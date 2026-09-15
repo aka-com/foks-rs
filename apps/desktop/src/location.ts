@@ -510,10 +510,10 @@ export function locationHref(href: string, location: Location): string {
  *
  * `01-vault.html` has one flat `?state=` per scene, and several of its names
  * are *not* locations: `grid` is a view preference, `show` is a selection,
- * `lease` is a **world**, not a place in it. `decodeLocation` answers `null`
+ * `lease` is a **snapshot**, not a place in it. `decodeLocation` answers `null`
  * for all of them on purpose (`tests/location.test.ts` pins that), so the
  * scene layer interprets the remaining state encoded by the name. The lease is
- * carried separately because it is a property of the world the shell is
+ * carried separately because it is a property of the snapshot the shell is
  * handed: the shell applies it with `applyLease`, it does not store it.
  */
 export interface Scene {

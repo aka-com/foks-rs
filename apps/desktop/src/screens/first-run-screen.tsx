@@ -90,7 +90,7 @@ import {
   storeDescription,
   storeReadable,
 } from '../model';
-import type { RoleWire, World } from '../model';
+import type { RoleWire, AgentSnapshot } from '../model';
 import { PageHeader } from '../shell/page-header';
 import { GoProfileChooser } from './go-profile-chooser';
 import { readableBy } from './scope';
@@ -150,6 +150,26 @@ const localStepOf = (state: FirstRunStateName): number => {
   if (state === 'protect' || state === 'phrase') return 2;
   return 3;
 };
+
+/** Delay between automatic retries of a transient identity refresh failure. */
+const IDENTITY_RETRY_DELAY_MS = 2_000;
+/** Bounded so a mutation that never finishes still surfaces its error. */
+const IDENTITY_RETRY_LIMIT = 30;
+
+/**
+ * Text to show while an identity refresh failure that clears on its own is
+ * retried, or null for failures that need the user.
+ */
+function transientIdentityFailure(code: string): string | null {
+  switch (code) {
+    case 'mutation-in-flight':
+      return 'Waiting for the current operation to finish…';
+    case 'catalog-required':
+      return 'The vault changed while loading. Trying again…';
+    default:
+      return null;
+  }
+}
 
 export function accountAliasFor(username: string): string {
   return username
@@ -239,16 +259,16 @@ function fixtureSeed(
 }
 
 function authoritativeSetupFacts(
-  world: World,
+  snapshot: AgentSnapshot,
   checkpoint: FirstRunCheckpoint,
 ): Parameters<typeof reconcileFirstRunCheckpoint>[1] {
   const server = checkpoint.profile
-    ? world.servers.find(
+    ? snapshot.servers.find(
         (candidate) => candidate.id === checkpoint.profile?.profile,
       )
     : undefined;
   const profile = checkpoint.profile
-    ? !profileInventoryComplete(world, 'profiles')
+    ? !profileInventoryComplete(snapshot, 'profiles')
       ? 'unknown'
       : !server
         ? 'missing'
@@ -259,8 +279,8 @@ function authoritativeSetupFacts(
             : 'missing'
     : 'unknown';
   const account = checkpoint.account
-    ? profileInventoryComplete(world, 'accounts')
-      ? world.accounts.some(
+    ? profileInventoryComplete(snapshot, 'accounts')
+      ? snapshot.accounts.some(
           (candidate) =>
             candidate.server === checkpoint.profile?.profile &&
             candidate.alias === checkpoint.account?.alias,
@@ -270,8 +290,8 @@ function authoritativeSetupFacts(
       : 'unknown'
     : 'unknown';
   const group = checkpoint.group
-    ? profileInventoryComplete(world, 'teams')
-      ? world.stores.some(
+    ? profileInventoryComplete(snapshot, 'teams')
+      ? snapshot.stores.some(
           (candidate) =>
             candidate.kind === 'team' &&
             candidate.server === checkpoint.profile?.profile &&
@@ -287,7 +307,7 @@ function authoritativeSetupFacts(
 
 function initialCheckpoint(
   bridge: Bridge,
-  world: World,
+  snapshot: AgentSnapshot,
   location: Extract<Location, { kind: 'first-run' }>,
   automaticEntry: boolean,
 ): FirstRunCheckpoint {
@@ -309,10 +329,10 @@ function initialCheckpoint(
     return fixtureSeed(bridge, path, location.step as FirstRunStateName);
   const reconcile = (checkpoint: FirstRunCheckpoint): FirstRunCheckpoint =>
     resolveProvisionedIdentity(
-      world,
+      snapshot,
       reconcileFirstRunCheckpoint(
         checkpoint,
-        authoritativeSetupFacts(world, checkpoint),
+        authoritativeSetupFacts(snapshot, checkpoint),
       ),
     );
   // URL/navigation state must never offer an acknowledged mutation again.
@@ -507,14 +527,14 @@ export function FirstRunChecklistStatus({
 }
 
 function FirstRunAppSidebar({
-  world,
+  snapshot,
   checkpoint,
   groupName,
   location,
   onNavigate,
   onReenter,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   checkpoint: FirstRunCheckpoint;
   groupName: string;
   location: Location;
@@ -539,7 +559,7 @@ function FirstRunAppSidebar({
   );
   return (
     <Sidebar
-      world={world}
+      snapshot={snapshot}
       location={location}
       alerts={checkpoint.path === 'invited' && !checkpoint.added ? 1 : 0}
       onNavigate={onNavigate}
@@ -550,14 +570,14 @@ function FirstRunAppSidebar({
 }
 
 function AddedDetails({
-  world,
+  snapshot,
   storeId,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   storeId?: string;
 }): ReactNode {
-  const store = world.stores.find((candidate) => candidate.id === storeId);
-  const item = world.items.find(
+  const store = snapshot.stores.find((candidate) => candidate.id === storeId);
+  const item = snapshot.items.find(
     (candidate) =>
       candidate.store === storeId && candidate.path.includes('staging-token'),
   );
@@ -773,11 +793,11 @@ function JoiningChoice({
 }
 
 export interface FirstRunExperienceProps {
-  world: World;
+  snapshot: AgentSnapshot;
   bridge: Bridge;
   location: Extract<Location, { kind: 'first-run' }>;
   onNavigate: (location: Location) => void;
-  onRefreshWorld: (force?: boolean) => Promise<World>;
+  onRefreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>;
   concealSignal: number;
   agentReady: boolean;
   onRetryAgent?: () => Promise<void>;
@@ -787,11 +807,11 @@ export interface FirstRunExperienceProps {
 }
 
 export function FirstRunExperience({
-  world,
+  snapshot,
   bridge,
   location,
   onNavigate,
-  onRefreshWorld,
+  onRefreshSnapshot,
   concealSignal,
   agentReady,
   onRetryAgent,
@@ -801,11 +821,11 @@ export function FirstRunExperience({
 }: FirstRunExperienceProps): ReactNode {
   const toasts = useToast();
   const [checkpoint, setCheckpoint] = useState(() =>
-    initialCheckpoint(bridge, world, location, automaticEntry),
+    initialCheckpoint(bridge, snapshot, location, automaticEntry),
   );
   const checkpointRef = useRef(checkpoint);
-  const setupEnvironment = useRef({ world, onRefreshWorld });
-  setupEnvironment.current = { world, onRefreshWorld };
+  const setupEnvironment = useRef({ snapshot, onRefreshSnapshot });
+  setupEnvironment.current = { snapshot, onRefreshSnapshot };
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -864,7 +884,7 @@ export function FirstRunExperience({
   const [discoveredGroups, setDiscoveredGroups] = useState<DiscoveredGroup[]>(
     [],
   );
-  const discoveredWorld = useRef<World>(world);
+  const discoveredSnapshot = useRef<AgentSnapshot>(snapshot);
   const pendingRef = useRef<PendingOperation[]>([]);
   const [mutationBusy, setMutationBusy] = useState(false);
   const [busyOperation, setBusyOperation] = useState<
@@ -882,6 +902,16 @@ export function FirstRunExperience({
   const busy = mutationBusy || phraseOperation !== null;
   const [identityLoading, setIdentityLoading] = useState(false);
   const [identityError, setIdentityError] = useState<string | null>(null);
+  // Shown while a transient identity refresh failure is retried on its own.
+  const [identityWaiting, setIdentityWaiting] = useState<string | null>(null);
+  const identityRetry = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (identityRetry.current !== null)
+        window.clearTimeout(identityRetry.current);
+    },
+    [],
+  );
   const [identityProblem, setIdentityProblem] =
     useState<IdentityProblem | null>(null);
   const [operationStatus, setOperationStatus] = useState<string | null>(null);
@@ -1072,11 +1102,11 @@ export function FirstRunExperience({
     : 'the group administrator';
   const group = checkpoint.group?.name ?? facts?.groupName ?? 'your group';
   const addedStores = checkpoint.group
-    ? world.stores.filter(
+    ? snapshot.stores.filter(
         (store) =>
           store.kind === 'team' &&
           store.active &&
-          storeReadable(world, store.id) &&
+          storeReadable(snapshot, store.id) &&
           store.server === profile?.profile &&
           store.account === checkpoint.account?.alias &&
           store.alias === checkpoint.group?.alias &&
@@ -1087,7 +1117,7 @@ export function FirstRunExperience({
   const addedStore = addedStores.length === 1 ? addedStores[0]?.id : undefined;
   const accountStores =
     checkpoint.account && profile
-      ? world.accounts.filter(
+      ? snapshot.accounts.filter(
           (candidate) =>
             candidate.server === profile.profile &&
             candidate.alias === checkpoint.account?.alias,
@@ -1096,13 +1126,13 @@ export function FirstRunExperience({
   const accountStore =
     accountStores.length === 1 ? accountStores[0]?.store : undefined;
   const personalAvailable = Boolean(
-    accountStore && storeReadable(world, accountStore),
+    accountStore && storeReadable(snapshot, accountStore),
   );
   const accountStoreRecord = accountStore
-    ? world.stores.find((candidate) => candidate.id === accountStore)
+    ? snapshot.stores.find((candidate) => candidate.id === accountStore)
     : undefined;
   const accountItemCount = accountStore
-    ? world.items.filter((item) => item.store === accountStore).length
+    ? snapshot.items.filter((item) => item.store === accountStore).length
     : 0;
 
   useEffect(() => {
@@ -1116,7 +1146,7 @@ export function FirstRunExperience({
     }
     let alive = true;
     setManagedStatusError(null);
-    const server = setupEnvironment.current.world.servers.find(
+    const server = setupEnvironment.current.snapshot.servers.find(
       (row) => row.id === managedProfile,
     );
     if (server?.trust.status === 'blocked' || server?.restrictions.length) {
@@ -1142,7 +1172,8 @@ export function FirstRunExperience({
         // Cached connectivity failure must not suppress a live local probe.
         // Publish readiness only after the catalog agrees with its pinned host.
         try {
-          const refreshed = await setupEnvironment.current.onRefreshWorld(true);
+          const refreshed =
+            await setupEnvironment.current.onRefreshSnapshot(true);
           if (!alive) return;
           const current = refreshed.servers.filter(
             (row) => row.id === managedProfile,
@@ -1192,7 +1223,7 @@ export function FirstRunExperience({
     },
     [onNavigate],
   );
-  const lastReconciledWorld = useRef(world);
+  const lastReconciledSnapshot = useRef(snapshot);
   useEffect(() => {
     const update = () => {
       const current = checkpointRef.current;
@@ -1215,17 +1246,17 @@ export function FirstRunExperience({
   }, [commit]);
   useEffect(() => {
     if (!agentReady || bridge.firstRunFixture) return;
-    if (lastReconciledWorld.current === world) return;
-    lastReconciledWorld.current = world;
+    if (lastReconciledSnapshot.current === snapshot) return;
+    lastReconciledSnapshot.current = snapshot;
     const reconciled = resolveProvisionedIdentity(
-      world,
+      snapshot,
       reconcileFirstRunCheckpoint(
         checkpoint,
-        authoritativeSetupFacts(world, checkpoint),
+        authoritativeSetupFacts(snapshot, checkpoint),
       ),
     );
     if (reconciled !== checkpoint) commit(reconciled);
-  }, [agentReady, bridge.firstRunFixture, checkpoint, commit, world]);
+  }, [agentReady, bridge.firstRunFixture, checkpoint, commit, snapshot]);
   const send = useCallback(
     (event: Parameters<typeof transitionFirstRun>[1]): void => {
       commit(transitionFirstRun(checkpointRef.current, event));
@@ -1286,7 +1317,7 @@ export function FirstRunExperience({
       // A first server check can set the gate before a profile has been
       // selected. Only the pending-operation read needs a profile.
       void reconcileFirstRunFailure(failure, async () => {
-        await onRefreshWorld();
+        await onRefreshSnapshot();
         if (profile) {
           const rows = await enqueueProfileWork(bridge, profile.profile, () =>
             bridge.listPendingOperations(profile.profile),
@@ -1302,7 +1333,7 @@ export function FirstRunExperience({
         report(presentFirstRunFailure(reconciled).detail);
       });
     },
-    [bridge, onRefreshWorld, profile],
+    [bridge, onRefreshSnapshot, profile],
   );
 
   useEffect(() => {
@@ -1315,12 +1346,19 @@ export function FirstRunExperience({
 
   const refreshAccountIdentity = async (
     saved = checkpointRef.current,
+    attempt = 0,
   ): Promise<void> => {
     if (!saved.provisionedAccount || !agentReady) return;
     autoProbedKey.current = `identity:${saved.provisionedAccount.alias}`;
     const generation = ++identityGeneration.current;
+    if (identityRetry.current !== null) {
+      window.clearTimeout(identityRetry.current);
+      identityRetry.current = null;
+    }
+    let retrying = false;
     setIdentityLoading(true);
     setIdentityError(null);
+    setIdentityWaiting(null);
     setIdentityProblem(null);
     try {
       // Account mutations invalidate the native catalog. Do not join an
@@ -1329,7 +1367,7 @@ export function FirstRunExperience({
       const refreshed = await sharedSetupRead(
         bridge,
         `identity:${saved.profile?.profile}:${saved.provisionedAccount.alias}`,
-        () => onRefreshWorld(true),
+        () => onRefreshSnapshot(true),
       );
       if (
         generation !== identityGeneration.current ||
@@ -1352,10 +1390,35 @@ export function FirstRunExperience({
       )
         return;
       const typed = normalizeCommandError(error);
+      if (isAgentReadinessError(typed)) {
+        setIdentityError(typed.message);
+        onAgentReadinessFailure?.(typed);
+        return;
+      }
+      // A native mutation still holding the catalog, or a snapshot replaced
+      // by a concurrent load, clears on its own. Wait and try again rather
+      // than presenting a vault-screen message as a setup failure.
+      const waiting = transientIdentityFailure(typed.code);
+      if (waiting && attempt < IDENTITY_RETRY_LIMIT) {
+        retrying = true;
+        setIdentityWaiting(waiting);
+        identityRetry.current = window.setTimeout(() => {
+          identityRetry.current = null;
+          if (!mounted.current || generation !== identityGeneration.current)
+            return;
+          if (checkpointRef.current !== saved) {
+            setIdentityWaiting(null);
+            setIdentityLoading(false);
+            return;
+          }
+          void refreshAccountIdentity(saved, attempt + 1);
+        }, IDENTITY_RETRY_DELAY_MS);
+        return;
+      }
       setIdentityError(typed.message);
-      if (isAgentReadinessError(typed)) onAgentReadinessFailure?.(typed);
     } finally {
-      if (generation === identityGeneration.current) setIdentityLoading(false);
+      if (generation === identityGeneration.current && !retrying)
+        setIdentityLoading(false);
     }
   };
 
@@ -1376,7 +1439,7 @@ export function FirstRunExperience({
   ): Promise<void> => {
     if (!saved.profile) return;
     try {
-      const refreshed = await onRefreshWorld(true);
+      const refreshed = await onRefreshSnapshot(true);
       if (!mounted.current || checkpointRef.current.provisioning) return;
       const probe = {
         ...saved,
@@ -1578,7 +1641,7 @@ export function FirstRunExperience({
           return;
         }
       }
-      const refreshed = await onRefreshWorld(true);
+      const refreshed = await onRefreshSnapshot(true);
       const probe = {
         ...saved,
         provisioning: undefined,
@@ -2307,7 +2370,7 @@ export function FirstRunExperience({
 
   const selectDiscoveredGroup = (
     found: DiscoveredGroup,
-    refreshed: World,
+    refreshed: AgentSnapshot,
   ): void => {
     if (
       !bridge.firstRunFixture &&
@@ -2365,14 +2428,14 @@ export function FirstRunExperience({
     setDiscoveredGroups([]);
     try {
       let result: Awaited<ReturnType<Bridge['discoverGroups']>>;
-      let refreshed: World;
+      let refreshed: AgentSnapshot;
       try {
         result = await enqueueProfileWork(bridge, profile.profile, () =>
           bridge.discoverGroups(profile.profile, checkpoint.account!.alias),
         );
       } finally {
         // Discovery invalidates the catalog even for zero groups or errors.
-        refreshed = await onRefreshWorld(true);
+        refreshed = await onRefreshSnapshot(true);
       }
       if (
         !mounted.current ||
@@ -2394,7 +2457,7 @@ export function FirstRunExperience({
           candidate.active &&
           (!facts?.groupName || candidate.name === facts.groupName),
       );
-      discoveredWorld.current = refreshed;
+      discoveredSnapshot.current = refreshed;
       const unique = new Set(
         eligible.map((row) => `${row.kind}:${row.teamIdHex}:${row.alias}`),
       );
@@ -2431,7 +2494,7 @@ export function FirstRunExperience({
   const retryPersonal = (): void => {
     setPersonalRefreshing(true);
     setPersonalRefreshError(null);
-    void onRefreshWorld()
+    void onRefreshSnapshot()
       .catch((error) => {
         const typed = normalizeCommandError(error);
         setPersonalRefreshError(typed.message);
@@ -2456,7 +2519,7 @@ export function FirstRunExperience({
 
   const selectManagedProfile = (returning = false): void => {
     if (!agentReady || !managedReport || !managedStatus) return;
-    const current = world.servers.filter(
+    const current = snapshot.servers.filter(
       (server) => server.id === managedReport.profile,
     );
     if (
@@ -2801,6 +2864,10 @@ export function FirstRunExperience({
         ) : identityError ? (
           <p className="crit" role="alert">
             {identityError}
+          </p>
+        ) : identityWaiting ? (
+          <p className="status" role="status">
+            {identityWaiting}
           </p>
         ) : null}
         <div className="actions">
@@ -3843,7 +3910,7 @@ export function FirstRunExperience({
             {personalAvailable
               ? 'Your account is connected to the local server on this Mac.'
               : accountStoreRecord
-                ? `Your Personal vault is unavailable (${storeDescription(world, accountStoreRecord).toLowerCase()}). Your setup progress is saved. Check server settings to restore access.`
+                ? `Your Personal vault is unavailable (${storeDescription(snapshot, accountStoreRecord).toLowerCase()}). Your setup progress is saved. Check server settings to restore access.`
                 : 'FOKS could not load your Personal vault. Your setup progress is saved. Retry loading the vault to continue.'}
           </p>
           {personalRefreshError ? (
@@ -4064,7 +4131,7 @@ export function FirstRunExperience({
                 <Button
                   key={`${found.kind}:${found.teamIdHex}:${found.alias}`}
                   onClick={() =>
-                    selectDiscoveredGroup(found, discoveredWorld.current)
+                    selectDiscoveredGroup(found, discoveredSnapshot.current)
                   }
                 >
                   Open “{found.name ?? found.alias}”
@@ -4325,7 +4392,7 @@ export function FirstRunExperience({
                   disabled={personalRefreshing}
                   onClick={() => {
                     setPersonalRefreshing(true);
-                    void onRefreshWorld(true)
+                    void onRefreshSnapshot(true)
                       .catch((error) =>
                         setMessage(normalizeCommandError(error).message),
                       )
@@ -4361,7 +4428,7 @@ export function FirstRunExperience({
           <span>Access</span>
           <span>Version</span>
         </div>
-        {world.items
+        {snapshot.items
           .filter((item) => item.store === addedStore)
           .slice(0, 4)
           .map((item) => (
@@ -4372,7 +4439,7 @@ export function FirstRunExperience({
                 <small>{item.path}</small>
               </span>
               <span>
-                <Chip>{readableBy(world, item).label}</Chip>
+                <Chip>{readableBy(snapshot, item).label}</Chip>
               </span>
               <span className="n">v{item.version}</span>
             </div>
@@ -4420,7 +4487,7 @@ export function FirstRunExperience({
     <>
       {appMode ? (
         <FirstRunAppSidebar
-          world={world}
+          snapshot={snapshot}
           checkpoint={checkpoint}
           groupName={checkpoint.group?.name ?? group}
           location={location}
@@ -4499,7 +4566,7 @@ export function FirstRunExperience({
         </div>
       </main>
       {state === 'added' ? (
-        <AddedDetails world={world} storeId={addedStore} />
+        <AddedDetails snapshot={snapshot} storeId={addedStore} />
       ) : null}
     </>
   );

@@ -38,7 +38,12 @@ import {
   storeDescriptionState,
   storeAvailability,
 } from '../model';
-import type { AccountStore, StoreRef, TeamStore, World } from '../model';
+import type {
+  AccountStore,
+  StoreRef,
+  TeamStore,
+  AgentSnapshot,
+} from '../model';
 import { PageHeader } from '../shell/page-header';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { agentLifecycleLabel, type AgentLifecycle } from '../agent-lifecycle';
@@ -53,13 +58,13 @@ import { GoProfileConnectSheet } from './go-profile-connect';
 import { ServersSection } from './servers-screen';
 
 interface Props {
-  world: World;
+  snapshot: AgentSnapshot;
   bridge: Bridge;
   location: Extract<Location, { kind: 'settings' }>;
   scene: string;
   onNavigate: (location: Location) => void;
   onRefresh: (message: string) => Promise<void>;
-  onRefreshWorld: () => Promise<World>;
+  onRefreshSnapshot: () => Promise<AgentSnapshot>;
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
   onLock: () => Promise<boolean>;
@@ -97,36 +102,40 @@ function isCatalogRequired(error: unknown): boolean {
   return normalizeCommandError(error).code === 'catalog-required';
 }
 
-function accountStores(world: World): AccountStore[] {
-  return world.stores.filter(
+function accountStores(snapshot: AgentSnapshot): AccountStore[] {
+  return snapshot.stores.filter(
     (store): store is AccountStore => store.kind === 'account',
   );
 }
 
 function GroupsSection({
-  world,
+  snapshot,
   discovering,
   onDiscover,
   onCreate,
   onInvite,
   onOpen,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   discovering: StoreRef | null;
   onDiscover: (context: DiscoveryContext) => Promise<void>;
   onCreate: () => void;
   onInvite: (store: AccountStore) => void;
   onOpen: (store: TeamStore) => void;
 }): ReactNode {
-  const accounts = accountStores(world);
-  const canCreate = accounts.some((store) => canCreateInStore(world, store.id));
-  const groups = world.stores.filter(
+  const accounts = accountStores(snapshot);
+  const canCreate = accounts.some((store) =>
+    canCreateInStore(snapshot, store.id),
+  );
+  const groups = snapshot.stores.filter(
     (store): store is TeamStore => store.kind === 'team',
   );
   const attention = groups.filter(
     (store) =>
-      storeDescriptionState(world, store) !== 'normal' ||
-      world.groupDetailFailures.some((failure) => failure.store === store.id),
+      storeDescriptionState(snapshot, store) !== 'normal' ||
+      snapshot.groupDetailFailures.some(
+        (failure) => failure.store === store.id,
+      ),
   );
   return (
     <>
@@ -162,9 +171,9 @@ function GroupsSection({
       <Inset className="settings-inset">
         {accounts.length ? (
           accounts.map((store) => {
-            const context = discoveryContext(world, store.id);
+            const context = discoveryContext(snapshot, store.id);
             const busy = discovering === store.id;
-            const account = world.accounts.find(
+            const account = snapshot.accounts.find(
               (candidate) => candidate.store === store.id,
             );
             return (
@@ -208,9 +217,9 @@ function GroupsSection({
           <SectionLabel>Needs attention</SectionLabel>
           <Inset className="settings-inset middle">
             {attention.map((store) => {
-              const state = storeDescriptionState(world, store);
-              const server = serverOf(world, store.id);
-              const caption = storeDescription(world, store);
+              const state = storeDescriptionState(snapshot, store);
+              const server = serverOf(snapshot, store.id);
+              const caption = storeDescription(snapshot, store);
               return (
                 <InsetRow
                   key={store.id}
@@ -242,10 +251,10 @@ function GroupsSection({
       <Inset className="settings-inset">
         {accounts.length ? (
           accounts.map((store) => {
-            const account = world.accounts.find(
+            const account = snapshot.accounts.find(
               (candidate) => candidate.store === store.id,
             );
-            const server = serverOf(world, store.id);
+            const server = serverOf(snapshot, store.id);
             return (
               <InsetRow
                 key={store.id}
@@ -273,13 +282,13 @@ function GroupsSection({
 }
 
 export function SettingsScreen({
-  world,
+  snapshot,
   bridge,
   location,
   scene,
   onNavigate,
   onRefresh,
-  onRefreshWorld,
+  onRefreshSnapshot,
   onError,
   onMutationError,
   onLock,
@@ -290,7 +299,7 @@ export function SettingsScreen({
   const [enteredScene] = useState(scene);
   const section =
     location.section === 'phrase' ? 'macs' : (location.section ?? 'account');
-  const stores = accountStores(world);
+  const stores = accountStores(snapshot);
   // Select account by exact StoreRef to avoid ambiguous profile-local aliases.
   const requested = location.store;
   const selected = requested
@@ -339,18 +348,18 @@ export function SettingsScreen({
   // Track open modal state to suppress background catalog reloads while sheets are active.
   const sheetOpen = useRef(sheet);
   sheetOpen.current = sheet;
-  const catalogRecovery = useRef<Promise<World> | null>(null);
+  const catalogRecovery = useRef<Promise<AgentSnapshot> | null>(null);
   const recoveredAccounts = useRef(new Set<string>());
   // Deduplicate concurrent catalog recovery requests.
-  const recoverCatalog = useCallback((): Promise<World> => {
+  const recoverCatalog = useCallback((): Promise<AgentSnapshot> => {
     if (!catalogRecovery.current) {
-      const pending = onRefreshWorld().finally(() => {
+      const pending = onRefreshSnapshot().finally(() => {
         if (catalogRecovery.current === pending) catalogRecovery.current = null;
       });
       catalogRecovery.current = pending;
     }
     return catalogRecovery.current;
-  }, [onRefreshWorld]);
+  }, [onRefreshSnapshot]);
   // Profile of the currently selected account, or empty if none selected.
   const profile = selected?.server ?? '';
 
@@ -444,11 +453,11 @@ export function SettingsScreen({
   }, [selectedId]);
 
   const accessStopped = (candidate: string): boolean => {
-    const server = world.servers.find((item) => item.id === candidate);
-    return !server || !serverAvailability(world, server).available;
+    const server = snapshot.servers.find((item) => item.id === candidate);
+    return !server || !serverAvailability(snapshot, server).available;
   };
   const selectedStopped = selected
-    ? !storeAvailability(world, selected).available ||
+    ? !storeAvailability(snapshot, selected).available ||
       accessStopped(selected.server)
     : true;
   useEffect(() => {
@@ -481,7 +490,7 @@ export function SettingsScreen({
         try {
           result = await load();
         } catch (error) {
-          // If catalog was invalidated, await world recovery and retry the query once.
+          // If catalog was invalidated, await snapshot recovery and retry the query once.
           if (!alive) return;
           if (sheetOpen.current || !isCatalogRequired(error)) throw error;
           const already = recoveredAccounts.current.has(requestedStore);
@@ -546,8 +555,8 @@ export function SettingsScreen({
     void (async () => {
       try {
         const next = new Map<string, string>();
-        for (const store of accountStores(world)) {
-          if (!storeAvailability(world, store).available) continue;
+        for (const store of accountStores(snapshot)) {
+          if (!storeAvailability(snapshot, store).available) continue;
           const loadCurrent = (): Promise<AccountDevice | undefined> =>
             enqueueProfileWork(bridge, store.server, () =>
               bridge.listAccountDevices(store.id),
@@ -582,7 +591,7 @@ export function SettingsScreen({
     return () => {
       alive = false;
     };
-  }, [bridge, onError, recoverCatalog, section, world]);
+  }, [bridge, onError, recoverCatalog, section, snapshot]);
 
   useEffect(() => {
     if (selectedStopped) setSheet(null);
@@ -614,10 +623,10 @@ export function SettingsScreen({
     toasts.show(message);
   };
   const account = selected
-    ? world.accounts.find((entry) => entry.store === selected.id)
+    ? snapshot.accounts.find((entry) => entry.store === selected.id)
     : undefined;
   const server = selected
-    ? world.servers.find((entry) => entry.id === selected.server)
+    ? snapshot.servers.find((entry) => entry.id === selected.server)
     : undefined;
   const macsLoading = Boolean(
     selected && !unavailable && !selectedStopped && !macsLoaded,
@@ -628,10 +637,10 @@ export function SettingsScreen({
   const createContext = stores[0];
   const invitedStore = stores.find((store) => store.id === inviteStore);
   const invitedAccount = invitedStore
-    ? world.accounts.find((entry) => entry.store === invitedStore.id)
+    ? snapshot.accounts.find((entry) => entry.store === invitedStore.id)
     : undefined;
   const invitedServer = invitedStore
-    ? serverOf(world, invitedStore.id)
+    ? serverOf(snapshot, invitedStore.id)
     : undefined;
   const inviteMessage =
     invitedStore && invitedAccount
@@ -662,7 +671,7 @@ export function SettingsScreen({
             {unavailable ? (
               <UnavailableAccount
                 stores={stores}
-                world={world}
+                snapshot={snapshot}
                 onSelect={(store) => go(section, store.id)}
                 onRefresh={() => void onRefresh('Accounts refreshed')}
               />
@@ -673,7 +682,7 @@ export function SettingsScreen({
                 selected={selected}
                 devices={devices}
                 backups={backups}
-                world={world}
+                snapshot={snapshot}
                 stopped={selectedStopped}
                 loading={macsLoading}
                 onConnectGoProfile={() => setSheet('go-profile')}
@@ -716,7 +725,7 @@ export function SettingsScreen({
             {section === 'account' ? (
               <>
                 <AccountSection
-                  world={world}
+                  snapshot={snapshot}
                   deviceNames={accountDeviceNames}
                   onConnectGoProfile={() => setSheet('go-profile')}
                   onPassphrase={(store, mode) => {
@@ -725,7 +734,7 @@ export function SettingsScreen({
                     setSheet('passphrase');
                   }}
                 />
-                {accountStores(world).map((store) => (
+                {accountStores(snapshot).map((store) => (
                   <AdminPanel
                     key={`admin-${store.id}`}
                     bridge={bridge}
@@ -733,7 +742,7 @@ export function SettingsScreen({
                     account={store.account}
                   />
                 ))}
-                {accountStores(world).map((store) => (
+                {accountStores(snapshot).map((store) => (
                   <BotPanel
                     key={`bot-${store.id}`}
                     bridge={bridge}
@@ -742,7 +751,7 @@ export function SettingsScreen({
                     onComplete={() => onRefresh('Bot account updated')}
                   />
                 ))}
-                {accountStores(world).map((store) => (
+                {accountStores(snapshot).map((store) => (
                   <InvitationPanel
                     key={`invite-${store.id}`}
                     bridge={bridge}
@@ -751,7 +760,7 @@ export function SettingsScreen({
                     onComplete={() => onRefresh('Group membership refreshed')}
                   />
                 ))}
-                {accountStores(world).map((store) => (
+                {accountStores(snapshot).map((store) => (
                   <RenamePanel
                     key={`rename-${store.id}`}
                     bridge={bridge}
@@ -760,7 +769,7 @@ export function SettingsScreen({
                     onComplete={() => onRefresh('Username updated')}
                   />
                 ))}
-                {accountStores(world).map((store) => (
+                {accountStores(snapshot).map((store) => (
                   <SsoPanel
                     key={store.id}
                     bridge={bridge}
@@ -776,7 +785,7 @@ export function SettingsScreen({
             ) : null}
             {section === 'servers' ? (
               <ServersSection
-                world={world}
+                snapshot={snapshot}
                 bridge={bridge}
                 profile={location.profile}
                 scene={enteredScene}
@@ -788,7 +797,7 @@ export function SettingsScreen({
             ) : null}
             {section === 'groups' ? (
               <GroupsSection
-                world={world}
+                snapshot={snapshot}
                 discovering={discovering}
                 onDiscover={discover}
                 onCreate={() => setGroupCreate(true)}
@@ -798,7 +807,7 @@ export function SettingsScreen({
             ) : null}
             {section === 'about' ? (
               <AboutSection
-                world={world}
+                snapshot={snapshot}
                 bridge={bridge}
                 appInfo={appInfo}
                 onError={onError}
@@ -817,7 +826,7 @@ export function SettingsScreen({
           onClose={() => setSheet(null)}
           onConnected={async (_profile, alias) => {
             setSheet(null);
-            await onRefreshWorld();
+            await onRefreshSnapshot();
             toasts.show(`Connected account "${alias}" from FOKS CLI`);
           }}
           onError={(error) => void onMutationError(error)}
@@ -971,7 +980,7 @@ export function SettingsScreen({
       ) : null}
       {groupCreate && createContext ? (
         <GroupSheet
-          world={world}
+          snapshot={snapshot}
           bridge={bridge}
           store={createContext}
           sheet="create"
@@ -979,7 +988,7 @@ export function SettingsScreen({
           onClose={() => setGroupCreate(false)}
           onSwitch={() => undefined}
           onApplied={async (message, created) => {
-            const next = await onRefreshWorld();
+            const next = await onRefreshSnapshot();
             toasts.show(message);
             if (!created) return;
             const accountStore = next.stores.find(
@@ -1084,12 +1093,12 @@ export function SettingsScreen({
  */
 function UnavailableAccount({
   stores,
-  world,
+  snapshot,
   onSelect,
   onRefresh,
 }: {
   stores: AccountStore[];
-  world: World;
+  snapshot: AgentSnapshot;
   onSelect: (store: AccountStore) => void;
   onRefresh: () => void;
 }): ReactNode {
@@ -1105,7 +1114,7 @@ function UnavailableAccount({
           {stores.map((store) => (
             <Button key={store.id} onClick={() => onSelect(store)}>
               {store.account} ·{' '}
-              {world.servers.find((server) => server.id === store.server)
+              {snapshot.servers.find((server) => server.id === store.server)
                 ?.name ?? store.server}
             </Button>
           ))}
@@ -1153,7 +1162,7 @@ function MacsSection({
   selected,
   devices,
   backups,
-  world,
+  snapshot,
   stopped,
   loading,
   onConnectGoProfile,
@@ -1167,7 +1176,7 @@ function MacsSection({
   selected?: AccountStore;
   devices: AccountDevice[];
   backups: BackupEnrollment[];
-  world: World;
+  snapshot: AgentSnapshot;
   stopped: boolean;
   loading: boolean;
   onConnectGoProfile: () => void;
@@ -1179,7 +1188,9 @@ function MacsSection({
 }): ReactNode {
   if (!selected)
     return <NoAvailableAccount onConnectGoProfile={onConnectGoProfile} />;
-  const account = world.accounts.find((entry) => entry.store === selected.id);
+  const account = snapshot.accounts.find(
+    (entry) => entry.store === selected.id,
+  );
   return (
     <>
       <div className="settings-label">
@@ -1197,8 +1208,8 @@ function MacsSection({
                 other.id !== store.id && other.account === store.account,
             );
             const server =
-              world.servers.find((entry) => entry.id === store.server)?.name ??
-              store.server;
+              snapshot.servers.find((entry) => entry.id === store.server)
+                ?.name ?? store.server;
             return {
               id: store.id,
               label: ambiguous ? `${store.account} · ${server}` : store.account,
@@ -1560,12 +1571,12 @@ function KeysSection({
 }
 
 function AccountSection({
-  world,
+  snapshot,
   deviceNames,
   onConnectGoProfile,
   onPassphrase,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   deviceNames: Map<string, string>;
   onConnectGoProfile: () => void;
   onPassphrase: (
@@ -1573,7 +1584,7 @@ function AccountSection({
     mode: 'set' | 'change' | 'verify',
   ) => void;
 }): ReactNode {
-  const stores = accountStores(world);
+  const stores = accountStores(snapshot);
   if (!stores.length) {
     return <NoAvailableAccount onConnectGoProfile={onConnectGoProfile} />;
   }
@@ -1589,18 +1600,20 @@ function AccountSection({
         Accounts on this Mac
       </SectionLabel>
       {stores.map((store) => {
-        const server = world.servers.find((entry) => entry.id === store.server);
-        const account = world.accounts.find(
+        const server = snapshot.servers.find(
+          (entry) => entry.id === store.server,
+        );
+        const account = snapshot.accounts.find(
           (entry) => entry.store === store.id,
         );
-        const availability = storeAvailability(world, store);
+        const availability = storeAvailability(snapshot, store);
         const stopped = !availability.available;
         const inert = stopped;
         const statusLabel = availability.available
           ? server?.compatibility.status === 'not-required'
             ? 'Check-in not required'
             : 'Available'
-          : storeDescription(world, store);
+          : storeDescription(snapshot, store);
         return (
           <div key={store.id}>
             <SectionLabel>
@@ -1664,7 +1677,7 @@ function AccountSection({
 }
 
 function AgentSection({
-  world,
+  snapshot,
   bridge,
   appInfo,
   onError,
@@ -1672,7 +1685,7 @@ function AgentSection({
   agentLifecycle,
   onRetryAgent,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   bridge: Bridge;
   appInfo: AppInfo | null;
   onError: (error: unknown) => void;
@@ -1681,7 +1694,7 @@ function AgentSection({
   onRetryAgent: () => Promise<void>;
 }): ReactNode {
   const ready =
-    world.agent.state === 'ready' && agentLifecycle.state === 'ready';
+    snapshot.agent.state === 'ready' && agentLifecycle.state === 'ready';
   return (
     <>
       <SectionLabel>Agent</SectionLabel>
@@ -1689,8 +1702,8 @@ function AgentSection({
         <InsetRow label="Status">
           <span className={ready ? 'agent' : 'agent warn'}>
             <i />
-            {world.agent.state === 'bootstrap'
-              ? `Bootstrap · ${world.agent.step}`
+            {snapshot.agent.state === 'bootstrap'
+              ? `Bootstrap · ${snapshot.agent.step}`
               : agentLifecycleLabel(agentLifecycle)}
           </span>
           <small>
@@ -1746,7 +1759,7 @@ function AgentSection({
 }
 
 function AboutSection({
-  world,
+  snapshot,
   bridge,
   appInfo,
   onError,
@@ -1755,7 +1768,7 @@ function AboutSection({
   agentLifecycle,
   onRetryAgent,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   bridge: Bridge;
   appInfo: AppInfo | null;
   onError: (error: unknown) => void;
@@ -1798,7 +1811,7 @@ function AboutSection({
         </InsetRow>
       </Inset>
       <AgentSection
-        world={world}
+        snapshot={snapshot}
         bridge={bridge}
         appInfo={appInfo}
         onError={onError}

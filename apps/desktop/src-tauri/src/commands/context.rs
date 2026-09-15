@@ -206,19 +206,49 @@ impl AppState {
         (generation, token)
     }
 
-    pub(super) fn accept_catalog(&self, generation: u64, catalog: CatalogSnapshot) {
+    /// Stores a loaded catalog. Returns false, storing nothing, when a later
+    /// load or mutation replaced the generation this load began with.
+    #[must_use]
+    pub(super) fn accept_catalog(&self, generation: u64, catalog: CatalogSnapshot) -> bool {
         let _coordination = self
             .catalog_coordination
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self.catalog_generation.load(Ordering::Acquire) == generation {
-            *self
-                .catalog
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(catalog);
-            self.mutation_requires_refresh
-                .store(false, Ordering::Release);
+        if self.catalog_generation.load(Ordering::Acquire) != generation {
+            return false;
         }
+        *self
+            .catalog
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(catalog);
+        self.mutation_requires_refresh
+            .store(false, Ordering::Release);
+        true
+    }
+
+    /// The current catalog snapshot and its generation. When `expected` names
+    /// the generation an earlier `list_catalog` returned and a later load or
+    /// mutation has replaced it, the read fails instead of answering from a
+    /// snapshot the caller never saw.
+    pub(super) fn catalog_at(
+        &self,
+        expected: Option<u64>,
+    ) -> Result<(u64, Option<CatalogSnapshot>), AgentError> {
+        let _coordination = self
+            .catalog_coordination
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let generation = self.catalog_generation.load(Ordering::Acquire);
+        if expected.is_some_and(|expected| expected != generation) {
+            return Err(catalog_changed_during_read());
+        }
+        Ok((
+            generation,
+            self.catalog
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+        ))
     }
 
     pub(super) fn invalidate_catalog(&self) {
@@ -900,6 +930,14 @@ impl Drop for MutationGuard {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
     }
+}
+
+pub(super) fn catalog_changed_during_read() -> AgentError {
+    AgentError::new(
+        "catalog-required",
+        "The vault changed while it was loading. Refresh and try again.",
+        true,
+    )
 }
 
 fn catalog_changed_during_group_read() -> AgentError {

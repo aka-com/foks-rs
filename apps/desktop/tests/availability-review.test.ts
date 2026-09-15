@@ -6,7 +6,7 @@ import {
   profileInventoryComplete,
   storeAvailability,
 } from '../src/model/lease';
-import type { Server, World } from '../src/model/types';
+import type { Server, AgentSnapshot } from '../src/model/types';
 
 const error = {
   code: 'unsupported-schema',
@@ -16,7 +16,7 @@ const error = {
   fatal: true,
 };
 
-function worldWithServer(change: Partial<Server>): World {
+function snapshotWithServer(change: Partial<Server>): AgentSnapshot {
   const store = FIXTURE.stores[0];
   return {
     ...FIXTURE,
@@ -27,7 +27,7 @@ function worldWithServer(change: Partial<Server>): World {
 }
 
 test('unknown empty inventory is not evidence that accounts disappeared', () => {
-  const empty: World = {
+  const empty: AgentSnapshot = {
     ...FIXTURE,
     servers: [],
     stores: [],
@@ -48,19 +48,19 @@ test('unknown empty inventory is not evidence that accounts disappeared', () => 
 });
 
 test('missing inventory for a catalog profile remains incomplete', () => {
-  const world: World = { ...FIXTURE, profileInventory: [] };
-  assert.equal(profileInventoryComplete(world, 'accounts'), false);
-  assert.equal(profileInventoryComplete(world, 'teams'), false);
+  const snapshot: AgentSnapshot = { ...FIXTURE, profileInventory: [] };
+  assert.equal(profileInventoryComplete(snapshot, 'accounts'), false);
+  assert.equal(profileInventoryComplete(snapshot, 'teams'), false);
 });
 
 test('store schema restriction takes priority over lease expiry without blocking a neighbor', () => {
   const store = FIXTURE.stores[0];
-  const world = worldWithServer({
+  const snapshot = snapshotWithServer({
     compatibility: { status: 'required', expiresAt: 10 },
   });
-  const restricted: World = {
-    ...world,
-    storeInventory: world.storeInventory.map((entry) =>
+  const restricted: AgentSnapshot = {
+    ...snapshot,
+    storeInventory: snapshot.storeInventory.map((entry) =>
       entry.store === store.id
         ? { ...entry, restrictions: [{ kind: 'schema-incompatible', error }] }
         : entry,
@@ -81,18 +81,18 @@ test('store schema restriction takes priority over lease expiry without blocking
 
 test('expiry is exact and an observed expired lease stays closed after a backward clock jump', () => {
   const store = FIXTURE.stores[0];
-  const world = worldWithServer({
+  const snapshot = snapshotWithServer({
     compatibility: { status: 'required', expiresAt: 10 },
   });
-  assert.deepEqual(storeAvailability(world, store, { nowSeconds: 9 }), {
+  assert.deepEqual(storeAvailability(snapshot, store, { nowSeconds: 9 }), {
     available: true,
   });
-  assert.deepEqual(storeAvailability(world, store, { nowSeconds: 10 }), {
+  assert.deepEqual(storeAvailability(snapshot, store, { nowSeconds: 10 }), {
     available: false,
     reason: 'check-in-expired',
   });
-  const observed: World = {
-    ...world,
+  const observed: AgentSnapshot = {
+    ...snapshot,
     observedExpiredLeases: [{ profile: store.server, expiresAt: 10 }],
   };
   assert.deepEqual(storeAvailability(observed, store, { nowSeconds: 9 }), {
@@ -108,7 +108,7 @@ test('a store restriction does not block another store on the same profile', () 
     (entry) => entry.id !== store.id && entry.server === store.server,
   );
   assert.ok(neighbor);
-  const world: World = {
+  const snapshot: AgentSnapshot = {
     ...FIXTURE,
     storeInventory: FIXTURE.storeInventory.map((entry) =>
       entry.store === store.id
@@ -116,28 +116,28 @@ test('a store restriction does not block another store on the same profile', () 
         : entry,
     ),
   };
-  assert.deepEqual(storeAvailability(world, store, { nowSeconds: 0 }), {
+  assert.deepEqual(storeAvailability(snapshot, store, { nowSeconds: 0 }), {
     available: false,
     reason: 'schema-incompatible',
   });
-  assert.deepEqual(storeAvailability(world, neighbor, { nowSeconds: 0 }), {
+  assert.deepEqual(storeAvailability(snapshot, neighbor, { nowSeconds: 0 }), {
     available: true,
   });
 });
 
 test('bootstrap blocks access even when optional selector arguments are omitted', () => {
-  const world: World = {
+  const snapshot: AgentSnapshot = {
     ...FIXTURE,
     agent: { state: 'bootstrap', step: 'different words' },
   };
-  assert.deepEqual(storeAvailability(world, FIXTURE.stores[0]), {
+  assert.deepEqual(storeAvailability(snapshot, FIXTURE.stores[0]), {
     available: false,
     reason: 'agent-unavailable',
   });
 });
 
 test('unavailable passive status does not imply no lease or a connection failure', () => {
-  const world = worldWithServer({
+  const snapshot = snapshotWithServer({
     passiveStatus: {
       status: 'failed',
       source: 'describe-server-status',
@@ -145,7 +145,7 @@ test('unavailable passive status does not imply no lease or a connection failure
     },
     compatibility: { status: 'requirement-unknown', error },
   });
-  assert.deepEqual(storeAvailability(world, FIXTURE.stores[0]), {
+  assert.deepEqual(storeAvailability(snapshot, FIXTURE.stores[0]), {
     available: false,
     reason: 'server-status-unavailable',
   });

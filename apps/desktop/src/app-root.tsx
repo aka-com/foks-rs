@@ -13,7 +13,7 @@ import { ToastController, ToastProvider } from '/kit/toasts';
 import {
   discoverUnboundTeams,
   isAgentReadinessError,
-  loadWorld,
+  loadSnapshot,
   normalizeCommandError,
   onAgentReadinessRequired,
   selectBridge,
@@ -55,7 +55,7 @@ import {
   storeOf,
   storeReadable,
 } from './model';
-import type { Item, World } from './model';
+import type { Item, AgentSnapshot } from './model';
 import { reconcileMutationFailure } from './mutation-recovery';
 import type { MutationFailureHandler } from './mutation-recovery';
 import { Sidebar } from './shell/sidebar';
@@ -233,8 +233,8 @@ function AgentStopNotice({
 }
 
 export interface AppProps {
-  /** Supplying a world makes render tests synchronous. Production omits it. */
-  world?: World;
+  /** Supplying a snapshot makes render tests synchronous. Production omits it. */
+  snapshot?: AgentSnapshot;
   /** A command seam for tests; production selects the Tauri or mock bridge. */
   bridge?: Bridge;
   /** Injected by the render tests so navigation is observable. */
@@ -243,11 +243,18 @@ export interface AppProps {
   leaseClock?: LeaseExpiryClock;
 }
 
-export function App({ world, bridge, store, leaseClock }: AppProps): ReactNode {
+export function App({
+  snapshot: agentSnapshot,
+  bridge,
+  store,
+  leaseClock,
+}: AppProps): ReactNode {
   const [activeBridge, setActiveBridge] = useState<Bridge | null>(
     () => bridge ?? null,
   );
-  const [loaded, setLoaded] = useState<World | null>(() => world ?? null);
+  const [loaded, setLoaded] = useState<AgentSnapshot | null>(
+    () => agentSnapshot ?? null,
+  );
   const [loadError, setLoadError] = useState<string | null>(null);
   const [firstRunStart, setFirstRunStart] = useState<'who' | 'local' | null>(
     null,
@@ -264,10 +271,13 @@ export function App({ world, bridge, store, leaseClock }: AppProps): ReactNode {
     useState<AgentLifecycleController | null>(null);
 
   useEffect(() => {
-    if (world) {
-      setLoaded(world);
+    if (agentSnapshot) {
+      setLoaded(agentSnapshot);
       if (bridge) {
-        const controller = new AgentLifecycleController(bridge, world.agent);
+        const controller = new AgentLifecycleController(
+          bridge,
+          agentSnapshot.agent,
+        );
         setAgentController(controller);
         setAgentLifecycle(controller.snapshot());
         setActiveBridge(bridge);
@@ -275,7 +285,7 @@ export function App({ world, bridge, store, leaseClock }: AppProps): ReactNode {
         return;
       }
       setLoadError(
-        'An injected world must include the bridge that answers its item actions.',
+        'An injected snapshot must include the bridge that answers its item actions.',
       );
       return;
     }
@@ -345,9 +355,9 @@ export function App({ world, bridge, store, leaseClock }: AppProps): ReactNode {
         ]);
         if (!alive || bootInvalidated) return;
         setManagedProfile(appInfo.managedProfile ?? null);
-        let next: World;
+        let next: AgentSnapshot;
         try {
-          next = await loadWorld(selected);
+          next = await loadSnapshot(selected);
         } catch (error) {
           const typed = normalizeCommandError(error);
           if (
@@ -358,7 +368,7 @@ export function App({ world, bridge, store, leaseClock }: AppProps): ReactNode {
             typed.fatal
           )
             throw error;
-          next = emptyWorld(status);
+          next = emptySnapshot(status);
         }
         if (!alive || bootInvalidated) return;
         // On an ordinary launch, look for teams that were granted to an
@@ -368,7 +378,7 @@ export function App({ world, bridge, store, leaseClock }: AppProps): ReactNode {
           try {
             if (await discoverUnboundTeams(selected, next)) {
               if (!alive || bootInvalidated) return;
-              next = await loadWorld(selected);
+              next = await loadSnapshot(selected);
             }
           } catch {
             // Team discovery is best-effort and must not block launch.
@@ -416,7 +426,7 @@ export function App({ world, bridge, store, leaseClock }: AppProps): ReactNode {
       stopLifecycle?.();
       stopMaintenance?.();
     };
-  }, [bootEpoch, bridge, world]);
+  }, [bootEpoch, bridge, agentSnapshot]);
 
   // Re-arm the app lock from the shell. The command layer arms the lock and
   // returns its state; on a platform that cannot authenticate, `locked` stays
@@ -554,7 +564,7 @@ export function App({ world, bridge, store, leaseClock }: AppProps): ReactNode {
   }
   return (
     <VaultShell
-      world={loaded}
+      snapshot={loaded}
       bridge={activeBridge}
       store={store}
       firstRunStart={firstRunStart}
@@ -567,7 +577,7 @@ export function App({ world, bridge, store, leaseClock }: AppProps): ReactNode {
 }
 
 interface VaultShellProps {
-  world: World;
+  snapshot: AgentSnapshot;
   bridge: Bridge;
   store?: LocationStore;
   firstRunStart?: 'who' | 'local' | null;
@@ -578,7 +588,7 @@ interface VaultShellProps {
 }
 
 function VaultShell({
-  world,
+  snapshot: agentSnapshot,
   bridge,
   store,
   firstRunStart = null,
@@ -604,7 +614,7 @@ function VaultShell({
     };
   });
   const [initialSelection] = useState(
-    () => scene.selection ?? demoSelection(scene.demo, world),
+    () => scene.selection ?? demoSelection(scene.demo, agentSnapshot),
   );
   const [fallback] = useState(() => {
     return storeAtScene({ ...scene, selection: initialSelection });
@@ -616,7 +626,7 @@ function VaultShell({
     [locations],
   );
   const state = useLocationState(locations);
-  const [latest, setLatest] = useState(world);
+  const [latest, setLatest] = useState(agentSnapshot);
   const [, updateSetupProgress] = useState(0);
   useEffect(() => {
     const update = () => updateSetupProgress((value) => value + 1);
@@ -626,17 +636,17 @@ function VaultShell({
   const latestRef = useRef(latest);
   latestRef.current = latest;
   const [observedExpiredLeases, setObservedExpiredLeases] = useState(
-    world.observedExpiredLeases,
+    agentSnapshot.observedExpiredLeases,
   );
   const [agentLifecycle, setAgentLifecycle] = useState<AgentLifecycle>(() =>
     agentController.snapshot(),
   );
   const [agentCatalogReady, setAgentCatalogReady] = useState(true);
-  const [refreshingWorld, setRefreshingWorld] = useState(false);
+  const [refreshingSnapshot, setRefreshingSnapshot] = useState(false);
   const [workflow, setWorkflow] = useState<WriteWorkflow>(() =>
     initialWriteWorkflow(
       typeof window === 'undefined' ? '' : window.location.search,
-      world,
+      agentSnapshot,
     ),
   );
   const [toasts] = useState(() => new ToastController());
@@ -669,8 +679,8 @@ function VaultShell({
     state.location.kind === 'first-run' &&
     state.location.step === 'boot',
   );
-  // Apply URL query lease overrides to the active world snapshot. Ordinary
-  // navigation must not manufacture a new world: first-run treats a changed
+  // Apply URL query lease overrides to the active snapshot. Ordinary
+  // navigation must not manufacture a new snapshot: first-run treats a changed
   // snapshot as authoritative inventory and could otherwise rewind a server
   // profile that the preceding command just created.
   const shown = useMemo(() => {
@@ -693,7 +703,7 @@ function VaultShell({
     scene.lease,
   ]);
 
-  useEffect(() => setLatest(world), [world]);
+  useEffect(() => setLatest(agentSnapshot), [agentSnapshot]);
 
   useEffect(() => {
     if (!bridge.native) return;
@@ -742,47 +752,54 @@ function VaultShell({
     };
   }, [bridge]);
 
-  // Catalog loads cancel the previous generation. Ordinary callers share one
-  // in-flight load; a mutation passes `force` because it invalidated any load
-  // that was already running against the old catalog.
-  const refreshWorldInFlight = useRef<Promise<World> | null>(null);
-  const refreshWorldGeneration = useRef(0);
-  const refreshWorld = useCallback(
-    (force = false): Promise<World> => {
-      if (force) refreshWorldInFlight.current = null;
-      if (!refreshWorldInFlight.current) {
-        const generation = ++refreshWorldGeneration.current;
-        const pending = loadWorld(bridge, latestRef.current)
-          .then((next) => {
-            if (generation === refreshWorldGeneration.current) {
-              setLatest(next);
-              setAgentCatalogReady(true);
-            }
-            return next;
-          })
-          .finally(() => {
-            if (refreshWorldInFlight.current === pending)
-              refreshWorldInFlight.current = null;
-          });
-        refreshWorldInFlight.current = pending;
-      }
-      return refreshWorldInFlight.current;
+  // Ordinary callers share one in-flight load; a mutation passes `force`
+  // because it invalidated any load that was already running against the
+  // old catalog.
+  const refreshSnapshotInFlight = useRef<Promise<AgentSnapshot> | null>(null);
+  const refreshSnapshotGeneration = useRef(0);
+  // Loads never overlap. The native side keeps a single catalog snapshot, and
+  // a snapshot load reads it across several commands after list_catalog; a
+  // second load starting in between would replace that snapshot and the
+  // first load's later reads would answer from the wrong one. A forced load
+  // therefore waits for the in-flight one to settle before it starts, and
+  // the in-flight result is discarded because a newer generation exists.
+  const refreshSnapshot = useCallback(
+    (force = false): Promise<AgentSnapshot> => {
+      const live = refreshSnapshotInFlight.current;
+      if (live && !force) return live;
+      const generation = ++refreshSnapshotGeneration.current;
+      const start = (): Promise<AgentSnapshot> =>
+        loadSnapshot(bridge, latestRef.current);
+      const pending = (live ? live.then(start, start) : start())
+        .then((next) => {
+          if (generation === refreshSnapshotGeneration.current) {
+            setLatest(next);
+            setAgentCatalogReady(true);
+          }
+          return next;
+        })
+        .finally(() => {
+          if (refreshSnapshotInFlight.current === pending)
+            refreshSnapshotInFlight.current = null;
+        });
+      refreshSnapshotInFlight.current = pending;
+      return pending;
     },
     [bridge],
   );
 
   const refresh = useCallback(
     async (message: string): Promise<void> => {
-      await refreshWorld(true);
+      await refreshSnapshot(true);
       toasts.show(message);
     },
-    [refreshWorld, toasts],
+    [refreshSnapshot, toasts],
   );
 
-  const refreshWorldRef = useRef(refreshWorld);
+  const refreshSnapshotRef = useRef(refreshSnapshot);
   const commandErrorRef = useRef<(error: unknown) => void>(() => undefined);
   const foregroundRefreshAllowed = useRef(false);
-  refreshWorldRef.current = refreshWorld;
+  refreshSnapshotRef.current = refreshSnapshot;
   foregroundRefreshAllowed.current =
     latest.agent.state === 'ready' &&
     agentController.snapshot().state === 'ready' &&
@@ -802,9 +819,9 @@ function VaultShell({
       }
       // Readiness and catalog availability are separate. A catalog failure
       // leaves the connected agent ready and is reported by the caller.
-      await refreshWorld(true);
+      await refreshSnapshot(true);
     },
-    [agentController, refreshWorld],
+    [agentController, refreshSnapshot],
   );
 
   const commandError = useCallback(
@@ -841,7 +858,7 @@ function VaultShell({
           return next;
         });
         if (foregroundRefreshAllowed.current)
-          void refreshWorldRef
+          void refreshSnapshotRef
             .current(true)
             .catch((error: unknown) => commandErrorRef.current(error));
       },
@@ -850,7 +867,7 @@ function VaultShell({
     const reconcileForeground = (): void => {
       coordinator.foreground();
       if (foregroundRefreshAllowed.current)
-        void refreshWorldRef
+        void refreshSnapshotRef
           .current()
           .catch((error: unknown) => commandErrorRef.current(error));
     };
@@ -896,12 +913,12 @@ function VaultShell({
   );
 
   const refreshAll = (): void => {
-    if (refreshingWorld) return;
-    setRefreshingWorld(true);
-    void refreshWorld()
+    if (refreshingSnapshot) return;
+    setRefreshingSnapshot(true);
+    void refreshSnapshot()
       .then(() => toasts.show('Vaults and groups refreshed'))
       .catch(commandError)
-      .finally(() => setRefreshingWorld(false));
+      .finally(() => setRefreshingSnapshot(false));
   };
 
   useEffect(() => {
@@ -919,8 +936,8 @@ function VaultShell({
       if (!agentController.applyMaintenance(snapshot)) return;
       if (snapshot.state === 'idle') return;
       foregroundRefreshAllowed.current = false;
-      refreshWorldGeneration.current++;
-      refreshWorldInFlight.current = null;
+      refreshSnapshotGeneration.current++;
+      refreshSnapshotInFlight.current = null;
       setAgentCatalogReady(false);
       setConcealSignal((value) => value + 1);
       if (snapshot.state !== 'complete') return;
@@ -933,7 +950,7 @@ function VaultShell({
       if (snapshot.disposition.status === 'continue-current-root')
         void agentController
           .establish(false)
-          .then(() => refreshWorld(true))
+          .then(() => refreshSnapshot(true))
           .catch(commandError);
     };
     void bridge
@@ -951,7 +968,7 @@ function VaultShell({
       alive = false;
       stop?.();
     };
-  }, [agentController, bridge, commandError, refreshWorld, toasts]);
+  }, [agentController, bridge, commandError, refreshSnapshot, toasts]);
 
   const handledReadinessErrors = useRef(new WeakSet<CommandError>());
   const handleAgentReadinessFailure = useCallback(
@@ -965,8 +982,8 @@ function VaultShell({
       // A component forwarding that rejection must not invalidate recovery twice.
       handledReadinessErrors.current.add(error);
       foregroundRefreshAllowed.current = false;
-      refreshWorldGeneration.current++;
-      refreshWorldInFlight.current = null;
+      refreshSnapshotGeneration.current++;
+      refreshSnapshotInFlight.current = null;
       setAgentCatalogReady(false);
       if (error.code === 'agent-lost') {
         agentController.disconnect(error.message);
@@ -1004,8 +1021,8 @@ function VaultShell({
         const message = await bridge.takeAgentConnectionLoss();
         if (alive && message) {
           foregroundRefreshAllowed.current = false;
-          refreshWorldGeneration.current++;
-          refreshWorldInFlight.current = null;
+          refreshSnapshotGeneration.current++;
+          refreshSnapshotInFlight.current = null;
           setAgentCatalogReady(false);
           agentController.disconnect(message);
           setConcealSignal((value) => value + 1);
@@ -1089,7 +1106,7 @@ function VaultShell({
     : 0;
   const screen = listsItems(here) ? (
     <ItemsScreen
-      world={shown}
+      snapshot={shown}
       bridge={bridge}
       state={state}
       locations={locations}
@@ -1119,7 +1136,7 @@ function VaultShell({
   ) : here.kind === 'team-chat' ? (
     <ChatScreen
       key={`chat:${here.ref}:${concealSignal}`}
-      world={shown}
+      snapshot={shown}
       bridge={bridge}
       location={here}
       accessNow={accessNow}
@@ -1131,7 +1148,7 @@ function VaultShell({
   ) : here.kind === 'group-settings' ? (
     <GroupSettingsScreen
       key={`${here.kind}:${here.ref}`}
-      world={shown}
+      snapshot={shown}
       bridge={bridge}
       location={here}
       onNavigate={(location) => locations.navigate(location)}
@@ -1141,20 +1158,20 @@ function VaultShell({
     />
   ) : here.kind === 'alerts' ? (
     <AlertsScreen
-      world={shown}
-      onRefreshWorld={refreshWorld}
+      snapshot={shown}
+      onRefreshSnapshot={refreshSnapshot}
       onError={commandError}
     />
   ) : here.kind === 'settings' ? (
     <SettingsScreen
       key={`settings:${concealSignal}`}
-      world={shown}
+      snapshot={shown}
       bridge={bridge}
       location={here}
       scene={namedState}
       onNavigate={(location) => locations.navigate(location)}
       onRefresh={refresh}
-      onRefreshWorld={refreshWorld}
+      onRefreshSnapshot={refreshSnapshot}
       onError={commandError}
       onMutationError={mutationError}
       onLock={onLock}
@@ -1209,14 +1226,14 @@ function VaultShell({
           className="global-refresh"
           icon="again"
           aria-label={
-            refreshingWorld ? 'Refreshing vaults and groups' : 'Refresh'
+            refreshingSnapshot ? 'Refreshing vaults and groups' : 'Refresh'
           }
           title={
-            refreshingWorld
+            refreshingSnapshot
               ? 'Refreshing vaults and groups'
               : 'Refresh vaults and groups'
           }
-          disabled={refreshingWorld}
+          disabled={refreshingSnapshot}
           onClick={refreshAll}
         />
       </div>
@@ -1230,11 +1247,11 @@ function VaultShell({
       >
         {here.kind === 'first-run' ? (
           <FirstRunExperience
-            world={shown}
+            snapshot={shown}
             bridge={bridge}
             location={here}
             onNavigate={(location) => locations.navigate(location)}
-            onRefreshWorld={refreshWorld}
+            onRefreshSnapshot={refreshSnapshot}
             concealSignal={concealSignal}
             agentReady={
               shown.agent.state === 'ready' &&
@@ -1251,7 +1268,7 @@ function VaultShell({
         ) : (
           <>
             <Sidebar
-              world={shown}
+              snapshot={shown}
               location={here}
               alerts={notesNow(shown).length}
               onNavigate={(location) => {
@@ -1271,7 +1288,7 @@ function VaultShell({
         )}
         {here.kind !== 'first-run' && detailsShown ? (
           <DetailsPanel
-            world={shown}
+            snapshot={shown}
             bridge={bridge}
             revealRequest={revealRequest}
             onRevealHandled={() => setRevealRequest(null)}
@@ -1311,7 +1328,7 @@ function VaultShell({
         />
       ) : null}
       <WriteOverlay
-        world={shown}
+        snapshot={shown}
         accessNow={accessNow}
         bridge={bridge}
         workflow={workflow}
@@ -1321,7 +1338,7 @@ function VaultShell({
         onMutationError={mutationError}
         onRetryAgent={() => recoverAgentReadiness(true)}
         onRefreshConflict={async (item, draft) => {
-          await refreshWorld();
+          await refreshSnapshot();
           setResumeDraft({
             store: item.store,
             path: item.path,
@@ -1336,7 +1353,7 @@ function VaultShell({
           setConcealSignal((value) => value + 1);
         }}
         onOpenExisting={async (existing) => {
-          const next = await refreshWorld();
+          const next = await refreshSnapshot();
           const current = next.items.find(
             (item) =>
               item.store === existing.storeId && item.path === existing.path,
@@ -1358,7 +1375,7 @@ function VaultShell({
       <ChatInboxProvider
         key={`inbox:${concealSignal}`}
         bridge={bridge}
-        world={shown}
+        snapshot={shown}
         onNavigate={navigateFromNotification}
         clock={chatClock}
       >
@@ -1374,7 +1391,7 @@ function VaultShell({
   );
 }
 
-function emptyWorld(agent: World['agent']): World {
+function emptySnapshot(agent: AgentSnapshot['agent']): AgentSnapshot {
   return {
     agent,
     servers: [],
@@ -1398,13 +1415,16 @@ function emptyWorld(agent: World['agent']): World {
 }
 
 /** Applies review-scene failures once at the fixture/model boundary. */
-function demoAvailabilityFacts(world: World, state: string): World {
+function demoAvailabilityFacts(
+  agentSnapshot: AgentSnapshot,
+  state: string,
+): AgentSnapshot {
   if (
     state === 'servers-list' ||
     state === 'servers-add' ||
     state === 'servers-lapsed'
   )
-    return applyLease(world, 'lapsed');
+    return applyLease(agentSnapshot, 'lapsed');
   if (state === 'servers-rollback') {
     const error = {
       code: 'host-verification-failed',
@@ -1414,8 +1434,8 @@ function demoAvailabilityFacts(world: World, state: string): World {
       ambiguous: false,
     };
     return {
-      ...world,
-      servers: world.servers.map((server) =>
+      ...agentSnapshot,
+      servers: agentSnapshot.servers.map((server) =>
         server.id === 'personal'
           ? { ...server, trust: { status: 'blocked' as const, error } }
           : server,
@@ -1431,23 +1451,25 @@ function demoAvailabilityFacts(world: World, state: string): World {
       ambiguous: false,
     };
     return {
-      ...world,
-      storeInventory: world.storeInventory.map((entry) =>
+      ...agentSnapshot,
+      storeInventory: agentSnapshot.storeInventory.map((entry) =>
         entry.store === 'acct:work'
           ? { ...entry, status: 'unavailable' as const, error }
           : entry,
       ),
     };
   }
-  return world;
+  return agentSnapshot;
 }
 
 function demoSelection(
   demo: Scene['demo'],
-  world: World,
+  agentSnapshot: AgentSnapshot,
 ): { store: string; path: string } | null {
   if (!demo) return null;
-  const candidates = world.items.filter((item) => item.kind !== 'Folder');
+  const candidates = agentSnapshot.items.filter(
+    (item) => item.kind !== 'Folder',
+  );
   let item: Item | undefined;
   if (demo === 'password')
     item = candidates.find((candidate) => isLogin(candidate));
@@ -1456,7 +1478,7 @@ function demoSelection(
       .filter(
         (candidate) =>
           kindOf(candidate) === 'Resource' &&
-          storeOf(world, candidate.store)?.kind === 'account',
+          storeOf(agentSnapshot, candidate.store)?.kind === 'account',
       )
       .sort((left, right) =>
         nameOf(left.path).localeCompare(nameOf(right.path)),
@@ -1466,7 +1488,7 @@ function demoSelection(
       .filter(
         (candidate) =>
           kindOf(candidate) === 'File' &&
-          storeOf(world, candidate.store)?.kind === 'team',
+          storeOf(agentSnapshot, candidate.store)?.kind === 'team',
       )
       .sort((left, right) => right.version - left.version)[0];
   } else if (demo === 'link')
@@ -1476,7 +1498,7 @@ function demoSelection(
       .filter(
         (candidate) =>
           kindOf(candidate) === 'Password' &&
-          storeOf(world, candidate.store)?.kind === 'team',
+          storeOf(agentSnapshot, candidate.store)?.kind === 'team',
       )
       .sort((left, right) =>
         nameOf(left.path).localeCompare(nameOf(right.path)),

@@ -101,3 +101,35 @@ fn known_store_metadata_never_authorizes_an_account_operation() {
         "store-not-found"
     );
 }
+
+#[test]
+fn catalog_reads_bound_to_a_generation_fail_once_it_is_replaced() {
+    let state = phase_four_state(vec![]);
+    let (generation, catalog) = state.catalog_at(None).unwrap();
+    assert!(catalog.is_some());
+    assert!(state.catalog_at(Some(generation)).is_ok());
+    // A later load clears the snapshot and moves the generation on.
+    let (next, _token) = state.begin_catalog_load_checked().unwrap();
+    assert_eq!(next, generation + 1);
+    let stale = state.catalog_at(Some(generation)).unwrap_err();
+    assert_eq!(stale.code, "catalog-required");
+    assert!(stale.retryable);
+    let (current, catalog) = state.catalog_at(Some(next)).unwrap();
+    assert_eq!(current, next);
+    assert!(catalog.is_none());
+    // Reads that do not name a generation keep answering from whatever is current.
+    assert!(state.catalog_at(None).is_ok());
+}
+
+#[test]
+fn a_catalog_load_that_lost_its_generation_is_not_accepted() {
+    let state = AppState::new(Arc::new(AgentHandle::new(
+        "/tmp/unused-foks-agent.sock".into(),
+    )));
+    let (first, _first_token) = state.begin_catalog_load_checked().unwrap();
+    let (second, _second_token) = state.begin_catalog_load_checked().unwrap();
+    assert!(!state.accept_catalog(first, CatalogSnapshot::default()));
+    assert!(state.catalog.lock().unwrap().is_none());
+    assert!(state.accept_catalog(second, CatalogSnapshot::default()));
+    assert!(state.catalog.lock().unwrap().is_some());
+}

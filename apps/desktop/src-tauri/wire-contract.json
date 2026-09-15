@@ -144,7 +144,8 @@
       }
     ],
     "failures": [],
-    "blockedProfiles": []
+    "blockedProfiles": [],
+    "generation": 7
   },
   "readItem": {
     "store": "opaque-store-ref",

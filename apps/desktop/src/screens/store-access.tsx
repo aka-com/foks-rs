@@ -7,7 +7,7 @@ import {
   storeDescriptionState,
   storeHeadingDescription,
 } from '../model';
-import type { Store, StoreDescriptionState, World } from '../model';
+import type { Store, StoreDescriptionState, AgentSnapshot } from '../model';
 import { PageHeader } from '../shell/page-header';
 
 type AccessProblem = Exclude<StoreDescriptionState, 'normal'>;
@@ -96,7 +96,7 @@ function accessCopy(
 }
 
 export interface StoreAccessTakeoverProps {
-  world: World;
+  snapshot: AgentSnapshot;
   store: Store;
   onOpenServer: (profile: string) => void;
   onFinishSetup: () => void;
@@ -105,16 +105,16 @@ export interface StoreAccessTakeoverProps {
 }
 
 export function StoreAccessTakeover({
-  world,
+  snapshot,
   store,
   onOpenServer,
   onFinishSetup,
   headerAction,
   noHeader = false,
 }: StoreAccessTakeoverProps): ReactNode {
-  const state = storeDescriptionState(world, store);
+  const state = storeDescriptionState(snapshot, store);
   if (state === 'normal') return null;
-  const server = serverOf(world, store.id);
+  const server = serverOf(snapshot, store.id);
   const copy = accessCopy(state, store, server?.name ?? store.server);
   const action =
     copy.action === 'finish-setup' ? (
@@ -132,7 +132,7 @@ export function StoreAccessTakeover({
       {noHeader ? null : (
         <PageHeader
           title={store.name}
-          subtitle={storeHeadingDescription(world, store)}
+          subtitle={storeHeadingDescription(snapshot, store)}
           action={
             <>
               {state === 'setup-incomplete' ? null : action}
@@ -166,10 +166,10 @@ function joinNames(stores: readonly Store[]): string {
 }
 
 /** Aggregates store access problems by server for warning banners. */
-export function storeAccessBands(world: World): StoreAccessBand[] {
+export function storeAccessBands(snapshot: AgentSnapshot): StoreAccessBand[] {
   const buckets = new Map<string, { state: AccessProblem; stores: Store[] }>();
-  for (const store of world.stores) {
-    const state = storeDescriptionState(world, store);
+  for (const store of snapshot.stores) {
+    const state = storeDescriptionState(snapshot, store);
     if (state === 'normal' || state === 'setup-incomplete') continue;
     const key = `${state}:${store.server}`;
     const bucket = buckets.get(key) ?? { state, stores: [] };
@@ -180,7 +180,8 @@ export function storeAccessBands(world: World): StoreAccessBand[] {
   return [...buckets.entries()].map(([key, { state, stores }]) => {
     const names = joinNames(stores);
     const verb = stores.length === 1 ? 'is' : 'are';
-    const serverName = serverOf(world, stores[0].id)?.name ?? stores[0].server;
+    const serverName =
+      serverOf(snapshot, stores[0].id)?.name ?? stores[0].server;
     const text =
       state === 'verification-failed'
         ? `${names} ${verb} unavailable because security verification failed for ${serverName}.`

@@ -47,7 +47,7 @@ async function setup(
   const { mockBridge } = (await vite.ssrLoadModule(
     '/src/mock-bridge.ts',
   )) as typeof import('../src/mock-bridge');
-  const enabledWorld = {
+  const enabledSnapshot = {
     ...FIXTURE,
     stores: FIXTURE.stores.filter(
       (s) => s.kind !== 'team' || s.id === 'team:eng',
@@ -58,7 +58,7 @@ async function setup(
         : s,
     ),
   };
-  const baseBridge = mockBridge(enabledWorld);
+  const baseBridge = mockBridge(enabledSnapshot);
   const bridge = override?.(baseBridge) ?? baseBridge;
   const portalRoot = document.getElementById('overlays');
   if (!portalRoot) throw new Error('missing overlay root');
@@ -77,10 +77,10 @@ async function setup(
         portalRoot: overlayRoot,
         children: createElement(ChatInboxProvider, {
           bridge,
-          world: enabledWorld,
+          snapshot: enabledSnapshot,
           children: visible
             ? createElement(ChatScreen, {
-                world: enabledWorld,
+                snapshot: enabledSnapshot,
                 bridge,
                 location,
                 onNavigate: (next: Location) => {
@@ -89,7 +89,7 @@ async function setup(
                 },
               })
             : createElement(Sidebar, {
-                world: enabledWorld,
+                snapshot: enabledSnapshot,
                 location: { kind: 'all' },
                 alerts: 0,
                 onNavigate: (next: Location) => {

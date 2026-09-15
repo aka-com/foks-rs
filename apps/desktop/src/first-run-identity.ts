@@ -1,4 +1,4 @@
-import type { World } from './model';
+import type { AgentSnapshot } from './model';
 import { transitionFirstRun, type FirstRunCheckpoint } from './first-run-state';
 
 export type IdentityProblem =
@@ -21,15 +21,15 @@ export const identityProblemText: Record<IdentityProblem, string> = {
 };
 
 export function provisionedIdentityProblem(
-  world: World,
+  snapshot: AgentSnapshot,
   checkpoint: FirstRunCheckpoint,
 ): IdentityProblem | null {
   const profile = checkpoint.profile;
   const pending = checkpoint.provisionedAccount;
   if (!profile || !pending) return null;
-  if (world.profileInventoryStatus !== 'complete')
+  if (snapshot.profileInventoryStatus !== 'complete')
     return 'inventory-unavailable';
-  const servers = world.servers.filter(
+  const servers = snapshot.servers.filter(
     (server) => server.id === profile.profile,
   );
   if (servers.length === 0) return 'profile-missing';
@@ -37,11 +37,11 @@ export function provisionedIdentityProblem(
   if (!servers[0].host_id) return 'inventory-unavailable';
   if (servers[0].host_id !== profile.hostId) return 'host-mismatch';
   if (
-    world.profileInventory.find((row) => row.profile === profile.profile)
+    snapshot.profileInventory.find((row) => row.profile === profile.profile)
       ?.accounts !== 'complete'
   )
     return 'inventory-unavailable';
-  const matches = world.accounts.filter(
+  const matches = snapshot.accounts.filter(
     (account) =>
       account.server === profile.profile && account.alias === pending.alias,
   );
@@ -52,24 +52,24 @@ export function provisionedIdentityProblem(
 
 /** Adopt only a unique account from the acknowledged operation's pinned host. */
 export function resolveProvisionedIdentity(
-  world: World,
+  snapshot: AgentSnapshot,
   checkpoint: FirstRunCheckpoint,
 ): FirstRunCheckpoint {
   const pending = checkpoint.provisionedAccount;
   const profile = checkpoint.profile;
   if (!pending || !profile) return checkpoint;
-  if (provisionedIdentityProblem(world, checkpoint)) return checkpoint;
-  const servers = world.servers.filter(
+  if (provisionedIdentityProblem(snapshot, checkpoint)) return checkpoint;
+  const servers = snapshot.servers.filter(
     (server) => server.id === profile.profile,
   );
   if (servers.length !== 1 || servers[0]?.host_id !== profile.hostId)
     return checkpoint;
   if (
-    world.profileInventory.find((row) => row.profile === profile.profile)
+    snapshot.profileInventory.find((row) => row.profile === profile.profile)
       ?.accounts !== 'complete'
   )
     return checkpoint;
-  const matches = world.accounts.filter(
+  const matches = snapshot.accounts.filter(
     (account) =>
       account.server === profile.profile && account.alias === pending.alias,
   );

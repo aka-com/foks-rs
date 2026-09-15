@@ -51,7 +51,7 @@ import type {
   Server,
   Store,
   StoreRef,
-  World,
+  AgentSnapshot,
 } from '../model';
 import { enqueueProfileWork } from '../bridge';
 import type { Bridge, PendingOperation } from '../bridge';
@@ -74,21 +74,21 @@ const stateName = (): string =>
     ? ''
     : (new URLSearchParams(window.location.search).get('state') ?? '');
 
-function itemsOf(world: World, store: string): Item[] {
-  return catalog(world).filter((item) => item.store === store);
+function itemsOf(snapshot: AgentSnapshot, store: string): Item[] {
+  return catalog(snapshot).filter((item) => item.store === store);
 }
 
-function readsOf(world: World, party: Party): Item[] {
-  return itemsOf(world, party.store).filter((item) =>
-    readersOf(world, item)?.some(
+function readsOf(snapshot: AgentSnapshot, party: Party): Item[] {
+  return itemsOf(snapshot, party.store).filter((item) =>
+    readersOf(snapshot, item)?.some(
       (candidate) => candidate.party_id_hex === party.party_id_hex,
     ),
   );
 }
 
-function canTarget(world: World, party: Party): boolean {
-  if (!actionableGroupMember(world, party)) return false;
-  const parties = partiesOf(world, party.store);
+function canTarget(snapshot: AgentSnapshot, party: Party): boolean {
+  if (!actionableGroupMember(snapshot, party)) return false;
+  const parties = partiesOf(snapshot, party.store);
   const mine = parties.find((candidate) => candidate.label === 'you');
   if (!mine) return false;
   const myRank = roleRank(mine.destination_role);
@@ -244,23 +244,30 @@ export interface DiscoveryContext {
 }
 
 export function discoveryContext(
-  world: World,
+  snapshot: AgentSnapshot,
   ref: StoreRef | null,
 ): DiscoveryContext | null {
   if (!ref) return null;
-  const account = world.accounts.find((candidate) => candidate.store === ref);
+  const account = snapshot.accounts.find(
+    (candidate) => candidate.store === ref,
+  );
   if (!account) return null;
-  const store = world.stores.find(
+  const store = snapshot.stores.find(
     (candidate) => candidate.id === account.store,
   );
   if (!store || store.kind !== 'account') return null;
   if (account.alias !== store.account || account.server !== store.server)
     return null;
-  const server = world.servers.find(
+  const server = snapshot.servers.find(
     (candidate) => candidate.id === store.server,
   );
   if (!server) return null;
-  return { account, store, server, available: storeReadable(world, store.id) };
+  return {
+    account,
+    store,
+    server,
+    available: storeReadable(snapshot, store.id),
+  };
 }
 
 /** One accessible name per button, since several read "Check for groups". */
@@ -303,22 +310,22 @@ function activateRow(
 }
 
 function PartyRow({
-  world,
+  snapshot,
   party,
   selected,
   onSelect,
   onOpen,
   manageable,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   party: Party;
   selected: boolean;
   onSelect: () => void;
   onOpen: () => void;
   manageable: boolean;
 }): ReactNode {
-  const active = admissionActive(world, party, party.store);
-  const actionable = manageable && canTarget(world, party);
+  const active = admissionActive(snapshot, party, party.store);
+  const actionable = manageable && canTarget(snapshot, party);
   return (
     <div
       className={`prow${selected ? ' sel' : ''}${active ? '' : ' dim'}`}
@@ -405,7 +412,7 @@ function SituationBand({
 }
 
 function PeopleTab({
-  world,
+  snapshot,
   store,
   selected,
   onSelect,
@@ -415,7 +422,7 @@ function PeopleTab({
   failure,
   onRetry,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   store: Store;
   selected: Party | null;
   onSelect: (party: Party | null) => void;
@@ -425,7 +432,7 @@ function PeopleTab({
   failure?: GroupDetailFailure;
   onRetry: () => void;
 }): ReactNode {
-  const parties = sortRoster(partiesOf(world, store.id));
+  const parties = sortRoster(partiesOf(snapshot, store.id));
   const inactive = store.kind === 'team' && store.active === false;
   const showAddActions = store.kind === 'team' && store.team_kind === 'named';
   const unavailableHint = manageable
@@ -490,7 +497,7 @@ function PeopleTab({
               {parties.map((party) => (
                 <PartyRow
                   key={party.party_id_hex}
-                  world={world}
+                  snapshot={snapshot}
                   party={party}
                   selected={selected?.party_id_hex === party.party_id_hex}
                   onSelect={() =>
@@ -531,28 +538,28 @@ function PeopleTab({
 }
 
 function PartyPanel({
-  world,
+  snapshot,
   party,
   onClose,
   onSheet,
   manageable,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   party: Party;
   onClose: () => void;
   onSheet: (sheet: Sheet, party?: Party) => void;
   manageable: boolean;
 }): ReactNode {
-  const items = itemsOf(world, party.store);
-  const readable = new Set(readsOf(world, party));
+  const items = itemsOf(snapshot, party.store);
+  const readable = new Set(readsOf(snapshot, party));
   const machine =
     party.party_kind === 'user' &&
     Boolean(party.note?.includes('service account'));
   const here = roleText(party);
-  const active = admissionActive(world, party, party.store);
-  const group = storeOf(world, party.store);
+  const active = admissionActive(snapshot, party, party.store);
+  const group = storeOf(snapshot, party.store);
   const pinned = party.scoped_host_id_hex
-    ? world.servers.find(
+    ? snapshot.servers.find(
         (server) =>
           server.host_id && server.host_id === party.scoped_host_id_hex,
       )
@@ -658,7 +665,7 @@ function PartyPanel({
           </p>
         ) : null}
       </div>
-      {manageable && canTarget(world, party) ? (
+      {manageable && canTarget(snapshot, party) ? (
         <div className="dfoot">
           {demotionFor(party) ? (
             <Button onClick={() => onSheet('demote', party)}>
@@ -675,7 +682,7 @@ function PartyPanel({
 }
 
 function FederationSection({
-  world,
+  snapshot,
   store,
   onSheet,
   onRerun,
@@ -684,7 +691,7 @@ function FederationSection({
   failure,
   onRetry,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   store: Store;
   onSheet: (sheet: Sheet) => void;
   onRerun: (operationId: string) => void;
@@ -693,9 +700,11 @@ function FederationSection({
   failure?: GroupDetailFailure;
   onRetry: () => void;
 }): ReactNode {
-  const entries = world.federation.filter((entry) => entry.store === store.id);
+  const entries = snapshot.federation.filter(
+    (entry) => entry.store === store.id,
+  );
   const inactive = store.kind === 'team' && store.active === false;
-  const parties = partiesOf(world, store.id);
+  const parties = partiesOf(snapshot, store.id);
   const showAddAction = store.kind === 'team' && store.team_kind === 'named';
   return (
     <div className="roster federation-section">
@@ -745,10 +754,10 @@ function FederationSection({
                     candidate.party_id_hex === entry.remote_team_id_hex,
                 );
                 const remoteName =
-                  world.servers.find(
+                  snapshot.servers.find(
                     (server) => server.id === entry.remote_profile,
                   )?.name ?? entry.remote_profile;
-                const readable = party ? readsOf(world, party).length : 0;
+                const readable = party ? readsOf(snapshot, party).length : 0;
                 return (
                   <div
                     className="prow"
@@ -918,7 +927,7 @@ function FederationExpulsionSheet({
 }
 
 function SettingsTab({
-  world,
+  snapshot,
   store,
   onSheet,
   onNavigate,
@@ -927,7 +936,7 @@ function SettingsTab({
   manageable,
   rekeyOpen,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   store: Extract<Store, { kind: 'team' }>;
   onSheet: (sheet: Sheet, party?: Party) => void;
   onNavigate: (location: Location) => void;
@@ -936,16 +945,16 @@ function SettingsTab({
   manageable: boolean;
   rekeyOpen: boolean;
 }): ReactNode {
-  const parties = partiesOf(world, store.id);
+  const parties = partiesOf(snapshot, store.id);
   const mine = parties.find((party) => party.label === 'you');
   const owner = parties.find(
     (party) => parseRole(party.destination_role)?.kind === 'owner',
   );
-  const account = world.accounts.find(
+  const account = snapshot.accounts.find(
     (candidate) =>
       candidate.alias === store.account && candidate.server === store.server,
   );
-  const server = serverOf(world, store.id);
+  const server = serverOf(snapshot, store.id);
   const seniors = parties
     .filter(
       (party) =>
@@ -957,7 +966,7 @@ function SettingsTab({
   const removable = manageable
     ? parties
         .map((party, index) => ({ party, index }))
-        .filter(({ party }) => canTarget(world, party))
+        .filter(({ party }) => canTarget(snapshot, party))
         .sort((left, right) => {
           const rank =
             roleRank(left.party.destination_role) -
@@ -973,7 +982,7 @@ function SettingsTab({
         })
         .map(({ party }) => party)
     : [];
-  const total = itemsOf(world, store.id).length;
+  const total = itemsOf(snapshot, store.id).length;
   return (
     <div className="group-settings">
       <SituationBand store={store} tab="settings" onFinish={onFinish} />
@@ -1050,7 +1059,7 @@ function SettingsTab({
                       <b>{partyShortName(party)}</b>
                       <small>
                         {fmtRole(party.destination_role)} · reads{' '}
-                        {readsOf(world, party).length} of {total}
+                        {readsOf(snapshot, party).length} of {total}
                       </small>
                     </span>
                   </button>
@@ -1126,10 +1135,14 @@ function SettingsTab({
   );
 }
 
-function inspectResponse(world: World, store: Store, tab: Tab): unknown {
+function inspectResponse(
+  snapshot: AgentSnapshot,
+  store: Store,
+  tab: Tab,
+): unknown {
   if (tab === 'settings') return store;
   return {
-    people: partiesOf(world, store.id).map((party) => ({
+    people: partiesOf(snapshot, store.id).map((party) => ({
       ...(party.username ? { username: party.username } : {}),
       party_kind: party.party_kind,
       generation: party.generation,
@@ -1141,7 +1154,7 @@ function inspectResponse(world: World, store: Store, tab: Tab): unknown {
       source_role: party.source_role,
       destination_role: party.destination_role,
     })),
-    federation: world.federation
+    federation: snapshot.federation
       .filter((entry) => entry.store === store.id)
       .map((entry) => ({
         remote_profile: entry.remote_profile,
@@ -1158,7 +1171,7 @@ function inspectResponse(world: World, store: Store, tab: Tab): unknown {
 }
 
 export function GroupSheet({
-  world,
+  snapshot,
   bridge,
   store,
   sheet,
@@ -1169,7 +1182,7 @@ export function GroupSheet({
   onError,
   onMutationError,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   bridge: Bridge;
   store: Store;
   sheet: Exclude<Sheet, null>;
@@ -1187,7 +1200,7 @@ export function GroupSheet({
   const toasts = useToast();
   const [username, setUsername] = useState('jules.park');
   const [visibility, setVisibility] = useState(0);
-  const callerParty = partiesOf(world, store.id).find(
+  const callerParty = partiesOf(snapshot, store.id).find(
     (candidate) => candidate.label === 'you',
   );
   const callerRank = callerParty ? roleRank(callerParty.destination_role) : 0;
@@ -1198,9 +1211,9 @@ export function GroupSheet({
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState('Platform');
   const [createKind, setCreateKind] = useState<'named' | 'adhoc'>('named');
-  const creationAccounts = world.stores.filter(
+  const creationAccounts = snapshot.stores.filter(
     (candidate) =>
-      candidate.kind === 'account' && canCreateInStore(world, candidate.id),
+      candidate.kind === 'account' && canCreateInStore(snapshot, candidate.id),
   );
   const [accountStoreId, setAccountStoreId] = useState(
     () =>
@@ -1208,12 +1221,12 @@ export function GroupSheet({
       creationAccounts[0]?.id ??
       '',
   );
-  const remotes = world.stores.filter(
+  const remotes = snapshot.stores.filter(
     (candidate): candidate is Extract<Store, { kind: 'team' }> =>
       candidate.kind === 'team' &&
       candidate.active &&
       candidate.team_kind === 'named' &&
-      storeReadable(world, candidate.id) &&
+      storeReadable(snapshot, candidate.id) &&
       candidate.server !== store.server,
   );
   const [remoteStoreId, setRemoteStoreId] = useState(remotes[0]?.id ?? '');
@@ -1221,12 +1234,12 @@ export function GroupSheet({
     (candidate) => candidate.id === accountStoreId,
   );
   const server = serverOf(
-    world,
+    snapshot,
     sheet === 'create' && creationAccount ? creationAccount.id : store.id,
   );
   const ownerStore =
     store.kind === 'team'
-      ? world.stores.find(
+      ? snapshot.stores.find(
           (candidate) =>
             candidate.kind === 'account' &&
             candidate.server === store.server &&
@@ -1234,7 +1247,7 @@ export function GroupSheet({
         )
       : undefined;
   const ownerAccount = ownerStore
-    ? world.accounts.find(
+    ? snapshot.accounts.find(
         (account) =>
           account.store === ownerStore.id ||
           (account.server === ownerStore.server &&
@@ -1255,9 +1268,9 @@ export function GroupSheet({
     remotes.find((candidate) => candidate.id === remoteStoreId) ?? remotes[0];
   const requiredFailure =
     sheet === 'admit'
-      ? groupDetailFailure(world, store.id, 'federation')
+      ? groupDetailFailure(snapshot, store.id, 'federation')
       : ['add', 'demote', 'remove'].includes(sheet)
-        ? groupDetailFailure(world, store.id, 'roster')
+        ? groupDetailFailure(snapshot, store.id, 'roster')
         : undefined;
   const title =
     sheet === 'invite'
@@ -1310,7 +1323,7 @@ export function GroupSheet({
       else if (
         sheet === 'demote' &&
         target &&
-        canTarget(world, target) &&
+        canTarget(snapshot, target) &&
         demotion
       )
         await bridge.demoteGroupMember({
@@ -1318,7 +1331,7 @@ export function GroupSheet({
           username: target.username!,
           destination: demotion,
         });
-      else if (sheet === 'remove' && target && canTarget(world, target))
+      else if (sheet === 'remove' && target && canTarget(snapshot, target))
         await bridge.removeGroupMember({
           storeId: store.id,
           username: target.username!,
@@ -1393,7 +1406,7 @@ export function GroupSheet({
                 busy ||
                 Boolean(requiredFailure) ||
                 !target ||
-                !canTarget(world, target)
+                !canTarget(snapshot, target)
               }
               onClick={() => void apply()}
             >
@@ -1407,7 +1420,7 @@ export function GroupSheet({
                 Boolean(requiredFailure) ||
                 (sheet === 'add' && !username.trim()) ||
                 (sheet === 'demote' &&
-                  (!target || !canTarget(world, target) || !demotion)) ||
+                  (!target || !canTarget(snapshot, target) || !demotion)) ||
                 (sheet === 'admit' && !remote) ||
                 (sheet === 'create' && (!teamAlias || !creationAccount))
               }
@@ -1637,7 +1650,7 @@ export function GroupSheet({
               Removing blocks future reads and rekeys the group. This user may
               retain a local copy of their current records.
             </p>
-            {target && !canTarget(world, target) ? (
+            {target && !canTarget(snapshot, target) ? (
               <Notice title={`${partyName(target)} cannot be removed here`}>
                 This member cannot be removed here. They are managed by another
                 server or account.
@@ -1652,7 +1665,7 @@ export function GroupSheet({
               {remotes.length ? (
                 <RadioGroup label="Group">
                   {remotes.map((group) => {
-                    const host = serverOf(world, group.id);
+                    const host = serverOf(snapshot, group.id);
                     return (
                       <RadioCard
                         key={group.id}
@@ -1723,8 +1736,8 @@ export function GroupSheet({
                       key={account.id}
                       selected={account.id === accountStoreId}
                       onSelect={() => setAccountStoreId(account.id)}
-                      title={serverOf(world, account.id)?.name}
-                      detail={`as ${world.accounts.find((candidate) => candidate.store === account.id || (candidate.alias === account.account && candidate.server === account.server))?.username ?? account.account}`}
+                      title={serverOf(snapshot, account.id)?.name}
+                      detail={`as ${snapshot.accounts.find((candidate) => candidate.store === account.id || (candidate.alias === account.account && candidate.server === account.server))?.username ?? account.account}`}
                     />
                   ))}
                 </RadioGroup>
@@ -1760,15 +1773,15 @@ export function GroupSheet({
 }
 
 export function GroupSettingsScreen({
-  world,
+  snapshot,
   bridge,
   location,
   onNavigate,
-  onApplied: onWorldApplied,
+  onApplied: onSnapshotApplied,
   onError,
-  onMutationError: onWorldMutationError,
+  onMutationError: onSnapshotMutationError,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   bridge: Bridge;
   location: Extract<Location, { kind: 'group-settings' }>;
   onNavigate: (location: Location) => void;
@@ -1793,16 +1806,16 @@ export function GroupSettingsScreen({
   useEffect(() => {
     setTab(location.tab ?? 'people');
   }, [location.ref, location.tab]);
-  const store = storeOf(world, location.ref);
+  const store = storeOf(snapshot, location.ref);
   const parties = useMemo(
-    () => (store ? partiesOf(world, store.id) : []),
-    [store, world],
+    () => (store ? partiesOf(snapshot, store.id) : []),
+    [store, snapshot],
   );
   const rosterFailure = store
-    ? groupDetailFailure(world, store.id, 'roster')
+    ? groupDetailFailure(snapshot, store.id, 'roster')
     : undefined;
   const federationFailure = store
-    ? groupDetailFailure(world, store.id, 'federation')
+    ? groupDetailFailure(snapshot, store.id, 'federation')
     : undefined;
   const [selected, setSelected] = useState<Party | null>(() =>
     initial === 'party'
@@ -1848,22 +1861,22 @@ export function GroupSettingsScreen({
   const onApplied = useCallback(
     async (message: string): Promise<void> => {
       try {
-        await onWorldApplied(message);
+        await onSnapshotApplied(message);
       } finally {
         await loadMembershipPending();
       }
     },
-    [loadMembershipPending, onWorldApplied],
+    [loadMembershipPending, onSnapshotApplied],
   );
   const onMutationError = useCallback<MutationFailureHandler>(
     async (error, options) => {
       try {
-        await onWorldMutationError(error, options);
+        await onSnapshotMutationError(error, options);
       } finally {
         await loadMembershipPending();
       }
     },
-    [loadMembershipPending, onWorldMutationError],
+    [loadMembershipPending, onSnapshotMutationError],
   );
   const [target, setTarget] = useState<Party | null>(() => {
     if (initial === 'demote')
@@ -1902,7 +1915,7 @@ export function GroupSettingsScreen({
       : target
     : null;
   const expulsionEntry = expulsionTarget
-    ? (world.federation.find(
+    ? (snapshot.federation.find(
         (entry) =>
           entry.store === expulsionTarget.store &&
           entry.active &&
@@ -1918,9 +1931,9 @@ export function GroupSettingsScreen({
     () =>
       store
         ? parties.length +
-          world.federation.filter((entry) => entry.store === store.id).length
+          snapshot.federation.filter((entry) => entry.store === store.id).length
         : 0,
-    [parties, store, world.federation],
+    [parties, store, snapshot.federation],
   );
   const storeId = store?.id;
   const seenStore = useRef(storeId);
@@ -1987,10 +2000,10 @@ export function GroupSettingsScreen({
       </>
     );
   }
-  const access = storeDescriptionState(world, store);
+  const access = storeDescriptionState(snapshot, store);
   const unavailable = access !== 'normal' && access !== 'setup-incomplete';
   const inactive = store.active === false;
-  const callerParty = partiesOf(world, store.id).find(
+  const callerParty = partiesOf(snapshot, store.id).find(
     (candidate) => candidate.label === 'you',
   );
   const callerRank = callerParty ? roleRank(callerParty.destination_role) : 0;
@@ -2088,7 +2101,7 @@ export function GroupSettingsScreen({
       </div>
       {unavailable ? (
         <StoreAccessTakeover
-          world={world}
+          snapshot={snapshot}
           store={store}
           noHeader
           onOpenServer={(profile) =>
@@ -2150,7 +2163,7 @@ export function GroupSettingsScreen({
               {tab === 'people' ? (
                 <>
                   <PeopleTab
-                    world={world}
+                    snapshot={snapshot}
                     store={store}
                     selected={selected}
                     onSelect={setSelected}
@@ -2170,7 +2183,7 @@ export function GroupSettingsScreen({
                     />
                   )}
                   <FederationSection
-                    world={world}
+                    snapshot={snapshot}
                     store={store}
                     onSheet={openSheet}
                     onRerun={(operationId) =>
@@ -2189,7 +2202,7 @@ export function GroupSettingsScreen({
                 </>
               ) : (
                 <SettingsTab
-                  world={world}
+                  snapshot={snapshot}
                   store={store}
                   onSheet={openSheet}
                   onNavigate={onNavigate}
@@ -2203,7 +2216,7 @@ export function GroupSettingsScreen({
                 <Toggle label="Inspect response">
                   <pre>
                     {JSON.stringify(
-                      inspectResponse(world, store, tab),
+                      inspectResponse(snapshot, store, tab),
                       null,
                       1,
                     )}
@@ -2214,7 +2227,7 @@ export function GroupSettingsScreen({
           </div>
           {selectedParty ? (
             <PartyPanel
-              world={world}
+              snapshot={snapshot}
               party={selectedParty}
               onClose={() => setSelected(null)}
               onSheet={openSheet}
@@ -2233,7 +2246,7 @@ export function GroupSettingsScreen({
           ) : null}
           {sheet ? (
             <GroupSheet
-              world={world}
+              snapshot={snapshot}
               bridge={bridge}
               store={store}
               sheet={sheet}

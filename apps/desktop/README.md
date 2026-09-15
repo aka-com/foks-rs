@@ -136,14 +136,14 @@ are decisions, not details:
   it loads only the app's versioned nonsecret first-run checkpoint so a mocked
   quit/resume walk includes completed setup facts. It is
   reached only by dynamic `import()`. `app-root.tsx` calls
-  `selectBridge`, checks the Rust app lock, and calls `loadWorld` only after an
-  armed lock has been authenticated; only an explicitly mocked browser gets the
-  fixture world. A native load constructs its world solely from validated
-  command responses, loads passive signed status before exposing catalog facts,
-  and then loads group rosters and federation admissions only for available
-  profiles. Status notices come only from typed catalog failures, typed status
-  failures, or the absence of a usable signed lease expiry. Device facts load
-  only for available accounts in the relevant Settings surface.
+  `selectBridge`, checks the Rust app lock, and calls `loadSnapshot` only after
+  an armed lock has been authenticated; only an explicitly mocked browser gets
+  the fixture snapshot. A native load constructs its snapshot solely from
+  validated command responses, loads passive signed status before exposing
+  catalog facts, and then loads group rosters and federation admissions only
+  for available profiles. Status notices come only from typed catalog failures,
+  typed status failures, or the absence of a usable signed lease expiry. Device
+  facts load only for available accounts in the relevant Settings surface.
 
 The Rust contract uses Rust field names in responses and camelCase Tauri
 arguments. `list_catalog` returns profiles, stores, items, failures and
@@ -313,7 +313,7 @@ kept so deep links defined in the design specification resolve to this location.
 | `conflict`                                                                  | All items                                   | exact-version refusal with retained draft and Refresh and review                                              |
 | `grid`                                                                      | All items                                   | `view=grid`                                                                                                   |
 | `folders`                                                                   | All items                                   | `view=folders`; store roots and folders are derived from catalog paths                                        |
-| `lease`                                                                     | Work (Acme)                                 | `lease=lapsed` — the whole world, not a place                                                                 |
+| `lease`                                                                     | Work (Acme)                                 | `lease=lapsed` — the whole snapshot, not a place                                                              |
 | `inactive`                                                                  | Homelab                                     | group reports inactive; Resume creation uses its resumable operation                                          |
 | `alerts`                                                                    | Alerts                                      | `lease=lapsed`, so the pane has its critical entry                                                            |
 | `agent-lost`                                                                | Full window stop                            | Retry reconnects and refreshes without replay                                                                 |

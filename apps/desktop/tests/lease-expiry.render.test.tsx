@@ -53,17 +53,25 @@ test.afterEach(() => ui.cleanup());
 test.after(async () => vite.close());
 
 test('an expiring open vault conceals details while a healthy neighbor stays usable', async () => {
-  const { App } = (await vite.ssrLoadModule('/src/app-root.tsx')) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule('/src/fixture.ts')) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule('/src/mock-bridge.ts')) as typeof import('../src/mock-bridge');
-  const { LocationStore, INITIAL_STATE } = (await vite.ssrLoadModule('/src/location.ts')) as typeof import('../src/location');
+  const { App } = (await vite.ssrLoadModule(
+    '/src/app-root.tsx',
+  )) as typeof import('../src/app-root');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { LocationStore, INITIAL_STATE } = (await vite.ssrLoadModule(
+    '/src/location.ts',
+  )) as typeof import('../src/location');
   const item = FIXTURE.items.find(
     (entry) => entry.store === 'team:eng' && entry.kind === 'Secret',
   );
   assert.ok(item);
   const start = Date.now() / 1_000;
   const expiresAt = Math.ceil(start) + 10;
-  const world = {
+  const agentSnapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
       server.id === 'acme'
@@ -85,8 +93,8 @@ test('an expiring open vault conceals details while a healthy neighbor stays usa
   clock.seconds = start;
   const rendered = ui.render(
     createElement(App, {
-      world,
-      bridge: mockBridge(world),
+      snapshot: agentSnapshot,
+      bridge: mockBridge(agentSnapshot),
       store: locations,
       leaseClock: clock,
     }),
@@ -94,7 +102,9 @@ test('an expiring open vault conceals details while a healthy neighbor stays usa
   await ui.waitFor(() => assert.ok(rendered.getByLabelText('Details')));
   const show = rendered.queryByRole('button', { name: 'Show' });
   if (show) ui.fireEvent.click(show);
-  await ui.waitFor(() => assert.ok(rendered.getByText('foks_team_token_7f31ac09')));
+  await ui.waitFor(() =>
+    assert.ok(rendered.getByText('foks_team_token_7f31ac09')),
+  );
 
   await ui.act(async () => clock.advance(expiresAt - start));
   await ui.waitFor(() => {
@@ -102,25 +112,34 @@ test('an expiring open vault conceals details while a healthy neighbor stays usa
     assert.equal(rendered.queryByText('foks_team_token_7f31ac09'), null);
     assert.ok(rendered.getAllByText('Check-in expired').length > 0);
   });
-  const personal = (rendered.getAllByRole('button') as HTMLButtonElement[]).find(
-    (button) => button.textContent?.includes('Personal'),
-  );
+  const personal = (
+    rendered.getAllByRole('button') as HTMLButtonElement[]
+  ).find((button) => button.textContent?.includes('Personal'));
   assert.ok(personal);
   assert.equal(personal.disabled, false);
 });
 
 test('expiry on one profile preserves a healthy neighboring editor draft', async () => {
-  const { App } = (await vite.ssrLoadModule('/src/app-root.tsx')) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule('/src/fixture.ts')) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule('/src/mock-bridge.ts')) as typeof import('../src/mock-bridge');
-  const { LocationStore, INITIAL_STATE } = (await vite.ssrLoadModule('/src/location.ts')) as typeof import('../src/location');
+  const { App } = (await vite.ssrLoadModule(
+    '/src/app-root.tsx',
+  )) as typeof import('../src/app-root');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { LocationStore, INITIAL_STATE } = (await vite.ssrLoadModule(
+    '/src/location.ts',
+  )) as typeof import('../src/location');
   const item = FIXTURE.items.find(
-    (entry) => entry.store === 'acct:personal' && entry.path === '/logins/github.com',
+    (entry) =>
+      entry.store === 'acct:personal' && entry.path === '/logins/github.com',
   );
   assert.ok(item);
   const start = Date.now() / 1_000;
   const expiresAt = Math.ceil(start) + 10;
-  const world = {
+  const agentSnapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
       server.id === 'acme'
@@ -142,8 +161,8 @@ test('expiry on one profile preserves a healthy neighboring editor draft', async
   clock.seconds = start;
   const rendered = ui.render(
     createElement(App, {
-      world,
-      bridge: mockBridge(world),
+      snapshot: agentSnapshot,
+      bridge: mockBridge(agentSnapshot),
       store: locations,
       leaseClock: clock,
     }),
@@ -161,12 +180,18 @@ test('expiry on one profile preserves a healthy neighboring editor draft', async
 });
 
 test('foreground retries authenticated reconciliation after an expiry refresh fails', async () => {
-  const { App } = (await vite.ssrLoadModule('/src/app-root.tsx')) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule('/src/fixture.ts')) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule('/src/mock-bridge.ts')) as typeof import('../src/mock-bridge');
+  const { App } = (await vite.ssrLoadModule(
+    '/src/app-root.tsx',
+  )) as typeof import('../src/app-root');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
   const start = Date.now() / 1_000;
   const expiresAt = Math.ceil(start) + 10;
-  const world = {
+  const agentSnapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
       server.id === 'acme'
@@ -178,7 +203,7 @@ test('foreground retries authenticated reconciliation after an expiry refresh fa
     ),
     observedExpiredLeases: [],
   };
-  const base = mockBridge(world);
+  const base = mockBridge(agentSnapshot);
   let catalogs = 0;
   const bridge = {
     ...base,
@@ -198,7 +223,7 @@ test('foreground retries authenticated reconciliation after an expiry refresh fa
   const clock = new Clock();
   clock.seconds = start;
   ui.render(
-    createElement(App, { world, bridge, leaseClock: clock }),
+    createElement(App, { snapshot: agentSnapshot, bridge, leaseClock: clock }),
   );
   await ui.act(async () => clock.advance(expiresAt - start));
   await ui.waitFor(() => assert.equal(catalogs, 1));
@@ -211,9 +236,15 @@ test('foreground retries authenticated reconciliation after an expiry refresh fa
 });
 
 test('an authoritative zero-profile catalog enters fresh-install onboarding', async () => {
-  const { App } = (await vite.ssrLoadModule('/src/app-root.tsx')) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule('/src/fixture.ts')) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule('/src/mock-bridge.ts')) as typeof import('../src/mock-bridge');
+  const { App } = (await vite.ssrLoadModule(
+    '/src/app-root.tsx',
+  )) as typeof import('../src/app-root');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
   window.history.replaceState(null, '', '/');
   const empty = {
     ...FIXTURE,
@@ -233,16 +264,24 @@ test('an authoritative zero-profile catalog enters fresh-install onboarding', as
     plaintext: {},
   };
   ui.render(createElement(App, { bridge: mockBridge(empty) }));
-  await ui.waitFor(() => assert.ok(ui.screen.getByText('How are you joining?')));
+  await ui.waitFor(() =>
+    assert.ok(ui.screen.getByText('How are you joining?')),
+  );
 });
 
 test('expiry during native maintenance waits for lifecycle restoration to refresh', async () => {
-  const { App } = (await vite.ssrLoadModule('/src/app-root.tsx')) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule('/src/fixture.ts')) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule('/src/mock-bridge.ts')) as typeof import('../src/mock-bridge');
+  const { App } = (await vite.ssrLoadModule(
+    '/src/app-root.tsx',
+  )) as typeof import('../src/app-root');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
   const start = Date.now() / 1_000;
   const expiresAt = Math.ceil(start) + 10;
-  const world = {
+  const agentSnapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
       server.id === 'acme'
@@ -261,7 +300,7 @@ test('expiry during native maintenance waits for lifecycle restoration to refres
   };
   const listeners = new Set<(value: MaintenanceSnapshot) => void>();
   let catalogs = 0;
-  const base = mockBridge(world);
+  const base = mockBridge(agentSnapshot);
   const bridge: Bridge = {
     ...base,
     native: true,
@@ -277,7 +316,9 @@ test('expiry during native maintenance waits for lifecycle restoration to refres
   };
   const clock = new Clock();
   clock.seconds = start;
-  ui.render(createElement(App, { world, bridge, leaseClock: clock }));
+  ui.render(
+    createElement(App, { snapshot: agentSnapshot, bridge, leaseClock: clock }),
+  );
   await ui.waitFor(() => assert.equal(listeners.size, 1));
   snapshot = {
     state: 'active',
@@ -304,4 +345,61 @@ test('expiry during native maintenance waits for lifecycle restoration to refres
     for (const listener of listeners) listener(snapshot);
   });
   await ui.waitFor(() => assert.ok(catalogs >= 1));
+});
+
+test('a forced expiry refresh waits for the in-flight foreground load', async () => {
+  const { App } = (await vite.ssrLoadModule(
+    '/src/app-root.tsx',
+  )) as typeof import('../src/app-root');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const start = Date.now() / 1_000;
+  const expiresAt = Math.ceil(start) + 10;
+  const agentSnapshot = {
+    ...FIXTURE,
+    servers: FIXTURE.servers.map((server) =>
+      server.id === 'acme'
+        ? {
+            ...server,
+            compatibility: { status: 'required' as const, expiresAt },
+          }
+        : server,
+    ),
+    observedExpiredLeases: [],
+  };
+  const base = mockBridge(agentSnapshot);
+  // Every catalog load waits until released, so a second load can only start
+  // once the test lets the first one finish.
+  const releases: Array<() => void> = [];
+  let catalogs = 0;
+  const bridge = {
+    ...base,
+    listCatalog: async () => {
+      catalogs++;
+      await new Promise<void>((resolve) => releases.push(resolve));
+      return base.listCatalog();
+    },
+  };
+  const clock = new Clock();
+  clock.seconds = start;
+  const rendered = ui.render(
+    createElement(App, { snapshot: agentSnapshot, bridge, leaseClock: clock }),
+  );
+  await rendered.findByRole('button', { name: /Refresh/ });
+  Object.defineProperty(document, 'hidden', {
+    configurable: true,
+    value: false,
+  });
+  ui.fireEvent(document, new Event('visibilitychange'));
+  await ui.waitFor(() => assert.equal(catalogs, 1));
+  await ui.act(async () => clock.advance(expiresAt - start));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(catalogs, 1, 'the forced load must not overlap the live one');
+  await ui.act(async () => releases.shift()?.());
+  await ui.waitFor(() => assert.equal(catalogs, 2));
+  await ui.act(async () => releases.shift()?.());
 });

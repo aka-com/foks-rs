@@ -9,14 +9,14 @@ import type { ReactNode } from 'react';
 import { Button, Chip, Icon } from '../components';
 import { PageHeader } from '../shell/page-header';
 import { notesNow } from '../model';
-import type { Notification, World } from '../model';
+import type { Notification, AgentSnapshot } from '../model';
 
 const ACTION_UNAVAILABLE =
   'Resolve this alert in Server Settings or Group Settings.';
 
 export interface AlertsScreenProps {
-  world: World;
-  onRefreshWorld: () => Promise<World>;
+  snapshot: AgentSnapshot;
+  onRefreshSnapshot: () => Promise<AgentSnapshot>;
   onError: (error: unknown) => void;
 }
 
@@ -25,17 +25,17 @@ function canRetry(note: Notification): boolean {
 }
 
 export function AlertsScreen({
-  world,
-  onRefreshWorld,
+  snapshot,
+  onRefreshSnapshot,
   onError,
 }: AlertsScreenProps): ReactNode {
   const [busy, setBusy] = useState<Set<string>>(new Set());
-  const notes = notesNow(world);
+  const notes = notesNow(snapshot);
 
   const retry = (note: Notification): void => {
     if (!canRetry(note) || busy.has(note.id)) return;
     setBusy((current) => new Set([...current, note.id]));
-    onRefreshWorld()
+    onRefreshSnapshot()
       .catch(onError)
       .finally(() => {
         setBusy((current) => {

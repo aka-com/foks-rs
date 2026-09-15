@@ -27,7 +27,9 @@ test.after(async () => vite.close());
 
 async function setup(
   readItem?: Bridge['readItem'],
-  selectItem?: (item: DetailsPanelProps['world']['items'][number]) => boolean,
+  selectItem?: (
+    item: DetailsPanelProps['snapshot']['items'][number],
+  ) => boolean,
 ) {
   const { DetailsPanel } = (await vite.ssrLoadModule(
     '/src/screens/details-panel.tsx',
@@ -48,7 +50,7 @@ async function setup(
   const bridge = mockBridge();
   const selected: Selection[] = [];
   const props: DetailsPanelProps = {
-    world: FIXTURE,
+    snapshot: FIXTURE,
     bridge: readItem ? { ...bridge, readItem } : bridge,
     selection: { store: link.store, path: link.path },
     onSelect: (selection) => {
@@ -97,7 +99,7 @@ test('a pending link read cannot reveal into a different selection', async () =>
   });
   const p = await setup(() => pending);
   const r = ui.render(p.draw());
-  const other = p.props.world.items.find((item) => item.kind === 'Secret')!;
+  const other = p.props.snapshot.items.find((item) => item.kind === 'Secret')!;
   p.props.selection = { store: other.store, path: other.path };
   r.rerender(p.draw());
   await ui.act(async () => {
@@ -125,11 +127,13 @@ test('an access generation quarantines old read flights across expiry and renewa
   const r = ui.render(p.draw());
   await ui.waitFor(() => assert.equal(reads, 1));
 
-  const store = p.props.world.stores.find((entry) => entry.id === p.link.store);
+  const store = p.props.snapshot.stores.find(
+    (entry) => entry.id === p.link.store,
+  );
   assert.ok(store);
-  p.props.world = {
-    ...p.props.world,
-    servers: p.props.world.servers.map((server) =>
+  p.props.snapshot = {
+    ...p.props.snapshot,
+    servers: p.props.snapshot.servers.map((server) =>
       server.id === store.server
         ? {
             ...server,
@@ -151,9 +155,9 @@ test('an access generation quarantines old read flights across expiry and renewa
   });
   assert.equal(r.queryByText('/expired-flight', { exact: false }), null);
 
-  p.props.world = {
-    ...p.props.world,
-    servers: p.props.world.servers.map((server) =>
+  p.props.snapshot = {
+    ...p.props.snapshot,
+    servers: p.props.snapshot.servers.map((server) =>
       server.id === store.server
         ? {
             ...server,

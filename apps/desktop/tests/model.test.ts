@@ -39,16 +39,16 @@ import {
   storeDisplayOrder,
   storeNavigationOrder,
 } from '../src/model';
-import type { Item, World } from '../src/model';
+import type { Item, AgentSnapshot } from '../src/model';
 
-function item(world: World, key: string): Item {
-  const found = world.items.find((candidate) => itemKey(candidate) === key);
+function item(snapshot: AgentSnapshot, key: string): Item {
+  const found = snapshot.items.find((candidate) => itemKey(candidate) === key);
   assert.ok(found, `item not found in fixture: ${key}`);
   return found;
 }
 
-function readerCount(world: World, key: string): number {
-  const readers = readersOf(world, item(world, key));
+function readerCount(snapshot: AgentSnapshot, key: string): number {
+  const readers = readersOf(snapshot, item(snapshot, key));
   assert.ok(readers, `item must belong to a team store: ${key}`);
   return readers.length;
 }
@@ -167,7 +167,7 @@ test('activating a federated team admission grants item read access', () => {
   assert.equal(admits(homelab.destination_role, 'Member · visibility 0'), true);
 
   // Activating federation admission increments reader count.
-  const admitted: World = {
+  const admitted: AgentSnapshot = {
     ...FIXTURE,
     federation: FIXTURE.federation.map((entry) => ({ ...entry, active: true })),
   };
@@ -358,7 +358,7 @@ test('an inactive group is described as setup incomplete', () => {
 });
 
 test('a group-detail failure changes its caption without stopping item access', () => {
-  const world = {
+  const snapshot = {
     ...FIXTURE,
     groupDetailFailures: [
       {
@@ -370,10 +370,12 @@ test('a group-detail failure changes its caption without stopping item access', 
       },
     ],
   };
-  const store = world.stores.find((candidate) => candidate.id === 'team:eng');
+  const store = snapshot.stores.find(
+    (candidate) => candidate.id === 'team:eng',
+  );
   assert.ok(store);
-  assert.equal(storeDescription(world, store), 'Roster unavailable');
-  assert.equal(storeReadable(world, store.id), true);
+  assert.equal(storeDescription(snapshot, store), 'Roster unavailable');
+  assert.equal(storeReadable(snapshot, store.id), true);
 });
 
 test('group item changes require one authenticated local party that admits the write role', () => {
@@ -392,7 +394,7 @@ test('group item changes require one authenticated local party that admits the w
     'the available account store is local',
   );
 
-  const noAuthenticatedParty: World = {
+  const noAuthenticatedParty: AgentSnapshot = {
     ...FIXTURE,
     parties: FIXTURE.parties.map((party) =>
       party.store === 'team:eng' && party.label === 'you'
@@ -454,7 +456,7 @@ test('every store the sidebar orders is in the fixture', () => {
 
 test('navigation orders vaults, named groups, then ad-hoc shares', () => {
   const byId = new Map(FIXTURE.stores.map((store) => [store.id, store]));
-  const world: World = {
+  const snapshot: AgentSnapshot = {
     ...FIXTURE,
     stores: [
       byId.get('team:homelab'),
@@ -465,7 +467,7 @@ test('navigation orders vaults, named groups, then ad-hoc shares', () => {
     ].filter((store) => store !== undefined),
   };
   assert.deepEqual(
-    storeNavigationOrder(world).map((store) => store.id),
+    storeNavigationOrder(snapshot).map((store) => store.id),
     [
       'acct:work',
       'acct:personal',
@@ -482,7 +484,7 @@ test('safestRemovalTarget selects member with lowest role rank, breaking ties by
     'dana.okafor',
   );
 
-  const changed: World = {
+  const changed: AgentSnapshot = {
     ...FIXTURE,
     parties: FIXTURE.parties.map((party) =>
       party.username === 'dana.okafor'
@@ -495,7 +497,7 @@ test('safestRemovalTarget selects member with lowest role rank, breaking ties by
     'deploy-bot',
   );
 
-  const lowerBand: World = {
+  const lowerBand: AgentSnapshot = {
     ...FIXTURE,
     parties: FIXTURE.parties.map((party) =>
       party.username === 'deploy-bot'
@@ -560,7 +562,7 @@ test('a never-probed server is a stopped store, not a normal one', () => {
     (candidate) => candidate.kind === 'account',
   );
   assert.ok(store);
-  const world = {
+  const snapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
       server.id === store.server
@@ -569,12 +571,12 @@ test('a never-probed server is a stopped store, not a normal one', () => {
     ),
   };
   // Never-probed servers must be treated as inactive rather than normal.
-  assert.equal(storeDescriptionState(world, store), 'verification-required');
+  assert.equal(storeDescriptionState(snapshot, store), 'verification-required');
   assert.equal(storeDescriptionState(FIXTURE, store), 'normal');
 });
 
 test('authoritative empty inventory is complete while an omitted configured profile is not', () => {
-  const empty: World = {
+  const empty: AgentSnapshot = {
     ...FIXTURE,
     servers: [],
     stores: [],
@@ -611,7 +613,7 @@ test('store security restrictions outrank server lease and inventory failures', 
     retryable: false,
     ambiguous: false,
   };
-  const world: World = {
+  const snapshot: AgentSnapshot = {
     ...applyLease(FIXTURE, 'lapsed', 'acme', 100),
     storeInventory: FIXTURE.storeInventory.map((entry) =>
       entry.store === store.id
@@ -624,13 +626,13 @@ test('store security restrictions outrank server lease and inventory failures', 
         : entry,
     ),
   };
-  assert.deepEqual(storeAvailability(world, store, { nowSeconds: 100 }), {
+  assert.deepEqual(storeAvailability(snapshot, store, { nowSeconds: 100 }), {
     available: false,
     reason: 'schema-incompatible',
   });
   const neighbor = FIXTURE.stores.find((entry) => entry.server === 'personal');
   assert.ok(neighbor);
-  assert.equal(storeAvailability(world, neighbor).available, true);
+  assert.equal(storeAvailability(snapshot, neighbor).available, true);
 });
 
 test('every fixture admission names a profile, not an address', () => {

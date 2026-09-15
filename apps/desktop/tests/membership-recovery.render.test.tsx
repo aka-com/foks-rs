@@ -104,7 +104,7 @@ for (const kind of ['team-member-addition', 'team-member-edit'] as const) {
         children: createElement(ToastProvider, {
           controller: new ToastController(),
           children: createElement(GroupSettingsScreen, {
-            world: FIXTURE,
+            snapshot: FIXTURE,
             bridge,
             location: { kind: 'group-settings', ref: store.id, tab: 'people' },
             onNavigate: () => {},

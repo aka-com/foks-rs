@@ -16,30 +16,30 @@ import {
   storeDescriptionState,
   storeNavigationOrder,
 } from '../model';
-import type { Store, World } from '../model';
+import type { Store, AgentSnapshot } from '../model';
 import { sameLocation } from '../location';
 import type { Location } from '../location';
 
-function chatAvailable(world: World, store: Store): boolean {
+function chatAvailable(snapshot: AgentSnapshot, store: Store): boolean {
   return (
     store.kind === 'team' &&
     store.team_kind === 'named' &&
     store.active !== false &&
-    storeReadable(world, store.id) &&
-    world.servers.some(
+    storeReadable(snapshot, store.id) &&
+    snapshot.servers.some(
       (server) =>
-        server.id === store.server && serverChatAvailable(world, server),
+        server.id === store.server && serverChatAvailable(snapshot, server),
     )
   );
 }
 
 /** Places Control-Tab walks, in sidebar order. The footer is not included. */
-export function sidebarCycleLocations(world: World): Location[] {
+export function sidebarCycleLocations(snapshot: AgentSnapshot): Location[] {
   return [
     { kind: 'all' },
-    ...storeNavigationOrder(world).flatMap((store): Location[] => [
+    ...storeNavigationOrder(snapshot).flatMap((store): Location[] => [
       { kind: 'store', ref: store.id },
-      ...(chatAvailable(world, store)
+      ...(chatAvailable(snapshot, store)
         ? [{ kind: 'team-chat' as const, ref: store.id }]
         : []),
     ]),
@@ -47,11 +47,11 @@ export function sidebarCycleLocations(world: World): Location[] {
 }
 
 export function nextSidebarCycleLocation(
-  world: World,
+  snapshot: AgentSnapshot,
   current: Location,
   delta: 1 | -1,
 ): Location | null {
-  const places = sidebarCycleLocations(world);
+  const places = sidebarCycleLocations(snapshot);
   if (!places.length) return null;
   const index = places.findIndex((place) => sameLocation(place, current));
   if (index < 0) return delta > 0 ? places[0] : places[places.length - 1];
@@ -112,7 +112,7 @@ export function NavRow({
 }
 
 export interface SidebarProps {
-  world: World;
+  snapshot: AgentSnapshot;
   location: Location;
   /** Count of active notifications shown in the sidebar. */
   alerts: number;
@@ -130,7 +130,7 @@ export interface SidebarProps {
 }
 
 export function Sidebar({
-  world,
+  snapshot,
   location,
   alerts,
   onNavigate,
@@ -160,7 +160,7 @@ export function Sidebar({
       )
         return;
       const next = nextSidebarCycleLocation(
-        world,
+        snapshot,
         location,
         event.shiftKey ? -1 : 1,
       );
@@ -170,9 +170,9 @@ export function Sidebar({
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [location, onNavigate, world]);
+  }, [location, onNavigate, snapshot]);
 
-  const stores = storeNavigationOrder(world);
+  const stores = storeNavigationOrder(snapshot);
   const vaults = stores.filter((store) => store.kind === 'account');
   const groups = stores.filter(
     (store) => store.kind === 'team' && store.team_kind === 'named',
@@ -186,7 +186,7 @@ export function Sidebar({
    * while group stores include their member roster.
    */
   const storeRow = (store: Store): ReactNode => {
-    const connectionError = storeDescriptionState(world, store) !== 'normal';
+    const connectionError = storeDescriptionState(snapshot, store) !== 'normal';
     return (
       <NavRow
         key={store.id}
@@ -202,7 +202,7 @@ export function Sidebar({
           )
         }
         name={store.name}
-        caption={storeDescription(world, store)}
+        caption={storeDescription(snapshot, store)}
         dimmed={connectionError}
         onSelect={() => {
           // Clicking the currently active store preserves the existing selection.
@@ -243,17 +243,19 @@ export function Sidebar({
                   indented
                   name={`${store.name} chat`}
                   tail={
-                    chatAvailable(world, store) ? chatTail(store.id) : undefined
+                    chatAvailable(snapshot, store)
+                      ? chatTail(store.id)
+                      : undefined
                   }
                   caption={
-                    chatAvailable(world, store)
+                    chatAvailable(snapshot, store)
                       ? undefined
                       : 'Chat unavailable for this server'
                   }
-                  dimmed={!chatAvailable(world, store)}
-                  disabled={!chatAvailable(world, store)}
+                  dimmed={!chatAvailable(snapshot, store)}
+                  disabled={!chatAvailable(snapshot, store)}
                   title={
-                    chatAvailable(world, store)
+                    chatAvailable(snapshot, store)
                       ? undefined
                       : 'The current server compatibility grant does not enable chat.'
                   }

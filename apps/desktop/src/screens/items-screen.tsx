@@ -29,7 +29,7 @@ import {
   storeOf,
   storeReadable,
 } from '../model';
-import type { Item, Store, World } from '../model';
+import type { Item, Store, AgentSnapshot } from '../model';
 import type { LocationStore, LocationState } from '../location';
 import { normalizeCommandError } from '../bridge';
 import type { Bridge, ItemRequest } from '../bridge';
@@ -54,7 +54,7 @@ function PathChip({ path }: { path: string }): ReactNode {
 }
 
 interface RowProps {
-  world: World;
+  snapshot: AgentSnapshot;
   item: Item;
   selected: boolean;
   /** The full path is shown beside the store while a search is running. */
@@ -141,7 +141,7 @@ function ItemActions({
 }
 
 function Row({
-  world,
+  snapshot,
   item,
   selected,
   searching,
@@ -150,9 +150,9 @@ function Row({
   onSelect,
 }: RowProps): ReactNode {
   const sub = searching
-    ? `${whereOf(world, item)} · ${item.path}`
+    ? `${whereOf(snapshot, item)} · ${item.path}`
     : subtitle
-      ? whereOf(world, item)
+      ? whereOf(snapshot, item)
       : '';
   return (
     <div
@@ -191,7 +191,7 @@ function Tile({
   onOpen,
   onDelete,
   deleteDisabled,
-}: Omit<RowProps, 'searching' | 'world'> & ItemActionProps): ReactNode {
+}: Omit<RowProps, 'searching' | 'snapshot'> & ItemActionProps): ReactNode {
   const kind = kindOf(item);
   return (
     <div
@@ -245,24 +245,26 @@ function Tile({
 }
 
 function TileSection({
-  world,
+  snapshot,
   store,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   store: Store;
 }): ReactNode {
   if (store.kind === 'team') {
     return (
       <div className="gsec">
         <span>{store.name}</span>
-        <span className="n">· {peopleGroups(partiesOf(world, store.id))}</span>
+        <span className="n">
+          · {peopleGroups(partiesOf(snapshot, store.id))}
+        </span>
       </div>
     );
   }
   return (
     <div className="gsec">
       {store.name}
-      <span className="n">· {serverOf(world, store.id)?.name}</span>
+      <span className="n">· {serverOf(snapshot, store.id)?.name}</span>
     </div>
   );
 }
@@ -387,12 +389,12 @@ function TreeRow({
 }
 
 function FolderBrowser({
-  world,
+  snapshot,
   state,
   trees,
   locations,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   state: LocationState;
   trees: readonly StoreTree[];
   locations: LocationStore;
@@ -483,7 +485,7 @@ function FolderBrowser({
         ...selectedNode!.items.map((item) => (
           <Row
             key={`${item.store}|${item.path}`}
-            world={world}
+            snapshot={snapshot}
             item={item}
             selected={
               state.selection?.store === item.store &&
@@ -565,7 +567,7 @@ function FolderBrowser({
 /* --------------------------------------------------------------- screen -- */
 
 export interface ItemsScreenProps {
-  world: World;
+  snapshot: AgentSnapshot;
   bridge: Bridge;
   state: LocationState;
   locations: LocationStore;
@@ -579,7 +581,7 @@ export interface ItemsScreenProps {
 }
 
 export function ItemsScreen({
-  world,
+  snapshot,
   bridge,
   state,
   locations,
@@ -598,8 +600,8 @@ export function ItemsScreen({
   const [listMetrics, setListMetrics] = useState({ top: 0, viewport: 600 });
   const { location } = state;
   const store =
-    location.kind === 'store' ? storeOf(world, location.ref) : undefined;
-  const header = headerFor(world, location);
+    location.kind === 'store' ? storeOf(snapshot, location.ref) : undefined;
+  const header = headerFor(snapshot, location);
   const head = (
     <PageHeader
       {...header}
@@ -609,11 +611,11 @@ export function ItemsScreen({
       }}
     />
   );
-  const items = scopedItems(world, state);
+  const items = scopedItems(snapshot, state);
   // Search temporarily replaces the browser with flat results; it must not
   // invalidate the selected folder or change where New saves.
-  const folderItems = scopedItems(world, { ...state, query: '' });
-  const trees: StoreTree[] = storeDisplayOrder(world)
+  const folderItems = scopedItems(snapshot, { ...state, query: '' });
+  const trees: StoreTree[] = storeDisplayOrder(snapshot)
     .map((candidate) => ({
       store: candidate,
       root: folderTree(
@@ -646,10 +648,10 @@ export function ItemsScreen({
     return () => observer?.disconnect();
   }, [items.length, state.view, state.kind, state.query, location.kind]);
 
-  if (store && storeDescriptionState(world, store) !== 'normal') {
+  if (store && storeDescriptionState(snapshot, store) !== 'normal') {
     return (
       <StoreAccessTakeover
-        world={world}
+        snapshot={snapshot}
         store={store}
         onOpenServer={(profile) =>
           locations.navigate({ kind: 'settings', section: 'servers', profile })
@@ -670,7 +672,7 @@ export function ItemsScreen({
     );
   }
 
-  const accessBands = storeAccessBands(world);
+  const accessBands = storeAccessBands(snapshot);
   const kindMeta = state.kind === 'All' ? null : KINDS[state.kind];
   // Default to the current store if readable; otherwise, fall back to the first available vault.
   const selectedFolder = folderSelection(location, state.folder);
@@ -681,11 +683,11 @@ export function ItemsScreen({
     ? folderAt(selectedTree.root, selectedFolder.path)
     : undefined;
   const createStore =
-    selectedTree && storeReadable(world, selectedTree.store.id)
+    selectedTree && storeReadable(snapshot, selectedTree.store.id)
       ? selectedTree.store.id
-      : store && storeReadable(world, store.id)
+      : store && storeReadable(snapshot, store.id)
         ? store.id
-        : (defaultCreateStore(world) ?? '');
+        : (defaultCreateStore(snapshot) ?? '');
   const createFolder =
     state.view === 'folders' &&
     selectedTree &&
@@ -704,10 +706,10 @@ export function ItemsScreen({
     else toasts.show(normalizeCommandError(error).message);
   };
   const currentStoreAvailable = (storeId: string): boolean => {
-    const candidate = storeOf(world, storeId);
+    const candidate = storeOf(snapshot, storeId);
     return Boolean(
       candidate &&
-      storeAvailability(world, candidate, {
+      storeAvailability(snapshot, candidate, {
         nowSeconds: accessNow(),
       }).available,
     );
@@ -755,7 +757,7 @@ export function ItemsScreen({
           throw new Error('Could not verify link destination.');
         }
         // Resolve against the catalog to ensure the target is an item and not a folder.
-        const target = catalog(world).find(
+        const target = catalog(snapshot).find(
           (candidate) =>
             candidate.store === item.store && candidate.path === response.value,
         );
@@ -794,7 +796,7 @@ export function ItemsScreen({
       onDelete(item);
     },
     deleteDisabled:
-      !storeReadable(world, item.store) || !canChangeItem(world, item),
+      !storeReadable(snapshot, item.store) || !canChangeItem(snapshot, item),
   });
 
   return (
@@ -835,7 +837,7 @@ export function ItemsScreen({
             </div>
           ) : null}
           <FolderBrowser
-            world={world}
+            snapshot={snapshot}
             state={state}
             trees={trees}
             locations={locations}
@@ -903,18 +905,18 @@ export function ItemsScreen({
               {location.kind === 'all' &&
               state.sort === 'group' &&
               !state.query ? (
-                storeDisplayOrder(world).map((sectionStore) => {
+                storeDisplayOrder(snapshot).map((sectionStore) => {
                   const section = items.filter(
                     (item) => item.store === sectionStore.id,
                   );
                   if (!section.length) return null;
                   return (
                     <Fragment key={sectionStore.id}>
-                      <TileSection world={world} store={sectionStore} />
+                      <TileSection snapshot={snapshot} store={sectionStore} />
                       {section.map((item) => (
                         <Row
                           key={`${item.store}|${item.path}`}
-                          world={world}
+                          snapshot={snapshot}
                           item={item}
                           searching={false}
                           subtitle={false}
@@ -944,7 +946,7 @@ export function ItemsScreen({
                   {visibleRows.map((item) => (
                     <Row
                       key={`${item.store}|${item.path}`}
-                      world={world}
+                      snapshot={snapshot}
                       item={item}
                       searching={Boolean(state.query)}
                       subtitle={location.kind === 'all'}
@@ -970,13 +972,13 @@ export function ItemsScreen({
               )}
             </div>
           ) : location.kind === 'all' ? (
-            storeDisplayOrder(world).map((sectionStore) => {
+            storeDisplayOrder(snapshot).map((sectionStore) => {
               const id = sectionStore.id;
               const section = gridItems.filter((item) => item.store === id);
               if (!section.length || !sectionStore) return null;
               return (
                 <Fragment key={id}>
-                  <TileSection world={world} store={sectionStore} />
+                  <TileSection snapshot={snapshot} store={sectionStore} />
                   <div className="tiles">
                     {section.map((item) => (
                       <Tile

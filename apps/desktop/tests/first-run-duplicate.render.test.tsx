@@ -5,7 +5,7 @@ import { createServer, type ViteDevServer } from 'vite';
 import type { Bridge } from '../src/bridge';
 import type { FirstRunExperienceProps } from '../src/screens/first-run-screen';
 import type { FirstRunCheckpoint } from '../src/first-run-state';
-import type { World } from '../src/model';
+import type { AgentSnapshot } from '../src/model';
 import { installDom } from './lib/dom-harness';
 
 installDom({
@@ -123,10 +123,10 @@ async function harness() {
       );
       let props: FirstRunExperienceProps = {
         bridge,
-        world: complete,
+        snapshot: complete,
         location: { kind: 'first-run', path: 'own', step: saved.state },
         onNavigate: () => {},
-        onRefreshWorld: async () => complete,
+        onRefreshSnapshot: async () => complete,
         concealSignal: 0,
         agentReady: true,
         ...overrides,
@@ -182,13 +182,13 @@ function counting(
 async function refuse(
   h: Awaited<ReturnType<typeof harness>>,
   code: string,
-  refreshed: World,
+  refreshed: AgentSnapshot,
 ) {
   const { bridge, calls } = counting(h.bridge, code);
   const rendered = h.render(h.checkpoint, {
     bridge,
-    world: h.complete,
-    onRefreshWorld: async () => refreshed,
+    snapshot: h.complete,
+    onRefreshSnapshot: async () => refreshed,
   });
   ui.fireEvent.change(rendered.view.getByPlaceholderText('yourname'), {
     target: { value: 'personal' },

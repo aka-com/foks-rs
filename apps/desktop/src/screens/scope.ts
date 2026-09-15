@@ -12,12 +12,12 @@ import {
   peopleLabel,
   storeOf,
 } from '../model';
-import type { Item, World } from '../model';
+import type { Item, AgentSnapshot } from '../model';
 import type { Location, LocationState, SortKey } from '../location';
 
 /** Returns the store display name for an item. */
-export function whereOf(world: World, item: Item): string {
-  const store = storeOf(world, item.store);
+export function whereOf(snapshot: AgentSnapshot, item: Item): string {
+  const store = storeOf(snapshot, item.store);
   return store?.name ?? item.store;
 }
 
@@ -25,10 +25,10 @@ export function whereOf(world: World, item: Item): string {
  * Computes reader metadata for an item based on the store roster and read role.
  */
 export function readableBy(
-  world: World,
+  snapshot: AgentSnapshot,
   item: Item,
 ): { label: string; title?: string } {
-  const readers = readersOf(world, item);
+  const readers = readersOf(snapshot, item);
   if (!readers) return { label: 'Only you' };
   return {
     label: peopleLabel(readers.length),
@@ -37,16 +37,16 @@ export function readableBy(
 }
 
 const SORTS: Readonly<
-  Record<SortKey, (world: World) => (a: Item, b: Item) => number>
+  Record<SortKey, (snapshot: AgentSnapshot) => (a: Item, b: Item) => number>
 > = {
   name: () => (a, b) => nameOf(a.path).localeCompare(nameOf(b.path)),
   kind: () => (a, b) =>
     KIND_LIST.indexOf(kindOf(a) as (typeof KIND_LIST)[number]) -
       KIND_LIST.indexOf(kindOf(b) as (typeof KIND_LIST)[number]) ||
     nameOf(a.path).localeCompare(nameOf(b.path)),
-  group: (world) => (a, b) =>
-    (storeOf(world, a.store)?.name ?? '').localeCompare(
-      storeOf(world, b.store)?.name ?? '',
+  group: (snapshot) => (a, b) =>
+    (storeOf(snapshot, a.store)?.name ?? '').localeCompare(
+      storeOf(snapshot, b.store)?.name ?? '',
     ) || nameOf(a.path).localeCompare(nameOf(b.path)),
 };
 
@@ -126,9 +126,12 @@ export function listsItems(location: Location): boolean {
 /**
  * Filters and sorts items based on location, kind filter, search query, and sort key.
  */
-export function scopedItems(world: World, state: LocationState): Item[] {
+export function scopedItems(
+  snapshot: AgentSnapshot,
+  state: LocationState,
+): Item[] {
   const { location, kind, query, sort } = state;
-  let items = catalog(world);
+  let items = catalog(snapshot);
   if (location.kind === 'store') {
     items = items.filter((item) => item.store === location.ref);
   }
@@ -140,8 +143,10 @@ export function scopedItems(world: World, state: LocationState): Item[] {
     items = items.filter(
       (item) =>
         item.path.toLowerCase().includes(needle) ||
-        (storeOf(world, item.store)?.name ?? '').toLowerCase().includes(needle),
+        (storeOf(snapshot, item.store)?.name ?? '')
+          .toLowerCase()
+          .includes(needle),
     );
   }
-  return [...items].sort(SORTS[sort](world));
+  return [...items].sort(SORTS[sort](snapshot));
 }

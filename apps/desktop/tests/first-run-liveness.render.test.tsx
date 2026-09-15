@@ -124,10 +124,10 @@ async function harness() {
       );
       let props: FirstRunExperienceProps = {
         bridge,
-        world: unknown,
+        snapshot: unknown,
         location: { kind: 'first-run', path: 'own', step: saved.state },
         onNavigate: () => {},
-        onRefreshWorld: async () => unknown,
+        onRefreshSnapshot: async () => unknown,
         concealSignal: 0,
         agentReady: true,
         ...overrides,
@@ -153,10 +153,10 @@ test('completed local setup explains unavailable inventory and offers a retry th
     backupCommitted: true,
   };
   const rendered = h.render(saved, {
-    onRefreshWorld: async () => {
+    onRefreshSnapshot: async () => {
       refreshes++;
       if (refreshes === 1) throw new Error('Inventory unavailable');
-      rendered.rerender({ world: h.complete });
+      rendered.rerender({ snapshot: h.complete });
       return h.complete;
     },
   });
@@ -210,8 +210,8 @@ test('uncertain signup requires explicit pending-operation resume even when the 
     { ...h.checkpoint, account: undefined, state: 'account' },
     {
       bridge,
-      world: h.complete,
-      onRefreshWorld: async () => h.complete,
+      snapshot: h.complete,
+      onRefreshSnapshot: async () => h.complete,
     },
   );
   ui.fireEvent.change(rendered.view.getByPlaceholderText('yourname'), {
@@ -305,12 +305,12 @@ test('multiple groups refresh the catalog and preserve a selected unavailable va
   };
   const rendered = h.render(checkpoint, {
     location: { kind: 'first-run', path: 'invited', step: 'waiting' },
-    world: h.complete,
+    snapshot: h.complete,
     bridge: {
       ...h.bridge,
       discoverGroups: async () => ({ accountAlias: 'personal', groups }),
     },
-    onRefreshWorld: async (force) => {
+    onRefreshSnapshot: async (force) => {
       forces.push(force);
       return h.complete;
     },
@@ -325,7 +325,7 @@ test('multiple groups refresh the catalog and preserve a selected unavailable va
   assert.equal(saved.added, false);
   ui.cleanup();
   const resumed = h.render(saved, {
-    world: h.complete,
+    snapshot: h.complete,
     location: { kind: 'first-run', path: 'invited', step: 'waiting' },
   });
   assert.ok(resumed.view.getByText('two'));
@@ -343,7 +343,7 @@ test('zero groups still force catalog reconciliation', async () => {
         ...h.bridge,
         discoverGroups: async () => ({ accountAlias: 'personal', groups: [] }),
       },
-      onRefreshWorld: async (force) => {
+      onRefreshSnapshot: async (force) => {
         assert.equal(force, true);
         refreshes++;
         return h.complete;
@@ -379,7 +379,7 @@ test('local-server retry probes again despite a stale failed connectivity snapsh
   };
   const rendered = h.render(h.initialFirstRun('own', 'local'), {
     managedProfile: 'personal',
-    world: stale,
+    snapshot: stale,
     location: { kind: 'first-run', step: 'local', path: 'own' },
     bridge: {
       ...h.bridge,
@@ -401,7 +401,7 @@ test('local-server retry probes again despite a stale failed connectivity snapsh
         };
       },
     },
-    onRefreshWorld: async (force) => {
+    onRefreshSnapshot: async (force) => {
       assert.equal(force, true);
       refreshes++;
       return h.complete;
@@ -431,8 +431,8 @@ test('a native receipt confirms a lost reply without replaying account creation'
   const rendered = h.render(
     { ...h.checkpoint, account: undefined, state: 'account' },
     {
-      world: h.complete,
-      onRefreshWorld: async () => h.complete,
+      snapshot: h.complete,
+      onRefreshSnapshot: async () => h.complete,
       bridge: {
         ...h.bridge,
         runFirstRunAccountOperation: async (request) => {
@@ -564,7 +564,7 @@ test('acknowledged signup is persisted before refresh and resumes read-only afte
     { ...h.checkpoint, state: 'account', account: undefined },
     {
       bridge,
-      onRefreshWorld: async () => {
+      onRefreshSnapshot: async () => {
         refreshes++;
         return inventory.promise;
       },
@@ -595,7 +595,7 @@ test('acknowledged signup is persisted before refresh and resumes read-only afte
   const resumed = h.render(pending, {
     bridge,
     location: { kind: 'first-run', path: 'own', step: 'account' },
-    onRefreshWorld: async () => {
+    onRefreshSnapshot: async () => {
       refreshes++;
       return h.complete;
     },
@@ -636,7 +636,7 @@ for (const method of ['recovery', 'sso'] as const) {
       },
       {
         bridge,
-        onRefreshWorld: async () => {
+        onRefreshSnapshot: async () => {
           throw new Error('Identity unavailable');
         },
       },
@@ -732,7 +732,7 @@ for (const method of ['copy', 'pair', 'resume-pair'] as const) {
     };
     const rendered = h.render(h.initialFirstRun('own', 'who'), {
       bridge,
-      onRefreshWorld: async (force) => {
+      onRefreshSnapshot: async (force) => {
         refreshForces.push(force);
         return h.unknown;
       },
@@ -793,7 +793,7 @@ test('late identity refresh cannot complete onboarding after readiness is lost',
     },
   );
   const rendered = h.render(pending, {
-    onRefreshWorld: () => result.promise,
+    onRefreshSnapshot: () => result.promise,
     onRetryAgent: async () => {},
   });
   rendered.rerender({ agentReady: false });
@@ -804,7 +804,7 @@ test('late identity refresh cannot complete onboarding after readiness is lost',
   assert.ok(rendered.view.getByRole('button', { name: 'Retry setup' }));
   rendered.rerender({
     agentReady: true,
-    onRefreshWorld: async () => h.complete,
+    onRefreshSnapshot: async () => h.complete,
   });
   ui.fireEvent.click(
     rendered.view.getByRole('button', { name: 'Retry loading account' }),
@@ -817,7 +817,7 @@ test('the development bridge supplies matching identity facts after pending setu
   const { mockBridge } = (await vite.ssrLoadModule(
     '/src/mock-bridge.ts',
   )) as typeof import('../src/mock-bridge');
-  const { loadWorld } = (await vite.ssrLoadModule(
+  const { loadSnapshot } = (await vite.ssrLoadModule(
     '/src/bridge.ts',
   )) as typeof import('../src/bridge');
   const { resolveProvisionedIdentity } = (await vite.ssrLoadModule(
@@ -835,7 +835,7 @@ test('the development bridge supplies matching identity facts after pending setu
     h.FIRST_RUN_CHECKPOINT_KEY,
     h.encodeFirstRunCheckpoint(pending),
   );
-  const refreshed = await loadWorld(mockBridge());
+  const refreshed = await loadSnapshot(mockBridge());
   assert.equal(resolveProvisionedIdentity(refreshed, pending).state, 'protect');
 });
 
@@ -855,7 +855,7 @@ test('pending identity survives an empty refresh and is adopted from authoritati
   assert.equal(h.saved()?.state, 'identity-pending');
   ui.cleanup();
   const resumed = h.render(pending, {
-    world: h.complete,
+    snapshot: h.complete,
     location: { kind: 'first-run', path: 'own', step: 'who' },
   });
   assert.ok(resumed.view.getByRole('button', { name: 'Show recovery phrase' }));
@@ -892,8 +892,8 @@ test('allows starting over when unconfirmed setup has no resume path', async () 
     accounts: h.complete.accounts.filter((row) => row.server !== 'personal'),
   };
   const rendered = h.render(pendingOperation(h.checkpoint, 'copy', 'copy-1'), {
-    world: absent,
-    onRefreshWorld: async () => absent,
+    snapshot: absent,
+    onRefreshSnapshot: async () => absent,
     bridge: {
       ...h.bridge,
       listPendingOperations: async () => [],
@@ -926,8 +926,8 @@ test('shows a missing-server warning with the start-over action for an unconfirm
   const rendered = h.render(
     pendingOperation(h.checkpoint, 'copy', 'copy-missing-server'),
     {
-      world: missingProfile,
-      onRefreshWorld: async () => missingProfile,
+      snapshot: missingProfile,
+      onRefreshSnapshot: async () => missingProfile,
       bridge: {
         ...h.bridge,
         firstRunOperationStatus: async () => 'unknown' as const,
@@ -964,8 +964,8 @@ test('an unreadable receipt still probes pending operations and reports the rece
   const rendered = h.render(
     pendingOperation(h.checkpoint, 'signup', 'signup-1'),
     {
-      world: absent,
-      onRefreshWorld: async () => absent,
+      snapshot: absent,
+      onRefreshSnapshot: async () => absent,
       bridge: {
         ...h.bridge,
         listPendingOperations: async () => [
@@ -1008,8 +1008,8 @@ test('allows continuing with an existing account when a receipt cannot be read',
   const rendered = h.render(
     pendingOperation(h.checkpoint, 'signup', 'signup-2'),
     {
-      world: h.complete,
-      onRefreshWorld: async () => h.complete,
+      snapshot: h.complete,
+      onRefreshSnapshot: async () => h.complete,
       bridge: {
         ...h.bridge,
         listPendingOperations: async () => [],
@@ -1078,8 +1078,8 @@ test('shows option to set up a different account when identity is missing', asyn
   };
   const rendered = h.render(pending, {
     bridge,
-    world: absent,
-    onRefreshWorld: async () => absent,
+    snapshot: absent,
+    onRefreshSnapshot: async () => absent,
   });
   ui.fireEvent.click(
     await rendered.view.findByRole('button', {
@@ -1112,8 +1112,8 @@ test('shows a missing-server warning with the different-account action for ackno
     { type: 'account-provisioned', alias: 'personal', deviceName: 'Mac' },
   );
   const rendered = h.render(pending, {
-    world: missingProfile,
-    onRefreshWorld: async () => missingProfile,
+    snapshot: missingProfile,
+    onRefreshSnapshot: async () => missingProfile,
   });
   const warning = await rendered.view.findByRole('alert');
   assert.ok(warning.classList.contains('warning'));
@@ -1147,8 +1147,8 @@ test('a pending operation is confirmed on mount without any click', async () => 
   const rendered = h.render(
     pendingOperation(h.checkpoint, 'signup', 'signup-3'),
     {
-      world: h.complete,
-      onRefreshWorld: async () => h.complete,
+      snapshot: h.complete,
+      onRefreshSnapshot: async () => h.complete,
       bridge: {
         ...h.bridge,
         firstRunOperationStatus: async () => 'complete' as const,
@@ -1165,8 +1165,8 @@ test('cannot discard account setup while it is still running', async () => {
   const rendered = h.render(
     pendingOperation(h.checkpoint, 'signup', 'signup-4'),
     {
-      world: h.complete,
-      onRefreshWorld: async () => h.complete,
+      snapshot: h.complete,
+      onRefreshSnapshot: async () => h.complete,
       bridge: {
         ...h.bridge,
         firstRunOperationStatus: async () => 'running' as const,

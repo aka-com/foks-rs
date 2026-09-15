@@ -47,7 +47,7 @@ import type {
   ServerRestriction,
   Store,
   StoreRef,
-  World,
+  AgentSnapshot,
 } from './model';
 import { profileInventoryComplete, serverFactAvailability } from './model';
 
@@ -182,6 +182,12 @@ export interface CatalogDto {
   items: ItemDto[];
   failures: CatalogFailureDto[];
   blockedProfiles: string[];
+  /**
+   * Identifies the native snapshot this catalog came from. Later reads that
+   * pass it back fail when a newer load or mutation replaced the snapshot.
+   * Absent from mock responses, which have no native snapshot.
+   */
+  generation?: number;
 }
 
 export interface AccountDto {
@@ -710,7 +716,7 @@ export interface Bridge {
   cancelChat(viewId: string): Promise<void>;
   readonly native: boolean;
   /** Present only on the development bridge, never on the native bridge. */
-  readonly fixtureWorld?: World;
+  readonly fixtureSnapshot?: AgentSnapshot;
   readonly firstRunFixture?: FirstRunFixture;
   appLockState(): Promise<AppLockState>;
   windowState(): Promise<WindowStateEvent>;
@@ -724,8 +730,14 @@ export interface Bridge {
   listCatalog(): Promise<CatalogDto>;
   /** Returns store metadata only. Mutually exclusive with `listCatalog`. */
   listStores(): Promise<CatalogDto>;
-  listServers(): Promise<Server[]>;
-  listAccounts(): Promise<Account[]>;
+  /**
+   * Server rows drawn from the current native catalog snapshot. Passing the
+   * generation of a `listCatalog` response makes the read fail with a
+   * retryable catalog-required error when that snapshot has been replaced.
+   */
+  listServers(generation?: number): Promise<Server[]>;
+  /** Account identities for the current snapshot; `generation` as above. */
+  listAccounts(generation?: number): Promise<Account[]>;
   listGroupDetails(storeId: StoreRef): Promise<GroupDetailsDto>;
   listParties(storeId: StoreRef): Promise<Party[]>;
   listFederation(storeId: StoreRef): Promise<FederationEntry[]>;
@@ -1423,6 +1435,9 @@ export function decodeCatalog(value: unknown): CatalogDto {
     items: array(item.items, 'items', decodeItem),
     failures: array(item.failures, 'failures', decodeFailure),
     blockedProfiles: array(item.blockedProfiles, 'blockedProfiles', string),
+    ...(item.generation === undefined
+      ? {}
+      : { generation: integer(item.generation, 'generation') }),
   };
 }
 
@@ -2242,8 +2257,18 @@ export const tauriBridge: Bridge = {
   appInfo: () => checked('app_info', undefined, decodeAppInfo),
   listCatalog: () => checked('list_catalog', undefined, decodeCatalog),
   listStores: () => checked('list_stores', undefined, decodeCatalog),
-  listServers: () => checked('list_servers', undefined, decodeServers),
-  listAccounts: () => checked('list_accounts', undefined, decodeAccounts),
+  listServers: (generation) =>
+    checked(
+      'list_servers',
+      generation === undefined ? undefined : { generation },
+      decodeServers,
+    ),
+  listAccounts: (generation) =>
+    checked(
+      'list_accounts',
+      generation === undefined ? undefined : { generation },
+      decodeAccounts,
+    ),
   listGroupDetails: (storeId) =>
     checked('list_group_details', { storeId }, decodeGroupDetails),
   listParties: (storeId) => checked('list_parties', { storeId }, decodeParties),
@@ -2736,16 +2761,16 @@ function recoverableGroupDetailFailure(
  */
 export async function discoverUnboundTeams(
   bridge: Bridge,
-  world: World,
+  snapshot: AgentSnapshot,
 ): Promise<boolean> {
-  if (!profileInventoryComplete(world, 'accounts')) return false;
+  if (!profileInventoryComplete(snapshot, 'accounts')) return false;
   const bound = new Set<string>();
-  for (const store of world.stores) {
+  for (const store of snapshot.stores) {
     if (store.kind === 'team')
       bound.add(`${store.server}\u0000${store.account}`);
   }
   let attempted = false;
-  for (const account of world.accounts) {
+  for (const account of snapshot.accounts) {
     if (bound.has(`${account.server}\u0000${account.alias}`)) continue;
     attempted = true;
     try {
@@ -2759,12 +2784,31 @@ export async function discoverUnboundTeams(
   return attempted;
 }
 
-/** Load the current world state. */
-export async function loadWorld(
+/** Load the current snapshot state. */
+/**
+ * Loads the snapshot from the native catalog. The load is a sequence of reads
+ * bound to one catalog snapshot; when a concurrent load or mutation replaces
+ * that snapshot mid-sequence the native side reports catalog-required, and
+ * one further attempt is made against the new snapshot before giving up.
+ */
+export async function loadSnapshot(
   bridge: Bridge,
-  base = bridge.fixtureWorld,
+  base = bridge.fixtureSnapshot,
   nowSeconds: number = Math.floor(Date.now() / 1000),
-): Promise<World> {
+): Promise<AgentSnapshot> {
+  try {
+    return await loadSnapshotOnce(bridge, base, nowSeconds);
+  } catch (error) {
+    if (normalizeCommandError(error).code !== 'catalog-required') throw error;
+    return loadSnapshotOnce(bridge, base, nowSeconds);
+  }
+}
+
+async function loadSnapshotOnce(
+  bridge: Bridge,
+  base: AgentSnapshot | undefined,
+  nowSeconds: number,
+): Promise<AgentSnapshot> {
   const agent = await bridge.agentStatus();
   if (agent.state !== 'ready') {
     const error: CommandError = {
@@ -2847,7 +2891,7 @@ export async function loadWorld(
   });
   // When a server profile is blocked, skip roster queries for that server.
   const blockedProfiles = new Set(response.blockedProfiles);
-  const listedServers = await bridge.listServers();
+  const listedServers = await bridge.listServers(response.generation);
   const statusResults = bridge.native
     ? await Promise.all(
         listedServers
@@ -2974,7 +3018,7 @@ export async function loadWorld(
       restrictions: allRestrictions,
     };
   });
-  const rawAccounts = await bridge.listAccounts();
+  const rawAccounts = await bridge.listAccounts(response.generation);
   const unavailableServers = new Set(
     servers
       .filter(
@@ -3154,7 +3198,7 @@ export async function loadWorld(
     }));
   if (!bridge.native) {
     if (!base)
-      throw new Error('The mock bridge did not supply its fixture world.');
+      throw new Error('The mock bridge did not supply its fixture snapshot.');
     return {
       ...base,
       agent,

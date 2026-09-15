@@ -2,7 +2,7 @@ import type { Bridge } from '../bridge';
 import { normalizeCommandError } from '../bridge';
 import type { ChatReply, ChatResult, ChatScope } from '../chat-contract';
 import { serverChatAvailable, storeReadable } from '../model';
-import type { TeamStore, World } from '../model';
+import type { TeamStore, AgentSnapshot } from '../model';
 import { cancelled as cancelledAccess, chatClient, integrity } from './client';
 import {
   accountKey,
@@ -129,16 +129,17 @@ export class ChatInboxService {
     this.snapshot = readonlyMap([]);
     for (const listener of this.listeners) listener();
   }
-  updateStores(world: World) {
-    const eligible = world.stores.filter(
+  updateStores(agentSnapshot: AgentSnapshot) {
+    const eligible = agentSnapshot.stores.filter(
       (s): s is TeamStore =>
         s.kind === 'team' &&
         s.team_kind === 'named' &&
         s.active !== false &&
-        storeReadable(world, s.id) &&
-        world.servers.some(
+        storeReadable(agentSnapshot, s.id) &&
+        agentSnapshot.servers.some(
           (server) =>
-            server.id === s.server && serverChatAvailable(world, server),
+            server.id === s.server &&
+            serverChatAvailable(agentSnapshot, server),
         ),
     );
     const wanted = new Map(eligible.map((s) => [s.id, s]));
@@ -172,7 +173,9 @@ export class ChatInboxService {
         this.accounts.set(key, account);
       }
       if (!account.teams.has(store.id)) {
-        const server = world.servers.find((entry) => entry.id === store.server);
+        const server = agentSnapshot.servers.find(
+          (entry) => entry.id === store.server,
+        );
         account.teams.set(store.id, {
           store,
           blocked: new Set(),
@@ -188,7 +191,9 @@ export class ChatInboxService {
         this.publish(store.id, initial());
       } else {
         const team = account.teams.get(store.id);
-        const server = world.servers.find((entry) => entry.id === store.server);
+        const server = agentSnapshot.servers.find(
+          (entry) => entry.id === store.server,
+        );
         if (team) {
           team.store = store;
           team.accessExpiresAt =
@@ -332,12 +337,16 @@ export class ChatInboxService {
     this.jobs.set(client, account);
     try {
       if (!this.valid(account, team, epoch)) return;
-      const reply = await client.request({
-        action: 'sync-inbox',
-        blocked_channels: [...team.blocked],
-      }, undefined, () => {
-        if (!this.valid(account, team, epoch)) throw cancelledAccess();
-      });
+      const reply = await client.request(
+        {
+          action: 'sync-inbox',
+          blocked_channels: [...team.blocked],
+        },
+        undefined,
+        () => {
+          if (!this.valid(account, team, epoch)) throw cancelledAccess();
+        },
+      );
       if (!this.valid(account, team, epoch)) return;
       this.accept(account, team, reply);
       if (reply.result.kind !== 'inbox') throw integrity();
@@ -427,13 +436,17 @@ export class ChatInboxService {
     account.pollTeam = team.store.id;
     try {
       if (!this.valid(account, team, epoch)) return;
-      const reply = await client.request({
-        action: 'poll-inbox',
-        since,
-        timeout_milliseconds: 25_000,
-      }, undefined, () => {
-        if (!this.valid(account, team, epoch)) throw cancelledAccess();
-      });
+      const reply = await client.request(
+        {
+          action: 'poll-inbox',
+          since,
+          timeout_milliseconds: 25_000,
+        },
+        undefined,
+        () => {
+          if (!this.valid(account, team, epoch)) throw cancelledAccess();
+        },
+      );
       if (!this.valid(account, team, epoch)) return;
       this.accept(account, team, reply);
       if (reply.result.kind !== 'poll') throw integrity();

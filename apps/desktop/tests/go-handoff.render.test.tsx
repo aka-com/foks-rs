@@ -61,7 +61,7 @@ async function discoveryRecoveryHarness() {
   } = (await vite.ssrLoadModule(
     '/src/first-run-state.ts',
   )) as typeof import('../src/first-run-state');
-  const world = {
+  const snapshot = {
     ...FIXTURE,
     servers: [],
     accounts: [],
@@ -84,7 +84,7 @@ async function discoveryRecoveryHarness() {
   const checkpoint = encodeFirstRunCheckpoint(initialFirstRun('own', 'who'));
   window.localStorage.setItem(FIRST_RUN_CHECKPOINT_KEY, checkpoint);
   const bridge = {
-    ...mockBridge(world),
+    ...mockBridge(snapshot),
     native: true,
     firstRunFixture: undefined,
   };
@@ -95,7 +95,7 @@ async function discoveryRecoveryHarness() {
     render: (overrides: Partial<Bridge>) =>
       ui.render(
         createElement(App, {
-          world,
+          snapshot,
           store,
           bridge: { ...bridge, ...overrides },
         }),
@@ -334,10 +334,10 @@ test('discovers Go CLI profile in StrictMode and passes profile credentials to s
         controller: new ToastController(),
         children: createElement(FirstRunExperience, {
           bridge,
-          world: FIXTURE,
+          snapshot: FIXTURE,
           location: { kind: 'first-run', path: 'own', step: 'who' },
           onNavigate: () => {},
-          onRefreshWorld: async () => FIXTURE,
+          onRefreshSnapshot: async () => FIXTURE,
           concealSignal: 0,
           agentReady: true,
         }),
@@ -484,11 +484,11 @@ test('first-run waits for shared readiness and never initializes itself', async 
       controller: new ToastController(),
       children: createElement(FirstRunExperience, {
         bridge,
-        world: FIXTURE,
+        snapshot: FIXTURE,
         location: { kind: 'first-run', path: 'own', step: 'who' },
         onNavigate: () => {},
         automaticEntry: true,
-        onRefreshWorld: async () => FIXTURE,
+        onRefreshSnapshot: async () => FIXTURE,
         concealSignal: 0,
         agentReady: false,
       }),
@@ -519,10 +519,10 @@ test('first-run exposes shared agent recovery without discarding its current ste
       controller: new ToastController(),
       children: createElement(FirstRunExperience, {
         bridge: { ...mockBridge(), firstRunFixture: undefined },
-        world: FIXTURE,
+        snapshot: FIXTURE,
         location: { kind: 'first-run', path: 'own', step: 'address' },
         onNavigate: () => {},
-        onRefreshWorld: async () => FIXTURE,
+        onRefreshSnapshot: async () => FIXTURE,
         concealSignal: 0,
         agentReady: false,
         onRetryAgent: async () => {
@@ -627,10 +627,10 @@ test('native-shaped account creation is not rewound by the pre-mutation inventor
       controller: new ToastController(),
       children: createElement(FirstRunExperience, {
         bridge,
-        world: FIXTURE,
+        snapshot: FIXTURE,
         location: { kind: 'first-run', path: 'own', step: 'who' },
         onNavigate: () => {},
-        onRefreshWorld: async () => refreshed,
+        onRefreshSnapshot: async () => refreshed,
         concealSignal: 0,
         agentReady: true,
       }),
@@ -711,14 +711,14 @@ test('first-run account navigation, server edits, and connection errors stay sco
       controller: new ToastController(),
       children: createElement(FirstRunExperience, {
         bridge,
-        world: FIXTURE,
+        snapshot: FIXTURE,
         location: { kind: 'first-run', path: 'own', step: 'who' },
         concealSignal: 0,
         agentReady: true,
         onNavigate: (location: unknown) => {
           navigations.push(location);
         },
-        onRefreshWorld: async () => FIXTURE,
+        onRefreshSnapshot: async () => FIXTURE,
       }),
     }),
   );
@@ -818,10 +818,10 @@ test('personal recovery puts backup first and completes without creating a group
       controller: new ToastController(),
       children: createElement(FirstRunExperience, {
         bridge,
-        world: FIXTURE,
+        snapshot: FIXTURE,
         location: { kind: 'first-run', path: 'own', step: 'protect' },
         onNavigate: () => {},
-        onRefreshWorld: async () => FIXTURE,
+        onRefreshSnapshot: async () => FIXTURE,
         concealSignal: 0,
         agentReady: true,
       }),
@@ -894,7 +894,10 @@ test('resumed sign-in step rediscovers the CLI profile for the verified server',
       transitionFirstRun(checked, { type: 'go', state: 'existing' }),
     ),
   );
-  const world = { ...FIXTURE, profileInventoryStatus: 'unavailable' as const };
+  const snapshot = {
+    ...FIXTURE,
+    profileInventoryStatus: 'unavailable' as const,
+  };
   let scans = 0;
   const bridge: Bridge = {
     ...mockBridge(),
@@ -925,10 +928,10 @@ test('resumed sign-in step rediscovers the CLI profile for the verified server',
         controller: new ToastController(),
         children: createElement(FirstRunExperience, {
           bridge,
-          world,
+          snapshot,
           location: { kind: 'first-run', path: 'own', step: 'existing' },
           onNavigate: () => {},
-          onRefreshWorld: async () => world,
+          onRefreshSnapshot: async () => snapshot,
           concealSignal: 0,
           agentReady: true,
         }),
@@ -944,4 +947,142 @@ test('resumed sign-in step rediscovers the CLI profile for the verified server',
     'cli-owner',
     'the CLI username is suggested as the local alias, as the chooser does',
   );
+});
+
+test('identity loading waits out a native mutation instead of failing setup', async () => {
+  const { FirstRunExperience } = (await vite.ssrLoadModule(
+    '/src/screens/first-run-screen.tsx',
+  )) as typeof import('../src/screens/first-run-screen');
+  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
+    '/kit/toasts.tsx',
+  )) as typeof import('../kit/toasts');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const {
+    initialFirstRun,
+    transitionFirstRun,
+    encodeFirstRunCheckpoint,
+    decodeFirstRunCheckpoint,
+    FIRST_RUN_CHECKPOINT_KEY,
+  } = (await vite.ssrLoadModule(
+    '/src/first-run-state.ts',
+  )) as typeof import('../src/first-run-state');
+  const profile = {
+    profile: 'setup-foks-app-4430',
+    acceptance: 'inserted' as const,
+    lookupName: 'foks.app:4430',
+    canonicalName: 'foks.app',
+    hostId: candidate.hostId,
+    chain: 1,
+    epoch: 1,
+  };
+  let checkpoint = transitionFirstRun(initialFirstRun('own'), {
+    type: 'choose',
+    path: 'own',
+    returning: true,
+  });
+  checkpoint = transitionFirstRun(checkpoint, {
+    type: 'profile-checked',
+    address: 'foks.app:4430',
+    profile,
+  });
+  checkpoint = transitionFirstRun(checkpoint, {
+    type: 'account-provisioned',
+    alias: 'cli-owner',
+    deviceName: 'Test Mac',
+  });
+  assert.equal(checkpoint.state, 'identity-pending');
+  window.localStorage.setItem(
+    FIRST_RUN_CHECKPOINT_KEY,
+    encodeFirstRunCheckpoint(checkpoint),
+  );
+  // The snapshot before the refresh has no usable inventory, so the identity
+  // stays pending until a refresh succeeds.
+  const pending = {
+    ...FIXTURE,
+    profileInventoryStatus: 'unavailable' as const,
+  };
+  const connected = {
+    ...FIXTURE,
+    servers: [
+      {
+        ...FIXTURE.servers[0],
+        id: profile.profile,
+        name: profile.canonicalName,
+        host_id: profile.hostId,
+        accounts: ['cli-owner'],
+      },
+    ],
+    accounts: [
+      {
+        store: 'cli-owner-store',
+        alias: 'cli-owner',
+        username: 'cli-owner',
+        server: profile.profile,
+      },
+    ],
+    profileInventory: [
+      {
+        profile: profile.profile,
+        accounts: 'complete' as const,
+        teams: 'complete' as const,
+      },
+    ],
+    catalogProfiles: [profile.profile],
+    profileInventoryStatus: 'complete' as const,
+  };
+  let refreshes = 0;
+  const rendered = ui.render(
+    createElement(ToastProvider, {
+      controller: new ToastController(),
+      children: createElement(FirstRunExperience, {
+        bridge: { ...mockBridge(), native: true, firstRunFixture: undefined },
+        snapshot: pending,
+        location: { kind: 'first-run', path: 'own', step: 'identity-pending' },
+        onNavigate: () => {},
+        onRefreshSnapshot: async () => {
+          refreshes++;
+          // A native mutation still holds the catalog for the first two reads.
+          if (refreshes <= 2)
+            throw {
+              code: 'mutation-in-flight',
+              message:
+                'Wait for the current operation to finish before refreshing.',
+              retryable: false,
+              ambiguous: false,
+              fatal: false,
+            };
+          return connected;
+        },
+        concealSignal: 0,
+        agentReady: true,
+      }),
+    }),
+  );
+  await rendered.findByText('Waiting for the current operation to finish…');
+  assert.equal(rendered.queryByRole('alert'), null);
+  assert.equal(
+    (
+      rendered.getByRole('button', {
+        name: /Loading account details/,
+      }) as HTMLButtonElement
+    ).disabled,
+    true,
+  );
+  await ui.waitFor(
+    () => {
+      const saved = decodeFirstRunCheckpoint(
+        window.localStorage.getItem(FIRST_RUN_CHECKPOINT_KEY),
+      );
+      assert.equal(saved?.state, 'protect');
+      assert.equal(saved?.account?.alias, 'cli-owner');
+    },
+    { timeout: 8_000 },
+  );
+  assert.equal(refreshes, 3);
+  assert.equal(rendered.queryByRole('alert'), null);
 });

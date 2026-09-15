@@ -114,14 +114,14 @@ async function harness() {
     else window.localStorage.removeItem(state.FIRST_RUN_CHECKPOINT_KEY);
     let props: FirstRunExperienceProps = {
       bridge,
-      world: unknown,
+      snapshot: unknown,
       location: {
         kind: 'first-run',
         path: 'own',
         step: saved?.state ?? 'who',
       },
       onNavigate: () => {},
-      onRefreshWorld: async () => unknown,
+      onRefreshSnapshot: async () => unknown,
       concealSignal: 0,
       agentReady: true,
       ...overrides,
@@ -158,8 +158,8 @@ async function harness() {
 test('local setup without a managed server reports why it cannot continue', async () => {
   const h = await harness();
   const rendered = h.render(h.initialFirstRun('own', 'local'), {
-    world: h.complete,
-    onRefreshWorld: async () => h.complete,
+    snapshot: h.complete,
+    onRefreshSnapshot: async () => h.complete,
   });
   await rendered.view.findByText(/No local server is running/);
   assert.ok(
@@ -207,8 +207,8 @@ test('a username with no usable characters blocks account creation', async () =>
       state: 'account',
     },
     {
-      world: h.complete,
-      onRefreshWorld: async () => h.complete,
+      snapshot: h.complete,
+      onRefreshSnapshot: async () => h.complete,
       bridge: {
         ...h.bridge,
         createFirstRunAccount: async () => {
@@ -244,8 +244,8 @@ test('an unknown step in the URL starts setup at the first question', async () =
   };
   const rendered = h.renderFresh({
     location,
-    world: h.complete,
-    onRefreshWorld: async () => h.complete,
+    snapshot: h.complete,
+    onRefreshSnapshot: async () => h.complete,
     bridge: { ...h.bridge, native: false },
   });
   assert.ok(rendered.view.getByText('How are you joining?'));
@@ -270,8 +270,8 @@ test('an unconfirmed account operation keeps the sidebar on the account step', a
     accounts: h.complete.accounts.filter((row) => row.server !== 'personal'),
   };
   const rendered = h.render(pending, {
-    world: absent,
-    onRefreshWorld: async () => absent,
+    snapshot: absent,
+    onRefreshSnapshot: async () => absent,
     bridge: {
       ...h.bridge,
       listPendingOperations: async () => [],
@@ -293,8 +293,8 @@ test('shows why the Personal vault is unavailable and provides a link to server 
   const rendered = h.render(
     { ...h.checkpoint, state: 'local-done', backupCommitted: true },
     {
-      world: lapsed,
-      onRefreshWorld: async () => lapsed,
+      snapshot: lapsed,
+      onRefreshSnapshot: async () => lapsed,
       onNavigate: (location) => seen.push(location),
     },
   );
@@ -328,8 +328,8 @@ test('checklist allows retrying Personal vault loading while the account is not 
   const rendered = h.render(
     { ...h.checkpoint, state: 'checklist-own', backupCommitted: true },
     {
-      world: h.unknown,
-      onRefreshWorld: async () => {
+      snapshot: h.unknown,
+      onRefreshSnapshot: async () => {
         refreshes++;
         throw new Error('Inventory unavailable');
       },
@@ -361,8 +361,8 @@ test('allows leaving setup during server verification, but disables leaving duri
       serverAddress: 'localhost:4430',
     },
     {
-      world: h.complete,
-      onRefreshWorld: async () => h.complete,
+      snapshot: h.complete,
+      onRefreshSnapshot: async () => h.complete,
       onNavigate: (location) => seen.push(location),
       bridge: {
         ...h.bridge,
@@ -385,8 +385,8 @@ test('allows leaving setup during server verification, but disables leaving duri
   const protect = h.render(
     { ...h.checkpoint, managedLocal: false, state: 'protect' },
     {
-      world: h.complete,
-      onRefreshWorld: async () => h.complete,
+      snapshot: h.complete,
+      onRefreshSnapshot: async () => h.complete,
       bridge: {
         ...h.bridge,
         setFirstRunPassphrase: () =>

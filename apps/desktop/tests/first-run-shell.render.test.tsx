@@ -4,7 +4,7 @@ import { createElement } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge } from '../src/bridge';
-import type { World } from '../src/model/types';
+import type { AgentSnapshot } from '../src/model/types';
 import { installDom } from './lib/dom-harness';
 
 const dom = installDom({
@@ -34,7 +34,7 @@ function resetLocation(): void {
   window.history.replaceState(null, '', '/');
 }
 
-async function unclaimedWorld(): Promise<World> {
+async function unclaimedSnapshot(): Promise<AgentSnapshot> {
   const { FIXTURE } = (await vite.ssrLoadModule(
     '/src/fixture.ts',
   )) as typeof import('../src/fixture');
@@ -64,7 +64,7 @@ test('first-run resume reports an unreachable managed local server', async () =>
       '/src/first-run-state.ts',
     )) as typeof import('../src/first-run-state');
 
-  const base = mockBridge(await unclaimedWorld());
+  const base = mockBridge(await unclaimedSnapshot());
   const describedProfiles: string[] = [];
   const bridge: Bridge = {
     ...base,
@@ -123,7 +123,7 @@ test('first-run retry reconnects the agent transport after a connection loss', a
   window.localStorage.removeItem(FIRST_RUN_CHECKPOINT_KEY);
   resetLocation();
 
-  const base = mockBridge(await unclaimedWorld());
+  const base = mockBridge(await unclaimedSnapshot());
   let statusCalls = 0;
   let retryCalls = 0;
   let statusCallsAtRetry = -1;

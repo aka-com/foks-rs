@@ -9,19 +9,19 @@ import {
 } from 'react';
 import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
-import type { World } from '../model';
+import type { AgentSnapshot } from '../model';
 import { ChatInboxService } from './inbox-service';
 import type { ChatClock } from './inbox-service';
 const Context = createContext<ChatInboxService | null>(null);
 export function ChatInboxProvider({
   bridge,
-  world,
+  snapshot,
   children,
   onNavigate,
   clock,
 }: {
   bridge: Bridge;
-  world: World;
+  snapshot: AgentSnapshot;
   children: ReactNode;
   onNavigate?: (location: Location) => void;
   clock?: ChatClock;
@@ -30,7 +30,7 @@ export function ChatInboxProvider({
     () => new ChatInboxService(bridge, clock),
     [bridge, clock],
   );
-  useEffect(() => service.updateStores(world), [service, world]);
+  useEffect(() => service.updateStores(snapshot), [service, snapshot]);
   useEffect(() => {
     service.start();
     return () => service.stop();

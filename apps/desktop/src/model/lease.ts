@@ -17,7 +17,7 @@ import type {
   Server,
   Store,
   StoreRef,
-  World,
+  AgentSnapshot,
 } from './types';
 
 /** Identifier for the sample server subject to session lease requirements. */
@@ -43,8 +43,7 @@ export type AvailabilityReason =
   | 'setup-incomplete';
 
 export type Availability =
-  | { available: true }
-  | { available: false; reason: AvailabilityReason };
+  { available: true } | { available: false; reason: AvailabilityReason };
 
 export interface AvailabilityOptions {
   nowSeconds?: number;
@@ -73,22 +72,25 @@ export function serverLeaseState(
 }
 
 /** The server hosting a store. */
-export function serverOf(world: World, ref: StoreRef): Server | undefined {
-  const store = storeOf(world, ref);
-  return store && world.servers.find((s) => s.id === store.server);
+export function serverOf(
+  snapshot: AgentSnapshot,
+  ref: StoreRef,
+): Server | undefined {
+  const store = storeOf(snapshot, ref);
+  return store && snapshot.servers.find((s) => s.id === store.server);
 }
 
 /** Derives server access from independent facts at the supplied clock instant. */
 export function serverAvailability(
-  world: World,
+  snapshot: AgentSnapshot,
   server: Server,
   options: AvailabilityOptions = {},
 ): Availability {
-  if (world.agent.state !== 'ready')
+  if (snapshot.agent.state !== 'ready')
     return { available: false, reason: 'agent-unavailable' };
   return serverFactAvailability(
     server,
-    world.observedExpiredLeases,
+    snapshot.observedExpiredLeases,
     options,
   );
 }
@@ -150,22 +152,30 @@ function serverOperationalAvailability(
 
 /** The single access decision shared by navigation, views, and dispatch. */
 export function storeAvailability(
-  world: World,
+  snapshot: AgentSnapshot,
   store: Store,
   options: AvailabilityOptions = {},
 ): Availability {
   if (
-    world.agent.state !== 'ready' ||
+    snapshot.agent.state !== 'ready' ||
     options.agentReady === false ||
     options.catalogReady === false
   )
     return { available: false, reason: 'agent-unavailable' };
-  const server = world.servers.find((candidate) => candidate.id === store.server);
+  const server = snapshot.servers.find(
+    (candidate) => candidate.id === store.server,
+  );
   if (!server) return { available: false, reason: 'vault-unavailable' };
   const serverSecurity = serverSecurityAvailability(server);
   if (serverSecurity) return serverSecurity;
-  const inventory = world.storeInventory.find((entry) => entry.store === store.id);
-  if (inventory?.restrictions.some((entry) => entry.kind === 'schema-incompatible'))
+  const inventory = snapshot.storeInventory.find(
+    (entry) => entry.store === store.id,
+  );
+  if (
+    inventory?.restrictions.some(
+      (entry) => entry.kind === 'schema-incompatible',
+    )
+  )
     return { available: false, reason: 'schema-incompatible' };
   if (
     inventory?.restrictions.some(
@@ -175,7 +185,7 @@ export function storeAvailability(
     return { available: false, reason: 'import-verification-required' };
   const serverAccess = serverOperationalAvailability(
     server,
-    world.observedExpiredLeases,
+    snapshot.observedExpiredLeases,
     options,
   );
   if (!serverAccess.available) return serverAccess;
@@ -187,69 +197,80 @@ export function storeAvailability(
 }
 
 export function profileInventoryComplete(
-  world: World,
+  snapshot: AgentSnapshot,
   kind: 'profiles' | 'accounts' | 'teams',
 ): boolean {
-  if (kind === 'profiles') return world.profileInventoryStatus === 'complete';
-  if (world.profileInventoryStatus !== 'complete') return false;
-  return world.catalogProfiles.every(
+  if (kind === 'profiles')
+    return snapshot.profileInventoryStatus === 'complete';
+  if (snapshot.profileInventoryStatus !== 'complete') return false;
+  return snapshot.catalogProfiles.every(
     (profile) =>
-      world.profileInventory.find((entry) => entry.profile === profile)?.[
+      snapshot.profileInventory.find((entry) => entry.profile === profile)?.[
         kind
       ] === 'complete',
   );
 }
 
 /** Whether this store's server has a lapsed check-in. */
-export function leaseLapsed(world: World, ref: StoreRef): boolean {
-  const store = storeOf(world, ref);
+export function leaseLapsed(snapshot: AgentSnapshot, ref: StoreRef): boolean {
+  const store = storeOf(snapshot, ref);
   if (!store) return false;
-  const availability = storeAvailability(world, store);
+  const availability = storeAvailability(snapshot, store);
   return !availability.available && availability.reason === 'check-in-expired';
 }
 
 /** A protocol safety failure blocks a profile without claiming its lease lapsed. */
-export function serverBlocked(world: World, ref: StoreRef): boolean {
-  return serverOf(world, ref)?.trust.status === 'blocked';
+export function serverBlocked(snapshot: AgentSnapshot, ref: StoreRef): boolean {
+  return serverOf(snapshot, ref)?.trust.status === 'blocked';
 }
 
 /** A server that has never been checked hides its stores until it is. */
-export function serverNeverProbed(world: World, ref: StoreRef): boolean {
-  return serverOf(world, ref)?.trust.status === 'unprobed';
+export function serverNeverProbed(
+  snapshot: AgentSnapshot,
+  ref: StoreRef,
+): boolean {
+  return serverOf(snapshot, ref)?.trust.status === 'unprobed';
 }
 
 /** No usable signed expiry was available, so access fails closed without claiming lapse. */
-export function serverLeaseUnavailable(world: World, ref: StoreRef): boolean {
-  const lease = serverOf(world, ref)?.compatibility;
-  return lease?.status === 'required-unavailable' || lease?.status === 'requirement-unknown';
+export function serverLeaseUnavailable(
+  snapshot: AgentSnapshot,
+  ref: StoreRef,
+): boolean {
+  const lease = serverOf(snapshot, ref)?.compatibility;
+  return (
+    lease?.status === 'required-unavailable' ||
+    lease?.status === 'requirement-unknown'
+  );
 }
 
-export type StoreDescriptionState =
-  | 'normal'
-  | AvailabilityReason;
+export type StoreDescriptionState = 'normal' | AvailabilityReason;
 
 /** The condition that replaces a store's ordinary sidebar/header description. */
 export function storeDescriptionState(
-  world: World,
+  snapshot: AgentSnapshot,
   store: Store,
 ): StoreDescriptionState {
-  const availability = storeAvailability(world, store);
+  const availability = storeAvailability(snapshot, store);
   return availability.available ? 'normal' : availability.reason;
 }
 
 export function groupDetailFailure(
-  world: World,
+  snapshot: AgentSnapshot,
   store: StoreRef,
   source: GroupDetailSource,
 ): GroupDetailFailure | undefined {
-  return world.groupDetailFailures.find(
+  return snapshot.groupDetailFailures.find(
     (failure) => failure.store === store && failure.source === source,
   );
 }
 
 /** The one description used for a store in both navigation and page headers. */
-export function storeDescription(world: World, store: Store): string {
-  const state = storeDescriptionState(world, store);
+export function storeDescription(
+  snapshot: AgentSnapshot,
+  store: Store,
+): string {
+  const state = storeDescriptionState(snapshot, store);
   if (state === 'setup-incomplete') return 'Setup incomplete';
   if (state === 'verification-required') return 'Verification required';
   if (state === 'verification-failed') return 'Verification failed';
@@ -260,23 +281,26 @@ export function storeDescription(world: World, store: Store): string {
   if (state === 'server-status-unavailable') return 'Server status unavailable';
   if (state === 'vault-unavailable') return 'Vault unavailable';
   if (state === 'agent-unavailable') return 'Service unavailable';
-  if (store.kind === 'account') return serverOf(world, store.id)?.name ?? '';
-  if (groupDetailFailure(world, store.id, 'roster'))
+  if (store.kind === 'account') return serverOf(snapshot, store.id)?.name ?? '';
+  if (groupDetailFailure(snapshot, store.id, 'roster'))
     return 'Roster unavailable';
-  if (groupDetailFailure(world, store.id, 'federation'))
+  if (groupDetailFailure(snapshot, store.id, 'federation'))
     return 'Federation unavailable';
-  return peopleGroups(partiesOf(world, store.id));
+  return peopleGroups(partiesOf(snapshot, store.id));
 }
 
 /**
  * Returns subtitle text for a store page header. Suppresses status error text
  * when errors are already surfaced by full-page notices in the body.
  */
-export function storeHeadingDescription(world: World, store: Store): string {
-  if (storeDescriptionState(world, store) !== 'normal') return '';
-  if (groupDetailFailure(world, store.id, 'roster')) return '';
-  if (groupDetailFailure(world, store.id, 'federation')) return '';
-  return storeDescription(world, store);
+export function storeHeadingDescription(
+  snapshot: AgentSnapshot,
+  store: Store,
+): string {
+  if (storeDescriptionState(snapshot, store) !== 'normal') return '';
+  if (groupDetailFailure(snapshot, store.id, 'roster')) return '';
+  if (groupDetailFailure(snapshot, store.id, 'federation')) return '';
+  return storeDescription(snapshot, store);
 }
 
 /**
@@ -284,62 +308,70 @@ export function storeHeadingDescription(world: World, store: Store): string {
  * and team stores must report an active status.
  */
 export function storeReadable(
-  world: World,
+  snapshot: AgentSnapshot,
   ref: StoreRef,
   options: AvailabilityOptions = {},
 ): boolean {
-  const store = storeOf(world, ref);
-  return Boolean(store && storeAvailability(world, store, options).available);
+  const store = storeOf(snapshot, ref);
+  return Boolean(
+    store && storeAvailability(snapshot, store, options).available,
+  );
 }
 
 export function serverChatAvailable(
-  world: World,
+  snapshot: AgentSnapshot,
   server: Server,
   options: AvailabilityOptions = {},
 ): boolean {
-  return server.capabilities.chat && serverAvailability(world, server, options).available;
+  return (
+    server.capabilities.chat &&
+    serverAvailability(snapshot, server, options).available
+  );
 }
 
 /** Returns whether the current user has permission to create items in this store. */
-export function canCreateInStore(world: World, ref: StoreRef): boolean {
-  const store = storeOf(world, ref);
-  if (!store || !storeReadable(world, store.id)) return false;
+export function canCreateInStore(
+  snapshot: AgentSnapshot,
+  ref: StoreRef,
+): boolean {
+  const store = storeOf(snapshot, ref);
+  if (!store || !storeReadable(snapshot, store.id)) return false;
   if (store.kind === 'account') return true;
-  const own = partiesOf(world, store.id).filter(
+  const own = partiesOf(snapshot, store.id).filter(
     (party) =>
       party.label === 'you' &&
       party.party_kind === 'user' &&
       party.locally_manageable &&
-      admissionActive(world, party, store.id),
+      admissionActive(snapshot, party, store.id),
   );
   return own.length === 1;
 }
 
 /** Returns whether the local authenticated user has permission to edit the specified item. */
-export function canChangeItem(world: World, item: Item): boolean {
-  const store = storeOf(world, item.store);
-  if (!store || !canCreateInStore(world, store.id)) return false;
+export function canChangeItem(snapshot: AgentSnapshot, item: Item): boolean {
+  const store = storeOf(snapshot, item.store);
+  if (!store || !canCreateInStore(snapshot, store.id)) return false;
   if (store.kind === 'account') return true;
-  const own = partiesOf(world, store.id).filter(
+  const own = partiesOf(snapshot, store.id).filter(
     (party) =>
       party.label === 'you' &&
       party.party_kind === 'user' &&
       party.locally_manageable &&
-      admissionActive(world, party, store.id),
+      admissionActive(snapshot, party, store.id),
   );
   return own.length === 1 && admits(own[0].destination_role, item.write);
 }
 
 /** Returns all accessible items from readable stores, excluding directory entries. */
-export function catalog(world: World): Item[] {
-  return world.items.filter(
-    (item) => item.kind !== 'Folder' && storeReadable(world, item.store),
+export function catalog(snapshot: AgentSnapshot): Item[] {
+  return snapshot.items.filter(
+    (item) => item.kind !== 'Folder' && storeReadable(snapshot, item.store),
   );
 }
 
 /** Returns all readable stores in navigation display order. */
-export function listableStores(world: World): Store[] {
-  return world.stores.filter((store) => storeReadable(world, store.id));
+export function listableStores(snapshot: AgentSnapshot): Store[] {
+  return snapshot.stores.filter((store) => storeReadable(snapshot, store.id));
 }
 
 /**
@@ -347,39 +379,45 @@ export function listableStores(world: World): Store[] {
  * context is active. Selects the first writable store in navigation order, or
  * falls back to the first available store if all are read-only.
  */
-export function defaultCreateStore(world: World): StoreRef | undefined {
-  const order = storeNavigationOrder(world);
-  const writable = order.find((store) => canCreateInStore(world, store.id));
+export function defaultCreateStore(
+  snapshot: AgentSnapshot,
+): StoreRef | undefined {
+  const order = storeNavigationOrder(snapshot);
+  const writable = order.find((store) => canCreateInStore(snapshot, store.id));
   return (writable ?? order[0])?.id;
 }
 
 /**
  * Filters active system notifications based on current server lease state.
  */
-export function notesNow(world: World): Notification[] {
-  return world.notifications.filter((note) => {
+export function notesNow(snapshot: AgentSnapshot): Notification[] {
+  return snapshot.notifications.filter((note) => {
     if (note.id !== 'lease-acme') return true;
-    const server = world.servers.find((entry) => entry.id === LEASED_SERVER_ID);
+    const server = snapshot.servers.find(
+      (entry) => entry.id === LEASED_SERVER_ID,
+    );
     if (!server) return false;
-    const availability = serverAvailability(world, server);
-    return !availability.available && availability.reason === 'check-in-expired';
+    const availability = serverAvailability(snapshot, server);
+    return (
+      !availability.available && availability.reason === 'check-in-expired'
+    );
   });
 }
 
 /**
- * Put a server's compatibility lease into `state`, returning a new world.
+ * Put a server's compatibility lease into `state`, returning a new snapshot.
  *
- * Returns a cloned World state with the updated lease state and server records.
+ * Returns a cloned AgentSnapshot with the updated lease state and server
+ * records.
  */
 export function applyLease(
-  world: World,
+  snapshot: AgentSnapshot,
   state: 'fresh' | 'lapsed',
   serverId: string = LEASED_SERVER_ID,
   nowSeconds: number = Math.floor(Date.now() / 1000),
-): World {
-  const expiresAt =
-    state === 'lapsed' ? nowSeconds : nowSeconds + 12 * 86_400;
-  const retained = world.observedExpiredLeases.filter(
+): AgentSnapshot {
+  const expiresAt = state === 'lapsed' ? nowSeconds : nowSeconds + 12 * 86_400;
+  const retained = snapshot.observedExpiredLeases.filter(
     (entry) => entry.profile !== serverId || entry.expiresAt >= expiresAt,
   );
   const observedExpiredLeases =
@@ -390,9 +428,9 @@ export function applyLease(
       ? [...retained, { profile: serverId, expiresAt }]
       : retained;
   return {
-    ...world,
+    ...snapshot,
     observedExpiredLeases,
-    servers: world.servers.map((server) =>
+    servers: snapshot.servers.map((server) =>
       server.id !== serverId
         ? server
         : {

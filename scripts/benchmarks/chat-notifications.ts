@@ -18,7 +18,7 @@ import type {
   ChatScope,
 } from '../../apps/desktop/src/chat-contract';
 import type { NotificationMetric } from '../../apps/desktop/src/chat/notification-consumer';
-import type { World } from '../../apps/desktop/src/model';
+import type { AgentSnapshot } from '../../apps/desktop/src/model';
 import { decodeChatScope } from '../../apps/desktop/src/chat-contract';
 import type { WorkTiming } from '../../apps/desktop/src/scheduling/profile-work';
 
@@ -370,7 +370,7 @@ try {
       },
     ],
     servers: [{ id: 'receiver', chat_available: true }],
-  } as unknown as World);
+  } as unknown as AgentSnapshot);
   service.start();
   const consumer = enabled
     ? new NotificationConsumer(

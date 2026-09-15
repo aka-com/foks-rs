@@ -4,10 +4,10 @@
  */
 
 import { applyLease } from './model/lease';
-import type { World } from './model/types';
+import type { AgentSnapshot } from './model/types';
 
 /** Base fixture data prior to applying lease configuration. */
-const RAW: World = {
+const RAW: AgentSnapshot = {
   agent: { state: 'ready' },
   servers: [
     {
@@ -454,10 +454,10 @@ const RAW: World = {
 };
 
 /**
- * The fixture the shell starts from: the fresh lease world, so Engineering
+ * The fixture the shell starts from: the fresh lease snapshot, so Engineering
  * and Work list at all.
  */
-export const FIXTURE: World = applyLease(
+export const FIXTURE: AgentSnapshot = applyLease(
   {
     ...RAW,
     storeInventory: RAW.stores.map((store) => ({

@@ -14,7 +14,7 @@ import { FIXTURE } from './fixture';
 import { catalog } from './model/lease';
 import { parseRole, roleRank, visibilityOf } from './model/roles';
 import { itemKey } from './model/types';
-import type { RoleWire, Store, World } from './model/types';
+import type { RoleWire, Store, AgentSnapshot } from './model/types';
 import {
   decodeFirstRunCheckpoint,
   FIRST_RUN_CHECKPOINT_KEY,
@@ -37,20 +37,20 @@ export type AppLifecycleRequest = 'restart' | 'quit';
 
 export const mockAppLifecycleRequests: AppLifecycleRequest[] = [];
 
-export function mockBridge(world: World = FIXTURE): Bridge {
+export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
   const ssoModes = new Map<string, import('./sso-contract').SsoPurpose>();
-  const stores: Store[] = world.stores.map((store) => ({ ...store }));
-  const servers = world.servers.map((server) => ({ ...server }));
-  const accounts = world.accounts.map((account) => ({ ...account }));
-  let items = world.items.map((item) => ({ ...item }));
-  let parties = world.parties.map((party) => ({ ...party }));
-  let federation = world.federation.map((entry) => ({ ...entry }));
+  const stores: Store[] = snapshot.stores.map((store) => ({ ...store }));
+  const servers = snapshot.servers.map((server) => ({ ...server }));
+  const accounts = snapshot.accounts.map((account) => ({ ...account }));
+  let items = snapshot.items.map((item) => ({ ...item }));
+  let parties = snapshot.parties.map((party) => ({ ...party }));
+  let federation = snapshot.federation.map((entry) => ({ ...entry }));
   const contents = new Map(
     items.map((item) => [
       itemKey(item),
       item.kind === 'Link'
         ? (item.target ?? '')
-        : (world.plaintext[itemKey(item)] ?? item.value ?? ''),
+        : (snapshot.plaintext[itemKey(item)] ?? item.value ?? ''),
     ]),
   );
   const select = (request: ItemRequest) => {
@@ -121,14 +121,14 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       write: decodeCreateRole(writeRole),
     };
   };
-  const fixtureEngineeringStore = world.stores.find(
+  const fixtureEngineeringStore = snapshot.stores.find(
     (store) => store.id === 'team:eng',
   );
   const fixtureEngineering =
     fixtureEngineeringStore?.kind === 'team'
       ? fixtureEngineeringStore
       : undefined;
-  const fixtureHouseholdStore = world.stores.find(
+  const fixtureHouseholdStore = snapshot.stores.find(
     (store) => store.id === 'team:household',
   );
   const fixtureHousehold =
@@ -236,7 +236,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
     string,
     { backupAlias: string; accountAlias: string; backupId: string }[]
   >();
-  const yubi = world.yubiAccounts.map((entry) => ({
+  const yubi = snapshot.yubiAccounts.map((entry) => ({
     alias: entry.alias,
     state: 'complete' as const,
   }));
@@ -246,7 +246,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
     if (store.kind !== 'account') continue;
     const rows =
       store.account === 'personal'
-        ? world.devices.map((device) => ({
+        ? snapshot.devices.map((device) => ({
             id: device.id_hex.replace(/^02/, '04'),
             name: device.name,
             role: 'owner' as const,
@@ -361,7 +361,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
         teamsComplete: true,
       }),
     ),
-    items: catalog({ ...world, items }).map((item) => ({
+    items: catalog({ ...snapshot, items }).map((item) => ({
       store: item.store,
       path: item.path,
       kind: item.kind,
@@ -373,7 +373,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
     failures: [],
     blockedProfiles: [],
   });
-  const chat = mockChat(world);
+  const chat = mockChat(snapshot);
   return {
     native: false,
     maintainClientState: async () => {
@@ -389,7 +389,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
     },
     chat,
     cancelChat: chat.cancel,
-    fixtureWorld: world,
+    fixtureSnapshot: snapshot,
     firstRunFixture,
     appLockState: async () => appLockState(),
     windowState: async () => ({ maximized: false, fullscreen: false }),
@@ -407,7 +407,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
     quitApp: async () => {
       mockAppLifecycleRequests.push('quit');
     },
-    agentStatus: () => Promise.resolve({ ...world.agent }),
+    agentStatus: () => Promise.resolve({ ...snapshot.agent }),
     appInfo: async () => ({
       version: '0.3.0',
       agentSocket: '/private/foks/agent.sock',
@@ -599,7 +599,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       return { applied: true };
     },
     takeAgentConnectionLoss: async () => null,
-    retryAgentConnection: async () => ({ ...world.agent }),
+    retryAgentConnection: async () => ({ ...snapshot.agent }),
     createGroup: async ({ accountStoreId, teamAlias, name, kind }) => {
       const account = stores.find(
         (store) => store.id === accountStoreId && store.kind === 'account',
@@ -626,7 +626,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       parties.push({
         store: id,
         username:
-          world.accounts.find((candidate) => candidate.store === account.id)
+          snapshot.accounts.find((candidate) => candidate.store === account.id)
             ?.username ?? account.account,
         label: 'you',
         party_kind: 'user',
@@ -729,7 +729,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
         remote_profile: remote.server,
         remote_team_alias: remote.alias,
         remote_host_id_hex:
-          world.servers.find((server) => server.id === remote.server)
+          snapshot.servers.find((server) => server.id === remote.server)
             ?.host_id ?? '',
         remote_team_id_hex: remote.team_id_hex,
         destination: { role: 'Member', visibility },
@@ -744,7 +744,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
         locally_manageable: false,
         party_id_hex: remote.team_id_hex,
         scoped_host_id_hex:
-          world.servers.find((server) => server.id === remote.server)
+          snapshot.servers.find((server) => server.id === remote.server)
             ?.host_id ?? undefined,
         source_role: { role: 'Owner' },
         destination_role: { role: 'Member', visibility },
@@ -1241,7 +1241,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       return { applied: true };
     },
     listYubiCards: async () =>
-      world.cardsConnected.map((card) => ({ ...card })),
+      snapshot.cardsConnected.map((card) => ({ ...card })),
     listYubiAccounts: async () => yubi.map((entry) => ({ ...entry })),
     runYubi: async ({ command, args }) => {
       if (

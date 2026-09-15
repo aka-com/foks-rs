@@ -6,26 +6,32 @@
  */
 
 import { admits, parseRole, roleRank, visibilityOf } from './roles';
-import type { Item, Party, Store, StoreRef, World } from './types';
+import type { Item, Party, Store, StoreRef, AgentSnapshot } from './types';
 
 /** The store with this id, or `undefined`. */
-export function storeOf(world: World, ref: StoreRef): Store | undefined {
-  return world.stores.find((store) => store.id === ref);
+export function storeOf(
+  snapshot: AgentSnapshot,
+  ref: StoreRef,
+): Store | undefined {
+  return snapshot.stores.find((store) => store.id === ref);
 }
 
 /** Returns all member parties belonging to the specified store. */
-export function partiesOf(world: World, ref: StoreRef): Party[] {
-  return world.parties.filter((party) => party.store === ref);
+export function partiesOf(snapshot: AgentSnapshot, ref: StoreRef): Party[] {
+  return snapshot.parties.filter((party) => party.store === ref);
 }
 
 /** Returns whether a member party can be modified or removed by the current user. */
-export function actionableGroupMember(world: World, party: Party): boolean {
+export function actionableGroupMember(
+  snapshot: AgentSnapshot,
+  party: Party,
+): boolean {
   return Boolean(
     party.username &&
     party.party_kind === 'user' &&
     party.locally_manageable &&
     party.label !== 'you' &&
-    partiesOf(world, party.store).filter(
+    partiesOf(snapshot, party.store).filter(
       (candidate) => candidate.username === party.username,
     ).length === 1,
   );
@@ -36,14 +42,14 @@ export function actionableGroupMember(world: World, party: Party): boolean {
  * lower role rank and lower visibility bands, while preserving roster order on ties.
  */
 export function safestRemovalTarget(
-  world: World,
+  snapshot: AgentSnapshot,
   ref: StoreRef,
 ): Party | undefined {
   let safest: Party | undefined;
   let safestRank = Number.POSITIVE_INFINITY;
   let safestVisibility = Number.POSITIVE_INFINITY;
-  for (const party of partiesOf(world, ref)) {
-    if (!actionableGroupMember(world, party)) continue;
+  for (const party of partiesOf(snapshot, ref)) {
+    if (!actionableGroupMember(snapshot, party)) continue;
     const role = parseRole(party.destination_role);
     if (!role) continue;
     const rank = roleRank(role);
@@ -66,13 +72,13 @@ export function safestRemovalTarget(
  * federation admission record.
  */
 export function admissionActive(
-  world: World,
+  snapshot: AgentSnapshot,
   party: Party,
   ref: StoreRef,
 ): boolean {
   if (party.party_kind === 'user') return true;
   // When a party is host-scoped, the admission must match the specific remote host ID.
-  const entries = world.federation.filter(
+  const entries = snapshot.federation.filter(
     (f) =>
       f.store === ref &&
       f.remote_team_id_hex === party.party_id_hex &&
@@ -87,12 +93,12 @@ export function admissionActive(
  *
  * `null` on an account store — there is no roster to filter.
  */
-export function readersOf(world: World, item: Item): Party[] | null {
-  const store = storeOf(world, item.store);
+export function readersOf(snapshot: AgentSnapshot, item: Item): Party[] | null {
+  const store = storeOf(snapshot, item.store);
   if (!store || store.kind !== 'team') return null;
-  return partiesOf(world, store.id).filter(
+  return partiesOf(snapshot, store.id).filter(
     (party) =>
-      admissionActive(world, party, store.id) &&
+      admissionActive(snapshot, party, store.id) &&
       admits(party.destination_role, item.read),
   );
 }

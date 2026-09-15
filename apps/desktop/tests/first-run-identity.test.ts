@@ -30,7 +30,7 @@ const pending = transitionFirstRun(
   },
   { type: 'account-provisioned', alias: 'personal', deviceName: 'Mac' },
 );
-const world = {
+const snapshot = {
   ...FIXTURE,
   servers: FIXTURE.servers.map((server) =>
     server.id === 'personal' ? { ...server, host_id: profile.hostId } : server,
@@ -40,22 +40,22 @@ const world = {
 test('identity conflicts distinguish incomplete inventory from missing and inconsistent records', () => {
   assert.equal(
     provisionedIdentityProblem(
-      { ...world, profileInventoryStatus: 'unavailable', servers: [] },
+      { ...snapshot, profileInventoryStatus: 'unavailable', servers: [] },
       pending,
     ),
     'inventory-unavailable',
   );
   assert.equal(
-    provisionedIdentityProblem({ ...world, servers: [] }, pending),
+    provisionedIdentityProblem({ ...snapshot, servers: [] }, pending),
     'profile-missing',
   );
   assert.equal(
-    provisionedIdentityProblem({ ...world, accounts: [] }, pending),
+    provisionedIdentityProblem({ ...snapshot, accounts: [] }, pending),
     'account-missing',
   );
   assert.equal(
     provisionedIdentityProblem(
-      { ...world, accounts: [...world.accounts, world.accounts[0]] },
+      { ...snapshot, accounts: [...snapshot.accounts, snapshot.accounts[0]] },
       pending,
     ),
     'duplicate-records',
@@ -63,8 +63,8 @@ test('identity conflicts distinguish incomplete inventory from missing and incon
   assert.equal(
     provisionedIdentityProblem(
       {
-        ...world,
-        servers: world.servers.map((s) => ({ ...s, host_id: 'wrong' })),
+        ...snapshot,
+        servers: snapshot.servers.map((s) => ({ ...s, host_id: 'wrong' })),
       },
       pending,
     ),
@@ -140,32 +140,32 @@ test('acknowledged provisioning cannot be rewound by navigation or missing inven
 });
 
 test('identity adoption requires the pinned host, unique alias match and scoped complete inventory', () => {
-  const resolved = resolveProvisionedIdentity(world, pending);
+  const resolved = resolveProvisionedIdentity(snapshot, pending);
   assert.equal(resolved.state, 'protect');
   assert.equal(resolved.account?.username, 'rae');
   assert.equal(resolved.provisionedAccount, undefined);
   for (const changed of [
-    { ...world, servers: [] },
-    { ...world, servers: [...world.servers, world.servers[0]] },
+    { ...snapshot, servers: [] },
+    { ...snapshot, servers: [...snapshot.servers, snapshot.servers[0]] },
     {
-      ...world,
-      servers: world.servers.map((server) => ({
+      ...snapshot,
+      servers: snapshot.servers.map((server) => ({
         ...server,
         host_id: 'different',
       })),
     },
-    { ...world, accounts: [] },
-    { ...world, accounts: [...world.accounts, world.accounts[0]] },
+    { ...snapshot, accounts: [] },
+    { ...snapshot, accounts: [...snapshot.accounts, snapshot.accounts[0]] },
     {
-      ...world,
-      accounts: world.accounts.map((account) => ({
+      ...snapshot,
+      accounts: snapshot.accounts.map((account) => ({
         ...account,
         server: 'other',
       })),
     },
-    { ...world, profileInventory: [] },
+    { ...snapshot, profileInventory: [] },
     {
-      ...world,
+      ...snapshot,
       profileInventory: [
         {
           profile: 'personal',
@@ -179,8 +179,8 @@ test('identity adoption requires the pinned host, unique alias match and scoped 
   assert.equal(
     resolveProvisionedIdentity(
       {
-        ...world,
-        profileInventory: world.profileInventory.map((row) =>
+        ...snapshot,
+        profileInventory: snapshot.profileInventory.map((row) =>
           row.profile === 'personal'
             ? row
             : { ...row, accounts: 'unavailable' },

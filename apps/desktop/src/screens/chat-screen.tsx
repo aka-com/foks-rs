@@ -31,7 +31,7 @@ import {
   storeDescription,
   storeOf,
 } from '../model';
-import type { World } from '../model';
+import type { AgentSnapshot } from '../model';
 import type { Location } from '../location';
 import { PageHeader } from '../shell/page-header';
 import { failure, preparationCanChange, submissionId } from '../chat/actions';
@@ -54,28 +54,28 @@ function conversationMeta(
 }
 
 export function ChatScreen({
-  world,
+  snapshot: agentSnapshot,
   bridge,
   location,
   onNavigate,
   accessNow = systemAccessNow,
   accessGeneration = 0,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   bridge: Bridge;
   location: Extract<Location, { kind: 'team-chat' }>;
   onNavigate: (location: Location) => void;
   accessNow?: () => number;
   accessGeneration?: number;
 }): ReactNode {
-  const store = storeOf(world, location.ref);
+  const store = storeOf(agentSnapshot, location.ref);
   const { snapshot } = useChatInbox();
   const access = useCallback(
     () =>
       store
-        ? storeAvailability(world, store, { nowSeconds: accessNow() })
+        ? storeAvailability(agentSnapshot, store, { nowSeconds: accessNow() })
         : ({ available: false, reason: 'vault-unavailable' } as const),
-    [accessNow, store, world],
+    [accessNow, store, agentSnapshot],
   );
   const {
     channels,
@@ -135,7 +135,7 @@ export function ChatScreen({
   const storeId = store?.id ?? '';
   const senderNames = new Map(
     store
-      ? partiesOf(world, store.id)
+      ? partiesOf(agentSnapshot, store.id)
           .filter((party) => party.party_kind === 'user')
           .map((party) => [
             party.party_id_hex,
@@ -152,8 +152,7 @@ export function ChatScreen({
     [request],
   );
   const guardedRefresh = useCallback(
-    (): Promise<void> =>
-      accessAvailable() ? refresh() : Promise.resolve(),
+    (): Promise<void> => (accessAvailable() ? refresh() : Promise.resolve()),
     [accessAvailable, refresh],
   );
   const guardedRefreshPending = useCallback(
@@ -177,10 +176,13 @@ export function ChatScreen({
       <section className="chat-screen">
         <PageHeader
           title="Chat unavailable"
-          subtitle={storeDescription(world, store)}
+          subtitle={storeDescription(agentSnapshot, store)}
         />
         <div className="chat-conversation">
-          <Notice severity="crit" title={storeDescription(world, store)}>
+          <Notice
+            severity="crit"
+            title={storeDescription(agentSnapshot, store)}
+          >
             <p role="alert">
               Access to this group is stopped. Check the server status before
               reopening its conversations.

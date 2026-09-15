@@ -78,7 +78,7 @@ async function agentLostOverlay(options: {
       backgroundRef: { current: null },
       portalRoot,
       children: createElement(WriteOverlay, {
-        world: FIXTURE,
+        snapshot: FIXTURE,
         bridge,
         workflow: { kind: 'agent-lost', message: options.message },
         setWorkflow: () => {},

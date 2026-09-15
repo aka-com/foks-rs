@@ -1,4 +1,4 @@
-import type { World } from './model';
+import type { AgentSnapshot } from './model';
 import { cancelled } from './chat/client';
 import { CHAT_PAGE_ROWS } from './chat-limits';
 import type {
@@ -10,14 +10,14 @@ import type {
   ChatResult,
 } from './chat-contract';
 /** In-memory demo only; native chat never writes browser storage. */
-export function mockChat(world?: World) {
+export function mockChat(snapshot?: AgentSnapshot) {
   const accounts = new Map<
     string,
     { version: bigint; waiters: Set<() => void>; polling: boolean }
   >();
   const views = new Map<string, Set<() => void>>();
   const accountFor = (storeId: string) => {
-    const store = world?.stores.find((s) => s.id === storeId);
+    const store = snapshot?.stores.find((s) => s.id === storeId);
     const key = JSON.stringify([
       store?.server ?? 'demo',
       store?.account ?? 'me',

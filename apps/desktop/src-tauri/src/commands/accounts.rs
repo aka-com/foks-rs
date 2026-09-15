@@ -766,21 +766,17 @@ pub async fn verify_account_passphrase(
 pub async fn list_accounts(
     webview: tauri::Webview,
     state: State<'_, AppState>,
+    generation: Option<u64>,
 ) -> Result<Vec<AccountDto>, AgentError> {
     require_main_window(&webview)?;
-    let generation = state.catalog_generation.load(Ordering::Acquire);
-    let catalog = state
-        .catalog
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
-        .ok_or_else(|| {
-            AgentError::new(
-                "catalog-required",
-                "Refresh the vault before loading account identities.",
-                true,
-            )
-        })?;
+    let (generation, catalog) = state.catalog_at(generation)?;
+    let catalog = catalog.ok_or_else(|| {
+        AgentError::new(
+            "catalog-required",
+            "Refresh the vault before loading account identities.",
+            true,
+        )
+    })?;
     let transport = state.agent.transport();
     let accounts =
         tauri::async_runtime::spawn_blocking(move || load_accounts(transport.as_ref(), &catalog))

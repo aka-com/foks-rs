@@ -45,7 +45,7 @@ import type {
   RoleWire,
   Store,
   StoreRef,
-  World,
+  AgentSnapshot,
 } from '../model';
 import { normalizeCommandError } from '../bridge';
 import type { Bridge, KvRoleInput } from '../bridge';
@@ -120,7 +120,7 @@ function namedPath(
 
 export function initialWriteWorkflow(
   search: string,
-  world?: World,
+  snapshot?: AgentSnapshot,
 ): WriteWorkflow {
   const state = new URLSearchParams(search).get('state');
   if (state === 'new')
@@ -148,15 +148,15 @@ export function initialWriteWorkflow(
     };
   }
   if (state === 'agent-lost') return { kind: 'agent-lost' };
-  if (state === 'conflict' && world) {
-    const item = world.items.find((candidate) => isLogin(candidate));
+  if (state === 'conflict' && snapshot) {
+    const item = snapshot.items.find((candidate) => isLogin(candidate));
     if (item)
       return {
         kind: 'conflict',
         item,
         draft: editableValue(
           item,
-          world.plaintext[itemKey(item)] ?? item.value ?? '',
+          snapshot.plaintext[itemKey(item)] ?? item.value ?? '',
         ),
       };
   }
@@ -177,7 +177,7 @@ export function workflowForError(
 }
 
 interface NewSheetProps {
-  world: World;
+  snapshot: AgentSnapshot;
   bridge: Bridge;
   workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'new' }>;
   setWorkflow: (workflow: WriteWorkflow) => void;
@@ -190,25 +190,28 @@ interface NewSheetProps {
 /**
  * Formats a store option for the "Save in" vault selector.
  */
-function storeOption(world: World, store: Store): CardOption {
+function storeOption(snapshot: AgentSnapshot, store: Store): CardOption {
   return {
     id: store.id,
     title: store.name,
-    detail: storeDescription(world, store),
-    off: !canCreateInStore(world, store.id),
+    detail: storeDescription(snapshot, store),
+    off: !canCreateInStore(snapshot, store.id),
   };
 }
 
 /**
  * Returns a user-facing explanation if the selected store is read-only or blocked.
  */
-function writeBlockReason(world: World, store: Store): string | null {
-  if (canCreateInStore(world, store.id)) return null;
-  if (leaseLapsed(world, store.id))
+function writeBlockReason(
+  snapshot: AgentSnapshot,
+  store: Store,
+): string | null {
+  if (canCreateInStore(snapshot, store.id)) return null;
+  if (leaseLapsed(snapshot, store.id))
     return 'The signed server check-in expired. Check in again before retrying.';
-  if (serverBlocked(world, store.id))
+  if (serverBlocked(snapshot, store.id))
     return 'Server access is blocked. Cannot create items in this vault.';
-  if (serverLeaseUnavailable(world, store.id))
+  if (serverLeaseUnavailable(snapshot, store.id))
     return 'No usable signed server check-in is available. Cannot create items in this vault.';
   if (store.kind === 'team' && !store.active)
     return 'Group setup is incomplete. Complete setup before adding items.';
@@ -218,14 +221,14 @@ function writeBlockReason(world: World, store: Store): string | null {
 }
 
 function AccessBlock({
-  world,
+  snapshot,
   store,
   readRole,
   writeRole,
   onReadRole,
   onWriteRole,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   store: Store;
   readRole: KvRoleInput;
   writeRole: KvRoleInput;
@@ -248,11 +251,11 @@ function AccessBlock({
     read: roleWire(readRole),
     write: roleWire(writeRole),
   };
-  const roster = partiesOf(world, store.id);
-  const admitted = readersOf(world, candidate) ?? [];
+  const roster = partiesOf(snapshot, store.id);
+  const admitted = readersOf(snapshot, candidate) ?? [];
   const excluded = roster.filter((party) => !admitted.includes(party));
   const changers =
-    readersOf(world, { ...candidate, read: candidate.write }) ?? [];
+    readersOf(snapshot, { ...candidate, read: candidate.write }) ?? [];
   const readVisibility = readRole.startsWith('Member:')
     ? Number(readRole.slice('Member:'.length))
     : 0;
@@ -380,7 +383,7 @@ function AccessBlock({
 }
 
 function NewSheet({
-  world,
+  snapshot,
   bridge,
   workflow,
   setWorkflow,
@@ -391,9 +394,9 @@ function NewSheet({
 }: NewSheetProps): ReactNode {
   // If the specified store is not available locally, fall back to the default vault.
   const [storeId, setStoreId] = useState(() =>
-    storeOf(world, workflow.storeId)
+    storeOf(snapshot, workflow.storeId)
       ? workflow.storeId
-      : (defaultCreateStore(world) ?? workflow.storeId),
+      : (defaultCreateStore(snapshot) ?? workflow.storeId),
   );
   const [site, setSite] = useState(workflow.draft?.site ?? '');
   const [path, setPath] = useState(
@@ -426,10 +429,10 @@ function NewSheet({
   const [hovering, setHovering] = useState(false);
   const [saving, setSaving] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
-  const store = storeOf(world, storeId);
+  const store = storeOf(snapshot, storeId);
   const group = store?.kind === 'team';
-  const canWrite = Boolean(store && canCreateInStore(world, store.id));
-  const blocked = store ? writeBlockReason(world, store) : null;
+  const canWrite = Boolean(store && canCreateInStore(snapshot, store.id));
+  const blocked = store ? writeBlockReason(snapshot, store) : null;
   const itemKind = workflow.itemKind;
   const roleArgs = group ? { readRole, writeRole } : {};
 
@@ -486,8 +489,9 @@ function NewSheet({
     if (
       !store ||
       !canWrite ||
-      !storeAvailability(world, store, { nowSeconds: accessNow() }).available ||
-      !canCreateInStore(world, store.id) ||
+      !storeAvailability(snapshot, store, { nowSeconds: accessNow() })
+        .available ||
+      !canCreateInStore(snapshot, store.id) ||
       saving ||
       !path.startsWith('/') ||
       !pathName
@@ -620,11 +624,11 @@ function NewSheet({
       <>
         <SectionLabel>Save in</SectionLabel>
         <Inset>
-          {world.stores.length ? (
+          {snapshot.stores.length ? (
             <CardSelect
               label="Save in"
-              options={storeNavigationOrder(world).map((candidate) =>
-                storeOption(world, candidate),
+              options={storeNavigationOrder(snapshot).map((candidate) =>
+                storeOption(snapshot, candidate),
               )}
               value={storeId}
               onChange={setStoreId}
@@ -639,7 +643,7 @@ function NewSheet({
         {store && blocked ? <Band>{`${store.name}: ${blocked}`}</Band> : null}
         {store ? (
           <AccessBlock
-            world={world}
+            snapshot={snapshot}
             store={store}
             readRole={readRole}
             writeRole={writeRole}
@@ -723,13 +727,13 @@ function NewSheet({
 }
 
 function ExistsSheet({
-  world,
+  snapshot,
   workflow,
   setWorkflow,
   onOpenExisting,
   onError,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'exists' }>;
   setWorkflow: (workflow: WriteWorkflow) => void;
   onOpenExisting: (
@@ -737,7 +741,7 @@ function ExistsSheet({
   ) => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
-  const clash = world.items.find(
+  const clash = snapshot.items.find(
     (item) => item.store === workflow.storeId && item.path === workflow.path,
   );
   const version = clash?.version;
@@ -780,7 +784,7 @@ function ExistsSheet({
         <p>
           An item already exists at this path. No files were overwritten
           {version
-            ? ` in ${storeOf(world, workflow.storeId)?.name ?? 'this vault'} (currently version ${version})`
+            ? ` in ${storeOf(snapshot, workflow.storeId)?.name ?? 'this vault'} (currently version ${version})`
             : ''}
           . You can open the existing item to review it, or choose a different
           name or path.
@@ -860,7 +864,7 @@ function AgentLostDialog({
 }
 
 export function WriteOverlay({
-  world,
+  snapshot,
   bridge,
   workflow,
   setWorkflow,
@@ -873,7 +877,7 @@ export function WriteOverlay({
   onOpenExisting,
   accessNow = () => Date.now() / 1000,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   bridge: Bridge;
   workflow: WriteWorkflow;
   setWorkflow: (workflow: WriteWorkflow) => void;
@@ -906,7 +910,7 @@ export function WriteOverlay({
         onDismiss={() => setWorkflow(null)}
       >
         <NewSheet
-          world={world}
+          snapshot={snapshot}
           bridge={bridge}
           workflow={workflow}
           setWorkflow={setWorkflow}
@@ -925,7 +929,7 @@ export function WriteOverlay({
         onDismiss={() => setWorkflow(null)}
       >
         <ExistsSheet
-          world={world}
+          snapshot={snapshot}
           workflow={workflow}
           setWorkflow={setWorkflow}
           onOpenExisting={onOpenExisting}
@@ -945,7 +949,7 @@ export function WriteOverlay({
     );
   return (
     <DeleteSheet
-      world={world}
+      snapshot={snapshot}
       accessNow={accessNow}
       workflow={workflow}
       bridge={bridge}
@@ -1062,7 +1066,7 @@ function ConflictSheet({
  * Confirmation dialog for deleting an item.
  */
 function DeleteSheet({
-  world,
+  snapshot,
   accessNow,
   workflow,
   bridge,
@@ -1070,7 +1074,7 @@ function DeleteSheet({
   onApplied,
   onMutationError,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   accessNow: () => number;
   workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'delete' }>;
   bridge: Bridge;
@@ -1099,15 +1103,15 @@ function DeleteSheet({
             danger
             disabled={deleting}
             onClick={() => {
-              const store = storeOf(world, workflow.item.store);
+              const store = storeOf(snapshot, workflow.item.store);
               if (
                 deleting ||
                 !store ||
-                !storeAvailability(world, store, {
+                !storeAvailability(snapshot, store, {
                   nowSeconds: accessNow(),
                 }).available ||
-                !storeReadable(world, workflow.item.store) ||
-                !canChangeItem(world, workflow.item)
+                !storeReadable(snapshot, workflow.item.store) ||
+                !canChangeItem(snapshot, workflow.item)
               )
                 return;
               setDeleting(true);

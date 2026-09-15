@@ -34,7 +34,7 @@ import {
   storeAvailability,
   storeOf,
 } from '../model';
-import type { Item, Party, RoleWire, World } from '../model';
+import type { Item, Party, RoleWire, AgentSnapshot } from '../model';
 import type { Selection } from '../location';
 import { normalizeCommandError } from '../bridge';
 import type { Bridge, ItemRequest, ReadItemResponse } from '../bridge';
@@ -183,7 +183,7 @@ function PartyRow({
 }
 
 export interface DetailsPanelProps {
-  world: World;
+  snapshot: AgentSnapshot;
   bridge: Bridge;
   selection: Selection;
   /** Key of an item requested to be revealed immediately on render. */
@@ -213,7 +213,7 @@ export interface DetailsPanelProps {
 }
 
 export function DetailsPanel({
-  world,
+  snapshot,
   bridge,
   selection,
   revealRequest = null,
@@ -232,7 +232,7 @@ export function DetailsPanel({
   resumeDraft = null,
 }: DetailsPanelProps): ReactNode {
   const item: Item | undefined = selection
-    ? world.items.find(
+    ? snapshot.items.find(
         (candidate) =>
           candidate.store === selection.store &&
           candidate.path === selection.path,
@@ -267,14 +267,14 @@ export function DetailsPanel({
   const activeAccessSession = accessSession ?? localAccessSession.current;
 
   const accessAvailable = useCallback((): boolean => {
-    const currentStore = item ? storeOf(world, item.store) : undefined;
+    const currentStore = item ? storeOf(snapshot, item.store) : undefined;
     return Boolean(
       currentStore &&
-      storeAvailability(world, currentStore, {
+      storeAvailability(snapshot, currentStore, {
         nowSeconds: accessNow(),
       }).available,
     );
-  }, [accessNow, item, world]);
+  }, [accessNow, item, snapshot]);
 
   const request = useMemo<ItemRequest | null>(
     () =>
@@ -479,16 +479,16 @@ export function DetailsPanel({
     );
   }
 
-  const store = storeOf(world, item.store);
-  const server = serverOf(world, item.store);
+  const store = storeOf(snapshot, item.store);
+  const server = serverOf(snapshot, item.store);
   const serverName = server?.name ?? '';
   const kind = kindOf(item) as FilterKind;
   const fileMode = kind === 'File' || binaryFile;
   const displayKind: FilterKind = fileMode ? 'File' : kind;
   const team = store?.kind === 'team';
-  const canChange = canChangeItem(world, item);
-  const readers = readersOf(world, item);
-  const parties = store ? partiesOf(world, store.id) : [];
+  const canChange = canChangeItem(snapshot, item);
+  const readers = readersOf(snapshot, item);
+  const parties = store ? partiesOf(snapshot, store.id) : [];
   const activeRead = read?.key === key ? read : null;
   const shownValue = activeRead?.state === 'shown' ? activeRead.value : null;
   const readError = activeRead?.state === 'error' ? activeRead.message : null;
@@ -821,7 +821,7 @@ export function DetailsPanel({
                     epoch !== concealEpoch.current
                   )
                     return;
-                  const target = catalog(world).find(
+                  const target = catalog(snapshot).find(
                     (candidate) =>
                       candidate.store === item.store && candidate.path === path,
                   );

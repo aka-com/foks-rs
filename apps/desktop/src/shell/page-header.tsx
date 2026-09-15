@@ -8,7 +8,7 @@
 import type { ReactNode } from 'react';
 import { SearchField } from '../components';
 import { storeHeadingDescription, storeOf } from '../model';
-import type { World } from '../model';
+import type { AgentSnapshot } from '../model';
 import type { Location } from '../location';
 
 export interface HeaderParts {
@@ -18,16 +18,19 @@ export interface HeaderParts {
 }
 
 /** The title, subtitle, and optional trailing element for an item list. */
-export function headerFor(world: World, location: Location): HeaderParts {
+export function headerFor(
+  snapshot: AgentSnapshot,
+  location: Location,
+): HeaderParts {
   if (location.kind === 'all') {
     return { title: 'All items', subtitle: '' };
   }
   if (location.kind !== 'store') {
     return { title: 'FOKS', subtitle: '' };
   }
-  const store = storeOf(world, location.ref);
+  const store = storeOf(snapshot, location.ref);
   if (!store) return { title: 'Unknown vault', subtitle: '' };
-  const description = storeHeadingDescription(world, store);
+  const description = storeHeadingDescription(snapshot, store);
   return {
     title: store.name,
     subtitle: description,

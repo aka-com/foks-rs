@@ -5,10 +5,10 @@ import { ChatInboxService } from '../src/chat/inbox-service';
 import type { ChatClock } from '../src/chat/inbox-service';
 import type { Bridge } from '../src/bridge';
 import type { ChatAction, ChatReply } from '../src/chat-contract';
-import type { TeamStore, World } from '../src/model';
+import type { TeamStore, AgentSnapshot } from '../src/model';
 import { FIXTURE } from '../src/fixture';
 
-function chatWorld(stores: TeamStore[]): World {
+function chatSnapshot(stores: TeamStore[]): AgentSnapshot {
   const template = FIXTURE.servers[0];
   assert.ok(template);
   return {
@@ -68,7 +68,7 @@ function fixture(count = 2) {
     team_id_hex: String(i),
     active: true,
   }));
-  const world = chatWorld(stores);
+  const snapshot = chatSnapshot(stores);
   const clock = new Clock();
   const waits = new Map<
     string,
@@ -168,7 +168,7 @@ function fixture(count = 2) {
       });
     }
   };
-  service.updateStores(world);
+  service.updateStores(snapshot);
   service.start();
   return {
     service,
@@ -180,7 +180,7 @@ function fixture(count = 2) {
     denied,
     bump,
     waits,
-    world,
+    snapshot,
   };
 }
 test('shell synchronizes all teams with one poll and cancels while Chat is absent', async () => {
@@ -213,7 +213,7 @@ test('failed team retries independently and observed poll head advances before s
 test('removing the canonical team hands off without leaving a second waiter', async () => {
   const f = fixture();
   await f.clock.advance(500);
-  f.service.updateStores({ ...f.world, stores: f.world.stores.slice(1) });
+  f.service.updateStores({ ...f.snapshot, stores: f.snapshot.stores.slice(1) });
   await f.clock.advance(1000);
   assert.equal(f.waits.size, 1);
   assert.equal(f.service.getSnapshot().has('t0'), false);
@@ -243,7 +243,7 @@ test('blocked accounts clear projections and require a fresh lifetime', async ()
   await f.clock.advance(30000);
   assert.equal(f.syncs.length, count);
   f.service.stop();
-  f.service.updateStores(f.world);
+  f.service.updateStores(f.snapshot);
   f.service.start();
   await f.clock.advance(500);
   assert.equal(f.waits.size, 1);
@@ -257,24 +257,24 @@ test('finite admission serves excess accounts and releases more than the view li
   let registrations = 0;
   let peak = 0;
   const stores: TeamStore[] = Array.from({ length: 6 }, (_, i) => ({
-      id: `t${i}`,
-      name: `Team ${i}`,
-      kind: 'team',
-      team_kind: 'named',
-      active: true,
-      server: 'p',
-      account: `a${i}`,
-      alias: `team${i}`,
-      team_id_hex: `${i}`,
-    }));
-  const world = chatWorld(stores);
+    id: `t${i}`,
+    name: `Team ${i}`,
+    kind: 'team',
+    team_kind: 'named',
+    active: true,
+    server: 'p',
+    account: `a${i}`,
+    alias: `team${i}`,
+    team_id_hex: `${i}`,
+  }));
+  const snapshot = chatSnapshot(stores);
   const bridge = {
     chat: async (
       id: string,
       action: ChatAction,
       view: string,
     ): Promise<ChatReply> => {
-      const store = world.stores.find((s) => s.id === id) as TeamStore;
+      const store = snapshot.stores.find((s) => s.id === id) as TeamStore;
       registrations++;
       active.set(view, () => {});
       peak = Math.max(peak, active.size);
@@ -326,7 +326,7 @@ test('finite admission serves excess accounts and releases more than the view li
     },
   } as unknown as Bridge;
   const service = new ChatInboxService(bridge, clock, 2);
-  service.updateStores(world);
+  service.updateStores(snapshot);
   service.start();
   await clock.advance(600000);
   assert.equal(served.size, 6);
@@ -423,7 +423,7 @@ test('channel quarantine survives late sync and soft reset without blocking sibl
   assert.ok(f.service.isChannelBlocked('t0', id));
   assert.deepEqual(exclusions.at(-1), [id]);
   f.service.stop();
-  f.service.updateStores(f.world);
+  f.service.updateStores(f.snapshot);
   f.service.start();
   await f.clock.advance(500);
   assert.equal(f.service.isChannelBlocked('t0', id), false);

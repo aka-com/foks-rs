@@ -230,7 +230,7 @@ export type AgentStatus =
   | { readonly state: 'ready' }
   | { readonly state: 'bootstrap'; readonly step: string };
 
-/* ---------------------------------------------------------------- world -- */
+/* ------------------------------------------------------------- snapshot -- */
 
 /**
  * Complete immutable snapshot of the application state, including servers,
@@ -246,7 +246,7 @@ export interface GroupDetailFailure {
   retryable: boolean;
 }
 
-export interface World {
+export interface AgentSnapshot {
   agent: AgentStatus;
   servers: readonly Server[];
   accounts: readonly Account[];

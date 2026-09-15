@@ -36,7 +36,7 @@ import {
   decodeFederation,
   decodeGroupDetails,
   discoverUnboundTeams,
-  loadWorld,
+  loadSnapshot,
   enqueueProfileWork,
   normalizeCommandError,
   onAgentReadinessRequired,
@@ -52,7 +52,7 @@ import {
   serverAvailability,
   storeReadable,
   type Server,
-  type World,
+  type AgentSnapshot,
 } from '../src/model';
 import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';
@@ -109,7 +109,12 @@ const checkedHost = {
 
 function listedServer(
   id: string,
-  state: 'ok' | 'lease-lapsed' | 'lease-unavailable' | 'never-probed' | 'blocked' = 'never-probed',
+  state:
+    | 'ok'
+    | 'lease-lapsed'
+    | 'lease-unavailable'
+    | 'never-probed'
+    | 'blocked' = 'never-probed',
   accounts: string[] = [],
 ): Server {
   const error = {
@@ -933,7 +938,7 @@ test('agent status decoding preserves bootstrap as a non-ready variant', () => {
   );
 });
 
-test('loadWorld never requests the catalog while the agent requires bootstrap', async () => {
+test('loadSnapshot never requests the catalog while the agent requires bootstrap', async () => {
   let catalogRequests = 0;
   const bridge: Bridge = {
     ...mockBridge(FIXTURE),
@@ -946,14 +951,73 @@ test('loadWorld never requests the catalog while the agent requires bootstrap', 
       return catalog;
     },
   };
-  await assert.rejects(loadWorld(bridge), (error: unknown) => {
+  await assert.rejects(loadSnapshot(bridge), (error: unknown) => {
     assert.equal(normalizeCommandError(error).code, 'bootstrap-required');
     return true;
   });
   assert.equal(catalogRequests, 0);
 });
 
-test('loadWorld propagates catalog-wide readiness failures to the lifecycle owner', async () => {
+test('loadSnapshot binds later reads to the catalog generation and retries once when it changes', async () => {
+  const base = mockBridge(FIXTURE);
+  const seen: { servers: unknown[]; accounts: unknown[] } = {
+    servers: [],
+    accounts: [],
+  };
+  let loads = 0;
+  const bridge: Bridge = {
+    ...base,
+    listCatalog: async () => {
+      loads++;
+      return { ...(await base.listCatalog()), generation: loads };
+    },
+    listServers: async (generation) => {
+      seen.servers.push(generation);
+      // The first sequence loses its snapshot to a concurrent load.
+      if (generation === 1)
+        throw {
+          code: 'catalog-required',
+          message: 'The vault changed while it was loading.',
+          retryable: true,
+          ambiguous: false,
+          fatal: false,
+        };
+      return base.listServers();
+    },
+    listAccounts: async (generation) => {
+      seen.accounts.push(generation);
+      return base.listAccounts();
+    },
+  };
+  const snapshot = await loadSnapshot(bridge);
+  assert.equal(
+    loads,
+    2,
+    'exactly one further attempt after the snapshot changed',
+  );
+  assert.deepEqual(seen.servers, [1, 2]);
+  assert.deepEqual(seen.accounts, [2]);
+  assert.equal(snapshot.profileInventoryStatus, 'complete');
+  // A second change is reported rather than retried indefinitely.
+  const failing: Bridge = {
+    ...base,
+    listAccounts: async () => {
+      throw {
+        code: 'catalog-required',
+        message: 'The vault changed while it was loading.',
+        retryable: true,
+        ambiguous: false,
+        fatal: false,
+      };
+    },
+  };
+  await assert.rejects(loadSnapshot(failing), (error: unknown) => {
+    assert.equal(normalizeCommandError(error).code, 'catalog-required');
+    return true;
+  });
+});
+
+test('loadSnapshot propagates catalog-wide readiness failures to the lifecycle owner', async () => {
   const readiness: string[] = [];
   const unlisten = onAgentReadinessRequired((error) => {
     readiness.push(error.code);
@@ -979,7 +1043,7 @@ test('loadWorld propagates catalog-wide readiness failures to the lifecycle owne
     }),
   };
   try {
-    await assert.rejects(loadWorld(bridge), (error: unknown) => {
+    await assert.rejects(loadSnapshot(bridge), (error: unknown) => {
       assert.equal(normalizeCommandError(error).code, 'bootstrap-required');
       return true;
     });
@@ -989,7 +1053,7 @@ test('loadWorld propagates catalog-wide readiness failures to the lifecycle owne
   }
 });
 
-test('loadWorld reports native agent loss once without mislabeling it as lease failure', async () => {
+test('loadSnapshot reports native agent loss once without mislabeling it as lease failure', async () => {
   const previousWindow = globalThis.window;
   Object.defineProperty(globalThis, 'window', {
     value: {
@@ -1016,10 +1080,11 @@ test('loadWorld reports native agent loss once without mislabeling it as lease f
     native: true,
     listCatalog: async () => catalog,
     listServers: async () => [listedServer('foks.example.net', 'ok')],
-    describeServerStatus: (profile) => tauriBridge.describeServerStatus(profile),
+    describeServerStatus: (profile) =>
+      tauriBridge.describeServerStatus(profile),
   };
   try {
-    await assert.rejects(loadWorld(bridge), (error: unknown) => {
+    await assert.rejects(loadSnapshot(bridge), (error: unknown) => {
       assert.equal(normalizeCommandError(error).code, 'agent-lost');
       return true;
     });
@@ -1055,13 +1120,13 @@ test('selectBridge returns native tauriBridge when window.__TAURI_INTERNALS__ is
   }
 });
 
-test('loadWorld retains validated account-store identities in the mock world', async () => {
-  const world = await loadWorld(mockBridge(FIXTURE), FIXTURE);
-  assert.equal(world.accounts.length, FIXTURE.accounts.length);
-  for (const account of world.accounts) {
+test('loadSnapshot retains validated account-store identities in the mock snapshot', async () => {
+  const snapshot = await loadSnapshot(mockBridge(FIXTURE), FIXTURE);
+  assert.equal(snapshot.accounts.length, FIXTURE.accounts.length);
+  for (const account of snapshot.accounts) {
     assert.ok(account.store);
     assert.equal(
-      world.stores.find((store) => store.id === account.store)?.kind,
+      snapshot.stores.find((store) => store.id === account.store)?.kind,
       'account',
     );
   }
@@ -1088,7 +1153,7 @@ test('discoverUnboundTeams discovers teams only for accounts with no binding', a
       };
     },
   };
-  const world: World = {
+  const snapshot: AgentSnapshot = {
     ...FIXTURE,
     accounts: [
       {
@@ -1125,21 +1190,21 @@ test('discoverUnboundTeams discovers teams only for accounts with no binding', a
       },
     ],
   };
-  assert.equal(await discoverUnboundTeams(bridge, world), true);
+  assert.equal(await discoverUnboundTeams(bridge, snapshot), true);
   assert.deepEqual(calls, [{ profile: 'foks.example.net', alias: 'personal' }]);
 });
 
 test('startup discovery requests a catalog reload even for empty or failed discovery', async () => {
-  const world: World = {
+  const snapshot: AgentSnapshot = {
     ...FIXTURE,
     stores: FIXTURE.stores.filter((store) => store.kind !== 'team'),
     accounts: FIXTURE.accounts.slice(0, 1),
   };
-  assert.equal(world.accounts.length, 1);
+  assert.equal(snapshot.accounts.length, 1);
   for (const failed of [false, true]) {
     let catalogValid = true;
     const bridge: Bridge = {
-      ...mockBridge(world),
+      ...mockBridge(snapshot),
       discoverGroups: async (_profile, accountAlias) => {
         // The native mutation command invalidates its catalog before dispatch.
         catalogValid = false;
@@ -1153,12 +1218,12 @@ test('startup discovery requests a catalog reload even for empty or failed disco
         return { accountAlias, groups: [] };
       },
     };
-    assert.equal(await discoverUnboundTeams(bridge, world), true);
+    assert.equal(await discoverUnboundTeams(bridge, snapshot), true);
     assert.equal(catalogValid, false);
   }
 });
 
-test('discoverUnboundTeams leaves a fully bound world untouched', async () => {
+test('discoverUnboundTeams leaves a fully bound snapshot untouched', async () => {
   let calls = 0;
   const bridge: Bridge = {
     ...mockBridge(FIXTURE),
@@ -1171,7 +1236,7 @@ test('discoverUnboundTeams leaves a fully bound world untouched', async () => {
   assert.equal(calls, 0);
 });
 
-test('loadWorld makes a single catalog call and does not leak fixture data in native mode', async () => {
+test('loadSnapshot makes a single catalog call and does not leak fixture data in native mode', async () => {
   let calls = 0;
   const accountStore = catalog.stores[0];
   assert.ok(accountStore);
@@ -1212,10 +1277,10 @@ test('loadWorld makes a single catalog call and does not leak fixture data in na
     copyItemPath: async () => ({ ok: true }),
     downloadFile: async () => ({ saved: false }),
   };
-  const world = await loadWorld(bridge, FIXTURE);
+  const snapshot = await loadSnapshot(bridge, FIXTURE);
   assert.equal(calls, 1);
-  assert.deepEqual(world.stores, catalog.stores);
-  assert.deepEqual(world.accounts, [
+  assert.deepEqual(snapshot.stores, catalog.stores);
+  assert.deepEqual(snapshot.accounts, [
     {
       store: accountStore.id,
       server: 'foks.example.net',
@@ -1223,12 +1288,15 @@ test('loadWorld makes a single catalog call and does not leak fixture data in na
       username: 'rae',
     },
   ]);
-  assert.equal(world.parties.length, 0);
-  assert.equal(world.notifications.length, 0);
-  assert.equal(world.plaintext['acct:personal|/logins/github.com'], undefined);
+  assert.equal(snapshot.parties.length, 0);
+  assert.equal(snapshot.notifications.length, 0);
+  assert.equal(
+    snapshot.plaintext['acct:personal|/logins/github.com'],
+    undefined,
+  );
 });
 
-test('loadWorld keeps known stores visible while revoking access to unavailable stores', async () => {
+test('loadSnapshot keeps known stores visible while revoking access to unavailable stores', async () => {
   const known = catalog.stores[0];
   assert.ok(known);
   const response: CatalogDto = {
@@ -1278,21 +1346,21 @@ test('loadWorld keeps known stores visible while revoking access to unavailable 
     listParties: async () => [],
     listFederation: async () => [],
   };
-  const world = await loadWorld(bridge);
+  const snapshot = await loadSnapshot(bridge);
   assert.deepEqual(
-    world.stores.map((store) => store.id),
+    snapshot.stores.map((store) => store.id),
     [known.id],
   );
-  assert.deepEqual(world.storeInventory, [
+  assert.deepEqual(snapshot.storeInventory, [
     {
       store: known.id,
       status: 'unavailable',
       restrictions: [],
     },
   ]);
-  assert.equal(world.profileInventory[0]?.accounts, 'unavailable');
-  assert.equal(storeReadable(world, known.id), false);
-  assert.equal(canCreateInStore(world, known.id), false);
+  assert.equal(snapshot.profileInventory[0]?.accounts, 'unavailable');
+  assert.equal(storeReadable(snapshot, known.id), false);
+  assert.equal(canCreateInStore(snapshot, known.id), false);
 });
 
 test('creates a notification when a server cannot be described instead of omitting it', async () => {
@@ -1335,19 +1403,19 @@ test('creates a notification when a server cannot be described instead of omitti
     copyItemPath: async () => ({ ok: true }),
     downloadFile: async () => ({ saved: false }),
   };
-  const world = await loadWorld(bridge, FIXTURE);
-  const note = world.notifications.find((entry) =>
+  const snapshot = await loadSnapshot(bridge, FIXTURE);
+  const note = snapshot.notifications.find((entry) =>
     entry.id.startsWith('verification-required-'),
   );
   assert.ok(
     note,
-    `a never-probed note: ${JSON.stringify(world.notifications.map((n) => n.id))}`,
+    `a never-probed note: ${JSON.stringify(snapshot.notifications.map((n) => n.id))}`,
   );
   assert.equal(note.title, 'foks.example.net is locked');
   assert.equal(note.action, 'Verify');
 });
 
-test('loadWorld does not fetch team rosters for blocked profiles', async () => {
+test('loadSnapshot does not fetch team rosters for blocked profiles', async () => {
   const storeId = '{"Team":{"profile":"foks.example.net","team_alias":"ops"}}';
   const blocked: CatalogDto = {
     profiles: ['foks.example.net'],
@@ -1400,12 +1468,12 @@ test('loadWorld does not fetch team rosters for blocked profiles', async () => {
     copyItemPath: async () => ({ ok: true }),
     downloadFile: async () => ({ saved: false }),
   };
-  const world = await loadWorld(bridge);
+  const snapshot = await loadSnapshot(bridge);
   assert.equal(rosterCalls, 0);
-  assert.equal(world.notifications[0]?.title, 'foks.example.net is locked');
+  assert.equal(snapshot.notifications[0]?.title, 'foks.example.net is locked');
 });
 
-test('loadWorld does not fetch members for an inactive team', async () => {
+test('loadSnapshot does not fetch members for an inactive team', async () => {
   const storeId = '{"Team":{"profile":"foks.example.net","team_alias":"ops"}}';
   const accountId =
     '{"Account":{"profile":"foks.example.net","account_alias":"rae"}}';
@@ -1488,18 +1556,18 @@ test('loadWorld does not fetch members for an inactive team', async () => {
     copyItemPath: async () => ({ ok: true }),
     downloadFile: async () => ({ saved: false }),
   };
-  const world = await loadWorld(bridge);
+  const snapshot = await loadSnapshot(bridge);
   assert.equal(rosterCalls, 0);
-  const ops = world.stores.find((store) => store.id === storeId);
+  const ops = snapshot.stores.find((store) => store.id === storeId);
   assert.equal(ops?.kind, 'team');
   assert.equal(ops?.kind === 'team' && ops.active, false);
   assert.equal(
-    world.parties.some((party) => party.store === storeId),
+    snapshot.parties.some((party) => party.store === storeId),
     false,
   );
 });
 
-test('loadWorld evaluates store access based on server lease validity and protocol requirements', async () => {
+test('loadSnapshot evaluates store access based on server lease validity and protocol requirements', async () => {
   assert.equal(signedLeaseState(101, 100), 'fresh');
   assert.equal(signedLeaseState(100, 100), 'lapsed');
   assert.equal(signedLeaseState(null, 100), 'unavailable');
@@ -1567,54 +1635,61 @@ test('loadWorld evaluates store access based on server lease validity and protoc
     listParties: async () => [],
     listFederation: async () => [],
   };
-  const world = await loadWorld(bridge, undefined, 100);
+  const snapshot = await loadSnapshot(bridge, undefined, 100);
   assert.deepEqual(
-    world.items.map((item) => item.store),
+    snapshot.items.map((item) => item.store),
     ['account:fresh', 'account:v019'],
   );
   assert.deepEqual(
-    world.accounts.map((account) => account.store),
+    snapshot.accounts.map((account) => account.store),
     ['account:fresh', 'account:v019'],
   );
   assert.deepEqual(
-    world.stores.map((store) => store.id),
+    snapshot.stores.map((store) => store.id),
     stores.map((store) => store.id),
     'local aliases remain visible while unverified server contents are hidden',
   );
   assert.equal(
     serverAvailability(
-      world,
-      world.servers.find((server) => server.id === 'fresh')!,
+      snapshot,
+      snapshot.servers.find((server) => server.id === 'fresh')!,
       { nowSeconds: 100 },
     ).available,
     true,
   );
   const expired = serverAvailability(
-    world,
-    world.servers.find((server) => server.id === 'expired')!,
+    snapshot,
+    snapshot.servers.find((server) => server.id === 'expired')!,
     { nowSeconds: 100 },
   );
-  assert.equal(expired.available ? 'available' : expired.reason, 'check-in-expired');
   assert.equal(
-    world.servers.find((server) => server.id === 'missing')?.compatibility.status,
+    expired.available ? 'available' : expired.reason,
+    'check-in-expired',
+  );
+  assert.equal(
+    snapshot.servers.find((server) => server.id === 'missing')?.compatibility
+      .status,
     'required-unavailable',
   );
   assert.equal(
-    world.servers.find((server) => server.id === 'v019')?.compatibility.status,
+    snapshot.servers.find((server) => server.id === 'v019')?.compatibility
+      .status,
     'not-required',
   );
   assert.equal(
-    world.servers.find((server) => server.id === 'failed')?.passiveStatus.status,
+    snapshot.servers.find((server) => server.id === 'failed')?.passiveStatus
+      .status,
     'failed',
   );
-  assert.deepEqual(world.observedExpiredLeases, []);
+  assert.deepEqual(snapshot.observedExpiredLeases, []);
   assert.match(
-    world.notifications.find((note) => note.id === 'status-unavailable-failed')
-      ?.detail ?? '',
+    snapshot.notifications.find(
+      (note) => note.id === 'status-unavailable-failed',
+    )?.detail ?? '',
     /Server contents are unavailable until the connection status is verified./,
   );
 
-  const racedWorld = await loadWorld(
+  const racedSnapshot = await loadSnapshot(
     {
       ...bridge,
       listAccounts: async () =>
@@ -1629,13 +1704,13 @@ test('loadWorld evaluates store access based on server lease validity and protoc
     100,
   );
   assert.deepEqual(
-    racedWorld.accounts.map((account) => account.store),
+    racedSnapshot.accounts.map((account) => account.store),
     ['account:fresh', 'account:v019'],
     'stale account rows are discarded without affecting active server accounts',
   );
 });
 
-test('loadWorld only imports accounts belonging to active profiles', async () => {
+test('loadSnapshot only imports accounts belonging to active profiles', async () => {
   const stores = FIXTURE.stores.filter(
     (store) =>
       store.id === 'acct:personal' ||
@@ -1687,15 +1762,15 @@ test('loadWorld only imports accounts belonging to active profiles', async () =>
       return [];
     },
   };
-  const world = await loadWorld(bridge);
+  const snapshot = await loadSnapshot(bridge);
   assert.deepEqual(
-    world.accounts.map((account) => account.store),
+    snapshot.accounts.map((account) => account.store),
     ['acct:personal'],
   );
   assert.equal(rosterCalls, 0);
 });
 
-test('loadWorld omits rosters for lapsed servers and enriches active member and team labels', async () => {
+test('loadSnapshot omits rosters for lapsed servers and enriches active member and team labels', async () => {
   const base = mockBridge(FIXTURE);
   let rosterCalls = 0;
   const bridge: Bridge = {
@@ -1740,14 +1815,14 @@ test('loadWorld omits rosters for lapsed servers and enriches active member and 
       return base.listGroupDetails(storeId);
     },
   };
-  const world = await loadWorld(bridge);
+  const snapshot = await loadSnapshot(bridge);
   assert.equal(
     rosterCalls,
     1,
     'only active group rosters are requested; inactive and lapsed groups are skipped',
   );
   assert.equal(
-    world.parties.some((party) => party.store === 'team:eng'),
+    snapshot.parties.some((party) => party.store === 'team:eng'),
     false,
   );
 
@@ -1811,7 +1886,7 @@ test('loadWorld omits rosters for lapsed servers and enriches active member and 
       };
     },
   };
-  const fresh = await loadWorld(freshBridge);
+  const fresh = await loadSnapshot(freshBridge);
   const sameNames = fresh.parties.filter(
     (party) => party.username === 'rae.chen',
   );
@@ -1829,7 +1904,7 @@ test('loadWorld omits rosters for lapsed servers and enriches active member and 
   );
 });
 
-test('loadWorld retains stores and items when group details encounter transient server errors', async () => {
+test('loadSnapshot retains stores and items when group details encounter transient server errors', async () => {
   const base = mockBridge(FIXTURE);
   const failure = {
     code: 'rate-limited',
@@ -1841,7 +1916,7 @@ test('loadWorld retains stores and items when group details encounter transient 
   const bridge: Bridge = {
     ...base,
     native: true,
-    fixtureWorld: undefined,
+    fixtureSnapshot: undefined,
     listGroupDetails: async (storeId) =>
       storeId === 'team:household'
         ? {
@@ -1853,10 +1928,10 @@ test('loadWorld retains stores and items when group details encounter transient 
           }
         : base.listGroupDetails(storeId),
   };
-  const world = await loadWorld(bridge);
-  assert.ok(world.stores.some((store) => store.id === 'team:eng'));
-  assert.ok(world.items.some((item) => item.store === 'team:household'));
-  assert.deepEqual(world.groupDetailFailures, [
+  const snapshot = await loadSnapshot(bridge);
+  assert.ok(snapshot.stores.some((store) => store.id === 'team:eng'));
+  assert.ok(snapshot.items.some((item) => item.store === 'team:household'));
+  assert.deepEqual(snapshot.groupDetailFailures, [
     {
       store: 'team:household',
       source: 'roster',
@@ -1873,21 +1948,22 @@ test('loadWorld retains stores and items when group details encounter transient 
     },
   ]);
   assert.equal(
-    world.parties.some((party) => party.store === 'team:household'),
+    snapshot.parties.some((party) => party.store === 'team:household'),
     false,
   );
   assert.equal(
-    world.notifications.filter((note) => note.id.startsWith('group-')).length,
+    snapshot.notifications.filter((note) => note.id.startsWith('group-'))
+      .length,
     2,
   );
 });
 
-test('loadWorld handles disabled group capabilities gracefully without leaking internal errors', async () => {
+test('loadSnapshot handles disabled group capabilities gracefully without leaking internal errors', async () => {
   const base = mockBridge(FIXTURE);
   const capabilityBridge: Bridge = {
     ...base,
     native: true,
-    fixtureWorld: undefined,
+    fixtureSnapshot: undefined,
     listGroupDetails: async (storeId) => {
       const details = await base.listGroupDetails(storeId);
       return storeId === 'team:household'
@@ -1908,9 +1984,9 @@ test('loadWorld handles disabled group capabilities gracefully without leaking i
         : details;
     },
   };
-  const world = await loadWorld(capabilityBridge);
+  const snapshot = await loadSnapshot(capabilityBridge);
   assert.deepEqual(
-    world.groupDetailFailures.filter(
+    snapshot.groupDetailFailures.filter(
       (failure) => failure.store === 'team:household',
     ),
     [
@@ -1927,13 +2003,13 @@ test('loadWorld handles disabled group capabilities gracefully without leaking i
   const malformedBridge: Bridge = {
     ...base,
     native: true,
-    fixtureWorld: undefined,
+    fixtureSnapshot: undefined,
     listGroupDetails: async () => {
       throw new Error('private implementation detail');
     },
   };
   await assert.rejects(
-    loadWorld(malformedBridge),
+    loadSnapshot(malformedBridge),
     (error: unknown) =>
       error instanceof Error &&
       error.message.includes('unrecognized group-detail error') &&
@@ -1941,12 +2017,12 @@ test('loadWorld handles disabled group capabilities gracefully without leaking i
   );
 });
 
-test('loadWorld rejects group detail payloads referencing mismatched store IDs', async () => {
+test('loadSnapshot rejects group detail payloads referencing mismatched store IDs', async () => {
   const base = mockBridge(FIXTURE);
   const bridge: Bridge = {
     ...base,
     native: true,
-    fixtureWorld: undefined,
+    fixtureSnapshot: undefined,
     listGroupDetails: async (storeId) => {
       const details = await base.listGroupDetails(storeId);
       if (details.parties.status !== 'success' || !details.parties.value.length)
@@ -1960,7 +2036,7 @@ test('loadWorld rejects group detail payloads referencing mismatched store IDs',
       };
     },
   };
-  await assert.rejects(loadWorld(bridge), /roster for a different store/);
+  await assert.rejects(loadSnapshot(bridge), /roster for a different store/);
 });
 
 test('mock revokeOwnerBackup validates alias, removes enrollment, and behaves idempotently on retry', async () => {
@@ -2280,7 +2356,7 @@ test('mock expelFederatedGroup requires both host ID and team ID to match', asyn
 });
 
 test('the mock rejects member and sharing updates for an active ad-hoc group', async () => {
-  const world = {
+  const snapshot = {
     ...FIXTURE,
     stores: FIXTURE.stores.map((store) =>
       store.id === 'team:homelab' && store.kind === 'team'
@@ -2288,7 +2364,7 @@ test('the mock rejects member and sharing updates for an active ad-hoc group', a
         : store,
     ),
   };
-  const bridge = mockBridge(world);
+  const bridge = mockBridge(snapshot);
   await assert.rejects(
     bridge.addGroupMember({
       storeId: 'team:homelab',
@@ -2331,7 +2407,7 @@ test('enqueueProfileWork serializes tasks for the same profile', async () => {
   assert.deepEqual(seen, ['start-a', 'end-a', 'b']);
 });
 
-test('native loadWorld serializes group detail requests per profile', async () => {
+test('native loadSnapshot serializes group detail requests per profile', async () => {
   const base = mockBridge(FIXTURE);
   let legacyCalls = 0;
   const active = new Map<string, number>();
@@ -2373,7 +2449,7 @@ test('native loadWorld serializes group detail requests per profile', async () =
       return base.listFederation(storeId);
     },
   };
-  await loadWorld(bridge);
+  await loadSnapshot(bridge);
   assert.ok((peak.get('personal') ?? 0) <= 1);
   assert.ok((peak.get('acme') ?? 0) <= 1);
   assert.equal(peak.get('personal'), 1);

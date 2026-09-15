@@ -1123,13 +1123,19 @@ pub async fn reset_server(
 pub async fn list_servers(
     webview: tauri::Webview,
     state: State<'_, AppState>,
+    generation: Option<u64>,
 ) -> Result<Vec<ServerDto>, AgentError> {
     require_main_window(&webview)?;
-    let catalog = state
-        .catalog
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
+    let (_, catalog) = state.catalog_at(generation)?;
+    // A caller bound to a snapshot must not receive never-probed rows because
+    // the snapshot is absent; that is a stale read, not a fresh install.
+    if generation.is_some() && catalog.is_none() {
+        return Err(AgentError::new(
+            "catalog-required",
+            "Refresh the vault before loading server details.",
+            true,
+        ));
+    }
     let transport = state.agent.transport();
     tauri::async_runtime::spawn_blocking(move || {
         let value = transport

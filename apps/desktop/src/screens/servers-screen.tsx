@@ -32,10 +32,10 @@ import {
 import type { Location } from '../location';
 import { hue, initials, plural, serverAvailability, shortId } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
-import type { Server, TeamStore, World } from '../model';
+import type { Server, TeamStore, AgentSnapshot } from '../model';
 
 interface Props {
-  world: World;
+  snapshot: AgentSnapshot;
   bridge: Bridge;
   /** The server the section is open on, or nothing for the list. */
   profile?: string;
@@ -92,11 +92,11 @@ function versionMismatchText(
 }
 
 function serverFor(
-  world: World,
+  agentSnapshot: AgentSnapshot,
   profile: string | undefined,
 ): Server | undefined {
   return profile
-    ? world.servers.find((server) => server.id === profile)
+    ? agentSnapshot.servers.find((server) => server.id === profile)
     : undefined;
 }
 
@@ -134,17 +134,14 @@ const markTone = (state: ServerUiState): string =>
   state === 'checked' ? 'ok' : isLocked(state) ? 'bad' : '';
 
 function resolveServerUiState(
-  world: World,
+  agentSnapshot: AgentSnapshot,
   server: Server,
 ): ServerUiState {
-  const availability = serverAvailability(world, server);
+  const availability = serverAvailability(agentSnapshot, server);
   if (availability.available) return 'checked';
   if (availability.reason === 'verification-required') return 'unprobed';
   if (availability.reason === 'check-in-expired') return 'lapsed';
-  if (
-    availability.reason === 'verification-failed'
-  )
-    return 'blocked';
+  if (availability.reason === 'verification-failed') return 'blocked';
   if (availability.reason === 'schema-incompatible') return 'schema';
   if (availability.reason === 'import-verification-required')
     return 'import-verification';
@@ -186,7 +183,7 @@ const servers = (profile?: string): Location => ({
 });
 
 export function ServersSection({
-  world,
+  snapshot: agentSnapshot,
   bridge,
   profile,
   scene,
@@ -212,7 +209,7 @@ export function ServersSection({
   const [resetError, setResetError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const toasts = useToast();
-  const selected = serverFor(world, profile);
+  const selected = serverFor(agentSnapshot, profile);
   const seededCheck = useRef(false);
   const rollback = enteredScene === 'servers-rollback';
 
@@ -238,7 +235,7 @@ export function ServersSection({
     let alive = true;
     void (async () => {
       const rows = new Map<string, ServerStatusSnapshot>();
-      for (const server of world.servers) {
+      for (const server of agentSnapshot.servers) {
         if (
           server.trust.status === 'blocked' ||
           server.restrictions.some(
@@ -265,11 +262,11 @@ export function ServersSection({
     return () => {
       alive = false;
     };
-  }, [bridge, onError, world.servers]);
+  }, [bridge, onError, agentSnapshot.servers]);
 
   useEffect(() => {
     if (
-      !bridge.fixtureWorld ||
+      !bridge.fixtureSnapshot ||
       enteredScene !== 'servers-check' ||
       !selected ||
       seededCheck.current
@@ -442,7 +439,7 @@ export function ServersSection({
     <>
       {selected ? (
         <ServerBody
-          world={world}
+          snapshot={agentSnapshot}
           server={selected}
           status={statuses.get(selected.id)}
           host={currentHost}
@@ -463,7 +460,7 @@ export function ServersSection({
         />
       ) : (
         <ServerList
-          world={world}
+          snapshot={agentSnapshot}
           statuses={statuses}
           busy={busy}
           onOpen={(next) => onNavigate(servers(next))}
@@ -552,7 +549,7 @@ function StatusLine({
  * Renders an individual server row in the settings server list.
  */
 function ServerRow({
-  world,
+  snapshot: agentSnapshot,
   server,
   state,
   expiry,
@@ -560,7 +557,7 @@ function ServerRow({
   onOpen,
   onCheck,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   server: Server;
   state: ServerUiState;
   expiry: number | null;
@@ -568,10 +565,10 @@ function ServerRow({
   onOpen: (profile: string) => void;
   onCheck: (server: Server) => void;
 }): ReactNode {
-  const account = world.accounts.find(
+  const account = agentSnapshot.accounts.find(
     (item) => item.server === server.id || item.server === server.name,
   );
-  const groups = world.stores
+  const groups = agentSnapshot.stores
     .filter((store) => store.kind === 'team' && store.server === server.id)
     .map((store) => store.name);
   return (
@@ -620,27 +617,27 @@ function ServerRow({
 }
 
 function ServerList({
-  world,
+  snapshot: agentSnapshot,
   statuses,
   busy,
   onOpen,
   onCheck,
   onAdd,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   statuses: Map<string, ServerStatusSnapshot>;
   busy: boolean;
   onOpen: (profile: string) => void;
   onCheck: (server: Server) => void;
   onAdd: () => void;
 }): ReactNode {
-  const rows = world.servers.map((server) => {
+  const rows = agentSnapshot.servers.map((server) => {
     const snapshot = statuses.get(server.id);
-    const state = resolveServerUiState(world, server);
+    const state = resolveServerUiState(agentSnapshot, server);
     const expiry =
       server.compatibility.status === 'required'
         ? server.compatibility.expiresAt
-        : snapshot?.leaseExpiresAt ?? null;
+        : (snapshot?.leaseExpiresAt ?? null);
     return { server, state, expiry };
   });
   // Servers requiring user attention are displayed at the top of the list.
@@ -651,7 +648,7 @@ function ServerList({
       {entries.map(({ server, state, expiry }) => (
         <ServerRow
           key={server.id}
-          world={world}
+          snapshot={agentSnapshot}
           server={server}
           state={state}
           expiry={expiry}
@@ -849,7 +846,7 @@ function GroupChip({
 }
 
 function ServerBody({
-  world,
+  snapshot: agentSnapshot,
   server,
   status,
   host,
@@ -863,7 +860,7 @@ function ServerBody({
   onCopy,
   onOpenGroup,
 }: {
-  world: World;
+  snapshot: AgentSnapshot;
   server: Server;
   status?: ServerStatusSnapshot;
   host: ServerStatusSnapshot['host'];
@@ -877,17 +874,17 @@ function ServerBody({
   onCopy: (text: string) => void;
   onOpenGroup: (store: TeamStore) => void;
 }): ReactNode {
-  const state = resolveServerUiState(world, server);
+  const state = resolveServerUiState(agentSnapshot, server);
   const locked = isLocked(state);
   const blocked = state === 'blocked';
   const expiry =
     server.compatibility.status === 'required'
       ? server.compatibility.expiresAt
-      : status?.leaseExpiresAt ?? null;
-  const account = world.accounts.find(
+      : (status?.leaseExpiresAt ?? null);
+  const account = agentSnapshot.accounts.find(
     (item) => item.server === server.id || item.server === server.name,
   );
-  const groups = world.stores.filter(
+  const groups = agentSnapshot.stores.filter(
     (store): store is TeamStore =>
       store.kind === 'team' && store.server === server.id,
   );

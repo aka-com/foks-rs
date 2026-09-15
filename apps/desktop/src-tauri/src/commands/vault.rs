@@ -95,6 +95,9 @@ pub struct CatalogDto {
     pub items: Vec<ItemDto>,
     pub failures: Vec<CatalogFailureDto>,
     pub blocked_profiles: Vec<String>,
+    /// Identifies the native snapshot this response came from. Later reads
+    /// that pass it back fail when the snapshot has since been replaced.
+    pub generation: u64,
 }
 
 impl CatalogDto {
@@ -146,6 +149,7 @@ impl CatalogDto {
                 })
                 .collect(),
             blocked_profiles: snapshot.blocked_profiles.clone(),
+            generation: 0,
         })
     }
 }
@@ -781,9 +785,13 @@ async fn load_catalog(state: &AppState, include_items: bool) -> Result<CatalogDt
     })
     .await
     .map_err(|error| AgentError::unknown(format!("Failed to load vault catalog: {error}")))??;
-    let dto = CatalogDto::from_snapshot(&snapshot)?;
-    if include_items {
-        state.accept_catalog(generation, snapshot);
+    let mut dto = CatalogDto::from_snapshot(&snapshot)?;
+    dto.generation = generation;
+    // A load that lost its generation to a later load or mutation must not be
+    // reported as the current snapshot: the reads that follow it would answer
+    // from whichever snapshot replaced it.
+    if include_items && !state.accept_catalog(generation, snapshot) {
+        return Err(super::context::catalog_changed_during_read());
     }
     Ok(dto)
 }

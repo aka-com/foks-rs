@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createElement } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 
-import type { StoreRef, World } from '../src/model';
+import type { StoreRef, AgentSnapshot } from '../src/model';
 import { installDom } from './lib/dom-harness';
 
 installDom({
@@ -28,7 +28,7 @@ test.before(async () => {
 test.afterEach(() => ui.cleanup());
 test.after(async () => vite.close());
 
-async function renderKeys(world: World, store?: StoreRef) {
+async function renderKeys(snapshot: AgentSnapshot, store?: StoreRef) {
   const { SettingsScreen } = (await vite.ssrLoadModule(
     '/src/screens/settings-screen.tsx',
   )) as typeof import('../src/screens/settings-screen');
@@ -42,8 +42,8 @@ async function renderKeys(world: World, store?: StoreRef) {
     createElement(ToastProvider, {
       controller: new ToastController(),
       children: createElement(SettingsScreen, {
-        world,
-        bridge: mockBridge(world),
+        snapshot,
+        bridge: mockBridge(snapshot),
         location: {
           kind: 'settings',
           section: 'keys',
@@ -52,7 +52,7 @@ async function renderKeys(world: World, store?: StoreRef) {
         scene: 'settings',
         onNavigate: () => {},
         onRefresh: async () => {},
-        onRefreshWorld: async () => world,
+        onRefreshSnapshot: async () => snapshot,
         onError: (error: unknown) => {
           throw error;
         },
@@ -75,7 +75,7 @@ test('security-key settings explain that a fresh installation needs an account',
   const { FIXTURE } = (await vite.ssrLoadModule(
     '/src/fixture.ts',
   )) as typeof import('../src/fixture');
-  const empty: World = {
+  const empty: AgentSnapshot = {
     ...FIXTURE,
     servers: [],
     accounts: [],
@@ -110,7 +110,7 @@ test('security-key settings retain recovery guidance for a stopped account', asy
     (candidate) => candidate.kind === 'account',
   );
   assert.ok(account?.kind === 'account');
-  const blocked: World = {
+  const blocked: AgentSnapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
       server.id === account.server
