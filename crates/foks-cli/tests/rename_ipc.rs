@@ -48,6 +48,7 @@ fn cli_and_resident_agent_submit_and_recover_original_rename() {
     registry
         .add(Profile {
             name: "local".into(),
+            label: None,
             probe: format!("localhost:{}", env.addresses().unwrap().probe.port()),
             protocol: ProtocolPolicy::V019,
             trust: TrustRoot::CertificateDer { path: root },

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 22;
+pub const PROTOCOL_VERSION: u32 = 23;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -489,6 +489,10 @@ pub enum Operation {
     },
     RemoveProfile {
         name: String,
+    },
+    SetProfileLabel {
+        profile: String,
+        label: Option<String>,
     },
     DescribeResetHardState {
         profile: String,
@@ -1079,6 +1083,11 @@ impl std::fmt::Debug for Operation {
             Self::RemoveProfile { name } => formatter
                 .debug_struct("RemoveProfile")
                 .field("name", name)
+                .finish(),
+            Self::SetProfileLabel { profile, label } => formatter
+                .debug_struct("SetProfileLabel")
+                .field("profile", profile)
+                .field("label", label)
                 .finish(),
             Self::DescribeResetHardState { profile } => formatter
                 .debug_struct("DescribeResetHardState")
@@ -2046,6 +2055,31 @@ fn bounded_field(mut value: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_profile_label_has_stable_wire_debug_and_mutation_shapes() {
+        let operation = Operation::SetProfileLabel {
+            profile: "setup-foks-app-4430".to_owned(),
+            label: Some("FOKS".to_owned()),
+        };
+        assert_eq!(
+            serde_json::to_value(&operation).unwrap(),
+            serde_json::json!({
+                "operation": "set-profile-label",
+                "profile": "setup-foks-app-4430",
+                "label": "FOKS"
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<Operation>(serde_json::to_value(&operation).unwrap()).unwrap(),
+            operation
+        );
+        assert_eq!(
+            format!("{operation:?}"),
+            "SetProfileLabel { profile: \"setup-foks-app-4430\", label: Some(\"FOKS\") }"
+        );
+        assert!(operation.is_mutation());
+    }
 
     #[test]
     fn discover_teams_operation_has_stable_wire_and_debug_shapes() {

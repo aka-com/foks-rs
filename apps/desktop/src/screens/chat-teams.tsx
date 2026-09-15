@@ -20,6 +20,7 @@ import type { ReactNode, Ref } from 'react';
 import { Button, Icon, SectionLabel } from '../components';
 import {
   chatAvailable,
+  serverDisplayName,
   storeDescription,
   storeNavigationOrder,
 } from '../model';
@@ -78,7 +79,7 @@ export function noChatReason(
   const server = serverFor(snapshot, store);
   if (store.active === false) return 'Setup incomplete';
   if (!server) return 'Server unavailable';
-  return `Chat not offered on ${server.name}`;
+  return `Chat not offered on ${serverDisplayName(server)}`;
 }
 
 /** Named teams with no chat at all, listed under "No chat" with the reason. */
@@ -215,6 +216,7 @@ function teamRow(
     ? ''
     : storeDescription(snapshot, store, options);
   const unread = reachable ? teamUnread(entry) : null;
+  const server = serverFor(snapshot, store);
   return {
     store,
     entry,
@@ -229,7 +231,7 @@ function teamRow(
       : undefined,
     badge: reachable ? unread : { label: '!', description: unavailable },
     names: partyNames(snapshot, store.id),
-    server: serverFor(snapshot, store)?.name ?? store.server,
+    server: server ? serverDisplayName(server) : store.server,
   };
 }
 

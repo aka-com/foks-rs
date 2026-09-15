@@ -215,7 +215,7 @@ test('the profile lists the account’s teams, its devices and its keys', async 
   );
   // An enrollment is answered for the server profile, not for this account,
   // and its row says where it is enrolled rather than naming an account.
-  assert.ok(ui.within(keys).getByText('Enrollment · on foks.example.net'));
+  assert.ok(ui.within(keys).getByText('Enrollment · on Personal server'));
   // The only verification this page can state is this Mac's own key.
   assert.equal(
     ui.within(keys).getAllByRole('img', { name: 'Authenticated on this Mac' })
@@ -381,7 +381,7 @@ test('a read answering after the account changed is dropped', async () => {
   const keys = rendered.getByRole('region', { name: 'Keys' });
   assert.equal(ui.within(keys).queryByText('Travel Mac · Computer'), null);
   assert.equal(ui.within(keys).queryByText('paper-backup · Paper key'), null);
-  assert.ok(ui.within(keys).getByText('Enrollment · on foks.acme-corp.com'));
+  assert.ok(ui.within(keys).getByText('Enrollment · on Acme'));
 });
 
 test('a stopped account lists no keys and says what is unavailable', async () => {
@@ -395,9 +395,7 @@ test('a stopped account lists no keys and says what is unavailable', async () =>
 
   const keys = rendered.getByRole('region', { name: 'Keys' });
   assert.ok(
-    ui
-      .within(keys)
-      .getByText('Keys are unavailable until foks.acme-corp.com is checked.'),
+    ui.within(keys).getByText('Keys are unavailable until Acme is checked.'),
   );
   const devices = rendered.getByRole('region', { name: 'Devices' });
   assert.ok(ui.within(devices).getByText('Not listed while access is stopped'));
@@ -419,7 +417,7 @@ test('the username row opens a sheet titled for the workflow, not the account', 
   const dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
   const heading = ui.within(dialog).getByRole('heading', { level: 2 });
   assert.equal(heading.textContent, 'Change username');
-  assert.ok(ui.within(dialog).getByText('satoshi on foks.example.net'));
+  assert.ok(ui.within(dialog).getByText('satoshi on Personal server'));
   assert.ok(ui.within(dialog).getByLabelText('Username'));
 });
 
@@ -437,7 +435,7 @@ test('the switcher lists every account and switching navigates by StoreRef', asy
   assert.equal(accounts.length, 2);
   assert.equal(accounts[0].getAttribute('aria-pressed'), 'true');
   assert.ok(accounts[0].textContent?.includes('satoshi'));
-  assert.ok(accounts[1].textContent?.includes('foks.acme-corp.com'));
+  assert.ok(accounts[1].textContent?.includes('Acme'));
 
   await ui.act(async () => {
     ui.fireEvent.click(accounts[1]);
@@ -455,7 +453,7 @@ test('an attention card carries the route to where it is resolved', async () => 
     chosen.push(location),
   );
 
-  assert.ok(rendered.getByText('foks.acme-corp.com is locked'));
+  assert.ok(rendered.getByText('Acme is locked'));
   await ui.act(async () => {
     ui.fireEvent.click(
       rendered.getByRole('button', { name: 'Open the server' }),
@@ -656,7 +654,7 @@ test('a stale address says the account is no longer available', async () => {
   assert.ok(rendered.getByRole('button', { name: 'Refresh the catalog' }));
   await ui.act(async () => {
     ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'personal · foks.example.net' }),
+      rendered.getByRole('button', { name: 'personal · Personal server' }),
     );
   });
   assert.deepEqual(chosen.at(-1), { kind: 'people', store: 'acct:personal' });

@@ -10,7 +10,8 @@ import {
   partiesOf,
   partyName,
   roleRank,
-  serverOf,
+  serverDisplayName,
+  serverName,
   storeReadable,
 } from '../model';
 import type {
@@ -70,10 +71,10 @@ export function discoveryContext(
 
 /** One accessible name per button, since several read "Check for groups". */
 export const checkLabel = (context: DiscoveryContext): string =>
-  `Check for groups accessible to ${context.account.username} on ${context.server.name}`;
+  `Check for groups accessible to ${context.account.username} on ${serverDisplayName(context.server)}`;
 
 export const unavailableTitle = (context: DiscoveryContext): string =>
-  `Restore access to ${context.server.name} before checking for groups.`;
+  `Restore access to ${serverDisplayName(context.server)} before checking for groups.`;
 
 /**
  * Why an invitation cannot be written: the message names the server the
@@ -102,7 +103,7 @@ export function manageReason(
     return 'Memberships can’t be changed in an ad-hoc group.';
   if (store.active === false) return 'Finish setting up this group first.';
   if (!storeReadable(snapshot, store.id))
-    return `Restore access to ${serverOf(snapshot, store.id)?.name ?? store.server} first.`;
+    return `Restore access to ${serverName(snapshot, store)} first.`;
   if (groupDetailFailure(snapshot, store.id, source))
     return source === 'roster'
       ? 'The roster could not be read. Refresh before making changes.'

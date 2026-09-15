@@ -629,10 +629,7 @@ function AccountPanel({
         stopped={stopped}
         server={serverName(snapshot, store)}
       />
-      <SectionLabel>
-        {serverName(snapshot, store)}
-        {server?.label ? ` · ${server.label}` : ''}
-      </SectionLabel>
+      <SectionLabel>{serverName(snapshot, store)}</SectionLabel>
       <Inset className="settings-inset wide">
         <InsetRow
           label="Username"

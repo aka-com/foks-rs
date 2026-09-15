@@ -134,6 +134,7 @@ fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof()
     registry
         .add(Profile {
             name: "local".into(),
+            label: None,
             probe: external_probe.unwrap_or_else(|| {
                 format!(
                     "localhost:{}",

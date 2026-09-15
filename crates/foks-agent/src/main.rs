@@ -2209,6 +2209,7 @@ fn dispatch_result(
             };
             let profile = Profile {
                 name,
+                label: None,
                 probe,
                 protocol,
                 trust,
@@ -2245,6 +2246,7 @@ fn dispatch_result(
                     &mut registry,
                     Profile {
                         name,
+                        label: None,
                         probe,
                         protocol,
                         trust,
@@ -2289,6 +2291,7 @@ fn dispatch_result(
                     &mut registry,
                     Profile {
                         name,
+                        label: None,
                         probe,
                         protocol,
                         trust,
@@ -2305,6 +2308,15 @@ fn dispatch_result(
             Ok(serde_json::json!({
                 "profile": name,
                 "removed": removed,
+            }))
+        }
+        Operation::SetProfileLabel { profile, label } => {
+            let label = foks_client_app::normalize_profile_label(&profile, label)?;
+            let changed = registry.set_label(&profile, label.clone())?;
+            Ok(serde_json::json!({
+                "profile": profile,
+                "label": label,
+                "changed": changed,
             }))
         }
         Operation::DescribeResetHardState { profile } => {
@@ -5013,6 +5025,65 @@ mod tests {
     }
 
     #[test]
+    fn profile_labels_are_changed_locally_and_returned_by_listing() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = directory.path().join("state");
+        ClientCredentials::initialize(&state, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&state).unwrap();
+        registry
+            .add(Profile {
+                name: "offline".to_owned(),
+                label: None,
+                probe: "127.0.0.1:1".to_owned(),
+                protocol: ProtocolPolicy::V019,
+                trust: TrustRoot::WebPki,
+            })
+            .unwrap();
+        drop(registry);
+
+        let response = dispatch(
+            &state,
+            Request::new(
+                1,
+                Operation::SetProfileLabel {
+                    profile: "offline".to_owned(),
+                    label: Some("  FOKS  ".to_owned()),
+                },
+            ),
+        );
+        assert!(matches!(
+            response.result,
+            ResponseResult::Success { value }
+                if value == serde_json::json!({
+                    "profile": "offline",
+                    "label": "FOKS",
+                    "changed": true
+                })
+        ));
+        let profiles = dispatch(&state, Request::new(2, Operation::ListProfiles));
+        assert!(matches!(
+            profiles.result,
+            ResponseResult::Success { value }
+                if value[0]["name"] == "offline" && value[0]["label"] == "FOKS"
+        ));
+
+        let unchanged = dispatch(
+            &state,
+            Request::new(
+                3,
+                Operation::SetProfileLabel {
+                    profile: "offline".to_owned(),
+                    label: Some("FOKS".to_owned()),
+                },
+            ),
+        );
+        assert!(matches!(
+            unchanged.result,
+            ResponseResult::Success { value } if value["changed"] == false
+        ));
+    }
+
+    #[test]
     fn profile_overview_combines_startup_reads() {
         let directory = tempfile::tempdir().unwrap();
         let state = directory.path().join("state");
@@ -5021,6 +5092,7 @@ mod tests {
         registry
             .add(Profile {
                 name: "local".to_owned(),
+                label: None,
                 probe: "foks.app".to_owned(),
                 protocol: ProtocolPolicy::V019,
                 trust: TrustRoot::WebPki,
@@ -5064,6 +5136,7 @@ mod tests {
         registry
             .add(Profile {
                 name: "local".to_owned(),
+                label: None,
                 probe: "foks.app".to_owned(),
                 protocol: ProtocolPolicy::V019,
                 trust: TrustRoot::WebPki,
@@ -5104,6 +5177,7 @@ mod tests {
         registry
             .add(Profile {
                 name: "local".to_owned(),
+                label: None,
                 probe: "foks.app".to_owned(),
                 protocol: ProtocolPolicy::V019,
                 trust: TrustRoot::WebPki,
@@ -5587,6 +5661,7 @@ mod tests {
         registry
             .add(foks_client_app::Profile {
                 name: "hosted".to_owned(),
+                label: None,
                 probe: "foks.app".to_owned(),
                 protocol: foks_client_app::ProtocolPolicy::CurrentProbeOnly {
                     canary_public_key:

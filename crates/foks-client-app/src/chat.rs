@@ -391,6 +391,7 @@ mod tests {
         registry
             .add(Profile {
                 name: "local".into(),
+                label: None,
                 probe: format!("localhost:{}", addresses.probe.port()),
                 protocol: ProtocolPolicy::V019,
                 trust: TrustRoot::CertificateDer { path: root },

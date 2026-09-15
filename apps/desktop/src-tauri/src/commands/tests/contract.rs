@@ -16,7 +16,7 @@ use crate::commands::servers::{
     added_server_response, checked_server_response, forgotten_server_response,
     reset_preview_response, server_status_response, AddedServerDto, CheckedProfileDto,
     CheckedServerDto, CheckedServerVersionDto, ForgottenServerDto, ResetArtifactDto,
-    ResetPreviewDto, ServerStatusSnapshotDto, StoredHostDto,
+    ResetPreviewDto, ServerLabelDto, ServerStatusSnapshotDto, StoredHostDto,
 };
 use crate::commands::tests::support::test_profile_value;
 use crate::commands::types::{CommandAck, MutationDto, RoleDto};
@@ -283,6 +283,15 @@ fn wire_contract_fixture_matches_serialized_shapes() {
         configured_probe: "foks.partner.example".to_owned(),
     };
     assert_eq!(serde_json::to_value(added).unwrap(), fixture["addedServer"]);
+    let labeled = ServerLabelDto {
+        profile: "partner".to_owned(),
+        label: Some("Partners".to_owned()),
+        changed: true,
+    };
+    assert_eq!(
+        serde_json::to_value(labeled).unwrap(),
+        fixture["serverLabel"]
+    );
     let forgotten = ForgottenServerDto {
         profile: "partner".to_owned(),
         removed: true,

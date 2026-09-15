@@ -13,6 +13,53 @@ const PROFILE_STAGING_PREFIX: &str = ".pending-profile-";
 const PROFILE_PUBLICATION_MARKER_VERSION: u32 = 1;
 const PROFILE_PUBLICATION_BINDING_TYPE_ID: u64 = 0x9171_dbed_137a_c227;
 
+pub const PROFILE_LABEL_MAX_BYTES: usize = 64;
+
+fn validate_profile_label(label: Option<&str>) -> Result<()> {
+    let Some(label) = label else {
+        return Ok(());
+    };
+    if label.trim().is_empty() {
+        return Err(Error::InvalidProfile("profile label is empty"));
+    }
+    if label != label.trim() {
+        return Err(Error::InvalidProfile(
+            "profile label has surrounding whitespace",
+        ));
+    }
+    if label.len() > PROFILE_LABEL_MAX_BYTES {
+        return Err(Error::InvalidProfile("profile label is too long"));
+    }
+    if label.contains(['\0', '\r', '\n']) {
+        return Err(Error::InvalidProfile(
+            "profile label contains a forbidden character",
+        ));
+    }
+    Ok(())
+}
+
+pub fn normalize_profile_label(name: &str, label: Option<String>) -> Result<Option<String>> {
+    validate_name(name)?;
+    let label = match label {
+        Some(label) => {
+            if label.contains(['\0', '\r', '\n']) {
+                return Err(Error::InvalidProfile(
+                    "profile label contains a forbidden character",
+                ));
+            }
+            let label = label.trim().to_owned();
+            if label.is_empty() || label == name {
+                None
+            } else {
+                Some(label)
+            }
+        }
+        None => None,
+    };
+    validate_profile_label(label.as_deref())?;
+    Ok(label)
+}
+
 #[cfg(test)]
 static TEST_PROFILE_PUBLICATION_CRASH_POINT: std::sync::atomic::AtomicU8 =
     std::sync::atomic::AtomicU8::new(0);
@@ -109,6 +156,8 @@ pub enum TrustRoot {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Profile {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     pub probe: String,
     pub protocol: ProtocolPolicy,
     pub trust: TrustRoot,
@@ -117,6 +166,12 @@ pub struct Profile {
 impl Profile {
     pub fn validate(&self) -> Result<()> {
         validate_name(&self.name)?;
+        validate_profile_label(self.label.as_deref())?;
+        if self.label.as_deref() == Some(self.name.as_str()) {
+            return Err(Error::InvalidProfile(
+                "profile label duplicates the profile name",
+            ));
+        }
         ProbeTarget::parse(&self.probe)?;
         if let Some(key) = self.protocol.canary_public_key() {
             let decoded = foks_compat_artifact::decode_public_key(key)
@@ -626,6 +681,18 @@ impl ProfileRegistry {
         self.save(&next)?;
         self.profiles = next;
         Ok(())
+    }
+
+    pub fn set_label(&mut self, name: &str, label: Option<String>) -> Result<bool> {
+        let current = self.profile(name)?.clone();
+        let label = normalize_profile_label(name, label)?;
+        if current.label == label {
+            return Ok(false);
+        }
+        let mut updated = current;
+        updated.label = label;
+        self.replace(updated)?;
+        Ok(true)
     }
 
     pub fn apply_canary(
@@ -1446,10 +1513,94 @@ mod tests {
         environment.write_probe_root(&root).unwrap();
         Profile {
             name: name.to_owned(),
+            label: None,
             probe,
             protocol: ProtocolPolicy::V019,
             trust: TrustRoot::CertificateDer { path: root },
         }
+    }
+
+    #[test]
+    fn profile_label_is_optional_normalized_and_persistent() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        let original = Profile {
+            name: "setup-foks-app-4430".to_owned(),
+            label: None,
+            probe: "foks.app:4430".to_owned(),
+            protocol: ProtocolPolicy::V019,
+            trust: TrustRoot::WebPki,
+        };
+        registry.add(original.clone()).unwrap();
+
+        let stored = fs::read_to_string(root.join("profiles.toml")).unwrap();
+        assert!(!stored.contains("label"));
+        drop(registry);
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        assert_eq!(registry.profile(&original.name).unwrap().label, None);
+
+        assert!(registry
+            .set_label(&original.name, Some("  FOKS  ".to_owned()))
+            .unwrap());
+        assert!(!registry
+            .set_label(&original.name, Some("FOKS".to_owned()))
+            .unwrap());
+        drop(registry);
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        let labeled = registry.profile(&original.name).unwrap();
+        assert_eq!(labeled.label.as_deref(), Some("FOKS"));
+        assert_eq!(labeled.name, original.name);
+        assert_eq!(labeled.probe, original.probe);
+        assert_eq!(labeled.protocol, original.protocol);
+        assert_eq!(labeled.trust, original.trust);
+
+        assert!(registry
+            .set_label(&original.name, Some("Work".to_owned()))
+            .unwrap());
+        assert!(registry
+            .set_label(&original.name, Some(original.name.clone()))
+            .unwrap());
+        assert_eq!(registry.profile(&original.name).unwrap().label, None);
+        assert!(!registry.set_label(&original.name, None).unwrap());
+        assert!(matches!(
+            registry.set_label("missing", Some("Missing".to_owned())),
+            Err(Error::ProfileMissing)
+        ));
+    }
+
+    #[test]
+    fn profile_labels_reject_invalid_and_oversized_values() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        registry
+            .add(Profile {
+                name: "local".to_owned(),
+                label: None,
+                probe: "foks.example.test".to_owned(),
+                protocol: ProtocolPolicy::V019,
+                trust: TrustRoot::WebPki,
+            })
+            .unwrap();
+        for label in ["a\nb".to_owned(), "a\rb".to_owned(), "a\0b".to_owned()] {
+            assert!(matches!(
+                registry.set_label("local", Some(label)),
+                Err(Error::InvalidProfile(_))
+            ));
+        }
+        assert!(matches!(
+            registry.set_label("local", Some("界".repeat(22))),
+            Err(Error::InvalidProfile("profile label is too long"))
+        ));
+        let invalid_from_disk = Profile {
+            label: Some("  ".to_owned()),
+            ..registry.profile("local").unwrap().clone()
+        };
+        assert!(matches!(
+            invalid_from_disk.validate(),
+            Err(Error::InvalidProfile("profile label is empty"))
+        ));
     }
 
     fn current_probe_only_profile(
@@ -1471,12 +1622,14 @@ mod tests {
     fn server_status_distinguishes_lease_free_and_leased_protocols() {
         let v019 = Profile {
             name: "v019".to_owned(),
+            label: None,
             probe: "foks.example.test".to_owned(),
             protocol: ProtocolPolicy::V019,
             trust: TrustRoot::WebPki,
         };
         let current = Profile {
             name: "current".to_owned(),
+            label: None,
             protocol: ProtocolPolicy::CurrentProbeOnly {
                 canary_public_key: "unused-by-status".to_owned(),
                 lease_url: "https://updates.example.test/lease".to_owned(),
@@ -1933,6 +2086,7 @@ mod tests {
         registry
             .add(Profile {
                 name: "local".to_owned(),
+                label: None,
                 probe: "foks.example.test".to_owned(),
                 protocol: ProtocolPolicy::V019,
                 trust: TrustRoot::WebPki,
@@ -1975,6 +2129,7 @@ mod tests {
         registry
             .add(Profile {
                 name: "local".to_owned(),
+                label: None,
                 probe: "foks.example.test".to_owned(),
                 protocol: ProtocolPolicy::V019,
                 trust: TrustRoot::WebPki,

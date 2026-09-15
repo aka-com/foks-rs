@@ -704,6 +704,7 @@ fn profile_from_arguments(arguments: ProfileAdd) -> Result<Profile, Box<dyn std:
     };
     Ok(Profile {
         name: arguments.name,
+        label: None,
         probe: arguments.target,
         protocol,
         trust,

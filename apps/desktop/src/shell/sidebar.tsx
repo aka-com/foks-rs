@@ -12,6 +12,7 @@ import { Menu, Popover } from '/kit/overlay-primitives';
 import { Chip, Icon } from '../components';
 import {
   chatAvailable,
+  serverDisplayName,
   storeAvailability,
   storeDescription,
   storeHues,
@@ -221,9 +222,10 @@ function AccountHeader({
   const usernameOf = (store: AccountStore): string =>
     snapshot.accounts.find((entry) => entry.store === store.id)?.username ??
     store.account;
-  const serverNameOf = (store: AccountStore): string =>
-    snapshot.servers.find((entry) => entry.id === store.server)?.name ??
-    store.server;
+  const serverNameOf = (store: AccountStore): string => {
+    const server = snapshot.servers.find((entry) => entry.id === store.server);
+    return server ? serverDisplayName(server) : store.server;
+  };
   const username = active ? usernameOf(active) : 'No account';
   const server = active ? serverNameOf(active) : 'None on this Mac';
   // Selecting an account keeps the page the reader is on when that page acts
@@ -301,8 +303,14 @@ function AccountHeader({
             {servers.map((serverId) => (
               <div key={serverId}>
                 <div className="cap">
-                  {snapshot.servers.find((entry) => entry.id === serverId)
-                    ?.name ?? serverId}
+                  {(() => {
+                    const entry = snapshot.servers.find(
+                      (candidate) => candidate.id === serverId,
+                    );
+                    if (!entry) return serverId;
+                    const name = serverDisplayName(entry);
+                    return entry.label ? `${name} · ${entry.name}` : name;
+                  })()}
                 </div>
                 {accounts
                   .filter((store) => store.server === serverId)

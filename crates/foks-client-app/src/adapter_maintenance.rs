@@ -301,6 +301,7 @@ mod tests {
         registry
             .add(Profile {
                 name: "local".into(),
+                label: None,
                 probe: "unreachable.invalid:443".into(),
                 trust: TrustRoot::WebPki,
                 protocol: ProtocolPolicy::CurrentProbeOnly {

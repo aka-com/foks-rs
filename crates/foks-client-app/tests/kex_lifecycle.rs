@@ -250,6 +250,7 @@ fn machine(
     registry
         .add(Profile {
             name: "local".to_owned(),
+            label: None,
             probe: format!("localhost:{port}"),
             protocol: ProtocolPolicy::V019,
             trust: TrustRoot::CertificateDer { path: root },

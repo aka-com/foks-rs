@@ -593,6 +593,7 @@ test('native-shaped account creation is not rewound by the pre-mutation inventor
         id: profile,
         name: 'foks.app',
         label: null,
+        configuredProbe: 'foks.app',
         host_id: hostId,
         chain: 1,
         epoch: 1,

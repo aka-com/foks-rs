@@ -33,6 +33,8 @@ import {
   profileInventoryComplete,
   readersOf,
   roleRank,
+  serverDisplayName,
+  serverName,
   rtype,
   safestRemovalTarget,
   storeReadable,
@@ -57,6 +59,33 @@ function readerCount(snapshot: AgentSnapshot, key: string): number {
   return readers.length;
 }
 
+test('server display names prefer labels and fall back to profile names', () => {
+  assert.equal(
+    serverDisplayName({ name: 'setup-foks-app-4430', label: 'FOKS' }),
+    'FOKS',
+  );
+  assert.equal(
+    serverDisplayName({ name: 'setup-foks-app-4430', label: null }),
+    'setup-foks-app-4430',
+  );
+});
+
+test('duplicate server labels include the profile name in store contexts', () => {
+  const snapshot = {
+    ...FIXTURE,
+    servers: FIXTURE.servers.map((server, index) =>
+      index < 2 ? { ...server, label: 'Shared' } : server,
+    ),
+  };
+  assert.equal(
+    serverName(snapshot, { server: 'personal' }),
+    'Shared · foks.example.net',
+  );
+  assert.equal(
+    serverName(snapshot, { server: 'acme' }),
+    'Shared · foks.acme-corp.com',
+  );
+});
 /* ------------------------------------------------------------------ roles -- */
 
 test('roleRank orders Member with visibility below Admin and Owner', () => {
@@ -678,12 +707,12 @@ test('teamCaption drops the server on a page that is already about one', () => {
     (candidate) => candidate.id === 'team:household',
   );
   assert.ok(store && store.kind === 'team');
-  assert.equal(teamCaption(FIXTURE, store), 'Named group · foks.example.net');
+  assert.equal(teamCaption(FIXTURE, store), 'Named group · Personal server');
   assert.equal(teamCaption(FIXTURE, store, { server: false }), 'Named group');
   // The account is named only where it is asked for, and after the server.
   assert.equal(
     teamCaption(FIXTURE, store, { shared: true }),
-    'Named group · foks.example.net · as satoshi',
+    'Named group · Personal server · as satoshi',
   );
   assert.equal(
     teamCaption(FIXTURE, store, { server: false, shared: true }),

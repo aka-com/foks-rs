@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react';
 import { Band, Button, Notice } from '../components';
 import {
+  serverName as displayServerName,
   serverOf,
   storeDescriptionState,
   storeHeadingDescription,
@@ -127,7 +128,7 @@ export function StoreAccessTakeover({
   const state = storeDescriptionState(snapshot, store);
   if (state === 'normal') return null;
   const server = serverOf(snapshot, store.id);
-  const copy = accessCopy(state, store, server?.name ?? store.server);
+  const copy = accessCopy(state, store, displayServerName(snapshot, store));
   const action =
     copy.action === 'finish-setup' ? (
       <Button variant="primary" onClick={onFinishSetup}>
@@ -208,8 +209,7 @@ export function storeAccessBands(snapshot: AgentSnapshot): StoreAccessBand[] {
   return [...buckets.entries()].map(([key, { state, stores }]) => {
     const names = joinNames(stores);
     const verb = stores.length === 1 ? 'is' : 'are';
-    const serverName =
-      serverOf(snapshot, stores[0].id)?.name ?? stores[0].server;
+    const serverName = displayServerName(snapshot, stores[0]);
     const text =
       state === 'verification-failed'
         ? `${names} ${verb} unavailable because security verification failed for ${serverName}.`

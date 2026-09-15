@@ -7,6 +7,7 @@ use std::sync::Arc;
 pub(super) fn test_profile(name: impl Into<String>) -> ProfileSummary {
     ProfileSummary {
         name: name.into(),
+        label: None,
         probe: "foks.example".to_owned(),
         protocol: ProfileProtocolSummary::V019,
         trust: ProfileTrustSummary::WebPki,

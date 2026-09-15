@@ -231,6 +231,10 @@ test('the account menu switches account, adds one, and locks the app', async () 
   const header = document.querySelector<HTMLButtonElement>('.side.rail .who');
   assert.ok(header);
   assert.equal(header.querySelector('.t b')?.textContent, 'satoshi');
+  assert.equal(
+    header.querySelector('.t small')?.textContent,
+    'Personal server',
+  );
 
   const open = async (): Promise<HTMLElement> => {
     ui.fireEvent.click(header);
@@ -243,6 +247,11 @@ test('the account menu switches account, adds one, and locks the app', async () 
 
   // Choosing an account keeps the page and changes whose account it acts on.
   let menu = await open();
+  assert.ok(
+    [...menu.querySelectorAll('.cap')].some(
+      (entry) => entry.textContent === 'Personal server · foks.example.net',
+    ),
+  );
   const other = [...menu.querySelectorAll('button')].find((button) =>
     button.textContent?.includes('vitalik'),
   );

@@ -22,7 +22,7 @@ import {
   partiesOf,
   peopleGroups,
   prefixOf,
-  serverOf,
+  serverName,
   storeDescription,
   storeDescriptionState,
   storeDisplayOrder,
@@ -267,7 +267,7 @@ function TileSection({
   return (
     <div className="gsec">
       {store.name}
-      <span className="n">· {serverOf(snapshot, store.id)?.name}</span>
+      <span className="n">· {serverName(snapshot, store)}</span>
     </div>
   );
 }

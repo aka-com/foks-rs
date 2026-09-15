@@ -257,9 +257,10 @@ pub use kv::{
     KvMutationPrecondition, KvReadReport, KvRoleSummary, KvWriteReport,
 };
 pub use registry::{
-    Capability, CheckedProfileSession, ProbeAcceptance, ProbeReport, Profile, ProfilePaths,
-    ProfilePublicationReport, ProfileRegistry, ProfileSession, ProtocolPolicy,
-    ServerStatusSnapshot, ServerVersionReport, StoredHostStatus, TrustRoot,
+    normalize_profile_label, Capability, CheckedProfileSession, ProbeAcceptance, ProbeReport,
+    Profile, ProfilePaths, ProfilePublicationReport, ProfileRegistry, ProfileSession,
+    ProtocolPolicy, ServerStatusSnapshot, ServerVersionReport, StoredHostStatus, TrustRoot,
+    PROFILE_LABEL_MAX_BYTES,
 };
 #[cfg(test)]
 use team::StoredTeam;
@@ -560,6 +561,7 @@ mod tests {
     fn profile(name: &str, protocol: ProtocolPolicy) -> Profile {
         Profile {
             name: name.to_owned(),
+            label: None,
             probe: "foks.app".to_owned(),
             protocol,
             trust: TrustRoot::WebPki,

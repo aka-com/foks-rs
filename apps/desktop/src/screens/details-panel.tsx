@@ -31,6 +31,7 @@ import {
   peopleLabel,
   readersOf,
   serverOf,
+  serverDisplayName,
   storeAvailability,
   storeOf,
 } from '../model';
@@ -454,7 +455,7 @@ export function DetailsPanel({
 
   const store = storeOf(snapshot, item.store);
   const server = serverOf(snapshot, item.store);
-  const serverName = server?.name ?? '';
+  const serverName = server ? serverDisplayName(server) : '';
   const kind = kindOf(item) as FilterKind;
   const fileMode = kind === 'File' || binaryFile;
   const displayKind: FilterKind = fileMode ? 'File' : kind;

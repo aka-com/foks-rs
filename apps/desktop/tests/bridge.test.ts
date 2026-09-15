@@ -14,6 +14,7 @@ import {
   decodeGroupDiscovery,
   decodeServerStatus,
   decodeCheckedServer,
+  decodeServerLabelResponse,
   decodeAccountDevices,
   decodeBackupEnrollments,
   decodeBackupRevocation,
@@ -129,6 +130,7 @@ function listedServer(
     id,
     name: id,
     label: null,
+    configuredProbe: id,
     host_id: null,
     chain: null,
     epoch: null,
@@ -350,6 +352,7 @@ test('decoders validate server status, member rosters, and federation entries', 
       id: 'foks.example.net',
       name: 'foks.example.net',
       label: null,
+      configured_probe: 'foks.example.net',
       host_id: 'abc',
       chain: 2,
       epoch: 9,
@@ -466,6 +469,22 @@ test('decoders successfully parse the full wire contract golden fixture', async 
     message: '',
     compatible: true,
   });
+  assert.deepEqual(
+    decodeServerLabelResponse({
+      profile: 'work',
+      label: 'FOKS',
+      changed: true,
+    }),
+    { profile: 'work', label: 'FOKS', changed: true },
+  );
+  assert.throws(() =>
+    decodeServerLabelResponse({
+      profile: 'work',
+      label: 'FOKS',
+      changed: true,
+      extra: true,
+    }),
+  );
   assert.equal(decodeAccountDevices([fixture.device])[0]?.name, 'This Mac');
   assert.equal(
     decodeBackupEnrollments([fixture.backupEnrollment])[0]?.backupAlias,
@@ -1901,7 +1920,7 @@ test('loadSnapshot omits rosters for lapsed servers and enriches active member a
   );
   assert.equal(
     fresh.parties.find((party) => party.party_kind === 'named-team')?.team_name,
-    'homelab @ foks.example.net',
+    'homelab @ Personal server',
   );
 });
 
@@ -2482,6 +2501,33 @@ test('maintenance snapshots decode typed operation and restoration outcomes', ()
   if (snapshot.state !== 'complete') return;
   assert.deepEqual(snapshot.operation, { status: 'completed' });
   assert.equal(snapshot.disposition.status, 'restoration-failed');
+});
+
+test('mock server labels change only the selected profile and reject unknown ids', async () => {
+  const bridge = mockBridge(FIXTURE);
+  const before = await bridge.listServers();
+  assert.deepEqual(await bridge.setServerLabel('personal', '  FOKS  '), {
+    profile: 'personal',
+    label: 'FOKS',
+    changed: true,
+  });
+  assert.deepEqual(await bridge.setServerLabel('personal', 'FOKS'), {
+    profile: 'personal',
+    label: 'FOKS',
+    changed: false,
+  });
+  assert.deepEqual(await bridge.setServerLabel('personal', null), {
+    profile: 'personal',
+    label: null,
+    changed: true,
+  });
+  const after = await bridge.listServers();
+  assert.equal(after.find((server) => server.id === 'personal')?.label, null);
+  assert.deepEqual(
+    after.filter((server) => server.id !== 'personal'),
+    before.filter((server) => server.id !== 'personal'),
+  );
+  await assert.rejects(() => bridge.setServerLabel('missing', 'Unknown'));
 });
 
 test('maintenance snapshot decoder rejects impossible loose values', () => {

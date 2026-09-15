@@ -18,7 +18,7 @@ import {
   partyName,
   roleName,
   roleRank,
-  serverOf,
+  serverName,
 } from '../model';
 import type { AgentSnapshot, Party, TeamStore } from '../model';
 import type { ChatChannel, ChatScope } from '../chat-contract';
@@ -78,7 +78,7 @@ export function ChannelInfoPanel({
               : 'No channel is open.'}
         </p>
         <p className="chat-info-where">
-          {store.name} · {serverOf(snapshot, store.id)?.name ?? store.server}
+          {store.name} · {serverName(snapshot, store)}
         </p>
       </section>
       {channel && (

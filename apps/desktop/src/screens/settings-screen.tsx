@@ -29,6 +29,7 @@ import {
   accountStores,
   accountSubtitle,
   plural,
+  serverDisplayName,
   serverName,
   usernameOf,
 } from '../model';
@@ -799,7 +800,7 @@ function ResetMacSheet({
       : `Each reset confirmation can be used once and has a server-specific expiration duration: ${servers
           .map(
             (server) =>
-              `${server.name} (${previews.get(server.id)?.expiresInSeconds} seconds)`,
+              `${serverDisplayName(server)} (${previews.get(server.id)?.expiresInSeconds} seconds)`,
           )
           .join(', ')}. Reopen this dialog to generate new confirmations.`;
 
@@ -887,7 +888,7 @@ function ResetMacSheet({
         return (
           <div key={server.id}>
             <SectionLabel>
-              {server.name} · {server.id}
+              {serverDisplayName(server)} · {server.id}
             </SectionLabel>
             <Inset>
               {failure ? (

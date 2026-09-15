@@ -14,6 +14,7 @@ const RAW: AgentSnapshot = {
       id: 'personal',
       name: 'foks.example.net',
       label: 'Personal server',
+      configuredProbe: 'foks.example.net',
       host_id: '9f31c2aa07',
       chain: 12,
       epoch: 4821,
@@ -29,6 +30,7 @@ const RAW: AgentSnapshot = {
       id: 'acme',
       name: 'foks.acme-corp.com',
       label: 'Acme',
+      configuredProbe: 'foks.acme-corp.com',
       host_id: 'b04d17e390',
       chain: 33,
       epoch: 90417,
@@ -44,6 +46,7 @@ const RAW: AgentSnapshot = {
       id: 'partner',
       name: 'foks.partner.dev',
       label: null,
+      configuredProbe: 'foks.partner.dev',
       host_id: null,
       chain: null,
       epoch: null,
@@ -426,7 +429,7 @@ const RAW: AgentSnapshot = {
     {
       id: 'lease-acme',
       severity: 'crit',
-      title: 'foks.acme-corp.com is locked',
+      title: 'Acme is locked',
       detail:
         'The server’s check-in expired. Work and Engineering groups are unavailable until the agent renews it.',
       action: 'Check status',

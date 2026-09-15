@@ -41,6 +41,7 @@ fn admin_configuration_and_checks_use_the_real_agent_without_printing_sessions()
     registry
         .add(Profile {
             name: "local".into(),
+            label: None,
             probe: format!("localhost:{}", env.addresses().unwrap().probe.port()),
             protocol: ProtocolPolicy::V019,
             trust: TrustRoot::CertificateDer { path: root },

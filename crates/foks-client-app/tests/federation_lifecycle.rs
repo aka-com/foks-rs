@@ -908,6 +908,7 @@ fn add_profile(
     registry
         .add(Profile {
             name: name.to_owned(),
+            label: None,
             probe: format!("localhost:{probe_port}"),
             protocol: ProtocolPolicy::V019,
             trust: TrustRoot::CertificateDer { path: root },

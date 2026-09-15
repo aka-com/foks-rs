@@ -30,7 +30,7 @@ import {
   CHAT_NAME_MAX_CHARS,
   CHAT_NAME_MIN_CHARS,
 } from '../chat-limits';
-import { chatAvailable, storeDescription } from '../model';
+import { chatAvailable, serverDisplayName, storeDescription } from '../model';
 import type {
   AgentSnapshot,
   AvailabilityOptions,
@@ -182,9 +182,12 @@ export function NewChatSheet({
             ({ conversation }) => !conversation?.hidden,
           ).length
         : null;
-      const server =
-        snapshot.servers.find((candidate) => candidate.id === store.server)
-          ?.name ?? store.server;
+      const serverEntry = snapshot.servers.find(
+        (candidate) => candidate.id === store.server,
+      );
+      const server = serverEntry
+        ? serverDisplayName(serverEntry)
+        : store.server;
       return {
         store,
         reason: reachable

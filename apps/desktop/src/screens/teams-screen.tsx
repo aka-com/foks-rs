@@ -26,7 +26,8 @@ import {
   partiesOf,
   plural,
   roleName,
-  serverOf,
+  serverDisplayName,
+  serverName as displayServerName,
   storeAttentionState,
   storeDescription,
   storeDescriptionState,
@@ -211,7 +212,7 @@ function AccountRow({
   const available = Boolean(context?.available);
   // The server this account signs in to, named as the row's heading. Its
   // store's name is the account's, not a server's, so it is no fallback here.
-  const serverName = context?.server.name ?? store.server;
+  const serverName = context ? serverDisplayName(context.server) : store.server;
   const caption = account
     ? `as ${account.username} · ${store.account}`
     : 'This account is not signed in on this Mac.';
@@ -260,7 +261,7 @@ function AccountRow({
             available
               ? 'Copy a message that helps someone create an account on this server.'
               : context
-                ? inviteUnavailableTitle(context.server.name)
+                ? inviteUnavailableTitle(serverDisplayName(context.server))
                 : 'This account is not signed in on this Mac.'
           }
           onClick={onInvite}
@@ -379,8 +380,7 @@ export function TeamsScreen({
    * reasons the group's own page gives.
    */
   const rowMenu = (store: TeamStore): ReactNode => {
-    const server = serverOf(snapshot, store.id);
-    const serverName = server?.name ?? store.server;
+    const serverName = displayServerName(snapshot, store);
     const rosterReason = manageReason(snapshot, store, 'roster');
     const federationReason = manageReason(snapshot, store, 'federation');
     // The invitation is sent as the account that holds the group, so with no

@@ -37,6 +37,8 @@ import {
   roleChipLabel,
   roleName,
   roleRank,
+  serverDisplayName,
+  serverName as displayServerName,
   serverOf,
   storeDescriptionState,
   storeOf,
@@ -526,9 +528,12 @@ function FederationRows({
   return (
     <div className="rt bare fed">
       {entries.map((entry) => {
-        const remoteName =
-          snapshot.servers.find((server) => server.id === entry.remote_profile)
-            ?.name ?? entry.remote_profile;
+        const remoteServer = snapshot.servers.find(
+          (server) => server.id === entry.remote_profile,
+        );
+        const remoteName = remoteServer
+          ? serverDisplayName(remoteServer)
+          : entry.remote_profile;
         const memberReason =
           'Every member of an admitted group holds the role shown on its row. They are managed on their own server and cannot be changed or removed one by one.';
         return (
@@ -683,8 +688,7 @@ function MembersTab({
   );
   const machines = parties.filter((party) => isMachine(party));
   const named = store.kind === 'team' && store.team_kind === 'named';
-  const server = serverOf(snapshot, store.id);
-  const serverName = server?.name ?? store.server;
+  const serverName = displayServerName(snapshot, store);
   const readable = storeReadable(snapshot, store.id);
   const row = (party: Party): ReactNode => (
     <PartyRow
@@ -978,7 +982,7 @@ function SettingsTab({
             </Button>
           }
         >
-          {server?.name}
+          {server ? serverDisplayName(server) : store.server}
         </InsetRow>
         <InsetRow label="Your account">
           {account?.username ?? store.account} · {mine ? roleText(mine) : '—'}
@@ -1123,7 +1127,10 @@ function SettingsTab({
           }
         >
           <span className="t">
-            <b>Reset this Mac’s state for {server?.name}</b>
+            <b>
+              Reset this Mac’s state for{' '}
+              {server ? serverDisplayName(server) : store.server}
+            </b>
             <small>
               Removes locally stored keys and server data from this Mac.
             </small>
@@ -1233,11 +1240,7 @@ export function GroupSheet({
   const creationAccount = creationAccounts.find(
     (candidate) => candidate.id === accountStoreId,
   );
-  const server = serverOf(
-    snapshot,
-    sheet === 'create' && creationAccount ? creationAccount.id : store.id,
-  );
-  const serverName = server?.name ?? store.server;
+  const serverName = displayServerName(snapshot, store);
   const teamAlias = name
     .trim()
     .toLowerCase()
@@ -1693,7 +1696,7 @@ export function GroupSheet({
                         selected={remote?.id === group.id}
                         onSelect={() => setRemoteStoreId(group.id)}
                         title={group.alias}
-                        detail={`on ${host?.name ?? group.server}`}
+                        detail={`on ${host ? serverDisplayName(host) : group.server}`}
                       />
                     );
                   })}
@@ -1744,13 +1747,11 @@ export function GroupSheet({
             </Inset>
             <Band severity="info" label="How admission works">
               {store.name} asks{' '}
-              {remote
-                ? (serverOf(snapshot, remote.id)?.name ?? remote.server)
-                : 'that server'}{' '}
-              who is in {remote?.alias ?? 'that group'} and syncs that list.
-              People are added and removed there, not here, and one of them
-              cannot be changed or removed on their own: only the whole
-              admission can be removed, which rotates {store.name}’s key.
+              {remote ? displayServerName(snapshot, remote) : 'that server'} who
+              is in {remote?.alias ?? 'that group'} and syncs that list. People
+              are added and removed there, not here, and one of them cannot be
+              changed or removed on their own: only the whole admission can be
+              removed, which rotates {store.name}’s key.
             </Band>
             <p className="fn">
               If the remote server becomes unreachable, the federated team
@@ -1779,7 +1780,7 @@ export function GroupSheet({
                       key={account.id}
                       selected={account.id === accountStoreId}
                       onSelect={() => setAccountStoreId(account.id)}
-                      title={serverOf(snapshot, account.id)?.name}
+                      title={displayServerName(snapshot, account)}
                       detail={`as ${snapshot.accounts.find((candidate) => candidate.store === account.id || (candidate.alias === account.account && candidate.server === account.server))?.username ?? account.account} · ${account.account} account`}
                     />
                   ))}
@@ -2131,7 +2132,7 @@ export function GroupSettingsScreen({
           {/* The server, then the bare role this account holds here. */}
           <div className="sub">
             {[
-              serverOf(snapshot, store.id)?.name ?? store.server,
+              displayServerName(snapshot, store),
               callerParty
                 ? (() => {
                     const parsed = parseRole(callerParty.destination_role);
@@ -2164,7 +2165,7 @@ export function GroupSettingsScreen({
                   icon="again"
                   reason={
                     unavailable
-                      ? `Restore access to ${serverOf(snapshot, store.id)?.name ?? store.server} first.`
+                      ? `Restore access to ${displayServerName(snapshot, store)} first.`
                       : inactive
                         ? 'Finish setting up this group first.'
                         : undefined

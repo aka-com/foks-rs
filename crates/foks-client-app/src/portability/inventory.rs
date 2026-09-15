@@ -572,6 +572,7 @@ mod tests {
             registry
                 .add(Profile {
                     name: name.into(),
+                    label: None,
                     probe: "foks.app".into(),
                     protocol: ProtocolPolicy::V019,
                     trust: TrustRoot::WebPki,

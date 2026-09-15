@@ -195,6 +195,7 @@ pub fn run() {
             commands::servers::check_and_add_profile,
             commands::enrollment::check_and_add_go_profile,
             commands::servers::add_server,
+            commands::servers::set_server_label,
             commands::servers::forget_server,
             commands::servers::describe_server_status,
             commands::servers::check_server,

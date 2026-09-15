@@ -1791,6 +1791,7 @@ mod reset_tests {
         registry
             .add(Profile {
                 name: "local".to_owned(),
+                label: None,
                 probe: "foks.app".to_owned(),
                 protocol: ProtocolPolicy::V019,
                 trust: TrustRoot::WebPki,

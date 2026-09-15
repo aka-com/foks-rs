@@ -54,6 +54,7 @@ fn bot_secrets_cross_real_agent_only_through_private_files_and_live_sessions() {
     registry
         .add(Profile {
             name: "local".into(),
+            label: None,
             probe: format!("localhost:{}", env.addresses().unwrap().probe.port()),
             protocol: ProtocolPolicy::V019,
             trust: TrustRoot::CertificateDer { path: root },

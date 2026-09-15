@@ -894,10 +894,7 @@ export function DevicesScreen({
             snapshot.accounts.find((entry) => entry.store === selected.id)
               ?.username ?? selected.account
           }
-          server={
-            snapshot.servers.find((entry) => entry.id === selected.server)
-              ?.name ?? selected.server
-          }
+          server={serverName(snapshot, selected)}
           seedPhrase={
             enteredScene === 'settings-phrase'
               ? bridge.firstRunFixture?.backupPhrase

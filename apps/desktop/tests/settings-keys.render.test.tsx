@@ -585,7 +585,7 @@ test('navigating to an unavailable account displays an error and lists available
   );
   await ui.act(async () => {
     ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'personal · foks.example.net' }),
+      rendered.getByRole('button', { name: 'personal · Personal server' }),
     );
   });
   assert.deepEqual(chosen.at(-1), { kind: 'devices', store: 'acct:personal' });
@@ -603,7 +603,7 @@ test('switching accounts from that notice leaves the lost key’s address behind
 
   await ui.act(async () => {
     ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'personal · foks.example.net' }),
+      rendered.getByRole('button', { name: 'personal · Personal server' }),
     );
   });
   assert.deepEqual(chosen.at(-1), { kind: 'devices', store: 'acct:personal' });

@@ -53,6 +53,7 @@ interface SettingsOptions {
   decorate?: (bridge: Bridge) => Bridge;
   /** Collects the failures a test expects, instead of raising them. */
   onMutationError?: (error: unknown) => void;
+  onRefresh?: (message: string) => Promise<void>;
 }
 
 async function renderSettings(
@@ -65,6 +66,7 @@ async function renderSettings(
     onMutationError = (error) => {
       throw error;
     },
+    onRefresh = async () => {},
   }: SettingsOptions = {},
 ) {
   const { SettingsScreen } = (await vite.ssrLoadModule(
@@ -93,7 +95,7 @@ async function renderSettings(
           location: { kind: 'settings', ...where },
           scene,
           onNavigate,
-          onRefresh: async () => {},
+          onRefresh,
           onRefreshSnapshot: async () => snapshot,
           onError: (error: unknown) => {
             throw error;
@@ -119,7 +121,7 @@ test('the page holds servers, credentials, about, this Mac and the danger zone',
 
   for (const label of [
     'Account',
-    'Security key credentials · satoshi on foks.example.net',
+    'Security key credentials · satoshi on Personal server',
     'About',
     'This Mac',
     'Danger zone',
@@ -155,9 +157,7 @@ test('a section address puts the page and the keyboard on that section', async (
   });
   // The card credentials name the account they act on.
   assert.ok(
-    rendered.getByText(
-      'Security key credentials · satoshi on foks.example.net',
-    ),
+    rendered.getByText('Security key credentials · satoshi on Personal server'),
   );
 });
 
@@ -169,7 +169,7 @@ test('the card credentials name an account the reader can change', async () => {
   });
 
   const group = rendered.getByRole('group', {
-    name: 'Security key credentials · satoshi on foks.example.net',
+    name: 'Security key credentials · satoshi on Personal server',
   });
   const accounts = ui.within(group).getAllByRole('button');
   assert.equal(accounts.length, 2);
@@ -207,7 +207,7 @@ test('the passphrase sheet opens in the mode its row names, Verify included', as
     ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
     'Account passphrase',
   );
-  assert.ok(ui.within(dialog).getByText('satoshi on foks.example.net'));
+  assert.ok(ui.within(dialog).getByText('satoshi on Personal server'));
   assert.ok(
     ui.within(dialog).getByRole('button', { name: 'Verify passphrase' }),
   );
@@ -225,6 +225,11 @@ test('a profile address opens that server instead of the page', async () => {
   assert.ok(rendered.getByText('Accounts on this server'));
   assert.ok(rendered.getByText('Teams on this server'));
   assert.ok(rendered.getByText('Identity and trust'));
+  assert.ok(rendered.getByText('Profile'));
+  assert.ok(rendered.getAllByText('personal'));
+  assert.ok(rendered.getByText('Address'));
+  assert.ok(rendered.getAllByText('foks.example.net').length);
+  assert.ok(rendered.getByRole('button', { name: 'Rename…' }));
   assert.ok(
     rendered.getByRole('button', { name: 'Inspect last check response' }),
   );
@@ -242,6 +247,96 @@ test('a profile address opens that server instead of the page', async () => {
   assert.equal(rendered.queryByRole('button', { name: 'Lock now' }), null);
   // The audit log reads the two numbers the agent reports, not a date.
   assert.ok(rendered.getByText(/12 entries · checkpoint 4821/));
+});
+
+test('server display names can be set and cleared through the stable profile id', async () => {
+  const calls: Array<[string, string | null]> = [];
+  const messages: string[] = [];
+  const rendered = await renderSettings(await fixture(), {
+    where: { profile: 'personal' },
+    decorate: (bridge) => ({
+      ...bridge,
+      setServerLabel: async (profile, label) => {
+        calls.push([profile, label]);
+        return { profile, label, changed: true };
+      },
+    }),
+    onRefresh: async (message) => {
+      messages.push(message);
+    },
+  });
+
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Rename…' }));
+  });
+  let dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
+  assert.ok(
+    ui
+      .within(dialog)
+      .getByText('This only changes how the server is named in this app.'),
+  );
+  const field = ui.within(dialog).getByLabelText('Display name');
+  assert.equal((field as HTMLInputElement).value, 'Personal server');
+  await ui.act(async () => {
+    ui.fireEvent.change(field, { target: { value: '  FOKS  ' } });
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Save' }));
+  });
+  await ui.waitFor(() => assert.equal(rendered.queryByRole('dialog'), null));
+  assert.deepEqual(calls, [['personal', 'FOKS']]);
+  assert.deepEqual(messages, ['Server name updated.']);
+
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Rename…' }));
+  });
+  dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
+  const clearing = ui.within(dialog).getByLabelText('Display name');
+  await ui.act(async () => {
+    ui.fireEvent.change(clearing, { target: { value: '   ' } });
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Save' }));
+  });
+  await ui.waitFor(() => assert.equal(rendered.queryByRole('dialog'), null));
+  assert.deepEqual(calls.at(-1), ['personal', null]);
+});
+
+test('a rename failure leaves the sheet open and reports the error', async () => {
+  const failures: unknown[] = [];
+  const expected = new Error('label write failed');
+  const rendered = await renderSettings(await fixture(), {
+    where: { profile: 'personal' },
+    decorate: (bridge) => ({
+      ...bridge,
+      setServerLabel: async () => Promise.reject(expected),
+    }),
+    onMutationError: (error) => failures.push(error),
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Rename…' }));
+  });
+  const dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
+  await ui.act(async () => {
+    ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Save' }));
+    await Promise.resolve();
+  });
+  await ui.waitFor(() => assert.deepEqual(failures, [expected]));
+  assert.equal(rendered.getByRole('dialog'), dialog);
+});
+
+test('duplicate server labels retain visible profile-name disambiguation', async () => {
+  const snapshot = await fixture();
+  const duplicated = {
+    ...snapshot,
+    servers: snapshot.servers.map((server, index) =>
+      index < 2 ? { ...server, label: 'Shared' } : server,
+    ),
+  };
+  const rendered = await renderSettings(duplicated);
+  assert.equal(rendered.getAllByText('Shared').length, 2);
+  assert.ok(rendered.getByText('foks.example.net'));
+  assert.ok(rendered.getByText('foks.acme-corp.com'));
 });
 
 test('a server page captions its groups without repeating itself', async () => {

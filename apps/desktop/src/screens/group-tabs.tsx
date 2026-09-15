@@ -22,6 +22,8 @@ import {
   chatAvailable,
   plural,
   serverAvailability,
+  serverDisplayName,
+  serverName as displayServerName,
   serverOf,
   storeDescriptionState,
 } from '../model';
@@ -61,7 +63,7 @@ function noChannelsReason(
   const server = serverOf(snapshot, store.id);
   if (!server) return 'This group’s server is not configured on this Mac.';
   if (!server.capabilities.chat)
-    return `${server.name} does not offer chat, so this group has no channels.`;
+    return `${serverDisplayName(server)} does not offer chat, so this group has no channels.`;
   return undefined;
 }
 
@@ -119,7 +121,7 @@ export function ChannelsTab({
     // of its server, never the roster summary a store's description falls back
     // to once nothing is wrong with it.
     const state = unreachableReason(snapshot, store, accessOptions);
-    const serverName = serverOf(snapshot, store.id)?.name ?? store.server;
+    const serverName = displayServerName(snapshot, store);
     const copy = state ? accessCopy(state, store, serverName) : undefined;
     return (
       <div className="roster">
@@ -332,7 +334,7 @@ export function IncompleteGroupPage({
   onNavigate: (location: Location) => void;
 }): ReactNode {
   const server = serverOf(snapshot, store.id);
-  const serverName = server?.name ?? store.server;
+  const serverName = server ? serverDisplayName(server) : store.server;
   const account = snapshot.accounts.find(
     (candidate) =>
       candidate.alias === store.account && candidate.server === store.server,

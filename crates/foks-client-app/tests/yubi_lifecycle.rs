@@ -22,6 +22,7 @@ fn product_vault_covers_yubikey_provisioning_recovery_administration_and_revocat
     registry
         .add(Profile {
             name: "local".to_owned(),
+            label: None,
             probe: format!("localhost:{}", addresses.probe.port()),
             protocol: ProtocolPolicy::V019,
             trust: TrustRoot::CertificateDer { path: root },

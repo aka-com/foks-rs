@@ -680,6 +680,7 @@ mod tests {
         registry
             .add(crate::Profile {
                 name: "registry-only".into(),
+                label: None,
                 probe: "foks.app".into(),
                 protocol: crate::ProtocolPolicy::V019,
                 trust: crate::TrustRoot::WebPki,

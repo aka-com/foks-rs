@@ -11,6 +11,7 @@ import {
   storeAvailability,
   storeDescription,
 } from './lease';
+import { serverDisplayName } from './types';
 import type { AccountStore, AgentSnapshot } from './types';
 
 /** The account stores on this Mac, in catalog order. */
@@ -28,17 +29,23 @@ export function usernameOf(
   return snapshot.accounts.find((entry) => entry.store === store.id)?.username;
 }
 
-/** The server's name, or its profile id when the catalog has no name. */
+/** Human-readable server name, with profile disambiguation for duplicate labels. */
 export function serverName(
   snapshot: AgentSnapshot,
-  store: AccountStore,
+  store: Pick<AccountStore, 'server'>,
 ): string {
-  return (
-    snapshot.servers.find((entry) => entry.id === store.server)?.name ??
-    store.server
-  );
+  const server = snapshot.servers.find((entry) => entry.id === store.server);
+  if (!server) return store.server;
+  const displayName = serverDisplayName(server);
+  const duplicate =
+    server.label !== null &&
+    snapshot.servers.some(
+      (candidate) =>
+        candidate.id !== server.id &&
+        serverDisplayName(candidate) === displayName,
+    );
+  return duplicate ? `${displayName} · ${server.name}` : displayName;
 }
-
 /**
  * The line under a sheet title: who the workflow acts as, and where. The
  * title itself never carries the account alias.

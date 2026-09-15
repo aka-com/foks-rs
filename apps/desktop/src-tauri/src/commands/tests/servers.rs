@@ -1,7 +1,8 @@
 use crate::commands::execution::ambiguous_mutation_response;
 use crate::commands::servers::{
     check_existing_or_add_profile, normalized_probe_endpoint, normalized_probe_hostname,
-    require_transport_profile, reset_result_response, ProfileSummary, ProfileTrustSummary,
+    require_transport_profile, reset_result_response, server_label_response, ProfileSummary,
+    ProfileTrustSummary,
 };
 use crate::commands::tests::support::{phase_four_state, test_profile, test_profile_value};
 use crate::commands::validation::MAXIMUM_FIRST_RUN_ROWS;
@@ -236,6 +237,19 @@ fn profile_preflight_is_exact_bounded_and_unique() {
     );
     assert!(require_transport_profile(&ProfileListTransport { value: real_wire }, "work").is_ok());
 
+    let mut labeled = test_profile("work");
+    labeled.label = Some("FOKS".to_owned());
+    assert_eq!(
+        serde_json::to_value(&labeled).unwrap(),
+        serde_json::json!({
+            "name":"work",
+            "label":"FOKS",
+            "probe":"foks.example",
+            "protocol":{"generation":"v019"},
+            "trust":{"kind":"web-pki"}
+        })
+    );
+
     let mut unknown = test_profile_value("work");
     unknown
         .as_object_mut()
@@ -335,6 +349,38 @@ fn profile_preflight_is_exact_bounded_and_unique() {
         .code,
         "invalid-response"
     );
+}
+
+#[test]
+fn server_label_response_is_exact_and_bound_to_the_request() {
+    let expected = Some("FOKS".to_owned());
+    assert_eq!(
+        server_label_response(
+            serde_json::json!({
+                "profile": "work",
+                "label": "FOKS",
+                "changed": true
+            }),
+            "work",
+            &expected,
+        )
+        .unwrap()
+        .label,
+        expected
+    );
+    for value in [
+        serde_json::json!({"profile":"other","label":"FOKS","changed":true}),
+        serde_json::json!({"profile":"work","label":null,"changed":true}),
+        serde_json::json!({"profile":"work","label":"FOKS","changed":true,"extra":1}),
+        serde_json::json!({"profile":"work","changed":true}),
+    ] {
+        assert_eq!(
+            server_label_response(value, "work", &expected)
+                .unwrap_err()
+                .code,
+            "invalid-response"
+        );
+    }
 }
 
 #[test]

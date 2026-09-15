@@ -20,6 +20,7 @@ impl Fixture {
         registry
             .add(Profile {
                 name: "local".into(),
+                label: None,
                 probe: format!(
                     "localhost:{}",
                     environment.addresses().unwrap().probe.port()

@@ -8,6 +8,7 @@
 import { storeNavigationOrder } from './order';
 import { admissionActive, partiesOf, peopleGroups, storeOf } from './readers';
 import { admits } from './roles';
+import { serverDisplayName } from './types';
 import type {
   CompatibilityLease,
   GroupDetailFailure,
@@ -309,8 +310,10 @@ export function teamCaption(
     options.kind === false
       ? []
       : [store.team_kind === 'named' ? 'Named group' : 'Ad-hoc share'];
-  if (options.server !== false)
-    parts.push(serverOf(snapshot, store.id)?.name ?? store.server);
+  if (options.server !== false) {
+    const server = serverOf(snapshot, store.id);
+    parts.push(server ? serverDisplayName(server) : store.server);
+  }
   if (options.shared)
     parts.push(
       `as ${
@@ -340,7 +343,10 @@ export function storeDescription(
   if (state === 'server-status-unavailable') return 'Server status unavailable';
   if (state === 'vault-unavailable') return 'Vault unavailable';
   if (state === 'agent-unavailable') return 'Service unavailable';
-  if (store.kind === 'account') return serverOf(snapshot, store.id)?.name ?? '';
+  if (store.kind === 'account') {
+    const server = serverOf(snapshot, store.id);
+    return server ? serverDisplayName(server) : '';
+  }
   if (groupDetailFailure(snapshot, store.id, 'roster'))
     return 'Roster unavailable';
   if (groupDetailFailure(snapshot, store.id, 'federation'))

@@ -41,6 +41,9 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
   const ssoModes = new Map<string, import('./sso-contract').SsoPurpose>();
   const stores: Store[] = snapshot.stores.map((store) => ({ ...store }));
   const servers = snapshot.servers.map((server) => ({ ...server }));
+  const serverProbes = new Map(
+    snapshot.servers.map((server) => [server.id, server.configuredProbe]),
+  );
   const accounts = snapshot.accounts.map((account) => ({ ...account }));
   let items = snapshot.items.map((item) => ({ ...item }));
   let parties = snapshot.parties.map((party) => ({ ...party }));
@@ -212,8 +215,8 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
   for (const server of servers) {
     if (server.host_id && server.chain !== null && server.epoch !== null) {
       serverHosts.set(server.id, {
-        lookupName: server.name,
-        canonicalName: server.name,
+        lookupName: server.configuredProbe,
+        canonicalName: server.configuredProbe,
         hostId: hostIds[server.id] ?? `02${'1'.repeat(64)}`,
         chain: server.chain,
         epoch: server.epoch,
@@ -1017,14 +1020,12 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       };
     },
     describeServerStatus: async (profile) => {
-      const server = servers.find(
-        (entry) => entry.id === profile || entry.name === profile,
-      );
+      const server = servers.find((entry) => entry.id === profile);
       if (!server)
         throw failure('store-not-found', 'That server is not configured.');
       return {
         profile: server.id,
-        configuredProbe: server.name,
+        configuredProbe: serverProbes.get(server.id) ?? server.name,
         host: serverHosts.get(server.id) ?? null,
         leaseRequired: true,
         leaseExpiresAt:
@@ -1039,15 +1040,13 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       };
     },
     checkServer: async (profile) => {
-      const server = servers.find(
-        (entry) => entry.id === profile || entry.name === profile,
-      );
+      const server = servers.find((entry) => entry.id === profile);
       if (!server)
         throw failure('store-not-found', 'That server is not configured.');
       const existing = serverHosts.get(server.id);
       const host = existing ?? {
-        lookupName: server.name,
-        canonicalName: server.name,
+        lookupName: serverProbes.get(server.id) ?? server.name,
+        canonicalName: serverProbes.get(server.id) ?? server.name,
         hostId: hostIds[server.id] ?? `02${'7'.repeat(64)}`,
         chain: 4,
         epoch: 118204,
@@ -1073,8 +1072,9 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
         );
       servers.push({
         id: profileName,
-        name: probe,
+        name: profileName,
         label: null,
+        configuredProbe: probe,
         host_id: null,
         chain: null,
         epoch: null,
@@ -1089,7 +1089,27 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
         capabilities: { chat: false },
         restrictions: [],
       });
+      serverProbes.set(profileName, probe);
       return { profile: profileName, configuredProbe: probe };
+    },
+    setServerLabel: async (profile, label) => {
+      const server = servers.find((entry) => entry.id === profile);
+      if (!server)
+        throw failure('profile-not-found', 'That server is not configured.');
+      if (
+        label?.includes('\0') ||
+        label?.includes('\r') ||
+        label?.includes('\n')
+      )
+        throw failure('invalid-request', 'Enter a valid display name.');
+      const trimmed = label?.trim() ?? '';
+      if (new TextEncoder().encode(trimmed).length > 64)
+        throw failure('invalid-request', 'Enter a valid display name.');
+      const normalized =
+        trimmed === '' || trimmed === server.name ? null : trimmed;
+      const changed = server.label !== normalized;
+      server.label = normalized;
+      return { profile, label: normalized, changed };
     },
     forgetServer: async (profile, confirmation) => {
       if (profile !== confirmation)
@@ -1100,6 +1120,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       const index = servers.findIndex((server) => server.id === profile);
       if (index >= 0) servers.splice(index, 1);
       serverHosts.delete(profile);
+      serverProbes.delete(profile);
       return { profile, removed: true as const };
     },
     listAccountDevices: async (accountStoreId) =>

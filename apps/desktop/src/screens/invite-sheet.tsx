@@ -64,6 +64,9 @@ function inviteMessage(
   group: TeamStore | undefined,
 ): string {
   const host = serverName(snapshot, account);
+  const address =
+    snapshot.servers.find((server) => server.id === account.server)
+      ?.configuredProbe ?? account.server;
   // The username as the server holds it: the whole of it is what the reader
   // types back, so it is not abbreviated here.
   const inviter = usernameOf(snapshot, account) ?? account.account;
@@ -73,7 +76,7 @@ function inviteMessage(
       : `I'd like to invite you to FOKS on ${host}.`,
     '',
     '1. Ask me for the FOKS installer and install it',
-    `2. When it asks for a server address, enter ${host}`,
+    `2. When it asks for a server address, enter ${address}`,
     // No convention is invented for the username: the server decides what it
     // will accept, and this Mac holds no rule about it.
     '3. Create your account on the server',

@@ -247,6 +247,30 @@ pub(super) fn forgotten_server_response(
     })
 }
 
+pub(super) fn server_label_response(
+    value: serde_json::Value,
+    expected_profile: &str,
+    expected_label: &Option<String>,
+) -> Result<ServerLabelDto, AgentError> {
+    let response: ProfileLabelResponse = serde_json::from_value(value.clone())
+        .map_err(|error| invalid_response(error.to_string()))?;
+    let canonical =
+        serde_json::to_value(&response).map_err(|error| invalid_response(error.to_string()))?;
+    if canonical != value
+        || response.profile != expected_profile
+        || &response.label != expected_label
+    {
+        return Err(invalid_response(
+            "The agent returned a label result for a different server profile.",
+        ));
+    }
+    Ok(ServerLabelDto {
+        profile: response.profile,
+        label: response.label,
+        changed: response.changed,
+    })
+}
+
 pub(super) fn server_status_response(
     value: serde_json::Value,
     expected_profile: &str,
@@ -387,6 +411,8 @@ pub(super) fn reset_result_response(
 #[serde(deny_unknown_fields)]
 pub(super) struct ProfileSummary {
     pub(super) name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) label: Option<String>,
     pub(super) probe: String,
     pub(super) protocol: ProfileProtocolSummary,
     pub(super) trust: ProfileTrustSummary,
@@ -420,6 +446,7 @@ pub struct ServerDto {
     pub id: String,
     pub name: String,
     pub label: Option<String>,
+    pub configured_probe: String,
     pub host_id: Option<String>,
     pub chain: Option<u64>,
     pub epoch: Option<u64>,
@@ -434,6 +461,14 @@ pub struct ServerDto {
 pub struct AddedServerDto {
     pub profile: String,
     pub configured_probe: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerLabelDto {
+    pub profile: String,
+    pub label: Option<String>,
+    pub changed: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -538,6 +573,14 @@ struct RemovedProfileResponse {
     removed: bool,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileLabelResponse {
+    profile: String,
+    label: Option<String>,
+    changed: bool,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ResetPreviewResponse {
@@ -593,6 +636,8 @@ pub(super) fn transport_profile(
 
 fn valid_profile_summary(profile: &ProfileSummary) -> bool {
     valid_local_name(&profile.name)
+        && foks_client_app::normalize_profile_label(&profile.name, profile.label.clone())
+            .is_ok_and(|label| label == profile.label)
         && valid_probe_target(&profile.probe)
         && match &profile.trust {
             ProfileTrustSummary::WebPki => true,
@@ -947,6 +992,35 @@ pub async fn add_server(
 }
 
 #[tauri::command]
+pub async fn set_server_label(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    profile: String,
+    label: Option<String>,
+) -> Result<ServerLabelDto, AgentError> {
+    require_main_window(&webview)?;
+    crate::applock::require_unlocked(&app)?;
+    let _mutation = state.begin_mutation()?;
+    let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
+    let label = foks_client_app::normalize_profile_label(&profile, label).map_err(|_| {
+        invalid_request(
+            "Display name must be 64 UTF-8 bytes or fewer and cannot contain NUL or line breaks.",
+        )
+    })?;
+    let expected_profile = profile.clone();
+    let expected_label = label.clone();
+    let value = apply_operation_value(
+        &state,
+        Operation::SetProfileLabel { profile, label },
+        MutationKind::Guarded,
+    )
+    .await?;
+    server_label_response(value, &expected_profile, &expected_label)
+        .map_err(|error| ambiguous_mutation_response(&state, error.message))
+}
+
+#[tauri::command]
 pub async fn forget_server(
     app: tauri::AppHandle,
     webview: tauri::Webview,
@@ -1168,7 +1242,8 @@ pub async fn list_servers(
                 ServerDto {
                     id: profile.name.clone(),
                     name: profile.name,
-                    label: None,
+                    label: profile.label,
+                    configured_probe: profile.probe,
                     host_id: None,
                     chain: None,
                     epoch: None,

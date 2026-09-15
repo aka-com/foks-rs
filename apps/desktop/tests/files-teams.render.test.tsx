@@ -149,7 +149,7 @@ test('a Files row in an abnormal state carries a chip and is dimmed', async () =
   assert.equal(personal.querySelector('.tail .chip'), null);
   assert.equal(
     personal.querySelector('.name small')?.textContent,
-    'Vault · foks.example.net',
+    'Vault · Personal server',
   );
 });
 
@@ -187,7 +187,7 @@ test('a Teams row in an abnormal state carries the same chip, and opens group se
   // says only where it lives; the chip beside it says what is wrong.
   assert.equal(
     homelab.querySelector('.name small')?.textContent,
-    'foks.example.net',
+    'Personal server',
   );
 
   const eng = row('Engineering');
@@ -209,10 +209,7 @@ test('a Teams row says the server, the roster summary and your role', async () =
   // One account per server on this Mac, so the server says all the caption
   // has to; the account is named only where two hold accounts on the same
   // server, and the kind only where no section label already says it.
-  assert.equal(
-    eng.querySelector('.name small')?.textContent,
-    'foks.acme-corp.com',
-  );
+  assert.equal(eng.querySelector('.name small')?.textContent, 'Acme');
   // The roster the group's own details call loaded on refresh, split the way
   // the group page splits it: people, machines and admitted groups.
   assert.equal(
@@ -228,12 +225,12 @@ test('a Teams row says the server, the roster summary and your role', async () =
 
 test('the Teams page carries one check row per account store', async () => {
   const rendered = await teams();
-  const personal = row('foks.example.net');
+  const personal = row('Personal server');
   assert.equal(
     personal.querySelector('.name small')?.textContent,
     'as satoshi · personal',
   );
-  const work = row('foks.acme-corp.com');
+  const work = row('Acme');
   assert.equal(
     work.querySelector('.name small')?.textContent,
     'as vitalik · work',
@@ -249,7 +246,7 @@ test('the Teams page carries one check row per account store', async () => {
 
 test('checking an account store reports its result on that row', async () => {
   const rendered = await teams();
-  const work = row('foks.acme-corp.com');
+  const work = row('Acme');
   const status = work.querySelector('[role="status"]');
   assert.ok(status, 'the live region exists before the result arrives');
   assert.equal(status.textContent, '');
@@ -261,12 +258,9 @@ test('checking an account store reports its result on that row', async () => {
     ui.fireEvent.click(check);
   });
   await ui.waitFor(() =>
-    assert.ok(
-      row('foks.acme-corp.com').querySelector('.tail .summary')?.textContent,
-    ),
+    assert.ok(row('Acme').querySelector('.tail .summary')?.textContent),
   );
-  const result =
-    row('foks.acme-corp.com').querySelector('.tail .summary')?.textContent;
+  const result = row('Acme').querySelector('.tail .summary')?.textContent;
   assert.ok(
     result?.includes('for vitalik'),
     `the check row reported "${result ?? ''}"`,
@@ -315,10 +309,7 @@ test('a Teams row menu says why an action does not apply', async () => {
   await teams();
   // This account is an Admin of Engineering, so the roster actions apply.
   openRowMenu('Engineering');
-  assert.equal(
-    inert(menuItem('Engineering', 'Add someone on foks.acme-corp.com…')),
-    false,
-  );
+  assert.equal(inert(menuItem('Engineering', 'Add someone on Acme…')), false);
   assert.equal(inert(menuItem('Engineering', 'Add a group…')), false);
   // Leaving has no command at all, and the reason names who can remove you.
   const leave = menuItem('Engineering', 'Leave…');
@@ -337,7 +328,7 @@ test('a Teams row menu says why an action does not apply', async () => {
 
   // An ad-hoc share has no membership to change, and its setup is unfinished.
   openRowMenu('Homelab');
-  const add = menuItem('Homelab', 'Add someone on foks.example.net…');
+  const add = menuItem('Homelab', 'Add someone on Personal server…');
   assert.equal(inert(add), true);
   assert.equal(
     add.getAttribute('title'),
@@ -369,7 +360,7 @@ test('a roster failure gives the Teams row menu its own reasons', async () => {
   });
   const unread = 'The roster could not be read. Refresh before making changes.';
   openRowMenu('Engineering');
-  const add = menuItem('Engineering', 'Add someone on foks.acme-corp.com…');
+  const add = menuItem('Engineering', 'Add someone on Acme…');
   assert.equal(inert(add), true);
   assert.equal(add.getAttribute('title'), unread);
   // Admitting a group is refused for the same reason: the role that would
@@ -390,7 +381,7 @@ test('a server row whose access lapsed says so with a chip', async () => {
     '/src/model/lease.ts',
   )) as typeof import('../src/model/lease');
   await teams(() => {}, { snapshot: applyLease(await fixture(), 'lapsed') });
-  const work = row('foks.acme-corp.com');
+  const work = row('Acme');
   assert.equal(stateChip(work), 'Check-in expired');
   // The caption still says only which account the row is.
   assert.equal(
@@ -405,7 +396,7 @@ test('a server row whose access lapsed says so with a chip', async () => {
   // The invitation names the server the invitee joins, so it says so.
   assert.equal(
     invite.getAttribute('title'),
-    'Restore access to foks.acme-corp.com before inviting someone.',
+    'Restore access to Acme before inviting someone.',
   );
 });
 
@@ -432,9 +423,9 @@ test('creating and joining act as the account the address names', async () => {
   // both in its subtitle and in the choice it is seeded to.
   assert.equal(
     document.querySelector('.sheet .hd small')?.textContent,
-    'vitalik on foks.acme-corp.com',
+    'vitalik on Acme',
   );
-  assert.equal(seededAccount(), 'foks.acme-corp.com');
+  assert.equal(seededAccount(), 'Acme');
   // The button says the alias the server is asked to create, not the name.
   assert.ok(created.getByRole('button', { name: 'Create platform' }));
   ui.cleanup();
@@ -443,9 +434,9 @@ test('creating and joining act as the account the address names', async () => {
   await teams(() => {}, { store: 'acct:personal', scene: 'create' });
   assert.equal(
     document.querySelector('.sheet .hd small')?.textContent,
-    'satoshi on foks.example.net',
+    'satoshi on Personal server',
   );
-  assert.equal(seededAccount(), 'foks.example.net');
+  assert.equal(seededAccount(), 'Personal server');
   ui.cleanup();
 
   const joining = await teams(() => {}, {
@@ -455,13 +446,13 @@ test('creating and joining act as the account the address names', async () => {
   assert.ok(joining.getByRole('heading', { name: 'Join a group' }));
   assert.equal(
     document.querySelector('.sheet .hd small')?.textContent,
-    'vitalik on foks.acme-corp.com',
+    'vitalik on Acme',
   );
 });
 
 test('an account row invites as its own account, and the sheet can change it', async () => {
   const rendered = await teams();
-  const work = row('foks.acme-corp.com');
+  const work = row('Acme');
   const invite = [...work.querySelectorAll('button')].find(
     (button) => button.textContent === 'Invite someone…',
   );
@@ -482,7 +473,7 @@ test('an account row invites as its own account, and the sheet can change it', a
   );
   assert.match(
     document.querySelector('.band.info')?.textContent ?? '',
-    /You are inviting as vitalik, on foks\.acme-corp\.com/,
+    /You are inviting as vitalik, on Acme/,
   );
   assert.match(
     document.querySelector('.copybox .v')?.textContent ?? '',
@@ -509,7 +500,7 @@ test('an account row invites as its own account, and the sheet can change it', a
   });
   assert.match(
     document.querySelector('.band.info')?.textContent ?? '',
-    /You are inviting as satoshi, on foks\.example\.net/,
+    /You are inviting as satoshi, on Personal server/,
   );
   const groups = document.querySelector(
     '[role="radiogroup"][aria-label="Which group you plan to add them to"]',

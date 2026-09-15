@@ -31,7 +31,7 @@ import { decodeChatReply } from './chat-contract';
 import type { ChatAction, ChatReply } from './chat-contract';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { itemKey, parseRole } from './model';
+import { itemKey, parseRole, serverDisplayName } from './model';
 import type {
   AgentStatus,
   Account,
@@ -421,6 +421,12 @@ export interface ServerStatusSnapshot {
   /** Expiration timestamp of the signed lease in Unix seconds, or null if unleased. */
   leaseExpiresAt: number | null;
   chatAvailable: boolean;
+}
+
+export interface ServerLabelResponse {
+  profile: string;
+  label: string | null;
+  changed: boolean;
 }
 
 export interface AppInfo {
@@ -845,6 +851,10 @@ export interface Bridge {
     profileName: string,
     probe: string,
   ): Promise<{ profile: string; configuredProbe: string }>;
+  setServerLabel(
+    profile: string,
+    label: string | null,
+  ): Promise<ServerLabelResponse>;
   forgetServer(
     profile: string,
     confirmation: string,
@@ -1127,7 +1137,8 @@ function decodeServer(value: unknown, at: string): Server {
   return {
     id: string(item.id, `${at}.id`),
     name: string(item.name, `${at}.name`),
-    label: nullableString(item.label, `${at}.label`),
+    label: nullableString(item.label, at + '.label'),
+    configuredProbe: string(item.configured_probe, at + '.configured_probe'),
     host_id: nullableString(item.host_id, `${at}.host_id`),
     chain: nullableInteger(item.chain, `${at}.chain`),
     epoch: nullableInteger(item.epoch, `${at}.epoch`),
@@ -1803,6 +1814,23 @@ const decodeAddedServer = (
   };
 };
 
+export const decodeServerLabelResponse = (
+  value: unknown,
+): ServerLabelResponse => {
+  const item = record(value, 'set_server_label response');
+  const keys = Object.keys(item).sort();
+  if (keys.join(',') !== 'changed,label,profile') {
+    throw new Error('set_server_label response has an invalid shape');
+  }
+  return {
+    profile: string(item.profile, 'set_server_label.profile'),
+    label: nullable(item.label, 'set_server_label.label', (entry, at) =>
+      string(entry, at),
+    ),
+    changed: bool(item.changed, 'set_server_label.changed'),
+  };
+};
+
 const decodeForgottenServer = (
   value: unknown,
 ): { profile: string; removed: true } => {
@@ -2161,7 +2189,7 @@ function notificationsOf(
           {
             id: `${availability.available ? 'available' : availability.reason}-${server.id}`,
             severity: 'crit' as const,
-            title: `${server.name} is locked`,
+            title: `${serverDisplayName(server)} is locked`,
             ...copy,
           },
         ]
@@ -2545,6 +2573,8 @@ export const tauriBridge: Bridge = {
     checked('check_server', { profile }, decodeCheckedServer),
   addServer: (profileName, probe) =>
     checked('add_server', { profileName, probe }, decodeAddedServer),
+  setServerLabel: (profile, label) =>
+    checked('set_server_label', { profile, label }, decodeServerLabelResponse),
   forgetServer: (profile, confirmation) =>
     checked('forget_server', { profile, confirmation }, decodeForgottenServer),
   listAccountDevices: (accountStoreId) =>
@@ -3138,6 +3168,10 @@ async function loadSnapshotOnce(
     throw new Error('list_servers omitted a server used by the catalog.');
   }
   const federation = rosters.flatMap((roster) => roster.federation);
+  const displayServerById = (profile: string): string => {
+    const server = servers.find((candidate) => candidate.id === profile);
+    return server ? serverDisplayName(server) : profile;
+  };
   const parties = rosters
     .flatMap((roster) => roster.parties)
     .map((party) => {
@@ -3180,7 +3214,7 @@ async function loadSnapshotOnce(
         // Resolve the remote server's display name rather than its internal profile identifier.
         team_name:
           admissions.length === 1
-            ? `${admissions[0].remote_team_alias} @ ${servers.find((server) => server.id === admissions[0].remote_profile)?.name ?? admissions[0].remote_profile}`
+            ? `${admissions[0].remote_team_alias} @ ${displayServerById(admissions[0].remote_profile)}`
             : party.team_name,
       };
     });

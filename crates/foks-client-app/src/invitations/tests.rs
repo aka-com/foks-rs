@@ -20,6 +20,7 @@ impl Fixture {
         registry
             .add(Profile {
                 name: "local".into(),
+                label: None,
                 probe: format!(
                     "localhost:{}",
                     environment.addresses().unwrap().probe.port()
@@ -275,6 +276,7 @@ fn remote_invitation_reopens_both_profiles_and_admits_with_verified_keys() {
     f.registry
         .add(Profile {
             name: "remote".into(),
+            label: None,
             probe: format!("localhost:{}", remote_env.addresses().unwrap().probe.port()),
             protocol: ProtocolPolicy::V019,
             trust: TrustRoot::CertificateDer { path: root },

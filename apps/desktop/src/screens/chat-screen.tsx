@@ -13,7 +13,7 @@ import type { Bridge } from '../bridge';
 import type { ChatAction, ChatReply } from '../chat-contract';
 import {
   chatAvailable,
-  serverOf,
+  serverName,
   storeAvailability,
   storeDescription,
   storeDescriptionState,
@@ -181,7 +181,7 @@ export function ChatScreen({
         <h2>{store.name} chat is locked</h2>
         <p role="alert">
           {storeDescription(agentSnapshot, store, describeOptions)} on{' '}
-          {serverOf(agentSnapshot, store.id)?.name ?? store.server}.{' '}
+          {serverName(agentSnapshot, store)}.{' '}
           {lapsed
             ? 'Every store on that server is unavailable until the server is checked again. Messages already on this Mac are kept.'
             : 'Messages already on this Mac are kept.'}

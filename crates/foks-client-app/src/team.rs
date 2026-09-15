@@ -2343,6 +2343,7 @@ mod tests {
         registry
             .add(crate::Profile {
                 name: "local".to_owned(),
+                label: None,
                 probe: format!("localhost:{}", addresses.probe.port()),
                 protocol: crate::ProtocolPolicy::V019,
                 trust: crate::TrustRoot::CertificateDer { path: root },
@@ -2410,6 +2411,7 @@ mod tests {
             registry
                 .add(crate::Profile {
                     name: "local".to_owned(),
+                    label: None,
                     probe: format!("localhost:{}", addresses.probe.port()),
                     protocol: crate::ProtocolPolicy::V019,
                     trust: crate::TrustRoot::CertificateDer { path: root },
@@ -2634,6 +2636,7 @@ mod tests {
         registry
             .add(crate::Profile {
                 name: "local".to_owned(),
+                label: None,
                 probe: format!("localhost:{}", addresses.probe.port()),
                 protocol: crate::ProtocolPolicy::V019,
                 trust: crate::TrustRoot::CertificateDer { path: root },

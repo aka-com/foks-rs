@@ -19,6 +19,7 @@ fn scoped_reads_bind_identity_preserve_absent_roots_and_verify_team_and_file_dat
     registry
         .add(Profile {
             name: "local".into(),
+            label: None,
             probe: format!(
                 "localhost:{}",
                 environment.addresses().unwrap().probe.port()

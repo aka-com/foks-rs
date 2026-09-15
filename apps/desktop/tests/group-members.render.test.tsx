@@ -454,7 +454,7 @@ test('each action follows the rows it adds to', async () => {
     [...actions[0].querySelectorAll('button')].map((node) =>
       (node.textContent ?? '').trim(),
     ),
-    ['Add someone on foks.acme-corp.com…', 'Invite someone…'],
+    ['Add someone on Acme…', 'Invite someone…'],
   );
   // Then the admitted groups, then what admits another one.
   const federation = document.querySelector('.rt.fed');

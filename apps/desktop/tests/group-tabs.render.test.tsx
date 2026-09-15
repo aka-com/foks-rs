@@ -115,15 +115,12 @@ function channelRows(): HTMLElement[] {
 }
 
 test('the Channels tab says why a group on a chatless server has none', async () => {
-  // Engineering lives on foks.acme-corp.com, which does not offer chat.
+  // Chat is not enabled for Engineering's server, Acme.
   const rendered = await group('team:eng', 'channels');
   const band = document.querySelector('.band.info');
   assert.ok(band);
   assert.equal(band.querySelector('b')?.textContent, 'No channels here');
-  assert.match(
-    band.textContent ?? '',
-    /foks\.acme-corp\.com does not offer chat/,
-  );
+  assert.match(band.textContent ?? '', /Chat is not enabled on Acme/);
   // Nothing is offered that the server could not take.
   assert.equal(rendered.queryByRole('button', { name: 'Add channel' }), null);
   // The tab itself carries no count, because there is no list to count.
@@ -178,7 +175,7 @@ test('the Channels tab reads the clock afresh, so a lapse closes it', async () =
   assert.equal(band.querySelector('b')?.textContent, 'Check-in expired');
   assert.match(
     band.textContent ?? '',
-    /The signed check-in for foks\.example\.net has expired\./,
+    /The session for Personal server has expired\./,
   );
   assert.equal(rendered.queryByRole('button', { name: 'Add channel' }), null);
 });
@@ -209,7 +206,7 @@ test('a channel list that arrived with a problem keeps its rows', async () => {
 
 test('the Channels tab lists the group’s channels and opens one in Chat', async () => {
   const journal: Location[] = [];
-  // Household lives on foks.example.net, which offers chat.
+  // Household lives on Personal server, which offers chat.
   await group('team:household', 'channels', {
     onNavigate: (to) => journal.push(to),
   });
@@ -334,7 +331,7 @@ test('the add sheet switches between a person and another server’s group', asy
   await ui.act(async () => {
     ui.fireEvent.click(
       rendered.getByRole('button', {
-        name: 'Add someone on foks.acme-corp.com…',
+        name: 'Add someone on Acme…',
       }),
     );
   });
@@ -452,7 +449,7 @@ test('the add sheet clears the agent’s refusal when the username changes', asy
   await ui.act(async () => {
     ui.fireEvent.click(
       rendered.getByRole('button', {
-        name: 'Add someone on foks.acme-corp.com…',
+        name: 'Add someone on Acme…',
       }),
     );
   });
@@ -482,7 +479,7 @@ test('add member dialog rejects usernames already present in roster', async () =
   await ui.act(async () => {
     ui.fireEvent.click(
       rendered.getByRole('button', {
-        name: 'Add someone on foks.acme-corp.com…',
+        name: 'Add someone on Acme…',
       }),
     );
   });
@@ -516,7 +513,7 @@ test('a group whose setup never finished has no tabs, and two ways out', async (
   // takeover cannot describe it differently.
   assert.match(
     band.textContent ?? '',
-    /Homelab was created on foks\.example\.net but its key setup did not finish on this Mac\./,
+    /Homelab was created on Personal server, but key setup is incomplete on this Mac\./,
   );
   assert.equal(band.textContent?.includes('Nothing runs while FOKS'), false);
   assert.ok(rendered.getByRole('button', { name: 'Finish setup' }));

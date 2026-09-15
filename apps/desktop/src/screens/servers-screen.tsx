@@ -33,6 +33,7 @@ import type { Location } from '../location';
 import {
   plural,
   serverAvailability,
+  serverDisplayName,
   shortId,
   storeAttentionState,
   storeDescription,
@@ -56,7 +57,7 @@ interface Props {
   onMutationError: MutationFailureHandler;
 }
 
-type Sheet = 'add' | 'reset' | 'forget' | null;
+type Sheet = 'add' | 'rename' | 'reset' | 'forget' | null;
 
 const expires = (value: number | null): string => {
   if (value === null) return 'No expiration date';
@@ -421,8 +422,19 @@ export function ServersSection({
           setSheet(null);
           setReset(null);
           await onRefresh(
-            `${selected.name} has been reset. Verify the server before reconnecting.`,
+            `${serverDisplayName(selected)} has been reset. Verify the server before reconnecting.`,
           );
+        }}
+        onError={(error) => void onMutationError(error)}
+      />
+    ) : sheet === 'rename' && selected ? (
+      <RenameServerSheet
+        server={selected}
+        bridge={bridge}
+        onClose={() => setSheet(null)}
+        onRenamed={async () => {
+          await onRefresh('Server name updated.');
+          setSheet(null);
         }}
         onError={(error) => void onMutationError(error)}
       />
@@ -434,7 +446,7 @@ export function ServersSection({
         onForgot={async () => {
           setSheet(null);
           onNavigate(servers());
-          await onRefresh(`Removed ${selected.name}`);
+          await onRefresh(`Removed ${serverDisplayName(selected)}`);
         }}
         onError={(error) => void onMutationError(error)}
       />
@@ -453,6 +465,7 @@ export function ServersSection({
           busy={busy}
           onBack={() => onNavigate(servers())}
           onCheck={() => void check(selected)}
+          onRename={() => setSheet('rename')}
           onReset={() => setSheet('reset')}
           onForget={() => setSheet('forget')}
           onCopy={(text) =>
@@ -572,7 +585,7 @@ function ServerRow({
   onCheck: (server: Server) => void;
 }): ReactNode {
   const account = agentSnapshot.accounts.find(
-    (item) => item.server === server.id || item.server === server.name,
+    (item) => item.server === server.id,
   );
   const groups = agentSnapshot.stores
     .filter((store) => store.kind === 'team' && store.server === server.id)
@@ -608,8 +621,8 @@ function ServerRow({
       <ServerMark state={state} />
       <span className="t">
         <b>
-          <span>{server.name}</span>
-          {server.label ? <em>{server.label}</em> : null}
+          <span>{serverDisplayName(server)}</span>
+          {server.label ? <em>{server.name}</em> : null}
         </b>
         <small>
           <StatusLine
@@ -823,6 +836,7 @@ function ServerBody({
   busy,
   onBack,
   onCheck,
+  onRename,
   onReset,
   onForget,
   onCopy,
@@ -838,6 +852,7 @@ function ServerBody({
   busy: boolean;
   onBack: () => void;
   onCheck: () => void;
+  onRename: () => void;
   onReset: () => void;
   onForget: () => void;
   onCopy: (text: string) => void;
@@ -853,17 +868,13 @@ function ServerBody({
       ? server.compatibility.expiresAt
       : (status?.leaseExpiresAt ?? null);
   const account = agentSnapshot.accounts.find(
-    (item) => item.server === server.id || item.server === server.name,
+    (item) => item.server === server.id,
   );
   const groups = agentSnapshot.stores.filter(
     (store): store is TeamStore =>
       store.kind === 'team' && store.server === server.id,
   );
-  const subtitle = server.label
-    ? `${server.label}${account && !locked ? ` · signed in as ${account.username}` : ''}`
-    : account && !locked
-      ? `signed in as ${account.username}`
-      : '';
+  const subtitle = `Profile ${server.id}${account && !locked ? ` · signed in as ${account.username}` : ''}`;
   const hasHost = Boolean(host) && state !== 'unavailable';
 
   return (
@@ -875,10 +886,13 @@ function ServerBody({
       <div className="shead">
         <ServerMark state={state} />
         <span className="t">
-          <b>{server.name}</b>
+          <b>{serverDisplayName(server)}</b>
           <small>{subtitle}</small>
         </span>
         <StatusChip state={state} />
+        <Button size="sm" onClick={onRename}>
+          Rename…
+        </Button>
         <Button
           size="sm"
           icon="again"
@@ -957,7 +971,7 @@ function ServerBody({
             {JSON.stringify(
               {
                 profile: status?.profile ?? server.id,
-                configuredProbe: status?.configuredProbe ?? server.name,
+                configuredProbe: status?.configuredProbe ?? null,
                 host,
                 leaseRequired: status?.leaseRequired ?? null,
                 leaseExpiresAt: expiry,
@@ -1057,7 +1071,10 @@ function ServerBody({
       <SectionLabel>Identity and trust</SectionLabel>
       {hasHost && host ? (
         <Inset className="settings-inset middle">
-          <InsetRow label="Address">{server.name}</InsetRow>
+          <InsetRow label="Profile">{server.id}</InsetRow>
+          <InsetRow label="Address">
+            {status?.configuredProbe ?? 'Status unavailable'}
+          </InsetRow>
           <InsetRow
             label="Host ID"
             action={
@@ -1088,7 +1105,10 @@ function ServerBody({
         </Inset>
       ) : (
         <Inset className="settings-inset middle">
-          <InsetRow label="Address">{server.name}</InsetRow>
+          <InsetRow label="Profile">{server.id}</InsetRow>
+          <InsetRow label="Address">
+            {status?.configuredProbe ?? 'Status unavailable'}
+          </InsetRow>
           <InsetRow label="Host ID">
             <span className="stopped">
               {state === 'unprobed'
@@ -1236,6 +1256,72 @@ function AddServerSheet({
   );
 }
 
+function RenameServerSheet({
+  server,
+  bridge,
+  onClose,
+  onRenamed,
+  onError,
+}: {
+  server: Server;
+  bridge: Bridge;
+  onClose: () => void;
+  onRenamed: () => Promise<void>;
+  onError: (error: unknown) => void;
+}): ReactNode {
+  const [name, setName] = useState(server.label ?? server.name);
+  const [busy, setBusy] = useState(false);
+  const trimmed = name.trim();
+  const valid =
+    !trimmed.includes('\0') &&
+    !trimmed.includes('\n') &&
+    !trimmed.includes('\r') &&
+    new TextEncoder().encode(trimmed).length <= 64;
+  return (
+    <SheetFrame
+      title="Rename server"
+      subtitle="This only changes how the server is named in this app."
+      onClose={onClose}
+      footer={
+        <>
+          <Button disabled={busy} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            disabled={!valid || busy}
+            onClick={() => {
+              const label =
+                trimmed === '' || trimmed === server.name ? null : trimmed;
+              setBusy(true);
+              void bridge
+                .setServerLabel(server.id, label)
+                .then((response) => {
+                  if (
+                    response.profile !== server.id ||
+                    response.label !== label
+                  )
+                    throw new Error(
+                      'set_server_label returned a different server label.',
+                    );
+                  return onRenamed();
+                })
+                .catch(onError)
+                .finally(() => setBusy(false));
+            }}
+          >
+            Save
+          </Button>
+        </>
+      }
+    >
+      <Inset>
+        <Field label="Display name" value={name} onChange={setName} />
+      </Inset>
+    </SheetFrame>
+  );
+}
+
 function ResetSheet({
   server,
   preview,
@@ -1267,7 +1353,7 @@ function ResetSheet({
   }, [preview?.token]);
   return (
     <SheetFrame
-      title={`Erase local credentials for ${server.name}?`}
+      title={`Erase local credentials for ${serverDisplayName(server)}?`}
       subtitle="Delete local account keys and reset server trust on this device"
       onClose={() => {
         if (busy) return;
@@ -1408,7 +1494,7 @@ function ForgetSheet({
   const [busy, setBusy] = useState(false);
   return (
     <SheetFrame
-      title={`Remove local data for ${server.name}?`}
+      title={`Remove local data for ${serverDisplayName(server)}?`}
       subtitle="Remove all local keys and stored data for this server"
       onClose={onClose}
       danger

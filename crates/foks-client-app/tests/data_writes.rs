@@ -25,6 +25,7 @@ fn adapter_writes_are_bound_durable_and_never_replayed() {
     registry
         .add(Profile {
             name: "local".into(),
+            label: None,
             probe: format!(
                 "localhost:{}",
                 environment.addresses().unwrap().probe.port()
