@@ -131,6 +131,13 @@ export function ChannelInfoPanel({
       {channel && (
         <section>
           <h3>Alerts on this device</h3>
+          <Button
+            onClick={() =>
+              onNavigate({ kind: 'settings', section: 'notifications' })
+            }
+          >
+            Device notification settings
+          </Button>
           <NotificationSettings
             storeId={store.id}
             scope={scope}

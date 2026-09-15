@@ -1200,32 +1200,22 @@ test('opening chat from a populated shell establishes history ownership before c
   assert.equal(ui.screen.queryByText('Conversation closed.'), null);
 });
 
-test('denied notification permission restores retryable settings without enabling alerts', async () => {
-  let configurations = 0;
-  await setup((base) => ({
-    ...base,
-    chatLocal: async (action) => {
-      if (action.action === 'configure') {
-        configurations++;
-        throw new Error('Permission denied for test');
-      }
-      return {
-        epoch: 'aa'.repeat(16),
-        available: true,
-        settings: { enabled: false, previews: false, overrides: {} },
-      };
-    },
-  }));
-  // The alert controls live in the channel info panel now.
+test('channel info keeps channel overrides and links to device notification settings', async () => {
+  const destinations: unknown[] = [];
+  await setup(undefined, true, (location) => destinations.push(location));
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Channel info' }));
-  const enable = ui.screen.getByRole('checkbox', {
-    name: 'Enable desktop alerts on this device',
-  });
-  ui.fireEvent.click(enable);
-  await ui.screen.findByText('Permission denied for test');
-  await ui.waitFor(() =>
-    assert.equal((enable as HTMLInputElement).disabled, false),
+  assert.equal(
+    ui.screen.queryByRole('checkbox', {
+      name: 'Enable desktop alerts on this device',
+    }),
+    null,
   );
-  assert.equal((enable as HTMLInputElement).checked, false);
-  assert.equal(configurations, 1);
+  await ui.screen.findByLabelText('Channel alerts');
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', { name: 'Device notification settings' }),
+  );
+  assert.deepEqual(destinations.at(-1), {
+    kind: 'settings',
+    section: 'notifications',
+  });
 });

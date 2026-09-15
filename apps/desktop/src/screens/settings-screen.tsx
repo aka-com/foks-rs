@@ -37,6 +37,7 @@ import type { AccountStore, AgentSnapshot } from '../model';
 import { PageHeader } from '../shell/page-header';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { agentLifecycleLabel, type AgentLifecycle } from '../agent-lifecycle';
+import { NotificationSettings } from '../chat/notification-provider';
 import { ServersSection } from './servers-screen';
 import { AccountMark, AccountSwitcher } from './account-switcher';
 import { UnavailableAccount } from './people-screen';
@@ -167,6 +168,7 @@ export function SettingsScreen({
     servers: useRef<HTMLDivElement>(null),
     credentials: useRef<HTMLDivElement>(null),
     about: useRef<HTMLDivElement>(null),
+    notifications: useRef<HTMLDivElement>(null),
   } satisfies Record<SettingsSection, unknown>;
   const requestedSection = location.section;
   const openProfile = location.profile;
@@ -393,6 +395,17 @@ export function SettingsScreen({
                 </InsetRow>
               </Inset>
             )}
+          </div>
+          <div
+            ref={anchors.notifications}
+            role="region"
+            aria-labelledby="settings-notifications-label"
+            tabIndex={-1}
+          >
+            <SectionLabel id="settings-notifications-label">
+              Notifications
+            </SectionLabel>
+            <NotificationSettings />
           </div>
           <AboutSection
             snapshot={snapshot}

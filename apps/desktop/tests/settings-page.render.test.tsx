@@ -83,29 +83,37 @@ async function renderSettings(
   )) as typeof import('../kit/overlay-primitives');
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
+  const { ChatInboxProvider } = await vite.ssrLoadModule(
+    '/src/chat/inbox-provider.tsx',
+  );
+  const bridge = decorate(mockBridge(snapshot));
   const rendered = ui.render(
-    createElement(OverlayProvider, {
-      backgroundRef: { current: null },
-      portalRoot,
-      children: createElement(ToastProvider, {
-        controller: new ToastController(),
-        children: createElement(SettingsScreen, {
-          snapshot,
-          bridge: decorate(mockBridge(snapshot)),
-          location: { kind: 'settings', ...where },
-          scene,
-          onNavigate,
-          onRefresh,
-          onRefreshSnapshot: async () => snapshot,
-          onError: (error: unknown) => {
-            throw error;
-          },
-          onMutationError: async (error: unknown) => {
-            onMutationError(error);
-          },
-          onLock: async () => true,
-          agentLifecycle: { state: 'ready' },
-          onRetryAgent: async () => {},
+    createElement(ChatInboxProvider, {
+      bridge,
+      snapshot,
+      children: createElement(OverlayProvider, {
+        backgroundRef: { current: null },
+        portalRoot,
+        children: createElement(ToastProvider, {
+          controller: new ToastController(),
+          children: createElement(SettingsScreen, {
+            snapshot,
+            bridge,
+            location: { kind: 'settings', ...where },
+            scene,
+            onNavigate,
+            onRefresh,
+            onRefreshSnapshot: async () => snapshot,
+            onError: (error: unknown) => {
+              throw error;
+            },
+            onMutationError: async (error: unknown) => {
+              onMutationError(error);
+            },
+            onLock: async () => true,
+            agentLifecycle: { state: 'ready' },
+            onRetryAgent: async () => {},
+          }),
         }),
       }),
     }),
@@ -564,4 +572,38 @@ test('a reset that fails part way reloads every preview', async () => {
   // The run stopped where it failed and said so; it did not report success.
   assert.equal(reported.length, 1);
   assert.equal(attempts, 2);
+});
+
+test('device notification preferences are reachable without a channel and recover denied permission', async () => {
+  let configurations = 0;
+  const rendered = await renderSettings(await fixture(), {
+    where: { section: 'notifications' },
+    decorate: (base) => ({
+      ...base,
+      chatLocal: async (action) => {
+        if (action.action === 'configure') {
+          configurations++;
+          throw new Error('Permission denied for test');
+        }
+        return {
+          epoch: 'aa'.repeat(16),
+          available: true,
+          settings: { enabled: false, previews: false, overrides: {} },
+        };
+      },
+    }),
+  });
+  assert.equal(
+    document.activeElement,
+    rendered.getByRole('region', { name: 'Notifications' }),
+  );
+  const enable = rendered.getByRole('checkbox', {
+    name: 'Enable desktop alerts on this device',
+  }) as HTMLInputElement;
+  ui.fireEvent.click(enable);
+  await rendered.findByText('Permission denied for test');
+  await ui.waitFor(() => assert.equal(enable.disabled, false));
+  assert.equal(enable.checked, false);
+  assert.equal(configurations, 1);
+  assert.equal(rendered.queryByLabelText('Channel alerts'), null);
 });

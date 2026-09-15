@@ -17,7 +17,8 @@ import type { LeaseState, StoreRef } from './model/types';
  * hides the rest. `credentials` is the Account section: the passphrase and
  * card credentials People and Devices send the reader here for.
  */
-export type SettingsSection = 'servers' | 'about' | 'credentials';
+export type SettingsSection =
+  'servers' | 'about' | 'credentials' | 'notifications';
 
 /** Which pane of the Devices tab is open. */
 export type DevicesSection = 'macs' | 'keys';
@@ -495,6 +496,7 @@ export function encodeLocation(location: Location): {
 }
 
 const SETTINGS_SECTIONS: readonly SettingsSection[] = [
+  'notifications',
   'servers',
   'about',
   'credentials',

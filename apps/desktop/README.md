@@ -494,11 +494,10 @@ and socket, Lock now), This Mac (export, import, verify online, move the data
 folder) and a danger zone whose Reset this Mac runs the per-server reset once
 per profile, each with its own one-use preview token and typed profile name;
 the sheet states a token lifetime only once every server has reported one, and
-names the servers, not the profile ids, when they differ. The redesign's
-Notifications section is not built: the app stores no notification
-preferences — the agent delivers chat notifications and the snapshot's
-notifications are derived warnings — so the three switches the mock drew would
-be controls over nothing. A server's own page
+names the servers, not the profile ids, when they differ. Notifications holds this device's desktop-alert and message-preview preferences,
+which the desktop persists locally. Channel overrides stay in Chat's info panel,
+with a link to Settings; none of these preferences sync between devices.
+A server's own page
 carries a Check in its header, and the band a never-checked or lapsed server
 draws offers the same check beside the reason. Under the check-in rows, one
 disclosure — Inspect last check response — holds the whole diagnostic

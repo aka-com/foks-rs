@@ -174,7 +174,7 @@ export function NotificationSettings({
   scope,
   channel,
 }: {
-  storeId: string;
+  storeId?: string;
   scope?: ChatScope;
   channel?: string;
 }) {
@@ -200,29 +200,39 @@ export function NotificationSettings({
       ) : !session.available ? (
         <p>Desktop alerts are unavailable in this runtime.</p>
       ) : null}
-      <label>
-        <input
-          type="checkbox"
-          disabled={!session?.available}
-          checked={session?.settings.enabled ?? false}
-          onChange={(e) =>
-            void configure({ action: 'configure', enabled: e.target.checked })
-          }
-        />
-        Enable desktop alerts on this device
-      </label>
-      <label>
-        <input
-          type="checkbox"
-          disabled={!session?.available || !session.settings.enabled}
-          checked={session?.settings.previews ?? false}
-          onChange={(e) =>
-            void configure({ action: 'configure', previews: e.target.checked })
-          }
-        />
-        Include message previews
-      </label>
-      {scope && channel && key && (
+      {!storeId && (
+        <>
+          <label>
+            <input
+              type="checkbox"
+              disabled={!session?.available}
+              checked={session?.settings.enabled ?? false}
+              onChange={(e) =>
+                void configure({
+                  action: 'configure',
+                  enabled: e.target.checked,
+                })
+              }
+            />
+            Enable desktop alerts on this device
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              disabled={!session?.available || !session.settings.enabled}
+              checked={session?.settings.previews ?? false}
+              onChange={(e) =>
+                void configure({
+                  action: 'configure',
+                  previews: e.target.checked,
+                })
+              }
+            />
+            Include message previews
+          </label>
+        </>
+      )}
+      {storeId && scope && channel && key && (
         <label>
           Channel alerts
           <select
