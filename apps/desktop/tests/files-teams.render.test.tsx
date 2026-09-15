@@ -183,10 +183,11 @@ test('a Teams row in an abnormal state carries the same chip, and opens group se
   const homelab = row('Homelab');
   assert.ok(homelab.className.split(' ').includes('off'));
   assert.equal(stateChip(homelab), 'Setup incomplete');
-  // The caption is the server alone while the chip says what is wrong.
+  // The caption says what the object is and where it lives; the chip beside
+  // it says what is wrong.
   assert.equal(
     homelab.querySelector('.name small')?.textContent,
-    'foks.example.net',
+    'Ad-hoc share · foks.example.net',
   );
 
   const eng = row('Engineering');
@@ -205,11 +206,12 @@ test('a Teams row in an abnormal state carries the same chip, and opens group se
 test('a Teams row says the server, the roster summary and your role', async () => {
   await teams();
   const eng = row('Engineering');
-  // One account per server on this Mac, so the server alone says which
-  // account holds the group.
+  // One account per server on this Mac, so the kind and the server say all
+  // the caption has to; the account is named only where two hold accounts on
+  // the same server.
   assert.equal(
     eng.querySelector('.name small')?.textContent,
-    'foks.acme-corp.com',
+    'Named group · foks.acme-corp.com',
   );
   // The roster the group's own details call loaded on refresh, split the way
   // the group page splits it: people, machines and admitted groups.

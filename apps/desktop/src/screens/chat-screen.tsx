@@ -1,20 +1,14 @@
 import { ChatThread } from '../chat/chat-thread';
 import { PendingRow } from '../chat/pending-row';
-import { channelTitle, listChannels, partyNames } from '../chat/presentation';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ReactNode, Ref } from 'react';
 import {
-  Band,
-  Button,
-  Icon,
-  Inset,
-  InsetRow,
-  Notice,
-  RadioCard,
-  RadioGroup,
-  SectionLabel,
-  SheetDialog,
-} from '../components';
+  channelTitle,
+  listChannels,
+  openChannel,
+  partyNames,
+} from '../chat/presentation';
+import { useCallback, useState } from 'react';
+import type { ReactNode, Ref } from 'react';
+import { Band, Button, Icon, Notice, SectionLabel } from '../components';
 import type { Bridge } from '../bridge';
 import type { ChatAction, ChatReply } from '../chat-contract';
 import {
@@ -25,9 +19,8 @@ import {
   storeDescriptionState,
   storeOf,
 } from '../model';
-import type { AgentSnapshot, StoreRef } from '../model';
+import type { AgentSnapshot, AvailabilityOptions, StoreRef } from '../model';
 import type { Location } from '../location';
-import { failure, preparationCanChange, submissionId } from '../chat/actions';
 import { useChatConversation } from '../chat/use-chat-conversation';
 import { chatTeams } from './chat-teams';
 import './chat.css';
@@ -44,27 +37,30 @@ export function ChatScreen({
   location,
   onNavigate,
   accessNow = systemAccessNow,
+  accessOptions,
   accessGeneration = 0,
   infoOpen = false,
   onToggleInfo,
   infoRef,
-  creating = false,
-  onCreating,
+  onNewChat,
+  onSearch,
 }: {
   snapshot: AgentSnapshot;
   bridge: Bridge;
   location: Extract<Location, { kind: 'chat' }> & { ref: StoreRef };
   onNavigate: (location: Location) => void;
   accessNow?: () => number;
+  accessOptions?: AvailabilityOptions;
   accessGeneration?: number;
   /** The tab owns the info panel, because it owns the layout it sits in. */
   infoOpen?: boolean;
   onToggleInfo?: () => void;
   /** The ⓘ toggle, so the tab can hand focus back when the panel closes. */
   infoRef?: Ref<HTMLButtonElement>;
-  /** The new-channel sheet, opened from here or from the column's `+`. */
-  creating?: boolean;
-  onCreating?: (open: boolean) => void;
+  /** Opens the tab's New chat sheet on this team. */
+  onNewChat?: () => void;
+  /** Moves to the column's search field, the only search chat has. */
+  onSearch?: () => void;
 }): ReactNode {
   const store = storeOf(agentSnapshot, location.ref);
   const access = useCallback(
@@ -82,6 +78,7 @@ export function ChatScreen({
     syncError,
     degraded,
     loading,
+    resyncing,
     blocked,
     blockedChannels,
     channelRevisions,
@@ -100,11 +97,10 @@ export function ChatScreen({
     access,
     accessGeneration,
   );
-  const [created, setCreated] = useState<string | null>(null);
   const listed = listChannels(channels, conversations);
-  const channel =
-    listed.find(({ channel }) => channel.id === location.channel)?.channel ??
-    (!location.channel ? listed[0]?.channel : undefined);
+  // The tab's column resolves the current row the same way, through the same
+  // helper, so the row drawn as current is the channel this pane mounted.
+  const channel = openChannel(listed, location.channel);
   const activeConversation = conversations.find(
     (conversation) => conversation.channel.id === channel?.id,
   );
@@ -135,16 +131,12 @@ export function ChatScreen({
       accessAvailable() ? markRead(channelId, sequence) : Promise.resolve(),
     [accessAvailable, markRead],
   );
-  useEffect(() => {
-    if (!created || !storeId) return;
-    if (!channels.some((channel) => channel.id === created)) return;
-    setCreated(null);
-    onNavigate({ kind: 'chat', ref: storeId, channel: created });
-  }, [channels, created, onNavigate, storeId]);
-  const available = accessAvailable();
+  const describeOptions = accessOptions ?? { nowSeconds: accessNow() };
+  const available = store
+    ? storeAvailability(agentSnapshot, store, describeOptions).available
+    : false;
   // The reason the locked pane states is read off the clock the lock decision
   // used, so the two cannot disagree about a check-in that expired this second.
-  const describeOptions = { nowSeconds: accessNow() };
   const team =
     store &&
     store.kind === 'team' &&
@@ -152,8 +144,10 @@ export function ChatScreen({
     store.active !== false
       ? store
       : undefined;
-  const openCreate = () => onCreating?.(true);
   const empty = !loading && !listed.length && !error;
+  // Whether this conversation has carried saved work since it was opened, so
+  // the section can say it was accounted for rather than simply vanishing.
+  const [recovered, setRecovered] = useState(false);
   const unfinished = pending.filter(
     (op) =>
       !op.observed &&
@@ -161,6 +155,7 @@ export function ChatScreen({
         op.channel !== channel?.id ||
         !channel?.readable),
   );
+  if (unfinished.length > 0 && !recovered) setRecovered(true);
   // Only a team that can actually be opened is worth offering: `chatTeams`
   // filters on the server's capability, not on whether it answers today.
   const elsewhere = chatTeams(agentSnapshot).find(
@@ -288,6 +283,7 @@ export function ChatScreen({
             channel={channel}
             teamName={team.name}
             onFiles={() => onNavigate({ kind: 'store', ref: team.id })}
+            onSearch={onSearch}
             onInfo={onToggleInfo}
             infoOpen={infoOpen}
             infoRef={infoRef}
@@ -309,7 +305,12 @@ export function ChatScreen({
                 op.channel === channel.id,
             )}
           />
-        ) : loading ? (
+        ) : // A channel the location names that this team does not list yet is
+        // not an unavailable channel while the team is being synchronized
+        // again: a channel created in this window is exactly that, and saying
+        // it is unavailable a moment after creating it is the pane calling the
+        // reader's own work missing.
+        loading || (location.channel && resyncing) ? (
           <div className="empty" aria-busy="true">
             <p>Loading {team.name}…</p>
           </div>
@@ -334,8 +335,8 @@ export function ChatScreen({
               Create the first channel for {team.name}. Every member with the
               right role can join in.
             </p>
-            {empty && (
-              <Button variant="primary" icon="plus" onClick={openCreate}>
+            {empty && onNewChat && (
+              <Button variant="primary" icon="plus" onClick={onNewChat}>
                 New channel
               </Button>
             )}
@@ -345,12 +346,12 @@ export function ChatScreen({
     );
   return (
     <>
-      {unfinished.length > 0 && (
+      {unfinished.length > 0 ? (
         <section className="chat-recovery" aria-label="Needs attention">
           <SectionLabel>Needs attention</SectionLabel>
           <p className="chat-quiet">
-            Saved work that has not finished. Nothing here is sent twice without
-            your say-so.
+            Saved work that has not finished. Nothing here is sent again unless
+            you ask.
           </p>
           {unfinished.map((op) => (
             <PendingRow
@@ -362,194 +363,19 @@ export function ChatScreen({
             />
           ))}
         </section>
+      ) : (
+        // What was saved here and then accounted for is worth saying once: the
+        // section it sat in leaving without a word reads as work gone missing.
+        recovered && (
+          <section className="chat-recovery caught-up" aria-label="Saved work">
+            <p className="chat-quiet" role="status">
+              <Icon name="check" size={13} /> All caught up. Everything saved on
+              this Mac has been accounted for.
+            </p>
+          </section>
+        )
       )}
       {pane}
-      {creating && (
-        <ChannelCreateSheet
-          team={team?.name ?? ''}
-          request={guardedRequest}
-          onClose={() => onCreating?.(false)}
-          onCreated={async (channelId) => {
-            setCreated(channelId);
-            await guardedRefresh();
-          }}
-        />
-      )}
     </>
-  );
-}
-
-function ChannelCreateSheet({
-  team,
-  request,
-  onClose,
-  onCreated,
-}: {
-  /** The open team; a channel can only be created in the team that is open. */
-  team: string;
-  request: (a: ChatAction) => Promise<ChatReply>;
-  onClose: () => void;
-  onCreated: (channelId: string) => Promise<void>;
-}): ReactNode {
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [admin, setAdmin] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const submission = useRef<ChatAction | null>(null);
-  const sending = useRef(false);
-  const alive = useRef(true);
-  useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
-      submission.current = null;
-    };
-  }, []);
-  const locked = busy || submission.current !== null;
-  const create = async () => {
-    if (sending.current) return;
-    sending.current = true;
-    setBusy(true);
-    setError('');
-    submission.current ??= {
-      action: 'prepare-channel',
-      submission: submissionId(),
-      name,
-      description,
-      admin,
-    };
-    let preparedId: string | null = null;
-    try {
-      const prepared = await request(submission.current);
-      if (!alive.current) return;
-      if (prepared.result.kind !== 'operation')
-        throw new Error('Invalid channel preparation.');
-      const op = prepared.result.operation;
-      preparedId = op.id;
-      submission.current = null;
-      setName('');
-      setDescription('');
-      const attempted = await request({ action: 'attempt', operation: op.id });
-      if (!alive.current) return;
-      const channelId =
-        attempted.result.kind === 'operation'
-          ? attempted.result.operation.channel
-          : op.channel;
-      await onCreated(channelId);
-      if (alive.current) onClose();
-    } catch (e) {
-      if (alive.current) {
-        if (submission.current && preparationCanChange(e))
-          submission.current = null;
-        setError(failure(e));
-        if (preparedId) {
-          try {
-            await request({ action: 'status', operation: preparedId });
-          } catch {
-            /* Keep the durable identity visible if status is unavailable. */
-          }
-        }
-      }
-    } finally {
-      sending.current = false;
-      if (alive.current) setBusy(false);
-    }
-  };
-  return (
-    <SheetDialog
-      title="New channel"
-      onClose={onClose}
-      dismissible={!locked}
-      footer={
-        <>
-          <Button disabled={locked} onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            variant="primary"
-            disabled={busy}
-            onClick={() => void create()}
-          >
-            {busy
-              ? 'Creating…'
-              : submission.current
-                ? 'Recover preparation'
-                : 'Create channel'}
-          </Button>
-        </>
-      }
-    >
-      <form
-        className="chat-create"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void create();
-        }}
-      >
-        {team && <p className="hint">This channel is created in {team}.</p>}
-        <Inset>
-          <InsetRow label="Channel name">
-            <input
-              aria-label="Channel name"
-              data-sheet-autofocus="true"
-              value={name}
-              disabled={locked}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="design"
-              maxLength={32}
-            />
-            <small>
-              3–32 characters, lowercased automatically. The one exception is an
-              empty name, which creates the team&apos;s general channel.
-            </small>
-          </InsetRow>
-          <InsetRow label="Description">
-            <textarea
-              aria-label="Channel description"
-              value={description}
-              disabled={locked}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="What this channel is for"
-              maxLength={1024}
-            />
-            <small>
-              Optional, 3–512 characters. Descriptions are lowercased
-              automatically.
-            </small>
-          </InsetRow>
-        </Inset>
-        <SectionLabel>Who can take part</SectionLabel>
-        <Inset>
-          <RadioGroup label="Channel audience">
-            <RadioCard
-              title="Everyone on the team"
-              detail="Members and above can read and write."
-              selected={!admin}
-              disabled={locked}
-              onSelect={() => setAdmin(false)}
-            />
-            <RadioCard
-              title="Admins and owners"
-              detail="Hidden from members. Only admins and owners can read or write."
-              selected={admin}
-              disabled={locked}
-              onSelect={() => setAdmin(true)}
-            />
-          </RadioGroup>
-        </Inset>
-        {submission.current && !busy && (
-          <p className="hint">
-            The server reply was lost. Recover retries the same request so the
-            channel is not created twice.
-          </p>
-        )}
-        {error && (
-          <p role="alert" className="action-error">
-            {error}
-          </p>
-        )}
-      </form>
-    </SheetDialog>
   );
 }

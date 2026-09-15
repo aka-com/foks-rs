@@ -21,6 +21,7 @@ import {
   Toggle,
 } from '../components';
 import {
+  accountSubtitle,
   actionableGroupMember,
   catalog,
   canCreateInStore,
@@ -60,7 +61,6 @@ import type { RoleDto } from '../bridge';
 import type { GroupSettingsTab, Location } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { PageHeader } from '../shell/page-header';
-import { accountSubtitle } from './settings-screen';
 import { StoreAccessTakeover } from './store-access';
 import { useToast } from '/kit/toasts';
 

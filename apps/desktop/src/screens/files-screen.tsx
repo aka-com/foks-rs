@@ -10,6 +10,7 @@
 import type { ReactNode } from 'react';
 import { Chip, Icon, SectionLabel } from '../components';
 import {
+  storeAttentionState,
   storeDescription,
   storeDescriptionState,
   storeHues,
@@ -40,8 +41,12 @@ function StoreRow({
 }): ReactNode {
   const description = storeDescription(snapshot, store);
   // An abnormal state is a chip at the end of the row, never a caption: the
-  // caption says what the store is, the chip says what is wrong with it.
-  const state = storeDescriptionState(snapshot, store);
+  // caption says what the store is, the chip says what is wrong with it. A
+  // roster the agent could not read is one of those states, and only
+  // `storeAttentionState` knows it; the store itself is still reachable, so
+  // the row is not dimmed for it.
+  const abnormal = storeAttentionState(snapshot, store) !== 'normal';
+  const available = storeDescriptionState(snapshot, store) === 'normal';
   const kindWord =
     store.kind === 'account'
       ? 'Vault'
@@ -49,13 +54,11 @@ function StoreRow({
         ? 'Share'
         : 'Group';
   const caption =
-    state === 'normal' && description
-      ? `${kindWord} · ${description}`
-      : kindWord;
+    !abnormal && description ? `${kindWord} · ${description}` : kindWord;
   return (
     <button
       type="button"
-      className={state === 'normal' ? 'row' : 'row off'}
+      className={available ? 'row' : 'row off'}
       title={description || undefined}
       onClick={onOpen}
     >
@@ -75,7 +78,7 @@ function StoreRow({
         <small>{caption}</small>
       </span>
       <span className="tail">
-        {state === 'normal' ? null : <Chip tone="warn">{description}</Chip>}
+        {abnormal ? <Chip tone="warn">{description}</Chip> : null}
       </span>
     </button>
   );

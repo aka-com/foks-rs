@@ -203,6 +203,8 @@ const ROUND_TRIP: Location[] = [
   { kind: 'devices' },
   { kind: 'devices', section: 'macs' },
   { kind: 'devices', section: 'keys', store: 'acct:work' },
+  { kind: 'devices', store: 'acct:personal', device: '04a779c40674' },
+  { kind: 'devices', store: 'acct:personal', device: 'yubi:primary key' },
   { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
   { kind: 'group-settings', ref: 'team:eng', tab: 'settings' },
   { kind: 'settings', section: 'servers' },
@@ -299,10 +301,63 @@ test('the sections that became tabs keep their deep links', () => {
     decodeLocation('?state=devices&section=phrase&store=acct:work'),
     { kind: 'devices', section: 'macs', store: 'acct:work' },
   );
+  // One key's own page is an address of its own: the key id for a Mac or a
+  // paper key, and `yubi:<alias>` for an enrollment the agent names by alias.
+  assert.deepEqual(
+    decodeLocation('?state=devices&store=acct:personal&device=04a779c40674'),
+    { kind: 'devices', store: 'acct:personal', device: '04a779c40674' },
+  );
+  // The Devices names written before the page was one carry it too.
+  assert.deepEqual(
+    decodeLocation('?state=settings-macs-work&device=yubi:work key'),
+    {
+      kind: 'devices',
+      section: 'macs',
+      store: 'acct:work',
+      device: 'yubi:work key',
+    },
+  );
+  // A device is not a Settings address: `device=` is cleared with the rest.
+  assert.equal(
+    new URL(
+      locationHref('http://localhost/?state=devices&device=04a7', {
+        kind: 'settings',
+        section: 'about',
+      }),
+    ).searchParams.get('device'),
+    null,
+  );
   // The panes Settings kept are unchanged.
   assert.deepEqual(decodeLocation('?state=settings&section=servers'), {
     kind: 'settings',
     section: 'servers',
+  });
+  // `credentials` is the Account section People and Devices link into, and it
+  // carries the account those pages were addressed at.
+  assert.deepEqual(decodeLocation('?state=settings&section=credentials'), {
+    kind: 'settings',
+    section: 'credentials',
+  });
+  assert.deepEqual(
+    decodeLocation('?state=settings&section=credentials&store=acct:work'),
+    { kind: 'settings', section: 'credentials', store: 'acct:work' },
+  );
+  // `profile` belongs to the Servers section alone, so it is dropped here.
+  assert.deepEqual(
+    decodeLocation('?state=settings&section=credentials&profile=acme'),
+    { kind: 'settings', section: 'credentials' },
+  );
+  // Written back out, that address is the same address.
+  for (const location of [
+    { kind: 'settings', section: 'credentials' },
+    { kind: 'settings', section: 'credentials', store: 'acct:work' },
+  ] as const) {
+    const href = locationHref('http://localhost/?state=all', location);
+    assert.deepEqual(decodeLocation(new URL(href).search), location, href);
+  }
+  // Accounts became People, and the address says so.
+  assert.deepEqual(decodeLocation('?state=settings&section=account'), {
+    kind: 'people',
   });
 });
 
@@ -338,7 +393,9 @@ test('the aliases for retired pages point at the tabs that replaced them', () =>
     ref: 'team:eng',
   });
   assert.deepEqual(
-    decodeLocation(`?state=team-chat&store=team:eng&channel=${'ab'.repeat(16)}`),
+    decodeLocation(
+      `?state=team-chat&store=team:eng&channel=${'ab'.repeat(16)}`,
+    ),
     { kind: 'chat', ref: 'team:eng', channel: 'ab'.repeat(16) },
   );
   // A team-chat link with no team named no place at all.

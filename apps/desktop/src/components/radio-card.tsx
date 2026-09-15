@@ -1,6 +1,8 @@
 /** Accessible card-styled radio button and radio group components. */
 
 import type { ReactNode } from 'react';
+import { Icon } from './icon';
+import type { FoksIconName } from '../icons';
 
 export interface RadioGroupProps {
   /** What is being chosen, for the screen reader. */
@@ -31,6 +33,8 @@ export interface RadioCardProps {
   /** Supporting text under the label. */
   detail?: ReactNode;
   selected: boolean;
+  /** A glyph before the title, saying what kind of thing the card is. */
+  icon?: FoksIconName;
   onSelect?: () => void;
   disabled?: boolean;
   /** Dimmed and inert — the design's `.radio.off`. */
@@ -45,6 +49,7 @@ export function RadioCard({
   title,
   detail,
   selected,
+  icon,
   onSelect,
   disabled = false,
   off = false,
@@ -69,6 +74,11 @@ export function RadioCard({
       onClick={onSelect}
     >
       <span className="rb" />
+      {icon ? (
+        <span className="rico" aria-hidden="true">
+          <Icon name={icon} />
+        </span>
+      ) : null}
       <span className="t">
         <b>{title}</b>
         {detail === undefined ? null : <small>{detail}</small>}

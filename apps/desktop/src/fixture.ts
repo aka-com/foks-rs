@@ -406,7 +406,20 @@ const RAW: AgentSnapshot = {
     },
   ],
   yubiAccounts: [
-    { alias: 'primary key', server: 'personal', serial: 20993145 },
+    {
+      alias: 'primary key',
+      server: 'personal',
+      serial: 20993145,
+      state: 'complete',
+    },
+    // An enrollment the agent never finished: the work account's key list is
+    // one row with the Incomplete chip and a revoke that cannot run.
+    {
+      alias: 'work key',
+      server: 'acme',
+      serial: 20993146,
+      state: 'pending',
+    },
   ],
   cardsConnected: [{ serial: 20993145 }],
   notifications: [

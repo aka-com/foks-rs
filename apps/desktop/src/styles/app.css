@@ -208,13 +208,13 @@ body {
 }
 
 .tab .n {
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--muted);
   background: var(--chip-bg);
   border-radius: var(--radius-pill);
   padding: 0 6px;
-  line-height: 17px;
+  line-height: 18px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -686,7 +686,8 @@ body {
   flex: none;
   border: 1px solid var(--line-field);
   border-radius: 50%;
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 1;
 }
 
 .setup-step.done .setup-mark,
@@ -1371,8 +1372,8 @@ body {
 
 .facts .k {
   color: var(--faint);
-  font-size: 10.5px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -1648,7 +1649,6 @@ body {
 }
 
 @media (max-width: 900px) {
-  .choices.c3,
   .local-other-protection {
     grid-template-columns: 1fr;
   }
@@ -2013,11 +2013,4 @@ body {
 
 .panel-body > details.dd > .inset {
   margin-top: 6px;
-}
-
-/* ---------- account picker ----------
-   A full-width card select naming the account a settings section applies to:
-   the alias over a caption of the identity and server behind it. */
-.settings-main > .account-picker {
-  margin: 2px 0 4px;
 }

@@ -11,8 +11,13 @@ import type { LeaseState, StoreRef } from './model/types';
 
 /* ------------------------------------------------------------- location -- */
 
-/** Which pane of the Settings tab is open. */
-export type SettingsSection = 'servers' | 'about';
+/**
+ * Which section of the Settings page an address points at. Settings is one
+ * scrolling page now, so a section is where the page opens, not a pane that
+ * hides the rest. `credentials` is the Account section: the passphrase and
+ * card credentials People and Devices send the reader here for.
+ */
+export type SettingsSection = 'servers' | 'about' | 'credentials';
 
 /** Which pane of the Devices tab is open. */
 export type DevicesSection = 'macs' | 'keys';
@@ -45,7 +50,17 @@ export type Location =
    * names the account the create and discovery rows act as.
    */
   | { kind: 'teams'; store?: StoreRef }
-  | { kind: 'devices'; section?: DevicesSection; store?: StoreRef }
+  /**
+   * Devices. `device` is one row's own page: the key id of a Mac or a paper
+   * key, or `yubi:<alias>` for a security-key enrollment, which the agent
+   * names by alias and not by an id.
+   */
+  | {
+      kind: 'devices';
+      section?: DevicesSection;
+      store?: StoreRef;
+      device?: string;
+    }
   /**
    * `profile` names the server the Servers section is open on; it means
    * nothing on any other section and is dropped when moving between them.
@@ -170,7 +185,9 @@ export function sameLocation(a: Location, b: Location): boolean {
   if (a.kind === 'people' && b.kind === 'people') return a.store === b.store;
   if (a.kind === 'teams' && b.kind === 'teams') return a.store === b.store;
   if (a.kind === 'devices' && b.kind === 'devices')
-    return a.section === b.section && a.store === b.store;
+    return (
+      a.section === b.section && a.store === b.store && a.device === b.device
+    );
   if (a.kind === 'settings' && b.kind === 'settings')
     return (
       a.section === b.section && a.store === b.store && a.profile === b.profile
@@ -365,6 +382,7 @@ const CLEARED_PARAMS: Readonly<Record<string, string | null>> = {
   tab: null,
   account: null,
   channel: null,
+  device: null,
 };
 
 /** The `?state=` value and extra parameters a location deep-links as. */
@@ -413,6 +431,7 @@ export function encodeLocation(location: Location): {
           ...CLEARED_PARAMS,
           store: location.store ?? null,
           section: location.section ?? null,
+          device: location.device ?? null,
         },
       };
     case 'settings':
@@ -442,7 +461,11 @@ export function encodeLocation(location: Location): {
   }
 }
 
-const SETTINGS_SECTIONS: readonly SettingsSection[] = ['servers', 'about'];
+const SETTINGS_SECTIONS: readonly SettingsSection[] = [
+  'servers',
+  'about',
+  'credentials',
+];
 const DEVICES_SECTIONS: readonly DevicesSection[] = ['macs', 'keys'];
 
 /**
@@ -540,6 +563,7 @@ export function decodeLocation(search: string): Location | null {
   if (state === 'devices') {
     const section = params.get('section');
     const store = params.get('store') ?? undefined;
+    const device = params.get('device') ?? undefined;
     const resolved =
       section && (DEVICES_SECTIONS as readonly string[]).includes(section)
         ? (section as DevicesSection)
@@ -550,6 +574,7 @@ export function decodeLocation(search: string): Location | null {
       kind: 'devices',
       ...(resolved ? { section: resolved } : {}),
       ...(store ? { store } : {}),
+      ...(device ? { device } : {}),
     };
   }
   if (state === 'settings') {
@@ -641,7 +666,13 @@ export function decodeLocation(search: string): Location | null {
     alias?.kind === 'teams'
   ) {
     const store = params.get('store') ?? alias.store;
-    return { ...alias, ...(store ? { store } : {}) };
+    // A device's own page is addressable under the old Devices names too.
+    const device = alias.kind === 'devices' ? params.get('device') : null;
+    return {
+      ...alias,
+      ...(store ? { store } : {}),
+      ...(device ? { device } : {}),
+    };
   }
   return alias ?? null;
 }

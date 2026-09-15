@@ -1,5 +1,6 @@
 /* Tab including team column, the conversation, and info panel. */
 .chat-screen {
+  position: relative;
   display: grid;
   grid-template-columns: 272px minmax(0, 1fr);
   min-width: 0;
@@ -31,6 +32,9 @@
   flex: 1;
   min-width: 0;
 }
+.chat-inbox-top .btn.primary {
+  flex: none;
+}
 .chat-inbox-scroll {
   flex: 1;
   min-height: 0;
@@ -53,23 +57,12 @@
   padding: 22px 16px;
   text-align: center;
 }
-/* The heading is a button; the team's own buttons are its siblings, so the
-   keyboard reaches each of them. */
-.chat-team {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-}
-.chat-team > .chat-channel-list,
-.chat-team > .chat-loadrow {
-  grid-column: 1 / -1;
-}
-.chat-team-head {
+.chat-conv {
   display: flex;
   align-items: center;
   gap: 9px;
   width: 100%;
-  padding: 6px 8px 6px 12px;
+  padding: 6px 12px;
   border: 0;
   background: none;
   font: inherit;
@@ -77,31 +70,81 @@
   text-align: left;
   cursor: pointer;
 }
-.chat-team-head:hover {
+.chat-conv:hover {
   background: var(--hover);
 }
+.chat-conv:focus-visible,
 .chat-team-head:focus-visible {
   outline: 2px solid var(--accent-border);
   outline-offset: -2px;
 }
-/* The open team's heading row is washed end to end, buttons included, so the
-   wash sits on the row and the channels below it keep the column's surface. */
-.chat-team.open {
-  background: var(--accent-wash);
+.chat-conv.on {
+  background: var(--accent);
+  color: var(--main-surface);
 }
-.chat-team.open > .chat-channel-list,
-.chat-team.open > .chat-loadrow {
-  background: var(--surface);
+.chat-conv .t {
+  flex: 1;
+  min-width: 0;
 }
-.chat-team-head.open {
-  box-shadow: inset 3px 0 0 var(--accent);
+.chat-conv .t b {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-conv.unread .t b {
+  font-weight: 700;
+}
+.chat-conv .t small,
+.chat-conv .when {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-conv .t small.chat-row-note,
+.chat-team-head .t small.chat-row-note {
+  font-size: 12px;
+  color: var(--faint);
+}
+.chat-conv.on .t small.chat-row-note {
+  color: var(--main-surface);
+  opacity: 0.85;
+}
+.chat-conv .when {
+  flex: none;
+  align-self: flex-start;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.chat-conv.on .t small,
+.chat-conv.on .when {
+  color: var(--main-surface);
+}
+.chat-conv.on .chat-unread {
+  background: var(--main-surface);
+  color: var(--accent-ink);
+}
+/* Team with multiple channels. Channels are indented under the heading. */
+.chat-team-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 8px 2px 12px;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
 }
 .chat-team-head.off {
-  cursor: default;
+  padding: 6px 8px 6px 12px;
   opacity: 0.55;
-}
-.chat-team-head.off:hover {
-  background: transparent;
 }
 .chat-team-head .t {
   flex: 1;
@@ -115,33 +158,26 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.chat-team-head.open .t b {
-  font-weight: 700;
-}
 .chat-team-head .t small {
   display: block;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.chat-team > .btn.icon {
+.chat-team-head .btn.icon {
   width: 24px;
   height: 24px;
-  margin-right: 4px;
   flex: none;
   border: 0;
   box-shadow: none;
   background: transparent;
   color: var(--muted);
 }
-.chat-team > .btn.icon:hover {
+.chat-team-head .btn.icon:hover {
   background: var(--btn-hover);
   color: var(--ink);
-}
-.chat-loadrow {
-  padding-left: 47px;
 }
 .chat-nochat-label {
   border-top: 1px solid var(--line-soft);
@@ -157,24 +193,21 @@
 .chat-status .band small {
   display: block;
   margin-top: 2px;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--muted);
 }
 .chat-channel-list {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding: 2px 0 8px;
-}
-.chat-channel-list .chat-quiet {
-  padding-left: 47px;
+  padding: 0 0 6px;
 }
 .chat-channel {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 4px 12px 4px 47px;
+  padding: 4px 12px 4px 43px;
   border: 0;
   background: none;
   font: inherit;
@@ -190,12 +223,9 @@
   background: var(--accent);
   color: var(--main-surface);
 }
+/* Unreachable team channels. */
 .chat-channel.off {
   opacity: 0.45;
-  cursor: default;
-}
-.chat-channel.off:hover {
-  background: none;
 }
 .chat-channel .t {
   flex: 1;
@@ -218,11 +248,17 @@
 }
 .chat-channel small {
   display: block;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* A hidden conversation keeps its channel in the column and says it is hidden
+   (`presentation.ts`); it is drawn dimmed so the caption and the look agree. */
+.chat-conv.hidden .t,
+.chat-channel.hidden .t {
+  opacity: 0.6;
 }
 .chat-channel .lock {
   flex: none;
@@ -243,9 +279,9 @@
   text-align: center;
   color: var(--main-surface);
   background: var(--unread);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
-  line-height: 18px;
+  line-height: 19px;
   font-variant-numeric: tabular-nums;
 }
 .chat-unread.muted {
@@ -274,6 +310,17 @@
 .chat-recovery .sec {
   margin: 0 0 2px;
 }
+.chat-recovery.caught-up {
+  padding: 6px 20px;
+  background: var(--ok-wash);
+}
+.chat-recovery.caught-up .chat-quiet {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  color: var(--ok-ink);
+}
 .chat-pending {
   display: grid;
   gap: 5px;
@@ -289,11 +336,11 @@
   color: var(--ink);
 }
 .chat-pending small {
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--muted);
 }
 .chat-pending small span {
-  font: 11px var(--mono);
+  font: 12px var(--mono);
 }
 .chat-pending p {
   margin: 0;
@@ -434,8 +481,8 @@
 }
 .chat-info h3 {
   margin: 0 0 6px;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
@@ -448,7 +495,7 @@
   padding: 0;
 }
 .chat-info-where {
-  font: 11px var(--mono);
+  font: 12px var(--mono);
   color: var(--muted);
 }
 .chat-info-members {
@@ -478,7 +525,7 @@
   border-radius: var(--radius-pill);
   background: var(--chip-bg);
   color: var(--chip-ink);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
 }
 .chat-info section .btn {
@@ -518,7 +565,7 @@
 .chat-info-foot {
   margin: 0;
   padding: 10px 14px;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--muted);
 }
 .chat-conversation > .band {
@@ -562,22 +609,33 @@
   flex: 1;
   min-width: 0;
 }
+/* Channel name header. Keep broader width and avoid collapsing. */
 .chat-thread-title h2 {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  overflow: hidden;
   font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.01em;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .chat-thread-title h2 .team {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--muted);
   font-weight: 600;
 }
 .chat-thread-title h2 .sep {
+  flex: none;
   color: var(--muted);
   font-weight: 400;
   white-space: pre;
+}
+.chat-thread-title h2 .chan {
+  flex: none;
 }
 .chat-thread-title p {
   margin: 2px 0 0;
@@ -623,7 +681,7 @@
   padding: 4px 0 12px;
 }
 .chat-history-edge small {
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--faint);
 }
 .chat-messages-empty {
@@ -652,7 +710,7 @@
 }
 .chat-message header time {
   flex: none;
-  font: 11px var(--mono);
+  font: 12px var(--mono);
   color: var(--faint);
 }
 .chat-message p {
@@ -671,8 +729,8 @@
   align-items: center;
   gap: 8px;
   margin: 2px 0 14px;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--accent-ink);
@@ -728,10 +786,40 @@
   gap: 10px;
   margin-top: 8px;
 }
+/* Dimmed, inert controls for agents. */
+.chat-composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+.chat-composer-tools .btn.icon {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  color: var(--faint);
+}
+.chat-composer-tools .btn.icon[aria-disabled='true'] {
+  opacity: 1;
+  cursor: default;
+}
+.chat-mdhint {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--faint);
+}
+.chat-mdhint .mono {
+  font: 12px var(--mono);
+}
 .chat-composer-row small {
   flex: 1;
   min-width: 0;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--muted);
 }
 .chat-composer-row .chat-meter {
@@ -752,27 +840,103 @@
   border-color: var(--accent);
   outline-offset: 0;
 }
+/* New chat's team and channel picks: the group's own mark rides in the row's
+   first line, so a team is recognized by the mark it carries everywhere. */
+.chat-pick .radio b {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .chat-create .inset + .sec {
   margin-top: 14px;
+}
+.chat-create .radios + .inset {
+  margin-top: 12px;
 }
 .chat-create .fr .v small {
   font-size: 12px;
 }
-/* What runs out of room is the space the tab has, not the window: the rail
-   takes its share first, so at the 960px minimum window the pane would be
-   ~196px wide with the info panel open. `.main` is an inline-size container
-   (`shell.css`), so the columns narrow when the conversation would. */
-@container (max-width: 900px) {
+/* The name and description are one kind of control — a bordered field that
+   fills the value column — with the label on the field's first line and the
+   hint under it. A length outside the limits is said by the border alone. */
+.chat-create .inset .fr {
+  align-items: flex-start;
+  padding: 9px 12px;
+}
+.chat-create .inset .fr .k {
+  padding-top: 7px;
+}
+.chat-create .inset .fr .v {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.chat-create .inset .fr input,
+.chat-create .inset .fr textarea {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--line-field);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: 6px 10px;
+  font-size: 13px;
+  line-height: 1.4;
+  outline: 0;
+  resize: none;
+  color: var(--ink);
+}
+.chat-create .inset .fr input:focus,
+.chat-create .inset .fr textarea:focus {
+  border-color: var(--accent-border);
+  background: var(--main-surface);
+  box-shadow: 0 0 0 3px var(--accent-wash);
+}
+.chat-create .inset .fr input.over,
+.chat-create .inset .fr textarea.over {
+  border-color: var(--danger-border);
+}
+.chat-create .inset .fr input.over:focus,
+.chat-create .inset .fr textarea.over:focus {
+  box-shadow: 0 0 0 3px var(--danger-wash);
+}
+.chat-create .inset .fr input:disabled,
+.chat-create .inset .fr textarea:disabled {
+  opacity: 0.6;
+}
+.chat-create .inset .fr .v small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+.chat-create .inset .fr .v small.action-error {
+  color: var(--danger-ink);
+}
+@container (max-width: 1000px) {
   .chat-screen.with-info {
-    grid-template-columns: 220px minmax(0, 1fr) 260px;
+    grid-template-columns: 272px minmax(0, 1fr);
+  }
+  /* Cover the conversation completely so the panel does not obscure only part
+     of each message and the header controls.. */
+  .chat-screen.with-info .chat-info {
+    position: absolute;
+    inset: 0 0 0 272px;
+    width: auto;
+    z-index: 2;
+    box-shadow: var(--shadow-menu);
+  }
+}
+@container (max-width: 900px) {
+  .chat-screen,
+  .chat-screen.with-info {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+  .chat-screen.with-info .chat-info {
+    inset-inline-start: 220px;
   }
 }
 @media (max-width: 860px) {
-  .chat-screen {
-    grid-template-columns: 220px minmax(0, 1fr);
-  }
+  .chat-screen,
   .chat-screen.with-info {
-    grid-template-columns: 220px minmax(0, 1fr) 260px;
+    grid-template-columns: 220px minmax(0, 1fr);
   }
   .chat-thread-header,
   .chat-messages,

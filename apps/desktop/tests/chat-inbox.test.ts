@@ -337,6 +337,36 @@ test('finite admission serves excess accounts and releases more than the view li
   assert.equal(active.size, 0);
 });
 
+test('eligibility follows the service clock, not the wall clock', async () => {
+  const f = fixture();
+  await f.clock.advance(500);
+  assert.deepEqual(new Set(f.syncs), new Set(['t0', 't1']));
+  // The server's check-in expires two seconds into the service's clock, which
+  // stands at half a second. Nothing the wall clock says takes a team away.
+  const expiresAt = 2;
+  const lapsing = {
+    ...f.snapshot,
+    servers: f.snapshot.servers.map((server) => ({
+      ...server,
+      compatibility: { status: 'required' as const, expiresAt },
+    })),
+  };
+  f.service.updateStores(lapsing);
+  await f.clock.advance(100);
+  assert.deepEqual(
+    [...f.service.getSnapshot().keys()].sort(),
+    ['t0', 't1'],
+    'a check-in still current on the service clock keeps both teams',
+  );
+  // Past the expiry on that same clock the teams are no longer kept: the Chat
+  // tab decides reachability on the shell's clock and would otherwise wait for
+  // entries that never arrive.
+  await f.clock.advance(3000);
+  f.service.updateStores(lapsing);
+  assert.equal(f.service.getSnapshot().size, 0);
+  f.service.stop();
+});
+
 test('access-denied canonical team hands polling to an accessible sibling', async () => {
   const f = fixture();
   f.denied.add('t0');

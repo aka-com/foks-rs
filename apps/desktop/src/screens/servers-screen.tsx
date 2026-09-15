@@ -30,9 +30,18 @@ import {
   Toggle,
 } from '../components';
 import type { Location } from '../location';
-import { hue, initials, plural, serverAvailability, shortId } from '../model';
+import {
+  plural,
+  serverAvailability,
+  shortId,
+  storeAttentionState,
+  storeDescription,
+  teamCaption,
+} from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
-import type { Server, TeamStore, AgentSnapshot } from '../model';
+import type { Server, StoreRef, TeamStore, AgentSnapshot } from '../model';
+import { AccountMark } from './account-switcher';
+import { GroupMark } from './groups-screen';
 
 interface Props {
   snapshot: AgentSnapshot;
@@ -453,6 +462,7 @@ export function ServersSection({
               .catch(onError)
           }
           onOpenGroup={(store) => onNavigate({ kind: 'store', ref: store.id })}
+          onOpenAccount={(store) => onNavigate({ kind: 'people', store })}
         />
       ) : (
         <ServerList
@@ -576,10 +586,12 @@ function ServerRow({
       action={
         <>
           <StatusChip state={state} />
-          {state === 'unprobed' ? (
+          {/* A never-checked server and a lapsed one are equally stuck, and
+              the command is the same one, so both rows offer it. */}
+          {state === 'unprobed' || state === 'lapsed' ? (
             <Button
               size="sm"
-              variant="primary"
+              variant={state === 'unprobed' ? 'primary' : 'plain'}
               icon="again"
               disabled={busy}
               onClick={() => onCheck(server)}
@@ -636,9 +648,13 @@ function ServerList({
         : (snapshot?.leaseExpiresAt ?? null);
     return { server, state, expiry };
   });
-  // Servers requiring user attention are displayed at the top of the list.
-  const attention = rows.filter((row) => isLocked(row.state));
-  const ready = rows.filter((row) => !isLocked(row.state));
+  // Servers requiring user attention are displayed at the top of the list. A
+  // server that has never been checked is one of them: nothing on it can be
+  // used until it is, so Ready would be a false claim about it.
+  const needsAttention = (row: (typeof rows)[number]): boolean =>
+    isLocked(row.state) || row.state === 'unprobed';
+  const attention = rows.filter(needsAttention);
+  const ready = rows.filter((row) => !needsAttention(row));
   const box = (entries: typeof rows): ReactNode => (
     <Inset className="settings-inset middle">
       {entries.map(({ server, state, expiry }) => (
@@ -759,23 +775,9 @@ function StatusBand({
     );
   if (state === 'unavailable')
     return (
-      <Band
-        severity="crit"
-        label="Check-in status unknown."
-        action={
-          <Button
-            size="sm"
-            variant="primary"
-            icon="again"
-            disabled={busy}
-            onClick={onCheck}
-          >
-            Check now
-          </Button>
-        }
-      >
+      <Band severity="crit" label="Check-in status unknown.">
         Cannot verify the status of this server. This server is locked until a
-        usable status is available.
+        usable status is available. Check it from the header above.
       </Band>
     );
   if (state === 'blocked')
@@ -802,43 +804,12 @@ function StatusBand({
     );
   if (state === 'import-verification')
     return (
-      <Band
-        severity="crit"
-        label="Imported profile needs verification."
-        action={
-          <Button
-            size="sm"
-            variant="primary"
-            icon="again"
-            disabled={busy}
-            onClick={onCheck}
-          >
-            Check now
-          </Button>
-        }
-      >
-        Verify this imported profile online before accessing its vaults.
+      <Band severity="crit" label="Imported profile needs verification">
+        Verify this imported profile online before accessing its vaults. Use the
+        Check button in the header to verify the profile.
       </Band>
     );
   return null;
-}
-
-/** A named group on this server, as a chip that opens it. */
-function GroupChip({
-  store,
-  onOpen,
-}: {
-  store: TeamStore;
-  onOpen: () => void;
-}): ReactNode {
-  return (
-    <button type="button" className="gchip" onClick={onOpen}>
-      <span className="av team" style={{ background: hue(store.name) }}>
-        {initials(store.name)}
-      </span>
-      {store.name}
-    </button>
-  );
 }
 
 function ServerBody({
@@ -855,6 +826,7 @@ function ServerBody({
   onForget,
   onCopy,
   onOpenGroup,
+  onOpenAccount,
 }: {
   snapshot: AgentSnapshot;
   server: Server;
@@ -869,6 +841,8 @@ function ServerBody({
   onForget: () => void;
   onCopy: (text: string) => void;
   onOpenGroup: (store: TeamStore) => void;
+  /** The account on this server, on People, where an account is managed. */
+  onOpenAccount: (store: StoreRef) => void;
 }): ReactNode {
   const state = resolveServerUiState(agentSnapshot, server);
   const locked = isLocked(state);
@@ -884,7 +858,6 @@ function ServerBody({
     (store): store is TeamStore =>
       store.kind === 'team' && store.server === server.id,
   );
-  const named = groups.filter((store) => store.team_kind === 'named');
   const subtitle = server.label
     ? `${server.label}${account && !locked ? ` · signed in as ${account.username}` : ''}`
     : account && !locked
@@ -905,6 +878,19 @@ function ServerBody({
           <small>{subtitle}</small>
         </span>
         <StatusChip state={state} />
+        <Button
+          size="sm"
+          icon="again"
+          disabled={busy || blocked}
+          title={
+            blocked
+              ? 'This server is blocked until its identity is reset'
+              : undefined
+          }
+          onClick={onCheck}
+        >
+          Check
+        </Button>
       </div>
       <StatusBand
         state={state}
@@ -923,19 +909,9 @@ function ServerBody({
       <Inset className="settings-inset middle">
         {state === 'checked' ? (
           <>
-            <InsetRow
-              label="Status"
-              action={
-                <Button
-                  size="sm"
-                  icon="again"
-                  disabled={busy}
-                  onClick={onCheck}
-                >
-                  Check
-                </Button>
-              }
-            >
+            {/* The header carries the one Check this page offers; a checked
+                server's status row states the fact and nothing else. */}
+            <InsetRow label="Status">
               {checked
                 ? 'Last checked: now. Trust history unchanged.'
                 : 'Identity pinned on this Mac.'}
@@ -968,95 +944,147 @@ function ServerBody({
         )}
       </Inset>
 
-      <SectionLabel>On this server</SectionLabel>
-      <Inset className="settings-inset">
-        <InsetRow label="You">
-          {locked ? (
+      {/* The whole response, behind one disclosure, directly under the
+          check-in it is the record of. */}
+      {hasHost && host ? (
+        <Toggle
+          label="Inspect last check response"
+          open={rollback || undefined}
+          disabled={rollback}
+        >
+          <pre>
+            {JSON.stringify(
+              {
+                profile: status?.profile ?? server.id,
+                configuredProbe: status?.configuredProbe ?? server.name,
+                host,
+                leaseRequired: status?.leaseRequired ?? null,
+                leaseExpiresAt: expiry,
+              },
+              null,
+              2,
+            )}
+          </pre>
+        </Toggle>
+      ) : null}
+
+      {/* What stops if this server lapses: the account held on it, and the
+          groups that live there. */}
+      <SectionLabel>Accounts on this server</SectionLabel>
+      <Inset className="settings-inset middle wide">
+        {locked ? (
+          <InsetRow label="You">
             <span className="stopped">Hidden while locked</span>
-          ) : account ? (
-            <>
-              <b>{account.username}</b>
-              <small>Local alias: {account.alias}</small>
-            </>
-          ) : (
-            <>
-              No account on this server<small>Read-only access available</small>
-            </>
-          )}
-        </InsetRow>
-        <InsetRow label="Groups">
-          {locked ? (
+          </InsetRow>
+        ) : account ? (
+          <InsetRow
+            className="devrow"
+            action={
+              <Button size="sm" onClick={() => onOpenAccount(account.store)}>
+                People
+              </Button>
+            }
+          >
+            <AccountMark name={account.username} />
+            <span className="t">
+              <span className="namechip">
+                <b>{account.username}</b> <Chip>{account.alias}</Chip>
+              </span>
+              <small>
+                Your account on this server. The local alias is never sent to
+                it.
+              </small>
+            </span>
+          </InsetRow>
+        ) : (
+          <InsetRow label="You">
+            No account on this server<small>Read-only access available</small>
+          </InsetRow>
+        )}
+      </Inset>
+
+      <SectionLabel>Teams on this server</SectionLabel>
+      <Inset className="settings-inset middle wide">
+        {locked ? (
+          <InsetRow label="Teams">
             <span className="stopped">
               {groups.length
                 ? `${groups.map((store) => store.name).join(', ')} — locked`
                 : 'Hidden while locked'}
             </span>
-          ) : named.length ? (
-            <span className="gchips">
-              {named.map((store) => (
-                <GroupChip
-                  key={store.id}
-                  store={store}
-                  onOpen={() => onOpenGroup(store)}
-                />
-              ))}
-            </span>
-          ) : (
-            'No groups configured'
-          )}
-        </InsetRow>
+          </InsetRow>
+        ) : groups.length ? (
+          groups.map((store) => {
+            const description = storeDescription(agentSnapshot, store);
+            const abnormal =
+              storeAttentionState(agentSnapshot, store) !== 'normal';
+            return (
+              <InsetRow
+                key={store.id}
+                className="devrow"
+                action={
+                  <>
+                    {abnormal ? <Chip tone="warn">{description}</Chip> : null}
+                    <Button
+                      size="sm"
+                      aria-label={`Open ${store.name}`}
+                      onClick={() => onOpenGroup(store)}
+                    >
+                      Open
+                    </Button>
+                  </>
+                }
+              >
+                <GroupMark store={store} size="sm" />
+                <span className="t">
+                  <b>{store.name}</b>
+                  <small>
+                    {/* This page is already about one server, so the caption
+                        does not repeat it. */}
+                    {teamCaption(agentSnapshot, store, { server: false })}
+                    {abnormal ? '' : ` · ${description}`}
+                  </small>
+                </span>
+              </InsetRow>
+            );
+          })
+        ) : (
+          <InsetRow label="Teams">No groups on this server</InsetRow>
+        )}
       </Inset>
 
-      <SectionLabel>Identity</SectionLabel>
+      <SectionLabel>Identity and trust</SectionLabel>
       {hasHost && host ? (
-        <>
-          <Inset className="settings-inset middle">
-            <InsetRow label="Address">{server.name}</InsetRow>
-            <InsetRow
-              label="Host ID"
-              action={
-                <Button
-                  size="sm"
-                  icon="copy"
-                  disabled={blocked}
-                  onClick={() => onCopy(host.hostId)}
-                >
-                  Copy
-                </Button>
-              }
-            >
-              <span className="hostid" title={host.hostId}>
-                <code>{shortId(host.hostId, 8)}</code>
-              </span>
-              <small>
-                Hover to view the full ID. Click Copy to copy the full value.
-              </small>
-            </InsetRow>
-            <InsetRow label="Audit log">
-              Verified · Checkpoint{' '}
-              {new Date(host.epoch * 1000).toLocaleDateString()}
-            </InsetRow>
-          </Inset>
-          <Toggle
-            label="View diagnostic response"
-            open={rollback || undefined}
-            disabled={rollback}
+        <Inset className="settings-inset middle">
+          <InsetRow label="Address">{server.name}</InsetRow>
+          <InsetRow
+            label="Host ID"
+            action={
+              <Button
+                size="sm"
+                icon="copy"
+                disabled={blocked}
+                onClick={() => onCopy(host.hostId)}
+              >
+                Copy
+              </Button>
+            }
           >
-            <pre>
-              {JSON.stringify(
-                {
-                  profile: status?.profile ?? server.id,
-                  configuredProbe: status?.configuredProbe ?? server.name,
-                  host,
-                  leaseRequired: status?.leaseRequired ?? null,
-                  leaseExpiresAt: expiry,
-                },
-                null,
-                2,
-              )}
-            </pre>
-          </Toggle>
-        </>
+            <span className="hostid" title={host.hostId}>
+              <code>{shortId(host.hostId, 8)}</code>
+            </span>
+            <small>
+              Pinned on this Mac. Hover to view the full ID, or Copy to copy the
+              full value.
+            </small>
+          </InsetRow>
+          {/* `chain` and `epoch` are a length and a checkpoint number, not
+              times: they are reported as the two numbers the agent sends. */}
+          <InsetRow label="Audit log">
+            Verified · {plural(host.chain, 'entry', 'entries')} · checkpoint{' '}
+            {host.epoch}
+          </InsetRow>
+        </Inset>
       ) : (
         <Inset className="settings-inset middle">
           <InsetRow label="Address">{server.name}</InsetRow>
@@ -1072,7 +1100,7 @@ function ServerBody({
         </Inset>
       )}
 
-      <SectionLabel className="danger-title">Manage Server Data</SectionLabel>
+      <SectionLabel className="danger-title">Danger zone</SectionLabel>
       <Inset className="settings-inset middle danger-box">
         <InsetRow
           className="dangerrow"
@@ -1276,9 +1304,9 @@ function ResetSheet({
       <p>
         This permanently deletes local account keys for this server. Server data
         is not deleted, but you can permanently lose access to it without
-        another enrolled device, a saved recovery phrase for an enrolled backup,
-        or a usable external backup of your local state. Your account passphrase
-        alone cannot restore the deleted keys.
+        another enrolled device, a paper key you wrote down, or a usable
+        external backup of your local state. Your account passphrase alone
+        cannot restore the deleted keys.
       </p>
       <Inset>
         <InsetRow label="Removed">
@@ -1290,8 +1318,7 @@ function ResetSheet({
         </InsetRow>
         <InsetRow label="Recovery required">
           Verify the server again and recover or pair an account before using it
-          on this device. Saving a recovery phrase here is not part of this
-          operation.
+          on this device. Saving a paper key here is not part of this operation.
         </InsetRow>
         <InsetRow label="Unaffected">
           Other configured servers and their local data.
@@ -1420,8 +1447,8 @@ function ForgetSheet({
           history, and cached data.
         </InsetRow>
         <InsetRow label="Warning">
-          Accounts without a backup recovery phrase or another paired device
-          cannot be accessed again.
+          Accounts without a paper key or another paired device cannot be
+          accessed again.
         </InsetRow>
         <InsetRow label="Unaffected">
           Other configured servers and their local data.

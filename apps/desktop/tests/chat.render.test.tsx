@@ -95,14 +95,15 @@ async function setup(
               // teams whose conversation is not mounted.
               createElement(ChatTeamColumn, {
                 snapshot: enabledSnapshot,
-                onSelectTeam: (ref: string) => {
-                  const next: Location = { kind: 'chat', ref };
+                onOpen: (ref: string, channel?: string) => {
+                  const next: Location = channel
+                    ? { kind: 'chat', ref, channel }
+                    : { kind: 'chat', ref };
                   onNavigate(next);
                   setLocation(next);
                   setVisible(true);
                 },
-                onOpenChannel: () => {},
-                onNewChannel: () => {},
+                onNewChat: () => {},
                 onSettings: () => {},
                 onCreateTeam: () => {},
               }),
@@ -117,16 +118,27 @@ async function setup(
 /** A team row's unread badge: the count belongs to the row that names the team. */
 async function teamBadge(team: string): Promise<HTMLElement> {
   return ui.waitFor(() => {
-    const badge = [...document.querySelectorAll<HTMLElement>('.chat-team-head')]
+    const badge = [
+      ...document.querySelectorAll<HTMLElement>('.chat-conv, .chat-team-head'),
+    ]
       .find((row) => row.querySelector('b')?.textContent === team)
       ?.querySelector<HTMLElement>('.chat-unread');
     assert.ok(badge, `${team} carries an unread badge`);
     return badge;
   });
 }
-function openChannelSheet() {
+/**
+ * The create-a-channel form, reached the way the tab offers it: New chat, the
+ * team, then Create a channel.
+ */
+async function openChannelSheet() {
+  ui.fireEvent.click(ui.screen.getAllByRole('button', { name: 'New chat' })[0]);
   ui.fireEvent.click(
-    ui.screen.getAllByRole('button', { name: 'New channel' })[0],
+    await ui.screen.findByRole('radio', { name: /^Engineering/ }),
+  );
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Continue' }));
+  ui.fireEvent.click(
+    await ui.screen.findByRole('radio', { name: /Create a channel/ }),
   );
   return ui.screen.getByRole('textbox', { name: 'Channel name' });
 }
@@ -159,6 +171,43 @@ test('composer suppresses IME and repeated Enter, and renders hostile text safel
   assert.equal(document.querySelector('.chat-messages img'), null);
   assert.equal((composer as HTMLTextAreaElement).value, '');
 });
+test('the header search button moves to the column’s search field', async () => {
+  await setup();
+  // The column's field is a search field, so its role is `searchbox`.
+  const field = ui.screen.getByRole('searchbox', {
+    name: 'Search teams and channels',
+  });
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', { name: 'Search teams and channels' }),
+  );
+  // There is no message index, so the header's search is the column's.
+  assert.equal(document.activeElement === field, true);
+});
+
+test('the composer draws what chat cannot do, inert and saying why', async () => {
+  await setup();
+  for (const [label, reason] of [
+    ['Attach a file', /text only/],
+    ['Insert an emoji', /not available yet/],
+    ['Set an exploding timer', /no expiry to set/],
+  ] as const) {
+    const control = ui.screen.getByRole('button', { name: label });
+    // Inert, but reachable: a control whose only content is the reason it
+    // cannot be used has to be focusable to state that reason, so it carries
+    // `aria-disabled` rather than `disabled`.
+    assert.equal(control.getAttribute('aria-disabled'), 'true');
+    assert.equal(control.hasAttribute('disabled'), false);
+    assert.equal(control.getAttribute('tabindex'), '0');
+    assert.match(control.getAttribute('title') ?? '', reason);
+    const described = control.getAttribute('aria-describedby');
+    assert.ok(described, `${label} names its reason`);
+    assert.match(document.getElementById(described)?.textContent ?? '', reason);
+  }
+  // The hint offers only markup the thread actually renders.
+  assert.ok(ui.screen.getByText('**bold**'));
+  assert.equal(ui.screen.queryByText('@user'), null);
+});
+
 test('renders channel descriptions, message times, and bounded inbox previews', async () => {
   await setup();
   await ui.screen.findByText('A place for the whole team.');
@@ -215,16 +264,12 @@ test('conversation inbox wakes, refreshes history, and shows unread state', asyn
     });
     await ui.screen.findByText('Arrived through live sync');
     assert.ok(polls > 0);
-    // The team and the channel each carry the count, and each names only the
-    // count: the row they sit in says which team or channel it belongs to.
+    // Engineering's channels are the general channel alone, so it is one row,
+    // and that row carries the count. The label states the count alone: the row
+    // it sits in says which conversation it belongs to.
     assert.equal(
       (await teamBadge('Engineering')).getAttribute('aria-label'),
       '1 unread',
-    );
-    assert.ok(
-      document
-        .querySelector('.chat-channel')
-        ?.querySelector('.chat-unread[aria-label="1 unread"]'),
     );
   } finally {
     Object.defineProperty(document, 'hasFocus', {
@@ -394,7 +439,7 @@ test('definite preparation errors allow input correction', async () => {
       if (action.action === 'prepare-channel')
         throw {
           code: 'chat-invalid-input',
-          message: 'Use an empty name for general.',
+          message: 'That name is not allowed here.',
           fatal: false,
           retryable: false,
           ambiguous: false,
@@ -402,10 +447,10 @@ test('definite preparation errors allow input correction', async () => {
       return base.chat(store, action);
     },
   }));
-  const name = openChannelSheet();
-  ui.fireEvent.change(name, { target: { value: 'general' } });
+  const name = await openChannelSheet();
+  ui.fireEvent.change(name, { target: { value: 'refused' } });
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create channel' }));
-  await ui.screen.findByText('Use an empty name for general.');
+  await ui.screen.findByText('That name is not allowed here.');
   assert.equal((name as HTMLInputElement).disabled, false);
   ui.fireEvent.change(name, { target: { value: 'valid' } });
   assert.equal((name as HTMLInputElement).value, 'valid');
@@ -437,7 +482,7 @@ test('ambiguous channel preparation keeps its sheet and submission until recover
       return reply;
     },
   }));
-  const name = openChannelSheet();
+  const name = await openChannelSheet();
   ui.fireEvent.change(name, { target: { value: 'recoverable' } });
   const description = ui.screen.getByRole('textbox', {
     name: 'Channel description',
@@ -446,8 +491,9 @@ test('ambiguous channel preparation keeps its sheet and submission until recover
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create channel' }));
   await ui.screen.findByText('Preparation reply lost');
   assert.equal((description as HTMLTextAreaElement).disabled, true);
+  // The sheet cannot be stepped out of while its submission is unresolved.
   assert.equal(
-    ui.screen.getByRole('button', { name: 'Cancel' }).hasAttribute('disabled'),
+    ui.screen.getByRole('button', { name: 'Back' }).hasAttribute('disabled'),
     true,
   );
   ui.fireEvent.keyDown(document, { key: 'Escape' });
@@ -469,7 +515,9 @@ test('team members opens the existing membership workflow in the same window', a
   });
   // Team members moved behind the conversation header's ⓘ, into the panel.
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Channel info' }));
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Team members' }));
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', { name: 'Manage in Teams' }),
+  );
   assert.deepEqual(destination, {
     kind: 'group-settings',
     ref: 'team:eng',
@@ -511,8 +559,9 @@ test('channel creation opens in a sheet, selects the new channel, and needs no m
   const navigations: unknown[] = [];
   await setup(undefined, true, (location) => navigations.push(location));
   assert.equal(ui.screen.queryByRole('dialog'), null);
-  const name = openChannelSheet();
-  assert.equal(document.activeElement, name);
+  const name = await openChannelSheet();
+  // Choosing to create rather than to join puts the caret in the name field.
+  assert.equal(document.activeElement === name, true);
   const audience = ui.screen.getByRole('radiogroup', {
     name: 'Channel audience',
   });

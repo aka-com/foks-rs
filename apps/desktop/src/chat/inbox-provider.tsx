@@ -19,18 +19,32 @@ export function ChatInboxProvider({
   children,
   onNavigate,
   clock,
+  accessNow,
 }: {
   bridge: Bridge;
   snapshot: AgentSnapshot;
   children: ReactNode;
   onNavigate?: (location: Location) => void;
   clock?: ChatClock;
+  /**
+   * The shell's availability clock in seconds. The service decides which teams
+   * it keeps on the same clock the Chat tab decides reachability on, so the two
+   * cannot disagree about a check-in that expired this second.
+   */
+  accessNow?: () => number;
 }) {
   const service = useMemo(
     () => new ChatInboxService(bridge, clock),
     [bridge, clock],
   );
-  useEffect(() => service.updateStores(snapshot), [service, snapshot]);
+  useEffect(
+    () =>
+      service.updateStores(
+        snapshot,
+        accessNow ? { nowSeconds: accessNow() } : {},
+      ),
+    [service, snapshot, accessNow],
+  );
   useEffect(() => {
     service.start();
     return () => service.stop();

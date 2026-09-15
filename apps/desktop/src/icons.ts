@@ -18,6 +18,11 @@ export const FOKS_ICONS = {
     ['rect', { x: 3, y: 5, width: 18, height: 14, rx: 2 }],
     ['path', { d: 'M7 9l3 3-3 3M12 15h5' }],
   ],
+  /* A Mac in a device list, as distinct from a terminal. */
+  laptop: [
+    ['rect', { x: 3, y: 5, width: 18, height: 11, rx: 2 }],
+    ['path', { d: 'M2 19h20' }],
+  ],
   file: [
     [
       'path',
@@ -181,6 +186,23 @@ export const FOKS_ICONS = {
       'path',
       { d: 'M20 14a2 2 0 0 1-2 2H9l-4 3.5V6a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2z' },
     ],
+  ],
+  /* The composer's three controls the agent has no action for. */
+  attach: [
+    [
+      'path',
+      {
+        d: 'M20 11.5 12 19.5a4.5 4.5 0 0 1-6.4-6.4l8-8a3 3 0 0 1 4.3 4.3l-8 8a1.5 1.5 0 0 1-2.2-2.2l7.3-7.3',
+      },
+    ],
+  ],
+  smile: [
+    ['circle', { cx: 12, cy: 12, r: 9 }],
+    ['path', { d: 'M8.5 14.5a4.5 4.5 0 0 0 7 0M9 9.5v.5M15 9.5v.5' }],
+  ],
+  timer: [
+    ['circle', { cx: 12, cy: 13, r: 8 }],
+    ['path', { d: 'M12 9v4l2.5 2M9 2h6' }],
   ],
   /* Sidebar collapse toggle, expanded state. */
   'panel-filled': [

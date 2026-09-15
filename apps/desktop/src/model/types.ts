@@ -210,6 +210,8 @@ export interface YubiAccount {
   alias: string;
   server: string;
   serial: number;
+  /** As `list_yubi_accounts` reports it: an enrollment may be unfinished. */
+  state: 'pending' | 'complete';
 }
 
 export interface Card {

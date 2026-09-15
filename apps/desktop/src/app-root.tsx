@@ -67,11 +67,11 @@ import {
   storedSidePinnedPref,
 } from './sidebar-prefs';
 import { PeopleScreen } from './screens/people-screen';
+import { DevicesScreen } from './screens/devices-screen';
 import { DetailsPanel } from './screens/details-panel';
 import { ItemsScreen } from './screens/items-screen';
 import type { DropUpload } from './screens/items-screen';
 import { ChatTab } from './screens/chat-tab';
-import { firstChatTeam } from './screens/chat-teams';
 import { FilesScreen } from './screens/files-screen';
 import { TeamsScreen } from './screens/teams-screen';
 import { GroupSettingsScreen } from './screens/groups-screen';
@@ -703,6 +703,9 @@ function VaultShell({
       ? ''
       : (new URLSearchParams(window.location.search).get('state') ?? ''),
   );
+  // Scenes trigger only on initial navigation. Conceal events remount tabs to
+  // clear sensitive inputs, so tabs must not re-trigger scene dialogs.
+  const enteredScene = concealSignal === 0 ? namedState : '';
 
   const fixtureFirstRunBoot = Boolean(
     bridge.firstRunFixture &&
@@ -1202,7 +1205,7 @@ function VaultShell({
   const settingsProps = {
     snapshot: shown,
     bridge,
-    scene: namedState,
+    scene: enteredScene,
     onNavigate: (location: Location) => locations.navigate(location),
     onRefresh: refresh,
     onRefreshSnapshot: refreshSnapshot,
@@ -1254,14 +1257,10 @@ function VaultShell({
       bridge={bridge}
       location={here}
       accessNow={accessNow}
-      // The generation belongs to the server of the team the tab opens, which
-      // with no `ref` is the team the tab falls back to.
-      accessGeneration={
-        accessGenerations.get(
-          storeOf(shown, here.ref ?? firstChatTeam(shown)?.id ?? '')?.server ??
-            '',
-        ) ?? 0
-      }
+      // The generation belongs to the server of the team the tab opens, and
+      // with no `ref` the tab is the only thing that knows which team that is,
+      // so it is handed the whole map and picks from the `ref` it resolved.
+      accessGenerations={accessGenerations}
       onNavigate={(location) => locations.navigate(location)}
     />
   ) : here.kind === 'group-settings' ? (
@@ -1281,10 +1280,18 @@ function VaultShell({
       onNavigate={(location) => locations.navigate(location)}
     />
   ) : here.kind === 'people' ? (
+    // People owns its own sheets and shares no state with Settings, so it is
+    // given exactly the props it declares.
     <PeopleScreen
       key={`people:${concealSignal}`}
-      {...settingsProps}
+      snapshot={shown}
+      bridge={bridge}
       location={here}
+      onNavigate={(location) => locations.navigate(location)}
+      onRefresh={refresh}
+      onRefreshSnapshot={refreshSnapshot}
+      onError={commandError}
+      onMutationError={mutationError}
     />
   ) : here.kind === 'teams' ? (
     // Teams shares no state with Settings, so it is given exactly the props it
@@ -1302,17 +1309,22 @@ function VaultShell({
       onMutationError={mutationError}
     />
   ) : here.kind === 'devices' ? (
-    <SettingsScreen
+    <DevicesScreen
       key={`devices:${concealSignal}`}
-      {...settingsProps}
-      variant="devices"
+      snapshot={shown}
+      bridge={bridge}
       location={here}
+      scene={enteredScene}
+      onNavigate={(location) => locations.navigate(location)}
+      onRefresh={refresh}
+      onRefreshSnapshot={refreshSnapshot}
+      onError={commandError}
+      onMutationError={mutationError}
     />
   ) : here.kind === 'settings' ? (
     <SettingsScreen
       key={`settings:${concealSignal}`}
       {...settingsProps}
-      variant="settings"
       location={here}
     />
   ) : (
@@ -1536,6 +1548,7 @@ function VaultShell({
         snapshot={shown}
         onNavigate={navigateFromNotification}
         clock={chatClock}
+        accessNow={accessNow}
       >
         {shell}
       </ChatInboxProvider>

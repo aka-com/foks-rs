@@ -2,6 +2,18 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { decodeChatReply, sequence } from '../src/chat-contract';
 import {
+  CHAT_DESCRIPTION_MAX_CHARS,
+  CHAT_DESCRIPTION_MIN_CHARS,
+  CHAT_NAME_MAX_CHARS,
+  CHAT_NAME_MIN_CHARS,
+} from '../src/chat-limits';
+import {
+  channelDescriptionProblem,
+  channelNameProblem,
+  normalizeChannelDescription,
+  normalizeChannelName,
+} from '../src/chat/presentation';
+import {
   decodeLocation,
   encodeLocation,
   transition,
@@ -264,4 +276,54 @@ test('notification history accepts only bounded snippets and retains history sco
   assert.equal(decodeChatReply(reply, storeId, action).result.kind, 'history');
   reply.result.messages[0].content.text += 'x';
   assert.throws(() => decodeChatReply(reply, storeId, action));
+});
+
+test('the channel name and description bands are the ones the agent admits', () => {
+  // The numbers are not typed twice: they are the shared policy the Rust build
+  // compiles its constants from, and `foks-agent` asserts those against
+  // `ChatLimits`, which is what the client actually admits a channel on.
+  assert.equal(CHAT_NAME_MIN_CHARS, 3);
+  assert.equal(CHAT_NAME_MAX_CHARS, 32);
+  assert.equal(CHAT_DESCRIPTION_MIN_CHARS, 3);
+  assert.equal(CHAT_DESCRIPTION_MAX_CHARS, 512);
+  assert.equal(channelNameProblem('a'.repeat(CHAT_NAME_MAX_CHARS)), null);
+  assert.equal(
+    channelNameProblem('a'.repeat(CHAT_NAME_MAX_CHARS + 1)),
+    `Channel names are at most ${CHAT_NAME_MAX_CHARS} characters.`,
+  );
+  assert.equal(
+    channelNameProblem('a'.repeat(CHAT_NAME_MIN_CHARS - 1)),
+    `Channel names are at least ${CHAT_NAME_MIN_CHARS} characters.`,
+  );
+  assert.equal(
+    channelDescriptionProblem('x'.repeat(CHAT_DESCRIPTION_MAX_CHARS)),
+    null,
+  );
+  assert.equal(
+    channelDescriptionProblem('x'.repeat(CHAT_DESCRIPTION_MAX_CHARS + 1)),
+    `Descriptions are at most ${CHAT_DESCRIPTION_MAX_CHARS} characters.`,
+  );
+  assert.equal(
+    channelDescriptionProblem('xx'),
+    `Descriptions must be at least ${CHAT_DESCRIPTION_MIN_CHARS} characters or empty.`,
+  );
+  assert.equal(channelDescriptionProblem(''), null);
+});
+
+test('lowercasing follows the agent, which keeps one scalar per character', () => {
+  // The agent lowercases per character and keeps the first scalar of the
+  // mapping, so a name at the bound stays at the bound. JavaScript's own
+  // `toLowerCase()` expands "İ" into two scalars, which would count a name of
+  // 32 characters as 33 and refuse a name the agent takes.
+  assert.equal(normalizeChannelName('İ'), 'i');
+  assert.equal([...normalizeChannelName('İ'.repeat(32))].length, 32);
+  assert.equal(channelNameProblem('İ'.repeat(CHAT_NAME_MAX_CHARS)), null);
+  assert.equal([...normalizeChannelDescription('İ'.repeat(512))].length, 512);
+  assert.equal(
+    channelDescriptionProblem('İ'.repeat(CHAT_DESCRIPTION_MAX_CHARS)),
+    null,
+  );
+  // Ordinary lowercasing and trimming are unchanged.
+  assert.equal(normalizeChannelName('  Design  '), 'design');
+  assert.equal(normalizeChannelDescription('Team DECISIONS'), 'team decisions');
 });

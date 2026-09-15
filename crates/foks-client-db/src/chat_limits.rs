@@ -14,6 +14,8 @@ impl ChatLimits {
     pub const PREDECESSORS: usize = 32;
     pub const RECOVERY_WINDOW: u64 = 100;
     pub const AUTHENTICATION_ATTEMPTS: usize = 3;
+    // The desktop checks these four before sending, from
+    // `crates/foks-agent-proto/chat-limits.json`; `foks-agent` asserts parity.
     pub const NAME_MIN_CHARS: usize = 3;
     pub const NAME_MAX_CHARS: usize = 32;
     pub const DESCRIPTION_MIN_CHARS: usize = 3;

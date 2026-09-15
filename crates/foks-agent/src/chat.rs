@@ -514,6 +514,26 @@ mod tests {
         ));
     }
 
+    /// The desktop checks a channel name and description before sending them,
+    /// out of the same `chat-limits.json` this crate compiles its constants
+    /// from. `ChatLimits` is what the client actually admits them on, so the two
+    /// have to carry the same numbers or the sheet would accept a name the
+    /// agent refuses.
+    #[test]
+    fn character_bounds_match_the_client_admission_policy() {
+        use foks_client_db::ChatLimits;
+        assert_eq!(CHAT_NAME_MIN_CHARS, ChatLimits::NAME_MIN_CHARS);
+        assert_eq!(CHAT_NAME_MAX_CHARS, ChatLimits::NAME_MAX_CHARS);
+        assert_eq!(
+            CHAT_DESCRIPTION_MIN_CHARS,
+            ChatLimits::DESCRIPTION_MIN_CHARS
+        );
+        assert_eq!(
+            CHAT_DESCRIPTION_MAX_CHARS,
+            ChatLimits::DESCRIPTION_MAX_CHARS
+        );
+    }
+
     #[test]
     fn preview_text_is_single_line_and_utf8_bounded() {
         assert_eq!(preview_text("first\nsecond"), "first");

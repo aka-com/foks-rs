@@ -20,17 +20,19 @@ import {
 import { InvitationPanel } from '../components/invitation-panel';
 import { enqueueProfileWork } from '../bridge';
 import {
+  accountSubtitle,
   canCreateInStore,
-  groupDetailFailure,
   parseRole,
   partiesOf,
   plural,
   roleName,
   serverOf,
+  storeAttentionState,
   storeDescription,
   storeDescriptionState,
   storeNavigationOrder,
   storeReadable,
+  teamCaption,
 } from '../model';
 import type {
   AccountStore,
@@ -55,7 +57,6 @@ import {
   unavailableTitle,
 } from './groups-screen';
 import type { DiscoveryContext, GroupSheetKind } from './groups-screen';
-import { accountSubtitle } from './settings-screen';
 
 /** Only what this page uses; the tab shares no state with Settings. */
 export interface TeamsScreenProps {
@@ -76,26 +77,6 @@ interface ListSheet {
   store: Store;
 }
 
-/**
- * The caption under a group's name: the server it lives on. The account it is
- * held through is added only when this Mac holds two accounts on that server,
- * where the server alone would not say which one this row belongs to.
- */
-function teamCaption(
-  snapshot: AgentSnapshot,
-  store: TeamStore,
-  shared: boolean,
-): string {
-  const server = serverOf(snapshot, store.id)?.name ?? store.server;
-  if (!shared) return server;
-  const username =
-    snapshot.accounts.find(
-      (account) =>
-        account.server === store.server && account.alias === store.account,
-    )?.username ?? store.account;
-  return `${server} · as ${username}`;
-}
-
 /** One group or share: mark, name, server, roster summary, role and state. */
 function TeamRow({
   snapshot,
@@ -112,13 +93,9 @@ function TeamRow({
 }): ReactNode {
   const state = storeDescriptionState(snapshot, store);
   const description = storeDescription(snapshot, store);
-  const failed = Boolean(
-    groupDetailFailure(snapshot, store.id, 'roster') ??
-    groupDetailFailure(snapshot, store.id, 'federation'),
-  );
   // The abnormal state is a chip at the end of the row; the roster summary
   // takes its place when there is nothing wrong.
-  const abnormal = state !== 'normal' || failed;
+  const abnormal = storeAttentionState(snapshot, store) !== 'normal';
   const mine = partiesOf(snapshot, store.id).find(
     (party) => party.label === 'you',
   );
@@ -137,7 +114,7 @@ function TeamRow({
           <span className="tt">
             <span>{store.name}</span>
           </span>
-          <small>{teamCaption(snapshot, store, shared)}</small>
+          <small>{teamCaption(snapshot, store, { shared })}</small>
         </span>
         <span className="tail">
           {abnormal ? (

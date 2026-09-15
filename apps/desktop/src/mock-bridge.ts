@@ -236,9 +236,13 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     string,
     { backupAlias: string; accountAlias: string; backupId: string }[]
   >();
+  // `list_yubi_accounts` returns results for a single profile. The mock tracks
+  // the associated server and enrollment status per account, filtering
+  // enrollments by account and marking incomplete enrollments as pending.
   const yubi = snapshot.yubiAccounts.map((entry) => ({
     alias: entry.alias,
-    state: 'complete' as const,
+    server: entry.server,
+    state: entry.state,
   }));
   const accountStore = (id: string) =>
     stores.find((store) => store.id === id && store.kind === 'account');
@@ -246,12 +250,22 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     if (store.kind !== 'account') continue;
     const rows =
       store.account === 'personal'
-        ? snapshot.devices.map((device) => ({
-            id: device.id_hex.replace(/^02/, '04'),
-            name: device.name,
-            role: 'owner' as const,
-            current: device.current,
-          }))
+        ? [
+            ...snapshot.devices.map((device) => ({
+              id: device.id_hex.replace(/^02/, '04'),
+              name: device.name,
+              role: 'owner' as const,
+              current: device.current,
+            })),
+            // Hardware security key device record (prefix `08`), providing
+            // fixture data that distinguishes card-bound keys from host keys.
+            {
+              id: `08${'5'.repeat(64)}`,
+              name: 'Pocket YubiKey',
+              role: 'member' as const,
+              current: false,
+            },
+          ]
         : [
             {
               id: `04${'8'.repeat(64)}`,
@@ -1242,7 +1256,10 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     },
     listYubiCards: async () =>
       snapshot.cardsConnected.map((card) => ({ ...card })),
-    listYubiAccounts: async () => yubi.map((entry) => ({ ...entry })),
+    listYubiAccounts: async (profile) =>
+      yubi
+        .filter((entry) => entry.server === profile)
+        .map((entry) => ({ alias: entry.alias, state: entry.state })),
     runYubi: async ({ command, args }) => {
       if (
         command === 'yubi_pin_status' ||
@@ -1259,7 +1276,14 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
             ? args.yubiAlias
             : 'primary key';
       if (command === 'create_yubi_account')
-        yubi.push({ alias, state: 'complete' });
+        yubi.push({
+          alias,
+          server:
+            'profile' in args && typeof args.profile === 'string'
+              ? args.profile
+              : '',
+          state: 'complete',
+        });
       if (
         command === 'create_yubi_account' ||
         command === 'resume_yubi_account' ||

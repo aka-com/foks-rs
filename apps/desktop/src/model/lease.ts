@@ -17,6 +17,7 @@ import type {
   Server,
   Store,
   StoreRef,
+  TeamStore,
   AgentSnapshot,
 } from './types';
 
@@ -264,6 +265,58 @@ export function groupDetailFailure(
   return snapshot.groupDetailFailures.find(
     (failure) => failure.store === store && failure.source === source,
   );
+}
+
+/** Why a store's row says something other than its ordinary description. */
+export type StoreAttentionState =
+  StoreDescriptionState | 'roster-unavailable' | 'federation-unavailable';
+
+/**
+ * Whether anything is wrong with a store, as every list that draws a chip at
+ * the end of a row decides it: the store is unavailable, or a detail the row
+ * would otherwise summarize could not be read. A list that consulted only
+ * `storeDescriptionState` would print "Roster unavailable" as if it were the
+ * roster summary.
+ */
+export function storeAttentionState(
+  snapshot: AgentSnapshot,
+  store: Store,
+  options: AvailabilityOptions = {},
+): StoreAttentionState {
+  const state = storeDescriptionState(snapshot, store, options);
+  if (state !== 'normal') return state;
+  if (groupDetailFailure(snapshot, store.id, 'roster'))
+    return 'roster-unavailable';
+  if (groupDetailFailure(snapshot, store.id, 'federation'))
+    return 'federation-unavailable';
+  return 'normal';
+}
+
+/**
+ * The caption under a group's name, wherever one is listed: what it is, then
+ * the server it lives on. The account it is held through is added only when
+ * this Mac holds two accounts on that server, where the server alone would not
+ * say which one this row belongs to; the server itself is dropped on a page
+ * that is already about one server.
+ */
+export function teamCaption(
+  snapshot: AgentSnapshot,
+  store: TeamStore,
+  options: { shared?: boolean; server?: boolean } = {},
+): string {
+  const parts = [store.team_kind === 'named' ? 'Named group' : 'Ad-hoc share'];
+  if (options.server !== false)
+    parts.push(serverOf(snapshot, store.id)?.name ?? store.server);
+  if (options.shared)
+    parts.push(
+      `as ${
+        snapshot.accounts.find(
+          (account) =>
+            account.server === store.server && account.alias === store.account,
+        )?.username ?? store.account
+      }`,
+    );
+  return parts.join(' · ');
 }
 
 /** The one description used for a store in both navigation and page headers. */

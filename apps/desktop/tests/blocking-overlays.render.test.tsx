@@ -354,6 +354,52 @@ test('restoration-failed keeps its retry and adds a quit action', async () => {
   rendered.unmount();
 });
 
+test('a conceal does not reopen the sheet a scene opened with the page', async () => {
+  const { App, FIXTURE, mockBridge } = await modules();
+  const listeners = new Set<(value: MaintenanceSnapshot) => void>();
+  let current: MaintenanceSnapshot = {
+    state: 'idle',
+    generation: 0,
+    revision: 0,
+  };
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    native: true,
+    clientStateMaintenanceStatus: async () => current,
+    onMaintenanceStatus: async (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  // `?state=settings-phrase` opens Devices with the one-time paper-key sheet.
+  window.history.replaceState(null, '', '/?state=settings-phrase');
+  const rendered = ui.render(createElement(App, { bridge }));
+  await ui.waitFor(() => {
+    assert.match(document.body.textContent ?? '', /Save paper key/);
+  });
+
+  // The conceal remounts the tabs to take the phrase off the screen. The scene
+  // was entered once: re-reading it here would put the phrase straight back.
+  current = {
+    state: 'complete',
+    generation: 6,
+    revision: 8,
+    kind: 'verify',
+    operation: { status: 'completed' },
+    disposition: { status: 'continue-current-root' },
+  };
+  await ui.act(async () => {
+    for (const listener of listeners) listener(current);
+    await Promise.resolve();
+  });
+  await ui.waitFor(() => {
+    assert.doesNotMatch(document.body.textContent ?? '', /Save paper key/);
+  });
+  // The page itself is back, so the phrase is gone rather than the whole tab.
+  assert.match(document.body.textContent ?? '', /Paper keys/);
+  rendered.unmount();
+});
+
 test('active maintenance overlay renders no action buttons', async () => {
   const { rendered } = await shellOverlay({
     state: 'active',

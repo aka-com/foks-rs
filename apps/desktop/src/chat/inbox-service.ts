@@ -1,8 +1,8 @@
 import type { Bridge } from '../bridge';
 import { normalizeCommandError } from '../bridge';
 import type { ChatReply, ChatResult, ChatScope } from '../chat-contract';
-import { serverChatAvailable, storeReadable } from '../model';
-import type { TeamStore, AgentSnapshot } from '../model';
+import { chatAvailable } from '../model';
+import type { AvailabilityOptions, TeamStore, AgentSnapshot } from '../model';
 import { cancelled as cancelledAccess, chatClient, integrity } from './client';
 import {
   accountKey,
@@ -129,18 +129,28 @@ export class ChatInboxService {
     this.snapshot = readonlyMap([]);
     for (const listener of this.listeners) listener();
   }
-  updateStores(agentSnapshot: AgentSnapshot) {
+  /**
+   * Use the shell's availability clock so the Chat tab and inbox service agree
+   * when a check-in expires. Otherwise the tab could wait for an entry that the
+   * service considers ineligible. With no supplied clock, use the service clock
+   * so tests can control this decision.
+   *
+   * A team is eligible when `chatAvailable` returns true, matching the Chat
+   * tab, team column, and New chat sheet.
+   */
+  updateStores(
+    agentSnapshot: AgentSnapshot,
+    options: AvailabilityOptions = {},
+  ) {
+    const timed: AvailabilityOptions = {
+      ...options,
+      nowSeconds: options.nowSeconds ?? this.clock.now() / 1000,
+    };
     const eligible = agentSnapshot.stores.filter(
       (s): s is TeamStore =>
         s.kind === 'team' &&
         s.team_kind === 'named' &&
-        s.active !== false &&
-        storeReadable(agentSnapshot, s.id) &&
-        agentSnapshot.servers.some(
-          (server) =>
-            server.id === s.server &&
-            serverChatAvailable(agentSnapshot, server),
-        ),
+        chatAvailable(agentSnapshot, s, timed),
     );
     const wanted = new Map(eligible.map((s) => [s.id, s]));
     for (const account of [...this.accounts.values()]) {
@@ -215,6 +225,20 @@ export class ChatInboxService {
       }
     }
     this.kick();
+  }
+  /**
+   * Whether a team has been invalidated and the synchronization that answers it
+   * has not published yet. A channel this Mac has just created is listed by
+   * that synchronization, so a location naming it is waiting rather than naming
+   * something that is not there. A synchronization already running counts:
+   * `sync` clears `dirty` when it starts and publishes only when it lands.
+   */
+  isInvalidated(id: string): boolean {
+    for (const account of this.accounts.values()) {
+      const team = account.teams.get(id);
+      if (team) return team.dirty || team.busy;
+    }
+    return false;
   }
   isChannelBlocked(id: string, channel: string): boolean {
     return this.snapshot.get(id)?.blockedChannels.has(channel) ?? false;

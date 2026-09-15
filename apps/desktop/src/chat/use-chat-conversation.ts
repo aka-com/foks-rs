@@ -325,6 +325,14 @@ export function useChatConversation(
     syncError: inbox?.data ? inbox.error : '',
     degraded: inbox?.data?.degraded ?? false,
     loading: !inbox || (inbox.state === 'loading' && !inbox.error),
+    // A team whose next synchronization has not landed is still answering for
+    // what it holds: a channel created a moment ago is listed by that reply.
+    // A synchronization that failed says so instead, so this does not become a
+    // wait with nothing behind it.
+    resyncing:
+      inbox?.state === 'ready' &&
+      !inbox.error &&
+      service.isInvalidated(storeId),
     blocked,
     blockedChannels: inbox?.blockedChannels ?? EMPTY_BLOCKED,
     revision: inbox?.revision ?? 0,

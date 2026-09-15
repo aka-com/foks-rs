@@ -1,70 +1,51 @@
-import { InvitationPanel } from '../components/invitation-panel';
-import { AdminPanel } from '../components/admin-panel';
-import { BotPanel } from '../components/bot-panel';
-import { RenamePanel } from '../components/rename-panel';
-import { SsoPanel } from '../components/sso-panel';
+/**
+ * The Settings tab: one scrolling page, with no sub-navigation.
+ *
+ * What is left once People holds the accounts, Devices holds the keys and
+ * Teams holds the groups: the servers this Mac talks to, the credentials you
+ * type, what this application and its agent are, and the one reset that acts
+ * on this Mac. A `section=` address scrolls to and focuses its section, and
+ * `profile=` opens that server's page.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import { useToast } from '/kit/toasts';
 import { enqueueProfileWork, normalizeCommandError } from '../bridge';
-import type {
-  AccountDevice,
-  AppInfo,
-  BackupEnrollment,
-  Bridge,
-  PairingOffer,
-  YubiCommand,
-  YubiEnrollment,
-} from '../bridge';
+import type { AppInfo, Bridge, ResetPreview, YubiEnrollment } from '../bridge';
 import {
   Band,
   Button,
   Chip,
-  Field,
   Icon,
   Inset,
   InsetRow,
-  CardSelect,
-  Notice,
   SectionLabel,
-  SegmentedControl,
   SheetDialog,
 } from '../components';
-import type { CardOption } from '../components';
-import type { DevicesSection, Location, SettingsSection } from '../location';
+import type { Location, SettingsSection } from '../location';
 import {
-  serverAvailability,
-  storeDescription,
-  storeAvailability,
+  accountStopped,
+  accountStores,
+  accountSubtitle,
+  plural,
+  serverName,
+  usernameOf,
 } from '../model';
 import type { AccountStore, AgentSnapshot } from '../model';
 import { PageHeader } from '../shell/page-header';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { agentLifecycleLabel, type AgentLifecycle } from '../agent-lifecycle';
-import { GoProfileConnectSheet } from './go-profile-connect';
 import { ServersSection } from './servers-screen';
-
-/**
- * Which tab this screen is the body of. Each variant names its own title, the
- * panes its sub-nav offers, and the location kind its navigation writes.
- */
-export type SettingsVariant = 'settings' | 'devices' | 'people';
-
-/** A pane of the settings body. Several are tabs of their own now. */
-type Pane = 'account' | 'servers' | 'macs' | 'keys' | 'about';
-
-export type SettingsLocation = Extract<
-  Location,
-  { kind: 'settings' | 'devices' | 'people' }
->;
+import { AccountMark, AccountSwitcher } from './account-switcher';
+import { UnavailableAccount } from './people-screen';
+import { PassphraseSheet, YubiActionSheet } from './device-sheets';
+import type { PassphraseMode, SimpleYubiAction } from './device-sheets';
 
 export interface SettingsScreenProps {
   snapshot: AgentSnapshot;
   bridge: Bridge;
-  variant?: SettingsVariant;
-  location: SettingsLocation;
-  /** Drawn at the top of the body, above the sub-nav and the pane. */
-  before?: ReactNode;
+  location: Extract<Location, { kind: 'settings' }>;
   scene: string;
   onNavigate: (location: Location) => void;
   onRefresh: (message: string) => Promise<void>;
@@ -76,90 +57,14 @@ export interface SettingsScreenProps {
   onRetryAgent: () => Promise<void>;
 }
 
-/** The account panels reached from a row in Settings → Accounts. */
-type AccountSheet = 'rename' | 'bot' | 'admin' | 'join' | 'sso';
-
-type Sheet =
-  | 'phrase'
-  | 'pair'
-  | 'recover'
-  | 'enrol'
-  | 'provision'
-  | 'yubi'
-  | 'revoke'
-  | 'passphrase'
-  | 'remove-device'
-  | 'revoke-backup'
-  | 'go-profile'
-  | AccountSheet
-  | null;
-const SECTIONS: readonly {
-  id: Pane;
-  label: string;
-  icon: 'file' | 'key' | 'vault' | 'server' | 'people' | 'info';
-}[] = [
-  { id: 'account', label: 'Accounts', icon: 'vault' },
-  { id: 'servers', label: 'Servers', icon: 'server' },
-  { id: 'macs', label: 'Recovery devices', icon: 'file' },
-  { id: 'keys', label: 'Security keys', icon: 'key' },
-  { id: 'about', label: 'About', icon: 'info' },
-];
-
-/** The title, the strapline and the panes each tab's body offers. */
-const VARIANTS: Readonly<
-  Record<
-    SettingsVariant,
-    { title: string; subtitle: string; panes: readonly Pane[] }
-  >
-> = {
-  settings: {
-    title: 'Settings',
-    subtitle: 'Servers, the local agent, and this application',
-    panes: ['servers', 'about'],
-  },
-  devices: {
-    title: 'Devices',
-    subtitle: 'Recovery devices and security keys on this Mac',
-    panes: ['macs', 'keys'],
-  },
-  people: {
-    title: 'People',
-    subtitle: 'Your accounts on this Mac, and anything that needs attention',
-    panes: ['account'],
-  },
-};
-
-function isCatalogRequired(error: unknown): boolean {
-  return normalizeCommandError(error).code === 'catalog-required';
-}
-
-function accountStores(snapshot: AgentSnapshot): AccountStore[] {
-  return snapshot.stores.filter(
-    (store): store is AccountStore => store.kind === 'account',
-  );
-}
-
-/**
- * The line under a sheet title: who the workflow acts as, and where. The
- * title itself never carries the account alias.
- */
-export function accountSubtitle(
-  snapshot: AgentSnapshot,
-  store: AccountStore,
-): string {
-  const username = snapshot.accounts.find(
-    (entry) => entry.store === store.id,
-  )?.username;
-  const server = snapshot.servers.find((entry) => entry.id === store.server);
-  return `${username ?? store.account} on ${server?.name ?? store.server}`;
-}
+/** A sheet this page owns. Add a server and the per-server reset are the
+ *  Servers section's own. */
+type Sheet = 'passphrase' | 'yubi' | 'reset-mac' | null;
 
 export function SettingsScreen({
   snapshot,
   bridge,
-  variant = 'settings',
   location,
-  before,
   scene,
   onNavigate,
   onRefresh,
@@ -170,79 +75,31 @@ export function SettingsScreen({
   agentLifecycle,
   onRetryAgent,
 }: SettingsScreenProps): ReactNode {
-  // Capture initial fixture scene once; the shell canonicalizes the route on mount.
   const [enteredScene] = useState(scene);
-  const panes = VARIANTS[variant].panes;
-  const requestedPane =
-    location.kind === 'settings' || location.kind === 'devices'
-      ? location.section
-      : undefined;
-  const section: Pane =
-    requestedPane && panes.includes(requestedPane) ? requestedPane : panes[0];
-  const stores = accountStores(snapshot);
-  // Select account by exact StoreRef to avoid ambiguous profile-local aliases.
-  const requested = location.store;
-  const selected = requested
-    ? stores.find((store) => store.id === requested)
-    : stores[0];
-  const unavailable = requested !== undefined && selected === undefined;
-  const [sheet, setSheet] = useState<Sheet>(() =>
-    enteredScene === 'settings-phrase'
-      ? 'phrase'
-      : enteredScene === 'settings-enrol'
-        ? 'enrol'
-        : null,
-  );
-  const [devices, setDevices] = useState<AccountDevice[]>([]);
-  const [backups, setBackups] = useState<BackupEnrollment[]>([]);
-  const [yubi, setYubi] = useState<YubiEnrollment[]>([]);
-  const [cards, setCards] = useState<{ serial: number }[]>([]);
-  const [pendingYubi, setPendingYubi] = useState<SimpleYubiAction | null>(null);
-  const [passphraseMode, setPassphraseMode] = useState<'set' | 'change'>('set');
-  // The account a row-launched sheet applies to, the passphrase sheet
-  // included. Held by value so a sheet keeps its account while it is open.
-  const [accountSheetStore, setAccountSheetStore] =
-    useState<AccountStore | null>(null);
-  const [pairMode, setPairMode] = useState<'offer' | 'accept'>('offer');
-  const [removeDevice, setRemoveDevice] = useState<AccountDevice | null>(null);
-  const [revokeBackup, setRevokeBackup] = useState<BackupEnrollment | null>(
-    null,
-  );
-  const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
-  const [accountDeviceNames, setAccountDeviceNames] = useState<
-    Map<string, string>
-  >(new Map());
-  const [macsLoaded, setMacsLoaded] = useState(false);
-  const [keysLoaded, setKeysLoaded] = useState(false);
   const toasts = useToast();
-  // Track open modal state to suppress background catalog reloads while sheets are active.
-  const sheetOpen = useRef(sheet);
-  sheetOpen.current = sheet;
-  const catalogRecovery = useRef<Promise<AgentSnapshot> | null>(null);
-  const recoveredAccounts = useRef(new Set<string>());
-  // Deduplicate concurrent catalog recovery requests.
-  const recoverCatalog = useCallback((): Promise<AgentSnapshot> => {
-    if (!catalogRecovery.current) {
-      const pending = onRefreshSnapshot().finally(() => {
-        if (catalogRecovery.current === pending) catalogRecovery.current = null;
-      });
-      catalogRecovery.current = pending;
-    }
-    return catalogRecovery.current;
-  }, [onRefreshSnapshot]);
-  // Profile of the currently selected account, or empty if none selected.
-  const profile = selected?.server ?? '';
+  const stores = accountStores(snapshot);
+  const addressed = location.store
+    ? stores.find((store) => store.id === location.store)
+    : stores[0];
+  // An address naming an account this Mac no longer holds: the card rows act
+  // on nothing, and saying "No security key is enrolled" would be a claim
+  // about an account that is not here.
+  const unavailable = location.store !== undefined && addressed === undefined;
+  const [sheet, setSheet] = useState<Sheet>(null);
+  const [passphrase, setPassphrase] = useState<{
+    store: AccountStore;
+    mode: PassphraseMode;
+  } | null>(null);
+  const [yubiAction, setYubiAction] = useState<SimpleYubiAction>('change-pin');
+  const [yubi, setYubi] = useState<YubiEnrollment[]>([]);
+  const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
 
+  // A passphrase, a PIN or an unlock code must not stay on screen behind
+  // another window, and a reset preview token is invalidated with it.
   useEffect(() => {
     const conceal = (): void => {
-      // Browser sign-in must retain its operation while the browser has focus.
-      if (sheetOpen.current === 'go-profile' || sheetOpen.current === 'sso')
-        return;
       setSheet(null);
-      setPendingYubi(null);
-      setAccountSheetStore(null);
-      setRemoveDevice(null);
-      setRevokeBackup(null);
+      setPassphrase(null);
     };
     const concealWhenHidden = (): void => {
       if (document.hidden) conceal();
@@ -254,177 +111,6 @@ export function SettingsScreen({
       document.removeEventListener('visibilitychange', concealWhenHidden);
     };
   }, []);
-
-  // Canonicalize the default route to the first account's exact StoreRef.
-  useEffect(() => {
-    if (location.store || !selected) return;
-    onNavigate({ ...location, store: selected.id });
-  }, [location, onNavigate, selected]);
-
-  // Reset active sheets and account-specific state when switching accounts.
-  const selectedId = selected?.id;
-  const shown = useRef(selectedId);
-  useEffect(() => {
-    if (shown.current === selectedId) return;
-    shown.current = selectedId;
-    setSheet(null);
-    setPendingYubi(null);
-    setAccountSheetStore(null);
-    setRemoveDevice(null);
-    setRevokeBackup(null);
-    setDevices([]);
-    setBackups([]);
-    setYubi([]);
-    setCards([]);
-    setMacsLoaded(false);
-    setKeysLoaded(false);
-    recoveredAccounts.current = new Set();
-  }, [selectedId]);
-
-  const accessStopped = (candidate: string): boolean => {
-    const server = snapshot.servers.find((item) => item.id === candidate);
-    return !server || !serverAvailability(snapshot, server).available;
-  };
-  const selectedStopped = selected
-    ? !storeAvailability(snapshot, selected).available ||
-      accessStopped(selected.server)
-    : true;
-  useEffect(() => {
-    let alive = true;
-    if (!selected || selectedStopped) {
-      setDevices([]);
-      setBackups([]);
-      setMacsLoaded(true);
-      return;
-    }
-    // Capture target store before await to avoid applying stale device responses.
-    const requestedStore = selected.id;
-    const requestedProfile = selected.server;
-    setMacsLoaded(false);
-    const load = (): Promise<{
-      nextDevices: AccountDevice[];
-      nextBackups: BackupEnrollment[];
-    }> =>
-      enqueueProfileWork(bridge, requestedProfile, async () => {
-        const nextDevices = await bridge.listAccountDevices(requestedStore);
-        const nextBackups = await bridge.listBackupEnrollments(requestedStore);
-        return { nextDevices, nextBackups };
-      });
-    void (async () => {
-      try {
-        let result: {
-          nextDevices: AccountDevice[];
-          nextBackups: BackupEnrollment[];
-        };
-        try {
-          result = await load();
-        } catch (error) {
-          // If catalog was invalidated, await snapshot recovery and retry the query once.
-          if (!alive) return;
-          if (sheetOpen.current || !isCatalogRequired(error)) throw error;
-          const already = recoveredAccounts.current.has(requestedStore);
-          if (already && !catalogRecovery.current) throw error;
-          recoveredAccounts.current.add(requestedStore);
-          await recoverCatalog();
-          if (!alive) return;
-          result = await load();
-        }
-        if (alive) {
-          recoveredAccounts.current.delete(requestedStore);
-          setDevices(result.nextDevices);
-          setBackups(result.nextBackups);
-          setMacsLoaded(true);
-        }
-      } catch (error) {
-        if (alive) {
-          onError(error);
-          setMacsLoaded(true);
-        }
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [bridge, onError, recoverCatalog, selected, selectedStopped]);
-
-  useEffect(() => {
-    let alive = true;
-    if (!profile || selectedStopped) {
-      setCards([]);
-      setYubi([]);
-      setKeysLoaded(true);
-      return;
-    }
-    // Discard responses if selected profile changed while query was in-flight.
-    setKeysLoaded(false);
-    void enqueueProfileWork(bridge, profile, async () => {
-      const nextCards = await bridge.listYubiCards(profile);
-      const nextYubi = await bridge.listYubiAccounts(profile);
-      return { nextCards, nextYubi };
-    })
-      .then(({ nextCards, nextYubi }) => {
-        if (alive) {
-          setCards(nextCards);
-          setYubi(nextYubi);
-          setKeysLoaded(true);
-        }
-      })
-      .catch(onError);
-    return () => {
-      alive = false;
-    };
-  }, [bridge, onError, profile, selectedStopped]);
-
-  useEffect(() => {
-    let alive = true;
-    if (section !== 'account') {
-      setAccountDeviceNames(new Map());
-      return;
-    }
-    void (async () => {
-      try {
-        const next = new Map<string, string>();
-        for (const store of accountStores(snapshot)) {
-          if (!storeAvailability(snapshot, store).available) continue;
-          const loadCurrent = (): Promise<AccountDevice | undefined> =>
-            enqueueProfileWork(bridge, store.server, () =>
-              bridge.listAccountDevices(store.id),
-            ).then((devices) => devices.find((device) => device.current));
-          let current: AccountDevice | undefined;
-          try {
-            current = await loadCurrent();
-          } catch (error) {
-            if (!alive) return;
-            if (sheetOpen.current || !isCatalogRequired(error)) throw error;
-            const already = recoveredAccounts.current.has(store.id);
-            if (already && !catalogRecovery.current) throw error;
-            recoveredAccounts.current.add(store.id);
-            await recoverCatalog();
-            if (!alive) return;
-            current = await loadCurrent();
-          }
-          if (current) {
-            recoveredAccounts.current.delete(store.id);
-            next.set(
-              store.id,
-              current.name ??
-                (current.id.startsWith('08') ? 'Security key' : 'Device'),
-            );
-          }
-        }
-        if (alive) setAccountDeviceNames(next);
-      } catch (error: unknown) {
-        if (alive) onError(error);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [bridge, onError, recoverCatalog, section, snapshot]);
-
-  useEffect(() => {
-    if (selectedStopped) setSheet(null);
-  }, [selectedStopped]);
 
   useEffect(() => {
     let alive = true;
@@ -439,1057 +125,363 @@ export function SettingsScreen({
     };
   }, [bridge, onError]);
 
-  // Move within this tab, retaining the selected account. A pane belongs to
-  // exactly one tab, so the variant decides the location kind.
-  const go = (next: Pane, store = selected?.id): void => {
-    if (variant === 'people') {
-      onNavigate({ kind: 'people', ...(store ? { store } : {}) });
-      return;
-    }
-    if (variant === 'devices') {
-      onNavigate({
-        kind: 'devices',
-        section: next as DevicesSection,
-        ...(store ? { store } : {}),
+  // The card rows act on the addressed account's enrolled key; the key itself
+  // is listed on Devices.
+  const profile = addressed?.server;
+  const keysStopped = addressed
+    ? accountStopped(snapshot, addressed).stopped
+    : true;
+  useEffect(() => {
+    let alive = true;
+    setYubi([]);
+    if (!profile || keysStopped) return;
+    void enqueueProfileWork(bridge, profile, () =>
+      bridge.listYubiAccounts(profile),
+    )
+      .then((entries) => {
+        if (alive) setYubi(entries);
+      })
+      .catch((error: unknown) => {
+        if (alive && normalizeCommandError(error).code !== 'catalog-required')
+          onError(error);
       });
-      return;
-    }
-    onNavigate({
-      kind: 'settings',
-      section: next as SettingsSection,
-      ...(store ? { store } : {}),
-    });
+    return () => {
+      alive = false;
+    };
+  }, [bridge, keysStopped, onError, profile]);
+
+  const enrolled = yubi.find((entry) => entry.state === 'complete');
+  const openYubi = (action: SimpleYubiAction): void => {
+    setYubiAction(action);
+    setSheet('yubi');
   };
-  const applied = async (message: string): Promise<void> => {
-    setSheet(null);
-    await onRefresh(message);
-    toasts.show(message);
-  };
-  const closeAccountSheet = (): void => {
-    setSheet(null);
-    setAccountSheetStore(null);
-  };
-  const account = selected
-    ? snapshot.accounts.find((entry) => entry.store === selected.id)
-    : undefined;
-  const server = selected
-    ? snapshot.servers.find((entry) => entry.id === selected.server)
-    : undefined;
-  const macsLoading = Boolean(
-    selected && !unavailable && !selectedStopped && !macsLoaded,
+  const cardReason = keysStopped
+    ? 'Account access is stopped'
+    : enrolled
+      ? undefined
+      : 'No complete enrollment found';
+
+  // A `section=` address scrolls to its section and puts the keyboard there.
+  const anchors = {
+    servers: useRef<HTMLDivElement>(null),
+    credentials: useRef<HTMLDivElement>(null),
+    about: useRef<HTMLDivElement>(null),
+  } satisfies Record<SettingsSection, unknown>;
+  const requestedSection = location.section;
+  const openProfile = location.profile;
+  useEffect(() => {
+    if (!requestedSection || openProfile) return;
+    const anchor = anchors[requestedSection]?.current;
+    if (!anchor) return;
+    if (typeof anchor.scrollIntoView === 'function')
+      anchor.scrollIntoView({ block: 'start' });
+    anchor.focus({ preventScroll: true });
+    // The anchors are stable refs; the address is what moves the page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedSection, openProfile]);
+
+  const serversSection = (
+    <ServersSection
+      snapshot={snapshot}
+      bridge={bridge}
+      profile={location.profile}
+      scene={enteredScene}
+      onNavigate={onNavigate}
+      onRefresh={onRefresh}
+      onError={onError}
+      onMutationError={onMutationError}
+    />
   );
-  const keysLoading = Boolean(
-    selected && !unavailable && !selectedStopped && !keysLoaded,
-  );
+
+  // A server's own page is a page, not a section of this one.
+  if (location.profile)
+    return (
+      <>
+        <PageHeader title="Settings" subtitle="Servers" />
+        <div className="body">
+          <div className="settings-main">{serversSection}</div>
+        </div>
+      </>
+    );
+
   return (
     <>
       <PageHeader
-        title={VARIANTS[variant].title}
-        subtitle={VARIANTS[variant].subtitle}
+        title="Settings"
+        subtitle="Servers, account credentials and this Mac"
       />
       <div className="body">
-        {before}
-        <div className={panes.length > 1 ? 'settings-cols' : ''}>
-          {panes.length > 1 ? (
-            <nav className="settings-sections" aria-label="Settings sections">
-              {SECTIONS.filter((item) => panes.includes(item.id)).map(
-                (item) => (
-                  <button
-                    type="button"
-                    key={item.id}
-                    className={item.id === section ? 'nav on' : 'nav'}
-                    onClick={() => go(item.id)}
-                  >
-                    <Icon name={item.icon} />
-                    <span className="t">{item.label}</span>
-                  </button>
-                ),
+        <div className="settings-main">
+          <div
+            className="settings-section"
+            ref={anchors.servers}
+            tabIndex={-1}
+            role="region"
+            // This section's first label names a group of servers ("Needs
+            // attention", "Ready"), not the section, so it is named here.
+            aria-label="Servers"
+          >
+            {serversSection}
+          </div>
+          <div
+            className="settings-section"
+            ref={anchors.credentials}
+            tabIndex={-1}
+            role="region"
+            aria-labelledby="settings-account-label"
+          >
+            <SectionLabel id="settings-account-label">Account</SectionLabel>
+            <Inset className="settings-inset middle wide">
+              {stores.length ? (
+                stores.map((store) => {
+                  const stopped = accountStopped(snapshot, store);
+                  return (
+                    <InsetRow
+                      key={store.id}
+                      className="devrow"
+                      action={
+                        <>
+                          {(['set', 'change', 'verify'] as const).map(
+                            (mode) => (
+                              <Button
+                                key={mode}
+                                size="sm"
+                                disabled={stopped.stopped}
+                                title={
+                                  stopped.stopped ? stopped.reason : undefined
+                                }
+                                onClick={() => {
+                                  setPassphrase({ store, mode });
+                                  setSheet('passphrase');
+                                }}
+                              >
+                                {mode === 'set'
+                                  ? 'Set…'
+                                  : mode === 'change'
+                                    ? 'Change…'
+                                    : 'Verify…'}
+                              </Button>
+                            ),
+                          )}
+                        </>
+                      }
+                    >
+                      <AccountMark
+                        name={usernameOf(snapshot, store) ?? store.account}
+                      />
+                      <span className="t">
+                        <b>{usernameOf(snapshot, store) ?? store.account}</b>
+                        <small>
+                          {store.account} · {serverName(snapshot, store)}
+                        </small>
+                        {/* Why the three actions are off, on the row and not
+                            only in each button's title. */}
+                        {stopped.stopped ? (
+                          <small className="why">{stopped.reason}</small>
+                        ) : null}
+                      </span>
+                    </InsetRow>
+                  );
+                })
+              ) : (
+                <InsetRow label="None">No accounts on this Mac.</InsetRow>
               )}
-            </nav>
-          ) : null}
-          <div className="settings-main">
+            </Inset>
+            <SectionLabel id="settings-card-label">
+              {addressed
+                ? `Security key credentials · ${accountSubtitle(snapshot, addressed)}`
+                : 'Security key credentials'}
+            </SectionLabel>
+            {/* The label names one account, so the reader is given the way to
+                choose another rather than a fact about an account they did
+                not pick. */}
+            {unavailable ? null : (
+              <AccountSwitcher
+                snapshot={snapshot}
+                stores={stores}
+                selected={addressed}
+                labelledBy="settings-card-label"
+                onSwitch={(store) =>
+                  onNavigate({ ...location, store: store.id })
+                }
+              />
+            )}
             {unavailable ? (
               <UnavailableAccount
                 stores={stores}
                 snapshot={snapshot}
-                onSelect={(store) => go(section, store.id)}
+                onSelect={(store) =>
+                  onNavigate({ ...location, store: store.id })
+                }
                 onRefresh={() => void onRefresh('Accounts refreshed')}
               />
-            ) : null}
-            {section === 'macs' && !unavailable ? (
-              <MacsSection
-                stores={stores}
-                selected={selected}
-                devices={devices}
-                backups={backups}
-                snapshot={snapshot}
-                stopped={selectedStopped}
-                loading={macsLoading}
-                onConnectGoProfile={() => setSheet('go-profile')}
-                onSwitch={(store) => go('macs', store.id)}
-                onSheet={setSheet}
-                onPair={(mode) => {
-                  setPairMode(mode);
-                  setSheet('pair');
-                }}
-                onRemove={(device) => {
-                  setRemoveDevice(device);
-                  setSheet('remove-device');
-                }}
-                onRevokeBackup={(backup) => {
-                  setRevokeBackup(backup);
-                  setSheet('revoke-backup');
-                }}
-              />
-            ) : null}
-            {section === 'keys' && !unavailable ? (
-              <KeysSection
-                yubi={yubi}
-                cards={cards}
-                accountConfigured={selected !== undefined}
-                stopped={selectedStopped}
-                loading={keysLoading}
-                onSheet={setSheet}
-                onAction={(command) => {
-                  setSheet('yubi');
-                  setPendingYubi(command);
-                }}
-              />
-            ) : null}
-            {section === 'account' ? (
-              <AccountSection
-                snapshot={snapshot}
-                deviceNames={accountDeviceNames}
-                onConnectGoProfile={() => setSheet('go-profile')}
-                onPassphrase={(store, mode) => {
-                  setAccountSheetStore(store);
-                  setPassphraseMode(mode);
-                  setSheet('passphrase');
-                }}
-                onAccountSheet={(store, next) => {
-                  setAccountSheetStore(store);
-                  setSheet(next);
-                }}
-              />
-            ) : null}
-            {section === 'servers' ? (
-              <ServersSection
-                snapshot={snapshot}
-                bridge={bridge}
-                profile={
-                  location.kind === 'settings' ? location.profile : undefined
-                }
-                scene={enteredScene}
-                onNavigate={onNavigate}
-                onRefresh={onRefresh}
-                onError={onError}
-                onMutationError={onMutationError}
-              />
-            ) : null}
-            {section === 'about' ? (
-              <AboutSection
-                snapshot={snapshot}
-                bridge={bridge}
-                appInfo={appInfo}
-                onError={onError}
-                onMessage={(text: string) => toasts.show(text)}
-                onLock={onLock}
-                agentLifecycle={agentLifecycle}
-                onRetryAgent={onRetryAgent}
-              />
-            ) : null}
+            ) : (
+              <Inset className="settings-inset middle wide">
+                <InsetRow
+                  label="Enrolled key"
+                  action={
+                    <Button
+                      size="sm"
+                      onClick={() =>
+                        onNavigate({
+                          kind: 'devices',
+                          // The address this page carries, so a stale reference
+                          // travels and is reported there rather than dropped.
+                          ...((location.store ?? addressed?.id)
+                            ? { store: location.store ?? addressed?.id }
+                            : {}),
+                        })
+                      }
+                    >
+                      Open Devices
+                    </Button>
+                  }
+                >
+                  {enrolled ? (
+                    <>
+                      <b>{enrolled.alias}</b> <Chip tone="ok">Enrolled</Chip>
+                    </>
+                  ) : (
+                    'No security key is enrolled on this account.'
+                  )}
+                  <small>
+                    The key itself, its enrollment and PIN status are on the
+                    Devices page.
+                  </small>
+                </InsetRow>
+                <InsetRow
+                  label="Card PIN"
+                  action={
+                    <Button
+                      size="sm"
+                      disabled={cardReason !== undefined}
+                      title={cardReason}
+                      onClick={() => openYubi('change-pin')}
+                    >
+                      Change PIN…
+                    </Button>
+                  }
+                >
+                  Enter the current PIN and a new PIN.
+                </InsetRow>
+                <InsetRow
+                  label="Unlock code"
+                  action={
+                    <>
+                      <Button
+                        size="sm"
+                        disabled={cardReason !== undefined}
+                        title={cardReason}
+                        onClick={() => openYubi('unblock')}
+                      >
+                        Unblock PIN…
+                      </Button>
+                      <Button
+                        size="sm"
+                        disabled={cardReason !== undefined}
+                        title={cardReason}
+                        onClick={() => openYubi('change-puk')}
+                      >
+                        Change unlock code…
+                      </Button>
+                    </>
+                  }
+                >
+                  Use the unlock code (PUK) to set a new PIN, or set a new
+                  unlock code.
+                </InsetRow>
+              </Inset>
+            )}
           </div>
+          <AboutSection
+            snapshot={snapshot}
+            bridge={bridge}
+            appInfo={appInfo}
+            anchor={anchors.about}
+            onError={onError}
+            onMessage={(text: string) => toasts.show(text)}
+            onLock={onLock}
+            agentLifecycle={agentLifecycle}
+            onRetryAgent={onRetryAgent}
+          />
+          <SectionLabel className="danger-title">Danger zone</SectionLabel>
+          <Inset className="settings-inset middle wide danger-box">
+            <InsetRow
+              className="dangerrow"
+              label="Reset this Mac"
+              action={
+                <Button
+                  size="sm"
+                  variant="danger"
+                  disabled={!snapshot.servers.length}
+                  title={
+                    snapshot.servers.length
+                      ? undefined
+                      : 'No server is configured on this Mac'
+                  }
+                  onClick={() => setSheet('reset-mac')}
+                >
+                  Reset this Mac…
+                </Button>
+              }
+            >
+              <small>
+                Removes the local account keys, trust history, cache and
+                unfinished operations this Mac holds for every server. Your
+                accounts keep existing on their servers and other devices are
+                untouched.
+              </small>
+            </InsetRow>
+          </Inset>
         </div>
       </div>
-      {sheet === 'go-profile' ? (
-        <GoProfileConnectSheet
-          bridge={bridge}
-          onClose={() => setSheet(null)}
-          onConnected={async (_profile, alias) => {
-            setSheet(null);
-            await onRefreshSnapshot();
-            toasts.show(`Connected account "${alias}" from FOKS CLI`);
-          }}
-          onError={(error) => void onMutationError(error)}
-        />
-      ) : null}
-      {sheet === 'phrase' && selected && account && server ? (
-        <PhraseSheet
-          bridge={bridge}
-          profile={selected.server}
-          accountAlias={selected.account}
-          username={account.username}
-          server={server.name}
-          seedPhrase={
-            enteredScene === 'settings-phrase'
-              ? bridge.firstRunFixture?.backupPhrase
-              : undefined
-          }
-          onClose={() => setSheet(null)}
-          onDone={async () => applied('Backup phrase enrolled successfully.')}
-          onError={(error) => void onMutationError(error)}
-        />
-      ) : null}
-      {sheet === 'pair' && selected ? (
-        <PairSheet
-          bridge={bridge}
-          store={selected}
-          initialMode={pairMode}
-          onClose={() => setSheet(null)}
-          onDone={async (message) => applied(message)}
-          onError={(error) => void onMutationError(error)}
-        />
-      ) : null}
-      {sheet === 'recover' && selected ? (
-        <RecoverSheet
-          bridge={bridge}
-          store={selected}
-          onClose={() => setSheet(null)}
-          onDone={async () => applied('Recovery submitted successfully.')}
-          onError={(error) => void onMutationError(error)}
-        />
-      ) : null}
-      {sheet === 'enrol' && selected ? (
-        <EnrollSheet
-          bridge={bridge}
-          store={selected}
-          card={cards[0]}
-          onClose={() => setSheet(null)}
-          onDone={async () => applied('YubiKey account created successfully.')}
-          onError={(error) => void onMutationError(error)}
-        />
-      ) : null}
-      {sheet === 'provision' && selected ? (
-        <ProvisionSheet
-          bridge={bridge}
-          store={selected}
-          cards={cards}
-          onClose={() => setSheet(null)}
-          onDone={async () => applied('YubiKey added to account successfully')}
-          onError={(error) => void onMutationError(error)}
-        />
-      ) : null}
-      {sheet === 'yubi' && selected && pendingYubi ? (
-        <YubiActionSheet
-          bridge={bridge}
-          store={selected}
-          action={pendingYubi}
-          alias={
-            (pendingYubi === 'resume-enrollment'
-              ? yubi.find((entry) => entry.state === 'pending')
-              : yubi.find((entry) => entry.state === 'complete')
-            )?.alias ?? ''
-          }
-          onClose={() => {
-            setSheet(null);
-            setPendingYubi(null);
-          }}
-          onDone={async () => {
-            setPendingYubi(null);
-            await applied('Security key updated.');
-          }}
-          onError={(error) => void onMutationError(error)}
-        />
-      ) : null}
-      {sheet === 'revoke' &&
-      selected &&
-      yubi.some((entry) => entry.state === 'complete') ? (
-        <RevokeSheet
-          bridge={bridge}
-          store={selected}
-          alias={yubi.find((entry) => entry.state === 'complete')?.alias ?? ''}
-          onClose={() => setSheet(null)}
-          onDone={async () => applied('YubiKey revoked successfully')}
-          onError={(error) => void onMutationError(error)}
-        />
-      ) : null}
-      {accountSheetStore && sheet === 'rename' ? (
-        <RenamePanel
-          bridge={bridge}
-          profile={accountSheetStore.server}
-          account={accountSheetStore.account}
-          presentation={{
-            title: 'Change username',
-            subtitle: accountSubtitle(snapshot, accountSheetStore),
-            onClose: closeAccountSheet,
-          }}
-          onComplete={() => onRefresh('Username updated')}
-        />
-      ) : null}
-      {accountSheetStore && sheet === 'bot' ? (
-        <BotPanel
-          bridge={bridge}
-          profile={accountSheetStore.server}
-          account={accountSheetStore.account}
-          presentation={{
-            title: 'Bot accounts',
-            subtitle: accountSubtitle(snapshot, accountSheetStore),
-            onClose: closeAccountSheet,
-          }}
-          onComplete={() => onRefresh('Bot account updated')}
-        />
-      ) : null}
-      {accountSheetStore && sheet === 'admin' ? (
-        <AdminPanel
-          bridge={bridge}
-          profile={accountSheetStore.server}
-          account={accountSheetStore.account}
-          presentation={{
-            title: 'Manage via web',
-            subtitle: accountSubtitle(snapshot, accountSheetStore),
-            onClose: closeAccountSheet,
-          }}
-        />
-      ) : null}
-      {accountSheetStore && sheet === 'join' ? (
-        <InvitationPanel
-          bridge={bridge}
-          profile={accountSheetStore.server}
-          account={accountSheetStore.account}
-          presentation={{
-            title: 'Join a group',
-            subtitle: accountSubtitle(snapshot, accountSheetStore),
-            onClose: closeAccountSheet,
-          }}
-          onComplete={() => onRefresh('Group membership refreshed')}
-        />
-      ) : null}
-      {accountSheetStore && sheet === 'sso' ? (
-        <SsoPanel
-          bridge={bridge}
-          profile={accountSheetStore.server}
-          account={accountSheetStore.account}
-          login={true}
-          presentation={{
-            title: 'Organization sign-in',
-            subtitle: accountSubtitle(snapshot, accountSheetStore),
-            onClose: closeAccountSheet,
-          }}
-          onComplete={() => onRefresh('Organization sign-in verified')}
-        />
-      ) : null}
-      {sheet === 'passphrase' && accountSheetStore ? (
+      {sheet === 'passphrase' && passphrase ? (
         <PassphraseSheet
           bridge={bridge}
-          store={accountSheetStore}
-          subtitle={accountSubtitle(snapshot, accountSheetStore)}
-          initialMode={passphraseMode}
+          store={passphrase.store}
+          subtitle={accountSubtitle(snapshot, passphrase.store)}
+          initialMode={passphrase.mode}
           onClose={() => {
             setSheet(null);
-            setAccountSheetStore(null);
+            setPassphrase(null);
           }}
           onDone={(message) => {
             setSheet(null);
-            setAccountSheetStore(null);
+            setPassphrase(null);
             void onRefresh(message).catch((error) => onMutationError(error));
           }}
           onError={(error) => void onMutationError(error)}
         />
       ) : null}
-      {sheet === 'remove-device' && selected && removeDevice ? (
-        <RemoveDeviceSheet
+      {sheet === 'yubi' && addressed ? (
+        <YubiActionSheet
           bridge={bridge}
-          store={selected}
-          device={removeDevice}
-          onClose={() => {
-            setSheet(null);
-            setRemoveDevice(null);
-          }}
+          store={addressed}
+          action={yubiAction}
+          alias={enrolled?.alias ?? ''}
+          onClose={() => setSheet(null)}
           onDone={async () => {
-            const name = removeDevice.name ?? 'device';
-            setRemoveDevice(null);
-            await applied(`Device "${name}" removed`);
+            setSheet(null);
+            await onRefresh('Security key updated.');
           }}
           onError={(error) => void onMutationError(error)}
         />
       ) : null}
-      {sheet === 'revoke-backup' && selected && revokeBackup ? (
-        <RevokeBackupSheet
+      {sheet === 'reset-mac' ? (
+        <ResetMacSheet
+          snapshot={snapshot}
           bridge={bridge}
-          store={selected}
-          backup={revokeBackup}
-          onClose={() => {
+          onClose={() => setSheet(null)}
+          onDone={async (count) => {
             setSheet(null);
-            setRevokeBackup(null);
-          }}
-          onDone={async () => {
-            const alias = revokeBackup.backupAlias;
-            setRevokeBackup(null);
-            await applied(`Revoked backup phrase ${alias}`);
+            await onRefreshSnapshot();
+            await onRefresh(
+              `Local state reset for ${plural(count, 'server')}. Verify each server before reconnecting.`,
+            );
           }}
           onError={(error) => void onMutationError(error)}
         />
       ) : null}
-    </>
-  );
-}
-
-/**
- * Displayed when the requested account cannot be found in the current catalog.
- */
-function UnavailableAccount({
-  stores,
-  snapshot,
-  onSelect,
-  onRefresh,
-}: {
-  stores: AccountStore[];
-  snapshot: AgentSnapshot;
-  onSelect: (store: AccountStore) => void;
-  onRefresh: () => void;
-}): ReactNode {
-  return (
-    <Notice
-      severity="crit"
-      title="Account no longer available"
-      actions={
-        <>
-          <Button variant="primary" onClick={onRefresh}>
-            Refresh the catalog
-          </Button>
-          {stores.map((store) => (
-            <Button key={store.id} onClick={() => onSelect(store)}>
-              {store.account} ·{' '}
-              {snapshot.servers.find((server) => server.id === store.server)
-                ?.name ?? store.server}
-            </Button>
-          ))}
-        </>
-      }
-    >
-      <p>
-        This account is no longer available on this Mac. Select another account
-        below or refresh the catalog.
-      </p>
-      {stores.length ? null : (
-        <p>
-          This Mac has no active account. Add and verify a server, then create
-          or recover an account.
-        </p>
-      )}
-    </Notice>
-  );
-}
-
-function NoAvailableAccount({
-  onConnectGoProfile,
-}: {
-  onConnectGoProfile: () => void;
-}): ReactNode {
-  return (
-    <Notice
-      title="No available account on this Mac"
-      actions={
-        <Button variant="primary" onClick={onConnectGoProfile}>
-          Connect existing account
-        </Button>
-      }
-    >
-      <p>
-        Add and verify a server, then create or recover an account, or connect
-        an existing FOKS account on your device.
-      </p>
-    </Notice>
-  );
-}
-
-/** The account this section applies to, chosen from a full-width dropdown. */
-function AccountPicker({
-  stores,
-  selected,
-  snapshot,
-  onSwitch,
-}: {
-  stores: AccountStore[];
-  selected: AccountStore;
-  snapshot: AgentSnapshot;
-  onSwitch: (store: AccountStore) => void;
-}): ReactNode {
-  const options: CardOption[] = stores.map((store) => {
-    const username = snapshot.accounts.find(
-      (entry) => entry.store === store.id,
-    )?.username;
-    const server = snapshot.servers.find((entry) => entry.id === store.server);
-    const stopped = !storeAvailability(snapshot, store).available;
-    return {
-      id: store.id,
-      title: store.account,
-      detail: `${username ?? 'Identity unavailable'} on ${server?.name ?? store.server}${stopped ? ' · access stopped' : ''}`,
-    };
-  });
-  return (
-    <Inset className="account-picker">
-      <CardSelect
-        label="This account"
-        options={options}
-        value={selected.id}
-        onChange={(id) => {
-          const next = stores.find((store) => store.id === id);
-          if (next) onSwitch(next);
-        }}
-      />
-    </Inset>
-  );
-}
-
-function MacsSection({
-  stores,
-  selected,
-  devices,
-  backups,
-  snapshot,
-  stopped,
-  loading,
-  onConnectGoProfile,
-  onSwitch,
-  onSheet,
-  onPair,
-  onRemove,
-  onRevokeBackup,
-}: {
-  stores: AccountStore[];
-  selected?: AccountStore;
-  devices: AccountDevice[];
-  backups: BackupEnrollment[];
-  snapshot: AgentSnapshot;
-  stopped: boolean;
-  loading: boolean;
-  onConnectGoProfile: () => void;
-  onSwitch: (store: AccountStore) => void;
-  onSheet: (sheet: Sheet) => void;
-  onPair: (mode: 'offer' | 'accept') => void;
-  onRemove: (device: AccountDevice) => void;
-  onRevokeBackup: (backup: BackupEnrollment) => void;
-}): ReactNode {
-  if (!selected)
-    return <NoAvailableAccount onConnectGoProfile={onConnectGoProfile} />;
-  const account = snapshot.accounts.find(
-    (entry) => entry.store === selected.id,
-  );
-  return (
-    <>
-      <SectionLabel>Account</SectionLabel>
-      <AccountPicker
-        stores={stores}
-        selected={selected}
-        snapshot={snapshot}
-        onSwitch={onSwitch}
-      />
-      <SectionLabel>This account</SectionLabel>
-      <Inset className="settings-inset">
-        <InsetRow label="Signed in as">
-          <b>{account?.username ?? 'Unknown user'}</b>
-        </InsetRow>
-        <InsetRow label="Local alias">{selected.account}</InsetRow>
-      </Inset>
-      {stopped ? (
-        <Band severity="crit" label="Account access is stopped">
-          Restore access in Server settings before managing this account or its
-          security keys.
-        </Band>
-      ) : null}
-      <SectionLabel>Your Macs</SectionLabel>
-      <Inset className="settings-inset">
-        {loading ? (
-          <InsetRow>Loading devices…</InsetRow>
-        ) : devices.length ? (
-          devices.map((device) => (
-            <InsetRow
-              key={device.id}
-              label={
-                device.name ??
-                (device.id.startsWith('08') ? 'YubiKey' : 'Device')
-              }
-              action={
-                <>
-                  {device.current ? (
-                    <Chip tone="you">
-                      {device.id.startsWith('08')
-                        ? 'current security key'
-                        : 'this Mac'}
-                    </Chip>
-                  ) : device.id.startsWith('04') ? (
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      disabled={stopped}
-                      onClick={() => onRemove(device)}
-                    >
-                      Remove…
-                    </Button>
-                  ) : (
-                    <Chip>Security key (managed separately)</Chip>
-                  )}
-                </>
-              }
-            >
-              <b>{device.role}</b>
-              <small>{device.id}</small>
-            </InsetRow>
-          ))
-        ) : (
-          <InsetRow label="None">
-            {stopped
-              ? 'Not listed while access is stopped'
-              : 'No devices connected to this account.'}
-          </InsetRow>
-        )}
-      </Inset>
-      <SectionLabel>Pairing</SectionLabel>
-      <Inset className="settings-inset">
-        <InsetRow
-          label="From this Mac"
-          action={
-            <Button
-              variant="primary"
-              disabled={stopped}
-              onClick={() => onPair('offer')}
-            >
-              Start pairing…
-            </Button>
-          }
-        >
-          Get a pairing phrase to connect another device to your account.
-        </InsetRow>
-        <InsetRow
-          label="On this Mac"
-          action={
-            <Button disabled={stopped} onClick={() => onPair('accept')}>
-              Accept or resume…
-            </Button>
-          }
-        >
-          Enter the pairing phrase displayed on your other FOKS device.
-        </InsetRow>
-      </Inset>
-      <SectionLabel>Recovery</SectionLabel>
-      <Inset className="settings-inset middle">
-        <InsetRow
-          label="Backup phrases"
-          action={
-            <Button disabled={stopped} onClick={() => onSheet('phrase')}>
-              {backups.length ? 'Enroll another…' : 'Enroll…'}
-            </Button>
-          }
-        >
-          {loading
-            ? 'Loading…'
-            : backups.length
-              ? `${backups.length} enrollment${backups.length === 1 ? '' : 's'} stored on this Mac`
-              : 'No backup phrases stored on this Mac for this account.'}
-        </InsetRow>
-        {backups.map((backup) => (
-          <InsetRow
-            key={backup.backupId}
-            label={backup.backupAlias}
-            action={
-              <Button
-                size="sm"
-                variant="danger"
-                disabled={stopped}
-                onClick={() => onRevokeBackup(backup)}
-              >
-                Revoke…
-              </Button>
-            }
-          >
-            <small>{backup.backupId}</small>
-          </InsetRow>
-        ))}
-        <InsetRow
-          label="Recover account"
-          action={
-            <Button disabled={stopped} onClick={() => onSheet('recover')}>
-              Recover…
-            </Button>
-          }
-        >
-          Use a backup phrase to recover an existing account on this Mac.
-        </InsetRow>
-      </Inset>
-      <p className="fn">
-        Only backup phrases created on this Mac are listed here. Backup keys
-        created on other devices cannot be viewed or revoked from this screen.
-      </p>
-    </>
-  );
-}
-
-type SimpleYubiAction =
-  | 'sync'
-  | 'pin-status'
-  | 'change-pin'
-  | 'set-passphrase'
-  | 'change-passphrase'
-  | 'verify-passphrase'
-  | 'unblock'
-  | 'change-puk'
-  | 'recover-management'
-  | 'recover-subkey'
-  | 'resume-enrollment'
-  | 'resume-rotation'
-  | 'rotate';
-
-function KeysSection({
-  yubi,
-  cards,
-  accountConfigured,
-  stopped,
-  loading,
-  onSheet,
-  onAction,
-}: {
-  yubi: YubiEnrollment[];
-  cards: { serial: number }[];
-  accountConfigured: boolean;
-  stopped: boolean;
-  loading: boolean;
-  onSheet: (sheet: Sheet) => void;
-  onAction: (action: SimpleYubiAction) => void;
-}): ReactNode {
-  const actions: readonly [SimpleYubiAction, string, string][] = [
-    ['sync', 'Sync', 'Update the key account; optionally include federation.'],
-    [
-      'pin-status',
-      'PIN status',
-      'Read remaining PIN attempts from the connected card.',
-    ],
-    ['change-pin', 'Change PIN', 'Enter the current PIN and a new PIN.'],
-    ['set-passphrase', 'Set passphrase', 'Set a new account passphrase.'],
-    [
-      'change-passphrase',
-      'Change passphrase',
-      'Enter the card PIN and a confirmed new passphrase.',
-    ],
-    [
-      'verify-passphrase',
-      'Verify passphrase',
-      'Test the passphrase with the server login challenge.',
-    ],
-    ['unblock', 'Unblock PIN', 'Use your unlock code (PUK) to set a new PIN.'],
-    ['change-puk', 'Change unlock code', 'Set a new unlock code (PUK).'],
-    [
-      'recover-management',
-      'Restore management access',
-      'Authorize this Mac to manage the security key.',
-    ],
-    [
-      'recover-subkey',
-      'Restore signing key',
-      'Re-derive authentication credentials using your card PIN.',
-    ],
-    [
-      'resume-enrollment',
-      'Resume enrollment',
-      'Continue an interrupted enrollment.',
-    ],
-    [
-      'resume-rotation',
-      'Resume key rotation',
-      'Continue an interrupted management key rotation.',
-    ],
-    ['rotate', 'Rotate management key', 'Generate a new card management key.'],
-  ];
-  return (
-    <>
-      <SectionLabel>Enrolled keys</SectionLabel>
-      <Inset className="settings-inset">
-        {loading ? (
-          <InsetRow>Loading keys…</InsetRow>
-        ) : yubi.length ? (
-          yubi.map((item) => (
-            <InsetRow
-              key={item.alias}
-              label={item.alias}
-              action={<Chip>{item.state}</Chip>}
-            >
-              Serial number unavailable
-            </InsetRow>
-          ))
-        ) : (
-          <InsetRow label="None">No YubiKeys enrolled.</InsetRow>
-        )}
-      </Inset>
-      <SectionLabel>Connected now</SectionLabel>
-      <Inset className="settings-inset">
-        {loading ? (
-          <InsetRow>Loading keys…</InsetRow>
-        ) : cards.length ? (
-          cards.map((card) => (
-            <InsetRow key={card.serial} label={`YubiKey ${card.serial}`}>
-              <Chip tone="ok">Connected</Chip>
-            </InsetRow>
-          ))
-        ) : (
-          <InsetRow label="None">No security key is connected.</InsetRow>
-        )}
-      </Inset>
-      {stopped ? (
-        <Band
-          severity="crit"
-          label={
-            accountConfigured
-              ? 'Security-key access is stopped'
-              : 'No account configured'
-          }
-        >
-          {accountConfigured
-            ? 'Restore account access in Settings › Servers before changing these settings.'
-            : 'Add or recover an account before configuring security keys.'}
-        </Band>
-      ) : null}
-      <SectionLabel>Add</SectionLabel>
-      <Inset className="settings-inset">
-        <InsetRow
-          label="New account"
-          action={
-            <Button
-              variant="primary"
-              disabled={stopped}
-              onClick={() => onSheet('enrol')}
-            >
-              Create on YubiKey…
-            </Button>
-          }
-        >
-          Store credentials directly on the security key from creation.
-        </InsetRow>
-        <InsetRow
-          label="Existing account"
-          action={
-            <Button disabled={stopped} onClick={() => onSheet('provision')}>
-              Provision…
-            </Button>
-          }
-        >
-          Add a connected security key as an authorized device for this account.
-        </InsetRow>
-      </Inset>
-      <SectionLabel>Everyday and recovery</SectionLabel>
-      <Inset className="settings-inset">
-        {actions.map(([id, label, copy]) => {
-          const available =
-            !stopped &&
-            !loading &&
-            (id === 'resume-enrollment'
-              ? yubi.some((entry) => entry.state === 'pending')
-              : yubi.some((entry) => entry.state === 'complete'));
-          return (
-            <InsetRow
-              key={id}
-              label={label}
-              action={
-                <Button
-                  size="sm"
-                  disabled={!available}
-                  title={
-                    available
-                      ? undefined
-                      : stopped
-                        ? 'Server access is stopped'
-                        : loading
-                          ? 'Loading account…'
-                          : id === 'resume-enrollment'
-                            ? 'No pending enrollment found'
-                            : 'No complete enrollment found'
-                  }
-                  onClick={() => onAction(id)}
-                >
-                  {label.includes(' ') ? 'Open…' : label}
-                </Button>
-              }
-            >
-              {copy}
-            </InsetRow>
-          );
-        })}
-      </Inset>
-      <SectionLabel className="danger-title">Danger</SectionLabel>
-      <Inset className="danger-box settings-inset">
-        <InsetRow
-          label="Revoke YubiKey"
-          action={
-            <Button
-              variant="danger"
-              disabled={
-                stopped || !yubi.some((entry) => entry.state === 'complete')
-              }
-              onClick={() => onSheet('revoke')}
-            >
-              Revoke…
-            </Button>
-          }
-        >
-          Rotates account keys controlled by this YubiKey.
-        </InsetRow>
-      </Inset>
-    </>
-  );
-}
-
-function AccountSection({
-  snapshot,
-  deviceNames,
-  onConnectGoProfile,
-  onPassphrase,
-  onAccountSheet,
-}: {
-  snapshot: AgentSnapshot;
-  deviceNames: Map<string, string>;
-  onConnectGoProfile: () => void;
-  onPassphrase: (store: AccountStore, mode: 'set' | 'change') => void;
-  onAccountSheet: (store: AccountStore, sheet: AccountSheet) => void;
-}): ReactNode {
-  const stores = accountStores(snapshot);
-  if (!stores.length) {
-    return <NoAvailableAccount onConnectGoProfile={onConnectGoProfile} />;
-  }
-  return (
-    <>
-      <SectionLabel
-        action={
-          <Button size="sm" onClick={onConnectGoProfile}>
-            Connect from FOKS CLI…
-          </Button>
-        }
-      >
-        Accounts on this Mac
-      </SectionLabel>
-      {stores.map((store) => {
-        const server = snapshot.servers.find(
-          (entry) => entry.id === store.server,
-        );
-        const account = snapshot.accounts.find(
-          (entry) => entry.store === store.id,
-        );
-        const availability = storeAvailability(snapshot, store);
-        const stopped = !availability.available;
-        const inert = stopped;
-        const statusLabel = availability.available
-          ? server?.compatibility.status === 'not-required'
-            ? 'Check-in not required'
-            : 'Available'
-          : storeDescription(snapshot, store);
-        return (
-          <div key={store.id}>
-            <SectionLabel>
-              {server?.name ?? store.server}
-              {server?.label ? ` · ${server.label}` : ''}
-            </SectionLabel>
-            <Inset className="settings-inset">
-              <InsetRow
-                label="Username"
-                action={
-                  <Button
-                    size="sm"
-                    disabled={inert}
-                    onClick={() => onAccountSheet(store, 'rename')}
-                  >
-                    Change…
-                  </Button>
-                }
-              >
-                <b>{account?.username ?? 'Identity unavailable'}</b>{' '}
-                <Chip tone={stopped ? 'warn' : 'default'}>{statusLabel}</Chip>
-              </InsetRow>
-              <InsetRow label="Local alias">{store.account}</InsetRow>
-              <InsetRow label="Device">
-                {stopped
-                  ? 'Not listed while access is stopped'
-                  : (deviceNames.get(store.id) ?? 'Current device unknown')}
-                <small>This account’s current authenticated device.</small>
-              </InsetRow>
-              <InsetRow
-                label="Passphrase"
-                action={
-                  <>
-                    <Button
-                      size="sm"
-                      disabled={inert}
-                      onClick={() => onPassphrase(store, 'set')}
-                    >
-                      Set…
-                    </Button>
-                    <Button
-                      size="sm"
-                      disabled={inert}
-                      onClick={() => onPassphrase(store, 'change')}
-                    >
-                      Change…
-                    </Button>
-                  </>
-                }
-              >
-                <small>
-                  {stopped
-                    ? 'Reconnect to the server to manage your passphrase.'
-                    : 'Protects this account’s secret keys on this Mac.'}
-                </small>
-              </InsetRow>
-              <InsetRow
-                label="SSO"
-                action={
-                  <Button
-                    size="sm"
-                    onClick={() => onAccountSheet(store, 'sso')}
-                  >
-                    Sign in…
-                  </Button>
-                }
-              >
-                <small>
-                  Sign in through your organization’s identity provider.
-                </small>
-              </InsetRow>
-              <InsetRow
-                label="Bot accounts"
-                action={
-                  <Button
-                    size="sm"
-                    onClick={() => onAccountSheet(store, 'bot')}
-                  >
-                    Manage…
-                  </Button>
-                }
-              >
-                <small>
-                  Device credentials for automation on this account.
-                </small>
-              </InsetRow>
-              <InsetRow
-                label="Web admin"
-                action={
-                  <Button
-                    size="sm"
-                    onClick={() => onAccountSheet(store, 'admin')}
-                  >
-                    Open…
-                  </Button>
-                }
-              >
-                <small>
-                  Opens the host’s administration panel in a private window.
-                </small>
-              </InsetRow>
-              <InsetRow
-                label="Groups"
-                action={
-                  <Button
-                    size="sm"
-                    onClick={() => onAccountSheet(store, 'join')}
-                  >
-                    Join a group…
-                  </Button>
-                }
-              >
-                <small>
-                  Request membership with an invitation from an administrator.
-                </small>
-              </InsetRow>
-            </Inset>
-          </div>
-        );
-      })}
     </>
   );
 }
@@ -1515,71 +507,68 @@ function AgentSection({
     snapshot.agent.state === 'ready' && agentLifecycle.state === 'ready';
   return (
     <>
-      <SectionLabel>Agent</SectionLabel>
-      <Inset className="settings-inset">
-        <InsetRow label="Status">
-          <span className={ready ? 'agent' : 'agent warn'}>
-            <i />
-            {snapshot.agent.state === 'bootstrap'
-              ? 'Starting the FOKS agent'
-              : agentLifecycleLabel(agentLifecycle)}
-          </span>
-          <small>
-            The local background agent must be connected to use FOKS.
-          </small>
-        </InsetRow>
-        <InsetRow
-          label="Socket"
-          valueClass="mono"
-          action={
-            appInfo ? (
-              <Button
-                size="sm"
-                onClick={() =>
-                  void bridge
-                    .copyText(appInfo.agentSocket)
-                    .then(() => onMessage('Socket path copied'))
-                    .catch(onError)
-                }
-              >
-                Copy
-              </Button>
-            ) : undefined
-          }
-        >
-          {appInfo?.agentSocket ?? 'Reading app info…'}
-          <small>Local connection used by this desktop app.</small>
-        </InsetRow>
-        <InsetRow
-          label="Connection"
-          action={
-            ready ? undefined : (
-              <Button
-                variant="primary"
-                onClick={() =>
-                  void onRetryAgent()
-                    .then(() => onMessage('Connected to local agent.'))
-                    .catch(onError)
-                }
-              >
-                Retry connection
-              </Button>
-            )
-          }
-        >
-          {ready
-            ? 'Connected.'
-            : 'Reconnect to the local agent. Interrupted changes will be reconciled and will not be repeated automatically.'}
-        </InsetRow>
-      </Inset>
+      <InsetRow
+        label="Agent"
+        action={
+          ready ? undefined : (
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() =>
+                void onRetryAgent()
+                  .then(() => onMessage('Connected to local agent.'))
+                  .catch(onError)
+              }
+            >
+              Retry connection
+            </Button>
+          )
+        }
+      >
+        <span className={ready ? 'agent' : 'agent warn'}>
+          <i />
+          {snapshot.agent.state === 'bootstrap'
+            ? 'Starting the FOKS agent'
+            : agentLifecycleLabel(agentLifecycle)}
+        </span>
+        <small>The local background agent must be connected to use FOKS.</small>
+      </InsetRow>
+      <InsetRow
+        label="Socket"
+        valueClass="mono"
+        action={
+          appInfo ? (
+            <Button
+              size="sm"
+              onClick={() =>
+                void bridge
+                  .copyText(appInfo.agentSocket)
+                  .then(() => onMessage('Socket path copied'))
+                  .catch(onError)
+              }
+            >
+              Copy
+            </Button>
+          ) : undefined
+        }
+      >
+        {appInfo?.agentSocket ?? 'Reading app info…'}
+        <small>Local connection used by this desktop app.</small>
+      </InsetRow>
     </>
   );
 }
 
+/**
+ * About and This Mac: two sections, so two regions. What the application is
+ * and what this Mac's copy of it can be moved to are different subjects, and
+ * one region named About would name half of what it encloses.
+ */
 function AboutSection({
   snapshot,
   bridge,
   appInfo,
+  anchor,
   onError,
   onMessage,
   onLock,
@@ -1589,6 +578,8 @@ function AboutSection({
   snapshot: AgentSnapshot;
   bridge: Bridge;
   appInfo: AppInfo | null;
+  /** The `section=about` address lands on the first of the two. */
+  anchor: RefObject<HTMLDivElement | null>;
   onError: (error: unknown) => void;
   onMessage: (message: string) => void;
   onLock: () => Promise<boolean>;
@@ -1598,1372 +589,360 @@ function AboutSection({
   const maintenanceUnavailable = agentLifecycle.state !== 'ready';
   return (
     <>
-      <SectionLabel>Application</SectionLabel>
-      <Inset className="settings-inset middle">
-        <InsetRow
-          label="Lock application"
-          action={
-            <Button
-              size="sm"
-              icon="shield"
-              onClick={() => {
-                void onLock().then(
-                  (locked) => {
-                    if (!locked)
-                      onMessage(
-                        'Application lock is not available on this system.',
-                      );
-                  },
-                  (error) => onError(error),
-                );
-              }}
-            >
-              Lock now
-            </Button>
-          }
-        >
-          <small>
+      <div
+        className="settings-section"
+        ref={anchor}
+        tabIndex={-1}
+        role="region"
+        aria-labelledby="settings-about-label"
+      >
+        <SectionLabel id="settings-about-label">About</SectionLabel>
+        <Inset className="settings-inset middle wide">
+          <InsetRow label="Version">
+            FOKS Desktop {appInfo?.version ?? '…'}
+            <small>Installed application version.</small>
+          </InsetRow>
+          <AgentSection
+            snapshot={snapshot}
+            bridge={bridge}
+            appInfo={appInfo}
+            onError={onError}
+            onMessage={onMessage}
+            agentLifecycle={agentLifecycle}
+            onRetryAgent={onRetryAgent}
+          />
+          <InsetRow
+            label="Lock application"
+            action={
+              <Button
+                size="sm"
+                icon="shield"
+                onClick={() => {
+                  void onLock().then(
+                    (locked) => {
+                      if (!locked)
+                        onMessage(
+                          'Application lock is not available on this system.',
+                        );
+                    },
+                    (error) => onError(error),
+                  );
+                }}
+              >
+                Lock now
+              </Button>
+            }
+          >
             Require your operating-system credentials before FOKS can read vault
             data again.
-          </small>
-        </InsetRow>
-      </Inset>
-      <AgentSection
-        snapshot={snapshot}
-        bridge={bridge}
-        appInfo={appInfo}
-        onError={onError}
-        onMessage={onMessage}
-        agentLifecycle={agentLifecycle}
-        onRetryAgent={onRetryAgent}
-      />
-      <SectionLabel>Local state</SectionLabel>
-      <Inset className="settings-inset">
-        <InsetRow
-          label="Transfer FOKS state"
-          action={
-            <>
+          </InsetRow>
+        </Inset>
+      </div>
+      <div
+        className="settings-section"
+        role="region"
+        aria-labelledby="settings-this-mac-label"
+      >
+        <SectionLabel id="settings-this-mac-label">This Mac</SectionLabel>
+        <Inset className="settings-inset wide">
+          <InsetRow
+            label="Transfer FOKS state"
+            action={
+              <>
+                <Button
+                  size="sm"
+                  disabled={maintenanceUnavailable}
+                  onClick={() => {
+                    void bridge.maintainClientState('export').catch(onError);
+                  }}
+                >
+                  Export…
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={maintenanceUnavailable}
+                  onClick={() => {
+                    void bridge.maintainClientState('import').catch(onError);
+                  }}
+                >
+                  Import…
+                </Button>
+              </>
+            }
+          >
+            <small>
+              Encrypted backups copy device credentials. Use a new device for
+              independent revocation.
+            </small>
+          </InsetRow>
+          <InsetRow
+            label="Verify imported accounts"
+            action={
               <Button
                 size="sm"
                 disabled={maintenanceUnavailable}
                 onClick={() => {
-                  void bridge.maintainClientState('export').catch(onError);
+                  void bridge.maintainClientState('verify').catch(onError);
                 }}
               >
-                Export…
+                Verify online
               </Button>
+            }
+          >
+            <small>
+              Check current account and device authority before enabling
+              imported state.
+            </small>
+          </InsetRow>
+          <InsetRow
+            label="Move FOKS data"
+            action={
               <Button
                 size="sm"
                 disabled={maintenanceUnavailable}
                 onClick={() => {
-                  void bridge.maintainClientState('import').catch(onError);
+                  void bridge.relocateClientState().catch(onError);
                 }}
               >
-                Import…
+                Choose folder…
               </Button>
-            </>
-          }
-        >
-          <small>
-            Encrypted backups copy device credentials. Use a new device for
-            independent revocation.
-          </small>
-        </InsetRow>
-        <InsetRow
-          label="Verify imported accounts"
-          action={
-            <Button
-              size="sm"
-              disabled={maintenanceUnavailable}
-              onClick={() => {
-                void bridge.maintainClientState('verify').catch(onError);
-              }}
-            >
-              Verify online
-            </Button>
-          }
-        >
-          <small>
-            Check current account and device authority before enabling imported
-            state.
-          </small>
-        </InsetRow>
-        <InsetRow
-          label="Move FOKS data"
-          action={
-            <Button
-              size="sm"
-              disabled={maintenanceUnavailable}
-              onClick={() => {
-                void bridge.relocateClientState().catch(onError);
-              }}
-            >
-              Choose folder…
-            </Button>
-          }
-        >
-          <small>
-            Move every profile and its credentials to another folder on this
-            disk. FOKS verifies the move and restarts.
-          </small>
-        </InsetRow>
-      </Inset>
-      <SectionLabel>About</SectionLabel>
-      <Inset className="settings-inset">
-        <InsetRow label="Version">
-          FOKS Desktop {appInfo?.version ?? '…'}
-          <small>Installed application version.</small>
-        </InsetRow>
-      </Inset>
+            }
+          >
+            <small>
+              Move every profile and its credentials to another folder on this
+              disk. FOKS verifies the move and restarts.
+            </small>
+          </InsetRow>
+        </Inset>
+      </div>
     </>
   );
 }
 
-function SheetFrame({
-  title,
-  subtitle,
-  children,
-  footer,
+/**
+ * Reset this Mac: `describe_reset` and `reset_server` once per server.
+ *
+ * There is no command that spans profiles, so each server answers with its own
+ * one-use token and each profile name is typed. A run that fails part way says
+ * how far it got rather than pretending the rest happened.
+ */
+function ResetMacSheet({
+  snapshot,
+  bridge,
   onClose,
-  danger = false,
-  dismissible = true,
+  onDone,
+  onError,
 }: {
-  title: string;
-  subtitle: string;
-  children: ReactNode;
-  footer: ReactNode;
+  snapshot: AgentSnapshot;
+  bridge: Bridge;
   onClose: () => void;
-  danger?: boolean;
-  dismissible?: boolean;
+  onDone: (count: number) => Promise<void>;
+  onError: (error: unknown) => void;
 }): ReactNode {
+  const servers = snapshot.servers;
+  const [previews, setPreviews] = useState<Map<string, ResetPreview>>(
+    new Map(),
+  );
+  const [failures, setFailures] = useState<Map<string, string>>(new Map());
+  const [typed, setTyped] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback((): void => {
+    setLoading(true);
+    setPreviews(new Map());
+    setFailures(new Map());
+    void (async () => {
+      const found = new Map<string, ResetPreview>();
+      const failed = new Map<string, string>();
+      for (const server of servers) {
+        try {
+          const preview = await enqueueProfileWork(bridge, server.id, () =>
+            bridge.describeReset(server.id),
+          );
+          if (preview.profile !== server.id)
+            throw new Error('describe_reset returned a different profile.');
+          found.set(server.id, preview);
+        } catch (error) {
+          failed.set(server.id, normalizeCommandError(error).message);
+        }
+      }
+      setPreviews(found);
+      setFailures(failed);
+      setLoading(false);
+    })();
+  }, [bridge, servers]);
+  useEffect(load, [load]);
+
+  const ready =
+    !loading &&
+    servers.length > 0 &&
+    servers.every(
+      (server) => previews.has(server.id) && typed[server.id] === server.id,
+    );
+  const stores = accountStores(snapshot);
+
+  // Each server answers with its own lifetime, so the sentence waits until
+  // every preview has answered and then says what they actually said. There
+  // is no default to fall back on: an invented number is a promise.
+  const lifetimes = servers.map(
+    (server) => previews.get(server.id)?.expiresInSeconds,
+  );
+  const answered =
+    servers.length > 0 && lifetimes.every((seconds) => seconds !== undefined);
+  const agreed =
+    answered && new Set(lifetimes).size === 1 ? lifetimes[0] : undefined;
+  const expiry = !answered
+    ? null
+    : agreed !== undefined
+      ? `Each reset confirmation expires in ${agreed} seconds and can be used once. Reopen this dialog to generate new ones.`
+      : `Each reset confirmation can be used once and expires on its own server’s terms: ${servers
+          .map(
+            (server) =>
+              `${server.name} in ${previews.get(server.id)?.expiresInSeconds} seconds`,
+          )
+          .join(', ')}. Reopen this dialog to generate new ones.`;
+
   return (
     <SheetDialog
       width="wide"
-      danger={danger}
-      onClose={onClose}
-      dismissible={dismissible}
-      title={title}
-      subtitle={subtitle}
-      footer={footer}
+      danger
+      dismissible={!busy}
+      onClose={() => {
+        if (busy) return;
+        onClose();
+      }}
+      title="Reset this Mac?"
+      subtitle="Delete local account keys and reset server trust for every server on this Mac"
       glyph={
-        <span className={`server-mark ${danger ? 'danger' : ''}`}>
-          <Icon name={danger ? 'trash' : 'gear'} />
+        <span className="server-mark danger">
+          <Icon name="trash" />
         </span>
       }
-    >
-      {children}
-    </SheetDialog>
-  );
-}
-
-function PhraseSheet({
-  bridge,
-  profile,
-  accountAlias,
-  username,
-  server,
-  seedPhrase,
-  onClose,
-  onDone,
-  onError,
-}: {
-  bridge: Bridge;
-  profile: string;
-  accountAlias: string;
-  username: string;
-  server: string;
-  seedPhrase?: string;
-  onClose: () => void;
-  onDone: () => Promise<void>;
-  onError: (error: unknown) => void;
-}): ReactNode {
-  const [phrase, setPhrase] = useState<string | null>(() => seedPhrase ?? null);
-  const [alias, setAlias] = useState('paper-backup');
-  const [written, setWritten] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const words = phrase?.split(/\s+/) ?? [];
-  return (
-    <SheetFrame
-      title={phrase ? 'Save backup phrase' : 'Create backup phrase'}
-      subtitle={`Generate a recovery phrase for ${username} on ${server}`}
-      onClose={() => {
-        setPhrase(null);
-        onClose();
-      }}
-      dismissible={!phrase}
-      footer={
-        <>
-          {phrase ? (
-            <Button
-              variant="primary"
-              disabled={!written || busy}
-              onClick={() => {
-                setBusy(true);
-                const once = phrase;
-                setPhrase(null);
-                void bridge
-                  .commitOwnerBackup(profile, accountAlias, alias, once)
-                  .then(onDone)
-                  .catch(onError)
-                  .finally(() => setBusy(false));
-              }}
-            >
-              Done
-            </Button>
-          ) : (
-            <>
-              <Button onClick={onClose}>Cancel</Button>
-              <Button
-                variant="primary"
-                disabled={!alias.trim() || busy}
-                onClick={() => {
-                  setBusy(true);
-                  void bridge
-                    .prepareOwnerBackup(profile, accountAlias, alias.trim())
-                    .then((result) => setPhrase(result.phrase))
-                    .catch(onError)
-                    .finally(() => setBusy(false));
-                }}
-              >
-                Generate phrase
-              </Button>
-            </>
-          )}
-        </>
-      }
-    >
-      {phrase ? (
-        <>
-          <p>
-            This phrase is shown only once and cannot be copied. Write it down
-            and keep it in a secure location.
-          </p>
-          <div className="words">
-            {words.map((word, index) => (
-              <span className="word" key={`${index}-${word}`}>
-                <i>{index + 1}</i>
-                {word}
-              </span>
-            ))}
-          </div>
-          <label className="checkline">
-            <input
-              type="checkbox"
-              checked={written}
-              onChange={(event) => setWritten(event.target.checked)}
-            />
-            I have written down these words
-          </label>
-        </>
-      ) : (
-        <Inset>
-          <Field label="Backup alias" value={alias} onChange={setAlias} />
-        </Inset>
-      )}
-    </SheetFrame>
-  );
-}
-
-function PairSheet({
-  bridge,
-  store,
-  initialMode,
-  onClose,
-  onDone,
-  onError,
-}: {
-  bridge: Bridge;
-  store: AccountStore;
-  initialMode: 'offer' | 'accept';
-  onClose: () => void;
-  onDone: (message: string) => Promise<void>;
-  onError: (error: unknown) => void;
-}): ReactNode {
-  const [mode, setMode] = useState<'offer' | 'accept'>(initialMode);
-  const [offer, setOffer] = useState<PairingOffer | null>(null);
-  const [target, setTarget] = useState(store.account);
-  const [device, setDevice] = useState('This Mac');
-  const [phrase, setPhrase] = useState('');
-  const [busy, setBusy] = useState(false);
-  const queued = <T,>(task: () => Promise<T>): Promise<T> =>
-    enqueueProfileWork(bridge, store.server, task);
-  const act = (task: () => Promise<unknown>, message: string): void => {
-    setOffer(null);
-    setPhrase('');
-    setBusy(true);
-    void queued(task)
-      .then(() => onDone(message))
-      .catch(onError)
-      .finally(() => setBusy(false));
-  };
-  const revealOffer = (task: () => Promise<PairingOffer>): void => {
-    setOffer(null);
-    setBusy(true);
-    void queued(task)
-      .then((next) => {
-        if (next.accountAlias !== store.account)
-          throw new Error('pairing offer returned a different account.');
-        setOffer(next);
-      })
-      .catch(onError)
-      .finally(() => setBusy(false));
-  };
-  return (
-    <SheetFrame
-      title="Set up another Mac"
-      subtitle="Start or resume pairing a device"
-      onClose={() => {
-        if (busy) return;
-        setOffer(null);
-        setPhrase('');
-        onClose();
-      }}
       footer={
         <>
           <Button disabled={busy} onClick={onClose}>
-            Close
+            Cancel
           </Button>
-          <span className="spacer" />
-          {mode === 'offer' ? (
-            <>
-              <Button
-                disabled={busy}
-                onClick={() =>
-                  revealOffer(() => bridge.resumeDevicePairingOffer(store.id))
-                }
-              >
-                Resume offer
-              </Button>
-              <Button
-                disabled={!offer || busy}
-                onClick={() =>
-                  act(async () => {
-                    const result = await bridge.finishDevicePairing(store.id);
-                    if (result.alias !== store.account)
-                      throw new Error(
-                        'finish_device_pairing returned a different account.',
-                      );
-                    return result;
-                  }, 'Device paired successfully.')
-                }
-              >
-                Finish
-              </Button>
-              <Button
-                variant="primary"
-                disabled={busy}
-                onClick={() =>
-                  revealOffer(() => bridge.startDevicePairing(store.id))
-                }
-              >
-                Start
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button
-                disabled={busy || !target}
-                onClick={() =>
-                  act(async () => {
-                    const result = await bridge.resumeDevicePairingAcceptance(
-                      store.server,
-                      target,
+          <Button
+            variant="danger"
+            disabled={!ready || busy}
+            onClick={() => {
+              setBusy(true);
+              void (async () => {
+                let done = 0;
+                try {
+                  for (const server of servers) {
+                    const preview = previews.get(server.id);
+                    if (!preview) break;
+                    await bridge.resetServer(
+                      server.id,
+                      server.id,
+                      preview.token,
                     );
-                    if (result.alias !== target)
-                      throw new Error(
-                        'resume_device_pairing_acceptance returned a different account.',
-                      );
-                    return result;
-                  }, 'Pairing acceptance resumed; refreshed authenticated devices')
+                    done += 1;
+                  }
+                  await onDone(done);
+                } catch (error) {
+                  onError(error);
+                  // Every token is spent or stale once a run has started.
+                  load();
+                } finally {
+                  setBusy(false);
                 }
-              >
-                Resume acceptance
-              </Button>
-              <Button
-                variant="primary"
-                disabled={busy || !target || !device || !phrase}
-                onClick={() =>
-                  act(async () => {
-                    const result = await bridge.acceptDevicePairing(
-                      store.server,
-                      target,
-                      device,
-                      phrase,
-                    );
-                    if (result.alias !== target)
-                      throw new Error(
-                        'accept_device_pairing returned a different account.',
-                      );
-                    return result;
-                  }, 'Pairing accepted; refreshed authenticated devices')
-                }
-              >
-                Accept
-              </Button>
-            </>
-          )}
+              })();
+            }}
+          >
+            Reset this Mac
+          </Button>
         </>
       }
     >
-      <SegmentedControl
-        label="Pairing direction"
-        value={mode}
-        onChange={(next) => {
-          if (next === 'offer') {
-            setPhrase('');
-            setMode('offer');
-          } else {
-            setOffer(null);
-            setMode('accept');
-          }
-        }}
-        items={[
-          { id: 'offer', label: 'From this Mac' },
-          { id: 'accept', label: 'On this Mac' },
-        ]}
-      />
-      {mode === 'offer' ? (
-        <>
-          <p>
-            Select Start, enter the pairing phrase on the other Mac, then select
-            Finish here. Resume opens the pending offer.
-          </p>
-          {offer ? (
+      <p>
+        This permanently deletes local account keys. Server data is not deleted,
+        but you can permanently lose access to it without another enrolled
+        device, a paper key you wrote down, or a usable external backup of your
+        local state. Your account passphrase alone cannot restore the deleted
+        keys.
+      </p>
+      <Inset>
+        <InsetRow label="Unaffected">
+          Your accounts on their servers, and every other device. Only what this
+          Mac holds is erased.
+        </InsetRow>
+        <InsetRow label="Accounts on this Mac">
+          {stores.length
+            ? stores
+                .map(
+                  (store) =>
+                    `${usernameOf(snapshot, store) ?? store.account} (${store.account})`,
+                )
+                .join(', ')
+            : 'None'}
+        </InsetRow>
+      </Inset>
+      {servers.map((server) => {
+        const preview = previews.get(server.id);
+        const failure = failures.get(server.id);
+        return (
+          <div key={server.id}>
+            <SectionLabel>
+              {server.name} · {server.id}
+            </SectionLabel>
             <Inset>
-              <InsetRow label="Pairing phrase" valueClass="mono">
-                {offer.phrase}
+              {failure ? (
+                <InsetRow label="Preview">
+                  <span className="danger-title">{failure}</span>
+                </InsetRow>
+              ) : preview ? (
+                <>
+                  <InsetRow label="Discarded operations">
+                    {preview.resumables.length
+                      ? preview.resumables
+                          .map(
+                            (row) =>
+                              `${row.kind} · ${row.alias}${row.target ? ` · ${row.target}` : ''}`,
+                          )
+                          .join(', ')
+                      : 'No resumable operations found.'}
+                  </InsetRow>
+                  <InsetRow label="Data to erase">
+                    {preview.artifacts.length
+                      ? preview.artifacts
+                          .map(
+                            (row) =>
+                              `${row.kind} · ${row.entries} entries · ${row.bytes.toLocaleString()} bytes`,
+                          )
+                          .join(', ')
+                      : 'No local data to erase.'}
+                  </InsetRow>
+                </>
+              ) : (
+                <InsetRow label="Preview">Loading…</InsetRow>
+              )}
+              <InsetRow label="Confirm">
+                <input
+                  value={typed[server.id] ?? ''}
+                  disabled={!preview}
+                  onChange={(event) =>
+                    setTyped((current) => ({
+                      ...current,
+                      [server.id]: event.target.value,
+                    }))
+                  }
+                  placeholder={`Type "${server.id}" to confirm`}
+                />
               </InsetRow>
             </Inset>
-          ) : null}
-        </>
-      ) : (
-        <>
-          <p>
-            Enter the pairing phrase from the other Mac. Resume continues a
-            pending acceptance.
-          </p>
-          <Inset>
-            <Field label="Account alias" value={target} onChange={setTarget} />
-            <Field label="Device name" value={device} onChange={setDevice} />
-            <Field
-              label="Pairing phrase"
-              value={phrase}
-              onChange={setPhrase}
-              type="password"
-            />
-          </Inset>
-        </>
-      )}
-    </SheetFrame>
-  );
-}
-
-function RecoverSheet({
-  bridge,
-  store,
-  onClose,
-  onDone,
-  onError,
-}: {
-  bridge: Bridge;
-  store: AccountStore;
-  onClose: () => void;
-  onDone: () => Promise<void>;
-  onError: (error: unknown) => void;
-}): ReactNode {
-  const [target, setTarget] = useState(store.account);
-  const [device, setDevice] = useState('This Mac');
-  const [phrase, setPhrase] = useState('');
-  const [busy, setBusy] = useState(false);
-  return (
-    <SheetFrame
-      title="Recover on this Mac"
-      subtitle="Use your backup phrase"
-      onClose={() => {
-        setPhrase('');
-        onClose();
-      }}
-      footer={
-        <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button
-            variant="primary"
-            disabled={!target || !device || !phrase || busy}
-            onClick={() => {
-              const once = phrase;
-              setPhrase('');
-              setBusy(true);
-              void enqueueProfileWork(bridge, store.server, () =>
-                bridge.recoverOwnerAccount(store.server, target, once, device),
-              )
-                .then(onDone)
-                .catch(onError)
-                .finally(() => setBusy(false));
-            }}
-          >
-            Recover
-          </Button>
-        </>
-      }
-    >
-      <p>
-        Recovery adds this Mac as an authorized device. If interrupted, you can
-        resume recovery from Alerts using the same phrase.
-      </p>
-      <Inset>
-        <Field label="Local alias" value={target} onChange={setTarget} />
-        <Field label="Device name" value={device} onChange={setDevice} />
-        <InsetRow label="Recovery phrase">
-          <textarea
-            value={phrase}
-            onChange={(event) => setPhrase(event.target.value)}
-          />
-        </InsetRow>
-      </Inset>
-    </SheetFrame>
-  );
-}
-
-function EnrollSheet({
-  bridge,
-  store,
-  card,
-  onClose,
-  onDone,
-  onError,
-}: {
-  bridge: Bridge;
-  store: AccountStore;
-  card?: { serial: number };
-  onClose: () => void;
-  onDone: () => Promise<void>;
-  onError: (error: unknown) => void;
-}): ReactNode {
-  const [alias, setAlias] = useState('work-key');
-  const [username, setUsername] = useState('');
-  const [deviceName, setDeviceName] = useState(
-    card ? `YubiKey ${card.serial}` : 'YubiKey',
-  );
-  const [invite, setInvite] = useState('');
-  const [pin, setPin] = useState('');
-  const [puk, setPuk] = useState('');
-  const [signingSlot, setSigningSlot] = useState('0x82');
-  const [pqSlot, setPqSlot] = useState('0x83');
-  const [pinAttempts, setPinAttempts] = useState(3);
-  const [pukAttempts, setPukAttempts] = useState(3);
-  const [busy, setBusy] = useState(false);
-  const clear = (): void => {
-    setInvite('');
-    setPin('');
-    setPuk('');
-  };
-  const slot = (value: string): number | null =>
-    /^0x[0-9a-fA-F]{2}$/.test(value)
-      ? Number.parseInt(value.slice(2), 16)
-      : null;
-  const signing = slot(signingSlot);
-  const pq = slot(pqSlot);
-  const validAttempts =
-    Number.isInteger(pinAttempts) &&
-    pinAttempts > 0 &&
-    pinAttempts <= 255 &&
-    Number.isInteger(pukAttempts) &&
-    pukAttempts > 0 &&
-    pukAttempts <= 255;
-  return (
-    <SheetFrame
-      title="Create a YubiKey account"
-      subtitle={`Create a new account on ${store.server}`}
-      onClose={() => {
-        clear();
-        onClose();
-      }}
-      footer={
-        <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button
-            variant="primary"
-            disabled={
-              !card ||
-              !alias.trim() ||
-              !username.trim() ||
-              !deviceName.trim() ||
-              !pin ||
-              !puk ||
-              signing === null ||
-              pq === null ||
-              signing === pq ||
-              !validAttempts ||
-              busy
-            }
-            onClick={() => {
-              if (signing === null || pq === null) return;
-              const command: YubiCommand = {
-                command: 'create_yubi_account',
-                args: {
-                  profile: store.server,
-                  alias: alias.trim(),
-                  username: username.trim(),
-                  deviceName: deviceName.trim(),
-                  email: '',
-                  invite,
-                  cardSerial: card?.serial ?? 0,
-                  signingSlot: signing,
-                  pqSlot: pq,
-                  pin,
-                  puk,
-                  pinAttempts,
-                  pukAttempts,
-                },
-              };
-              clear();
-              setBusy(true);
-              void bridge
-                .runYubi(command)
-                .then(onDone)
-                .catch(onError)
-                .finally(() => setBusy(false));
-            }}
-          >
-            Prepare card and create account
-          </Button>
-        </>
-      }
-    >
-      <p>Before you continue:</p>
-      <ol className="sheet-steps">
-        <li>
-          <b>Credentials are written in a single operation.</b> If setup fails,
-          the card's security applet must be reset, erasing existing card data.
-        </li>
-        <li>
-          <b>The card must use default factory settings.</b> Custom-managed
-          cards are not supported.
-        </li>
-        <li>
-          <b>Save your unlock code securely.</b> It cannot be recovered if lost.
-        </li>
-      </ol>
-      {card ? (
-        <p>
-          <b>YubiKey {card.serial}</b> is connected. Choose an alias for this
-          key below.
-        </p>
-      ) : (
-        <Band label="Connect a YubiKey">
-          No security key is currently detected.
+          </div>
+        );
+      })}
+      {servers.length ? null : (
+        <Band label="No servers on this Mac">
+          There is nothing for this reset to erase.
         </Band>
       )}
-      <Inset>
-        <Field label="Alias" value={alias} onChange={setAlias} />
-        <Field label="Username" value={username} onChange={setUsername} />
-        <Field
-          label="Device name"
-          value={deviceName}
-          onChange={setDeviceName}
-        />
-        <Field label="Card PIN" value={pin} onChange={setPin} type="password" />
-        <Field
-          label="Unlock code"
-          value={puk}
-          onChange={setPuk}
-          type="password"
-        />
-        <InsetRow label="Invite">
-          <input
-            type="password"
-            value={invite}
-            onChange={(event) => setInvite(event.target.value)}
-          />
-          <small>Optional server invitation code.</small>
-        </InsetRow>
-      </Inset>
-      <details className="adv">
-        <summary>Advanced</summary>
-        <Inset>
-          <Field
-            label="Signing slot"
-            value={signingSlot}
-            onChange={setSigningSlot}
-            mono
-          />
-          <Field
-            label="Post-quantum slot"
-            value={pqSlot}
-            onChange={setPqSlot}
-            mono
-          />
-          <InsetRow label="PIN tries">
-            <input
-              type="number"
-              min={1}
-              max={255}
-              value={pinAttempts}
-              onChange={(event) => setPinAttempts(Number(event.target.value))}
-            />
-          </InsetRow>
-          <InsetRow label="PUK tries">
-            <input
-              type="number"
-              min={1}
-              max={255}
-              value={pukAttempts}
-              onChange={(event) => setPukAttempts(Number(event.target.value))}
-            />
-          </InsetRow>
-        </Inset>
-      </details>
-      <p className="hint">
-        PIN, unlock code and invite go only to the local agent and are cleared
-        when submitted.
-      </p>
-    </SheetFrame>
-  );
-}
-
-function ProvisionSheet({
-  bridge,
-  store,
-  cards,
-  onClose,
-  onDone,
-  onError,
-}: {
-  bridge: Bridge;
-  store: AccountStore;
-  cards: { serial: number }[];
-  onClose: () => void;
-  onDone: () => Promise<void>;
-  onError: (error: unknown) => void;
-}): ReactNode {
-  const [targetAlias, setTargetAlias] = useState('new-key');
-  const [deviceName, setDeviceName] = useState(
-    cards[0] ? `YubiKey ${cards[0].serial}` : 'YubiKey',
-  );
-  const [serial, setSerial] = useState(cards[0]?.serial ?? 0);
-  const [pin, setPin] = useState('');
-  const [puk, setPuk] = useState('');
-  const [busy, setBusy] = useState(false);
-  const clear = (): void => {
-    setPin('');
-    setPuk('');
-  };
-  const valid = Boolean(
-    cards.some((card) => card.serial === serial) &&
-    targetAlias.trim() &&
-    deviceName.trim() &&
-    pin &&
-    puk,
-  );
-  return (
-    <SheetFrame
-      title="Provision a YubiKey device"
-      subtitle={`Add a security key to ${store.account}`}
-      onClose={() => {
-        clear();
-        onClose();
-      }}
-      footer={
-        <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button
-            variant="primary"
-            disabled={!valid || busy}
-            onClick={() => {
-              const command: YubiCommand = {
-                command: 'provision_yubi_device',
-                args: {
-                  accountStoreId: store.id,
-                  targetAlias: targetAlias.trim(),
-                  deviceName: deviceName.trim(),
-                  cardSerial: serial,
-                  signingSlot: 0x82,
-                  pqSlot: 0x83,
-                  pin,
-                  puk,
-                  pinAttempts: 3,
-                  pukAttempts: 3,
-                },
-              };
-              clear();
-              setBusy(true);
-              void bridge
-                .runYubi(command)
-                .then(onDone)
-                .catch(onError)
-                .finally(() => setBusy(false));
-            }}
-          >
-            Provision card
-          </Button>
-        </>
-      }
-    >
-      <p>Enter a new alias and select a connected card.</p>
-      {cards.length ? null : (
-        <Band label="Connect a YubiKey">
-          No security key is currently detected.
-        </Band>
-      )}
-      <Inset>
-        <Field
-          label="Key alias"
-          value={targetAlias}
-          onChange={setTargetAlias}
-        />
-        <Field
-          label="Device name"
-          value={deviceName}
-          onChange={setDeviceName}
-        />
-        {cards.length ? (
-          <InsetRow label="Connected card">
-            <select
-              value={serial}
-              onChange={(event) => setSerial(Number(event.target.value))}
-            >
-              {cards.map((card) => (
-                <option key={card.serial} value={card.serial}>
-                  YubiKey {card.serial}
-                </option>
-              ))}
-            </select>
-          </InsetRow>
-        ) : null}
-        <Field label="Card PIN" value={pin} onChange={setPin} type="password" />
-        <Field
-          label="Unlock code"
-          value={puk}
-          onChange={setPuk}
-          type="password"
-        />
-      </Inset>
-    </SheetFrame>
-  );
-}
-
-function YubiActionSheet({
-  bridge,
-  store,
-  action,
-  alias,
-  onClose,
-  onDone,
-  onError,
-}: {
-  bridge: Bridge;
-  store: AccountStore;
-  action: SimpleYubiAction;
-  alias: string;
-  onClose: () => void;
-  onDone: () => Promise<void>;
-  onError: (error: unknown) => void;
-}): ReactNode {
-  const [pin, setPin] = useState('');
-  const [other, setOther] = useState('');
-  const [confirmation, setConfirmation] = useState('');
-  const [busy, setBusy] = useState(false);
-  const needsPin = !['pin-status', 'recover-management'].includes(action);
-  const needsOther = [
-    'change-pin',
-    'set-passphrase',
-    'change-passphrase',
-    'verify-passphrase',
-    'unblock',
-    'change-puk',
-  ].includes(action);
-  const needsConfirmation =
-    action === 'set-passphrase' || action === 'change-passphrase';
-  const valid = Boolean(
-    alias &&
-    (!needsPin || action === 'resume-rotation' || pin) &&
-    (!needsOther || other) &&
-    (!needsConfirmation || other === confirmation),
-  );
-  const firstLabel =
-    action === 'unblock' || action === 'change-puk'
-      ? 'Current PUK'
-      : 'Card PIN';
-  const otherLabel =
-    action === 'change-pin' || action === 'unblock'
-      ? 'New PIN'
-      : action === 'change-puk'
-        ? 'New PUK'
-        : 'Passphrase';
-  const submit = (): void => {
-    let command: YubiCommand;
-    switch (action) {
-      case 'sync':
-        command = {
-          command: 'sync_yubi_account',
-          args: { profile: store.server, alias, pin, withFederation: true },
-        };
-        break;
-      case 'pin-status':
-        command = {
-          command: 'yubi_pin_status',
-          args: { profile: store.server, alias },
-        };
-        break;
-      case 'change-pin':
-        command = {
-          command: 'change_yubi_pin',
-          args: { profile: store.server, alias, oldPin: pin, newPin: other },
-        };
-        break;
-      case 'set-passphrase':
-      case 'change-passphrase':
-        command = {
-          command:
-            action === 'set-passphrase'
-              ? 'set_yubi_passphrase'
-              : 'change_yubi_passphrase',
-          args: {
-            profile: store.server,
-            alias,
-            pin,
-            passphrase: other,
-            confirmation,
-          },
-        };
-        break;
-      case 'verify-passphrase':
-        command = {
-          command: 'verify_yubi_passphrase',
-          args: { profile: store.server, alias, pin, passphrase: other },
-        };
-        break;
-      case 'unblock':
-        command = {
-          command: 'unblock_yubi_pin',
-          args: { profile: store.server, alias, puk: pin, newPin: other },
-        };
-        break;
-      case 'change-puk':
-        command = {
-          command: 'change_yubi_puk',
-          args: { profile: store.server, alias, oldPuk: pin, newPuk: other },
-        };
-        break;
-      case 'recover-management':
-        command = {
-          command: 'recover_yubi_management_key',
-          args: { accountStoreId: store.id, yubiAlias: alias },
-        };
-        break;
-      case 'recover-subkey':
-        command = {
-          command: 'recover_yubi_subkey',
-          args: { profile: store.server, alias, pin },
-        };
-        break;
-      case 'resume-enrollment':
-        command = {
-          command: 'resume_yubi_account',
-          args: { profile: store.server, alias, pin },
-        };
-        break;
-      case 'resume-rotation':
-        command = {
-          command: 'resume_yubi_management_key',
-          args: { profile: store.server, alias, ...(pin ? { pin } : {}) },
-        };
-        break;
-      case 'rotate':
-        command = {
-          command: 'rotate_yubi_management_key',
-          args: { profile: store.server, alias, pin },
-        };
-        break;
-    }
-    setPin('');
-    setOther('');
-    setConfirmation('');
-    setBusy(true);
-    void bridge
-      .runYubi(command)
-      .then(onDone)
-      .catch(onError)
-      .finally(() => setBusy(false));
-  };
-  return (
-    <SheetFrame
-      title={action
-        .split('-')
-        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-        .join(' ')}
-      subtitle={alias || 'Choose an enrolled key alias'}
-      onClose={() => {
-        setPin('');
-        setOther('');
-        setConfirmation('');
-        onClose();
-      }}
-      footer={
-        <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={!valid || busy} onClick={submit}>
-            Continue
-          </Button>
-        </>
-      }
-    >
-      <p>
-        The values below go only to the local agent and are cleared when
-        submitted.
-      </p>
-      <Inset>
-        <InsetRow label="Key alias">
-          <b>{alias || 'No key enrolled'}</b>
-        </InsetRow>
-        {needsPin ? (
-          <InsetRow label={firstLabel}>
-            <input
-              type="password"
-              value={pin}
-              onChange={(event) => setPin(event.target.value)}
-            />
-          </InsetRow>
-        ) : null}
-        {needsOther ? (
-          <InsetRow label={otherLabel}>
-            <input
-              type="password"
-              value={other}
-              onChange={(event) => setOther(event.target.value)}
-            />
-          </InsetRow>
-        ) : null}
-        {needsConfirmation ? (
-          <Field
-            label="Confirm"
-            value={confirmation}
-            onChange={setConfirmation}
-            type="password"
-          />
-        ) : null}
-      </Inset>
-    </SheetFrame>
-  );
-}
-
-function RevokeSheet({
-  bridge,
-  store,
-  alias,
-  onClose,
-  onDone,
-  onError,
-}: {
-  bridge: Bridge;
-  store: AccountStore;
-  alias: string;
-  onClose: () => void;
-  onDone: () => Promise<void>;
-  onError: (error: unknown) => void;
-}): ReactNode {
-  const [confirmation, setConfirmation] = useState('');
-  const [busy, setBusy] = useState(false);
-  return (
-    <SheetFrame
-      title={`Revoke ${alias}?`}
-      subtitle="Disconnects this key and updates account security"
-      onClose={() => {
-        if (busy) return;
-        onClose();
-      }}
-      danger
-      dismissible={!busy}
-      footer={
-        <>
-          <Button disabled={busy} onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            variant="danger"
-            disabled={confirmation !== alias || busy}
-            onClick={() => {
-              setBusy(true);
-              void bridge
-                .runYubi({
-                  command: 'revoke_yubi_device',
-                  args: {
-                    accountStoreId: store.id,
-                    yubiAlias: alias,
-                    confirmation,
-                  },
-                })
-                .then((result) => {
-                  if (
-                    result.alias !== alias ||
-                    result.removedLocalCredential !== true
-                  )
-                    throw new Error(
-                      'revoke_yubi_device returned a different enrollment.',
-                    );
-                  return onDone();
-                })
-                .catch(onError)
-                .finally(() => setBusy(false));
-            }}
-          >
-            Revoke {alias}
-          </Button>
-        </>
-      }
-    >
-      <p>
-        This YubiKey will immediately lose access to your account. Any data
-        previously cached on devices using this key will remain until cleared.
-        Enter the key alias to confirm revocation.
-      </p>
-      <Inset>
-        <InsetRow label="Confirm">
-          <input
-            value={confirmation}
-            onChange={(event) => setConfirmation(event.target.value)}
-            placeholder={`type ${alias}`}
-          />
-        </InsetRow>
-      </Inset>
-    </SheetFrame>
-  );
-}
-
-function RevokeBackupSheet({
-  bridge,
-  store,
-  backup,
-  onClose,
-  onDone,
-  onError,
-}: {
-  bridge: Bridge;
-  store: AccountStore;
-  backup: BackupEnrollment;
-  onClose: () => void;
-  onDone: () => Promise<void>;
-  onError: (error: unknown) => void;
-}): ReactNode {
-  const [confirmation, setConfirmation] = useState('');
-  const [busy, setBusy] = useState(false);
-  return (
-    <SheetFrame
-      title={`Revoke ${backup.backupAlias}?`}
-      subtitle={`${store.account} · ${backup.backupId}`}
-      onClose={() => {
-        if (busy) return;
-        onClose();
-      }}
-      danger
-      dismissible={!busy}
-      footer={
-        <>
-          <Button disabled={busy} onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            variant="danger"
-            disabled={confirmation !== backup.backupAlias || busy}
-            onClick={() => {
-              setBusy(true);
-              void bridge
-                .revokeOwnerBackup(store.id, backup, confirmation)
-                .then((revoked) => {
-                  if (
-                    revoked.backupAlias !== backup.backupAlias ||
-                    revoked.backupId !== backup.backupId
-                  )
-                    throw new Error(
-                      'revoke_owner_backup returned a different enrollment.',
-                    );
-                  return onDone();
-                })
-                .catch(onError)
-                .finally(() => setBusy(false));
-            }}
-          >
-            Revoke backup phrase
-          </Button>
-        </>
-      }
-    >
-      <p>
-        This phrase will immediately lose future recovery access. Revocation
-        also rotates every account key the backup could read. Enter the backup
-        alias to confirm.
-      </p>
-      <Inset>
-        <InsetRow label="Confirm">
-          <input
-            value={confirmation}
-            onChange={(event) => setConfirmation(event.target.value)}
-            placeholder={`type ${backup.backupAlias}`}
-          />
-        </InsetRow>
-      </Inset>
-    </SheetFrame>
-  );
-}
-
-function RemoveDeviceSheet({
-  bridge,
-  store,
-  device,
-  onClose,
-  onDone,
-  onError,
-}: {
-  bridge: Bridge;
-  store: AccountStore;
-  device: AccountDevice;
-  onClose: () => void;
-  onDone: () => Promise<void>;
-  onError: (error: unknown) => void;
-}): ReactNode {
-  const [confirmation, setConfirmation] = useState('');
-  const [busy, setBusy] = useState(false);
-  const expected = device.name ?? device.id;
-  return (
-    <SheetFrame
-      title={`Remove ${device.name ?? 'device'}?`}
-      subtitle={`${store.account} · ${device.id}`}
-      onClose={onClose}
-      danger
-      footer={
-        <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button
-            variant="danger"
-            disabled={confirmation !== expected || busy}
-            onClick={() => {
-              setBusy(true);
-              void bridge
-                .removeAccountDevice(store.id, device.id)
-                .then((removed) => {
-                  if (removed.deviceId !== device.id)
-                    throw new Error(
-                      'remove_account_device returned a different device.',
-                    );
-                  return onDone();
-                })
-                .catch(onError)
-                .finally(() => setBusy(false));
-            }}
-          >
-            Remove device
-          </Button>
-        </>
-      }
-    >
-      <p>
-        This device loses future access to the account. Any data previously
-        downloaded to this device will remain until removed; change any
-        sensitive secrets if the device is not under your control.
-      </p>
-      <p className="fn">
-        You can only remove other devices here. YubiKeys are managed under
-        Security keys.
-      </p>
-      <Inset>
-        <InsetRow label="Confirm">
-          <input
-            value={confirmation}
-            onChange={(event) => setConfirmation(event.target.value)}
-            placeholder={`type ${expected}`}
-          />
-        </InsetRow>
-      </Inset>
-    </SheetFrame>
-  );
-}
-
-function PassphraseSheet({
-  bridge,
-  store,
-  subtitle,
-  initialMode,
-  onClose,
-  onDone,
-  onError,
-}: {
-  bridge: Bridge;
-  store: AccountStore;
-  subtitle: string;
-  initialMode: 'set' | 'change';
-  onClose: () => void;
-  onDone: (message: string) => void;
-  onError: (error: unknown) => void;
-}): ReactNode {
-  const [mode, setMode] = useState<'set' | 'change'>(initialMode);
-  const [passphrase, setPassphrase] = useState('');
-  const [confirmation, setConfirmation] = useState('');
-  const [busy, setBusy] = useState(false);
-  const submit = (): void => {
-    const secret = passphrase;
-    const repeated = confirmation;
-    setBusy(true);
-    const task =
-      mode === 'set'
-        ? bridge.setAccountPassphrase(store.id, secret, repeated)
-        : bridge.changeAccountPassphrase(store.id, secret, repeated);
-    void task
-      .then(() => {
-        setPassphrase('');
-        setConfirmation('');
-        onDone('Passphrase updated successfully.');
-      })
-      .catch(onError)
-      .finally(() => setBusy(false));
-  };
-  return (
-    <SheetFrame
-      title="Account passphrase"
-      subtitle={subtitle}
-      onClose={() => {
-        if (busy) return;
-        setPassphrase('');
-        setConfirmation('');
-        onClose();
-      }}
-      footer={
-        <>
-          <Button disabled={busy} onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            variant="primary"
-            disabled={!passphrase || passphrase !== confirmation || busy}
-            onClick={submit}
-          >
-            {mode === 'set' ? 'Set passphrase' : 'Change passphrase'}
-          </Button>
-        </>
-      }
-    >
-      <SegmentedControl
-        label="Passphrase action"
-        value={mode}
-        onChange={setMode}
-        items={[
-          { id: 'set', label: 'Set' },
-          { id: 'change', label: 'Change' },
-        ]}
-      />
-      <Inset>
-        <Field
-          label="Passphrase"
-          value={passphrase}
-          onChange={setPassphrase}
-          type="password"
-        />
-        <Field
-          label="Confirm"
-          value={confirmation}
-          onChange={setConfirmation}
-          type="password"
-        />
-      </Inset>
-    </SheetFrame>
+      {expiry ? <p className="hint">{expiry}</p> : null}
+    </SheetDialog>
   );
 }

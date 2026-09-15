@@ -16,6 +16,7 @@ import {
   parseRole,
   partiesOf,
   partyName,
+  roleName,
   roleRank,
   serverOf,
 } from '../model';
@@ -23,15 +24,10 @@ import type { AgentSnapshot, Party, TeamStore } from '../model';
 import type { ChatChannel, ChatScope } from '../chat-contract';
 import type { Location } from '../location';
 
-/** "Owner", "Admin", "Member" — never the visibility band. */
+/** "Owner", "Admin", "Member" — the shell's role name, never the band. */
 function roleLabel(party: Party): string {
   const role = parseRole(party.destination_role);
-  if (!role) return 'Role unavailable';
-  return role.kind === 'owner'
-    ? 'Owner'
-    : role.kind === 'admin'
-      ? 'Admin'
-      : 'Member';
+  return role ? roleName(role) : 'Role unavailable';
 }
 
 export function ChannelInfoPanel({
@@ -129,7 +125,7 @@ export function ChannelInfoPanel({
             })
           }
         >
-          Team members
+          Manage in Teams
         </Button>
       </section>
       {channel && (
@@ -143,7 +139,7 @@ export function ChannelInfoPanel({
         </section>
       )}
       <p className="chat-info-foot">
-        Leaving, muting, renaming and deleting a channel are not available yet.
+        Leaving, muting, renaming and deleting a channel are not available.
       </p>
     </aside>
   );

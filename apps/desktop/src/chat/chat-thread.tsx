@@ -17,10 +17,38 @@ import {
   messageDate,
   messageTime,
 } from './presentation';
+import type { FoksIconName } from '../icons';
+
+/** The composer controls no `ChatAction` reaches, and why each one is inert. */
+const INERT_TOOLS: readonly {
+  icon: FoksIconName;
+  label: string;
+  reason: string;
+}[] = [
+  {
+    icon: 'attach',
+    label: 'Attach a file',
+    reason: 'Attachments are not available: chat carries text only.',
+  },
+  {
+    icon: 'smile',
+    label: 'Insert an emoji',
+    reason:
+      'The emoji picker is not available yet. Typed emoji are sent as text.',
+  },
+  {
+    icon: 'timer',
+    label: 'Set an exploding timer',
+    reason:
+      'Exploding messages are not available: the agent has no expiry to set.',
+  },
+];
+
 export function ChatThread({
   channel,
   teamName,
   onFiles,
+  onSearch,
   onInfo,
   infoOpen = false,
   infoRef,
@@ -48,6 +76,8 @@ export function ChatThread({
   teamName?: string;
   /** Opens the team's files; the header's folder button. */
   onFiles?: () => void;
+  /** Moves to the inbox column's search field; the header's search button. */
+  onSearch?: () => void;
   /** Opens the channel info panel; the header's ⓘ button. */
   onInfo?: () => void;
   infoOpen?: boolean;
@@ -124,7 +154,7 @@ export function ChatThread({
                 </span>
               </>
             )}
-            {title}
+            <span className="chan">{title}</span>
           </h2>
           <p>
             {channel.description && <span>{channel.description}</span>}
@@ -147,6 +177,17 @@ export function ChatThread({
             void refreshInbox().catch((e) => setError(failure(e)));
           }}
         />
+        {onSearch && (
+          <Button
+            variant="quiet"
+            icon="search"
+            aria-label="Search teams and channels"
+            // Chat has no message index, so the header's search is the
+            // column's: it finds a team or a channel, never a message.
+            title="Search teams and channels"
+            onClick={onSearch}
+          />
+        )}
         {onFiles && (
           <Button
             variant="quiet"
@@ -333,6 +374,31 @@ export function ChatThread({
                 }}
               />
               <div className="chat-composer-row">
+                {/* Attachments, emoji and exploding messages have no
+                    `ChatAction`: they are drawn inert, each saying so, rather
+                    than left out of a composer readers know from elsewhere.
+                    `aria-disabled` rather than `disabled`, because a control
+                    whose only content is the reason it cannot be used has to
+                    be reachable by keyboard to state it. */}
+                <span className="chat-composer-tools">
+                  {INERT_TOOLS.map((tool) => (
+                    <Fragment key={tool.icon}>
+                      <Button
+                        variant="quiet"
+                        icon={tool.icon}
+                        aria-disabled="true"
+                        tabIndex={0}
+                        aria-label={tool.label}
+                        aria-describedby={`${hintId}-${tool.icon}`}
+                        title={tool.reason}
+                        onClick={(event) => event.preventDefault()}
+                      />
+                      <span id={`${hintId}-${tool.icon}`} className="offscreen">
+                        {tool.reason}
+                      </span>
+                    </Fragment>
+                  ))}
+                </span>
                 <small id={hintId}>
                   {recovering
                     ? 'The reply to this message was lost. Recover it to send the same text once.'
@@ -360,6 +426,15 @@ export function ChatThread({
                       : 'Send'}
                 </Button>
               </div>
+              {/* Only the markup the thread actually renders is advertised. */}
+              <p className="chat-mdhint">
+                <span className="mono">**bold**</span>
+                <span className="mono">*italics*</span>
+                <span className="mono">`code`</span>
+                <span className="mono">&gt; quote</span>
+                <span className="mono">- list</span>
+                <span className="mono">[label](https://…)</span>
+              </p>
             </form>
           ) : (
             <p className="chat-quiet">

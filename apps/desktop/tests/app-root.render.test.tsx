@@ -157,7 +157,7 @@ test('the Files roots page lists the stores the rail used to enumerate', async (
   });
 });
 
-test('the chat tab opens the first team with chat and lists the rest', async () => {
+test('the chat tab opens a conversation and lists every team at once', async () => {
   const tab = [
     ...document.querySelectorAll<HTMLButtonElement>('.side.rail .nav'),
   ].find((row) => row.querySelector('.t')?.textContent === 'Chat');
@@ -168,15 +168,20 @@ test('the chat tab opens the first team with chat and lists the rest', async () 
     assert.ok(node, 'the chat tab draws its team column');
     return node;
   });
-  const rows = [...column.querySelectorAll<HTMLElement>('.chat-team-head')];
+  const rows = [
+    ...column.querySelectorAll<HTMLElement>('.chat-conv, .chat-team-head'),
+  ];
   const name = (row: HTMLElement) => row.querySelector('b')?.textContent;
   const household = rows.find((row) => name(row) === 'Household');
   const engineering = rows.find((row) => name(row) === 'Engineering');
-  assert.ok(household, 'a team whose server offers chat is a heading');
+  assert.ok(household, 'a team whose server offers chat is listed');
   assert.ok(engineering, 'a team whose server offers no chat is still listed');
-  // `chat` with no team resolves to the first team that has one, and that team
-  // is the open one.
-  assert.equal(household.getAttribute('aria-current'), 'true');
+  // `chat` with no conversation resolves to one, and its row is the current
+  // one. Household's channels are the general channel alone, so it is a single
+  // row rather than a heading with a list.
+  await testingLibrary.waitFor(() =>
+    assert.equal(household.getAttribute('aria-current'), 'page'),
+  );
   // Chat follows the server capability grant, as the rail's chat rows did:
   // Engineering's server offers none, so it sits under "No chat", dimmed and
   // not selectable.
@@ -230,6 +235,72 @@ test('opens on All items, in the folder browser', async () => {
   const rows = document.querySelectorAll('.body .row');
   assert.ok(rows.length > 0, 'items list is rendered in main body');
   assert.equal(document.querySelector('[data-shell-placeholder]'), null);
+});
+
+/**
+ * A StoreRef is the agent's own identifier for a store and is opaque: the real
+ * agent answers with a JSON object, not the fixture's readable `acct:<alias>`.
+ * The address may carry one — `?store=` has always encoded it — but no page may
+ * draw one, so People, Devices and Settings are read for every ref the catalog
+ * holds, in their text and in the attributes a reader is shown.
+ */
+test('People, Devices and Settings draw no StoreRef', async () => {
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const refs = FIXTURE.stores.map((store) => store.id);
+  assert.ok(refs.includes('acct:personal'), 'the fixture names account stores');
+  assert.ok(refs.includes('team:eng'), 'the fixture names team stores');
+
+  const tab = (name: string): HTMLButtonElement => {
+    const found = [
+      ...document.querySelectorAll<HTMLButtonElement>('.side.rail .nav'),
+    ].find((row) => row.querySelector('.t')?.textContent === name);
+    assert.ok(found, `the rail has a ${name} tab`);
+    return found;
+  };
+  /** Everything the page shows a reader: its text and its shown attributes. */
+  const shownText = (main: Element): string =>
+    [
+      main.textContent ?? '',
+      ...[
+        ...main.querySelectorAll('[title],[aria-label],[placeholder]'),
+      ].flatMap((node) =>
+        ['title', 'aria-label', 'placeholder'].map(
+          (name) => node.getAttribute(name) ?? '',
+        ),
+      ),
+      ...[...main.querySelectorAll('input,textarea')].map(
+        (node) => (node as HTMLInputElement).value,
+      ),
+    ].join(' ');
+
+  for (const [name, settled] of [
+    ['People', 'Accounts on this Mac'],
+    ['Devices', 'Macs and device keys'],
+    ['Settings', 'Danger zone'],
+  ] as const) {
+    testingLibrary.fireEvent.click(tab(name));
+    const main = await testingLibrary.waitFor(() => {
+      assert.equal(document.querySelector('.loc h1')?.textContent, name);
+      const node = document.querySelector('main.main');
+      assert.ok(node);
+      // Wait for the page's own reads: a loading pane draws none of the rows
+      // a ref could reach, so reading it early would pass for the wrong reason.
+      assert.ok(
+        (node.textContent ?? '').includes(settled),
+        `${name} finished loading`,
+      );
+      return node;
+    });
+    const drawn = shownText(main);
+    for (const ref of refs)
+      assert.equal(
+        drawn.includes(ref),
+        false,
+        `${name} draws the StoreRef ${ref}`,
+      );
+  }
 });
 
 test.after(() => {

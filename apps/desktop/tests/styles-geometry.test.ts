@@ -9,6 +9,10 @@ import { readSource } from './lib/source';
 
 const SHELL = '../src/styles/shell.css';
 const TOKENS = '../kit/tokens.css';
+/** The stylesheets that carry every authored type size in the desktop app. */
+const SHEETS = [SHELL, '../src/styles/app.css', '../src/screens/chat.css'];
+/** Nothing in the app draws text below this size. */
+const TYPE_FLOOR_PX = 12;
 
 /** The `:root` declarations in a stylesheet, as name → value. */
 function rootTokens(css: string): Map<string, string> {
@@ -86,6 +90,46 @@ test('declares the 18 expected FOKS design tokens', async () => {
   assert.equal(tokens.get('--main-surface'), '#fff');
   assert.equal(tokens.get('--hover'), 'rgba(0,0,0,.05)');
   assert.equal(tokens.get('--shadow-menu'), '0 10px 28px rgba(15,20,45,.14)');
+});
+
+/**
+ * Every authored type size in a stylesheet, as `{ value, source }` pairs. Both
+ * the longhand (`font-size:11px`) and the size component of the `font:`
+ * shorthand (`font:600 12px/16px inherit`) are collected; the shorthand's size
+ * is its first px length, because the weight and style keywords that may
+ * precede it carry no unit and the line-height that may follow it is separated
+ * by a slash.
+ */
+function typeSizes(css: string): { value: number; source: string }[] {
+  const declarations = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const sizes: { value: number; source: string }[] = [];
+  for (const match of declarations.matchAll(/font(-size)?\s*:\s*([^;}]+)/g)) {
+    const value = match[2].trim();
+    const px = /(\d+(?:\.\d+)?)px/.exec(value);
+    if (px) sizes.push({ value: Number(px[1]), source: `font: ${value}` });
+  }
+  return sizes;
+}
+
+test('no stylesheet draws text below the 12px type floor', async () => {
+  for (const sheet of SHEETS) {
+    const css = await readSource(sheet, import.meta.url);
+    for (const { value, source } of typeSizes(css)) {
+      assert.ok(
+        value >= TYPE_FLOOR_PX,
+        `${sheet} declares ${value}px, below the ${TYPE_FLOOR_PX}px floor: ${source}`,
+      );
+    }
+    // Relative type sizes would escape the scan above, so none are allowed.
+    assert.doesNotMatch(
+      css.replace(/\/\*[\s\S]*?\*\//g, ''),
+      /font-size\s*:\s*[\d.]+(em|rem|pt|%)/,
+      `${sheet} sizes text in a relative unit, which the floor cannot check`,
+    );
+  }
+  // `<small>` would otherwise fall to the UA's 0.8333em inside a 13px row.
+  const shell = await readSource(SHELL, import.meta.url);
+  assert.match(shell, /(^|})small\{font-size:12px\}/m);
 });
 
 test('stylesheet contains no dark mode media queries or theme overrides', async () => {

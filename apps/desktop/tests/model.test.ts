@@ -37,9 +37,11 @@ import {
   safestRemovalTarget,
   storeReadable,
   storeAvailability,
+  storeAttentionState,
   storeDisplayOrder,
   storeHues,
   storeNavigationOrder,
+  teamCaption,
 } from '../src/model';
 import type { Item, Store, AgentSnapshot } from '../src/model';
 
@@ -621,6 +623,72 @@ test('a never-probed server is a stopped store, not a normal one', () => {
   // Never-probed servers must be treated as inactive rather than normal.
   assert.equal(storeDescriptionState(snapshot, store), 'verification-required');
   assert.equal(storeDescriptionState(FIXTURE, store), 'normal');
+});
+
+test('storeAttentionState counts an unread detail the row would summarize', () => {
+  const store = FIXTURE.stores.find(
+    (candidate) => candidate.id === 'team:household',
+  );
+  assert.ok(store);
+  // Nothing is wrong with the fixture's group: its roster is the caption.
+  assert.equal(storeAttentionState(FIXTURE, store), 'normal');
+  assert.equal(storeDescription(FIXTURE, store), '2 people');
+
+  // A roster the agent could not read leaves the store reachable, so only
+  // `storeAttentionState` knows the row has something to say. Without it a
+  // list would print "Roster unavailable" where the roster summary goes.
+  const unread = {
+    ...FIXTURE,
+    parties: FIXTURE.parties.filter((party) => party.store !== store.id),
+    groupDetailFailures: [
+      {
+        store: store.id,
+        source: 'roster' as const,
+        code: 'unavailable',
+        message: 'The group roster could not be read from the agent.',
+        retryable: true,
+      },
+    ],
+  };
+  assert.equal(storeDescriptionState(unread, store), 'normal');
+  assert.equal(storeAttentionState(unread, store), 'roster-unavailable');
+  assert.equal(storeDescription(unread, store), 'Roster unavailable');
+
+  // A federation read that failed is the same kind of fact.
+  const federation = {
+    ...unread,
+    groupDetailFailures: unread.groupDetailFailures.map((failure) => ({
+      ...failure,
+      source: 'federation' as const,
+    })),
+  };
+  assert.equal(
+    storeAttentionState(federation, store),
+    'federation-unavailable',
+  );
+
+  // An unavailable store keeps the reason it is unavailable: the access
+  // decision outranks a detail that could not be read under it.
+  const lapsed = applyLease(unread, 'lapsed', store.server);
+  assert.equal(storeAttentionState(lapsed, store), 'check-in-expired');
+});
+
+test('teamCaption drops the server on a page that is already about one', () => {
+  const store = FIXTURE.stores.find(
+    (candidate) => candidate.id === 'team:household',
+  );
+  assert.ok(store && store.kind === 'team');
+  assert.equal(teamCaption(FIXTURE, store), 'Named group · foks.example.net');
+  assert.equal(teamCaption(FIXTURE, store, { server: false }), 'Named group');
+  // The account is named only where it is asked for, and after the server.
+  assert.equal(
+    teamCaption(FIXTURE, store, { shared: true }),
+    'Named group · foks.example.net · as satoshi',
+  );
+  assert.equal(
+    teamCaption(FIXTURE, store, { server: false, shared: true }),
+    'Named group · as satoshi',
+  );
 });
 
 test('authoritative empty inventory is complete while an omitted configured profile is not', () => {

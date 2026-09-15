@@ -1,22 +1,25 @@
 /**
- * The Chat tab's team column.
+ * The Chat tab's inbox column: every team with chat, at once.
  *
- * Every named team whose server offers chat is a heading button with its
- * unread badge, beside the buttons that act on that team; exactly one of them
- * is the current team — `aria-current`, because the row selects rather than
- * folds — and lists its channels. Collapsed teams carry only the facts the
- * rail already reads — `useSidebarInbox()` plus `teamUnread` — so no inbox is
- * mounted for them. Named teams whose server offers no chat sit dimmed at the
+ * A team whose only channel is the general channel is a single row — its mark,
+ * its name, the last message, when that message arrived and its unread count,
+ * all taken from that one channel so the row and a channel row cannot disagree.
+ * A team with any named channel is a heading with its `#channels` indented under
+ * it, because a name is not something a team's row can carry for it. Every team
+ * is listed expanded: the column is the whole inbox, and
+ * nothing folds away. The rows are built from `useSidebarInbox()` — the
+ * per-team projections `ChatInboxService` already keeps for the rail's badge —
+ * so a team is listed, previewed and counted without a conversation being
+ * mounted for it. Named teams whose server offers no chat sit dimmed at the
  * foot under "No chat"; shares are not listed, because chat lives in a named
  * team. The column belongs to the tab and outlives a team switch.
  */
 
-import { useState } from 'react';
-import type { ReactNode } from 'react';
+import { useMemo, useState } from 'react';
+import type { ReactNode, Ref } from 'react';
 import { Button, Icon, SectionLabel } from '../components';
 import {
   chatAvailable,
-  shortId,
   storeDescription,
   storeNavigationOrder,
 } from '../model';
@@ -27,9 +30,17 @@ import type {
   StoreRef,
   TeamStore,
 } from '../model';
-import { channelTitle, listChannels } from '../chat/presentation';
+import {
+  channelMeta,
+  channelTitle,
+  listChannels,
+  partyNames,
+  previewLine,
+  previewTime,
+} from '../chat/presentation';
 import type { ListedChannel } from '../chat/presentation';
 import { useSidebarInbox } from '../chat/inbox-provider';
+import type { TeamInbox } from '../chat/inbox-service';
 import { teamUnread } from '../chat/unread';
 import { GroupMark } from './groups-screen';
 
@@ -71,7 +82,7 @@ export function noChatReason(
 }
 
 /** Named teams with no chat at all, listed under "No chat" with the reason. */
-function noChatTeams(snapshot: AgentSnapshot): TeamStore[] {
+export function noChatTeams(snapshot: AgentSnapshot): TeamStore[] {
   const listed = new Set(chatTeams(snapshot).map((store) => store.id));
   return storeNavigationOrder(snapshot).filter(
     (store): store is TeamStore =>
@@ -81,7 +92,7 @@ function noChatTeams(snapshot: AgentSnapshot): TeamStore[] {
   );
 }
 
-/** The team the tab opens when the location names none. */
+/** The team the tab falls back to when no conversation has any activity. */
 export function firstChatTeam(
   snapshot: AgentSnapshot,
   options: AvailabilityOptions = {},
@@ -92,44 +103,156 @@ export function firstChatTeam(
   );
 }
 
+/** Whether the team inbox is awaiting its initial response. */
+function firstSynchronization(entry: TeamInbox | undefined): boolean {
+  return !entry || (entry.state === 'loading' && !entry.data && !entry.error);
+}
+
 /**
- * "3 channels · 2 unread", or what is known while the inbox is still loading.
- * An inbox that failed says so rather than loading for ever.
+ * The conversation `{kind:'chat'}` with no team opens: the one with the most
+ * recent message across every team this Mac can reach, else the first team
+ * that has chat. `'pending'` means a reachable team the service has actually
+ * started on is still on its first synchronization and nothing else has
+ * answered yet, so the answer is not knowable yet and the tab waits rather
+ * than opening a team it would have to leave.
+ *
+ * The wait is bounded twice over: it ends as soon as one reachable team has
+ * answered, and a team missing from an inbox that already holds entries is
+ * never waited on. The service publishes an entry for every team it keeps in
+ * one pass, so an empty map means it has not been asked yet, while a team
+ * absent from a filled one is a team it does not keep — waiting on that team
+ * would be waiting for an entry that never arrives. The tab keeps re-resolving
+ * until selection becomes final, allowing a more recent conversation to
+ * replace the first response.
  */
-function teamSummary(
-  channels: number | null,
-  unread: string | null,
-  failure: string,
-): string {
-  if (failure) return failure;
-  if (channels === null) return 'Loading channels…';
-  const head = `${channels} ${channels === 1 ? 'channel' : 'channels'}`;
-  return unread ? `${head} · ${unread} unread` : head;
+export function openingConversation(
+  snapshot: AgentSnapshot,
+  inbox: ReadonlyMap<string, TeamInbox>,
+  options: AvailabilityOptions = {},
+): { ref: StoreRef; channel?: string } | 'pending' | undefined {
+  const teams = chatTeams(snapshot);
+  if (!teams.length) return undefined;
+  const reachable = teams.filter((store) =>
+    chatAvailable(snapshot, store, options),
+  );
+  const entries = reachable.map((store) => inbox.get(store.id));
+  const answered = entries.some((entry) => entry?.data || entry?.error);
+  const asked = inbox.size > 0;
+  const waiting = entries.some((entry) =>
+    entry ? firstSynchronization(entry) : !asked,
+  );
+  if (!answered && waiting) return 'pending';
+  let best: { ref: StoreRef; channel: string; at: bigint } | undefined;
+  for (const store of reachable)
+    for (const conversation of inbox.get(store.id)?.data?.conversations ?? []) {
+      if (conversation.hidden || !conversation.preview) continue;
+      const at = BigInt(conversation.preview.insert_time);
+      // Ties keep navigation order: the earlier team stays the one that opens.
+      if (!best || at > best.at)
+        best = { ref: store.id, channel: conversation.channel.id, at };
+    }
+  if (best) return { ref: best.ref, channel: best.channel };
+  const fallback = firstChatTeam(snapshot, options);
+  return fallback ? { ref: fallback.id } : undefined;
+}
+
+/** One team as the column draws it, whether as a row or as a heading. */
+interface TeamRow {
+  store: TeamStore;
+  entry: TeamInbox | undefined;
+  /** This Mac can open the team's chat right now. */
+  reachable: boolean;
+  /** The one line a row states instead of a preview: a reason or a failure. */
+  status: string;
+  /**
+   * What a synchronization that succeeded could not finish, said beside the
+   * preview rather than in place of it.
+   */
+  note: string;
+  /** `undefined` while the team's channel list has not arrived. */
+  channels: ListedChannel[] | undefined;
+  badge: { label: string; description: string } | null;
+  /** The team's people, resolved once per team rather than once per row. */
+  names: ReadonlyMap<string, string>;
+  server: string;
+}
+
+/** A badge that is a bare number, as opposed to "…", "!", "3+" or "3·". */
+function plainCount(label: string): boolean {
+  return /^\d+$/.test(label);
+}
+
+function teamRow(
+  snapshot: AgentSnapshot,
+  inbox: ReadonlyMap<string, TeamInbox>,
+  store: TeamStore,
+  options: AvailabilityOptions,
+  /** The team whose conversation is mounted beside the column. */
+  open: boolean,
+): TeamRow {
+  const entry = inbox.get(store.id);
+  const reachable = chatAvailable(snapshot, store, options);
+  // An inbox that failed says so here as well: the column and the pane cannot
+  // disagree about whether channels are still on their way. The open team's
+  // pane states the failure itself and carries the retry, so its row says only
+  // that no channel list is coming rather than printing the same line twice.
+  // A synchronization that succeeded but could not finish everything — a read
+  // status that will retry, a preview it could not fetch — carries its error
+  // alongside the data it did bring, so it is a note rather than a failure.
+  const failed =
+    entry !== undefined &&
+    (entry.state === 'unavailable' ||
+      entry.state === 'blocked' ||
+      (Boolean(entry.error) && !entry.data));
+  const failure = failed
+    ? open
+      ? 'Channels unavailable'
+      : entry.error || 'Channels unavailable'
+    : '';
+  // An unreachable team says what is wrong, in the words the rest of the shell
+  // uses for that store.
+  const unavailable = reachable
+    ? ''
+    : storeDescription(snapshot, store, options);
+  const unread = reachable ? teamUnread(entry) : null;
+  return {
+    store,
+    entry,
+    reachable,
+    status:
+      unavailable ||
+      failure ||
+      (firstSynchronization(entry) ? 'Loading channels…' : ''),
+    note: !failed && reachable && entry?.data ? entry.error : '',
+    channels: entry?.data
+      ? listChannels(entry.data.channels, entry.data.conversations)
+      : undefined,
+    badge: reachable ? unread : { label: '!', description: unavailable },
+    names: partyNames(snapshot, store.id),
+    server: serverFor(snapshot, store)?.name ?? store.server,
+  };
+}
+
+/** A channel's own unread count, or `null` when it has none. */
+function channelCount(listed: ListedChannel | undefined): string | null {
+  const conversation = listed?.conversation;
+  return conversation && BigInt(conversation.unread) > 0n
+    ? conversation.unread
+    : null;
 }
 
 export interface ChatTeamColumnProps {
   snapshot: AgentSnapshot;
-  /** The team whose inbox is mounted, when there is one. */
+  /** The team whose conversation is mounted, when there is one. */
   selected?: StoreRef;
-  /** The open team's channels, from the mounted conversation. */
-  channels?: readonly ListedChannel[];
   /** The open channel. */
   activeChannel?: string;
-  /** The open team's channels that failed verification. */
-  blockedChannels?: ReadonlySet<string>;
-  /** The local actor, so an own preview reads "You". */
-  actor?: string | null;
-  /** Party names for preview senders. */
-  senderNames?: ReadonlyMap<string, string>;
-  /** The open team's inbox is still on its first synchronization. */
-  loading?: boolean;
-  /** The open team's server is locked, so its channels cannot be opened. */
-  locked?: boolean;
   /** The clock the tab decides availability on, so the column shares it. */
   accessOptions?: AvailabilityOptions;
-  onSelectTeam: (ref: StoreRef) => void;
-  onOpenChannel: (channel: string) => void;
-  onNewChannel: () => void;
+  /** The search field, so the conversation header's search button reaches it. */
+  searchRef?: Ref<HTMLInputElement>;
+  onOpen: (ref: StoreRef, channel?: string) => void;
+  onNewChat: () => void;
   onSettings: (ref: StoreRef) => void;
   onCreateTeam: () => void;
 }
@@ -137,261 +260,149 @@ export interface ChatTeamColumnProps {
 export function ChatTeamColumn({
   snapshot,
   selected,
-  channels = [],
   activeChannel,
-  blockedChannels,
-  actor = null,
-  senderNames,
-  loading = false,
-  locked = false,
   accessOptions = {},
-  onSelectTeam,
-  onOpenChannel,
-  onNewChannel,
+  searchRef,
+  onOpen,
+  onNewChat,
   onSettings,
   onCreateTeam,
 }: ChatTeamColumnProps): ReactNode {
   const inbox = useSidebarInbox();
-  const teams = chatTeams(snapshot);
-  const withoutChat = noChatTeams(snapshot);
-  const open = teams.find((store) => store.id === selected);
-  // The column outlives a team switch, so a filter typed for one team is
-  // cleared when another opens.
+  // The column searches names, not messages: the agent has no message index,
+  // so a query that matched text would be a promise the client cannot keep.
   const [filter, setFilter] = useState('');
-  const [filtered, setFiltered] = useState(open?.id);
-  if (filtered !== open?.id) {
-    setFiltered(open?.id);
-    if (filter) setFilter('');
-  }
   const query = filter.trim().toLowerCase();
-  const shown = open
-    ? channels.filter(
-        ({ channel }) =>
-          !query || channelTitle(channel).toLowerCase().includes(query),
-      )
-    : [];
+  // The clock is the tab's, but the object it arrives in is rebuilt every
+  // render, so the memo is keyed on the moment rather than on its identity —
+  // and on the second rather than on the fraction of a millisecond the tab
+  // reads, which no two renders share and which would make the memo a cost
+  // with no hit. Availability changes on the second; a check-in that lapses
+  // between two ticks is seen on the next one.
+  const { nowSeconds, agentReady, catalogReady } = accessOptions;
+  const second = nowSeconds === undefined ? undefined : Math.floor(nowSeconds);
+  const now = nowSeconds === undefined ? Date.now() : nowSeconds * 1000;
+  // Every row reads the whole snapshot and the whole inbox map, so building
+  // them is worth doing once per change rather than once per keystroke in the
+  // search field.
+  const { teams, withoutChat, rows } = useMemo(() => {
+    const options: AvailabilityOptions = {
+      nowSeconds: second,
+      agentReady,
+      catalogReady,
+    };
+    const listedTeams = chatTeams(snapshot);
+    return {
+      teams: listedTeams,
+      withoutChat: noChatTeams(snapshot),
+      rows: listedTeams.map((store) =>
+        teamRow(snapshot, inbox, store, options, store.id === selected),
+      ),
+    };
+  }, [snapshot, inbox, second, agentReady, catalogReady, selected]);
+  const dimmed = withoutChat.filter(
+    (store) => !query || store.name.toLowerCase().includes(query),
+  );
+  let listed = 0;
+  const drawn = rows.map((row) => {
+    const named = row.store.name.toLowerCase().includes(query);
+    const matching = (row.channels ?? []).filter(
+      ({ channel }) =>
+        !query || named || channelTitle(channel).toLowerCase().includes(query),
+    );
+    if (query && !named && !matching.length) return null;
+    listed += 1;
+    // A team whose channels are the general channel alone is one row: there is
+    // no list to indent under a heading, and the general channel has no name
+    // to lose. A team whose one channel is named keeps its heading, so that
+    // "#deploys" is not swallowed by the team's own row.
+    const single =
+      !row.channels ||
+      row.channels.length === 0 ||
+      (row.channels.length === 1 && !row.channels[0].channel.name);
+    return single ? (
+      <ConversationRow
+        key={row.store.id}
+        row={row}
+        now={now}
+        current={row.store.id === selected}
+        onOpen={onOpen}
+      />
+    ) : (
+      <TeamHeading
+        key={row.store.id}
+        row={row}
+        channels={matching}
+        activeChannel={row.store.id === selected ? activeChannel : undefined}
+        onOpen={onOpen}
+        onSettings={onSettings}
+      />
+    );
+  });
   return (
     <aside className="chat-inbox" aria-label="Chat inbox">
       <div className="chat-inbox-top">
-        <label className="search">
+        {/* The field names itself, so there is no label to wrap it in: an empty
+            `<label>` would be a label with nothing in it. */}
+        <div className="search">
           <Icon name="search" />
           <input
-            type="text"
+            type="search"
+            ref={searchRef}
             value={filter}
-            disabled={!open}
-            placeholder={open ? `Search ${open.name}` : 'Search'}
-            aria-label={
-              open ? `Search channels in ${open.name}` : 'Search channels'
-            }
+            // The "No chat" teams are part of the column and are searched with
+            // the rest of it, so the field is live whenever the column lists
+            // anything at all.
+            disabled={!teams.length && !withoutChat.length}
+            placeholder="Search"
+            aria-label="Search teams and channels"
             autoComplete="off"
             onChange={(event) => setFilter(event.target.value)}
           />
-        </label>
+        </div>
+        <Button
+          variant="primary"
+          disabled={!teams.length}
+          title={
+            teams.length
+              ? 'Start a conversation in one of your teams'
+              : 'Chat needs a named team whose server offers chat'
+          }
+          onClick={onNewChat}
+        >
+          New chat
+        </Button>
       </div>
+      {/* What the search did, for a reader who cannot see the column narrow.
+          The region is always rendered, because a live region that arrives with
+          its text is not announced. */}
+      <p className="offscreen" role="status">
+        {query
+          ? `${listed + dimmed.length} of ${teams.length + withoutChat.length} teams match ${filter}.`
+          : ''}
+      </p>
       <div className="chat-inbox-scroll">
         {teams.length ? (
-          <SectionLabel>Teams</SectionLabel>
+          // A search that matches no conversation drops the label with them.
+          (!query || listed > 0) && <SectionLabel>Conversations</SectionLabel>
         ) : (
           <p className="chat-quiet chat-inbox-empty">
             No team on this Mac has chat.
           </p>
         )}
-        {teams.map((store) => {
-          const expanded = store.id === open?.id;
-          const reachable = chatAvailable(snapshot, store, accessOptions);
-          const entry = inbox.get(store.id);
-          // An inbox that failed says so here as well: the column and the pane
-          // cannot disagree about whether channels are still on their way.
-          const failure =
-            entry &&
-            (entry.error ||
-              entry.state === 'unavailable' ||
-              entry.state === 'blocked')
-              ? entry.error || 'Channels unavailable'
-              : '';
-          const unread = reachable ? teamUnread(entry) : null;
-          // An unreachable team says what is wrong, in the words the rest of
-          // the shell uses for that store.
-          const unavailable = reachable
-            ? ''
-            : storeDescription(snapshot, store, accessOptions);
-          const badge = reachable
-            ? unread
-            : { label: '!', description: unavailable };
-          // The channels of a team are its conversations and the channels that
-          // have none yet, which is what the expanded list draws.
-          const counted = entry?.data
-            ? listChannels(entry.data.channels, entry.data.conversations).length
-            : null;
-          const server = serverFor(snapshot, store);
-          // Only a plain count belongs in a sentence: "…", "!", "?", "3+" and
-          // "3·" are states, and the badge's own description says them.
-          const countable =
-            unread && /^\d+$/.test(unread.label) ? unread.label : null;
-          return (
-            <div
-              className={expanded ? 'chat-team open' : 'chat-team'}
-              key={store.id}
-            >
-              <button
-                type="button"
-                className={expanded ? 'chat-team-head open' : 'chat-team-head'}
-                // The row selects a team; it does not fold one away, so it is
-                // the current team rather than an expanded disclosure.
-                aria-current={expanded ? 'true' : undefined}
-                title={[
-                  `${store.name} · ${server?.name ?? store.server}`,
-                  badge?.description,
-                ]
-                  .filter(Boolean)
-                  .join(' · ')}
-                onClick={() => {
-                  if (!expanded) onSelectTeam(store.id);
-                }}
-              >
-                {/* One group, one mark: the column, the Teams row and the
-                    group's own page draw the same initial over the same
-                    colour. */}
-                <GroupMark store={store} size="sm" />
-                <span className="t">
-                  <b>{store.name}</b>
-                  <small>
-                    {expanded
-                      ? (server?.name ?? store.server)
-                      : unavailable || teamSummary(counted, countable, failure)}
-                  </small>
-                </span>
-                {badge && (
-                  <span className="chat-unread" aria-label={badge.description}>
-                    {badge.label}
-                  </span>
-                )}
-              </button>
-              {expanded && reachable && (
-                <Button
-                  variant="quiet"
-                  icon="plus"
-                  aria-label="New channel"
-                  title={`New channel in ${store.name}`}
-                  onClick={() => onNewChannel()}
-                />
-              )}
-              <Button
-                variant="quiet"
-                icon="gear"
-                aria-label={`Group settings for ${store.name}`}
-                title={`Group settings for ${store.name}`}
-                onClick={() => onSettings(store.id)}
-              />
-              {expanded && loading && !channels.length && (
-                <p className="chat-quiet chat-loadrow" role="status">
-                  Loading {store.name}…
-                </p>
-              )}
-              {expanded && (
-                <div className="chat-channel-list">
-                  {shown.map(({ channel, conversation }) => {
-                    const active = channel.id === activeChannel;
-                    const count =
-                      conversation && BigInt(conversation.unread) > 0n
-                        ? conversation.unread
-                        : null;
-                    const meta = blockedChannels?.has(channel.id)
-                      ? 'Verification stopped'
-                      : [
-                          !channel.readable ? 'Restricted' : '',
-                          conversation?.muted ? 'Muted' : '',
-                        ]
-                          .filter(Boolean)
-                          .join(' · ');
-                    return (
-                      <button
-                        type="button"
-                        key={channel.id}
-                        className={[
-                          'chat-channel',
-                          active ? 'on' : '',
-                          count ? 'unread' : '',
-                          locked ? 'off' : '',
-                        ]
-                          .filter(Boolean)
-                          .join(' ')}
-                        aria-current={active ? 'page' : undefined}
-                        disabled={locked}
-                        onClick={() => onOpenChannel(channel.id)}
-                      >
-                        <span className="t">
-                          <span className="n">{channelTitle(channel)}</span>
-                          {meta && <small>{meta}</small>}
-                          {conversation?.preview && (
-                            <small>
-                              {conversation.preview.sender === actor
-                                ? 'You'
-                                : conversation.preview.sender
-                                  ? (senderNames?.get(
-                                      conversation.preview.sender,
-                                    ) ?? shortId(conversation.preview.sender))
-                                  : 'Team member'}
-                              {': '}
-                              {conversation.preview.content.kind === 'text'
-                                ? conversation.preview.content.text
-                                : 'Unsupported message'}
-                            </small>
-                          )}
-                        </span>
-                        {channel.admin && (
-                          <span
-                            className="lock"
-                            title="Admins and owners only"
-                            aria-label="Admins and owners only"
-                          >
-                            <Icon name="key" size={13} />
-                          </span>
-                        )}
-                        {count && !locked && (
-                          <span
-                            className={
-                              conversation?.muted
-                                ? 'chat-unread muted'
-                                : 'chat-unread'
-                            }
-                            aria-label={`${count} unread`}
-                          >
-                            {count}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                  {!shown.length && channels.length > 0 && (
-                    <p className="chat-quiet">
-                      No channel in {store.name} matches “{filter}”.
-                    </p>
-                  )}
-                  {!channels.length &&
-                    !locked &&
-                    (failure ? (
-                      // The open team's pane states the failure and carries
-                      // the retry; the column says only that no channel list
-                      // is coming, rather than printing the same line twice.
-                      <p className="chat-quiet">Channels unavailable.</p>
-                    ) : (
-                      !loading && (
-                        <p className="chat-quiet">
-                          No channels yet. Create the first one to start
-                          talking.
-                        </p>
-                      )
-                    ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
-        {withoutChat.length > 0 && (
+        {drawn}
+        {query &&
+          !listed &&
+          !dimmed.length &&
+          teams.length + withoutChat.length > 0 && (
+            <p className="chat-quiet chat-inbox-empty">
+              No team or channel matches “{filter}”.
+            </p>
+          )}
+        {dimmed.length > 0 && (
           <>
             <SectionLabel className="chat-nochat-label">No chat</SectionLabel>
-            {withoutChat.map((store) => {
+            {dimmed.map((store) => {
               const reason = noChatReason(snapshot, store);
               return (
                 <div
@@ -414,5 +425,199 @@ export function ChatTeamColumn({
         <Button onClick={onCreateTeam}>Create or join a team</Button>
       </div>
     </aside>
+  );
+}
+
+/** A team whose channels are the general channel alone: one row. */
+function ConversationRow({
+  row,
+  now,
+  current,
+  onOpen,
+}: {
+  row: TeamRow;
+  now: number;
+  current: boolean;
+  onOpen: (ref: StoreRef, channel?: string) => void;
+}): ReactNode {
+  const only = row.channels?.[0];
+  const preview = only?.conversation?.preview;
+  const line = previewLine(
+    only?.conversation,
+    row.entry?.scope?.actor ?? null,
+    row.names,
+  );
+  // A single-channel team's row is the channel's row: the count, the weight it
+  // draws it in and the caption beside it all come from the one channel, so a
+  // muted or hidden conversation cannot read as a bold row with nothing on it.
+  const count = channelCount(only);
+  const muted = Boolean(only?.conversation?.muted);
+  const meta = only ? channelMeta(only, row.entry?.blockedChannels) : '';
+  // The states `teamUnread` reports — loading, unreachable, degraded, stale —
+  // stay in the team's badge; a bare number is the channel's own.
+  const badge =
+    row.badge && !plainCount(row.badge.label)
+      ? row.badge
+      : count
+        ? { label: count, description: `${count} unread` }
+        : null;
+  return (
+    <button
+      type="button"
+      className={[
+        'chat-conv',
+        current ? 'on' : '',
+        count ? 'unread' : '',
+        // A hidden conversation is listed and says so; it is drawn dimmed to
+        // match, rather than reading as an ordinary row with a caption.
+        only?.conversation?.hidden ? 'hidden' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      aria-current={current ? 'page' : undefined}
+      title={[`${row.store.name} · ${row.server}`, badge?.description]
+        .filter(Boolean)
+        .join(' · ')}
+      onClick={() => onOpen(row.store.id, only?.channel.id)}
+    >
+      {/* One group, one mark: the column, the Teams row and the group's own
+          page draw the same initial over the same colour. */}
+      <GroupMark store={row.store} size="sm" />
+      <span className="t">
+        <b>{row.store.name}</b>
+        <small>
+          {row.status ||
+            line ||
+            (row.channels?.length ? 'No messages yet' : 'No channels yet')}
+        </small>
+        {(meta || row.note) && (
+          <small className="chat-row-note">
+            {[meta, row.note].filter(Boolean).join(' · ')}
+          </small>
+        )}
+      </span>
+      {preview && !row.status && (
+        <span className="when">{previewTime(preview.insert_time, now)}</span>
+      )}
+      {badge && (
+        <span
+          className={muted ? 'chat-unread muted' : 'chat-unread'}
+          aria-label={badge.description}
+        >
+          {badge.label}
+        </span>
+      )}
+    </button>
+  );
+}
+
+/** A team with a channel of its own name: a heading and its channels. */
+function TeamHeading({
+  row,
+  channels,
+  activeChannel,
+  onOpen,
+  onSettings,
+}: {
+  row: TeamRow;
+  channels: readonly ListedChannel[];
+  activeChannel?: string;
+  onOpen: (ref: StoreRef, channel?: string) => void;
+  onSettings: (ref: StoreRef) => void;
+}): ReactNode {
+  // A heading's own count is the sum of the counts already drawn beside its
+  // channels, so only what the channels cannot say is drawn here: that the team
+  // cannot be reached, that its count is degraded, that it is going stale.
+  const state = row.badge && !plainCount(row.badge.label) ? row.badge : null;
+  return (
+    <div className="chat-team">
+      <div
+        className="chat-team-head"
+        title={[`${row.store.name} · ${row.server}`, row.badge?.description]
+          .filter(Boolean)
+          .join(' · ')}
+      >
+        <GroupMark store={row.store} size="sm" />
+        <span className="t">
+          {/* A team is a heading over its channels, and reads as one. */}
+          <b role="heading" aria-level={3}>
+            {row.store.name}
+          </b>
+          {row.status && <small>{row.status}</small>}
+          {row.note && <small className="chat-row-note">{row.note}</small>}
+        </span>
+        {state && (
+          <span className="chat-unread" aria-label={state.description}>
+            {state.label}
+          </span>
+        )}
+        <Button
+          variant="quiet"
+          icon="gear"
+          aria-label={`Group settings for ${row.store.name}`}
+          title={`Group settings for ${row.store.name}`}
+          onClick={() => onSettings(row.store.id)}
+        />
+      </div>
+      {/* The channels belong to the team named above them, and say so rather
+          than leaving a screen reader to infer it from the order. */}
+      <div
+        className="chat-channel-list"
+        role="group"
+        aria-label={row.store.name}
+      >
+        {channels.map((listedChannel) => {
+          const { channel, conversation } = listedChannel;
+          const active = channel.id === activeChannel;
+          const count = channelCount(listedChannel);
+          const meta = channelMeta(listedChannel, row.entry?.blockedChannels);
+          return (
+            <button
+              type="button"
+              key={channel.id}
+              className={[
+                'chat-channel',
+                active ? 'on' : '',
+                count ? 'unread' : '',
+                conversation?.hidden ? 'hidden' : '',
+                row.reachable ? '' : 'off',
+              ]
+                .filter(Boolean)
+                .join(' ')}
+              aria-current={active ? 'page' : undefined}
+              // A channel of an unreachable team opens the locked pane, which
+              // states the reason. Disabling it would be the one row in the
+              // column that answers nothing: the team's own row is clickable
+              // and lands in the same place.
+              onClick={() => onOpen(row.store.id, channel.id)}
+            >
+              <span className="t">
+                <span className="n">{channelTitle(channel)}</span>
+                {meta && <small>{meta}</small>}
+              </span>
+              {channel.admin && (
+                <span
+                  className="lock"
+                  title="Admins and owners only"
+                  aria-label="Admins and owners only"
+                >
+                  <Icon name="key" size={13} />
+                </span>
+              )}
+              {count && row.reachable && (
+                <span
+                  className={
+                    conversation?.muted ? 'chat-unread muted' : 'chat-unread'
+                  }
+                  aria-label={`${count} unread`}
+                >
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
