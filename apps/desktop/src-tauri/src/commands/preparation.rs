@@ -44,10 +44,11 @@ pub(super) async fn ensure_catalog_for_mutation(
     Ok(())
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(super) enum GroupMutationFacts {
     Members,
     Federation,
+    FederationRemoval,
 }
 
 #[derive(Debug)]
@@ -118,7 +119,13 @@ pub(super) async fn prepare_group_facts(
             })??;
             prepared.accounts = Some((team.profile, accounts));
         }
-        GroupMutationFacts::Federation => {
+        GroupMutationFacts::Federation | GroupMutationFacts::FederationRemoval => {
+            if facts == GroupMutationFacts::FederationRemoval {
+                prepared.parties = Some(match details.parties {
+                    GroupDetailResultDto::Success { value } => value,
+                    GroupDetailResultDto::Error { error } => return Err(error),
+                });
+            }
             prepared.federation = Some(match details.federation {
                 GroupDetailResultDto::Success { value } => value,
                 GroupDetailResultDto::Error { error } => return Err(error),

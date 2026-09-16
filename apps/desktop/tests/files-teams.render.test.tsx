@@ -13,6 +13,8 @@ import { createElement } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 
 import { installDom } from './lib/dom-harness';
+import type { Bridge } from '../src/bridge';
+import { CatalogCoordinator } from '../src/catalog-coordinator';
 import type { Location } from '../src/location';
 import type { AgentSnapshot } from '../src/model';
 
@@ -81,7 +83,8 @@ interface TeamsOptions {
   store?: string;
   /** The fixture scene, which may open a sheet on mount. */
   scene?: string;
-  refresh?: () => Promise<AgentSnapshot>;
+  refresh?: (force?: boolean) => Promise<AgentSnapshot>;
+  bridge?: Bridge;
   mutationError?: () => Promise<void>;
 }
 
@@ -112,7 +115,7 @@ async function teams(
         controller: new ToastController(),
         children: createElement(TeamsScreen, {
           snapshot,
-          bridge: mockBridge(snapshot),
+          bridge: options.bridge ?? mockBridge(snapshot),
           location: {
             kind: 'teams',
             ...(options.store ? { store: options.store } : {}),
@@ -506,4 +509,73 @@ test('a created group closes its sheet when only the post-write refresh fails', 
   });
   await ui.waitFor(() => assert.equal(rendered.queryByRole('dialog'), null));
   assert.equal(reads, 1);
+});
+
+test('group creation replaces a cancelled foreground catalog load without repeating the write', async () => {
+  const snapshot = await fixture();
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const base = mockBridge(snapshot);
+  const { loadSnapshot } = (await vite.ssrLoadModule(
+    '/src/bridge.ts',
+  )) as typeof import('../src/bridge');
+  let writes = 0;
+  let reads = 0;
+  let cancelRead!: (error: unknown) => void;
+  const published: AgentSnapshot[] = [];
+  const coordinator = new CatalogCoordinator<AgentSnapshot>(
+    () => {
+      reads++;
+      return reads === 1
+        ? new Promise((_, reject) => {
+            cancelRead = reject;
+          })
+        : loadSnapshot(base, snapshot);
+    },
+    (value) => {
+      published.push(value);
+    },
+  );
+  const foreground = coordinator.refresh();
+  // Observe a potential rejection before releasing the read barrier.
+  const foregroundResult = foreground.catch(() => undefined);
+  await ui.waitFor(() => assert.equal(reads, 1));
+  const forces: boolean[] = [];
+  const destinations: Location[] = [];
+  const rendered = await teams((location) => destinations.push(location), {
+    scene: 'create',
+    bridge: {
+      ...base,
+      createGroup: async (input) => {
+        writes++;
+        return base.createGroup(input);
+      },
+    },
+    refresh: (force = false) => {
+      forces.push(force);
+      return coordinator.refresh(force);
+    },
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Create group' }));
+  });
+  await ui.waitFor(() => assert.deepEqual(forces, [true]));
+  await ui.act(async () => {
+    cancelRead({
+      code: 'cancelled',
+      message: 'The request was cancelled.',
+      retryable: true,
+      ambiguous: false,
+      fatal: false,
+    });
+    await foregroundResult;
+  });
+  await ui.waitFor(() => assert.equal(rendered.queryByRole('dialog'), null));
+  assert.equal(writes, 1);
+  assert.equal(reads, 2);
+  assert.equal(published.length, 1);
+  assert.ok(published[0].stores.some((store) => store.id === 'team:platform'));
+  assert.deepEqual(destinations, [{ kind: 'store', ref: 'team:platform' }]);
+  assert.equal(rendered.queryByText(/Updated data could not be loaded/), null);
 });

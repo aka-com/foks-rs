@@ -883,6 +883,7 @@ function VaultShell({
   }, [locations, settlePrompt, toasts]);
   const [concealSignal, setConcealSignal] = useState(0);
   const metadataInvalidation = useRef<() => void>(() => undefined);
+  const [hardwareRefresh, setHardwareRefresh] = useState(0);
   // A conceal ends the session the remembered chat belonged to: the account
   // that comes back may not have that team on this Mac, so the rail's Chat tab
   // runs the first-team fallback again instead of reopening it. The Chat tab
@@ -1007,7 +1008,10 @@ function VaultShell({
         (next, forced) => {
           latestRef.current = next;
           setLatest(next);
-          if (forced) metadataInvalidation.current();
+          if (forced) {
+            metadataInvalidation.current();
+            setHardwareRefresh((generation) => generation + 1);
+          }
           setAgentCatalogReady(true);
         },
       ),
@@ -1585,6 +1589,7 @@ function VaultShell({
     />
   ) : here.kind === 'devices' ? (
     <DevicesScreen
+      hardwareRefresh={hardwareRefresh}
       onDeviceLabel={setDeviceLabel}
       key={`devices:${concealSignal}`}
       snapshot={shown}

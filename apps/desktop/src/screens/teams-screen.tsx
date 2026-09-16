@@ -67,7 +67,7 @@ export interface TeamsScreenProps {
   scene: string;
   onNavigate: (location: Location) => void;
   onRefresh: (message: string) => Promise<void>;
-  onRefreshSnapshot: () => Promise<AgentSnapshot>;
+  onRefreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>;
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
 }
@@ -322,7 +322,7 @@ export function TeamsScreen({
       // The row says what the check found; a toast repeating that sentence
       // would say it twice, so the refresh is silent.
       setResults((old) => ({ ...old, [context.store.id]: message }));
-      await onRefreshSnapshot();
+      await onRefreshSnapshot(true);
     } catch (error) {
       setResults((old) => ({
         ...old,
@@ -553,7 +553,9 @@ export function TeamsScreen({
             if (next) setSheet({ kind: next, store: sheet.store });
           }}
           onApplied={async (message, created) => {
-            const result = await synchronizeApplied(onRefreshSnapshot);
+            const result = await synchronizeApplied(() =>
+              onRefreshSnapshot(true),
+            );
             if (result.synchronization === 'pending') {
               if (result.error.code === 'catalog-read-retired') return;
               toasts.show(

@@ -17,6 +17,7 @@ struct PreparationTransport {
     calls: Mutex<Vec<Operation>>,
     fail_catalog: bool,
     fail_members: bool,
+    federated: bool,
     version: u64,
     access: Option<Arc<AtomicU64>>,
     pause_accounts: Option<(
@@ -32,6 +33,7 @@ impl PreparationTransport {
             calls: Mutex::new(vec![]),
             fail_catalog: false,
             fail_members: false,
+            federated: false,
             version,
             access: None,
             pause_accounts: None,
@@ -71,6 +73,12 @@ impl AgentTransport for PreparationTransport {
             Operation::ListTeamDetails { .. } => Ok(serde_json::to_value(TeamDetailsSummary {
                 members: if self.fail_members {
                     ResponseResult::Error { code: foks_agent_proto::ErrorCode::Busy, message:"members unavailable".into(), fields: Default::default() }
+                } else if self.federated {
+                    success(serde_json::json!([{
+                        "username":null, "party_id_hex":"03".repeat(33), "party_kind":"named-team", "scoped_host_id_hex":"02".repeat(33),
+                        "source_role":"admin", "destination_role":{"member":{"visibility":0}},
+                        "generation":1, "locally_manageable":false
+                    }]))
                 } else {
                     success(serde_json::json!([{
                         "username":"bob", "party_id_hex":"01".repeat(33), "party_kind":"user", "scoped_host_id_hex":null,
@@ -78,7 +86,11 @@ impl AgentTransport for PreparationTransport {
                         "generation":1, "locally_manageable":true
                     }]))
                 },
-                federation: success(serde_json::json!([])),
+                federation: success(if self.federated { serde_json::json!([{
+                    "local_team_alias":"engineering", "remote_profile":"home.example", "remote_team_alias":"homelab",
+                    "remote_host_id_hex":"02".repeat(33), "remote_team_id_hex":"03".repeat(33),
+                    "destination":{"member":{"visibility":0}}, "operation_id_hex":"07".repeat(16), "active":true
+                }]) } else { serde_json::json!([]) }),
             }).unwrap()),
             Operation::ListAccounts { profile } => {
                 if let Some((entered, resume)) = &self.pause_accounts {
@@ -323,6 +335,14 @@ fn failed_required_group_facts_do_not_fall_back_to_cached_authorization() {
     ))
     .unwrap_err();
     assert_eq!(error.code, "busy");
+    let error = tauri::async_runtime::block_on(prepare_group_facts(
+        &state,
+        &store,
+        GroupMutationFacts::FederationRemoval,
+        transport.clone(),
+    ))
+    .unwrap_err();
+    assert_eq!(error.code, "busy");
     // A failed unrelated member read does not block a federation-only request.
     tauri::async_runtime::block_on(prepare_group_facts(
         &state,
@@ -454,4 +474,32 @@ fn older_roster_completion_cannot_replace_prepared_member_target() {
     state.retain_roster(0, store, &[old]).unwrap();
     resume.send(()).unwrap();
     assert_eq!(worker.join().unwrap(), "01".repeat(33));
+}
+
+#[test]
+fn federation_removal_prepares_both_facts_without_a_cached_roster() {
+    let (state, store) = group_state();
+    // Catalog replacement retires these facts; removal must rebuild both.
+    assert!(state.rosters.lock().unwrap().is_empty());
+    assert!(state.federations.lock().unwrap().is_empty());
+    let permit = state.begin_mutation().unwrap();
+    let mut transport = PreparationTransport::new(7);
+    transport.federated = true;
+    let prepared = tauri::async_runtime::block_on(prepare_group_facts(
+        &state,
+        &store,
+        GroupMutationFacts::FederationRemoval,
+        Arc::new(transport),
+    ))
+    .unwrap();
+    assert!(prepared.parties.is_some());
+    assert!(prepared.federation.is_some());
+    // A late display read must not replace the roster owned by preparation.
+    state.retain_roster(0, store.clone(), &[]).unwrap();
+    let (_, entry) = state
+        .with_prepared_group_facts(&permit, prepared, || {
+            state.selected_active_federation_target(&store, &"02".repeat(33), &"03".repeat(33))
+        })
+        .unwrap();
+    assert_eq!(entry.remote_team_alias, "homelab");
 }

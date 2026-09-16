@@ -966,15 +966,19 @@ pub async fn expel_federated_group(
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
-    let (_permit, (team, entry)) =
-        prepare_group_mutation(&state, &store_id, GroupMutationFacts::Federation, || {
+    let (_permit, (team, entry)) = prepare_group_mutation(
+        &state,
+        &store_id,
+        GroupMutationFacts::FederationRemoval,
+        || {
             state.selected_active_federation_target(
                 &store_id,
                 &remote_host_id_hex,
                 &remote_team_id_hex,
             )
-        })
-        .await?;
+        },
+    )
+    .await?;
     if entry.remote_host_id_hex != remote_host_id_hex
         || entry.remote_team_id_hex != remote_team_id_hex
     {

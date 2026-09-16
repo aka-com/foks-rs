@@ -36,6 +36,7 @@ test('Accounts and Devices share metadata across navigation; Refresh reloads it 
   )) as typeof import('../src/mock-bridge');
   const base = mockBridge(FIXTURE);
   let releaseCard!: (cards: { serial: number }[]) => void;
+  let connected: { serial: number }[] = [];
   const calls = { devices: 0, backups: 0, enrollments: 0, cards: 0 };
   const bridge: Bridge = {
     ...base,
@@ -51,13 +52,13 @@ test('Accounts and Devices share metadata across navigation; Refresh reloads it 
       calls.enrollments++;
       return base.listYubiAccounts(profile);
     },
-    listYubiCards: async (profile) => {
+    listYubiCards: async () => {
       calls.cards++;
       if (calls.cards === 1)
         return new Promise((resolve) => {
           releaseCard = resolve;
         });
-      return base.listYubiCards(profile);
+      return connected;
     },
   };
   ui.render(createElement(App, { bridge }));
@@ -86,10 +87,26 @@ test('Accounts and Devices share metadata across navigation; Refresh reloads it 
     '.topbar button[aria-label="Refresh"]',
   );
   assert.ok(refresh);
+  connected = [{ serial: 87654321 }];
   await ui.act(async () => {
     ui.fireEvent.click(refresh);
   });
   await ui.waitFor(() => assert.equal(calls.devices, 2));
   assert.equal(calls.backups, 2);
   assert.equal(calls.enrollments, 2);
+  await ui.waitFor(() => {
+    assert.equal(calls.cards, 3);
+    assert.ok(document.body.textContent?.includes('87654321'));
+  });
+  connected = [];
+  await ui.act(async () => {
+    ui.fireEvent.click(refresh);
+  });
+  await ui.waitFor(() => {
+    assert.equal(calls.cards, 4);
+    assert.ok(
+      document.body.textContent?.includes('No security key connected.'),
+    );
+  });
+  assert.equal(document.body.textContent?.includes('87654321'), false);
 });

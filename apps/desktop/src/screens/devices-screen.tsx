@@ -135,6 +135,8 @@ export interface DevicesScreenProps {
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
   onDeviceLabel?: (label: DeviceLabel | null) => void;
+  /** Re-probe connected cards independently of cached enrollment metadata. */
+  hardwareRefresh?: number;
 }
 
 export function DevicesScreen({
@@ -148,6 +150,7 @@ export function DevicesScreen({
   onError,
   onMutationError,
   onDeviceLabel,
+  hardwareRefresh = 0,
 }: DevicesScreenProps): ReactNode {
   // The shell canonicalizes the route on mount; the scene it was entered at
   // is what decides whether a sheet opens with the page.
@@ -272,7 +275,15 @@ export function DevicesScreen({
     return () => {
       alive = false;
     };
-  }, [accessStopped, bridge, deviceCache, onError, profile, selectedId]);
+  }, [
+    accessStopped,
+    bridge,
+    deviceCache,
+    hardwareRefresh,
+    onError,
+    profile,
+    selectedId,
+  ]);
 
   // A `section=` address — the Devices addresses written before the page was
   // one — lands on the section it names.
