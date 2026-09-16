@@ -789,9 +789,7 @@ test('a paper key and an enrollment each carry their own page', async () => {
   assert.ok(key.getByText('This enrollment applies across the server.'));
   assert.equal(key.queryByText('satoshi'), null);
   assert.ok(
-    key.getByText(
-      'This enrollment cannot be matched to a card on this Mac.',
-    ),
+    key.getByText('This enrollment cannot be matched to a card on this Mac.'),
   );
   assert.ok(key.getByRole('button', { name: 'Settings › Account' }));
   await ui.act(async () => {
@@ -905,4 +903,23 @@ test('switching accounts drops the last account’s lists and closes an open she
   assert.ok(
     rendered.getByText('No paper keys stored on this Mac for this account.'),
   );
+});
+
+test('a paper key hidden by blur can be recovered once', async () => {
+  const { rendered, dialog, committed } = await paperKey();
+  const words = dialog.querySelector('.words')?.textContent;
+  ui.fireEvent(window, new Event('blur'));
+  assert.equal(rendered.queryByRole('dialog'), null);
+  ui.fireEvent.click(
+    rendered.getByRole('button', { name: 'Show the paper key again' }),
+  );
+  const resumed = rendered.getByRole('dialog');
+  assert.equal(resumed.querySelector('.words')?.textContent, words);
+  ui.fireEvent(window, new Event('blur'));
+  assert.equal(rendered.queryByRole('dialog'), null);
+  assert.equal(
+    rendered.queryByRole('button', { name: 'Show the paper key again' }),
+    null,
+  );
+  assert.deepEqual(committed, []);
 });

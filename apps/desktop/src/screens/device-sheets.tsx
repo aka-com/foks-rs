@@ -7,7 +7,7 @@
  * same commands behind it.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { enqueueProfileWork } from '../bridge';
 import { useSheetGuard } from '../navigation-guard';
@@ -187,6 +187,9 @@ export function PhraseSheet({
   username,
   server,
   seedPhrase,
+  seedAlias,
+  onPrepared,
+  onForget,
   onClose,
   onDone,
   onError,
@@ -197,28 +200,37 @@ export function PhraseSheet({
   username: string;
   server: string;
   seedPhrase?: string;
+  seedAlias?: string;
+  onPrepared?: (
+    draft: { phrase: string; alias: string },
+    concealed?: boolean,
+  ) => void;
+  onForget?: () => void;
   onClose: () => void;
   onDone: () => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
   const [phrase, setPhrase] = useState<string | null>(() => seedPhrase ?? null);
-  const [alias, setAlias] = useState('paper-backup');
+  const [alias, setAlias] = useState(seedAlias ?? 'paper-backup');
   const [written, setWritten] = useState(false);
   const [busy, setBusy] = useState(false);
   const words = phrase?.split(/\s+/) ?? [];
-  // Leaving the sheet with a phrase on screen is the same act as Cancel, by
-  // whichever of the three ways out it is done: the phrase is discarded, not
-  // committed. `prepare_owner_backup` wrote nothing, so there is nothing left
-  // to clean up, and a revealed phrase is not a reason to trap the reader.
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    if (seedPhrase)
+      onPrepared?.({ phrase: seedPhrase, alias: seedAlias ?? 'paper-backup' });
+    return () => {
+      mounted.current = false;
+    };
+  }, [onPrepared, seedAlias, seedPhrase]);
   const discard = (): void => {
+    onForget?.();
     setPhrase(null);
     setWritten(false);
     onClose();
   };
-  // The words are shown once and are held nowhere else, so a navigation that
-  // took this sheet with it would take them too. That is not a loss the reader
-  // can be asked to confirm blind: they are sent back to the sheet to write
-  // the phrase down or drop it there.
+  // Navigation requires saving or explicitly dismissing the displayed key.
   useSheetGuard(
     phrase
       ? { verdict: 'refuse', reason: 'Save or dismiss the paper key first.' }
@@ -245,6 +257,7 @@ export function PhraseSheet({
                 onClick={() => {
                   setBusy(true);
                   const once = phrase;
+                  onForget?.();
                   setPhrase(null);
                   void bridge
                     .commitOwnerBackup(profile, accountAlias, alias, once)
@@ -266,7 +279,13 @@ export function PhraseSheet({
                   setBusy(true);
                   void bridge
                     .prepareOwnerBackup(profile, accountAlias, alias.trim())
-                    .then((result) => setPhrase(result.phrase))
+                    .then((result) => {
+                      onPrepared?.(
+                        { phrase: result.phrase, alias: alias.trim() },
+                        !mounted.current,
+                      );
+                      if (mounted.current) setPhrase(result.phrase);
+                    })
                     .catch(onError)
                     .finally(() => setBusy(false));
                 }}
@@ -281,9 +300,9 @@ export function PhraseSheet({
       {phrase ? (
         <>
           <p>
-            These {words.length} words are the key. Write them down now. This
-            Mac shows them once and does not copy them; nothing else stores
-            them.
+            These {words.length} words are the key. Write them down now. If this
+            window loses focus, the phrase is hidden. You can show it once more
+            from Devices within two minutes. Dismissing it removes that option.
           </p>
           <div className="words">
             {words.map((word, index) => (

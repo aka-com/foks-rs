@@ -11,7 +11,13 @@
  * paper key and keeps the enrollment name the agent stores.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import type { ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
 import { normalizeCommandError } from '../bridge';
@@ -71,6 +77,9 @@ import {
 } from './device-model';
 import type { DeviceEntry, DeviceLists } from './device-model';
 import { UnavailableAccount } from './people-screen';
+
+import { paperKeyResume } from './paper-key-resume';
+import type { PaperKeyDraft } from './paper-key-resume';
 
 type Sheet =
   | 'add'
@@ -150,6 +159,15 @@ export function DevicesScreen({
         ? 'enrol'
         : null,
   );
+  const paperResume = paperKeyResume(bridge, selected?.id ?? '');
+  const retainedPaperKey = useSyncExternalStore(
+    paperResume.subscribe,
+    paperResume.get,
+  );
+  const [resumedPaperKey, setResumedPaperKey] = useState<PaperKeyDraft | null>(
+    null,
+  );
+  useEffect(() => () => paperResume.conceal(), [paperResume]);
   const [devices, setDevices] = useState<AccountDevice[]>([]);
   const [backups, setBackups] = useState<BackupEnrollment[]>([]);
   const [yubi, setYubi] = useState<YubiEnrollment[]>([]);
@@ -186,12 +204,14 @@ export function DevicesScreen({
   }, []);
 
   const closeSheets = useCallback((): void => {
+    paperResume.conceal();
+    setResumedPaperKey(null);
     setSheet(null);
     setPendingYubi(null);
     setRemoving(null);
     setRevoking(null);
     setActingKey(null);
-  }, []);
+  }, [paperResume]);
 
   // A phrase, a PIN or an unlock code must not stay on screen behind another
   // window.
@@ -893,6 +913,26 @@ export function DevicesScreen({
           onError={(error) => void onMutationError(error)}
         />
       ) : null}
+      {!sheet && retainedPaperKey?.hidden ? (
+        <Band
+          label="Paper key not saved"
+          action={
+            <>
+              <Button
+                onClick={() => {
+                  setResumedPaperKey(paperResume.take());
+                  setSheet('phrase');
+                }}
+              >
+                Show the paper key again
+              </Button>
+              <Button onClick={paperResume.forget}>Dismiss paper key</Button>
+            </>
+          }
+        >
+          The phrase can be shown once more for two minutes after it was hidden.
+        </Band>
+      ) : null}
       {sheet === 'phrase' && selected ? (
         <PhraseSheet
           bridge={bridge}
@@ -903,13 +943,23 @@ export function DevicesScreen({
               ?.username ?? selected.account
           }
           server={serverName(snapshot, selected)}
+          seedAlias={resumedPaperKey?.alias}
+          onPrepared={resumedPaperKey ? undefined : paperResume.prepare}
+          onForget={paperResume.forget}
           seedPhrase={
-            enteredScene === 'settings-phrase'
+            resumedPaperKey?.phrase ??
+            (enteredScene === 'settings-phrase'
               ? bridge.firstRunFixture?.backupPhrase
-              : undefined
+              : undefined)
           }
-          onClose={() => setSheet(null)}
-          onDone={async () => applied('Paper key created.')}
+          onClose={() => {
+            setResumedPaperKey(null);
+            setSheet(null);
+          }}
+          onDone={async () => {
+            setResumedPaperKey(null);
+            await applied('Paper key created.');
+          }}
           onError={(error) => void onMutationError(error)}
         />
       ) : null}
