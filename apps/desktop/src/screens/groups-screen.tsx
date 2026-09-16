@@ -1,3 +1,4 @@
+import { usePendingGroupOperations } from '../operation-queries';
 import { useTabSheetState } from '../navigation-guard';
 import { InvitationRecovery } from '../components/invitation-recovery';
 import { InvitationPanel } from '../components/invitation-panel';
@@ -59,7 +60,7 @@ import type {
   StoreRef,
   AgentSnapshot,
 } from '../model';
-import { enqueueProfileWork, normalizeCommandError } from '../bridge';
+import { normalizeCommandError } from '../bridge';
 import type { Bridge, PendingOperation } from '../bridge';
 import type { RoleDto } from '../bridge';
 import { useSidebarInbox } from '../chat/inbox-provider';
@@ -1910,56 +1911,38 @@ export function GroupSettingsScreen({
   // An interrupted member addition or role change leaves durable local state
   // that blocks every later membership mutation until it is resumed. Read the
   // account's pending operations for this group so the UI can finish it.
-  const [membershipPending, setMembershipPending] = useState<
-    PendingOperation[]
-  >([]);
-  const pendingProfile = store?.kind === 'team' ? store.server : undefined;
-  const pendingAlias = store?.kind === 'team' ? store.alias : undefined;
-  const loadMembershipPending = useCallback(async (): Promise<void> => {
-    if (!pendingProfile || !pendingAlias) {
-      setMembershipPending([]);
-      return;
-    }
-    try {
-      const rows = await enqueueProfileWork(bridge, pendingProfile, () =>
-        bridge.listPendingOperations(pendingProfile),
-      );
-      setMembershipPending(
-        rows.filter(
-          (row) =>
-            row.alias === pendingAlias &&
-            (row.kind === 'team-member-addition' ||
-              row.kind === 'team-member-edit'),
-        ),
-      );
-    } catch {
-      setMembershipPending([]);
-    }
-  }, [bridge, pendingAlias, pendingProfile]);
-  useEffect(() => {
-    void loadMembershipPending();
-  }, [loadMembershipPending]);
+  const {
+    operations: membershipPending,
+    refresh: loadMembershipPending,
+    generation: pendingGeneration,
+  } = usePendingGroupOperations(
+    bridge,
+    store?.kind === 'team' ? store : null,
+    Boolean(store && storeDescriptionState(snapshot, store) === 'normal'),
+  );
   // Both successful changes and reconciled failures can change the durable
   // pending records. Refresh them for every membership action and manual refresh.
   const onApplied = useCallback(
     async (message: string): Promise<void> => {
+      const observed = pendingGeneration();
       try {
         await onSnapshotApplied(message);
       } finally {
-        await loadMembershipPending();
+        await loadMembershipPending(observed);
       }
     },
-    [loadMembershipPending, onSnapshotApplied],
+    [loadMembershipPending, pendingGeneration, onSnapshotApplied],
   );
   const onMutationError = useCallback<MutationFailureHandler>(
     async (error, options) => {
+      const observed = pendingGeneration();
       try {
         await onSnapshotMutationError(error, options);
       } finally {
-        await loadMembershipPending();
+        await loadMembershipPending(observed);
       }
     },
-    [loadMembershipPending, onSnapshotMutationError],
+    [loadMembershipPending, pendingGeneration, onSnapshotMutationError],
   );
   const [target, setTarget] = useState<Party | null>(() => {
     if (initial === 'demote')
@@ -2238,7 +2221,8 @@ export function GroupSettingsScreen({
         />
       ) : (
         <>
-          {canManageRoster ? (
+          {/* The active invitation panel owns its reads while it is open. */}
+          {canManageRoster && !inviting ? (
             <InvitationRecovery
               bridge={bridge}
               store={store}

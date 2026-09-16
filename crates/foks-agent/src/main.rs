@@ -5,6 +5,7 @@ mod chat;
 mod chat_poll;
 mod data;
 mod invitations;
+mod profile_work;
 mod retention;
 mod sso;
 #[cfg(test)]
@@ -87,7 +88,6 @@ struct ConnectionCapacity {
     blocking: Arc<Semaphore>,
     chat_polling: Arc<Semaphore>,
     active_chat_polls: Arc<Mutex<std::collections::HashSet<ChatPollKey>>>,
-    mutations: Arc<Semaphore>,
 }
 
 #[derive(clap::Parser)]
@@ -209,7 +209,6 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     let blocking = Arc::new(Semaphore::new(arguments.blocking_workers));
     let chat_polling = Arc::new(Semaphore::new(arguments.chat_poll_workers));
     let active_chat_polls = Arc::new(Mutex::new(std::collections::HashSet::new()));
-    let mutations = Arc::new(Semaphore::new(1));
     let retention_gate = Arc::new(Semaphore::new(1));
     let mut retention_timer = tokio::time::interval(Duration::from_secs(60));
     retention_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -266,7 +265,6 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                     blocking: blocking.clone(),
                     chat_polling: chat_polling.clone(),
                     active_chat_polls: active_chat_polls.clone(),
-                    mutations: mutations.clone(),
                 };
                 let ready = ready.clone();
                 tokio::spawn(async move {
@@ -298,19 +296,12 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                 let Ok(scheduler_permit) = scheduler_gate.clone().try_acquire_owned() else {
                     continue;
                 };
-                let Ok(permit) = blocking.clone().try_acquire_owned() else {
-                    continue;
-                };
-                let Ok(mutation_permit) = mutations.clone().try_acquire_owned() else {
-                    continue;
-                };
                 let state = state_dir.clone();
                 let cancellation = scheduler_cancellation.clone();
-                tokio::task::spawn_blocking(move || {
+                let workers = blocking.clone();
+                tokio::spawn(async move {
                     let _scheduler_permit = scheduler_permit;
-                    let _permit = permit;
-                    let _mutation_permit = mutation_permit;
-                    run_scheduled_profiles(&state, timeout, cancellation);
+                    run_scheduled_profiles(state, timeout, cancellation, workers).await;
                 });
             }
             _ = compatibility.tick() => {
@@ -323,10 +314,9 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                 let state = state_dir.clone();
                 let client = compatibility_client.clone();
                 let cancellation = scheduler_cancellation.clone();
-                let mutations = mutations.clone();
                 tokio::spawn(async move {
                     let _compatibility_permit = compatibility_permit;
-                    refresh_hosted_profiles(&state, client, cancellation, mutations).await;
+                    refresh_hosted_profiles(&state, client, cancellation).await;
                 });
             }
         }
@@ -334,8 +324,13 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn run_scheduled_profiles(state_dir: &Path, timeout: Duration, cancellation: CancellationToken) {
-    let registry = match ProfileRegistry::open(state_dir) {
+async fn run_scheduled_profiles(
+    state_dir: PathBuf,
+    timeout: Duration,
+    cancellation: CancellationToken,
+    workers: Arc<Semaphore>,
+) {
+    let registry = match ProfileRegistry::open(&state_dir) {
         Ok(registry) => registry,
         Err(error) => {
             eprintln!("foks-agent scheduler could not open profiles: {error}");
@@ -356,10 +351,48 @@ fn run_scheduled_profiles(state_dir: &Path, timeout: Duration, cancellation: Can
         if cancellation.is_cancelled() {
             break;
         }
-        if let Err(error) =
-            run_scheduled_profile(state_dir, &profile, timeout, cancellation.clone())
+        // Federation jobs can discover further profiles while executing. Take
+        // the root barrier before worker capacity, in the same order as callers.
+        let started = Instant::now();
+        let admission = match profile_work::coordinator()
+            .acquire(&state_dir, profile_work::Scope::Root, timeout)
+            .await
         {
-            eprintln!("foks-agent scheduled refresh failed: {error}");
+            Ok(permit) => permit,
+            Err(error) => {
+                eprintln!("foks-agent scheduled refresh deferred: {error}");
+                continue;
+            }
+        };
+        let permit = match tokio::time::timeout(
+            timeout.saturating_sub(started.elapsed()),
+            workers.clone().acquire_owned(),
+        )
+        .await
+        {
+            Ok(Ok(permit)) => permit,
+            _ => continue,
+        };
+        if cancellation.is_cancelled() {
+            break;
+        }
+        let remaining = timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            continue;
+        }
+        let state = state_dir.clone();
+        let control = cancellation.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let _admission = admission;
+            let _permit = permit;
+            run_scheduled_profile(&state, &profile, remaining, control)
+                .map_err(|error| error.to_string())
+        })
+        .await;
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => eprintln!("foks-agent scheduled refresh failed: {error}"),
+            Err(_) => eprintln!("foks-agent scheduled refresh worker failed"),
         }
     }
 }
@@ -371,23 +404,26 @@ fn run_scheduled_profile(
     cancellation: CancellationToken,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let registry = ProfileRegistry::open(state_dir)?;
-    let session = ProfileSession::open_with_control(&registry, profile, timeout, cancellation)?;
+    let session =
+        ProfileSession::open_with_control(&registry, profile, timeout, cancellation.clone())?;
     let credentials = ClientCredentials::open(state_dir)?;
     let now = now_microseconds()?;
-    let _ = credentials.try_with_checked_session(&session, |session| {
-        let master = credentials.master_key()?;
-        let mut store = EncryptedFileSecretStore::open(
-            &session.paths().credential_store,
-            derive_vault_key(&master),
-        )?;
-        session.run_due_jobs_with_federation(
-            now,
-            &mut AccountVault::new(&mut store),
-            &registry,
-            &credentials,
-            &master,
-        )?;
-        Ok::<_, foks_client_app::Error>(())
+    profile_work::with_control(timeout, cancellation, || {
+        checked_session(&credentials, &session, |session| {
+            let master = credentials.master_key()?;
+            let mut store = EncryptedFileSecretStore::open(
+                &session.paths().credential_store,
+                derive_vault_key(&master),
+            )?;
+            session.run_due_jobs_with_federation(
+                now,
+                &mut AccountVault::new(&mut store),
+                &registry,
+                &credentials,
+                &master,
+            )?;
+            Ok(())
+        })
     })?;
     Ok(())
 }
@@ -396,7 +432,6 @@ async fn refresh_hosted_profiles(
     state_dir: &Path,
     client: reqwest::Client,
     cancellation: CancellationToken,
-    mutations: Arc<Semaphore>,
 ) {
     let registry = match ProfileRegistry::open(state_dir) {
         Ok(registry) => registry,
@@ -430,7 +465,7 @@ async fn refresh_hosted_profiles(
         }
         match fetched {
             Ok((profile, Ok(bytes))) => {
-                match apply_hosted_lease_with_gate(state_dir, &profile, &bytes, &mutations) {
+                match apply_hosted_lease_if_idle(state_dir, &profile, &bytes) {
                     Ok(Some(true)) => {
                         eprintln!("foks-agent applied a newer compatibility lease for {profile}");
                     }
@@ -545,13 +580,14 @@ fn apply_hosted_lease(
     Ok(current != previous)
 }
 
-fn apply_hosted_lease_with_gate(
+fn apply_hosted_lease_if_idle(
     state_dir: &Path,
     profile: &str,
     bytes: &[u8],
-    mutations: &Semaphore,
 ) -> Result<Option<bool>, Box<dyn std::error::Error>> {
-    let Ok(_mutation_permit) = mutations.try_acquire() else {
+    let Some(_profile_permit) =
+        profile_work::coordinator().try_acquire(state_dir, profile_work::Scope::Root)?
+    else {
         return Ok(None);
     };
     apply_hosted_lease(state_dir, profile, bytes).map(Some)
@@ -624,7 +660,6 @@ async fn handle_connection(
                 &mut stream,
                 state_dir.clone(),
                 capacity.blocking.clone(),
-                capacity.mutations.clone(),
                 timeout,
                 request.id,
                 header.clone(),
@@ -644,12 +679,9 @@ async fn handle_connection(
                     .to_owned();
                 let client = compatibility_http_client(timeout)?;
                 let bytes = fetch_canary(&client, &url).await?;
-                let _mutation_permit = capacity
-                    .mutations
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .map_err(|_| AgentRequestError("agent is shutting down"))?;
+                let _profile_permit = profile_work::coordinator()
+                    .acquire(&state_dir, profile_work::Scope::Root, timeout)
+                    .await?;
                 let updated = apply_hosted_lease(&state_dir, profile, &bytes)?;
                 Ok::<_, Box<dyn std::error::Error>>(serde_json::json!({
                     "profile": profile,
@@ -683,29 +715,29 @@ async fn handle_connection(
             }
             continue;
         }
-        let mutation_permit = if request.operation.is_mutation()
-            && !request.operation.is_device_pairing_wait()
+        // Admission precedes worker allocation: same-profile waiters must not
+        // occupy every worker and prevent an unrelated profile from proceeding.
+        let admitted_at = Instant::now();
+        let profile_permit = match profile_work::coordinator()
+            .acquire(
+                &state_dir,
+                profile_work::operation_scope(&request.operation),
+                timeout,
+            )
+            .await
         {
-            match tokio::time::timeout(timeout, capacity.mutations.clone().acquire_owned()).await {
-                Ok(Ok(permit)) => Some(permit),
-                Ok(Err(_)) => return Err("agent mutation gate closed".into()),
-                Err(_) => {
-                    write_response(
-                        &mut stream,
-                        &Response::error(
-                            request.id,
-                            ErrorCode::Busy,
-                            "another mutation is still in progress",
-                        ),
-                        timeout,
-                    )
-                    .await?;
-                    continue;
-                }
+            Ok(permit) => permit,
+            Err(error) => {
+                write_response(
+                    &mut stream,
+                    &dispatch_error_response(request.id, &error),
+                    timeout,
+                )
+                .await?;
+                continue;
             }
-        } else {
-            None
         };
+        let remaining = timeout.saturating_sub(admitted_at.elapsed());
         let worker_pool = if matches!(
             request.operation,
             Operation::DataWriteStatus { .. }
@@ -716,7 +748,7 @@ async fn handle_connection(
         } else {
             capacity.blocking.clone()
         };
-        let permit = match tokio::time::timeout(timeout, worker_pool.acquire_owned()).await {
+        let permit = match tokio::time::timeout(remaining, worker_pool.acquire_owned()).await {
             Ok(Ok(permit)) => permit,
             Ok(Err(_)) => return Err("agent worker pool closed".into()),
             Err(_) => {
@@ -738,12 +770,21 @@ async fn handle_connection(
         let operation_timeout = if request.operation.is_device_pairing_wait() {
             timeout.max(DEVICE_PAIRING_TIMEOUT)
         } else {
-            timeout
+            timeout.saturating_sub(admitted_at.elapsed())
         };
+        if operation_timeout.is_zero() {
+            write_response(
+                &mut stream,
+                &dispatch_error_response(request.id, &profile_work::AdmissionError::Deadline),
+                timeout,
+            )
+            .await?;
+            continue;
+        }
         let supervised = supervise_blocking(
             request.id,
             permit,
-            mutation_permit,
+            profile_permit,
             operation_timeout,
             move |cancellation| {
                 dispatch_controlled(
@@ -845,7 +886,6 @@ async fn handle_streaming_upload(
     stream: &mut tokio::net::UnixStream,
     state_dir: PathBuf,
     blocking: Arc<Semaphore>,
-    mutations: Arc<Semaphore>,
     timeout: Duration,
     request_id: u64,
     header: KvUploadHeader,
@@ -865,17 +905,21 @@ async fn handle_streaming_upload(
         .await?;
         return Ok(());
     }
-    let mutation_permit = match tokio::time::timeout(timeout, mutations.acquire_owned()).await {
-        Ok(Ok(permit)) => permit,
-        Ok(Err(_)) => return Err("agent mutation gate closed".into()),
-        Err(_) => {
+    let profile_permit = match profile_work::coordinator()
+        .acquire(
+            &state_dir,
+            profile_work::operation_scope(&Operation::PutKvStream {
+                header: header.clone(),
+            }),
+            timeout,
+        )
+        .await
+    {
+        Ok(permit) => permit,
+        Err(error) => {
             write_response(
                 stream,
-                &Response::error(
-                    request_id,
-                    ErrorCode::Busy,
-                    "another mutation is still in progress",
-                ),
+                &dispatch_error_response(request_id, &error),
                 timeout,
             )
             .await?;
@@ -905,35 +949,37 @@ async fn handle_streaming_upload(
     let worker_header = header.clone();
     let worker = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        let result = if let Some(submission) = worker_header.adapter {
-            data::upload(
-                &state_dir,
-                &ProfileRegistry::open(&state_dir)?,
-                submission,
-                &mut UploadReader::new(receiver, worker_header.total_length),
-                timeout,
-                worker_cancellation,
-            )
-        } else {
-            put_kv_reader(
-                &state_dir,
-                &ProfileRegistry::open(&state_dir)?,
-                timeout,
-                worker_cancellation,
-                &worker_header.store,
-                &worker_header.path,
-                UploadReader::new(receiver, worker_header.total_length),
-                worker_header.precondition,
-                worker_header.read_role,
-                worker_header.write_role,
-                worker_header.mkdir_p,
-            )
-        };
+        let result = profile_work::with_control(timeout, worker_cancellation.clone(), || {
+            if let Some(submission) = worker_header.adapter {
+                data::upload(
+                    &state_dir,
+                    &ProfileRegistry::open(&state_dir)?,
+                    submission,
+                    &mut UploadReader::new(receiver, worker_header.total_length),
+                    timeout,
+                    worker_cancellation,
+                )
+            } else {
+                put_kv_reader(
+                    &state_dir,
+                    &ProfileRegistry::open(&state_dir)?,
+                    timeout,
+                    worker_cancellation,
+                    &worker_header.store,
+                    &worker_header.path,
+                    UploadReader::new(receiver, worker_header.total_length),
+                    worker_header.precondition,
+                    worker_header.read_role,
+                    worker_header.write_role,
+                    worker_header.mkdir_p,
+                )
+            }
+        });
         let response = match result {
             Ok(value) => Response::success(request_id, value),
             Err(error) => dispatch_error_response(request_id, error.as_ref()),
         };
-        Ok::<_, Box<dyn std::error::Error + Send + Sync>>((response, mutation_permit))
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>((response, profile_permit))
     });
     let _cancel_on_drop = CancelOnDrop(cancellation.clone());
     let mut offset = 0u64;
@@ -987,13 +1033,13 @@ async fn handle_streaming_upload(
     if !committed {
         cancellation.cancel();
     }
-    let (response, mutation_permit) = match tokio::time::timeout(
+    let (response, profile_permit) = match tokio::time::timeout(
         timeout + CANCELLATION_GRACE,
         worker,
     )
     .await
     {
-        Ok(Ok(Ok((response, mutation_permit)))) => (response, Some(mutation_permit)),
+        Ok(Ok(Ok((response, profile_permit)))) => (response, Some(profile_permit)),
         Ok(Ok(Err(error))) => (
             Response::error(
                 request_id,
@@ -1023,7 +1069,7 @@ async fn handle_streaming_upload(
         }
     };
     write_response(stream, &response, timeout).await?;
-    drop(mutation_permit);
+    drop(profile_permit);
     Ok(())
 }
 
@@ -1038,18 +1084,18 @@ fn operation_allowed(ready: bool, operation: &Operation) -> bool {
 struct SupervisedResponse {
     response: Response,
     close_connection: bool,
-    _mutation_permit: Option<OwnedSemaphorePermit>,
+    _profile_permit: Option<profile_work::Permit>,
 }
 
 struct WorkerCompletion {
     response: Response,
-    mutation_permit: Option<OwnedSemaphorePermit>,
+    profile_permit: profile_work::Permit,
 }
 
 async fn supervise_blocking(
     request_id: u64,
     permit: OwnedSemaphorePermit,
-    mutation_permit: Option<OwnedSemaphorePermit>,
+    profile_permit: profile_work::Permit,
     timeout: Duration,
     operation: impl FnOnce(CancellationToken) -> Response + Send + 'static,
 ) -> SupervisedResponse {
@@ -1060,14 +1106,14 @@ async fn supervise_blocking(
         let _permit = permit;
         WorkerCompletion {
             response: operation(worker_cancellation),
-            mutation_permit,
+            profile_permit,
         }
     });
     match tokio::time::timeout(timeout, &mut task).await {
         Ok(Ok(completion)) => SupervisedResponse {
             response: completion.response,
             close_connection: false,
-            _mutation_permit: completion.mutation_permit,
+            _profile_permit: Some(completion.profile_permit),
         },
         Ok(Err(error)) => SupervisedResponse {
             response: Response::error(
@@ -1076,15 +1122,15 @@ async fn supervise_blocking(
                 format!("agent worker failed: {error}"),
             ),
             close_connection: true,
-            _mutation_permit: None,
+            _profile_permit: None,
         },
         Err(_) => {
             cancellation.cancel();
             // Blocking work cannot be forcibly killed safely. Give network
             // operations one poll interval to observe cancellation; if other
             // synchronous work remains stuck, its permit keeps the pool bound.
-            let mutation_permit = match tokio::time::timeout(CANCELLATION_GRACE, &mut task).await {
-                Ok(Ok(completion)) => completion.mutation_permit,
+            let profile_permit = match tokio::time::timeout(CANCELLATION_GRACE, &mut task).await {
+                Ok(Ok(completion)) => Some(completion.profile_permit),
                 Ok(Err(_)) | Err(_) => None,
             };
             SupervisedResponse {
@@ -1094,7 +1140,7 @@ async fn supervise_blocking(
                     "agent operation deadline exceeded; connection closed because completion is ambiguous",
                 ),
                 close_connection: true,
-                _mutation_permit: mutation_permit,
+                _profile_permit: profile_permit,
             }
         }
     }
@@ -1117,13 +1163,15 @@ fn dispatch_controlled(
 ) -> Response {
     let id = request.id;
     let initializes = matches!(request.operation, Operation::InitializeState { .. });
-    let result = dispatch_result(
-        state_dir,
-        request.operation,
-        timeout,
-        cancellation,
-        ready.load(Ordering::Acquire),
-    );
+    let result = profile_work::with_control(timeout, cancellation.clone(), || {
+        dispatch_result(
+            state_dir,
+            request.operation,
+            timeout,
+            cancellation,
+            ready.load(Ordering::Acquire),
+        )
+    });
     if initializes && result.is_ok() {
         ready.store(true, Ordering::Release);
     }
@@ -1134,6 +1182,19 @@ fn dispatch_controlled(
 }
 
 fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -> Response {
+    if let Some(error) = error.downcast_ref::<profile_work::AdmissionError>() {
+        // DeadlineExceeded means a dispatched operation may have committed.
+        // Admission failure is known not to have entered an operation body.
+        return Response::error_with_fields(
+            Some(id),
+            ErrorCode::Busy,
+            error.to_string(),
+            ErrorFields {
+                reason: Some("admission-not-started".to_owned()),
+                ..ErrorFields::default()
+            },
+        );
+    }
     if error
         .downcast_ref::<CatalogSnapshotChangedError>()
         .is_some()
@@ -4023,7 +4084,7 @@ fn dispatch_result(
                 cancellation,
             )?;
             let credentials = ClientCredentials::open(state_dir)?;
-            credentials.with_checked_sessions(&local, &remote, |local, remote| {
+            checked_sessions(&credentials, &local, &remote, |local, remote| {
                 let master = credentials.master_key()?;
                 let mut local_store = EncryptedFileSecretStore::open(
                     &local.paths().credential_store,
@@ -4452,9 +4513,45 @@ fn checked_session<T>(
     session: &ProfileSession,
     operation: impl FnOnce(&CheckedProfileSession<'_>) -> Result<T, Box<dyn std::error::Error>>,
 ) -> Result<T, Box<dyn std::error::Error>> {
-    credentials
-        .try_with_checked_session(session, operation)?
-        .ok_or_else(|| Box::new(ProfileBusyError) as Box<dyn std::error::Error>)
+    let mut operation = Some(operation);
+    loop {
+        profile_work::check_control()
+            .map_err(|_| Box::new(ProfileBusyError) as Box<dyn std::error::Error>)?;
+        let result = credentials.try_with_checked_session(session, |checked| {
+            operation.take().expect("checked operation runs once")(checked)
+        })?;
+        if let Some(value) = result {
+            return Ok(value);
+        }
+        // None proves the closure was not entered. Never retry an error from
+        // the closure, checkpoint publication, or response decoding.
+        profile_work::wait_for_external_lock()
+            .map_err(|_| Box::new(ProfileBusyError) as Box<dyn std::error::Error>)?;
+    }
+}
+
+fn checked_sessions<T>(
+    credentials: &ClientCredentials,
+    left: &ProfileSession,
+    right: &ProfileSession,
+    operation: impl FnOnce(
+        &CheckedProfileSession<'_>,
+        &CheckedProfileSession<'_>,
+    ) -> Result<T, Box<dyn std::error::Error>>,
+) -> Result<T, Box<dyn std::error::Error>> {
+    let mut operation = Some(operation);
+    loop {
+        profile_work::check_control()
+            .map_err(|_| Box::new(ProfileBusyError) as Box<dyn std::error::Error>)?;
+        let result = credentials.try_with_checked_sessions(left, right, |left, right| {
+            operation.take().expect("checked operation runs once")(left, right)
+        })?;
+        if let Some(value) = result {
+            return Ok(value);
+        }
+        profile_work::wait_for_external_lock()
+            .map_err(|_| Box::new(ProfileBusyError) as Box<dyn std::error::Error>)?;
+    }
 }
 
 fn yubi_card(
@@ -5757,17 +5854,17 @@ mod tests {
         let compatible =
             foks_compat_artifact::SignedCanaryArtifact::sign(artifact.clone(), &seed).unwrap();
         let bytes = serde_json::to_vec(&compatible).unwrap();
-        let mutation_gate = Semaphore::new(1);
-        let active_mutation = mutation_gate.try_acquire().unwrap();
+        let active_mutation = profile_work::coordinator()
+            .try_acquire(directory.path(), profile_work::Scope::profile("hosted"))
+            .unwrap()
+            .unwrap();
         assert_eq!(
-            apply_hosted_lease_with_gate(directory.path(), "hosted", &bytes, &mutation_gate,)
-                .unwrap(),
+            apply_hosted_lease_if_idle(directory.path(), "hosted", &bytes).unwrap(),
             None
         );
         drop(active_mutation);
         assert_eq!(
-            apply_hosted_lease_with_gate(directory.path(), "hosted", &bytes, &mutation_gate,)
-                .unwrap(),
+            apply_hosted_lease_if_idle(directory.path(), "hosted", &bytes).unwrap(),
             Some(true)
         );
         assert!(!apply_hosted_lease(directory.path(), "hosted", &bytes).unwrap());
@@ -5804,10 +5901,15 @@ mod tests {
         let permit = workers.clone().acquire_owned().await.unwrap();
         let observed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let worker_observed = Arc::clone(&observed);
+        let coordinator = Arc::new(profile_work::Coordinator::default());
+        let profile_permit = coordinator
+            .try_acquire(Path::new("/worker-test"), profile_work::Scope::profile("a"))
+            .unwrap()
+            .unwrap();
         let result = supervise_blocking(
             7,
             permit,
-            None,
+            profile_permit,
             Duration::from_millis(20),
             move |cancellation| {
                 while !cancellation.is_cancelled() {
@@ -5859,23 +5961,198 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn completed_mutations_hold_the_gate_until_the_response_is_released() {
+    async fn completed_workers_hold_profile_admission_until_the_response_is_released() {
         let workers = Arc::new(Semaphore::new(1));
-        let mutations = Arc::new(Semaphore::new(1));
+        let coordinator = Arc::new(profile_work::Coordinator::default());
+        let root = Path::new("/worker-test");
         let worker_permit = workers.clone().acquire_owned().await.unwrap();
-        let mutation_permit = mutations.clone().acquire_owned().await.unwrap();
+        let profile_permit = coordinator
+            .try_acquire(root, profile_work::Scope::profile("a"))
+            .unwrap()
+            .unwrap();
         let result = supervise_blocking(
             8,
             worker_permit,
-            Some(mutation_permit),
+            profile_permit,
             Duration::from_secs(1),
             |_| Response::success(8, serde_json::json!({ "ok": true })),
         )
         .await;
 
-        assert_eq!(mutations.available_permits(), 0);
+        assert!(coordinator
+            .try_acquire(root, profile_work::Scope::profile("a"))
+            .unwrap()
+            .is_none());
         drop(result);
-        assert_eq!(mutations.available_permits(), 1);
+        assert!(coordinator
+            .try_acquire(root, profile_work::Scope::profile("a"))
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn scheduled_admission_does_not_hold_worker_capacity_while_waiting() {
+        use std::future::Future as _;
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        ClientCredentials::initialize(&root, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        registry
+            .add(Profile {
+                name: "a".into(),
+                label: None,
+                probe: "example.test".into(),
+                protocol: ProtocolPolicy::V019,
+                trust: TrustRoot::WebPki,
+            })
+            .unwrap();
+        drop(registry);
+        let workers = Arc::new(Semaphore::new(1));
+        let foreground = profile_work::coordinator()
+            .try_acquire(&root, profile_work::Scope::profile("a"))
+            .unwrap()
+            .unwrap();
+        let mut scheduled = Box::pin(run_scheduled_profiles(
+            root.clone(),
+            Duration::from_secs(2),
+            CancellationToken::new(),
+            workers.clone(),
+        ));
+        std::future::poll_fn(|cx| {
+            assert!(scheduled.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        assert_eq!(
+            workers.available_permits(),
+            1,
+            "a queued root job cannot consume the foreground worker"
+        );
+        drop(scheduled);
+        drop(foreground);
+        assert!(profile_work::coordinator()
+            .try_acquire(&root, profile_work::Scope::Root)
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn checked_lock_wait_never_replays_an_entered_body_and_respects_cancellation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let credentials =
+            ClientCredentials::initialize(&root, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        for name in ["a", "b"] {
+            registry
+                .add(Profile {
+                    name: name.into(),
+                    label: None,
+                    probe: "example.test".into(),
+                    protocol: ProtocolPolicy::V019,
+                    trust: TrustRoot::WebPki,
+                })
+                .unwrap();
+        }
+        let first = ProfileSession::open(&registry, "a").unwrap();
+        let second = ProfileSession::open(&registry, "b").unwrap();
+        let mut entries = 0;
+        let result =
+            profile_work::with_control(Duration::from_secs(1), CancellationToken::new(), || {
+                checked_session(&credentials, &first, |_| {
+                    entries += 1;
+                    Err::<(), Box<dyn std::error::Error>>(Box::new(ProfileBusyError))
+                })
+            });
+        assert!(result.is_err());
+        assert_eq!(
+            entries, 1,
+            "an error after entering the callback must not replay it"
+        );
+        let result =
+            profile_work::with_control(Duration::from_secs(1), CancellationToken::new(), || {
+                checked_sessions(&credentials, &first, &second, |_, _| {
+                    entries += 1;
+                    Err::<(), Box<dyn std::error::Error>>(Box::new(ProfileBusyError))
+                })
+            });
+        assert!(result.is_err());
+        assert_eq!(entries, 2);
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let result = profile_work::with_control(Duration::from_secs(1), cancellation, || {
+            checked_session(&credentials, &first, |_| {
+                entries += 1;
+                Ok(())
+            })
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            entries, 2,
+            "cancellation before admission must not enter the callback"
+        );
+    }
+
+    #[tokio::test]
+    async fn timed_out_worker_retains_profile_until_its_actual_exit() {
+        let workers = Arc::new(Semaphore::new(1));
+        let coordinator = Arc::new(profile_work::Coordinator::default());
+        let root = Path::new("/stuck-worker-test");
+        let profile_permit = coordinator
+            .try_acquire(root, profile_work::Scope::profile("a"))
+            .unwrap()
+            .unwrap();
+        let permit = workers.clone().acquire_owned().await.unwrap();
+        let (entered, entry) = tokio::sync::oneshot::channel();
+        let (release, held) = std::sync::mpsc::channel();
+        let task = tokio::spawn(supervise_blocking(
+            10,
+            permit,
+            profile_permit,
+            Duration::from_millis(20),
+            move |_| {
+                entered.send(()).unwrap();
+                held.recv().unwrap();
+                Response::success(10, serde_json::json!({"ok":true}))
+            },
+        ));
+        entry.await.unwrap();
+        let response = task.await.unwrap();
+        assert!(response.close_connection);
+        drop(response);
+        assert_eq!(workers.available_permits(), 0);
+        assert!(coordinator
+            .try_acquire(root, profile_work::Scope::profile("a"))
+            .unwrap()
+            .is_none());
+        release.send(()).unwrap();
+        // Wait on actual permit release, without a polling delay or wider timeout.
+        drop(
+            coordinator
+                .acquire(
+                    root,
+                    profile_work::Scope::profile("a"),
+                    Duration::from_secs(2),
+                )
+                .await
+                .unwrap(),
+        );
+        assert_eq!(workers.available_permits(), 1);
+    }
+
+    #[test]
+    fn admission_errors_are_definite_non_execution_and_never_ambiguous_timeouts() {
+        for error in [
+            profile_work::AdmissionError::Full,
+            profile_work::AdmissionError::Deadline,
+            profile_work::AdmissionError::Cancelled,
+        ] {
+            let response = dispatch_error_response(9, &error);
+            assert!(
+                matches!(response.result, ResponseResult::Error { code: ErrorCode::Busy, fields, .. }
+                if fields.reason.as_deref() == Some("admission-not-started"))
+            );
+        }
     }
 
     #[test]

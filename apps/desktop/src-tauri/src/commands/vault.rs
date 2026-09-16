@@ -5,6 +5,7 @@ use crate::commands::context::AppState;
 use crate::commands::execution::{
     ambiguous_worker_failure, apply_kv_mutation, apply_operation, map_mutation_error, MutationKind,
 };
+use crate::commands::preparation::{check_mutation_access, prepare_catalog_mutation};
 use crate::commands::types::{CommandAck, MutationDto, RoleDto};
 use crate::commands::validation::{
     invalid_request, require_main_window, serialize_secret, DOWNLOAD_CHUNK_BYTES,
@@ -778,7 +779,16 @@ async fn apply_file_upload(
 }
 
 async fn load_catalog(state: &AppState, include_items: bool) -> Result<CatalogDto, AgentError> {
-    let (generation, token) = state.begin_catalog_load_checked()?;
+    // Store-only discovery does not replace the accepted full catalog or
+    // cancel a concurrent catalog refresh.
+    let (generation, token) = if include_items {
+        state.begin_catalog_load_checked()?
+    } else {
+        (
+            state.catalog_at(None)?.0,
+            foks_desktop::CatalogLoadToken::default(),
+        )
+    };
     let transport = state.agent.transport();
     let snapshot = tauri::async_runtime::spawn_blocking(move || {
         if include_items {
@@ -950,15 +960,16 @@ pub async fn create_text_item(
     read_role: Option<String>,
     write_role: Option<String>,
 ) -> Result<MutationDto, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
-    let _permit = state.begin_mutation()?;
+    let _permit = prepare_catalog_mutation(&state).await?;
     let store = state.selected_create_store(&store_id)?;
     let (read_role, write_role) =
         create_item_roles(&store, read_role.as_deref(), write_role.as_deref())?;
     let mutation = foks_desktop::create_kv_file_mutation(&store, &path, take_text_value(value)?)
         .map_err(invalid_request)?;
     let mutation = set_create_mutation_roles(mutation, read_role, write_role)?;
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_kv_mutation(&state, mutation, MutationKind::Create).await
 }
 
@@ -974,9 +985,9 @@ pub async fn create_link(
     read_role: Option<String>,
     write_role: Option<String>,
 ) -> Result<MutationDto, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
-    let _permit = state.begin_mutation()?;
+    let _permit = prepare_catalog_mutation(&state).await?;
     let store = state.selected_create_store(&store_id)?;
     let (read_role, write_role) =
         create_item_roles(&store, read_role.as_deref(), write_role.as_deref())?;
@@ -984,6 +995,7 @@ pub async fn create_link(
     let operation = foks_desktop::create_kv_symlink_operation(&store, &path, target.as_str())
         .map_err(invalid_request)?;
     let operation = set_create_operation_roles(operation, read_role, write_role)?;
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_operation(&state, operation, MutationKind::Create).await
 }
 
@@ -997,15 +1009,16 @@ pub async fn create_folder(
     read_role: Option<String>,
     write_role: Option<String>,
 ) -> Result<MutationDto, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
-    let _permit = state.begin_mutation()?;
+    let _permit = prepare_catalog_mutation(&state).await?;
     let store = state.selected_create_store(&store_id)?;
     let (read_role, write_role) =
         create_item_roles(&store, read_role.as_deref(), write_role.as_deref())?;
     let operation =
         foks_desktop::create_kv_directory_operation(&store, &path).map_err(invalid_request)?;
     let operation = set_create_operation_roles(operation, read_role, write_role)?;
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_operation(&state, operation, MutationKind::Create).await
 }
 
@@ -1019,13 +1032,14 @@ pub async fn edit_text_item(
     version: u64,
     value: String,
 ) -> Result<MutationDto, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
-    let _permit = state.begin_mutation()?;
+    let _permit = prepare_catalog_mutation(&state).await?;
     let item = state.selected_mutation_item(&store_id, &path, version)?;
     require_text_item(&item)?;
     let mutation = foks_desktop::edit_kv_file_mutation(&item, take_text_value(value)?)
         .map_err(invalid_request)?;
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_kv_mutation(&state, mutation, MutationKind::Guarded).await
 }
 
@@ -1038,11 +1052,12 @@ pub async fn remove_item(
     path: String,
     version: u64,
 ) -> Result<MutationDto, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
-    let _permit = state.begin_mutation()?;
+    let _permit = prepare_catalog_mutation(&state).await?;
     let item = state.selected_mutation_item(&store_id, &path, version)?;
     let operation = remove_item_operation(&item)?;
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_operation(&state, operation, MutationKind::Guarded).await
 }
 
@@ -1058,9 +1073,9 @@ pub async fn import_dropped_file(
     read_role: Option<String>,
     write_role: Option<String>,
 ) -> Result<MutationDto, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
-    let _permit = state.begin_mutation()?;
+    let _permit = prepare_catalog_mutation(&state).await?;
     let store = state.selected_create_store(&store_id)?;
     // Validate the destination file header before consuming the staged drop path.
     let header = file_create_header(
@@ -1072,6 +1087,7 @@ pub async fn import_dropped_file(
     )?;
     let source_path = Zeroizing::new(source_path);
     let source = state.take_drop_path(source_path.as_str())?;
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_file_upload(&state, header, source, MutationKind::Create).await
 }
 
@@ -1085,9 +1101,9 @@ pub async fn pick_and_import_file(
     read_role: Option<String>,
     write_role: Option<String>,
 ) -> Result<MutationDto, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
-    let _permit = state.begin_mutation()?;
+    let _permit = prepare_catalog_mutation(&state).await?;
     let store = state.selected_create_store(&store_id)?;
     let header = file_create_header(
         &store,
@@ -1108,6 +1124,7 @@ pub async fn pick_and_import_file(
     let source = source
         .into_path()
         .map_err(|error| AgentError::new("upload-source", error.to_string(), false))?;
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_file_upload(&state, header, source, MutationKind::Create).await
 }
 
@@ -1121,14 +1138,15 @@ pub async fn replace_dropped_file(
     version: u64,
     source_path: String,
 ) -> Result<MutationDto, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
-    let _permit = state.begin_mutation()?;
+    let _permit = prepare_catalog_mutation(&state).await?;
     let item = state.selected_mutation_item(&store_id, &path, version)?;
     require_file_item(&item)?;
     let header = file_edit_header(&item, 0)?;
     let source_path = Zeroizing::new(source_path);
     let source = state.take_drop_path(source_path.as_str())?;
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_file_upload(&state, header, source, MutationKind::Guarded).await
 }
 
@@ -1141,9 +1159,9 @@ pub async fn pick_and_replace_file(
     path: String,
     version: u64,
 ) -> Result<MutationDto, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
-    let _permit = state.begin_mutation()?;
+    let _permit = prepare_catalog_mutation(&state).await?;
     let item = state.selected_mutation_item(&store_id, &path, version)?;
     require_file_item(&item)?;
     let header = file_edit_header(&item, 0)?;
@@ -1159,5 +1177,6 @@ pub async fn pick_and_replace_file(
     let source = source
         .into_path()
         .map_err(|error| AgentError::new("upload-source", error.to_string(), false))?;
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_file_upload(&state, header, source, MutationKind::Guarded).await
 }

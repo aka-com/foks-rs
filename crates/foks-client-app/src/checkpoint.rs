@@ -642,6 +642,41 @@ impl ClientCredentials {
     where
         E: From<Error>,
     {
+        self.with_checked_sessions_policy(left, right, false, operation)
+            .map(|value| value.expect("blocking checked sessions acquire both locks"))
+    }
+
+    /// Returns None only when admission failed before entering the operation.
+    /// Every acquired lock is released before returning None, so a caller can
+    /// wait with a deadline and retry admission without replaying a mutation.
+    pub fn try_with_checked_sessions<T, E>(
+        &self,
+        left: &ProfileSession,
+        right: &ProfileSession,
+        operation: impl FnOnce(
+            &CheckedProfileSession<'_>,
+            &CheckedProfileSession<'_>,
+        ) -> std::result::Result<T, E>,
+    ) -> std::result::Result<Option<T>, E>
+    where
+        E: From<Error>,
+    {
+        self.with_checked_sessions_policy(left, right, true, operation)
+    }
+
+    fn with_checked_sessions_policy<T, E>(
+        &self,
+        left: &ProfileSession,
+        right: &ProfileSession,
+        nonblocking: bool,
+        operation: impl FnOnce(
+            &CheckedProfileSession<'_>,
+            &CheckedProfileSession<'_>,
+        ) -> std::result::Result<T, E>,
+    ) -> std::result::Result<Option<T>, E>
+    where
+        E: From<Error>,
+    {
         self.ensure_session_root(left).map_err(E::from)?;
         self.ensure_session_root(right).map_err(E::from)?;
         if left.paths.directory == right.paths.directory {
@@ -651,6 +686,11 @@ impl ClientCredentials {
         }
         let left_key = held_profile_key(&left.paths.directory);
         let right_key = held_profile_key(&right.paths.directory);
+        if left_key == right_key {
+            return Err(E::from(Error::InvalidConfig(
+                "cross-host operation requires two distinct profiles",
+            )));
+        }
         if HeldCheckedProfile::is_held(&left_key) || HeldCheckedProfile::is_held(&right_key) {
             // A paired operation takes both locks in a canonical order, so it
             // cannot reuse a single hold this thread already owns without
@@ -660,16 +700,53 @@ impl ClientCredentials {
                 "cross-host operation cannot nest inside a checked session for either profile",
             )));
         }
-        let (first, second) = if left.paths.directory < right.paths.directory {
+        let (first, second) = if left_key < right_key {
             (left, right)
         } else {
             (right, left)
         };
-        let first_lock = runtime::ProfileLock::operation(first.paths()).map_err(E::from)?;
-        let second_lock = runtime::ProfileLock::operation(second.paths()).map_err(E::from)?;
-        let database_locks = self
-            .lock_and_verify_checkpoints(first, second)
-            .map_err(E::from)?;
+        let acquire = |session: &ProfileSession| {
+            if nonblocking {
+                runtime::ProfileLock::try_operation(session.paths())
+            } else {
+                runtime::ProfileLock::operation(session.paths()).map(Some)
+            }
+        };
+        let Some(first_lock) = acquire(first).map_err(E::from)? else {
+            return Ok(None);
+        };
+        let Some(second_lock) = acquire(second).map_err(E::from)? else {
+            return Ok(None);
+        };
+        let database_locks = if nonblocking {
+            // Try both database/checkpoint locks without waiting while holding
+            // either. A shared database identity remains an integrity error.
+            if self.backend == CredentialBackend::Native
+                && first.rollback_checkpoint().map_err(E::from)?.database_id
+                    == second.rollback_checkpoint().map_err(E::from)?.database_id
+            {
+                return Err(E::from(self.checkpoint_reset_error(
+                    second,
+                    "hard-state database identity is already used by another profile",
+                )));
+            }
+            let Some(first_database) = self
+                .try_lock_and_verify_checkpoint(first)
+                .map_err(E::from)?
+            else {
+                return Ok(None);
+            };
+            let Some(second_database) = self
+                .try_lock_and_verify_checkpoint(second)
+                .map_err(E::from)?
+            else {
+                return Ok(None);
+            };
+            first_database.into_iter().chain(second_database).collect()
+        } else {
+            self.lock_and_verify_checkpoints(first, second)
+                .map_err(E::from)?
+        };
 
         let left_checked = checked_profile_for_use(self, left).map_err(E::from)?;
         let right_checked = checked_profile_for_use(self, right).map_err(E::from)?;
@@ -692,7 +769,7 @@ impl ClientCredentials {
         database_release.map_err(E::from)?;
         second_release.map_err(E::from)?;
         first_release.map_err(E::from)?;
-        result
+        result.map(Some)
     }
 
     /// Attempts the checked-session sequence without waiting for another
@@ -2120,5 +2197,67 @@ impl ClientStateMaintenanceGuard {
         let result = operation(&mut manifest)?;
         ClientCredentials::persist_native_manifest(&mut native, &mut manifest)?;
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    use crate::{CredentialBackend, Profile, ProfileRegistry, ProtocolPolicy, TrustRoot};
+
+    #[test]
+    fn paired_try_admission_releases_first_lock_and_never_enters_body_on_contention() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let credentials =
+            ClientCredentials::initialize(&root, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        for name in ["a", "b"] {
+            registry
+                .add(Profile {
+                    name: name.into(),
+                    label: None,
+                    probe: "example.test".into(),
+                    protocol: ProtocolPolicy::V019,
+                    trust: TrustRoot::WebPki,
+                })
+                .unwrap();
+        }
+        let first = ProfileSession::open(&registry, "a").unwrap();
+        let second = ProfileSession::open(&registry, "b").unwrap();
+        let external = runtime::ProfileLock::operation(second.paths()).unwrap();
+        assert_eq!(
+            credentials
+                .try_with_checked_sessions(&second, &first, |_, _| {
+                    panic!("contended operation must not execute");
+                    #[allow(unreachable_code)]
+                    Ok::<_, Error>(())
+                })
+                .unwrap(),
+            None
+        );
+        // Failure on the second lock must not retain the first profile.
+        assert!(runtime::ProfileLock::try_operation(first.paths())
+            .unwrap()
+            .is_some());
+        drop(external);
+        let mut entered = 0;
+        let result = credentials.try_with_checked_sessions(&second, &first, |left, right| {
+            entered += 1;
+            assert_eq!(left.profile().name, "b");
+            assert_eq!(right.profile().name, "a");
+            Err::<(), _>(Error::InvalidConfig("operation failed after admission"))
+        });
+        assert!(matches!(
+            result,
+            Err(Error::InvalidConfig("operation failed after admission"))
+        ));
+        assert_eq!(entered, 1);
+        assert!(runtime::ProfileLock::try_operation(first.paths())
+            .unwrap()
+            .is_some());
+        assert!(runtime::ProfileLock::try_operation(second.paths())
+            .unwrap()
+            .is_some());
     }
 }

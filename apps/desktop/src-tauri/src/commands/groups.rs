@@ -5,6 +5,9 @@ use crate::commands::context::AppState;
 use crate::commands::execution::{
     ambiguous_mutation_response, apply_operation, apply_profile_operation_value, MutationKind,
 };
+use crate::commands::preparation::{
+    check_mutation_access, prepare_catalog_mutation, prepare_group_mutation, GroupMutationFacts,
+};
 use crate::commands::types::{MutationDto, RoleDto};
 use crate::commands::validation::{
     bounded_local_name, invalid_request, invalid_response, require_main_window,
@@ -666,9 +669,17 @@ pub async fn list_group_details(
     store_id: String,
 ) -> Result<GroupDetailsDto, AgentError> {
     require_main_window(&webview)?;
+    load_group_details(&state, store_id, state.agent.transport(), true).await
+}
+
+pub(super) async fn load_group_details(
+    state: &AppState,
+    store_id: String,
+    transport: std::sync::Arc<dyn foks_desktop::AgentTransport>,
+    retain: bool,
+) -> Result<GroupDetailsDto, AgentError> {
     let generation = state.catalog_generation.load(Ordering::Acquire);
     let (profile, team_alias) = state.selected_team(&store_id)?;
-    let transport = state.agent.transport();
     let expected_profile = profile.clone();
     let expected_team_alias = team_alias.clone();
     let result_store = store_id.clone();
@@ -713,7 +724,9 @@ pub async fn list_group_details(
         GroupDetailResultDto::Success { value } => Some(value.as_slice()),
         GroupDetailResultDto::Error { .. } => None,
     };
-    state.retain_group_details(generation, store_id, parties, federation)?;
+    if retain {
+        state.retain_group_details(generation, store_id, parties, federation)?;
+    }
     Ok(details)
 }
 
@@ -794,11 +807,12 @@ pub async fn create_group(
     name: String,
     kind: GroupKindInput,
 ) -> Result<MutationDto, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
-    let _permit = state.begin_mutation()?;
+    let _permit = prepare_catalog_mutation(&state).await?;
     let account = state.selected_account(&account_store_id)?;
     let operation = create_group_operation(account, &team_alias, &name, kind)?;
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_operation(&state, operation, MutationKind::Create).await
 }
 
@@ -811,11 +825,12 @@ pub async fn add_group_member(
     username: String,
     destination: RoleInput,
 ) -> Result<MutationDto, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
-    let _permit = state.begin_mutation()?;
+    let _permit = prepare_catalog_mutation(&state).await?;
     let team = state.selected_active_team_for_mutation(&store_id)?;
     let operation = add_group_member_operation(team, &username, destination)?;
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_operation(&state, operation, MutationKind::Create).await
 }
 
@@ -827,15 +842,16 @@ pub async fn resume_group_member_addition(
     store_id: String,
     username: String,
 ) -> Result<MutationDto, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
-    let _permit = state.begin_mutation()?;
+    let _permit = prepare_catalog_mutation(&state).await?;
     let team = state.selected_active_team_for_mutation(&store_id)?;
     let operation = Operation::ResumeTeamMemberAddition {
         profile: team.profile,
         team_alias: team.team_alias,
         username: required_field(&username, "Enter a member username.")?,
     };
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_operation(&state, operation, MutationKind::Resume).await
 }
 
@@ -848,11 +864,16 @@ pub async fn demote_group_member(
     username: String,
     destination: RoleInput,
 ) -> Result<MutationDto, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
-    let _permit = state.begin_mutation()?;
-    let (team, party_id_hex, current) = state.selected_member_target(&store_id, &username)?;
-    let operation = demote_group_member_operation(team, &party_id_hex, current, destination)?;
+    let (_permit, operation) =
+        prepare_group_mutation(&state, &store_id, GroupMutationFacts::Members, || {
+            let (team, party_id_hex, current) =
+                state.selected_member_target(&store_id, &username)?;
+            demote_group_member_operation(team, &party_id_hex, current, destination)
+        })
+        .await?;
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_operation(&state, operation, MutationKind::Guarded).await
 }
 
@@ -864,11 +885,15 @@ pub async fn remove_group_member(
     store_id: String,
     username: String,
 ) -> Result<MutationDto, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
-    let _permit = state.begin_mutation()?;
-    let (team, party_id_hex, _) = state.selected_member_target(&store_id, &username)?;
-    let operation = remove_group_member_operation(team, &party_id_hex)?;
+    let (_permit, operation) =
+        prepare_group_mutation(&state, &store_id, GroupMutationFacts::Members, || {
+            let (team, party_id_hex, _) = state.selected_member_target(&store_id, &username)?;
+            remove_group_member_operation(team, &party_id_hex)
+        })
+        .await?;
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_operation(&state, operation, MutationKind::Guarded).await
 }
 
@@ -879,14 +904,15 @@ pub async fn resume_group_member_edit(
     state: State<'_, AppState>,
     store_id: String,
 ) -> Result<MutationDto, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
-    let _permit = state.begin_mutation()?;
+    let _permit = prepare_catalog_mutation(&state).await?;
     let team = state.selected_active_team_for_mutation(&store_id)?;
     let operation = Operation::ResumeTeamMemberEdit {
         profile: team.profile,
         team_alias: team.team_alias,
     };
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_operation(&state, operation, MutationKind::Resume).await
 }
 
@@ -899,12 +925,13 @@ pub async fn admit_group(
     remote_store_id: String,
     visibility: i16,
 ) -> Result<MutationDto, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
-    let _permit = state.begin_mutation()?;
+    let _permit = prepare_catalog_mutation(&state).await?;
     let local = state.selected_active_team_for_mutation(&store_id)?;
     let remote = state.selected_remote_named_team(&local.profile, &remote_store_id)?;
     let operation = admit_group_operation(local, remote, visibility);
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_operation(&state, operation, MutationKind::Create).await
 }
 
@@ -916,11 +943,15 @@ pub async fn rerun_group_admission(
     store_id: String,
     operation_id: String,
 ) -> Result<MutationDto, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
-    let _permit = state.begin_mutation()?;
-    let (local, entry) = state.selected_inactive_admission(&store_id, &operation_id)?;
-    let operation = rerun_group_admission_operation(local, entry)?;
+    let (_permit, operation) =
+        prepare_group_mutation(&state, &store_id, GroupMutationFacts::Federation, || {
+            let (local, entry) = state.selected_inactive_admission(&store_id, &operation_id)?;
+            rerun_group_admission_operation(local, entry)
+        })
+        .await?;
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_operation(&state, operation, MutationKind::Resume).await
 }
 
@@ -933,14 +964,17 @@ pub async fn expel_federated_group(
     remote_host_id_hex: String,
     remote_team_id_hex: String,
 ) -> Result<MutationDto, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
-    let _permit = state.begin_mutation()?;
-    let (team, entry) = state.selected_active_federation_target(
-        &store_id,
-        &remote_host_id_hex,
-        &remote_team_id_hex,
-    )?;
+    let (_permit, (team, entry)) =
+        prepare_group_mutation(&state, &store_id, GroupMutationFacts::Federation, || {
+            state.selected_active_federation_target(
+                &store_id,
+                &remote_host_id_hex,
+                &remote_team_id_hex,
+            )
+        })
+        .await?;
     if entry.remote_host_id_hex != remote_host_id_hex
         || entry.remote_team_id_hex != remote_team_id_hex
     {
@@ -948,6 +982,7 @@ pub async fn expel_federated_group(
             "The federated group changed before removal. Refresh and try again.",
         ));
     }
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_operation(
         &state,
         Operation::ExpelFederatedTeam {
@@ -968,9 +1003,9 @@ pub async fn resume_group_creation(
     state: State<'_, AppState>,
     store_id: String,
 ) -> Result<MutationDto, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
-    let _permit = state.begin_mutation()?;
+    let _permit = prepare_catalog_mutation(&state).await?;
     let (store, active) = state.selected_store(&store_id)?;
     let CatalogStoreRef::Team(store) = store else {
         return Err(invalid_request("Only pending group stores can be resumed."));
@@ -985,5 +1020,6 @@ pub async fn resume_group_creation(
         profile: store.profile,
         team_alias: store.team_alias,
     };
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_operation(&state, operation, MutationKind::Resume).await
 }

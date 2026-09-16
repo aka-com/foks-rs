@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DeviceCache } from '../src/device-cache';
+import { RetiredQueryError } from '../src/query-repository';
 import type { Bridge, AccountDevice } from '../src/bridge';
 
 function fixture() {
@@ -100,7 +101,7 @@ test('retiring a session clears metadata and late replies cannot refill it', asy
   await new Promise<void>((done) => setImmediate(done));
   cache.clear();
   resolve([]);
-  await pending;
+  await assert.rejects(pending, RetiredQueryError);
   assert.equal(cache.peek('p', 'a'), undefined);
   f.bridge.listAccountDevices = async () => [];
   await cache.load('p', 'a');

@@ -27,7 +27,22 @@ test('failed hydration cannot turn a confirmed write into a rejected operation',
 });
 
 test('ambiguous results override apparently retryable admission codes', () => {
-  assert.equal(failureOutcome(error('profile-busy')), 'not-started');
+  assert.equal(failureOutcome(error('profile-busy')), 'unknown');
+  assert.equal(failureOutcome(error('busy')), 'unknown');
+  assert.equal(
+    failureOutcome({
+      ...error('busy'),
+      details: { reason: 'admission-not-started' },
+    }),
+    'not-started',
+  );
+  assert.equal(
+    failureOutcome({
+      ...error('busy', true),
+      details: { reason: 'admission-not-started' },
+    }),
+    'unknown',
+  );
   assert.equal(failureOutcome(error('profile-busy', true)), 'unknown');
   assert.equal(failureOutcome(error('conflict')), 'rejected');
   assert.equal(failureOutcome(error('agent-lost')), 'unknown');

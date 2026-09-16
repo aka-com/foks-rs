@@ -1,7 +1,7 @@
-import { useDeviceCache } from '../device-cache';
-import { useCallback, useEffect, useState } from 'react';
-import type { Bridge, YubiEnrollment } from '../bridge';
-import { enqueueProfileWork } from '../bridge';
+import { useDeviceQueries } from '../device-cache';
+import { useMetadataQuery } from '../query-hooks';
+import { useEffect, useState } from 'react';
+import type { Bridge } from '../bridge';
 import { Button, Inset, InsetRow, SectionLabel } from '../components';
 import { serverAvailability } from '../model';
 import type { AgentSnapshot, Server } from '../model';
@@ -19,43 +19,19 @@ export function ProfileKeys({
   bridge: Bridge;
   onError: (error: unknown) => void;
 }) {
-  const deviceCache = useDeviceCache();
-  const [entries, setEntries] = useState<YubiEnrollment[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [failed, setFailed] = useState(false);
+  const deviceCache = useDeviceQueries(bridge);
   const [action, setAction] = useState<{
+    profile: string;
     alias: string;
     kind: SimpleYubiAction;
   } | null>(null);
   const available = serverAvailability(snapshot, server).available;
-  const load = useCallback(async () => {
-    return enqueueProfileWork(bridge, server.id, () =>
-      bridge.listYubiAccounts(server.id),
-    );
-  }, [bridge, server.id]);
-  useEffect(() => {
-    let active = true;
-    setEntries([]);
-    setFailed(false);
-    setLoading(available);
-    if (available)
-      void load()
-        .then((rows) => {
-          if (active) setEntries(rows);
-        })
-        .catch((error: unknown) => {
-          if (active) {
-            setFailed(true);
-            onError(error);
-          }
-        })
-        .finally(() => {
-          if (active) setLoading(false);
-        });
-    return () => {
-      active = false;
-    };
-  }, [available, load, onError]);
+  const query = available ? deviceCache.enrollments(server.id) : null;
+  const state = useMetadataQuery(query, { onError });
+  const entries = state.data ?? [];
+  const failed =
+    available && state.data === undefined && state.error !== undefined;
+  const loading = available && state.data === undefined && !failed;
   useEffect(() => {
     const conceal = () => setAction(null);
     const hidden = () => {
@@ -97,6 +73,7 @@ export function ProfileKeys({
                   <Button
                     onClick={() =>
                       setAction({
+                        profile: server.id,
                         alias: entry.alias,
                         kind: 'resume-enrollment',
                       })
@@ -108,21 +85,33 @@ export function ProfileKeys({
                   <>
                     <Button
                       onClick={() =>
-                        setAction({ alias: entry.alias, kind: 'change-pin' })
+                        setAction({
+                          profile: server.id,
+                          alias: entry.alias,
+                          kind: 'change-pin',
+                        })
                       }
                     >
                       Change PIN…
                     </Button>
                     <Button
                       onClick={() =>
-                        setAction({ alias: entry.alias, kind: 'unblock' })
+                        setAction({
+                          profile: server.id,
+                          alias: entry.alias,
+                          kind: 'unblock',
+                        })
                       }
                     >
                       Unblock PIN…
                     </Button>
                     <Button
                       onClick={() =>
-                        setAction({ alias: entry.alias, kind: 'change-puk' })
+                        setAction({
+                          profile: server.id,
+                          alias: entry.alias,
+                          kind: 'change-puk',
+                        })
                       }
                     >
                       Change unlock code…
@@ -136,7 +125,7 @@ export function ProfileKeys({
           ))
         )}
       </Inset>
-      {action && (
+      {action && available && action.profile === server.id && (
         <YubiActionSheet
           bridge={bridge}
           profile={server.id}
@@ -145,9 +134,12 @@ export function ProfileKeys({
           onClose={() => setAction(null)}
           onError={onError}
           onDone={async () => {
-            deviceCache?.clear();
             setAction(null);
-            setEntries(await load());
+            deviceCache.invalidateEnrollments(server.id);
+            deviceCache.repository.invalidate(['account-devices', server.id]);
+            // Read errors are reported by the subscription after the action has
+            // already succeeded, and never turn it into a failed write.
+            await query?.load().catch(() => undefined);
           }}
         />
       )}

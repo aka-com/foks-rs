@@ -1034,13 +1034,57 @@ enrollments are shared by profile. Fresh entries are reused for one minute.
 Returning to either tab paints cached rows immediately; expired entries remain
 visible while a read refreshes them. Concurrent metadata reads share requests.
 
-Explicit Refresh and mutation refreshes replace the cache after installing the
-new catalog. Account/profile identity or access changes and session concealment
-also replace it; lock/unmount clears it. Late reads cannot refill a cleared
-cache. Enrollment actions on the server page invalidate the cached metadata.
+The shared `QueryRepository` owns immutable metadata, subscriptions, freshness,
+and one shared read per resource generation. Accounts, Devices and the server's enrollment
+page subscribe to the same resources. Pending group operations and invitation
+recovery counts use the same repository; invitation payloads are not retained.
+
+A forced full catalog refresh invalidates metadata after installing the new
+catalog. Resource-specific actions invalidate their account or profile; cached
+rows remain visible during replacement reads. Account/profile identity or access
+changes and session concealment replace the repository; lock/unmount clears it.
+Generation checks prevent late reads from refilling a cleared or invalidated
+resource. Eligible catalog-required read failures share one repair and one read
+retry. This mechanism never retries writes or ambiguous results.
 
 Connected-card presence is probed separately on Devices and does not delay
 metadata rows. PIN state remains action-specific. The cache never stores recovery
 phrases, PINs, passphrases, or other secret inputs, and never persists to disk.
 Removing a device first reloads the native device list; cached display metadata
 does not replace target validation for the write.
+
+### State coordination
+
+The shell's `CatalogCoordinator` serializes compound snapshot loads. Concurrent
+ordinary requests share a load; invalidations during a load coalesce into one
+trailing load. Only the newest accepted result is published. Lock, maintenance,
+connection loss and unmount retire older replies. Native catalog loads likewise
+keep the accepted snapshot until a replacement succeeds. Publication retires
+native authorization facts before exposing the new generation; cached display
+metadata never supplies write authorization.
+
+Confirmed mutations and subsequent view synchronization have separate outcomes.
+A failed refresh does not turn an applied write into a failed write. Automatic
+recovery does not replay a mutation. Unknown delivery remains an explicit
+reconciliation or durable-operation recovery path.
+
+The agent owns bounded profile admission for foreground requests, periodic work,
+retention and chat verification. Conflicting requests queue before occupying a
+worker. Independent profiles may run concurrently; explicit multi-profile work
+reserves its entire set atomically. Registry changes and dynamic federation
+cascades use a conservative state-root barrier. External process locks remain
+authoritative, and lock acquisition is retried only before a callback starts.
+Long chat polls release profile admission while waiting for remote events.
+
+Opt-in frontend query and catalog diagnostics report aggregate outcomes and
+latencies without profile names, item paths, input values or response contents.
+The existing profile-work observer reports queue and execution durations. Agent
+admission failures use the typed `admission-not-started` reason; execution
+failures retain their existing ambiguity classification.
+
+Files and Groups commands prepare missing native catalog state while holding the
+mutation reservation, before dispatching one write. Group target validation uses
+fresh native facts; file edits retain the caller's exact version. The unlocked
+application generation must remain unchanged across preparation and file pickers.
+See [state consistency](../../docs/state-consistency.md) for ownership, recovery,
+interoperability and regression boundaries.

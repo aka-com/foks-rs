@@ -106,6 +106,19 @@ fn run(
         return Ok(None);
     };
     cursors.after_profile = Some(profile.clone());
+    // Local maintenance participates in the same FIFO as foreground requests.
+    // It has a short admission budget and never holds a partial profile set.
+    let _admission = match super::profile_work::coordinator().acquire_blocking(
+        state,
+        super::profile_work::Scope::profile(&profile),
+        std::time::Duration::from_secs(1),
+        &foks_client_app::CancellationToken::new(),
+    ) {
+        Ok(permit) => permit,
+        Err(_) => return Ok(None),
+    };
+    // A root-scoped registry edit may have completed while admission waited.
+    let registry = ProfileRegistry::open(state)?;
     let paths = registry.paths(&profile)?;
     // Registry-only profiles must not be initialized by maintenance.
     if !paths.hard_database.try_exists()? {

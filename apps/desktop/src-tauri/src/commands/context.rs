@@ -28,6 +28,7 @@ pub struct AppState {
     catalog_load: Mutex<Option<CatalogLoadToken>>,
     catalog_coordination: Mutex<()>,
     pub(super) catalog_generation: AtomicU64,
+    catalog_load_generation: AtomicU64,
     pub(super) catalog: Mutex<Option<CatalogSnapshot>>,
     mutation_in_flight: Arc<AtomicBool>,
     pub(super) mutation_requires_refresh: Arc<AtomicBool>,
@@ -46,6 +47,7 @@ impl AppState {
             catalog_load: Mutex::new(None),
             catalog_coordination: Mutex::new(()),
             catalog_generation: AtomicU64::new(0),
+            catalog_load_generation: AtomicU64::new(0),
             catalog: Mutex::new(None),
             mutation_in_flight: Arc::new(AtomicBool::new(false)),
             mutation_requires_refresh: Arc::new(AtomicBool::new(false)),
@@ -97,6 +99,61 @@ impl AppState {
             .map(|account| (account.store.clone(), account))
             .collect();
         Ok(())
+    }
+
+    /// Install freshly read authorization facts and bind the operation target
+    /// under one coordination lock. Earlier metadata reads cannot replace the
+    /// prepared facts between their installation and synchronous validation.
+    pub(super) fn with_prepared_group_facts<T>(
+        &self,
+        permit: &MutationGuard,
+        prepared: crate::commands::preparation::PreparedGroupFacts,
+        select: impl FnOnce() -> Result<T, AgentError>,
+    ) -> Result<T, AgentError> {
+        let _coordination = self
+            .catalog_coordination
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !Arc::ptr_eq(&self.mutation_in_flight, &permit.0)
+            || !self.mutation_in_flight.load(Ordering::Acquire)
+        {
+            return Err(invalid_request(
+                "The mutation reservation belongs to another session.",
+            ));
+        }
+        if self.catalog_generation.load(Ordering::Acquire) != prepared.generation {
+            return Err(catalog_changed_during_group_read());
+        }
+        if let Some((profile, accounts)) = prepared.accounts {
+            if accounts.iter().any(|account| account.profile != profile) {
+                return Err(invalid_response(
+                    "The account identities belong to another profile.",
+                ));
+            }
+            let mut retained = self
+                .accounts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            retained.retain(|_, account| account.profile != profile);
+            retained.extend(
+                accounts
+                    .into_iter()
+                    .map(|account| (account.store.clone(), account)),
+            );
+        }
+        if let Some(parties) = prepared.parties {
+            self.rosters
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(prepared.store.clone(), parties);
+        }
+        if let Some(federation) = prepared.federation {
+            self.federations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(prepared.store, federation);
+        }
+        select()
     }
 
     pub(super) fn retain_roster(
@@ -197,12 +254,9 @@ impl AppState {
         if let Some(previous) = live.replace(token.clone()) {
             previous.cancel();
         }
-        let generation = self.catalog_generation.fetch_add(1, Ordering::AcqRel) + 1;
-        *self
-            .catalog
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-        self.clear_group_facts();
+        // Loading is not publication. Keep the accepted snapshot and its
+        // dependent facts usable until a replacement has been validated.
+        let generation = self.catalog_load_generation.fetch_add(1, Ordering::AcqRel) + 1;
         (generation, token)
     }
 
@@ -214,13 +268,21 @@ impl AppState {
             .catalog_coordination
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self.catalog_generation.load(Ordering::Acquire) != generation {
+        if self.catalog_load_generation.load(Ordering::Acquire) != generation {
             return false;
         }
+        // Facts describe the previously accepted catalog. Retire them only
+        // when its replacement is published, under the same coordination
+        // lock used by retain_* so an old read cannot restore them afterward.
+        self.clear_group_facts();
         *self
             .catalog
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(catalog);
+        // Some reads capture the generation before selecting their target.
+        // Publish it last: an old generation with a new target is rejected by
+        // retain_*, but a new generation must never identify the old catalog.
+        self.catalog_generation.store(generation, Ordering::Release);
         self.mutation_requires_refresh
             .store(false, Ordering::Release);
         true
@@ -264,12 +326,15 @@ impl AppState {
         {
             token.cancel();
         }
-        self.catalog_generation.fetch_add(1, Ordering::AcqRel);
+        let generation = self.catalog_load_generation.fetch_add(1, Ordering::AcqRel) + 1;
         *self
             .catalog
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         self.clear_group_facts();
+        // As with publication, a read must not attach the new generation to
+        // a target or fact selected from the retired catalog.
+        self.catalog_generation.store(generation, Ordering::Release);
     }
 
     pub(super) fn begin_catalog_load_checked(&self) -> Result<(u64, CatalogLoadToken), AgentError> {
@@ -285,6 +350,48 @@ impl AppState {
             ));
         }
         Ok(self.begin_catalog_load())
+    }
+
+    /// Only the current mutation reservation can repair a missing catalog.
+    /// Ordinary refreshes remain excluded until the caller dispatches or exits.
+    pub(super) fn begin_missing_catalog_for_mutation(
+        &self,
+        permit: &MutationGuard,
+    ) -> Result<Option<(u64, CatalogLoadToken)>, AgentError> {
+        let _coordination = self
+            .catalog_coordination
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !Arc::ptr_eq(&self.mutation_in_flight, &permit.0)
+            || !self.mutation_in_flight.load(Ordering::Acquire)
+        {
+            return Err(invalid_request(
+                "The mutation reservation belongs to another session.",
+            ));
+        }
+        if self
+            .catalog
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
+        {
+            return Ok(None);
+        }
+        Ok(Some(self.begin_catalog_load()))
+    }
+
+    // Called under catalog_coordination after acquiring a mutation reservation.
+    // In-flight refreshes must not replace authorization facts during preflight.
+    fn retire_catalog_load(&self) {
+        if let Some(token) = self
+            .catalog_load
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            token.cancel();
+        }
+        self.catalog_load_generation.fetch_add(1, Ordering::AcqRel);
     }
 
     pub(super) fn selected_item(
@@ -916,6 +1023,10 @@ impl AppState {
     /// Acquire this guard before any mutation. Refusal is immediate:
     /// a second write cannot proceed until the prior operation reconciles.
     pub fn begin_mutation(&self) -> Result<MutationGuard, AgentError> {
+        let _coordination = self
+            .catalog_coordination
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.mutation_requires_refresh.load(Ordering::Acquire) {
             let mut error = AgentError::new(
                 "ambiguous",
@@ -934,6 +1045,7 @@ impl AppState {
                     false,
                 )
             })?;
+        self.retire_catalog_load();
         Ok(MutationGuard(Arc::clone(&self.mutation_in_flight)))
     }
 
@@ -941,6 +1053,10 @@ impl AppState {
     /// bootstrap repair after an uncertain response. Initialization does not clear
     /// `mutation_requires_refresh`; a successful catalog reconciliation clears it.
     pub fn begin_initialization(&self) -> Result<MutationGuard, AgentError> {
+        let _coordination = self
+            .catalog_coordination
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.mutation_in_flight
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| {
@@ -950,6 +1066,7 @@ impl AppState {
                     false,
                 )
             })?;
+        self.retire_catalog_load();
         Ok(MutationGuard(Arc::clone(&self.mutation_in_flight)))
     }
 }

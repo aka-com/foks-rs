@@ -1,3 +1,6 @@
+import { QueryRepositoryContext } from './query-hooks';
+import { readRecoveryFor } from './query-read-recovery';
+import { CatalogCoordinator } from './catalog-coordinator';
 import { synchronizeApplied } from './operation-outcome';
 import { accountStopped } from './model';
 import { DeviceCache, DeviceCacheContext } from './device-cache';
@@ -879,7 +882,7 @@ function VaultShell({
     };
   }, [locations, settlePrompt, toasts]);
   const [concealSignal, setConcealSignal] = useState(0);
-  const [deviceCacheEpoch, setDeviceCacheEpoch] = useState(0);
+  const metadataInvalidation = useRef<() => void>(() => undefined);
   // A conceal ends the session the remembered chat belonged to: the account
   // that comes back may not have that team on this Mac, so the rail's Chat tab
   // runs the first-team fallback again instead of reopening it. The Chat tab
@@ -997,47 +1000,34 @@ function VaultShell({
     };
   }, [bridge]);
 
-  // Ordinary callers share one in-flight load; a mutation passes `force`
-  // because it invalidated any load that was already running against the
-  // old catalog.
-  const refreshSnapshotInFlight = useRef<Promise<AgentSnapshot> | null>(null);
-  const refreshSnapshotGeneration = useRef(0);
-  // Loads never overlap. The native side keeps a single catalog snapshot, and
-  // a snapshot load reads it across several commands after list_catalog; a
-  // second load starting in between would replace that snapshot and the
-  // first load's later reads would answer from the wrong one. A forced load
-  // therefore waits for the in-flight one to settle before it starts, and
-  // the in-flight result is discarded because a newer generation exists.
-  const refreshSnapshot = useCallback(
-    (force = false): Promise<AgentSnapshot> => {
-      const live = refreshSnapshotInFlight.current;
-      if (live && !force) return live;
-      const generation = ++refreshSnapshotGeneration.current;
-      const start = (): Promise<AgentSnapshot> =>
-        loadSnapshot(bridge, latestRef.current);
-      const pending = (live ? live.then(start, start) : start())
-        .then((next) => {
-          if (generation === refreshSnapshotGeneration.current) {
-            setLatest(next);
-            if (force) setDeviceCacheEpoch((value) => value + 1);
-            setAgentCatalogReady(true);
-          }
-          return next;
-        })
-        .finally(() => {
-          if (refreshSnapshotInFlight.current === pending)
-            refreshSnapshotInFlight.current = null;
-        });
-      refreshSnapshotInFlight.current = pending;
-      return pending;
-    },
+  const catalogCoordinator = useMemo(
+    () =>
+      new CatalogCoordinator(
+        () => loadSnapshot(bridge, latestRef.current),
+        (next, forced) => {
+          latestRef.current = next;
+          setLatest(next);
+          if (forced) metadataInvalidation.current();
+          setAgentCatalogReady(true);
+        },
+      ),
     [bridge],
+  );
+  useEffect(() => {
+    catalogCoordinator.activate();
+    return () => catalogCoordinator.deactivate();
+  }, [catalogCoordinator]);
+  const refreshSnapshot = useCallback(
+    (force = false): Promise<AgentSnapshot> =>
+      catalogCoordinator.refresh(force),
+    [catalogCoordinator],
   );
 
   const refresh = useCallback(
     async (message: string): Promise<void> => {
       const result = await synchronizeApplied(() => refreshSnapshot(true));
       if (result.synchronization === 'pending') {
+        if (result.error.code === 'catalog-read-retired') return;
         if (isAgentReadinessError(result.error))
           commandErrorRef.current(result.error);
         else
@@ -1083,6 +1073,7 @@ function VaultShell({
   const commandError = useCallback(
     (error: unknown, item?: Item, draft = ''): void => {
       const typed = normalizeCommandError(error);
+      if (typed.code === 'catalog-read-retired') return;
       const routed = workflowForError(error, item, draft);
       if (routed) {
         if (routed.kind === 'agent-lost')
@@ -1225,8 +1216,7 @@ function VaultShell({
       if (!agentController.applyMaintenance(snapshot)) return;
       if (snapshot.state === 'idle') return;
       foregroundRefreshAllowed.current = false;
-      refreshSnapshotGeneration.current++;
-      refreshSnapshotInFlight.current = null;
+      catalogCoordinator.reset();
       setAgentCatalogReady(false);
       setConcealSignal((value) => value + 1);
       if (snapshot.state !== 'complete') return;
@@ -1257,7 +1247,14 @@ function VaultShell({
       alive = false;
       stop?.();
     };
-  }, [agentController, bridge, commandError, refreshSnapshot, toasts]);
+  }, [
+    agentController,
+    bridge,
+    catalogCoordinator,
+    commandError,
+    refreshSnapshot,
+    toasts,
+  ]);
 
   const handledReadinessErrors = useRef(new WeakSet<CommandError>());
   const handleAgentReadinessFailure = useCallback(
@@ -1271,8 +1268,7 @@ function VaultShell({
       // A component forwarding that rejection must not invalidate recovery twice.
       handledReadinessErrors.current.add(error);
       foregroundRefreshAllowed.current = false;
-      refreshSnapshotGeneration.current++;
-      refreshSnapshotInFlight.current = null;
+      catalogCoordinator.reset();
       setAgentCatalogReady(false);
       if (error.code === 'agent-lost') {
         agentController.disconnect(error.message);
@@ -1294,6 +1290,7 @@ function VaultShell({
     },
     [
       agentController,
+      catalogCoordinator,
       commandError,
       recoverAgentReadiness,
       state.location.kind,
@@ -1316,8 +1313,7 @@ function VaultShell({
         const message = await bridge.takeAgentConnectionLoss();
         if (alive && message) {
           foregroundRefreshAllowed.current = false;
-          refreshSnapshotGeneration.current++;
-          refreshSnapshotInFlight.current = null;
+          catalogCoordinator.reset();
           setAgentCatalogReady(false);
           agentController.disconnect(message);
           setConcealSignal((value) => value + 1);
@@ -1336,7 +1332,7 @@ function VaultShell({
       alive = false;
       window.clearInterval(timer);
     };
-  }, [agentController, bridge, commandError, setWorkflow]);
+  }, [agentController, bridge, catalogCoordinator, commandError, setWorkflow]);
 
   const appRef = useRef<HTMLDivElement>(null);
   const portalRoot = useMemo(
@@ -1803,8 +1799,8 @@ function VaultShell({
   );
 
   // Display labels do not identify accounts. Replacing identities or access
-  // retires all cached metadata; a forced catalog refresh does the same after
-  // the new catalog is installed, so reads cannot race its replacement.
+  // retires all cached metadata. Ordinary publication keeps resource data; a
+  // forced full refresh invalidates it after the new catalog is installed.
   const deviceIdentity = JSON.stringify({
     accounts: shown.accounts.map(({ store, alias, server }) => [
       store,
@@ -1825,7 +1821,15 @@ function VaultShell({
     () => new DeviceCache(bridge),
     // These values define the lifetime of the cache, not its read arguments.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [bridge, concealSignal, deviceCacheEpoch, deviceIdentity],
+    [bridge, concealSignal, deviceIdentity],
+  );
+  metadataInvalidation.current = () => deviceCache.repository.invalidate([]);
+  deviceCache.repository.setReadRecovery(
+    () =>
+      readRecoveryFor(deviceCache.repository).options({
+        refresh: () => refreshSnapshot(),
+      }),
+    () => foregroundRefreshAllowed.current,
   );
   useEffect(() => () => deviceCache.clear(), [deviceCache]);
 
@@ -1840,9 +1844,11 @@ function VaultShell({
         accessNow={accessNow}
       >
         <NavigationGuardProvider store={locations}>
-          <DeviceCacheContext.Provider value={deviceCache}>
-            {shell}
-          </DeviceCacheContext.Provider>
+          <QueryRepositoryContext.Provider value={deviceCache.repository}>
+            <DeviceCacheContext.Provider value={deviceCache}>
+              {shell}
+            </DeviceCacheContext.Provider>
+          </QueryRepositoryContext.Provider>
         </NavigationGuardProvider>
       </ChatInboxProvider>
     </ToastProvider>

@@ -1,4 +1,4 @@
-import { useDeviceCache } from '../device-cache';
+import { useDeviceMetadata } from '../device-cache';
 import { LocalAliasPanel } from '../components/local-alias-panel';
 import { localAliasOf } from '../model';
 import { useTabSheetState } from '../navigation-guard';
@@ -16,7 +16,7 @@ import { useTabSheetState } from '../navigation-guard';
  * Accounts had, with the same panels behind them.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AdminPanel } from '../components/admin-panel';
 import { BotPanel } from '../components/bot-panel';
@@ -33,7 +33,6 @@ import {
   Notice,
   SectionLabel,
 } from '../components';
-import { normalizeCommandError } from '../bridge';
 import type { Bridge } from '../bridge';
 import {
   accountStopped,
@@ -66,11 +65,7 @@ import type { MutationFailureHandler } from '../mutation-recovery';
 import { PageHeader } from '../shell/page-header';
 import { AccountMark } from './account-switcher';
 import { AccountHeader } from '../shell/sidebar';
-import {
-  deviceEntries,
-  NO_DEVICES,
-  readAccountAndProfileKeys,
-} from './device-model';
+import { deviceEntries } from './device-model';
 import type { DeviceEntry, DeviceLists } from './device-model';
 import { GroupMark } from './group-mark';
 import { GoProfileConnectSheet } from './go-profile-connect';
@@ -330,18 +325,18 @@ export function PeopleScreen({
   const stopped = selected
     ? accountStopped(snapshot, selected)
     : { stopped: true, reason: '' };
-  const deviceCache = useDeviceCache();
-  const initialKeys =
-    selected && !stopped.stopped
-      ? deviceCache?.peek(selected.server, selected.id)
-      : undefined;
-  const [lists, setLists] = useState<DeviceLists>(
-    () => initialKeys ?? NO_DEVICES,
-  );
-  const [loadingKeys, setLoadingKeys] = useState(() => !initialKeys);
-  // A read that failed is not an account with no keys, and the sections say
-  // which of the two this is.
-  const [keysFailed, setKeysFailed] = useState(false);
+  const {
+    lists,
+    loading: loadingKeys,
+    failed: keysFailed,
+  } = useDeviceMetadata({
+    bridge,
+    profile: selected?.server,
+    store: selected?.id,
+    enabled: !stopped.stopped,
+    recovery: { refresh: onRefreshSnapshot },
+    onError,
+  });
 
   // Secrets typed into a panel must not stay on screen behind another window.
   // Browser sign-in is the exception: it hands focus away on purpose.
@@ -376,94 +371,11 @@ export function PeopleScreen({
     onNavigate({ ...location, store: selected.id }, { force: true });
   }, [location, onNavigate, selected]);
 
-  // A catalog the agent has replaced mid-read is recovered by the shell's own
-  // refresh, once, and the read is retried once; concurrent requests share the
-  // one refresh. The shell's callback is held in a ref: a caller that passes a
-  // new function each render would otherwise re-read this account's keys on
-  // every render of the shell.
-  const refreshSnapshot = useRef(onRefreshSnapshot);
-  refreshSnapshot.current = onRefreshSnapshot;
-  const catalogRecovery = useRef<Promise<AgentSnapshot> | null>(null);
-  const recovered = useRef(new Set<string>());
-  const recoverCatalog = useCallback((): Promise<AgentSnapshot> => {
-    if (!catalogRecovery.current) {
-      const pending = refreshSnapshot.current().finally(() => {
-        if (catalogRecovery.current === pending) catalogRecovery.current = null;
-      });
-      catalogRecovery.current = pending;
-    }
-    return catalogRecovery.current;
-  }, []);
-
-  // The facts on this page the catalog does not carry: the keys this account
-  // holds, and which of them this Mac is authenticated with. This page lists
-  // no connected card, so it does not drive the card reader to find one.
-  const selectedId = selected?.id;
-  const selectedProfile = selected?.server;
-  const accessStopped = stopped.stopped;
+  // Changing account identity resets input state; query data is selected by
+  // exact account/profile identity on the same render, without copying it.
   useEffect(() => {
-    let alive = true;
-    const cached =
-      selectedId && selectedProfile && !accessStopped
-        ? deviceCache?.peek(selectedProfile, selectedId)
-        : undefined;
-    setLists(cached ?? NO_DEVICES);
-    setKeysFailed(false);
     setSheet(null);
-    if (!selectedId || !selectedProfile || accessStopped) {
-      setLoadingKeys(false);
-      return;
-    }
-    setLoadingKeys(!cached);
-    const load = (): Promise<DeviceLists> =>
-      deviceCache
-        ? deviceCache.load(selectedProfile, selectedId)
-        : readAccountAndProfileKeys(bridge, selectedProfile, selectedId, {
-            cards: false,
-          });
-    void (async () => {
-      try {
-        let result: DeviceLists;
-        try {
-          result = await load();
-        } catch (error) {
-          if (!alive) return;
-          if (normalizeCommandError(error).code !== 'catalog-required')
-            throw error;
-          const already = recovered.current.has(selectedId);
-          if (already && !catalogRecovery.current) throw error;
-          recovered.current.add(selectedId);
-          await recoverCatalog();
-          if (!alive) return;
-          deviceCache?.clear();
-          result = await load();
-        }
-        if (!alive) return;
-        recovered.current.delete(selectedId);
-        setLists(result);
-        setLoadingKeys(false);
-      } catch (error) {
-        if (!alive) return;
-        setLoadingKeys(false);
-        // The sections say the read failed rather than reporting no keys; the
-        // failure itself is the shell's to report.
-        setKeysFailed(!cached);
-        onError(error);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [
-    accessStopped,
-    deviceCache,
-    bridge,
-    onError,
-    recoverCatalog,
-    selectedId,
-    selectedProfile,
-    setSheet,
-  ]);
+  }, [selected?.id, setSheet]);
 
   const subtitle = plural(stores.length, 'account');
 

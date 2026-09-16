@@ -1,0 +1,457 @@
+use crate::agent::{AgentError, AgentHandle};
+use crate::commands::context::AppState;
+use crate::commands::execution::{execute_kv_mutation, MutationKind};
+use crate::commands::preparation::{
+    check_mutation_access, ensure_catalog_for_mutation, prepare_group_facts, GroupMutationFacts,
+};
+use crate::commands::tests::support::{account_ref, test_profile_value};
+use crate::commands::vault::store_id;
+use foks_agent_proto::{
+    KvEntryMetadata, KvPage, KvRole, Operation, ProfileOverview, ResponseResult, TeamDetailsSummary,
+};
+use foks_desktop::{AgentTransport, CatalogSnapshot, CatalogStoreRef, CatalogStoreSummary};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+
+struct PreparationTransport {
+    calls: Mutex<Vec<Operation>>,
+    fail_catalog: bool,
+    fail_members: bool,
+    version: u64,
+    access: Option<Arc<AtomicU64>>,
+    pause_accounts: Option<(
+        std::sync::mpsc::Sender<()>,
+        Mutex<std::sync::mpsc::Receiver<()>>,
+    )>,
+    username: &'static str,
+}
+
+impl PreparationTransport {
+    fn new(version: u64) -> Self {
+        Self {
+            calls: Mutex::new(vec![]),
+            fail_catalog: false,
+            fail_members: false,
+            version,
+            access: None,
+            pause_accounts: None,
+            username: "alice",
+        }
+    }
+}
+
+fn success(value: serde_json::Value) -> ResponseResult {
+    ResponseResult::Success { value }
+}
+
+impl AgentTransport for PreparationTransport {
+    fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        self.calls.lock().unwrap().push(operation.clone());
+        match operation {
+            Operation::ListProfiles if self.fail_catalog => Err(foks_desktop::AgentError::Transport("catalog unavailable".into())),
+            Operation::ListProfiles => {
+                if let Some(access) = &self.access { access.fetch_add(1, Ordering::AcqRel); }
+                Ok(serde_json::json!([test_profile_value("work.example")]))
+            },
+            Operation::ListKnownStores { .. } => Ok(serde_json::json!([])),
+            Operation::ListProfileOverview { profile } => Ok(serde_json::to_value(ProfileOverview {
+                profile: profile.clone(),
+                accounts: success(serde_json::json!([{"profile": profile, "alias":"personal", "username":"alice"}])),
+                teams: success(serde_json::json!([])),
+                server_status: success(serde_json::Value::Null),
+            }).unwrap()),
+            Operation::ListKv { .. } => Ok(serde_json::to_value(KvPage {
+                snapshot_version: 1,
+                entries: vec![KvEntryMetadata {
+                    path: "/note".into(), node_type: "small-file".into(), version: self.version,
+                    size: Some(1), read_role: KvRole::Owner, write_role: KvRole::Owner,
+                }],
+                next_cursor: None,
+            }).unwrap()),
+            Operation::ListTeamDetails { .. } => Ok(serde_json::to_value(TeamDetailsSummary {
+                members: if self.fail_members {
+                    ResponseResult::Error { code: foks_agent_proto::ErrorCode::Busy, message:"members unavailable".into(), fields: Default::default() }
+                } else {
+                    success(serde_json::json!([{
+                        "username":"bob", "party_id_hex":"01".repeat(33), "party_kind":"user", "scoped_host_id_hex":null,
+                        "source_role":{"member":{"visibility":0}}, "destination_role":{"member":{"visibility":0}},
+                        "generation":1, "locally_manageable":true
+                    }]))
+                },
+                federation: success(serde_json::json!([])),
+            }).unwrap()),
+            Operation::ListAccounts { profile } => {
+                if let Some((entered, resume)) = &self.pause_accounts {
+                    entered.send(()).unwrap();
+                    resume.lock().unwrap().recv().unwrap();
+                }
+                Ok(serde_json::json!([{"profile":profile,"alias":"personal","username":self.username}]))
+            }
+            Operation::PutKv { .. } => Ok(serde_json::Value::Null),
+            other => panic!("unexpected operation {other:?}"),
+        }
+    }
+}
+
+fn empty_state() -> AppState {
+    AppState::new(Arc::new(AgentHandle::new(
+        "/tmp/unused-foks-agent.sock".into(),
+    )))
+}
+
+fn prepared_edit(
+    state: &AppState,
+    transport: Arc<PreparationTransport>,
+    version: u64,
+) -> Result<(), AgentError> {
+    tauri::async_runtime::block_on(async {
+        let unlocked = transport
+            .access
+            .as_ref()
+            .map_or(0, |access| access.load(Ordering::Acquire));
+        let permit = state.begin_mutation()?;
+        ensure_catalog_for_mutation(state, &permit, transport.clone()).await?;
+        let store = store_id(&CatalogStoreRef::Account(account_ref(
+            "work.example",
+            "personal",
+        )));
+        let item = state.selected_mutation_item(&store, "/note", version)?;
+        let mutation = foks_desktop::edit_kv_file_mutation(&item, b"changed".to_vec()).unwrap();
+        check_mutation_access(
+            unlocked,
+            Ok(transport
+                .access
+                .as_ref()
+                .map_or(0, |access| access.load(Ordering::Acquire))),
+        )?;
+        state.invalidate_catalog();
+        execute_kv_mutation(transport.as_ref(), mutation, MutationKind::Guarded)
+    })
+}
+
+#[test]
+fn absent_catalog_is_loaded_before_exactly_one_version_bound_write() {
+    let state = empty_state();
+    let transport = Arc::new(PreparationTransport::new(7));
+    prepared_edit(&state, transport.clone(), 7).unwrap();
+    let calls = transport.calls.lock().unwrap();
+    assert!(matches!(calls.first(), Some(Operation::ListProfiles)));
+    assert!(matches!(calls.last(), Some(Operation::PutKv { .. })));
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| matches!(call, Operation::PutKv { .. }))
+            .count(),
+        1
+    );
+    assert!(state.begin_mutation().is_ok());
+}
+
+#[test]
+fn failed_catalog_or_changed_version_never_dispatches_a_write() {
+    for fail_catalog in [false, true] {
+        let state = empty_state();
+        let mut transport = PreparationTransport::new(8);
+        transport.fail_catalog = fail_catalog;
+        let transport = Arc::new(transport);
+        let error = prepared_edit(&state, transport.clone(), 7).unwrap_err();
+        if !fail_catalog {
+            assert_eq!(error.code, "conflict");
+        }
+        assert!(!transport
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|call| matches!(call, Operation::PutKv { .. })));
+        assert!(state.begin_mutation().is_ok());
+    }
+}
+
+#[test]
+fn mutation_reservation_fences_old_refresh_without_retiring_accepted_facts() {
+    let state = empty_state();
+    assert!(state.accept_catalog(0, CatalogSnapshot::default()));
+    let accepted = state.catalog_at(None).unwrap().0;
+    let (loading, _) = state.begin_catalog_load_checked().unwrap();
+    let permit = state.begin_mutation().unwrap();
+    assert!(!state.accept_catalog(loading, CatalogSnapshot::default()));
+    assert_eq!(state.catalog_at(None).unwrap().0, accepted);
+    assert!(state.catalog_at(None).unwrap().1.is_some());
+    assert_eq!(
+        state.begin_catalog_load_checked().unwrap_err().code,
+        "mutation-in-flight"
+    );
+    let transport = Arc::new(PreparationTransport::new(7));
+    tauri::async_runtime::block_on(ensure_catalog_for_mutation(
+        &state,
+        &permit,
+        transport.clone(),
+    ))
+    .unwrap();
+    assert!(transport.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn foreign_permits_and_prior_ambiguous_writes_cannot_enter_preparation() {
+    let state = empty_state();
+    let foreign = empty_state();
+    let permit = foreign.begin_mutation().unwrap();
+    let transport = Arc::new(PreparationTransport::new(7));
+    let error = tauri::async_runtime::block_on(ensure_catalog_for_mutation(
+        &state,
+        &permit,
+        transport.clone(),
+    ))
+    .unwrap_err();
+    assert_eq!(error.code, "invalid-request");
+    state
+        .mutation_requires_refresh
+        .store(true, Ordering::Release);
+    assert_eq!(
+        prepared_edit(&state, transport.clone(), 7)
+            .unwrap_err()
+            .code,
+        "ambiguous"
+    );
+    assert!(transport.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn member_preparation_loads_native_facts_and_preserves_other_profile_accounts() {
+    let state = empty_state();
+    let team = foks_agent_proto::TeamStoreRef {
+        profile: "work.example".into(),
+        account_alias: "personal".into(),
+        team_alias: "engineering".into(),
+        team_id: "03".repeat(33),
+    };
+    let store = store_id(&CatalogStoreRef::Team(team.clone()));
+    assert!(state.accept_catalog(
+        0,
+        CatalogSnapshot {
+            profiles: vec!["work.example".into(), "unavailable.example".into()],
+            stores: vec![
+                CatalogStoreSummary::Account {
+                    store: account_ref("work.example", "personal")
+                },
+                CatalogStoreSummary::Team {
+                    store: team,
+                    kind: "named".into(),
+                    name: Some("Engineering".into()),
+                    active: true,
+                    creation_phase: None
+                }
+            ],
+            ..Default::default()
+        }
+    ));
+    let unrelated = crate::commands::accounts::AccountDto {
+        local_alias: None,
+        store: "unrelated".into(),
+        profile: "unavailable.example".into(),
+        alias: "personal".into(),
+        username: "casey".into(),
+    };
+    state
+        .retain_accounts(0, std::slice::from_ref(&unrelated))
+        .unwrap();
+    let permit = state.begin_mutation().unwrap();
+    let transport = Arc::new(PreparationTransport::new(7));
+    let prepared = tauri::async_runtime::block_on(prepare_group_facts(
+        &state,
+        &store,
+        GroupMutationFacts::Members,
+        transport.clone(),
+    ))
+    .unwrap();
+    state
+        .with_prepared_group_facts(&permit, prepared, || {
+            state.selected_member_target(&store, "bob")
+        })
+        .unwrap();
+    assert_eq!(
+        state.accounts.lock().unwrap().get("unrelated"),
+        Some(&unrelated)
+    );
+    assert!(transport.calls.lock().unwrap().iter().all(|call| matches!(call, Operation::ListTeamDetails {profile,..} | Operation::ListAccounts {profile} if profile == "work.example")));
+}
+
+#[test]
+fn failed_required_group_facts_do_not_fall_back_to_cached_authorization() {
+    let state = crate::commands::tests::support::phase_four_state(vec![]);
+    let store = store_id(&CatalogStoreRef::Team(
+        crate::commands::tests::support::team_ref("work.example", "personal", "engineering"),
+    ));
+    let cached = crate::commands::groups::PartyDto {
+        store: store.clone(),
+        username: Some("bob".into()),
+        party_kind: "user".into(),
+        generation: 0,
+        locally_manageable: true,
+        party_id_hex: "01".repeat(33),
+        scoped_host_id_hex: None,
+        source_role: KvRole::Member { visibility: 0 }.into(),
+        destination_role: KvRole::Member { visibility: 0 }.into(),
+    };
+    state.retain_roster(0, store.clone(), &[cached]).unwrap();
+    state
+        .retain_accounts(
+            0,
+            &[crate::commands::accounts::AccountDto {
+                local_alias: None,
+                store: store_id(&CatalogStoreRef::Account(account_ref(
+                    "work.example",
+                    "personal",
+                ))),
+                profile: "work.example".into(),
+                alias: "personal".into(),
+                username: "alice".into(),
+            }],
+        )
+        .unwrap();
+    assert!(state.selected_member_target(&store, "bob").is_ok());
+    let _permit = state.begin_mutation().unwrap();
+    let mut transport = PreparationTransport::new(7);
+    transport.fail_members = true;
+    let transport = Arc::new(transport);
+    let error = tauri::async_runtime::block_on(prepare_group_facts(
+        &state,
+        &store,
+        GroupMutationFacts::Members,
+        transport.clone(),
+    ))
+    .unwrap_err();
+    assert_eq!(error.code, "busy");
+    // A failed unrelated member read does not block a federation-only request.
+    tauri::async_runtime::block_on(prepare_group_facts(
+        &state,
+        &store,
+        GroupMutationFacts::Federation,
+        transport.clone(),
+    ))
+    .unwrap();
+    assert!(transport
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|call| matches!(call, Operation::ListTeamDetails { .. })));
+}
+
+#[test]
+fn lock_generation_change_during_catalog_preparation_prevents_dispatch() {
+    let state = empty_state();
+    let mut transport = PreparationTransport::new(7);
+    transport.access = Some(Arc::new(AtomicU64::new(1)));
+    let transport = Arc::new(transport);
+    let error = prepared_edit(&state, transport.clone(), 7).unwrap_err();
+    assert_eq!(error.code, "app-locked");
+    assert!(!transport
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|call| matches!(call, Operation::PutKv { .. })));
+}
+
+fn group_state() -> (AppState, String) {
+    let state = empty_state();
+    let team = foks_agent_proto::TeamStoreRef {
+        profile: "work.example".into(),
+        account_alias: "personal".into(),
+        team_alias: "engineering".into(),
+        team_id: "03".repeat(33),
+    };
+    let store = store_id(&CatalogStoreRef::Team(team.clone()));
+    assert!(state.accept_catalog(0, CatalogSnapshot {
+        profiles: vec!["work.example".into()],
+        stores: vec![
+            CatalogStoreSummary::Account { store: account_ref("work.example", "personal") },
+            CatalogStoreSummary::Team { store: team, kind: "named".into(), name: Some("Engineering".into()), active:true, creation_phase:None },
+        ],
+        profile_overviews: vec![ProfileOverview {
+            profile: "work.example".into(),
+            accounts: success(serde_json::json!([{"profile":"work.example","alias":"personal","username":"cached-alice"}])),
+            teams: success(serde_json::json!([])), server_status: success(serde_json::Value::Null),
+        }],
+        ..Default::default()
+    }));
+    (state, store)
+}
+
+#[test]
+fn native_account_identity_supersedes_cached_overview_before_self_member_check() {
+    let (state, store) = group_state();
+    let permit = state.begin_mutation().unwrap();
+    let mut transport = PreparationTransport::new(7);
+    transport.username = "bob";
+    let transport = Arc::new(transport);
+    let prepared = tauri::async_runtime::block_on(prepare_group_facts(
+        &state,
+        &store,
+        GroupMutationFacts::Members,
+        transport.clone(),
+    ))
+    .unwrap();
+    let error = state
+        .with_prepared_group_facts(&permit, prepared, || {
+            state.selected_member_target(&store, "bob")
+        })
+        .unwrap_err();
+    assert_eq!(error.code, "member-not-actionable");
+    assert!(transport
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|call| matches!(call, Operation::ListAccounts { .. })));
+}
+
+#[test]
+fn older_roster_completion_cannot_replace_prepared_member_target() {
+    let (state, store) = group_state();
+    let state = Arc::new(state);
+    let (entered, waiting) = std::sync::mpsc::channel();
+    let (resume, released) = std::sync::mpsc::channel();
+    let mut transport = PreparationTransport::new(7);
+    transport.pause_accounts = Some((entered, Mutex::new(released)));
+    let transport = Arc::new(transport);
+    let worker_state = Arc::clone(&state);
+    let worker_store = store.clone();
+    let worker = std::thread::spawn(move || {
+        let permit = worker_state.begin_mutation().unwrap();
+        let prepared = tauri::async_runtime::block_on(prepare_group_facts(
+            &worker_state,
+            &worker_store,
+            GroupMutationFacts::Members,
+            transport,
+        ))
+        .unwrap();
+        worker_state
+            .with_prepared_group_facts(&permit, prepared, || {
+                worker_state.selected_member_target(&worker_store, "bob")
+            })
+            .unwrap()
+            .1
+    });
+    waiting
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    // A previously started metadata read returns while the final preflight
+    // account read is blocked. This formerly overwrote the fresh roster.
+    let old = crate::commands::groups::PartyDto {
+        store: store.clone(),
+        username: Some("bob".into()),
+        party_kind: "user".into(),
+        generation: 0,
+        locally_manageable: true,
+        party_id_hex: format!("01{}", "ab".repeat(32)),
+        scoped_host_id_hex: None,
+        source_role: KvRole::Owner.into(),
+        destination_role: KvRole::Owner.into(),
+    };
+    state.retain_roster(0, store, &[old]).unwrap();
+    resume.send(()).unwrap();
+    assert_eq!(worker.join().unwrap(), "01".repeat(33));
+}

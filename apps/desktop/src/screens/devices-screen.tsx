@@ -1,4 +1,4 @@
-import { useDeviceCache } from '../device-cache';
+import { useDeviceMetadata } from '../device-cache';
 import { useTabSheetState } from '../navigation-guard';
 /**
  * The Devices tab: one page per account, with no sub-navigation.
@@ -22,7 +22,7 @@ import {
 } from 'react';
 import type { ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
-import { enqueueProfileWork, normalizeCommandError } from '../bridge';
+import { enqueueProfileWork } from '../bridge';
 import type {
   AccountDevice,
   BackupEnrollment,
@@ -80,10 +80,9 @@ import {
   enrollmentForDevice,
   deviceIsCard,
   deviceName,
-  readAccountAndProfileKeys,
   roleLabel,
 } from './device-model';
-import type { DeviceEntry, DeviceLists } from './device-model';
+import type { DeviceEntry } from './device-model';
 import { UnavailableAccount } from './people-screen';
 
 import { paperKeyResume } from './paper-key-resume';
@@ -153,7 +152,6 @@ export function DevicesScreen({
   // The shell canonicalizes the route on mount; the scene it was entered at
   // is what decides whether a sheet opens with the page.
   const [enteredScene] = useState(scene);
-  const deviceCache = useDeviceCache();
   const toasts = useToast();
   const stores = accountStores(snapshot);
   const requested = location.store;
@@ -186,22 +184,7 @@ export function DevicesScreen({
     null,
   );
   useEffect(() => () => paperResume.conceal(), [paperResume]);
-  const initialKeys =
-    selected && !stopped.stopped
-      ? deviceCache?.peek(selected.server, selected.id)
-      : undefined;
-  const [devices, setDevices] = useState<AccountDevice[]>(
-    () => initialKeys?.devices ?? [],
-  );
-  const [backups, setBackups] = useState<BackupEnrollment[]>(
-    () => initialKeys?.backups ?? [],
-  );
-  const [yubi, setYubi] = useState<YubiEnrollment[]>(
-    () => initialKeys?.yubi ?? [],
-  );
   const [cards, setCards] = useState<{ serial: number }[]>([]);
-  // Cached metadata is available on the first paint of a returning tab.
-  const [loading, setLoading] = useState(() => !initialKeys);
   const [pendingYubi, setPendingYubi] = useState<SimpleYubiAction | null>(null);
   const [removing, setRemoving] = useState<AccountDevice | null>(null);
   const [revoking, setRevoking] = useState<BackupEnrollment | null>(null);
@@ -211,23 +194,19 @@ export function DevicesScreen({
 
   const sheetOpen = useRef(sheet);
   sheetOpen.current = sheet;
-  const catalogRecovery = useRef<Promise<AgentSnapshot> | null>(null);
-  const recovered = useRef(new Set<string>());
-  // The shell's callback is held in a ref, so the four reads below are driven
-  // by the account they are about and not by the identity of a function the
-  // caller may rebuild on every render.
-  const refreshSnapshot = useRef(onRefreshSnapshot);
-  refreshSnapshot.current = onRefreshSnapshot;
-  // Deduplicate concurrent catalog recovery requests.
-  const recoverCatalog = useCallback((): Promise<AgentSnapshot> => {
-    if (!catalogRecovery.current) {
-      const pending = refreshSnapshot.current().finally(() => {
-        if (catalogRecovery.current === pending) catalogRecovery.current = null;
-      });
-      catalogRecovery.current = pending;
-    }
-    return catalogRecovery.current;
-  }, []);
+  const {
+    cache: deviceCache,
+    lists,
+    loading,
+  } = useDeviceMetadata({
+    bridge,
+    profile: selected?.server,
+    store: selected?.id,
+    enabled: !stopped.stopped,
+    recovery: { refresh: onRefreshSnapshot, allowed: () => !sheetOpen.current },
+    onError,
+  });
+  const { devices, backups, yubi } = lists;
 
   const closeSheets = useCallback((): void => {
     paperResume.conceal();
@@ -274,73 +253,6 @@ export function DevicesScreen({
     shown.current = selectedId;
     closeSheets();
   }, [closeSheets, selectedId]);
-
-  // Metadata can outlive this tab. A catalog replaced mid-read is recovered
-  // once and retried once; connected-card presence is read separately below.
-  useEffect(() => {
-    let alive = true;
-    const cached =
-      selectedId && profile && !accessStopped
-        ? deviceCache?.peek(profile, selectedId)
-        : undefined;
-    setDevices(cached?.devices ?? []);
-    setBackups(cached?.backups ?? []);
-    setYubi(cached?.yubi ?? []);
-    if (!selectedId || !profile || accessStopped) {
-      setLoading(false);
-      return;
-    }
-    setLoading(!cached);
-    const load = (): Promise<DeviceLists> =>
-      deviceCache
-        ? deviceCache.load(profile, selectedId)
-        : readAccountAndProfileKeys(bridge, profile, selectedId, {
-            cards: false,
-          });
-    void (async () => {
-      try {
-        let result: DeviceLists;
-        try {
-          result = await load();
-        } catch (error) {
-          if (!alive) return;
-          const retryable =
-            !sheetOpen.current &&
-            normalizeCommandError(error).code === 'catalog-required';
-          if (!retryable) throw error;
-          const already = recovered.current.has(selectedId);
-          if (already && !catalogRecovery.current) throw error;
-          recovered.current.add(selectedId);
-          await recoverCatalog();
-          if (!alive) return;
-          deviceCache?.clear();
-          result = await load();
-        }
-        if (!alive) return;
-        recovered.current.delete(selectedId);
-        setDevices(result.devices);
-        setBackups(result.backups);
-        setYubi(result.yubi);
-        setLoading(false);
-      } catch (error) {
-        if (alive) {
-          onError(error);
-          setLoading(false);
-        }
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [
-    accessStopped,
-    bridge,
-    deviceCache,
-    onError,
-    profile,
-    recoverCatalog,
-    selectedId,
-  ]);
 
   // Card presence is live hardware state, never part of the metadata cache.
   useEffect(() => {
@@ -389,7 +301,21 @@ export function DevicesScreen({
   // repeat the sentence.
   const applied = async (message: string): Promise<void> => {
     closeSheets();
+    const resources =
+      profile && selectedId
+        ? [
+            deviceCache.account(profile, selectedId),
+            deviceCache.enrollments(profile),
+          ]
+        : [];
+    const versions = resources.map((query) => query.getSnapshot().invalidation);
     await onRefresh(message);
+    // A forced catalog refresh may already have invalidated these resources.
+    // Invalidation since the completed write is sufficient; do not start it twice.
+    resources.forEach((query, index) => {
+      if (query.getSnapshot().invalidation === versions[index])
+        query.invalidate();
+    });
   };
   const copyText = (text: string, said: string): void => {
     void bridge

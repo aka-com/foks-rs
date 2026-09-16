@@ -22,7 +22,7 @@ pub(super) fn run(
     let credentials = ClientCredentials::open(state_dir)?;
     if let Some(name) = action.remote_profile() {
         let remote = ProfileSession::open_with_control(registry, name, timeout, cancellation)?;
-        return credentials.with_checked_sessions(&session, &remote, |session, remote| {
+        return checked_sessions(&credentials, &session, &remote, |session, remote| {
             let master = credentials.master_key()?;
             let mut store = EncryptedFileSecretStore::open(
                 &session.paths().credential_store,

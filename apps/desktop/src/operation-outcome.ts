@@ -30,13 +30,13 @@ export function failureOutcome(
 ): 'not-started' | 'unknown' | 'rejected' {
   const typed = normalizeCommandError(error);
   if (typed.ambiguous) return 'unknown';
+  if (typed.details?.reason === 'admission-not-started') return 'not-started';
+  // A callback can itself report contention after execution has begun.
+  if (typed.code === 'busy' || typed.code === 'profile-busy') return 'unknown';
   if (
-    [
-      'profile-busy',
-      'mutation-in-flight',
-      'catalog-required',
-      'bootstrap-required',
-    ].includes(typed.code)
+    ['mutation-in-flight', 'catalog-required', 'bootstrap-required'].includes(
+      typed.code,
+    )
   )
     return 'not-started';
   // Unknown transport/worker errors must not imply that a new submission is safe.

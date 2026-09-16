@@ -1057,5 +1057,7 @@ test('device removal refreshes native device records before submitting the write
   await ui.act(async () => {
     ui.fireEvent.click(page.getByRole('button', { name: 'Remove device' }));
   });
-  assert.deepEqual(calls, ['read', 'remove']);
+  // The fresh authorization read precedes the write; subscribed display
+  // metadata is invalidated and refreshed only after successful completion.
+  assert.deepEqual(calls, ['read', 'remove', 'read']);
 });

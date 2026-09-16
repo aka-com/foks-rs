@@ -14,6 +14,7 @@ pub(crate) mod first_run;
 pub(crate) mod groups;
 pub(crate) mod invitations;
 pub(crate) mod portability;
+mod preparation;
 pub(crate) mod servers;
 pub(crate) mod sso;
 mod types;

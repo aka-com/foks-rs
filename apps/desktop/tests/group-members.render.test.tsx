@@ -187,7 +187,22 @@ test('Members exposes invitation creation, requests and approval recovery for th
   }
   assert.deepEqual(
     calls.map((call) => (call.action as { action: string }).action),
-    ['create', 'inbox', 'approve', 'reject', 'pending-approvals', 'list'],
+    [
+      // Confirmed or pending mutations refresh the visible recovery count.
+      'create',
+      'list',
+      'pending-approvals',
+      'inbox',
+      'approve',
+      'list',
+      'pending-approvals',
+      'reject',
+      'list',
+      'pending-approvals',
+      // These explicit read-only actions do not invalidate it again.
+      'pending-approvals',
+      'list',
+    ],
   );
   assert.ok(
     calls.every(

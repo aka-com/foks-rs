@@ -1,6 +1,6 @@
 //! Dedicated, cancellable account poll admission and supervision.
 use super::{
-    chat, dispatch_error_response, with_vault, write_response, CANCELLATION_GRACE,
+    chat, dispatch_error_response, profile_work, with_vault, write_response, CANCELLATION_GRACE,
     CHAT_POLL_TIMEOUT,
 };
 use foks_agent_proto::{ErrorCode, Operation, Request, Response, TeamStoreRef};
@@ -188,25 +188,48 @@ fn run_chat_poll(
     timeout: Duration,
     cancellation: CancellationToken,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    let registry = ProfileRegistry::open(state_dir)?;
-    let session = ProfileSession::open_with_control(
-        &registry,
-        &store.profile,
-        timeout,
-        cancellation.clone(),
-    )?;
-    let context = with_vault(state_dir, &session, |session, vault| {
-        chat::prepare_poll(session, vault, &store)
-    })?;
-    drop(session);
-    drop(registry);
+    let context = {
+        let _admission = profile_work::coordinator().acquire_blocking(
+            state_dir,
+            profile_work::Scope::profile(&store.profile),
+            timeout,
+            &cancellation,
+        )?;
+        let registry = ProfileRegistry::open(state_dir)?;
+        let session = ProfileSession::open_with_control(
+            &registry,
+            &store.profile,
+            timeout,
+            cancellation.clone(),
+        )?;
+        profile_work::with_control(timeout, cancellation.clone(), || {
+            with_vault(state_dir, &session, |session, vault| {
+                chat::prepare_poll(session, vault, &store)
+            })
+        })?
+    };
+    // A long network poll owns no profile admission or checked-session lock.
     let reply = chat::poll(context, since, timeout_milliseconds)?;
-    let registry = ProfileRegistry::open(state_dir)?;
-    let session =
-        ProfileSession::open_with_control(&registry, &store.profile, timeout, cancellation)?;
-    let (_, current_scope) = with_vault(state_dir, &session, |session, vault| {
-        chat::resolve_scope(session, vault, &store)
-    })?;
+    let (_, current_scope) = {
+        let _admission = profile_work::coordinator().acquire_blocking(
+            state_dir,
+            profile_work::Scope::profile(&store.profile),
+            timeout,
+            &cancellation,
+        )?;
+        let registry = ProfileRegistry::open(state_dir)?;
+        let session = ProfileSession::open_with_control(
+            &registry,
+            &store.profile,
+            timeout,
+            cancellation.clone(),
+        )?;
+        profile_work::with_control(timeout, cancellation, || {
+            with_vault(state_dir, &session, |session, vault| {
+                chat::resolve_scope(session, vault, &store)
+            })
+        })?
+    };
     if current_scope != reply.scope {
         return Err(foks_client::Error::ChatIntegrity("chat poll scope changed").into());
     }

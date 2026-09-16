@@ -1,3 +1,5 @@
+import { useDeviceCache } from '../device-cache';
+import { useQueryRepository } from '../query-hooks';
 import { useTabSheetState } from '../navigation-guard';
 import { useEffect, useRef, useState } from 'react';
 import { normalizeCommandError, type Bridge } from '../bridge';
@@ -43,6 +45,8 @@ export function InvitationPanel({
   recover?: boolean;
   onComplete: () => Promise<void> | void;
 }) {
+  const devices = useDeviceCache();
+  const queries = useQueryRepository(bridge, devices?.repository);
   const [invite, setInvite] = useTabSheetState('invitation.invite', '');
   const [remote, setRemote] = useTabSheetState('invitation.remote', '');
   const [sourceTeam, setSourceTeam] = useTabSheetState(
@@ -163,8 +167,25 @@ export function InvitationPanel({
         setError(normalizeCommandError(e).message);
     } finally {
       if (active.current === identity) setBusy(false);
-      if (active.current !== identity)
-        window.dispatchEvent(new Event(INVITATION_ACTIVITY));
+      if (
+        ![
+          'preview',
+          'preview-remote',
+          'inbox',
+          'pending-approvals',
+          'list',
+          'inspect-remote',
+        ].includes(action.action) &&
+        !(action.action === 'range' && !action.raise)
+      ) {
+        // Invalidate even when the recovery banner is currently unmounted.
+        queries.invalidate(['invitation-recovery', profile, account]);
+        window.dispatchEvent(
+          new window.CustomEvent(INVITATION_ACTIVITY, {
+            detail: { profile, account },
+          }),
+        );
+      }
     }
   };
   // Local mutations are listed durably by the agent and recovered from the

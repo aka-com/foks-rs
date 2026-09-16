@@ -555,8 +555,9 @@ export function TeamsScreen({
           onApplied={async (message, created) => {
             const result = await synchronizeApplied(onRefreshSnapshot);
             if (result.synchronization === 'pending') {
+              if (result.error.code === 'catalog-read-retired') return;
               toasts.show(
-                'Group created. Updated data could not be loaded. Use Refresh to reload it.',
+                'Change completed. Updated data could not be loaded. Use Refresh to reload it.',
                 { tone: 'warning' },
               );
               return;

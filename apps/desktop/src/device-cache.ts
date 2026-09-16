@@ -1,5 +1,5 @@
-/** Session-only metadata cache. Reader presence, PIN state and secrets are excluded. */
-import { createContext, useContext } from 'react';
+/** Session-only metadata queries. Reader presence, PIN state and secrets are excluded. */
+import { createContext, useContext, useMemo } from 'react';
 import { enqueueProfileWork } from './bridge';
 import type {
   AccountDevice,
@@ -9,86 +9,141 @@ import type {
 } from './bridge';
 import type { StoreRef } from './model';
 import type { DeviceLists } from './screens/device-model';
+import { NO_DEVICES } from './screens/device-model';
+import { QueryRepository } from './query-repository';
+import { useMetadataQuery, useQueryRepository } from './query-hooks';
+import { readRecoveryFor } from './query-read-recovery';
+import type { CatalogReadRecovery } from './query-read-recovery';
 
-interface Entry<T> {
-  value?: T;
-  updated: number;
-  pending?: Promise<T>;
+export const accountDeviceKey = (profile: string, store: StoreRef) =>
+  ['account-devices', profile, store] as const;
+export const profileEnrollmentKey = (profile: string) =>
+  ['profile-enrollments', profile] as const;
+interface AccountKeys {
+  devices: AccountDevice[];
+  backups: BackupEnrollment[];
 }
-const FRESH_FOR = 60_000;
 
+/** Typed resource service; the repository owns data, lifetimes and subscriptions. */
 export class DeviceCache {
-  private accounts = new Map<
-    string,
-    Entry<{ devices: AccountDevice[]; backups: BackupEnrollment[] }>
-  >();
-  private profiles = new Map<string, Entry<YubiEnrollment[]>>();
   constructor(
-    private bridge: Bridge,
-    private now: () => number = Date.now,
+    private readonly bridge: Bridge,
+    now: () => number = Date.now,
+    readonly repository = new QueryRepository(now),
   ) {}
 
-  /** Drop metadata and detach in-flight results, without cancelling native reads. */
   clear(): void {
-    this.accounts.clear();
-    this.profiles.clear();
+    this.repository.clear();
+  }
+  retire(): void {
+    this.repository.retire();
   }
 
-  peek(profile: string, store: StoreRef): DeviceLists | undefined {
-    const account = this.accounts.get(JSON.stringify([profile, store]))?.value;
-    const yubi = this.profiles.get(profile)?.value;
-    return account && yubi ? { ...account, yubi, cards: [] } : undefined;
-  }
-
-  private read<T>(
-    entries: Map<string, Entry<T>>,
-    key: string,
-    load: () => Promise<T>,
-  ): Promise<T> {
-    let entry = entries.get(key);
-    if (entry?.pending) return entry.pending;
-    if (entry?.value !== undefined && this.now() - entry.updated < FRESH_FOR)
-      return Promise.resolve(entry.value);
-    if (!entry) {
-      entry = { updated: 0 };
-      entries.set(key, entry);
-    }
-    const target = entry;
-    const pending = load()
-      .then((value) => {
-        if (entries.get(key) === target) {
-          target.value = value;
-          target.updated = this.now();
-        }
-        return value;
-      })
-      .finally(() => {
-        if (target.pending === pending) target.pending = undefined;
-      });
-    target.pending = pending;
-    return pending;
-  }
-
-  async load(profile: string, store: StoreRef): Promise<DeviceLists> {
-    const account = this.read(
-      this.accounts,
-      JSON.stringify([profile, store]),
+  account(profile: string, store: StoreRef) {
+    return this.repository.query<AccountKeys>(
+      accountDeviceKey(profile, store),
       () =>
         enqueueProfileWork(this.bridge, profile, async () => ({
           devices: await this.bridge.listAccountDevices(store),
           backups: await this.bridge.listBackupEnrollments(store),
         })),
     );
-    const enrollments = this.read(this.profiles, profile, () =>
-      enqueueProfileWork(this.bridge, profile, () =>
-        this.bridge.listYubiAccounts(profile),
-      ),
+  }
+
+  enrollments(profile: string) {
+    return this.repository.query<YubiEnrollment[]>(
+      profileEnrollmentKey(profile),
+      () =>
+        enqueueProfileWork(this.bridge, profile, () =>
+          this.bridge.listYubiAccounts(profile),
+        ),
     );
-    const [rows, yubi] = await Promise.all([account, enrollments]);
-    return { ...rows, yubi, cards: [] };
+  }
+
+  recoveryOptions(recovery?: CatalogReadRecovery) {
+    return readRecoveryFor(this.repository).options(recovery);
+  }
+
+  peek(profile: string, store: StoreRef): DeviceLists | undefined {
+    const account = this.account(profile, store).getSnapshot().data;
+    const yubi = this.enrollments(profile).getSnapshot().data;
+    return account && yubi
+      ? Object.freeze({ ...account, yubi, cards: [] })
+      : undefined;
+  }
+
+  async load(
+    profile: string,
+    store: StoreRef,
+    recovery?: CatalogReadRecovery,
+  ): Promise<DeviceLists> {
+    const options = this.recoveryOptions(recovery);
+    const [account, yubi] = await Promise.all([
+      this.account(profile, store).load(options),
+      this.enrollments(profile).load(options),
+    ]);
+    return Object.freeze({ ...account, yubi, cards: [] });
+  }
+
+  invalidateAccount(profile: string, store: StoreRef): void {
+    this.repository.invalidate(accountDeviceKey(profile, store));
+  }
+  invalidateEnrollments(profile: string): void {
+    this.repository.invalidate(profileEnrollmentKey(profile));
   }
 }
 
 export const DeviceCacheContext = createContext<DeviceCache | null>(null);
 export const useDeviceCache = (): DeviceCache | null =>
   useContext(DeviceCacheContext);
+
+/** Use one resource owner for profile pages and account pages in this access scope. */
+export function useDeviceQueries(bridge: Bridge): DeviceCache {
+  const shared = useDeviceCache();
+  const repository = useQueryRepository(bridge, shared?.repository);
+  return useMemo(
+    () => shared ?? new DeviceCache(bridge, Date.now, repository),
+    [bridge, repository, shared],
+  );
+}
+
+/** Both account pages subscribe to these exact resources instead of copying their results. */
+export function useDeviceMetadata({
+  bridge,
+  profile,
+  store,
+  enabled,
+  recovery,
+  onError,
+}: {
+  bridge: Bridge;
+  profile?: string;
+  store?: StoreRef;
+  enabled: boolean;
+  recovery: CatalogReadRecovery;
+  onError: (error: unknown) => void;
+}) {
+  const cache = useDeviceQueries(bridge);
+  const available = enabled && Boolean(profile && store);
+  const account = available ? cache.account(profile!, store!) : null;
+  const enrollments = available ? cache.enrollments(profile!) : null;
+  const options = { ...cache.recoveryOptions(recovery), onError };
+  const accountState = useMetadataQuery(account, options);
+  const enrollmentState = useMetadataQuery(enrollments, options);
+  const complete =
+    accountState.data !== undefined && enrollmentState.data !== undefined;
+  const failed =
+    available &&
+    !complete &&
+    (accountState.error !== undefined || enrollmentState.error !== undefined);
+  const lists = useMemo<DeviceLists>(
+    () => ({
+      devices: accountState.data?.devices ?? NO_DEVICES.devices,
+      backups: accountState.data?.backups ?? NO_DEVICES.backups,
+      yubi: enrollmentState.data ?? NO_DEVICES.yubi,
+      cards: NO_DEVICES.cards,
+    }),
+    [accountState.data, enrollmentState.data],
+  );
+  return { cache, lists, loading: available && !complete && !failed, failed };
+}

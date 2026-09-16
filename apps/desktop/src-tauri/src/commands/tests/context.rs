@@ -1,6 +1,8 @@
 use crate::agent::AgentHandle;
+use crate::commands::accounts::{AccountDto, DeviceDto};
 use crate::commands::context::AppState;
-use crate::commands::tests::support::{account_ref, phase_four_state};
+use crate::commands::tests::servers::ProfileListTransport;
+use crate::commands::tests::support::{account_ref, phase_four_state, team_ref};
 use crate::commands::vault::store_id;
 use foks_desktop::{CatalogSnapshot, CatalogStoreRef, CatalogStoreSummary};
 use std::path::PathBuf;
@@ -43,7 +45,8 @@ fn ambiguous_mutations_require_a_fresh_catalog_before_another_write() {
     );
     drop(initialization);
     assert!(state.mutation_requires_refresh.load(Ordering::Acquire));
-    state.accept_catalog(0, CatalogSnapshot::default());
+    let (generation, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.accept_catalog(generation, CatalogSnapshot::default()));
     assert!(state.begin_mutation().is_ok());
 }
 
@@ -108,17 +111,17 @@ fn catalog_reads_bound_to_a_generation_fail_once_it_is_replaced() {
     let (generation, catalog) = state.catalog_at(None).unwrap();
     assert!(catalog.is_some());
     assert!(state.catalog_at(Some(generation)).is_ok());
-    // A later load clears the snapshot and moves the generation on.
+    // A replacement is private until publication; the accepted token and
+    // facts stay valid while a refresh is running or fails.
     let (next, _token) = state.begin_catalog_load_checked().unwrap();
     assert_eq!(next, generation + 1);
+    assert!(state.catalog_at(Some(generation)).unwrap().1.is_some());
+    assert!(state.catalog_at(Some(next)).is_err());
+    assert!(state.accept_catalog(next, CatalogSnapshot::default()));
     let stale = state.catalog_at(Some(generation)).unwrap_err();
     assert_eq!(stale.code, "catalog-required");
     assert!(stale.retryable);
-    let (current, catalog) = state.catalog_at(Some(next)).unwrap();
-    assert_eq!(current, next);
-    assert!(catalog.is_none());
-    // Reads that do not name a generation keep answering from whatever is current.
-    assert!(state.catalog_at(None).is_ok());
+    assert_eq!(state.catalog_at(Some(next)).unwrap().0, next);
 }
 
 #[test]
@@ -164,4 +167,152 @@ fn invitation_history_does_not_retire_catalog_or_compete_with_mutations() {
         .unwrap();
     assert!(writer.is_some());
     assert!(state.catalog_at(None).unwrap().1.is_none());
+}
+
+#[test]
+fn failed_refresh_preserves_store_selection_but_mutation_retires_it() {
+    let state = phase_four_state(vec![]);
+    let before = state.catalog_at(None).unwrap();
+    // Use a real fixture target instead of depending on its display label.
+    let target = before.1.as_ref().unwrap().stores[0].store_ref();
+    let target_id = store_id(&target);
+    let (_loading, token) = state.begin_catalog_load_checked().unwrap();
+    token.cancel();
+    assert!(state.selected_store(&target_id).is_ok());
+    assert_eq!(state.catalog_at(None).unwrap(), before);
+    state.invalidate_catalog();
+    assert_eq!(
+        state.selected_store(&target_id).unwrap_err().code,
+        "catalog-required"
+    );
+}
+
+#[test]
+fn accepted_catalog_facts_survive_refresh_until_a_replacement_is_published() {
+    let state = phase_four_state(vec![]);
+    let (generation, catalog) = state.catalog_at(None).unwrap();
+    let catalog = catalog.unwrap();
+    let account = AccountDto {
+        local_alias: None,
+        store: store_id(&CatalogStoreRef::Account(account_ref(
+            "work.example",
+            "personal",
+        ))),
+        profile: "work.example".into(),
+        alias: "personal".into(),
+        username: "alice".into(),
+    };
+    let device = DeviceDto {
+        id: format!("04{}", "11".repeat(32)),
+        name: Some("Other Mac".into()),
+        role: "owner",
+        current: false,
+    };
+    let group = store_id(&CatalogStoreRef::Team(team_ref(
+        "work.example",
+        "personal",
+        "engineering",
+    )));
+    let retain_facts = |generation| {
+        state.retain_accounts(generation, std::slice::from_ref(&account))?;
+        state.retain_devices(
+            generation,
+            account.store.clone(),
+            std::slice::from_ref(&device),
+        )?;
+        // An empty response is still a retained fact. A missing map entry
+        // requires a read before an operation can use this group.
+        state.retain_group_details(generation, group.clone(), Some(&[]), Some(&[]))
+    };
+    let assert_retained_facts = || {
+        assert_eq!(state.selected_account_dto(&account.store).unwrap(), account);
+        assert!(state
+            .selected_device_target(&account.store, &device.id)
+            .is_ok());
+        assert_eq!(state.rosters.lock().unwrap().get(&group), Some(&vec![]));
+        assert_eq!(state.federations.lock().unwrap().get(&group), Some(&vec![]));
+    };
+    let assert_no_facts = || {
+        assert!(state.accounts.lock().unwrap().is_empty());
+        assert!(state.devices.lock().unwrap().is_empty());
+        assert!(state.rosters.lock().unwrap().is_empty());
+        assert!(state.federations.lock().unwrap().is_empty());
+    };
+    retain_facts(generation).unwrap();
+    let (failed, failed_token) = state.begin_catalog_load_checked().unwrap();
+    assert_retained_facts();
+    failed_token.cancel();
+    assert_retained_facts();
+    assert_eq!(state.catalog_at(None).unwrap().0, generation);
+
+    let (replacement, _token) = state.begin_catalog_load_checked().unwrap();
+    assert!(!state.accept_catalog(failed, CatalogSnapshot::default()));
+    assert_retained_facts();
+    assert!(state.accept_catalog(replacement, catalog));
+    assert_no_facts();
+    assert_eq!(
+        state.selected_account_dto(&account.store).unwrap_err().code,
+        "accounts-required"
+    );
+    assert_eq!(
+        state
+            .selected_device_target(&account.store, &device.id)
+            .unwrap_err()
+            .code,
+        "devices-required"
+    );
+
+    // Replies from before publication cannot reintroduce retired facts,
+    // whether the caller fetched individual sections or combined details.
+    assert_eq!(
+        retain_facts(generation).unwrap_err().code,
+        "catalog-required"
+    );
+    assert!(state
+        .retain_devices(
+            generation,
+            account.store.clone(),
+            std::slice::from_ref(&device)
+        )
+        .is_err());
+    assert!(state.retain_roster(generation, group.clone(), &[]).is_err());
+    assert!(state
+        .retain_federation(generation, group.clone(), &[])
+        .is_err());
+    assert!(state
+        .retain_group_details(generation, group.clone(), Some(&[]), Some(&[]))
+        .is_err());
+    assert_no_facts();
+    retain_facts(replacement).unwrap();
+    assert_retained_facts();
+}
+
+#[test]
+fn mutation_cancels_a_private_catalog_load_and_rejects_its_late_reply() {
+    let state = phase_four_state(vec![]);
+    let (published, catalog) = state.catalog_at(None).unwrap();
+    let (loading, token) = state.begin_catalog_load_checked().unwrap();
+    assert!(loading > published);
+    let transport = Arc::new(ProfileListTransport {
+        value: serde_json::json!([]),
+    });
+    assert!(foks_desktop::load_catalog_cancellable(transport.clone(), token.clone()).is_ok());
+    let mutation = state.begin_catalog_action(true).unwrap().unwrap();
+    // The same transport returned a valid response before invalidation.
+    assert!(matches!(
+        foks_desktop::load_catalog_cancellable(transport, token),
+        Err(foks_desktop::AgentError::Cancelled)
+    ));
+    let (invalidated, catalog_after_mutation) = state.catalog_at(None).unwrap();
+    assert!(invalidated > loading);
+    assert!(catalog_after_mutation.is_none());
+    assert!(!state.accept_catalog(loading, catalog.clone().unwrap()));
+    assert!(state.catalog_at(None).unwrap().1.is_none());
+    assert!(state.begin_catalog_load_checked().is_err());
+    drop(mutation);
+
+    let (replacement, _token) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.accept_catalog(replacement, catalog.unwrap()));
+    assert_eq!(state.catalog_at(None).unwrap().0, replacement);
+    assert!(state.catalog_at(None).unwrap().1.is_some());
 }
