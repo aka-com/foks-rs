@@ -90,6 +90,7 @@ async function snapshotWithChat(servers: string[]): Promise<AgentSnapshot> {
  * guards chat writes on.
  */
 interface Shell {
+  setLocation?: (next: Location) => void;
   setSnapshot: (next: AgentSnapshot) => void;
   setGenerations: (next: ReadonlyMap<string, number>) => void;
   /** The availability clock the tab reads, which is not the service's. */
@@ -128,6 +129,7 @@ async function mount(
     const [generations, setGenerations] =
       useState<ReadonlyMap<string, number>>(NO_GENERATIONS);
     if (shell) {
+      shell.setLocation = setLocation;
       shell.setSnapshot = setLive;
       shell.setGenerations = setGenerations;
     }
@@ -395,7 +397,7 @@ test('switching teams keeps the column and mounts exactly one conversation', asy
   const clock = new Clock();
   const journal = await mount(
     snapshot,
-    { kind: 'chat', ref: 'team:household' },
+    { kind: 'chat', ref: 'team:household', channel: 'ab'.repeat(16) },
     (base) => ({
       ...base,
       chat: async (store, action, view) => {
@@ -467,7 +469,8 @@ test('a team with no conversation mounted carries its preview and unread count',
   assert.equal(badge.getAttribute('aria-label'), '2 unread');
   assert.equal(badge.textContent, '2');
   assert.equal(
-    head('Household').querySelector('small:not(.chat-row-identity)')?.textContent,
+    head('Household').querySelector('small:not(.chat-row-identity)')
+      ?.textContent,
     'Team member: Team chat is ready.',
   );
   assert.ok(head('Household').querySelector('.when')?.textContent);
@@ -488,7 +491,8 @@ test('a team whose server offers no chat sits under No chat with the reason', as
   // The initial stands for the name beside it, so it is not read out twice.
   assert.equal(mark.getAttribute('aria-hidden'), 'true');
   assert.match(
-    engineering.querySelector('small:not(.chat-row-identity)')?.textContent ?? '',
+    engineering.querySelector('small:not(.chat-row-identity)')?.textContent ??
+      '',
     /^Chat not offered on /,
   );
   const labels = [...document.querySelectorAll('.sec')].map(
@@ -600,7 +604,7 @@ test('with no team at all the tab says how chat gets turned on', async () => {
   await ui.screen.findByText('No team or channel matches “nothing here”.');
   ui.fireEvent.change(field, { target: { value: '' } });
   // Nothing is selected, so nothing is navigated to.
-  assert.deepEqual(journal, []);
+  assert.equal(journal.length, 0);
   // Creating or joining a team is the Teams tab.
   ui.fireEvent.click(
     ui.screen.getAllByRole('button', { name: 'Create or join a team' })[0],
@@ -647,10 +651,14 @@ test('picking a team ends the note, and returning does not bring it back', async
 test('unfinished work sits in a bounded section and keeps the composer', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   let bridge: Bridge | undefined;
-  await mount(snapshot, { kind: 'chat', ref: 'team:eng' }, (base) => {
-    bridge = base;
-    return base;
-  });
+  await mount(
+    snapshot,
+    { kind: 'chat', ref: 'team:eng', channel: 'ab'.repeat(16) },
+    (base) => {
+      bridge = base;
+      return base;
+    },
+  );
   await ui.screen.findByText('Team chat is ready.');
   assert.ok(bridge);
   // Six preparations no one finished: enough that an unbounded section would
@@ -690,10 +698,14 @@ test('unfinished work sits in a bounded section and keeps the composer', async (
 test('saved work that is accounted for says so rather than vanishing', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   let bridge: Bridge | undefined;
-  await mount(snapshot, { kind: 'chat', ref: 'team:eng' }, (base) => {
-    bridge = base;
-    return base;
-  });
+  await mount(
+    snapshot,
+    { kind: 'chat', ref: 'team:eng', channel: 'ab'.repeat(16) },
+    (base) => {
+      bridge = base;
+      return base;
+    },
+  );
   await ui.screen.findByText('Team chat is ready.');
   assert.ok(bridge);
   await bridge.chat(
@@ -846,7 +858,8 @@ test('a synchronization that succeeded but could not finish keeps its preview', 
   );
   await ui.waitFor(() =>
     assert.equal(
-      head('Engineering').querySelector('small:not(.chat-row-identity)')?.textContent,
+      head('Engineering').querySelector('small:not(.chat-row-identity)')
+        ?.textContent,
       'Team member: Team chat is ready.',
     ),
   );
@@ -949,12 +962,16 @@ test('muted and hidden conversations stay listed and say what they are', async (
     assert.deepEqual(channels(), ['#general', '#chores', '#archive']),
   );
   const chores = channelRow('#chores');
-  assert.equal(chores.querySelector('small:not(.chat-row-identity)')?.textContent, 'Muted');
+  assert.equal(
+    chores.querySelector('small:not(.chat-row-identity)')?.textContent,
+    'Muted',
+  );
   const choresBadge = chores.querySelector('.chat-unread');
   assert.equal(choresBadge?.textContent, '3');
   assert.ok(choresBadge?.classList.contains('muted'));
   assert.equal(
-    channelRow('#archive').querySelector('small:not(.chat-row-identity)')?.textContent,
+    channelRow('#archive').querySelector('small:not(.chat-row-identity)')
+      ?.textContent,
     'Hidden',
   );
   // The single-row team draws the same things its channel row would: the count
@@ -1060,7 +1077,7 @@ test('an interrupted attempt recovers the same preparation rather than a second'
   const attempts: string[] = [];
   const journal = await mount(
     snapshot,
-    { kind: 'chat', ref: 'team:eng' },
+    { kind: 'chat', ref: 'team:eng', channel: 'ab'.repeat(16) },
     (base) => ({
       ...base,
       chat: async (store, action, view) => {
@@ -1515,16 +1532,20 @@ test('a channel is not attempted once the server’s access generation has moved
 
 test('a channel preparation under a changed identity stops chat and frees the sheet', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
-  await mount(snapshot, { kind: 'chat', ref: 'team:eng' }, (base) => ({
-    ...base,
-    chat: async (store, action, view) => {
-      const reply = await base.chat(store, action, view);
-      // A reply under a different identity is not this team's.
-      return action.action === 'prepare-channel'
-        ? { ...reply, scope: { ...reply.scope, actor: '99'.repeat(16) } }
-        : reply;
-    },
-  }));
+  await mount(
+    snapshot,
+    { kind: 'chat', ref: 'team:eng', channel: 'ab'.repeat(16) },
+    (base) => ({
+      ...base,
+      chat: async (store, action, view) => {
+        const reply = await base.chat(store, action, view);
+        // A reply under a different identity is not this team's.
+        return action.action === 'prepare-channel'
+          ? { ...reply, scope: { ...reply.scope, actor: '99'.repeat(16) } }
+          : reply;
+      },
+    }),
+  );
   await ui.waitFor(() => assert.ok(heads().length));
   const name = await openCreateForm(/^Engineering/);
   ui.fireEvent.change(name, { target: { value: 'design' } });
@@ -1575,4 +1596,51 @@ test('a channel created before its synchronization lands reads as loading', asyn
   );
   release();
   await ui.screen.findByRole('button', { name: /#design/ });
+});
+
+test('a team inbox stays channel-less until a conversation is selected', async () => {
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  const shell: Shell = {
+    setSnapshot: () => {},
+    setGenerations: () => {},
+    accessNow: () => Date.now() / 1000,
+  };
+  const journal = await mount(
+    snapshot,
+    { kind: 'chat', ref: 'team:eng' },
+    undefined,
+    undefined,
+    shell,
+  );
+  await ui.screen.findByText('Choose a channel to open a conversation.');
+  await ui.waitFor(() => assert.ok(head('Engineering')));
+  assert.equal(journal.length, 0);
+  const { crumbTrail } = (await vite.ssrLoadModule(
+    '/src/shell/topbar.tsx',
+  )) as typeof import('../src/shell/topbar');
+  assert.deepEqual(crumbTrail({ kind: 'chat', ref: 'team:eng' }, snapshot), [
+    'Chat',
+    'Engineering',
+  ]);
+  await ui.waitFor(() =>
+    assert.match(head('Engineering').textContent ?? '', /Engineering/),
+  );
+  ui.fireEvent.click(head('Engineering'));
+  await ui.waitFor(() =>
+    assert.equal(
+      (journal.at(-1) as Extract<Location, { kind: 'chat' }>)?.channel,
+      'ab'.repeat(16),
+    ),
+  );
+  const { parentLocation } = (await vite.ssrLoadModule(
+    '/src/location.ts',
+  )) as typeof import('../src/location');
+  const parent = parentLocation(journal.at(-1)!);
+  assert.ok(parent);
+  await ui.act(async () => {
+    shell.setLocation?.(parent);
+  });
+  await ui.screen.findByText('Choose a channel to open a conversation.');
+  assert.equal(parentLocation(parent), null);
+  assert.equal(journal.length, 1, 'returning to the inbox does not redirect');
 });

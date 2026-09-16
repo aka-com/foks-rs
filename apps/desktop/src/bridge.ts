@@ -726,6 +726,7 @@ export interface Bridge {
   readonly firstRunFixture?: FirstRunFixture;
   appLockState(): Promise<AppLockState>;
   windowState(): Promise<WindowStateEvent>;
+  setTrafficLightsVisible(visible: boolean): Promise<void>;
   lockApp(): Promise<AppLockState>;
   unlockApp(): Promise<AppLockState>;
   restartApp(): Promise<void>;
@@ -2277,6 +2278,8 @@ export const tauriBridge: Bridge = {
   native: true,
   appLockState: () => checked('app_lock_state', undefined, decodeAppLockState),
   windowState: () => checked('get_window_state', undefined, decodeWindowState),
+  setTrafficLightsVisible: (visible) =>
+    checked('set_traffic_lights_visible', { visible }, () => undefined),
   lockApp: () => checked('lock_app', undefined, decodeAppLockState),
   unlockApp: () => checked('unlock_app', undefined, decodeAppLockState),
   restartApp: () => invoke<void>('restart_app'),

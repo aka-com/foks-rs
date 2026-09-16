@@ -316,7 +316,7 @@ test('an active server check blocks navigation', async () => {
 
 /* -------------------------------------------------------- CLI handoff -- */
 
-test('scanning for CLI accounts allows the move, connecting refuses it', async () => {
+test('scanning and adding a CLI server both allow navigation', async () => {
   const h = await harness();
   const { GoProfileConnectSheet } = (await vite.ssrLoadModule(
     '/src/screens/go-profile-connect.tsx',
@@ -350,11 +350,8 @@ test('scanning for CLI accounts allows the move, connecting refuses it', async (
     );
   });
   await ui.act(async () => {
-    ui.fireEvent.click(rendered.getByRole('button', { name: 'Check server' }));
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Add server' }));
     await Promise.resolve();
   });
-  assert.deepEqual(h.verdict(store), {
-    verdict: 'refuse',
-    reason: 'Wait for the CLI connection to finish.',
-  });
+  assert.equal(h.verdict(store), null);
 });

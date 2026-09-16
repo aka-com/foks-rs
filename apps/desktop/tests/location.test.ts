@@ -955,9 +955,7 @@ test('a tab root has no parent, and neither does an account parameter', () => {
     { kind: 'people', store: 'acct:personal' },
     { kind: 'devices', store: 'acct:work' },
     { kind: 'settings', store: 'acct:work' },
-    // The Chat tab resolves a conversation for every address, so there is no
-    // channel-less page to go back to.
-    { kind: 'chat', ref: 'team:household', channel: 'a'.repeat(32) },
+    { kind: 'chat', ref: 'team:household' },
     { kind: 'first-run', step: 'who' },
   ] as Location[])
     assert.equal(parentLocation(location), null, `${location.kind} is a root`);
@@ -1208,4 +1206,14 @@ test('an item opens its page and selects on it, or neither', async () => {
     store: 'team:eng',
     path: '/deploy/token',
   });
+});
+
+test('a chat channel returns to its team inbox, whose back target is disabled', () => {
+  const parent = parentLocation({
+    kind: 'chat',
+    ref: 'team:eng',
+    channel: 'ab'.repeat(16),
+  });
+  assert.deepEqual(parent, { kind: 'chat', ref: 'team:eng' });
+  assert.equal(parentLocation(parent), null);
 });

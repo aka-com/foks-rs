@@ -17,7 +17,7 @@ import { Button, Icon } from '../components';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { channelTitle } from '../chat/presentation';
 import { storeOf } from '../model';
-import type { AgentSnapshot } from '../model';
+import type { AgentSnapshot, DeviceLabel } from '../model';
 import { parentLocation, railTabOf } from '../location';
 import type { Location, RailTab } from '../location';
 
@@ -53,6 +53,7 @@ export function crumbTrail(
   location: Location,
   snapshot?: AgentSnapshot,
   channelName?: string,
+  deviceLabel?: DeviceLabel | null,
 ): string[] {
   const tab = railTabOf(location);
   if (!tab) return [];
@@ -77,12 +78,17 @@ export function crumbTrail(
             : named(location.ref),
         );
       break;
-    // A device page names its own key in the page header. The crumb names the
-    // list it belongs to, which is where the chevron goes: the agent addresses
-    // a key by an id the snapshot's device list does not carry, so a crumb for
-    // the key itself could only guess at its name.
     case 'devices':
-      if (location.section) trail.push(DEVICES_SECTION_LABEL[location.section]);
+      if (location.device) {
+        trail.push(
+          deviceLabel &&
+            deviceLabel.store === location.store &&
+            deviceLabel.address === location.device
+            ? deviceLabel.name
+            : 'Key',
+        );
+      } else if (location.section)
+        trail.push(DEVICES_SECTION_LABEL[location.section]);
       break;
     case 'settings':
       if (location.section)
@@ -102,6 +108,7 @@ export function crumbTrail(
 export interface TopbarProps {
   /** Absent while the agent is starting; the crumbs then name the tab alone. */
   snapshot?: AgentSnapshot;
+  deviceLabel?: DeviceLabel | null;
   location: Location;
   onNavigate: (location: Location) => void;
   /** Opens the search palette. Omitted where no palette is mounted. */
@@ -116,6 +123,7 @@ export interface TopbarProps {
 
 export function Topbar({
   snapshot,
+  deviceLabel,
   location,
   onNavigate,
   onSearch,
@@ -141,6 +149,7 @@ export function Topbar({
     location,
     snapshot,
     open ? channelTitle(open) : undefined,
+    deviceLabel,
   );
   const parent = blocked ? null : parentLocation(location);
   return (

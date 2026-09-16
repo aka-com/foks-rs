@@ -55,6 +55,7 @@ import type {
   Notification,
   TeamStore,
 } from '../model';
+import type { Server } from '../model';
 import type { FoksIconName } from '../icons';
 import type { Location, NavigateOptions } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
@@ -318,6 +319,7 @@ export function PeopleScreen({
     : stores[0];
   const unavailable = requested !== undefined && selected === undefined;
   const [sheet, setSheet] = useState<AccountSheet | 'go-profile' | null>(null);
+  const [pairingProfile, setPairingProfile] = useState<Server | undefined>();
   // What this account holds: the keys are read here because the profile lists
   // them, not because anything on this page acts on one.
   const [lists, setLists] = useState<DeviceLists>(NO_DEVICES);
@@ -445,7 +447,12 @@ export function PeopleScreen({
         title="Accounts"
         subtitle={subtitle}
         action={
-          <Button onClick={() => setSheet('go-profile')}>
+          <Button
+            onClick={() => {
+              setPairingProfile(undefined);
+              setSheet('go-profile');
+            }}
+          >
             Connect from FOKS CLI…
           </Button>
         }
@@ -458,6 +465,27 @@ export function PeopleScreen({
             onRefreshSnapshot={onRefreshSnapshot}
             onError={onError}
           />
+          {snapshot.servers
+            .filter((server) => server.accounts.length === 0)
+            .map((server) => (
+              <Inset key={server.id}>
+                <InsetRow
+                  label={serverDisplayName(server)}
+                  action={
+                    <Button
+                      onClick={() => {
+                        setPairingProfile(server);
+                        setSheet('go-profile');
+                      }}
+                    >
+                      Pair
+                    </Button>
+                  }
+                >
+                  Connected, not yet paired
+                </InsetRow>
+              </Inset>
+            ))}
           {unavailable ? (
             <UnavailableAccount
               stores={stores}
@@ -502,6 +530,11 @@ export function PeopleScreen({
       {sheet === 'go-profile' ? (
         <GoProfileConnectSheet
           bridge={bridge}
+          existingProfile={pairingProfile}
+          onAdded={async () => {
+            setSheet(null);
+            await onRefresh('Server connected. Pair an account to continue.');
+          }}
           onClose={() => setSheet(null)}
           onConnected={async (_profile, alias) => {
             setSheet(null);

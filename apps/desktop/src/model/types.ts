@@ -209,6 +209,13 @@ export interface Account {
   server: string;
 }
 
+/** A name resolved from the Devices page's account-scoped bridge lists. */
+export interface DeviceLabel {
+  store: StoreRef;
+  address: string;
+  name: string;
+}
+
 export interface Device {
   alias: string;
   name: string;

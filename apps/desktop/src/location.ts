@@ -144,9 +144,8 @@ export function railTabOf(location: Location): RailTab | null {
  * page under Files, a group page under Teams, a section or a device page under
  * Settings and Devices. The `store` parameter that People, Teams, Devices and
  * Settings carry names the account the page acts as — every address of those
- * tabs carries one — so it never makes a page below the tab's root. Chat has no
- * parent either: the tab resolves a conversation for every address it is given,
- * so there is no channel-less page to return to.
+ * tabs carries one — so it never makes a page below the tab's root. A chat
+ * channel returns to its team's inbox, which has no parent.
  */
 export function parentLocation(location: Location): Location | null {
   switch (location.kind) {
@@ -155,6 +154,10 @@ export function parentLocation(location: Location): Location | null {
       return { kind: 'files' };
     case 'group-settings':
       return { kind: 'teams' };
+    case 'chat':
+      return location.ref && location.channel
+        ? { kind: 'chat', ref: location.ref }
+        : null;
     case 'devices':
       if (location.device)
         return {

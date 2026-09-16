@@ -1,11 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import type {
-  Bridge,
-  CheckedProfileResponse,
-  GoProfileCandidate,
-  GoProfileDiscovery,
-} from '../bridge';
+import type { Bridge, GoProfileCandidate, GoProfileDiscovery } from '../bridge';
 import { normalizeCommandError } from '../bridge';
 import {
   Button,
@@ -16,11 +11,14 @@ import {
   SheetDialog,
 } from '../components';
 import { useSheetGuard } from '../navigation-guard';
+import type { Server } from '../model';
 import { GoProfileChooser } from './go-profile-chooser';
 
 interface Props {
   bridge: Bridge;
   onClose: () => void;
+  existingProfile?: Pick<Server, 'id' | 'host_id'>;
+  onAdded?: (profile: string) => Promise<void>;
   onConnected: (profile: string, alias: string) => Promise<void>;
   onError: (error: unknown) => void;
 }
@@ -38,6 +36,8 @@ export function GoProfileConnectSheet({
   bridge,
   onClose,
   onConnected,
+  existingProfile,
+  onAdded,
   onError,
 }: Props): ReactNode {
   const [discovery, setDiscovery] = useState<GoProfileDiscovery | null>(null);
@@ -47,11 +47,13 @@ export function GoProfileConnectSheet({
   const [alias, setAlias] = useState('personal');
   const [deviceName, setDeviceName] = useState('FOKS Desktop');
   const [phrase, setPhrase] = useState('');
-  const [checked, setChecked] = useState<CheckedProfileResponse | null>(null);
+  const [checked, setChecked] = useState<{ profile: string } | null>(null);
   const [method, setMethod] = useState<'pair' | 'copy'>('pair');
   // Differentiate local scanning from network onboarding operations so the UI
   // can report specific progress.
-  const [work, setWork] = useState<'scan' | 'connect' | null>(null);
+  const [work, setWork] = useState<'scan' | 'add' | 'pair' | 'copy' | null>(
+    null,
+  );
   const busy = work !== null;
   const [error, setError] = useState<string | null>(null);
 
@@ -104,7 +106,7 @@ export function GoProfileConnectSheet({
 
   const choose = (candidate: GoProfileCandidate): void => {
     setSelected(candidate);
-    setChecked(null);
+    setChecked(existingProfile ? { profile: existingProfile.id } : null);
     setMethod('pair');
     setPhrase('');
     setServer(candidate.serverHint ?? '');
@@ -119,7 +121,7 @@ export function GoProfileConnectSheet({
 
   const check = async (): Promise<void> => {
     if (!selected || !server.trim() || !profileName.trim()) return;
-    setWork('connect');
+    setWork('add');
     setError(null);
     try {
       const result = await bridge.checkAndAddGoProfile(
@@ -133,6 +135,7 @@ export function GoProfileConnectSheet({
           'Server verification failed: the server does not match the selected CLI account.',
         );
       setChecked(result);
+      await onAdded?.(result.profile);
     } catch (failure) {
       setError(normalizeCommandError(failure).message);
       onError(failure);
@@ -146,7 +149,7 @@ export function GoProfileConnectSheet({
     if (!resume && !phrase.trim()) return;
     const submitted = phrase;
     setPhrase('');
-    setWork('connect');
+    setWork('pair');
     setError(null);
     try {
       const result = resume
@@ -177,7 +180,7 @@ export function GoProfileConnectSheet({
 
   const copy = async (): Promise<void> => {
     if (!selected?.copyable || !checked || !alias.trim()) return;
-    setWork('connect');
+    setWork('copy');
     setError(null);
     try {
       const result = await bridge.copyGoProfileDevice(
@@ -202,8 +205,11 @@ export function GoProfileConnectSheet({
   // account. If pairing has not started, prompt before dismissing typed pairing
   // input.
   useSheetGuard(
-    work === 'connect'
-      ? { verdict: 'refuse', reason: 'Wait for the CLI connection to finish.' }
+    work === 'copy'
+      ? {
+          verdict: 'refuse',
+          reason: 'Wait for the credential import to finish.',
+        }
       : phrase
         ? {
             verdict: 'prompt',
@@ -220,7 +226,9 @@ export function GoProfileConnectSheet({
 
   const candidates =
     discovery?.candidates.filter(
-      (candidate) => candidate.pairable || candidate.copyable,
+      (candidate) =>
+        (candidate.pairable || candidate.copyable) &&
+        (!existingProfile || candidate.hostId === existingProfile.host_id),
     ) ?? [];
 
   return (
@@ -240,7 +248,7 @@ export function GoProfileConnectSheet({
               disabled={busy || !server.trim() || !profileName.trim()}
               onClick={() => void check()}
             >
-              Check server
+              Add server
             </Button>
           ) : checked && method === 'pair' ? (
             <>
@@ -299,7 +307,7 @@ export function GoProfileConnectSheet({
       ) : null}
       {selected && !checked ? (
         <>
-          <SectionLabel>Destination server</SectionLabel>
+          <SectionLabel>Add the server before pairing</SectionLabel>
           <Inset>
             <Field
               disabled={busy}

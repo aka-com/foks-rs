@@ -55,7 +55,11 @@ test.after(async () => {
 });
 
 /** Where these tests start: the Chat tab with Engineering's conversation. */
-const IN_CHAT: Location = { kind: 'chat', ref: 'team:eng' };
+const IN_CHAT: Location = {
+  kind: 'chat',
+  ref: 'team:eng',
+  channel: 'ab'.repeat(16),
+};
 
 /** Engineering's second channel, so a switch inside one team is a real move. */
 const DESIGN_ID = 'ef'.repeat(16);

@@ -70,6 +70,7 @@ async function setup(
     const [location, setLocation] = useState<Location>({
       kind: 'chat',
       ref: 'team:eng',
+      channel: 'ab'.repeat(16),
     });
     return createElement(
       StrictMode,

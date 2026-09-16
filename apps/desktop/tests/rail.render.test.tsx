@@ -354,3 +354,59 @@ test('the rail names the account through which the selected group is accessed', 
     /vitalik/,
   );
 });
+
+test('native titlebar controls follow rail collapse and expansion', async () => {
+  const { App } = (await vite.ssrLoadModule(
+    '/src/app-root.tsx',
+  )) as typeof import('../src/app-root');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const calls: boolean[] = [];
+  window.localStorage.clear();
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    native: true,
+    setTrafficLightsVisible: async (visible) => {
+      calls.push(visible);
+    },
+  };
+  const r = ui.render(createElement(App, { snapshot: FIXTURE, bridge }));
+  await ui.waitFor(() => assert.equal(calls.at(-1), true));
+  ui.fireEvent.click(r.getByRole('button', { name: 'Collapse rail' }));
+  await ui.waitFor(() => assert.equal(calls.at(-1), false));
+  assert.ok(document.querySelector('.app.side-narrow'));
+  ui.fireEvent.click(r.getByRole('button', { name: 'Expand rail' }));
+  await ui.waitFor(() => assert.equal(calls.at(-1), true));
+  window.localStorage.clear();
+});
+
+test('device crumbs use the name resolved for the exact account and address', async () => {
+  const { crumbTrail } = (await vite.ssrLoadModule(
+    '/src/shell/topbar.tsx',
+  )) as typeof import('../src/shell/topbar');
+  const location = {
+    kind: 'devices',
+    store: 'acct:work',
+    device: '08abcd',
+  } as const;
+  const label = { store: 'acct:work', address: '08abcd', name: 'Travel key' };
+  assert.deepEqual(crumbTrail(location, undefined, undefined, label), [
+    'Devices',
+    'Travel key',
+  ]);
+  assert.deepEqual(
+    crumbTrail(location, undefined, undefined, {
+      ...label,
+      store: 'acct:personal',
+    }),
+    ['Devices', 'Key'],
+  );
+  assert.deepEqual(
+    crumbTrail(location, undefined, undefined, { ...label, address: 'other' }),
+    ['Devices', 'Key'],
+  );
+});

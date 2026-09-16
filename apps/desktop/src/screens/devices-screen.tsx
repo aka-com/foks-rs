@@ -40,7 +40,12 @@ import {
   Notice,
   SectionLabel,
 } from '../components';
-import type { AccountStore, AgentSnapshot, StoreRef } from '../model';
+import type {
+  AccountStore,
+  AgentSnapshot,
+  StoreRef,
+  DeviceLabel,
+} from '../model';
 import {
   accountStopped,
   accountStores,
@@ -127,6 +132,7 @@ export interface DevicesScreenProps {
   onRefreshSnapshot: () => Promise<AgentSnapshot>;
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
+  onDeviceLabel?: (label: DeviceLabel | null) => void;
 }
 
 export function DevicesScreen({
@@ -139,6 +145,7 @@ export function DevicesScreen({
   onRefreshSnapshot,
   onError,
   onMutationError,
+  onDeviceLabel,
 }: DevicesScreenProps): ReactNode {
   // The shell canonicalizes the route on mount; the scene it was entered at
   // is what decides whether a sheet opens with the page.
@@ -398,6 +405,17 @@ export function DevicesScreen({
   const detail = location.device
     ? deviceAt({ devices, backups, yubi, cards }, location.device)
     : undefined;
+
+  const detailAddress = detail?.address;
+  const detailName = detail?.name;
+  useEffect(() => {
+    onDeviceLabel?.(
+      selectedId && detailAddress && detailName
+        ? { store: selectedId, address: detailAddress, name: detailName }
+        : null,
+    );
+    return () => onDeviceLabel?.(null);
+  }, [onDeviceLabel, selectedId, detailAddress, detailName]);
 
   // An address naming an account this Mac no longer holds is reported as
   // exactly that, and the notice is the only list of the accounts it does

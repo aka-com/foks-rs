@@ -416,7 +416,7 @@ test('disables account selection and dialog dismissal while server verification 
   ui.fireEvent.click(
     rendered.getByRole('button', { name: 'Use official FOKS server' }),
   );
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Check server' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add server' }));
   assert.equal(
     (rendered.getByLabelText('Server address') as HTMLInputElement).disabled,
     true,
@@ -1086,4 +1086,129 @@ test('identity loading waits out a native mutation instead of failing setup', as
   );
   assert.equal(refreshes, 3);
   assert.equal(rendered.queryByRole('alert'), null);
+});
+
+test('a server added after unmount is listed on Accounts and pairs without another add', async () => {
+  const { PeopleScreen } = (await vite.ssrLoadModule(
+    '/src/screens/people-screen.tsx',
+  )) as typeof import('../src/screens/people-screen');
+  const { GoProfileConnectSheet } = (await vite.ssrLoadModule(
+    '/src/screens/go-profile-connect.tsx',
+  )) as typeof import('../src/screens/go-profile-connect');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { OverlayProvider } = (await vite.ssrLoadModule(
+    '/kit/overlay-primitives.tsx',
+  )) as typeof import('../kit/overlay-primitives');
+  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
+    '/kit/toasts.tsx',
+  )) as typeof import('../kit/toasts');
+  const snapshot = {
+    ...FIXTURE,
+    servers: [
+      ...FIXTURE.servers,
+      {
+        ...FIXTURE.servers[0],
+        id: 'cli-local',
+        name: 'CLI server',
+        label: null,
+        host_id: candidate.hostId,
+        accounts: [],
+      },
+    ],
+  };
+  let resolve!: (
+    value: Awaited<ReturnType<Bridge['checkAndAddGoProfile']>>,
+  ) => void;
+  let adds = 0;
+  const added: string[] = [];
+  const bridge: Bridge = {
+    ...mockBridge(snapshot),
+    discoverGoProfiles: async () => ({
+      installed: true,
+      candidates: [candidate],
+    }),
+    checkAndAddGoProfile: () => {
+      adds++;
+      return new Promise((done) => {
+        resolve = done;
+      });
+    },
+  };
+  const portalRoot = document.getElementById('overlays');
+  assert.ok(portalRoot);
+  const wrap = (children: import('react').ReactNode) =>
+    createElement(OverlayProvider, {
+      backgroundRef: { current: null },
+      portalRoot,
+      children: createElement(ToastProvider, {
+        controller: new ToastController(),
+        portalRoot,
+        children,
+      }),
+    });
+  const adding = ui.render(
+    wrap(
+      createElement(GoProfileConnectSheet, {
+        bridge,
+        onClose: () => {},
+        onConnected: async () => {},
+        onError: (error) => {
+          throw error;
+        },
+        onAdded: async (profile) => {
+          added.push(profile);
+        },
+      }),
+    ),
+  );
+  ui.fireEvent.click(await adding.findByRole('radio', { name: /cli-owner/ }));
+  ui.fireEvent.click(
+    adding.getByRole('button', { name: 'Use official FOKS server' }),
+  );
+  ui.fireEvent.click(adding.getByRole('button', { name: 'Add server' }));
+  adding.unmount();
+  await ui.act(async () => {
+    resolve({
+      profile: 'cli-local',
+      acceptance: 'inserted',
+      lookupName: 'foks.app',
+      canonicalName: 'foks.app',
+      hostId: candidate.hostId,
+      chain: 1,
+      epoch: 1,
+    });
+  });
+  assert.deepEqual(added, ['cli-local']);
+  const accounts = ui.render(
+    wrap(
+      createElement(PeopleScreen, {
+        snapshot,
+        bridge,
+        location: { kind: 'people' },
+        onNavigate: () => {},
+        onRefresh: async () => {},
+        onRefreshSnapshot: async () => snapshot,
+        onError: (error) => {
+          throw error;
+        },
+        onMutationError: async (error) => {
+          throw error;
+        },
+      }),
+    ),
+  );
+  const row = accounts.getByText('CLI server').parentElement;
+  assert.ok(row);
+  assert.ok(ui.within(row).getByText('Connected, not yet paired'));
+  ui.fireEvent.click(ui.within(row).getByRole('button', { name: 'Pair' }));
+  ui.fireEvent.click(await accounts.findByRole('radio', { name: /cli-owner/ }));
+  assert.ok(accounts.getByRole('button', { name: 'Pair this Mac' }));
+  assert.ok(accounts.getByRole('button', { name: 'Resume pairing' }));
+  assert.equal(accounts.queryByRole('button', { name: 'Add server' }), null);
+  assert.equal(adds, 1);
 });

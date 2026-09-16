@@ -249,6 +249,7 @@ pub fn run() {
             commands::application::restart_app,
             commands::application::quit_app,
             window_state::get_window_state,
+            window_state::set_traffic_lights_visible,
             commands::vault::list_stores,
             commands::vault::list_catalog,
             commands::servers::list_servers,

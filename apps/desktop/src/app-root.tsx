@@ -1,3 +1,4 @@
+import type { DeviceLabel } from './model';
 import { ChatInboxProvider } from './chat/inbox-provider';
 /**
  * Root application component for the FOKS desktop vault shell.
@@ -791,6 +792,7 @@ function VaultShell({
   const [initialSelection] = useState(
     () => scene.selection ?? demoSelection(scene.demo, agentSnapshot),
   );
+  const [deviceLabel, setDeviceLabel] = useState<DeviceLabel | null>(null);
   const [sideCollapsed, setSideCollapsed] = useState(storedSideCollapsedPref);
   // The topbar's toggle is the only writer of the stored preference; the
   // details panel's reaction below changes the width without recording it.
@@ -1376,6 +1378,13 @@ function VaultShell({
   }, [locations]);
 
   const here = state.location;
+  const trafficLightsVisible = !sideCollapsed || here.kind === 'first-run';
+  useEffect(() => {
+    if (bridge.native)
+      void bridge
+        .setTrafficLightsVisible(trafficLightsVisible)
+        .catch(commandError);
+  }, [bridge, commandError, trafficLightsVisible]);
   // Handle trackpad back gestures consistently with the topbar back button.
   // The destination is read through a ref so the listener mounts once. Suppress
   // gestures while a dialog is open or a navigation guard blocks the target to
@@ -1560,6 +1569,7 @@ function VaultShell({
     />
   ) : here.kind === 'devices' ? (
     <DevicesScreen
+      onDeviceLabel={setDeviceLabel}
       key={`devices:${concealSignal}`}
       snapshot={shown}
       bridge={bridge}
@@ -1660,6 +1670,7 @@ function VaultShell({
             />
             <main className="main">
               <Topbar
+                deviceLabel={deviceLabel}
                 snapshot={shown}
                 location={here}
                 onNavigate={(location) => locations.navigate(location)}

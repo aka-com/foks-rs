@@ -417,6 +417,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     firstRunFixture,
     appLockState: async () => appLockState(),
     windowState: async () => ({ maximized: false, fullscreen: false }),
+    setTrafficLightsVisible: async () => {},
     lockApp: async () => {
       appLocked = true;
       return appLockState();

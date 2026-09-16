@@ -86,26 +86,7 @@ export function ChatTab({
     : undefined;
   const [autoOpened, setAutoOpened] = useState<AutoOpened | null>(null);
   const [noteDismissed, setNoteDismissed] = useState(false);
-  // The location the tab navigated to on its own, so a location that arrived
-  // from anywhere else is recognized as not the tab's.
-  const wrote = useRef<{ ref: StoreRef; channel?: string } | null>(null);
-  // Initial selection is provisional while inboxes respond, allowing a more
-  // recent conversation to replace it. Selection becomes final when the chosen
-  // team's inbox loads. A location set externally, such as by a notification,
-  // column selection, or restored rail state, also finalizes selection so later
-  // inbox updates do not change the requested team. A location without a team
-  // starts initial selection.
-  const settled = useRef(false);
-  if (!location.ref) settled.current = false;
-  else if (
-    wrote.current?.ref !== location.ref ||
-    wrote.current.channel !== location.channel ||
-    inbox.get(location.ref)?.data !== undefined
-  )
-    settled.current = true;
-  const resolving =
-    !settled.current &&
-    (!location.ref || (autoOpened !== null && !noteDismissed));
+  const resolving = !location.ref;
   const opening = resolving
     ? openingConversation(snapshot, inbox, accessOptions)
     : undefined;
@@ -129,7 +110,7 @@ export function ChatTab({
   // the conversation with the most recent message, else to the first team that
   // has chat, and the location remembers the choice.
   useEffect(() => {
-    if (!openingRef) return;
+    if (location.ref || !openingRef) return;
     if (location.ref === openingRef && location.channel === openingChannel)
       return;
     setAutoOpened({
@@ -137,7 +118,6 @@ export function ChatTab({
       channel: openingChannel,
       recent: Boolean(openingChannel),
     });
-    wrote.current = { ref: openingRef, channel: openingChannel };
     onNavigate(
       openingChannel
         ? { kind: 'chat', ref: openingRef, channel: openingChannel }
@@ -183,9 +163,8 @@ export function ChatTab({
   // resolver's channel only while the team is the resolver's team as well: a
   // channel of the team it was about to open is not a channel of the team the
   // location names.
-  const wanted =
-    location.channel ?? (openingRef === ref ? openingChannel : undefined);
-  const channel = openChannel(listed, wanted);
+  const wanted = location.ref ? location.channel : openingChannel;
+  const channel = wanted ? openChannel(listed, wanted) : undefined;
   const loading =
     Boolean(open) && (!entry || (entry.state === 'loading' && !entry.error));
   useEffect(() => {
@@ -254,7 +233,14 @@ export function ChatTab({
             />
           </div>
         )}
-        {ref ? (
+        {ref &&
+        !wanted &&
+        open &&
+        chatAvailable(snapshot, open, accessOptions) ? (
+          <div className="empty" role="status">
+            <p>Choose a channel to open a conversation.</p>
+          </div>
+        ) : ref ? (
           <ChatScreen
             key={ref}
             snapshot={snapshot}

@@ -115,6 +115,20 @@ test('mounted shell ignores duplicate maintenance completion side effects', asyn
   const listeners = new Set<(value: MaintenanceSnapshot) => void>();
   let statusCalls = 0;
   let catalogCalls = 0;
+  // Freeze lease time; this test advances maintenance, not lease expiry.
+  const leaseClock = {
+    now: () => 1_000,
+    later: () => 0,
+    cancel: () => {},
+  };
+  let releaseCatalog!: () => void;
+  const catalogGate = new Promise<void>((resolve) => {
+    releaseCatalog = resolve;
+  });
+  let catalogEntered!: () => void;
+  const catalogStarted = new Promise<void>((resolve) => {
+    catalogEntered = resolve;
+  });
   const base = mockBridge(FIXTURE);
   const bridge: Bridge = {
     ...base,
@@ -130,10 +144,14 @@ test('mounted shell ignores duplicate maintenance completion side effects', asyn
     },
     listCatalog: async () => {
       catalogCalls++;
+      if (snapshot.state === 'complete' && snapshot.generation === 1) {
+        catalogEntered();
+        await catalogGate;
+      }
       return base.listCatalog();
     },
   };
-  const rendered = ui.render(createElement(App, { bridge }));
+  const rendered = ui.render(createElement(App, { bridge, leaseClock }));
   // The rail draws before a snapshot loads, so the account header is what says
   // the shell itself has mounted.
   await ui.waitFor(() => {
@@ -166,14 +184,28 @@ test('mounted shell ignores duplicate maintenance completion side effects', asyn
   };
   await ui.act(async () => {
     for (const listener of listeners) listener(snapshot);
-    await Promise.resolve();
-    await Promise.resolve();
+    // Completion establishes readiness before starting a catalog refresh.
+    // Wait for the bridge boundary, not a fixed number of microtasks.
+    await catalogStarted;
   });
-  assert.equal(document.querySelector('.stopveil'), null);
+  const callsDuringRefresh = { statusCalls, catalogCalls };
+  await ui.act(async () => {
+    for (const listener of listeners) listener(snapshot);
+  });
+  assert.deepEqual(
+    { statusCalls, catalogCalls },
+    callsDuringRefresh,
+    'duplicate completion does not start another refresh while one is pending',
+  );
+  await ui.act(async () => {
+    releaseCatalog();
+  });
+  await ui.waitFor(() =>
+    assert.equal(document.querySelector('.stopveil'), null),
+  );
   const callsAfterCompletion = { statusCalls, catalogCalls };
   await ui.act(async () => {
     for (const listener of listeners) listener(snapshot);
-    await Promise.resolve();
   });
   assert.deepEqual(
     { statusCalls, catalogCalls },
