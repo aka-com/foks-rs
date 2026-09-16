@@ -58,7 +58,7 @@ test('the window is the rail and the content column, with no title bar', () => {
   assert.equal(document.querySelector('.side .appname'), null);
 });
 
-test('the rail draws the six tabs, the unread badge and the attention dot', () => {
+test('the rail draws the six tabs, the unread badge and the Settings dot', () => {
   const tabs = [
     ...document.querySelectorAll<HTMLButtonElement>(
       '.side.rail .rail-tabs .nav',
@@ -68,12 +68,31 @@ test('the rail draws the six tabs, the unread badge and the attention dot', () =
     tabs.map((tab) => tab.querySelector('.t')?.textContent),
     ['Files', 'Chat', 'Teams', 'Devices', 'Account', 'Settings'],
   );
-  // The fixture's two open notifications light the dot on the avatar, which is
-  // the only place attention is advertised.
-  const dot = document.querySelector('.side.rail .attn');
-  assert.ok(dot, 'the account avatar carries the attention dot');
-  assert.equal(dot.getAttribute('aria-label'), 'Needs attention');
-  assert.equal(document.querySelector('.rail-tabs .dot'), null);
+  // The fixture's three notifications each already have a home of their own —
+  // Acme's lapsed check-in and Partner's unverified trust show on Settings,
+  // Homelab's incomplete setup and its inactive admission show on Teams — so
+  // none of them are left for the avatar dot to advertise.
+  assert.equal(
+    document.querySelector('.side.rail .attn'),
+    null,
+    'nothing is left unrouted for the avatar dot to carry',
+  );
+  // Partner has never been verified (Acme's own lapsed check-in note is only
+  // live once its lease is actually expired, which the running demo agent
+  // has not made true here), so the Settings tab carries the amber dot for
+  // Partner alone.
+  const settingsDot = tabs[5].querySelector('.tabdot');
+  assert.ok(settingsDot, 'the Settings tab carries its own dot');
+  assert.ok(settingsDot.classList.contains('warn'));
+  assert.equal(
+    settingsDot.getAttribute('aria-label'),
+    'foks.partner.dev: not verified',
+  );
+  // The Teams and Devices badges depend on a page having already loaded
+  // their signal this session; neither Teams nor Devices has been visited
+  // yet, so both are silent rather than guessing.
+  assert.equal(tabs[2].querySelector('.chat-unread'), null);
+  assert.equal(tabs[3].querySelector('.tabdot'), null);
   // Files is the tab that owns All items, the shell's starting location.
   assert.equal(tabs[0].getAttribute('aria-current'), 'page');
   assert.equal(tabs[4].getAttribute('aria-current'), null);

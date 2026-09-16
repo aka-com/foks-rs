@@ -100,6 +100,11 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side.rail .nav .ic,.side.rail .nav.on .ic{color:inherit;font-size:20px;width:20px}
 .side.rail .nav+.nav{margin-top:0}
 .side.rail .nav .chat-unread{margin-left:auto;min-width:20px;height:20px;padding:0 6px;border-radius:var(--radius-pill);background:var(--rail-badge);color:#fff;font-size:12px;font-weight:700;display:grid;place-items:center}
+/* Devices' and Settings' tab badges: a dot rather than a count, since neither
+   is a number the app can substantiate. Settings' is amber, because a server
+   problem is a warning rather than unread content. */
+.side.rail .nav .tabdot{margin-left:auto;width:8px;height:8px;border-radius:50%;background:var(--rail-badge);flex:none}
+.side.rail .nav .tabdot.warn{background:var(--warning-dot)}
 .side.rail .rail-tabs{display:flex;flex-direction:column;padding:10px 0}
 /* The header and the tabs, dimmed together while a blocking state owns the
    window: the frame is drawn, and none of it acts. */
@@ -145,6 +150,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side.rail.is-narrow .who .t,.side.rail.is-narrow .who .chev{display:none}
 .side.rail.is-narrow .attn{left:calc(50% + 8px);top:9px}
 .side.rail.is-narrow .nav>.chat-unread{position:absolute;top:2px;left:calc(50% + 2px);margin:0;box-shadow:0 0 0 2px var(--rail)}
+.side.rail.is-narrow .nav>.tabdot{position:absolute;top:8px;left:calc(50% + 9px);margin:0;box-shadow:0 0 0 2px var(--rail)}
 .side.rail.is-narrow .status{justify-content:center;padding-left:0;padding-right:0;gap:0;border-right:3px solid transparent}
 .side.rail.is-narrow .status .t{display:none}
 /* Account menu */

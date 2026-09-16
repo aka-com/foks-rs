@@ -420,6 +420,37 @@ test('a notice this page can route elsewhere is not repeated here', async () => 
   assert.equal(rendered.queryByText('Homelab cannot access Engineering'), null);
 });
 
+test('a server note and a team roster note both route away, by the ids the agent actually sends', async () => {
+  const snapshot = await fixture();
+  // These are the id shapes `notificationsOf` and the roster failure path in
+  // bridge.ts actually produce — distinct from the `lease-`/`team-`/`fed-`
+  // shorthand the fixture's own notices use.
+  const withRealIds: AgentSnapshot = {
+    ...snapshot,
+    notifications: [
+      {
+        id: 'check-in-expired-acme',
+        severity: 'crit',
+        title: 'Acme is locked',
+        detail: 'The signed server check-in has expired.',
+        action: 'Check in',
+      },
+      {
+        id: 'group-roster-unavailable-team:eng',
+        severity: 'warn',
+        title: 'Team member list is unavailable',
+        detail: 'The roster request did not complete.',
+        action: 'Refresh',
+      },
+    ],
+  };
+  const { rendered } = await renderPeople(withRealIds, 'acct:personal');
+
+  assert.equal(rendered.container.querySelector('.people-attention'), null);
+  assert.equal(rendered.queryByText('Acme is locked'), null);
+  assert.equal(rendered.queryByText('Team member list is unavailable'), null);
+});
+
 test('with nothing needing attention the band is hidden', async () => {
   const snapshot = await fixture();
   const { rendered } = await renderPeople({ ...snapshot, notifications: [] });

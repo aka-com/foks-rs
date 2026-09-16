@@ -33,6 +33,7 @@ import {
   SheetDialog,
 } from '../components';
 import type { AccountStore } from '../model';
+import { deviceAlertRegistry } from './device-alert';
 
 /** A YubiKey command that is one sheet of typed values. */
 export type SimpleYubiAction =
@@ -363,12 +364,19 @@ export function PairSheet({
   const [busy, setBusy] = useState(false);
   const queued = <T,>(task: () => Promise<T>): Promise<T> =>
     enqueueProfileWork(bridge, store.server, task);
-  const act = (task: () => Promise<unknown>, message: string): void => {
+  const act = (
+    task: () => Promise<unknown>,
+    message: string,
+    onSuccess?: () => void,
+  ): void => {
     setOffer(null);
     setPhrase('');
     setBusy(true);
     void queued(task)
-      .then(() => onDone(message))
+      .then(() => {
+        onSuccess?.();
+        return onDone(message);
+      })
       .catch(onError)
       .finally(() => setBusy(false));
   };
@@ -384,6 +392,9 @@ export function PairSheet({
         if (next.accountAlias !== store.account)
           throw new Error('pairing offer returned a different account.');
         setOffer(next);
+        // The Devices tab's rail dot has no way to ask the agent whether an
+        // offer is open; this is the one place that ever finds out.
+        deviceAlertRegistry(bridge).reportPairingOffer(store.id, true);
       })
       .catch(onError)
       .finally(() => setBusy(false));
@@ -433,14 +444,22 @@ export function PairSheet({
               variant="primary"
               disabled={!offer || busy}
               onClick={() =>
-                act(async () => {
-                  const result = await bridge.finishDevicePairing(store.id);
-                  if (result.alias !== store.account)
-                    throw new Error(
-                      'finish_device_pairing returned a different account.',
-                    );
-                  return result;
-                }, 'Device paired successfully.')
+                act(
+                  async () => {
+                    const result = await bridge.finishDevicePairing(store.id);
+                    if (result.alias !== store.account)
+                      throw new Error(
+                        'finish_device_pairing returned a different account.',
+                      );
+                    return result;
+                  },
+                  'Device paired successfully.',
+                  () =>
+                    deviceAlertRegistry(bridge).reportPairingOffer(
+                      store.id,
+                      false,
+                    ),
+                )
               }
             >
               Finish

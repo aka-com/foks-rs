@@ -1156,3 +1156,60 @@ test('device removal refreshes native device records before submitting the write
   // metadata is invalidated and refreshed only after successful completion.
   assert.deepEqual(calls, ['read', 'remove', 'read']);
 });
+
+test('an account with no paper key gets its own band, and the Devices tab rail dot learns of it', async () => {
+  const { deviceAlertRegistry } = (await vite.ssrLoadModule(
+    '/src/screens/device-alert.ts',
+  )) as typeof import('../src/screens/device-alert');
+  const snapshot = await fixture();
+  const bridgeRef: { current: Bridge | null } = { current: null };
+  const page = await renderDevices(snapshot, {
+    store: 'acct:work',
+    decorate: (bridge) => {
+      bridgeRef.current = bridge;
+      return bridge;
+    },
+  });
+  assert.ok(bridgeRef.current);
+  await ui.waitFor(() => {
+    assert.ok(page.getByText('No paper key'));
+  });
+  assert.equal(
+    deviceAlertRegistry(bridgeRef.current)
+      .getSnapshot()
+      .paperKeys.get('acct:work'),
+    false,
+  );
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      page.getByRole('button', { name: 'Create a paper key…' }),
+    );
+  });
+  assert.ok(document.querySelector('.sheet'));
+  assert.ok(page.getByRole('heading', { name: 'Create paper key' }));
+});
+
+test('an account with a paper key draws no band, and reports it has one', async () => {
+  const { deviceAlertRegistry } = (await vite.ssrLoadModule(
+    '/src/screens/device-alert.ts',
+  )) as typeof import('../src/screens/device-alert');
+  const snapshot = await fixture();
+  const bridgeRef: { current: Bridge | null } = { current: null };
+  const page = await renderDevices(snapshot, {
+    store: 'acct:personal',
+    decorate: (bridge) => {
+      bridgeRef.current = bridge;
+      return bridge;
+    },
+  });
+  assert.ok(bridgeRef.current);
+  await ui.waitFor(() => {
+    assert.equal(
+      deviceAlertRegistry(bridgeRef.current!)
+        .getSnapshot()
+        .paperKeys.get('acct:personal'),
+      true,
+    );
+  });
+  assert.equal(page.queryByText('No paper key'), null);
+});

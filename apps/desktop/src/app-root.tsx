@@ -14,7 +14,14 @@ import { ChatInboxProvider } from './chat/inbox-provider';
  * workflows with bridge IPC and URL location state.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import type { ReactNode } from 'react';
 import {
   Dialog,
@@ -68,9 +75,9 @@ import {
   isLogin,
   kindOf,
   nameOf,
-  notesNow,
   profileInventoryComplete,
   serverAvailability,
+  settingsAlertSummary,
   storeOf,
   storeReadable,
 } from './model';
@@ -88,7 +95,15 @@ import {
   rememberSideCollapsed,
   storedSideCollapsedPref,
 } from './sidebar-prefs';
-import { PeopleScreen } from './screens/people-screen';
+import { PeopleScreen, unroutedNotices } from './screens/people-screen';
+import {
+  deviceAlertRegistry,
+  devicesAlertSummary,
+} from './screens/device-alert';
+import {
+  teamRequestRegistry,
+  teamRequestsBadge,
+} from './screens/team-requests';
 import { DevicesScreen } from './screens/devices-screen';
 import { DetailsPanel } from './screens/details-panel';
 import { ItemsScreen } from './screens/items-screen';
@@ -1473,6 +1488,17 @@ function VaultShell({
         storeOf(shown, state.selection.store)?.server ?? '',
       ) ?? 0)
     : 0;
+  // The rail's own badges: Teams' and Devices' each read a registry the page
+  // that already loads the underlying fact reports into, rather than asking
+  // the agent again from here. See `team-requests.ts` and `device-alert.ts`.
+  const teamRequestCounts = useSyncExternalStore(
+    teamRequestRegistry(bridge).subscribe,
+    teamRequestRegistry(bridge).getSnapshot,
+  );
+  const deviceAlerts = useSyncExternalStore(
+    deviceAlertRegistry(bridge).subscribe,
+    deviceAlertRegistry(bridge).getSnapshot,
+  );
   // People, Teams, Devices and Settings are the same body under four titles.
   const settingsProps = {
     snapshot: shown,
@@ -1657,7 +1683,10 @@ function VaultShell({
               location={here}
               folder={state.folder}
               account={locations.getAccount()}
-              attention={notesNow(shown).length}
+              attention={unroutedNotices(shown).length}
+              teamRequests={teamRequestsBadge(shown, teamRequestCounts)}
+              devicesAlert={devicesAlertSummary(shown, deviceAlerts)}
+              settingsAlert={settingsAlertSummary(shown)}
               onTabNavigate={(tab) => locations.navigateTab(tab)}
               onNavigate={(location) => {
                 locations.navigate(location);

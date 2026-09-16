@@ -6,6 +6,8 @@
  * over the agent light at the foot. The rail's top is the window's traffic-light
  * strip: there is no title bar above it. The rail does not enumerate stores;
  * Files and Teams list them on their own pages. Control-Tab walks the six tabs.
+ * Chat and Teams carry a count on the tab that can resolve it; Devices and
+ * Settings carry a dot instead, since neither has a number to substantiate.
  * * The rail is 200px open and 46px collapsed. The width is selected by the user
  * from the rail itself: it never expands on hover or focus.
  */
@@ -215,8 +217,19 @@ export interface SidebarProps {
   /** The Files tree's selected folder (`LocationState.folder`). */
   folder?: string;
   account?: StoreRef;
-  /** How many things need attention. Draws the dot on the account avatar. */
+  /**
+   * Notices no tab's own badge can resolve — a catalog read that only a
+   * retry can fix, or a note whose place could not be derived. Draws the dot
+   * on the account avatar; every note type with a tab of its own reaches it
+   * through that tab's badge instead.
+   */
   attention?: number;
+  /** The Teams tab's badge: pending membership requests this session knows about. */
+  teamRequests?: { label: string; description: string } | null;
+  /** The Devices tab's dot: an open pairing offer, or an account with no paper key. */
+  devicesAlert?: { description: string } | null;
+  /** The Settings tab's dot: a lapsed check-in or an unverified server. */
+  settingsAlert?: { description: string } | null;
   onNavigate: (location: Location) => void;
   /** Steps the Files tree's selection back one folder. Omitted where the
    *  tree's selection is not reachable, in which case Back only ever
@@ -249,9 +262,10 @@ export interface SidebarProps {
 /**
  * The rail's account header and its menu: the accounts on this Mac grouped by
  * server, then the two commands that are not a place — adding an account and
- * locking the app. The attention dot rides the avatar and opens the Account
- * tab. `compact`, used by the Account tab's own "Switch account" button, opens
- * the same menu from a plain button rather than the avatar — it is the same
+ * locking the app. The dot rides the avatar for a note no tab's own badge can
+ * resolve, and opens the Account tab, where that note is still listed.
+ * `compact`, used by the Account tab's own "Switch account" button, opens the
+ * same menu from a plain button rather than the avatar — it is the same
  * component so there is exactly one switcher, not a second one repeating it.
  */
 export function AccountHeader({
@@ -554,6 +568,9 @@ export function Sidebar({
   folder = '',
   account,
   attention = 0,
+  teamRequests = null,
+  devicesAlert = null,
+  settingsAlert = null,
   onNavigate,
   onSetFolder,
   onTabNavigate,
@@ -569,6 +586,51 @@ export function Sidebar({
   const chatInbox = useSidebarInbox();
   const unread = snapshot ? railChatUnread(snapshot, chatInbox) : null;
   const here = railTabOf(location);
+  /**
+   * A tab's own badge: a count in `railChatUnread`'s own markup for Chat and
+   * Teams, a plain dot for Devices, and an amber one for Settings. The
+   * collapsed rail rides every one of these on the icon's own corner, the
+   * same rule `chat-unread` already follows there.
+   */
+  const railTail = (tab: RailTab): ReactNode => {
+    if (tab === 'chat')
+      return unread ? (
+        <span
+          className="chat-unread"
+          aria-label={unread.description}
+          title={unread.description}
+        >
+          {unread.label}
+        </span>
+      ) : undefined;
+    if (tab === 'teams')
+      return teamRequests ? (
+        <span
+          className="chat-unread"
+          aria-label={teamRequests.description}
+          title={teamRequests.description}
+        >
+          {teamRequests.label}
+        </span>
+      ) : undefined;
+    if (tab === 'devices')
+      return devicesAlert ? (
+        <span
+          className="tabdot"
+          aria-label={devicesAlert.description}
+          title={devicesAlert.description}
+        />
+      ) : undefined;
+    if (tab === 'settings')
+      return settingsAlert ? (
+        <span
+          className="tabdot warn"
+          aria-label={settingsAlert.description}
+          title={settingsAlert.description}
+        />
+      ) : undefined;
+    return undefined;
+  };
   useEffect(() => {
     if (blocked) return;
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -661,17 +723,7 @@ export function Sidebar({
               // it is noise.
               title={collapsed ? tab.label : undefined}
               disabled={blocked}
-              tail={
-                tab.id === 'chat' && unread ? (
-                  <span
-                    className="chat-unread"
-                    aria-label={unread.description}
-                    title={unread.description}
-                  >
-                    {unread.label}
-                  </span>
-                ) : undefined
-              }
+              tail={railTail(tab.id)}
               onSelect={() => {
                 if (onTabNavigate) onTabNavigate(tab.id);
                 else onNavigate(tabLocation(tab));

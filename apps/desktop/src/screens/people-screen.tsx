@@ -1,4 +1,5 @@
 import { useDeviceMetadata } from '../device-cache';
+import { deviceAlertRegistry } from './device-alert';
 import { LocalAliasPanel } from '../components/local-alias-panel';
 import { localAliasOf } from '../model';
 import { useTabSheetState } from '../navigation-guard';
@@ -83,12 +84,59 @@ interface Destination {
   location: Location;
 }
 
+/** A server profile named by a note id's reason prefix, e.g. `check-in-expired-acme`. */
+function serverNamedByReason(
+  snapshot: AgentSnapshot,
+  id: string,
+): Server | undefined {
+  const reasons = [
+    'check-in-expired',
+    'check-in-unavailable',
+    'server-status-unavailable',
+    'verification-failed',
+    'verification-required',
+    'status-unavailable',
+  ];
+  for (const reason of reasons) {
+    if (!id.startsWith(`${reason}-`)) continue;
+    const profile = id.slice(reason.length + 1);
+    const server = snapshot.servers.find((entry) => entry.id === profile);
+    if (server) return server;
+  }
+  return undefined;
+}
+
+/** A team named by a `group-roster-unavailable-` or `group-federation-unavailable-` note id. */
+function groupNamedByFailure(
+  snapshot: AgentSnapshot,
+  id: string,
+): TeamStore | undefined {
+  const prefixes = [
+    'group-roster-unavailable-',
+    'group-federation-unavailable-',
+  ];
+  for (const prefix of prefixes) {
+    if (!id.startsWith(prefix)) continue;
+    const storeId = id.slice(prefix.length);
+    return snapshot.stores.find(
+      (store): store is TeamStore =>
+        store.kind === 'team' && store.id === storeId,
+    );
+  }
+  return undefined;
+}
+
 /**
- * Where a note is resolved, when its id names a place this Mac holds: a
- * `lease-` note names a server profile, a `team-` note names the group that is
- * not set up, and a `fed-` note names the *admitted* group, whose admission is
- * resolved in the host group it was admitted to. A note whose place cannot be
- * derived keeps the label it always had rather than opening the wrong page.
+ * Where a note is resolved, when its id names a place this Mac holds. A note
+ * about a server — a lapsed check-in, an unverified or blocked server, a
+ * status read that failed — names the profile in its id's reason prefix and
+ * resolves to that server's own Settings page, where the same state already
+ * shows in "Needs attention". A note about a team's roster or federation read
+ * failing names the store and resolves to that team's own page. The
+ * synthetic `lease-`, `team-` and `fed-` prefixes are the fixture's own
+ * shorthand for the same three destinations, kept for its notices. A note
+ * whose place cannot be derived keeps the label it always had rather than
+ * opening the wrong page.
  *
  * A note this resolves is not drawn on this page at all: the place it names
  * already shows the same state, so this function is used only to tell such a
@@ -98,16 +146,24 @@ function destinationOf(
   snapshot: AgentSnapshot,
   note: Notification,
 ): Destination | null {
-  if (note.id.startsWith('lease-')) {
-    const profile = note.id.slice('lease-'.length);
-    const server = snapshot.servers.find((entry) => entry.id === profile);
-    if (!server) return null;
+  const namedServer =
+    (note.id.startsWith('lease-')
+      ? snapshot.servers.find(
+          (entry) => entry.id === note.id.slice('lease-'.length),
+        )
+      : undefined) ?? serverNamedByReason(snapshot, note.id);
+  if (namedServer)
     return {
       label: 'Open the server',
-      where: `Settings › Servers › ${serverDisplayName(server)}`,
-      location: { kind: 'settings', section: 'servers', profile: server.id },
+      where: `Settings › Servers › ${serverDisplayName(namedServer)}`,
+      location: {
+        kind: 'settings',
+        section: 'servers',
+        profile: namedServer.id,
+      },
     };
-  }
+  const namedGroup = groupNamedByFailure(snapshot, note.id);
+  if (namedGroup) return openGroup(namedGroup);
   if (note.id.startsWith('team-')) {
     const alias = note.id.slice('team-'.length);
     const matches = snapshot.stores.filter(
@@ -135,6 +191,19 @@ function destinationOf(
   return null;
 }
 
+/**
+ * The notices no tab can resolve: a catalog read that only a retry can fix,
+ * or a note whose place could not be derived — an alias that matches more
+ * than one store, or an admission this Mac cannot place. This is what the
+ * rail's account-avatar dot still counts, now that every other note type has
+ * a badge or an established home of its own.
+ */
+export function unroutedNotices(snapshot: AgentSnapshot): Notification[] {
+  return notesNow(snapshot).filter(
+    (note) => canRetry(note) || destinationOf(snapshot, note) === null,
+  );
+}
+
 interface UnroutedNoticesProps {
   snapshot: AgentSnapshot;
   onRefreshSnapshot: () => Promise<AgentSnapshot>;
@@ -157,9 +226,7 @@ function UnroutedNotices({
   onError,
 }: UnroutedNoticesProps): ReactNode {
   const [busy, setBusy] = useState<Set<string>>(new Set());
-  const notes = notesNow(snapshot).filter(
-    (note) => canRetry(note) || destinationOf(snapshot, note) === null,
-  );
+  const notes = unroutedNotices(snapshot);
   if (!notes.length) return null;
 
   const retry = (note: Notification): void => {
@@ -279,6 +346,22 @@ export function PeopleScreen({
     recovery: { refresh: onRefreshSnapshot },
     onError,
   });
+  // The Devices rail indicator initiates no background request; it reflects
+  // cached results from the account key list query.
+  useEffect(() => {
+    if (!selected || stopped.stopped || loadingKeys || keysFailed) return;
+    deviceAlertRegistry(bridge).reportPaperKey(
+      selected.id,
+      lists.backups.length > 0,
+    );
+  }, [
+    bridge,
+    selected,
+    stopped.stopped,
+    loadingKeys,
+    keysFailed,
+    lists.backups.length,
+  ]);
 
   // Secrets typed into a panel must not stay on screen behind another window.
   // Browser sign-in is the exception: it hands focus away on purpose.

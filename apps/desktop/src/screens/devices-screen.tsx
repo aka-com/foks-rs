@@ -84,6 +84,7 @@ import { UnavailableAccount } from './people-screen';
 
 import { paperKeyResume } from './paper-key-resume';
 import type { PaperKeyDraft } from './paper-key-resume';
+import { deviceAlertRegistry } from './device-alert';
 
 type Sheet =
   | 'add'
@@ -257,6 +258,7 @@ export function DevicesScreen({
     cache: deviceCache,
     lists,
     loading,
+    failed,
   } = useDeviceMetadata({
     bridge,
     profile: selected?.server,
@@ -266,6 +268,19 @@ export function DevicesScreen({
     onError,
   });
   const { devices, backups, yubi } = lists;
+  // The Devices rail indicator initiates no background request; it reflects
+  // cached results from the device list query.
+  useEffect(() => {
+    if (!selected || stopped.stopped || loading || failed) return;
+    deviceAlertRegistry(bridge).reportPaperKey(selected.id, backups.length > 0);
+  }, [bridge, selected, stopped.stopped, loading, failed, backups.length]);
+  const devicesAlert = useSyncExternalStore(
+    deviceAlertRegistry(bridge).subscribe,
+    deviceAlertRegistry(bridge).getSnapshot,
+  );
+  const pairingOfferOpen = selected
+    ? devicesAlert.offers.has(selected.id)
+    : false;
 
   const closeSheets = useCallback((): void => {
     paperResume.conceal();
@@ -638,6 +653,37 @@ export function DevicesScreen({
                   }
                 >
                   Devices and keys are not listed while access is stopped.
+                </Band>
+              ) : null}
+              {!stopped.stopped && pairingOfferOpen ? (
+                <Band
+                  label="A pairing is waiting on this device"
+                  action={
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setPairMode('offer');
+                        setSheet('pair');
+                      }}
+                    >
+                      Resume offer…
+                    </Button>
+                  }
+                >
+                  Type the phrase already issued on the other device, or open it
+                  again here.
+                </Band>
+              ) : null}
+              {!stopped.stopped && !loading && !failed && !backups.length ? (
+                <Band
+                  label="No paper key"
+                  action={
+                    <Button size="sm" onClick={() => setSheet('phrase')}>
+                      Create a paper key…
+                    </Button>
+                  }
+                >
+                  This account cannot be recovered on a new device without one.
                 </Band>
               ) : null}
 

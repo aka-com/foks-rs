@@ -48,6 +48,9 @@ async function rail(
   collapsed = false,
   /** Mount a modal dialog beside the rail, as a sheet or the palette would. */
   dialog = false,
+  teamRequests: { label: string; description: string } | null = null,
+  devicesAlert: { description: string } | null = null,
+  settingsAlert: { description: string } | null = null,
 ) {
   const { Sidebar } = await vite.ssrLoadModule('/src/shell/sidebar.tsx');
   const { ChatInboxProvider } = await vite.ssrLoadModule(
@@ -98,6 +101,9 @@ async function rail(
             snapshot,
             location,
             attention,
+            teamRequests,
+            devicesAlert,
+            settingsAlert,
             onNavigate: (next: Location) => journal.navigations.push(next),
             onLock: () => {
               journal.locks += 1;
@@ -162,6 +168,68 @@ test('no unread and nothing to attend to leaves both marks off', async () => {
   });
   assert.equal(document.querySelector('.side.rail .chat-unread'), null);
   assert.equal(document.querySelector('.side.rail .attn'), null);
+  assert.equal(document.querySelector('.side.rail .tabdot'), null);
+});
+
+test('renders a Teams count, Devices and Settings dots, and no empty indicators', async () => {
+  await rail(
+    { kind: 'all' },
+    '0',
+    0,
+    false,
+    false,
+    { label: '2', description: '2 requests to join a team' },
+    { description: 'An account has no paper key' },
+    { description: 'foks.partner.dev: not verified' },
+  );
+  const [, , teamsTab, devicesTab, , settingsTab] = tabs();
+  const teamsBadge = teamsTab.querySelector('.chat-unread');
+  assert.ok(teamsBadge, 'Teams carries a badge in the chat-unread markup');
+  assert.equal(teamsBadge.textContent, '2');
+  assert.equal(
+    teamsBadge.getAttribute('aria-label'),
+    '2 requests to join a team',
+  );
+  const devicesDot = devicesTab.querySelector('.tabdot');
+  assert.ok(devicesDot, 'Devices carries its dot');
+  assert.equal(devicesDot.classList.contains('warn'), false);
+  assert.equal(
+    devicesDot.getAttribute('aria-label'),
+    'An account has no paper key',
+  );
+  const settingsDot = settingsTab.querySelector('.tabdot');
+  assert.ok(settingsDot, 'Settings carries its dot');
+  assert.ok(settingsDot.classList.contains('warn'));
+  assert.equal(
+    settingsDot.getAttribute('aria-label'),
+    'foks.partner.dev: not verified',
+  );
+
+  // Collapsed, every badge still draws — riding the icon's own corner, the
+  // rule `chat-unread` already followed there.
+  await rail(
+    { kind: 'all' },
+    '0',
+    0,
+    true,
+    false,
+    { label: '2', description: '2 requests to join a team' },
+    { description: 'An account has no paper key' },
+    { description: 'foks.partner.dev: not verified' },
+  );
+  assert.ok(document.querySelector('.side.rail.is-narrow .chat-unread'));
+  assert.equal(
+    document.querySelectorAll('.side.rail.is-narrow .tabdot').length,
+    2,
+  );
+});
+
+test('with nothing known, Teams, Devices and Settings draw nothing', async () => {
+  await rail({ kind: 'all' }, '0', 0);
+  const [, , teamsTab, devicesTab, , settingsTab] = tabs();
+  assert.equal(teamsTab.querySelector('.chat-unread'), null);
+  assert.equal(devicesTab.querySelector('.tabdot'), null);
+  assert.equal(settingsTab.querySelector('.tabdot'), null);
 });
 
 test('the rail foot reports the connection, and says nothing about the step', async () => {

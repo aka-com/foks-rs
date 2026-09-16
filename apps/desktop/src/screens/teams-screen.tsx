@@ -11,11 +11,12 @@ import { useTabSheetState } from '../navigation-guard';
  * page; the team page returns here.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Menu, Popover } from '/kit/overlay-primitives';
 import type { ReactNode } from 'react';
-import { Button, Chip, Icon, MenuButton, MenuItem } from '../components';
+import { Band, Button, Chip, Icon, MenuButton, MenuItem } from '../components';
 import { InvitationPanel } from '../components/invitation-panel';
+import { teamRequestRegistry } from './team-requests';
 import { enqueueProfileWork } from '../bridge';
 import {
   canCreateInStore,
@@ -287,6 +288,17 @@ export function TeamsScreen({
   );
   const [discovering, setDiscovering] = useState<StoreRef | null>(null);
   const [results, setResults] = useState<Readonly<Record<string, string>>>({});
+  // The rail's own Teams badge is this same registry, summed across the
+  // whole Mac; here it is drawn per team, for whichever named teams this
+  // list already knows have requests waiting.
+  const requestCounts = useSyncExternalStore(
+    teamRequestRegistry(bridge).subscribe,
+    teamRequestRegistry(bridge).getSnapshot,
+  );
+  const flaggedTeams = teams.filter(
+    (store) =>
+      store.team_kind === 'named' && (requestCounts.get(store.id) ?? 0) > 0,
+  );
   const canCreate = accounts.some((store) =>
     canCreateInStore(snapshot, store.id),
   );
@@ -481,6 +493,36 @@ export function TeamsScreen({
           </>
         }
       />
+      {flaggedTeams.length ? (
+        <div className="bandstrip">
+          {flaggedTeams.map((store) => {
+            const count = requestCounts.get(store.id) ?? 0;
+            return (
+              <Band
+                key={store.id}
+                action={
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() =>
+                      onNavigate({
+                        kind: 'group-settings',
+                        ref: store.id,
+                        tab: 'requests',
+                      })
+                    }
+                  >
+                    Review
+                  </Button>
+                }
+              >
+                {plural(count, 'request')} to join {store.name}{' '}
+                {count === 1 ? 'is' : 'are'} waiting for you.
+              </Band>
+            );
+          })}
+        </div>
+      ) : null}
       <div className="body nav-rows">
         <div className="list-window">
           <div className="virtual-rows">

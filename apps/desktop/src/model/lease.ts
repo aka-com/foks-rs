@@ -9,6 +9,7 @@ import { storeNavigationOrder } from './order';
 import { admissionActive, partiesOf, peopleGroups, storeOf } from './readers';
 import { admits } from './roles';
 import { serverName } from './server-name';
+import { serverDisplayName } from './types';
 import type {
   AccountStore,
   CompatibilityLease,
@@ -510,6 +511,40 @@ export function notesNow(snapshot: AgentSnapshot): Notification[] {
       !availability.available && availability.reason === 'check-in-expired'
     );
   });
+}
+
+/** A server whose check-in has lapsed or whose trust has never been verified: the two reasons the Settings tab's amber dot answers for. */
+function serverFlaggedForSettings(availability: Availability): boolean {
+  return (
+    !availability.available &&
+    (availability.reason === 'check-in-expired' ||
+      availability.reason === 'verification-required')
+  );
+}
+
+/**
+ * The Settings tab's amber dot: on when a server's check-in has lapsed or it
+ * has never been verified. Every other access problem — blocked trust, an
+ * incompatible schema, an unreadable status — already has its own row in the
+ * Servers section's "Needs attention" list, which is the dot's other half:
+ * the band that resolves it.
+ */
+export function settingsAlertSummary(
+  snapshot: AgentSnapshot,
+): { description: string } | null {
+  const flagged = snapshot.servers.filter((server) =>
+    serverFlaggedForSettings(serverAvailability(snapshot, server)),
+  );
+  if (!flagged.length) return null;
+  if (flagged.length > 1)
+    return { description: `${flagged.length} servers need attention` };
+  const server = flagged[0];
+  const availability = serverAvailability(snapshot, server);
+  const reason =
+    !availability.available && availability.reason === 'check-in-expired'
+      ? 'check-in expired'
+      : 'not verified';
+  return { description: `${serverDisplayName(server)}: ${reason}` };
 }
 
 /**

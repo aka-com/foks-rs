@@ -2,6 +2,7 @@ import { usePendingGroupOperations } from '../operation-queries';
 import { useTabSheetState } from '../navigation-guard';
 import { InvitationRecovery } from '../components/invitation-recovery';
 import { InvitationPanel } from '../components/invitation-panel';
+import { teamRequestRegistry } from './team-requests';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
@@ -2400,7 +2401,13 @@ export function GroupSettingsScreen({
                     account={store.account}
                     teamAlias={store.alias}
                     onComplete={() => onApplied('Team requests updated')}
-                    onRowsChange={setRequestCount}
+                    onRowsChange={(count) => {
+                      setRequestCount(count);
+                      // The Teams tab's rail badge has no load of its own; it
+                      // only remembers what this page's own request list
+                      // already answered.
+                      teamRequestRegistry(bridge).report(store.id, count);
+                    }}
                   />
                 </div>
               ) : null}
