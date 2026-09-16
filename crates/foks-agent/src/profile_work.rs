@@ -18,6 +18,10 @@ const CONTROL_POLL: Duration = Duration::from_millis(20);
 pub(super) enum Scope {
     None,
     Profiles(Vec<String>),
+    // Snapshot reads share admission with profile work and other readers, but
+    // remain ordered against root-wide registry changes and state maintenance.
+    // ProfileRegistry::open still takes the cross-process registry lock.
+    RegistryRead,
     // Registry changes and federation cascades whose transitive profile set is
     // only known during execution reserve the state root before taking any lock.
     Root,
@@ -31,6 +35,7 @@ impl Scope {
             (Self::None, _) | (_, Self::None) => false,
             (Self::Root, _) | (_, Self::Root) => true,
             (Self::Profiles(a), Self::Profiles(b)) => a.iter().any(|p| b.contains(p)),
+            (Self::RegistryRead, _) | (_, Self::RegistryRead) => false,
         }
     }
 }
@@ -47,13 +52,13 @@ pub(super) fn operation_scope(operation: &Operation) -> Scope {
     use Operation::*;
     match operation {
         Ping | AgentStatus | RetentionStatus | DiscoverGoProfiles => Scope::None,
+        ListProfiles => Scope::RegistryRead,
         InitializeState { .. }
         | AddProfile { .. }
         | CheckAndAddProfile { .. }
         | CheckAndAddGoProfile { .. }
         | RemoveProfile { .. }
         | SetProfileLabel { .. }
-        | ListProfiles
         | ResetHardState { .. }
         | RefreshLease { .. }
         | DemoteTeamMember { .. }
@@ -479,6 +484,67 @@ mod tests {
         drop(second);
         drop(third.await.unwrap());
         drop((other_profile, other_root));
+        assert!(coordinator.state.lock().unwrap().active.is_empty());
+    }
+
+    #[test]
+    fn profile_listing_does_not_turn_a_long_profile_operation_into_a_root_barrier() {
+        let coordinator = Arc::new(Coordinator::default());
+        let root = Path::new("/admission-test");
+        // Represent an in-progress pairing on A without a timer or network wait.
+        let pairing = coordinator
+            .try_acquire(root, Scope::profile("a"))
+            .unwrap()
+            .unwrap();
+        let listing = coordinator
+            .try_acquire(root, operation_scope(&Operation::ListProfiles))
+            .unwrap()
+            .expect("registry listing must not wait for pairing");
+        let second_listing = coordinator
+            .try_acquire(root, operation_scope(&Operation::ListProfiles))
+            .unwrap()
+            .expect("readers can share the registry snapshot scope");
+        let other = coordinator
+            .try_acquire(root, Scope::profile("b"))
+            .unwrap()
+            .expect("listing must not block an independent profile");
+        assert!(coordinator
+            .try_acquire(root, Scope::profile("a"))
+            .unwrap()
+            .is_none());
+        drop((pairing, listing, second_listing, other));
+        assert!(coordinator.state.lock().unwrap().active.is_empty());
+    }
+
+    #[tokio::test]
+    async fn registry_changes_remain_exclusive_and_readers_cannot_overtake_them() {
+        let coordinator = Arc::new(Coordinator::default());
+        let root = Path::new("/admission-test");
+        for change in [
+            Operation::SetProfileLabel {
+                profile: "a".into(),
+                label: Some("Work".into()),
+            },
+            Operation::RemoveProfile { name: "a".into() },
+        ] {
+            let first_read = coordinator
+                .acquire(root, operation_scope(&Operation::ListProfiles), BUDGET)
+                .await
+                .unwrap();
+            let mut writer = Box::pin(coordinator.acquire(root, operation_scope(&change), BUDGET));
+            assert_pending(writer.as_mut()).await;
+            let mut later_read = Box::pin(coordinator.acquire(
+                root,
+                operation_scope(&Operation::ListProfiles),
+                BUDGET,
+            ));
+            assert_pending(later_read.as_mut()).await;
+            drop(first_read);
+            let writer = writer.await.unwrap();
+            assert_pending(later_read.as_mut()).await;
+            drop(writer);
+            drop(later_read.await.unwrap());
+        }
         assert!(coordinator.state.lock().unwrap().active.is_empty());
     }
 
