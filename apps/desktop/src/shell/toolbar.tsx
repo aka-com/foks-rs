@@ -162,8 +162,8 @@ export function Toolbar({
         <Button
           variant="quiet"
           icon="gear"
-          title="Group settings"
-          aria-label="Group settings"
+          title="Team settings"
+          aria-label="Team settings"
           onClick={onSettings}
         />
       ) : null}

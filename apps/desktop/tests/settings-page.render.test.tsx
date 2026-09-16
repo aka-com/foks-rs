@@ -347,8 +347,8 @@ test('a server page captions its groups without repeating itself', async () => {
 
   // The page is already about one server, so the caption drops it and keeps
   // what the object is and the roster summary.
-  assert.ok(rendered.getByText('Named group · 2 people'));
-  assert.equal(rendered.queryByText(/Named group · foks.example.net/), null);
+  assert.ok(rendered.getByText('Named team · 2 people'));
+  assert.equal(rendered.queryByText(/Named team · foks.example.net/), null);
 
   // A roster that could not be read is a chip at the end of the row, and the
   // caption is the bare kind rather than the failure in the summary's place.
@@ -379,7 +379,7 @@ test('a server page captions its groups without repeating itself', async () => {
     [...row.querySelectorAll('.chip')].map((chip) => chip.textContent)[0],
     'Roster unavailable',
   );
-  assert.equal(row.querySelector('small')?.textContent, 'Named group');
+  assert.equal(row.querySelector('small')?.textContent, 'Named team');
 });
 
 test('a server holding no group says so', async () => {
@@ -393,7 +393,7 @@ test('a server holding no group says so', async () => {
   );
 
   assert.ok(rendered.getByText('Teams on this server'));
-  assert.ok(rendered.getByText('No groups on this server'));
+  assert.ok(rendered.getByText('No teams on this server'));
 });
 
 test('a lapsed server says its check-in expired and offers the check', async () => {

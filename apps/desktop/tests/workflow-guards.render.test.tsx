@@ -265,7 +265,7 @@ test('an unsaved team name prompts before navigation', async () => {
   });
   const question = h.verdict(store);
   assert.equal(question?.verdict, 'prompt');
-  assert.equal(question.title, 'Discard this group?');
+  assert.equal(question.title, 'Discard this team?');
   assert.equal(question.body, 'Robotics has not been created.');
 });
 

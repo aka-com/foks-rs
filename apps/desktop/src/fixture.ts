@@ -328,7 +328,7 @@ const RAW: AgentSnapshot = {
       scoped_host_id_hex: '9f31c2aa07',
       source_role: { role: 'Owner' },
       destination_role: { role: 'Member', visibility: 0 },
-      note: 'Federated group: manage permissions in Engineering under Members › Groups on other servers.',
+      note: 'Federated team: manage permissions in Engineering under Members › Teams on other servers.',
     },
     // A service account is a user like any other.
     {
@@ -422,7 +422,7 @@ const RAW: AgentSnapshot = {
       severity: 'crit',
       title: 'Acme is locked',
       detail:
-        'The server’s check-in expired. Work and Engineering groups are unavailable until the agent renews it.',
+        'The server’s check-in expired. Work and Engineering teams are unavailable until the agent renews it.',
       action: 'Check status',
     },
     {
@@ -430,7 +430,7 @@ const RAW: AgentSnapshot = {
       severity: 'warn',
       title: 'Homelab is inactive',
       detail:
-        'Group setup incomplete. Items and members are unavailable until setup is finished.',
+        'Team setup incomplete. Items and members are unavailable until setup is finished.',
       action: 'Resume creation',
     },
     {
@@ -485,7 +485,7 @@ export const COPY = {
   remove_item:
     'This item will be deleted if it has not been modified by someone else. Earlier versions will no longer be accessible.',
   personal_store_fixed:
-    'Your Personal vault is private and cannot be shared. To share an item, move it to a group vault.',
+    'Your Personal vault is private and cannot be shared. To share an item, move it to a team vault.',
   resumable:
     'Select Resume to continue where you left off. Completed steps will not be repeated.',
 } as const;

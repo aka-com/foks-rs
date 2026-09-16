@@ -230,7 +230,7 @@ function useCopyText(
 /**
  * What a member row's second line says: the kind of party, and nothing else.
  * Only people and machines are drawn as member rows; a party that stands for
- * another group belongs to "Groups on other servers".
+ * another team belongs to "Teams on other servers".
  */
 function partySubtitle(party: Party): string {
   return isMachine(party) ? 'machine' : 'person';
@@ -244,13 +244,13 @@ function targetReason(
   manageable: boolean,
 ): string {
   if (store.kind === 'team' && store.team_kind === 'adhoc')
-    return 'Memberships can’t be changed in an ad-hoc group.';
+    return 'Memberships can’t be changed in an ad-hoc team.';
   if (!manageable)
-    return 'Only an Admin or an Owner can change this group’s members.';
+    return 'Only an Admin or an Owner can change this team’s members.';
   if (party.label === 'you')
     return 'You cannot change your own role or remove your own account.';
   if (party.party_kind !== 'user' || !party.locally_manageable)
-    return 'Members of an admitted group are managed on their own server and cannot be changed or removed one by one.';
+    return 'Members of an admitted team are managed on their own server and cannot be changed or removed one by one.';
   const mine = partiesOf(snapshot, party.store).find(
     (candidate) => candidate.label === 'you',
   );
@@ -336,7 +336,7 @@ function PartyRow({
                       : 'This member is already at the lowest role.'
                     : reason
                 }
-                title="Roles can only be lowered. To raise one, remove the member and add them again, which rotates the group key."
+                title="Roles can only be lowered. To raise one, remove the member and add them again, which rotates the team key."
                 onClick={() => {
                   close();
                   onSheet('demote', party);
@@ -347,7 +347,7 @@ function PartyRow({
               <MenuItem
                 danger
                 reason={actionable ? undefined : reason}
-                title="Removes this member and rotates the group key."
+                title="Removes this member and rotates the team key."
                 onClick={() => {
                   close();
                   onSheet('remove', party);
@@ -375,7 +375,7 @@ function SituationBand({ store, tab }: { store: Store; tab: Tab }): ReactNode {
     tab !== 'settings'
   ) {
     return (
-      <Band severity="info" label="Ad-hoc group">
+      <Band severity="info" label="Ad-hoc team">
         Memberships can’t be changed.
       </Band>
     );
@@ -543,7 +543,7 @@ function FederationRows({
           <Icon name="people" />
         </span>
         <span className="t">
-          <b>No groups from other servers.</b>
+          <b>No teams from other servers.</b>
         </span>
       </div>
     );
@@ -557,7 +557,7 @@ function FederationRows({
           ? serverDisplayName(remoteServer)
           : entry.remote_profile;
         const memberReason =
-          'Every member of an admitted group holds the role shown on its row. They are managed on their own server and cannot be changed or removed one by one.';
+          'Every member of an admitted team holds the role shown on its row. They are managed on their own server and cannot be changed or removed one by one.';
         return (
           <div
             className="prow"
@@ -628,7 +628,7 @@ function FederationRows({
                             ? undefined
                             : 'Restore access before removing this admission.'
                       }
-                      title="Removes the whole admission and rotates this group’s key."
+                      title="Removes the whole admission and rotates this team’s key."
                       onClick={() => {
                         close();
                         onRemove(entry);
@@ -648,7 +648,7 @@ function FederationRows({
           key={party.party_id_hex}
           party={party}
           chip="No admission record"
-          chipTitle="The roster lists this group as a member, but no admission record on this device matches it."
+          chipTitle="The roster lists this team as a member, but no admission record on this device matches it."
         />
       ))}
       {ambiguous.map((party) => (
@@ -656,7 +656,7 @@ function FederationRows({
           key={party.party_id_hex}
           party={party}
           chip="Ambiguous admission"
-          chipTitle="The roster lists this group once, but several admission records on this device match it, so none of them can be acted on."
+          chipTitle="The roster lists this team once, but several admission records on this device match it, so none of them can be acted on."
         />
       ))}
     </div>
@@ -795,13 +795,13 @@ function MembersTab({
                 }
                 onClick={onInvite}
               >
-                Invite to group…
+                Invite to team…
               </Button>
             </div>
           ) : null}
         </>
       )}
-      <SectionLabel>Groups on other servers</SectionLabel>
+      <SectionLabel>Teams on other servers</SectionLabel>
       {federationFailure ? (
         <Band
           label="Federation unavailable"
@@ -830,11 +830,11 @@ function MembersTab({
             disabled={!federationManageable}
             title={
               federationReason ??
-              'Give every member of another group a role here'
+              'Give every member of another team a role here'
             }
             onClick={() => onSheet('admit')}
           >
-            Add a group…
+            Add a team…
           </Button>
         </div>
       ) : null}
@@ -869,7 +869,7 @@ function FederationRemovalSheet({
         remoteTeamIdHex: entry.remote_team_id_hex,
       });
       await onApplied(
-        `${entry.remote_team_alias} removed and group keys rotated`,
+        `${entry.remote_team_alias} removed and team keys rotated`,
       );
       onClose();
     } catch (error) {
@@ -903,14 +903,13 @@ function FederationRemovalSheet({
     >
       <p>
         Every member of <b>{entry.remote_team_alias}</b> will lose access to
-        this group. Group encryption keys will be updated to block future
-        access.
+        this team. Team encryption keys will be updated to block future access.
       </p>
       <Inset>
         <InsetRow label="Remote host">
           <code>{entry.remote_host_id_hex}</code>
         </InsetRow>
-        <InsetRow label="Remote group">
+        <InsetRow label="Remote team">
           <code title={entry.remote_team_id_hex}>
             {shortId(entry.remote_team_id_hex)}
           </code>
@@ -979,7 +978,7 @@ function SettingsTab({
   return (
     <div className="group-settings">
       <SituationBand store={store} tab="settings" />
-      <SectionLabel>About this group</SectionLabel>
+      <SectionLabel>About this team</SectionLabel>
       <Inset>
         <InsetRow label="Name">
           <span>
@@ -1013,7 +1012,7 @@ function SettingsTab({
           {owner ? partyName(owner) : 'No owner designated'}
         </InsetRow>
         <InsetRow
-          label="Group ID"
+          label="Team ID"
           action={
             <Button
               size="sm"
@@ -1029,7 +1028,7 @@ function SettingsTab({
       </Inset>
       {store.team_kind === 'adhoc' ? (
         <p className="fn">
-          An ad-hoc group has no name on the server and a fixed membership.
+          An ad-hoc team has no name on the server and a fixed membership.
         </p>
       ) : (
         <>
@@ -1079,9 +1078,9 @@ function SettingsTab({
           }
         >
           <span className="t">
-            <b>Remove a group member</b>
+            <b>Remove a team member</b>
             <small>
-              Removing anyone rotates the group key and blocks their future
+              Removing anyone rotates the team key and blocks their future
               reads. Copies already downloaded are not erased.
             </small>
           </span>
@@ -1249,19 +1248,19 @@ export function GroupSheet({
   const title = adding
     ? sheet === 'add'
       ? `Add someone to ${store.name}`
-      : `Add a group to ${store.name}`
+      : `Add a team to ${store.name}`
     : sheet === 'demote'
       ? `Lower ${target ? `${partyName(target)}’s` : 'their'} role`
       : sheet === 'remove'
         ? `Remove ${target ? partyName(target) : 'them'} from ${store.name}?`
-        : 'Create a group';
+        : 'Create a team';
   const subtitle =
     sheet === 'create'
       ? undefined
       : sheet === 'add'
         ? undefined
         : sheet === 'admit'
-          ? 'Every member of that group gets the same role here'
+          ? 'Every member of that team gets the same role here'
           : sheet === 'demote'
             ? `${target ? roleText(target) : ''} in ${store.name} today`
             : '';
@@ -1310,7 +1309,7 @@ export function GroupSheet({
         : sheet === 'create' && name.trim() && name !== SUGGESTED_GROUP
           ? {
               verdict: 'prompt',
-              title: 'Discard this group?',
+              title: 'Discard this team?',
               body: `${name.trim()} has not been created.`,
               confirm: 'Discard',
               onConfirm: () => {
@@ -1363,7 +1362,7 @@ export function GroupSheet({
           (candidate) => candidate.id === accountStoreId,
         );
         if (!account)
-          throw new Error('No account store is available for group creation.');
+          throw new Error('No account store is available for team creation.');
         await bridge.createGroup({
           accountStoreId: account.id,
           teamAlias,
@@ -1447,8 +1446,8 @@ export function GroupSheet({
                 : sheet === 'demote'
                   ? 'Change role'
                   : sheet === 'admit'
-                    ? `Add ${remote?.alias ?? 'group'}`
-                    : 'Create group'}
+                    ? `Add ${remote?.alias ?? 'team'}`
+                    : 'Create team'}
             </Button>
           )}
         </>
@@ -1475,7 +1474,7 @@ export function GroupSheet({
             value={sheet}
             items={[
               { id: 'add' as const, label: 'A person or machine' },
-              { id: 'admit' as const, label: 'A group on another server' },
+              { id: 'admit' as const, label: 'A team on another server' },
             ]}
             onChange={(next) => {
               if (next !== sheet) onSwitch(next);
@@ -1497,10 +1496,10 @@ export function GroupSheet({
               />
               <InsetRow label="Server">
                 <span>
-                  {serverName} <Chip>this group’s server</Chip>
+                  {serverName} <Chip>this team’s server</Chip>
                   <span className="hint">
                     They need an account on this server. For someone on another
-                    server, add their group instead.
+                    server, add their team instead.
                   </span>
                 </span>
               </InsetRow>
@@ -1548,7 +1547,7 @@ export function GroupSheet({
                           ? 'Opens items at or above the chosen visibility.'
                           : next === 'Admin'
                             ? 'Changes items and adds or removes people. Cannot change other Admins or the Owner.'
-                            : 'Everything, including deleting the group.')
+                            : 'Everything, including deleting the team.')
                       }
                     />
                   );
@@ -1604,7 +1603,7 @@ export function GroupSheet({
                     selected={demotion?.role === 'Admin'}
                     onSelect={() => setDemotion({ role: 'Admin' })}
                     title="Admin"
-                    detail="Full access to group items and permission to manage members."
+                    detail="Full access to team items and permission to manage members."
                   />
                 ) : null}
                 <RadioCard
@@ -1674,7 +1673,7 @@ export function GroupSheet({
         {sheet === 'remove' ? (
           <>
             <p>
-              Removing blocks future reads and rekeys the group. This user may
+              Removing blocks future reads and rekeys the team. This user may
               retain a local copy of their current records.
             </p>
             {target ? (
@@ -1697,10 +1696,10 @@ export function GroupSheet({
         ) : null}
         {sheet === 'admit' ? (
           <>
-            <SectionLabel>Group</SectionLabel>
+            <SectionLabel>Team</SectionLabel>
             <Inset>
               {remotes.length ? (
-                <RadioGroup label="Group">
+                <RadioGroup label="Team">
                   {remotes.map((group) => {
                     const host = serverOf(snapshot, group.id);
                     return (
@@ -1715,15 +1714,15 @@ export function GroupSheet({
                   })}
                 </RadioGroup>
               ) : (
-                <InsetRow label="Group">
-                  <span className="dim">No eligible remote group</span>
+                <InsetRow label="Team">
+                  <span className="dim">No eligible remote team</span>
                 </InsetRow>
               )}
             </Inset>
             <p className="fn">
-              The command admits a group this device already holds, so the
-              choice is over the remote groups it holds: one on another server,
-              active, and reachable right now.
+              The command admits a team this device already holds, so the choice
+              is over the remote teams it holds: one on another server, active,
+              and reachable right now.
             </p>
             <SectionLabel>Role for its members</SectionLabel>
             <Inset>
@@ -1761,7 +1760,7 @@ export function GroupSheet({
             <Band severity="info" label="How admission works">
               {store.name} asks{' '}
               {remote ? displayServerName(snapshot, remote) : 'that server'} who
-              is in {remote?.alias ?? 'that group'} and syncs that list. People
+              is in {remote?.alias ?? 'that team'} and syncs that list. People
               are added and removed there, not here, and one of them cannot be
               changed or removed on their own: only the whole admission can be
               removed, which rotates {store.name}’s key.
@@ -1812,7 +1811,7 @@ export function GroupSheet({
                 </RadioGroup>
               ) : (
                 <InsetRow label="Account">
-                  <span className="dim">No account can create a group.</span>
+                  <span className="dim">No account can create a team.</span>
                 </InsetRow>
               )}
             </Inset>
@@ -2077,10 +2076,10 @@ export function GroupSettingsScreen({
   if (!store || store.kind !== 'team') {
     return (
       <>
-        <PageHeader title="Group unavailable" subtitle="" />
+        <PageHeader title="Team unavailable" subtitle="" />
         <div className="body">
-          <Notice title="This group is no longer available">
-            Refresh or choose another group from Teams.
+          <Notice title="This team is no longer available">
+            Refresh or choose another team from Teams.
           </Notice>
         </div>
       </>
@@ -2115,7 +2114,7 @@ export function GroupSettingsScreen({
   const finishSetup = (): void => {
     void mutate(
       () => bridge.resumeGroupCreation(store.id),
-      'Group creation resumed',
+      'Team creation resumed',
     );
   };
   const inviteSheet = inviting ? (
@@ -2134,7 +2133,7 @@ export function GroupSettingsScreen({
           setRecoverInvitations(false);
         },
       }}
-      onComplete={() => onApplied('Group requests updated')}
+      onComplete={() => onApplied('Team requests updated')}
     />
   ) : null;
   return (
@@ -2179,8 +2178,8 @@ export function GroupSettingsScreen({
             icon="more"
             trailingIcon={null}
             label=""
-            menuLabel="Group actions"
-            // Named for the group it acts on: several triggers on this page
+            menuLabel="Team actions"
+            // Named for the team it acts on: several triggers on this page
             // read "More" otherwise, and none of them says what it acts on.
             title={`Actions for ${store.name}`}
             aria-label={`Actions for ${store.name}`}
@@ -2193,24 +2192,24 @@ export function GroupSettingsScreen({
                     unavailable
                       ? `Restore access to ${displayServerName(snapshot, store)} first.`
                       : inactive
-                        ? 'Finish setting up this group first.'
+                        ? 'Finish setting up this team first.'
                         : undefined
                   }
                   onClick={() => {
                     close();
-                    void mutate(() => Promise.resolve(), 'Group refreshed');
+                    void mutate(() => Promise.resolve(), 'Team refreshed');
                   }}
                 >
-                  Refresh group
+                  Refresh team
                 </MenuItem>
                 <MenuItem
                   icon="copy"
                   onClick={() => {
                     close();
-                    void copy(store.team_id_hex, 'Group ID copied.');
+                    void copy(store.team_id_hex, 'Team ID copied.');
                   }}
                 >
-                  Copy group ID
+                  Copy team ID
                 </MenuItem>
                 <MenuItem
                   icon="out"
@@ -2244,7 +2243,7 @@ export function GroupSettingsScreen({
           snapshot={snapshot}
           store={store}
           onFinish={finishSetup}
-          onCopyId={() => void copy(store.team_id_hex, 'Group ID copied.')}
+          onCopyId={() => void copy(store.team_id_hex, 'Team ID copied.')}
           onNavigate={onNavigate}
         />
       ) : (
@@ -2291,7 +2290,7 @@ export function GroupSettingsScreen({
             </Band>
           ))}
           <Tabs
-            label="Group sections"
+            label="Team sections"
             idBase={GROUP_TABS}
             value={tab}
             onChange={(next) => {
@@ -2354,14 +2353,14 @@ export function GroupSettingsScreen({
                   menuParty={menuParty}
                   failure={rosterFailure}
                   federationFailure={federationFailure}
-                  onRetry={() => void onApplied('Refreshing group members…')}
+                  onRetry={() => void onApplied('Refreshing team members…')}
                   onRetryFederation={() =>
-                    void onApplied('Refreshing external groups…')
+                    void onApplied('Refreshing external teams…')
                   }
                   onRerun={(operationId) =>
                     void mutate(
                       () => bridge.rerunGroupAdmission(store.id, operationId),
-                      'Group access restored',
+                      'Team access restored',
                     )
                   }
                   onRemoveAdmission={setRemovalTarget}
@@ -2386,7 +2385,7 @@ export function GroupSettingsScreen({
                   store={store}
                   onSheet={openSheet}
                   onNavigate={onNavigate}
-                  onCopy={(text) => void copy(text, 'Group ID copied.')}
+                  onCopy={(text) => void copy(text, 'Team ID copied.')}
                   manageable={canManageRoster}
                   rekeyOpen={rekeyArmed}
                 />
@@ -2399,7 +2398,7 @@ export function GroupSettingsScreen({
                     profile={store.server}
                     account={store.account}
                     teamAlias={store.alias}
-                    onComplete={() => onApplied('Group requests updated')}
+                    onComplete={() => onApplied('Team requests updated')}
                   />
                 </Toggle>
               ) : null}

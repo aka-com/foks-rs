@@ -53,9 +53,9 @@ function stateChip(node: HTMLElement): string | null {
   return node.querySelector('.tail .chip.warn')?.textContent ?? null;
 }
 
-/** The chip naming the role this Mac's account holds in that group. */
-function roleChip(node: HTMLElement): string | null {
-  return node.querySelector('.tail .chip.role')?.textContent ?? null;
+/** The Chat/Share pill naming a Teams row's kind. */
+function kindChip(node: HTMLElement): string | null {
+  return node.querySelector('.tail .chip.kind')?.textContent ?? null;
 }
 
 async function fixture(): Promise<AgentSnapshot> {
@@ -190,22 +190,24 @@ test('the Files rows open All items and the store they name', async () => {
   assert.deepEqual(journal.at(-1), { kind: 'store', ref: 'team:eng' });
 });
 
-test('a Teams row in an abnormal state carries the same chip, and opens group settings', async () => {
+test('a Teams row in an abnormal state carries the same chip, and opens team settings', async () => {
   const journal: Location[] = [];
   await teams((location) => journal.push(location));
   const homelab = row('Homelab');
   assert.ok(homelab.className.split(' ').includes('off'));
   assert.equal(stateChip(homelab), 'Setup incomplete');
-  // The Shares section above already says what the object is, so the caption
-  // says only where it lives; the chip beside it says what is wrong.
+  // Named teams and ad-hoc shares are one list, so a row's own Chat/Share
+  // pill says what it is; the caption says only the catalog facts it has.
+  assert.equal(kindChip(homelab), 'Share');
   assert.equal(
     homelab.querySelector('.name small')?.textContent,
-    'Personal server',
+    'Personal server · 0 members',
   );
 
   const eng = row('Engineering');
   assert.equal(eng.className, 'row');
   assert.equal(stateChip(eng), null);
+  assert.equal(kindChip(eng), 'Chat');
   await ui.act(async () => {
     ui.fireEvent.click(eng);
   });
@@ -216,39 +218,37 @@ test('a Teams row in an abnormal state carries the same chip, and opens group se
   });
 });
 
-test('a Teams row says the server, the roster summary and your role', async () => {
+test('a Teams row displays the server, member count, and user role', async () => {
   await teams();
   const eng = row('Engineering');
-  // One account per server on this Mac, so the server says all the caption
-  // has to; the account is named only where two hold accounts on the same
-  // server, and the kind only where no section label already says it.
-  assert.equal(eng.querySelector('.name small')?.textContent, 'Acme');
-  // The roster the group's own details call loaded on refresh, split the way
-  // the group page splits it: people, machines and admitted groups.
+  // The caption is built only from catalog facts: the server, the roster the
+  // team's own details call loaded on refresh (every party, the way the team
+  // page's own summary counts them), and the role this account holds.
   assert.equal(
-    eng.querySelector('.tail .summary')?.textContent,
-    '4 people · 1 machine · 1 group',
+    eng.querySelector('.name small')?.textContent,
+    'Acme · 6 members · Your role: Admin',
   );
-  // The role is bare: "Admin", never "you are Admin".
-  assert.equal(roleChip(eng), 'Admin');
-  assert.equal(roleChip(row('Household')), 'Owner');
+  assert.equal(
+    row('Household').querySelector('.name small')?.textContent,
+    'Personal server · 2 members · Your role: Owner',
+  );
   // No item-readability count is drawn on the list.
   assert.equal(document.body.textContent?.includes('items readable'), false);
 });
 
-test('Find groups lists accounts under their servers', async () => {
+test('Find teams lists accounts under their servers', async () => {
   const rendered = await teams();
-  assert.equal(rendered.queryByRole('menu', { name: 'Find groups' }), null);
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Find groups' }));
+  assert.equal(rendered.queryByRole('menu', { name: 'Find teams' }), null);
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Find teams' }));
   assert.ok(rendered.getByRole('group', { name: 'Personal server' }));
   assert.ok(rendered.getByRole('group', { name: 'Acme' }));
   assert.ok(rendered.getByRole('menuitem', { name: 'Check as satoshi' }));
   assert.ok(rendered.getByRole('menuitem', { name: 'Check as vitalik' }));
-  assert.ok(rendered.getByText('Create a group'));
-  assert.ok(rendered.getByText('Join a group…'));
+  assert.ok(rendered.getByText('Create a team'));
+  assert.ok(rendered.getByText('Join a team…'));
 });
 
-test('Find groups keeps two accounts on one server distinct', async () => {
+test('Find teams keeps two accounts on one server distinct', async () => {
   const snapshot = await fixture();
   const account = snapshot.accounts.find(
     (account) => account.store === 'acct:work',
@@ -267,28 +267,28 @@ test('Find groups keeps two accounts on one server distinct', async () => {
       ],
     },
   });
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Find groups' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Find teams' }));
   const server = rendered.getByRole('group', { name: 'Acme' });
   assert.equal(server.querySelectorAll('button').length, 2);
   assert.ok(server.textContent?.includes('Check as vitalik'));
   assert.ok(server.textContent?.includes('Check as alice'));
 });
 
-test('Find groups provides an empty state without an account', async () => {
+test('Find teams provides an empty state without an account', async () => {
   const snapshot = await fixture();
   const rendered = await teams(() => {}, {
     snapshot: { ...snapshot, accounts: [], stores: [] },
   });
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Find groups' }));
-  assert.ok(rendered.getByText('Add an account to find its groups.'));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Find teams' }));
+  assert.ok(rendered.getByText('Add an account to find its teams.'));
   assert.equal(rendered.queryByRole('menuitem'), null);
   ui.fireEvent.pointerDown(document.body);
-  assert.equal(rendered.queryByRole('menu', { name: 'Find groups' }), null);
+  assert.equal(rendered.queryByRole('menu', { name: 'Find teams' }), null);
 });
 
 test('discovery keeps its result in the open menu and across reopening', async () => {
   const rendered = await teams();
-  const trigger = rendered.getByRole('button', { name: 'Find groups' });
+  const trigger = rendered.getByRole('button', { name: 'Find teams' });
   ui.fireEvent.click(trigger);
   const check = rendered.getByRole('menuitem', { name: 'Check as vitalik' });
   assert.equal(check.querySelector('[role="status"]')?.textContent, '');
@@ -301,9 +301,9 @@ test('discovery keeps its result in the open menu and across reopening', async (
       /for vitalik/,
     ),
   );
-  assert.ok(rendered.getByRole('menu', { name: 'Find groups' }));
+  assert.ok(rendered.getByRole('menu', { name: 'Find teams' }));
   ui.fireEvent.keyDown(document, { key: 'Escape' });
-  assert.equal(rendered.queryByRole('menu', { name: 'Find groups' }), null);
+  assert.equal(rendered.queryByRole('menu', { name: 'Find teams' }), null);
   assert.equal(document.activeElement, trigger);
   ui.fireEvent.click(trigger);
   assert.match(
@@ -352,7 +352,7 @@ test('a Teams row menu says why an action does not apply', async () => {
   // This account is an Admin of Engineering, so the roster actions apply.
   openRowMenu('Engineering');
   assert.equal(inert(menuItem('Engineering', 'Add someone on Acme…')), false);
-  assert.equal(inert(menuItem('Engineering', 'Add a group…')), false);
+  assert.equal(inert(menuItem('Engineering', 'Add a team…')), false);
   assert.equal(ui.screen.queryByRole('menuitem', { name: 'Leave…' }), null);
 
   // An ad-hoc share has no membership to change, and its setup is unfinished.
@@ -361,11 +361,11 @@ test('a Teams row menu says why an action does not apply', async () => {
   assert.equal(inert(add), true);
   assert.equal(
     add.getAttribute('title'),
-    'Memberships can’t be changed in an ad-hoc group.',
+    'Memberships can’t be changed in an ad-hoc team.',
   );
   assert.equal(inert(menuItem('Homelab', 'Finish setup…')), false);
-  // Copying the group ID is a local fact, so it applies throughout.
-  assert.equal(inert(menuItem('Homelab', 'Copy group ID')), false);
+  // Copying the team ID is a local fact, so it applies throughout.
+  assert.equal(inert(menuItem('Homelab', 'Copy team ID')), false);
 });
 
 test('a roster failure gives the Teams row menu its own reasons', async () => {
@@ -387,14 +387,21 @@ test('a roster failure gives the Teams row menu its own reasons', async () => {
       ],
     },
   });
+  // The roster failed to load, so the member count is dropped rather than
+  // stated as zero; with it goes the caller's own role, since that party list
+  // is what it would have come from.
+  assert.equal(
+    row('Engineering').querySelector('.name small')?.textContent,
+    'Acme',
+  );
   const unread = 'The roster could not be read. Refresh before making changes.';
   openRowMenu('Engineering');
   const add = menuItem('Engineering', 'Add someone on Acme…');
   assert.equal(inert(add), true);
   assert.equal(add.getAttribute('title'), unread);
-  // Admitting a group is refused for the same reason: the role that would
+  // Admitting a team is refused for the same reason: the role that would
   // permit it is a roster fact, so an unread roster settles nothing about it.
-  const admit = menuItem('Engineering', 'Add a group…');
+  const admit = menuItem('Engineering', 'Add a team…');
   assert.equal(inert(admit), true);
   assert.equal(admit.getAttribute('title'), unread);
 });
@@ -406,14 +413,24 @@ test('an unavailable account explains why discovery is disabled', async () => {
   const rendered = await teams(() => {}, {
     snapshot: applyLease(await fixture(), 'lapsed'),
   });
-  const trigger = rendered.getByRole('button', { name: 'Find groups' });
+  // A store whose access is stopped still gets its full caption: the lapse
+  // is a fact about the server, not about the roster the catalog already
+  // holds, so the chip beside it states the problem rather than replacing it.
+  const eng = row('Engineering');
+  assert.equal(stateChip(eng), 'Check-in expired');
+  assert.equal(kindChip(eng), 'Chat');
+  assert.equal(
+    eng.querySelector('.name small')?.textContent,
+    'Acme · 6 members · Your role: Admin',
+  );
+  const trigger = rendered.getByRole('button', { name: 'Find teams' });
   assert.equal(trigger.getAttribute('aria-expanded'), 'false');
   ui.fireEvent.click(trigger);
   const check = rendered.getByRole('menuitem', { name: /Check as vitalik/ });
   assert.equal(check.getAttribute('aria-disabled'), 'true');
   assert.ok(check.querySelector('small')?.textContent);
   ui.fireEvent.click(check);
-  assert.ok(rendered.getByRole('menu', { name: 'Find groups' }));
+  assert.ok(rendered.getByRole('menu', { name: 'Find teams' }));
 });
 
 /** The server and account the create sheet is seeded to. */
@@ -432,8 +449,8 @@ test('creating and joining act as the account the address names', async () => {
   });
   // The sheet opens on mount, on the account the address named.
   assert.equal(
-    created.getByRole('heading', { name: 'Create a group' }).textContent,
-    'Create a group',
+    created.getByRole('heading', { name: 'Create a team' }).textContent,
+    'Create a team',
   );
   // The account choice identifies the server without a repeated subtitle.
   assert.equal(
@@ -442,7 +459,7 @@ test('creating and joining act as the account the address names', async () => {
   );
   assert.equal(seededAccount(), 'Acme');
   // The action label stays stable while the group name is edited.
-  assert.ok(created.getByRole('button', { name: 'Create group' }));
+  assert.ok(created.getByRole('button', { name: 'Create team' }));
   ui.cleanup();
 
   // Another account in the address seeds the sheet to that one instead.
@@ -458,7 +475,7 @@ test('creating and joining act as the account the address names', async () => {
     store: 'acct:work',
     scene: 'join',
   });
-  assert.ok(joining.getByRole('heading', { name: 'Join a group' }));
+  assert.ok(joining.getByRole('heading', { name: 'Join a team' }));
   // The Teams page already names the account, so the sheet does not.
   assert.equal(document.querySelector('.sheet .hd small'), null);
 });
@@ -502,7 +519,7 @@ test('a created group closes its sheet when only the post-write refresh fails', 
     },
   });
   await ui.act(async () => {
-    ui.fireEvent.click(rendered.getByRole('button', { name: 'Create group' }));
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Create team' }));
   });
   await ui.waitFor(() => assert.equal(rendered.queryByRole('dialog'), null));
   assert.equal(reads, 1);
@@ -555,7 +572,7 @@ test('group creation replaces a cancelled foreground catalog load without repeat
     },
   });
   await ui.act(async () => {
-    ui.fireEvent.click(rendered.getByRole('button', { name: 'Create group' }));
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Create team' }));
   });
   await ui.waitFor(() => assert.deepEqual(forces, [true]));
   await ui.act(async () => {

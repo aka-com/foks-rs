@@ -708,7 +708,13 @@ export function ItemsScreen({
   const { location } = state;
   const store =
     location.kind === 'store' ? storeOf(snapshot, location.ref) : undefined;
-  const header = headerFor(snapshot, location);
+  // The account the rail header currently names, so a store's own heading
+  // does not repeat a server the rail already states.
+  const activeAccountRef = locations.getAccount();
+  const activeAccount = activeAccountRef
+    ? storeOf(snapshot, activeAccountRef)
+    : undefined;
+  const header = headerFor(snapshot, location, activeAccount);
   const head = (
     <PageHeader
       {...header}
@@ -760,6 +766,7 @@ export function ItemsScreen({
       <StoreAccessTakeover
         snapshot={snapshot}
         store={store}
+        activeAccount={activeAccount}
         onOpenServer={(profile) =>
           locations.navigate({ kind: 'settings', section: 'servers', profile })
         }
@@ -769,8 +776,8 @@ export function ItemsScreen({
             <Button
               variant="quiet"
               icon="gear"
-              title="Group settings"
-              aria-label="Group settings"
+              title="Team settings"
+              aria-label="Team settings"
               onClick={() => onSettings(store.id)}
             />
           ) : undefined

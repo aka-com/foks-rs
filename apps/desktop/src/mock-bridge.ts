@@ -92,7 +92,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       visibility < -32768 ||
       visibility > 32767
     ) {
-      throw failure('invalid-request', 'Choose a valid group item role.');
+      throw failure('invalid-request', 'Choose a valid team item role.');
     }
     return { role: 'Member', visibility };
   };
@@ -114,12 +114,12 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     if (!store.active)
       throw failure(
         'inactive-group',
-        'Finish setting up this group before making changes.',
+        'Finish setting up this team before making changes.',
       );
     if (readRole === undefined || writeRole === undefined)
       throw failure(
         'invalid-request',
-        'Specify both read and write roles for the group item.',
+        'Specify both read and write roles for the team item.',
       );
     return {
       read: decodeCreateRole(readRole),
@@ -371,13 +371,13 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
   const assertNamedGroup = (storeId: string): void => {
     const store = stores.find((candidate) => candidate.id === storeId);
     if (!store || store.kind !== 'team')
-      throw failure('store-not-found', 'The group was not found.');
+      throw failure('store-not-found', 'The team was not found.');
     if (!store.active)
-      throw failure('inactive-group', 'The group setup is incomplete.');
+      throw failure('inactive-group', 'The team setup is incomplete.');
     if (store.team_kind !== 'named')
       throw failure(
         'group-management-unavailable',
-        'Managing members and shared access requires a named group.',
+        'Managing members and shared access requires a named team.',
       );
   };
   const catalogResponse = (): CatalogDto => ({
@@ -623,7 +623,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       if (!store || store.kind !== 'team' || store.active) {
         throw failure(
           'invalid-request',
-          'This group has already completed setup.',
+          'This team has already completed setup.',
         );
       }
       store.active = true;
@@ -641,7 +641,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       if (stores.some((store) => store.id === id))
         throw failure(
           'conflict',
-          'A group with that identifier already exists.',
+          'A team with that identifier already exists.',
         );
       stores.push({
         id,
@@ -676,7 +676,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
           (party) => party.store === storeId && party.username === username,
         )
       )
-        throw failure('conflict', 'That user is already in the group.');
+        throw failure('conflict', 'That user is already in the team.');
       parties.push({
         store: storeId,
         username,
@@ -751,7 +751,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       )
         throw failure(
           'invalid-request',
-          'Choose an active named group on a different server.',
+          'Choose an active named team on a different server.',
         );
       const operation = `admission-${federation.length + 1}`;
       federation.push({
@@ -798,7 +798,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       if (matches.length !== 1)
         throw failure(
           'invalid-request',
-          'Select a single active federated group.',
+          'Select a single active federated team.',
         );
       federation = federation.filter((candidate) => candidate !== matches[0]);
       parties = parties.filter(
@@ -821,7 +821,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       if (!entry || entry.active)
         throw failure(
           'admission-not-resumable',
-          'This group invitation cannot be resumed.',
+          'This team invitation cannot be resumed.',
         );
       entry.active = true;
       return { applied: true };

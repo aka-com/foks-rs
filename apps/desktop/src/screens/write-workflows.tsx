@@ -251,9 +251,9 @@ export function writeBlockReason(
   if (serverLeaseUnavailable(snapshot, store.id))
     return 'The server connection is unavailable. New items cannot be saved to this vault right now.';
   if (store.kind === 'team' && !store.active)
-    return 'Group setup is incomplete. Complete setup before adding items.';
+    return 'Team setup is incomplete. Complete setup before adding items.';
   if (store.kind === 'team')
-    return 'You do not have write permissions for this group.';
+    return 'You do not have write permissions for this team.';
   return 'You do not have permission to create items in this vault.';
 }
 

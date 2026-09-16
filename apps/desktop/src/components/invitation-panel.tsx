@@ -243,7 +243,7 @@ export function InvitationPanel({
       .copyText(text)
       .catch((e) => setError(normalizeCommandError(e).message));
   const remoteRow = (
-    <InsetRow label="Server profile (for groups on another server)">
+    <InsetRow label="Server profile (for teams on another server)">
       <input
         value={remote}
         maxLength={128}
@@ -289,7 +289,7 @@ export function InvitationPanel({
     </InsetRow>
   );
   const sourceTeamRow = (
-    <InsetRow label="Requesting group (to add a group you administer instead of yourself)">
+    <InsetRow label="Requesting team (to add a team you administer instead of yourself)">
       <input
         value={sourceTeam}
         maxLength={128}
@@ -299,7 +299,7 @@ export function InvitationPanel({
     </InsetRow>
   );
   const sourceRoleRow = sourceTeam ? (
-    <InsetRow label="Requesting group role">
+    <InsetRow label="Requesting team role">
       <select
         value={sourceRole}
         disabled={busy}
@@ -314,7 +314,7 @@ export function InvitationPanel({
   const previewBox = preview ? (
     <div className="op">
       <p>
-        {preview.name ?? 'Group'} · <code>{preview.team_id}</code>
+        {preview.name ?? 'Team'} · <code>{preview.team_id}</code>
       </p>
       <p>
         Verified invitation host: <code>{preview.host_id}</code>
@@ -406,7 +406,7 @@ export function InvitationPanel({
                 : ''}
             </p>
           )}
-          {r.membership_verified && <p>Membership and group keys verified.</p>}
+          {r.membership_verified && <p>Membership and team keys verified.</p>}
           {r.invite && (
             <CopyBox text={r.invite} onCopy={copy} label="Copy invitation">
               <code aria-label="Shareable invitation">{r.invite}</code>
@@ -573,16 +573,16 @@ export function InvitationPanel({
       className="pcard"
       aria-label={
         teamAlias
-          ? 'Group invitations and requests'
-          : `Join a group as ${account}`
+          ? 'Team invitations and requests'
+          : `Join a team as ${account}`
       }
     >
       <h3>
-        {teamAlias ? 'Invitations and requests' : `Join a group · ${account}`}
+        {teamAlias ? 'Invitations and requests' : `Join a team · ${account}`}
       </h3>
       <p>
         {teamAlias
-          ? 'Issue invitations and review requests to join this group.'
+          ? 'Issue invitations and review requests to join this team.'
           : 'Paste an invitation to request membership. You will have access once an administrator approves your request.'}
       </p>
       {errorLine}
@@ -632,11 +632,11 @@ export function InvitationPanel({
             {recoverButton}
           </div>
           <details className="dd">
-            <summary>Group nesting order</summary>
+            <summary>Team nesting order</summary>
             <p>
-              A group that joins another must sit lower in the nesting order
-              than its destination. These controls move this group's position
-              and are checked against its existing memberships.
+              A team joining another team must be positioned below the
+              destination team in the hierarchy. These controls change this
+              team's position and validate against existing memberships.
             </p>
             <div className="btns">
               <Button
@@ -649,7 +649,7 @@ export function InvitationPanel({
                   })
                 }
               >
-                Lower this group's range
+                Lower this team's range
               </Button>
               <Button
                 disabled={busy}
@@ -661,7 +661,7 @@ export function InvitationPanel({
                   })
                 }
               >
-                Raise this group's range
+                Raise this team's range
               </Button>
             </div>
           </details>

@@ -320,7 +320,7 @@ test('read-only vault rejects drag-and-drop file upload and displays error expla
   await driver.hover(true);
   assert.ok(rendered.getByText('Cannot upload to Household'));
   assert.ok(
-    rendered.getByText('You do not have write permissions for this group.'),
+    rendered.getByText('You do not have write permissions for this team.'),
   );
   await driver.drop(['/Users/ray/report.pdf']);
   assert.equal(uploads.length, 0);

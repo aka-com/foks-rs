@@ -129,9 +129,9 @@ export function isMachine(party: Party): boolean {
 
 /**
  * A roster as a summary line reads it: the people, then the machines, then the
- * groups admitted from other servers — the same three sub-sections the group
+ * teams admitted from other servers — the same three sub-sections the team
  * page draws, so a list row and the page it opens agree ("4 people · 1 machine
- * · 1 group").
+ * · 1 team").
  */
 export function peopleGroups(parties: readonly Party[]): string {
   const groups = parties.filter((party) => party.party_kind !== 'user').length;
@@ -140,6 +140,6 @@ export function peopleGroups(parties: readonly Party[]): string {
   return [
     peopleLabel(people),
     ...(machines ? [plural(machines, 'machine')] : []),
-    ...(groups ? [plural(groups, 'group')] : []),
+    ...(groups ? [plural(groups, 'team')] : []),
   ].join(' · ');
 }

@@ -29,7 +29,7 @@ export function ServerVerificationStep({
 }: Props): ReactNode {
   return (
     <Pane
-      title={checkpoint.path === 'invited' ? 'Group server' : 'Server details'}
+      title={checkpoint.path === 'invited' ? 'Team server' : 'Server details'}
       header={false}
       scope="Server verified and pinned. No user data sent."
       foot={
@@ -42,7 +42,7 @@ export function ServerVerificationStep({
     >
       <h1>Select a server</h1>
       <p className="lead">
-        FOKS synchronizes your account, groups, and encrypted vaults through a
+        FOKS synchronizes your account, teams, and encrypted vaults through a
         server.
       </p>
       <Inset className="checked-address">

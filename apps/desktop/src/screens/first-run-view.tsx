@@ -162,7 +162,7 @@ export function SetupSidebar({
     'Select a server',
     'Create account',
     'Save recovery codes',
-    ...(path === 'invited' ? ['Join a group'] : []),
+    ...(path === 'invited' ? ['Join a team'] : []),
     'Complete',
   ];
   return (
@@ -267,7 +267,7 @@ export function FirstRunAppSidebar({
       {checkpoint.path === 'invited' && !checkpoint.added ? (
         <p className="side-note">
           {groupName} will appear under Teams once your access is approved. FOKS
-          checks for group access at launch. You can also click Check now.
+          checks for team access at launch. You can also click Check now.
         </p>
       ) : null}
     </>
@@ -318,7 +318,7 @@ export function AddedDetails({
           <h2>{name}</h2>
           <small>
             {kind.charAt(0).toUpperCase() + kind.slice(1)} in{' '}
-            {store?.name ?? 'this group'}
+            {store?.name ?? 'this team'}
           </small>
         </span>
       </div>
@@ -338,7 +338,7 @@ export function AddedDetails({
           </InsetRow>
         </Inset>
         <p className="pfn">
-          Access to this item depends on your role in the group.
+          Access to this item depends on your role in the team.
         </p>
         <SectionLabel>Info</SectionLabel>
         <div className="meta">
@@ -361,7 +361,7 @@ export function AddedDetails({
         </div>
         <SectionLabel>Sharing</SectionLabel>
         <p>
-          Members of {store?.name ?? 'this group'} with the required role or
+          Members of {store?.name ?? 'this team'} with the required role or
           higher can view this item based on the current member list.
         </p>
       </div>

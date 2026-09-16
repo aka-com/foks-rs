@@ -155,7 +155,7 @@ test('local certificate operations stay local while a remote inbox profile is se
     }),
   );
   ui.fireEvent.change(
-    r.getByLabelText('Server profile (for groups on another server)'),
+    r.getByLabelText('Server profile (for teams on another server)'),
     { target: { value: 'remote' } },
   );
   ui.fireEvent.click(r.getByText('Create invitation'));

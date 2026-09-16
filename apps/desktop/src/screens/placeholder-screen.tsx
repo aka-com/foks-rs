@@ -14,9 +14,9 @@ interface Pane {
 
 const PANES: Readonly<Record<string, Pane>> = {
   join: {
-    title: 'Join or create a group',
+    title: 'Join or create a team',
     subtitle: 'Coming soon',
-    body: 'To join an existing group, ask an administrator to add your username on the server. To manage your current groups, rosters, and roles, go to Groups.',
+    body: 'To join an existing team, ask an administrator to add your username on the server. To manage your current teams, rosters, and roles, go to Teams.',
   },
 };
 
@@ -32,10 +32,9 @@ export function PlaceholderScreen({
       <PageHeader title={pane.title} subtitle={pane.subtitle} />
       <div className="body">
         <div className="plain">
-          <h2>Group management coming soon</h2>
+          <h2>Team management coming soon</h2>
           <p>
-            Joining and creating groups will be available in an upcoming
-            release.
+            Joining and creating teams will be available in an upcoming release.
           </p>
         </div>
       </div>

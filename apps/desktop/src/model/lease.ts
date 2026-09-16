@@ -10,6 +10,7 @@ import { admissionActive, partiesOf, peopleGroups, storeOf } from './readers';
 import { admits } from './roles';
 import { serverName } from './server-name';
 import type {
+  AccountStore,
   CompatibilityLease,
   GroupDetailFailure,
   GroupDetailSource,
@@ -309,7 +310,7 @@ export function teamCaption(
   const parts =
     options.kind === false
       ? []
-      : [store.team_kind === 'named' ? 'Named group' : 'Ad-hoc share'];
+      : [store.team_kind === 'named' ? 'Named team' : 'Ad-hoc share'];
   if (options.server !== false) {
     parts.push(serverName(snapshot, store));
   }
@@ -359,16 +360,36 @@ export function storeDescription(
 
 /**
  * Returns subtitle text for a store page header. Suppresses status error text
- * when errors are already surfaced by full-page notices in the body.
+ * when errors are already surfaced by full-page notices in the body, except
+ * that a store hosted on a server other than `activeAccount`'s still names
+ * that server alongside the problem, since the rail header — which is what
+ * ordinarily says the server — is showing a different one.
+ *
+ * A store on the same server as `activeAccount` never repeats a server the
+ * rail header already states; `activeAccount` absent (no account known) is
+ * treated the same way, rather than guessing which server to name.
  */
 export function storeHeadingDescription(
   snapshot: AgentSnapshot,
   store: Store,
+  activeAccount?: Pick<AccountStore, 'server'>,
 ): string {
-  if (storeDescriptionState(snapshot, store) !== 'normal') return '';
-  if (groupDetailFailure(snapshot, store.id, 'roster')) return '';
-  if (groupDetailFailure(snapshot, store.id, 'federation')) return '';
-  return storeDescription(snapshot, store);
+  const foreign =
+    Boolean(activeAccount) && store.server !== activeAccount!.server;
+  const server = foreign ? serverName(snapshot, store) : undefined;
+  if (storeDescriptionState(snapshot, store) !== 'normal') {
+    if (!server) return '';
+    return `${storeDescription(snapshot, store)} · ${server}`;
+  }
+  if (groupDetailFailure(snapshot, store.id, 'roster'))
+    return server ? `Roster unavailable · ${server}` : '';
+  if (groupDetailFailure(snapshot, store.id, 'federation'))
+    return server ? `Federation unavailable · ${server}` : '';
+  // An account store's ordinary description is already just its server name;
+  // naming it again after itself would repeat the same word twice.
+  if (store.kind === 'account') return server ?? '';
+  const description = storeDescription(snapshot, store);
+  return server ? `${description} · ${server}` : description;
 }
 
 /**

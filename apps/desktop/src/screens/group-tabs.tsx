@@ -60,11 +60,11 @@ function noChannelsReason(
   store: TeamStore,
 ): string | undefined {
   if (store.team_kind !== 'named')
-    return 'An ad-hoc share has no chat: chat lives in a named group.';
+    return 'An ad-hoc share has no chat: chat lives in a named team.';
   const server = serverOf(snapshot, store.id);
-  if (!server) return 'This group’s server is not configured on this device.';
+  if (!server) return 'This team’s server is not configured on this device.';
   if (!server.capabilities.chat)
-    return `${serverDisplayName(server)} does not offer chat, so this group has no channels.`;
+    return `${serverDisplayName(server)} does not offer chat, so this team has no channels.`;
   return undefined;
 }
 
@@ -142,7 +142,7 @@ export function ChannelsTab({
     return (
       <div className="roster">
         <Band label="Channels unavailable">
-          {entry.error || 'This group’s channel list could not be read.'}
+          {entry.error || 'This team’s channel list could not be read.'}
         </Band>
       </div>
     );
@@ -247,8 +247,8 @@ export function ChannelsTab({
           disabled={listed === undefined}
           title={
             listed === undefined
-              ? 'Wait for this group’s channels before adding one.'
-              : 'Create a channel in this group'
+              ? 'Wait for this team’s channels before adding one.'
+              : 'Create a channel in this team'
           }
           onClick={onAddChannel}
         >
@@ -256,7 +256,7 @@ export function ChannelsTab({
         </Button>
       </div>
       <p className="fn">
-        Channels are encrypted to the group key. A channel’s own read and write
+        Channels are encrypted to the team key. A channel’s own read and write
         roles decide who can take part in it.
       </p>
     </div>
@@ -305,13 +305,13 @@ export function FilesTab({
             <b>{store.name}’s items live in Files</b>
             <small>
               {items ? plural(items, 'item') : 'No items yet'} — passwords,
-              resources, files and links shared with this group. Roles here
+              resources, files and links shared with this team. Roles here
               decide who can read each one.
             </small>
           </span>
         </InsetRow>
       </Inset>
-      <p className="fn">Files for this group are managed in the Files tab.</p>
+      <p className="fn">Files for this team are managed in the Files tab.</p>
     </div>
   );
 }
@@ -385,7 +385,7 @@ export function IncompleteGroupPage({
               {account?.username ?? store.account} on {serverName}
             </InsetRow>
             <InsetRow
-              label="Group ID"
+              label="Team ID"
               action={
                 <Button size="sm" icon="copy" onClick={onCopyId}>
                   Copy

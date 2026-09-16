@@ -70,7 +70,7 @@ import { GroupMark } from './group-mark';
 import { GoProfileConnectSheet } from './go-profile-connect';
 
 const ACTION_UNAVAILABLE =
-  'Resolve this in Settings › Servers, or in the group’s settings.';
+  'Resolve this in Settings › Servers, or in the team’s settings.';
 
 /** The accessible name for the severity indicator. */
 const SEVERITY_LABELS: Record<Notification['severity'], string> = {
@@ -536,10 +536,10 @@ export function PeopleScreen({
           profile={selected.server}
           account={selected.account}
           presentation={{
-            title: 'Join a group',
+            title: 'Join a team',
             onClose: () => setSheet(null),
           }}
-          onComplete={() => onRefresh('Group membership refreshed')}
+          onComplete={() => onRefresh('Team membership refreshed')}
         />
       ) : null}
       {selected && sheet === 'sso' ? (
@@ -732,10 +732,10 @@ function AccountPanel({
           Opens the host’s administration panel in a private window.
         </InsetRow>
         <InsetRow
-          label="Groups"
+          label="Teams"
           action={
             <Button size="sm" onClick={() => onSheet('join')}>
-              Join a group…
+              Join a team…
             </Button>
           }
         >
@@ -837,7 +837,7 @@ function TeamsOnAccount({
           })
         ) : (
           <InsetRow label="None">
-            This account is not in any group on this device.
+            This account is not in any team on this device.
           </InsetRow>
         )}
       </Inset>

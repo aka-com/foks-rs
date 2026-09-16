@@ -22,7 +22,7 @@ export function mockInvitations(
           )
         : undefined;
     if ('team_alias' in action && !team)
-      throw new Error('Fixture group not found for this account.');
+      throw new Error('Fixture team not found for this account.');
     const key = `${owner}/${team?.id}`;
     switch (action.action) {
       case 'create': {

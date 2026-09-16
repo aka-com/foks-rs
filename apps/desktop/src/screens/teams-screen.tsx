@@ -1,29 +1,25 @@
 import { synchronizeApplied } from '../operation-outcome';
 import { useTabSheetState } from '../navigation-guard';
 /**
- * The Teams tab: the groups and shares on this Mac, the per-account checks that
- * find more of them, and the entries that create or join one.
+ * The Teams tab: every named team and ad-hoc share on this Mac in one list,
+ * the per-account checks that find more of them, and the entries that create
+ * or join one.
  *
- * A row carries only catalog facts — mark, name, server, roster summary and the
- * role this Mac's account holds — and says an abnormal state with a chip at the
- * end of the row. A row opens the group's page; the group page returns here.
+ * Each row displays team metadata: avatar, name, server, member count, the
+ * user's role, a Chat or Share badge for team type, and a status chip for
+ * abnormal states. A row opens the team's
+ * page; the team page returns here.
  */
 
 import { useEffect, useRef, useState } from 'react';
 import { Menu, Popover } from '/kit/overlay-primitives';
 import type { ReactNode } from 'react';
-import {
-  Button,
-  Chip,
-  Icon,
-  MenuButton,
-  MenuItem,
-  SectionLabel,
-} from '../components';
+import { Button, Chip, Icon, MenuButton, MenuItem } from '../components';
 import { InvitationPanel } from '../components/invitation-panel';
 import { enqueueProfileWork } from '../bridge';
 import {
   canCreateInStore,
+  groupDetailFailure,
   parseRole,
   partiesOf,
   plural,
@@ -34,7 +30,6 @@ import {
   storeDescription,
   storeDescriptionState,
   storeNavigationOrder,
-  teamCaption,
 } from '../model';
 import type {
   AccountStore,
@@ -102,7 +97,7 @@ function FindGroups({
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
-        Find groups <Icon name="chev" className="chevron" />
+        Find teams <Icon name="chev" className="chevron" />
       </Button>
       {open ? (
         <Popover
@@ -112,7 +107,7 @@ function FindGroups({
         >
           <Menu
             className="menu find-groups-menu"
-            aria-label="Find groups"
+            aria-label="Find teams"
             anchorRef={anchorRef}
             onClose={() => setOpen(false)}
           >
@@ -174,7 +169,7 @@ function FindGroups({
             })}
             {!accounts.length ? (
               <p className="find-groups-empty">
-                Add an account to find its groups.
+                Add an account to find its teams.
               </p>
             ) : null}
           </Menu>
@@ -184,31 +179,44 @@ function FindGroups({
   );
 }
 
-/** One group or share: mark, name, server, roster summary, role and state. */
+/**
+ * One team, named or ad-hoc: mark, then a caption built only from what the
+ * catalog already gives this row — its server, its member count, and the
+ * role this account holds in it — each clause dropped rather than guessed
+ * when the catalog does not have it. A pill at the end says its kind: a named
+ * team opens onto Chat, an ad-hoc team is a fixed share with none.
+ */
 function TeamRow({
   snapshot,
   store,
-  shared,
   menu,
   onOpen,
 }: {
   snapshot: AgentSnapshot;
   store: TeamStore;
-  shared: boolean;
   menu: ReactNode;
   onOpen: () => void;
 }): ReactNode {
   const state = storeDescriptionState(snapshot, store);
   const description = storeDescription(snapshot, store);
-  // The abnormal state is a chip at the end of the row; the roster summary
-  // takes its place when there is nothing wrong.
+  // The abnormal state is a chip at the end of the row.
   const abnormal = storeAttentionState(snapshot, store) !== 'normal';
   const mine = partiesOf(snapshot, store.id).find(
     (party) => party.label === 'you',
   );
   const role = mine ? parseRole(mine.destination_role) : null;
+  // A roster the agent could not read is not a member count of zero; the
+  // clause is dropped rather than stating a count that may be wrong.
+  const rosterKnown = !groupDetailFailure(snapshot, store.id, 'roster');
+  const caption = [
+    displayServerName(snapshot, store),
+    rosterKnown ? plural(partiesOf(snapshot, store.id).length, 'member') : null,
+    role ? `Your role: ${roleName(role)}` : null,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(' · ');
   return (
-    // The row itself is the button that opens the group; its menu is a sibling
+    // The row itself is the button that opens the team; its menu is a sibling
     // of that button, not a control nested inside one.
     <div className="rowline">
       <button
@@ -221,24 +229,14 @@ function TeamRow({
           <span className="tt">
             <span>{store.name}</span>
           </span>
-          {/* The section above already says whether this is a group or a
-              share, so the caption says only where it lives. */}
-          <small>{teamCaption(snapshot, store, { shared, kind: false })}</small>
+          <small>{caption}</small>
         </span>
         <span className="tail">
-          {abnormal ? (
-            <Chip tone="warn">{description}</Chip>
-          ) : (
-            <span className="summary">{description}</span>
-          )}
-          {/* The chip sits in a column of its own width so the roles down the
-              list line up; the chip itself keeps its own. */}
-          {role ? (
-            <span className="rolecell">
-              <Chip className="role">{roleName(role)}</Chip>
-            </span>
-          ) : null}
-          {/* The row opens the group, and says so at its end. */}
+          {abnormal ? <Chip tone="warn">{description}</Chip> : null}
+          <Chip className="kind">
+            {store.team_kind === 'adhoc' ? 'Share' : 'Chat'}
+          </Chip>
+          {/* The row opens the team, and says so at its end. */}
           <span className="go" aria-hidden="true">
             <Icon name="chev" />
           </span>
@@ -262,11 +260,11 @@ export function TeamsScreen({
 }: TeamsScreenProps): ReactNode {
   const toasts = useToast();
   const stores = storeNavigationOrder(snapshot);
+  // Named teams and ad-hoc shares are one list here; a row's own pill says
+  // which it is, so nothing above the list needs to split them.
   const teams = stores.filter(
     (store): store is TeamStore => store.kind === 'team',
   );
-  const groups = teams.filter((store) => store.team_kind === 'named');
-  const shares = teams.filter((store) => store.team_kind === 'adhoc');
   const accounts = stores.filter(
     (store): store is AccountStore => store.kind === 'account',
   );
@@ -301,7 +299,7 @@ export function TeamsScreen({
     setResults({});
   }, [accountKey]);
 
-  // Ask one account's server which groups it belongs to. Discovery writes
+  // Ask one account's server which teams it belongs to. Discovery writes
   // durable local bindings, so it runs through the profile work queue and any
   // failure is reconciled like a mutation rather than replayed blindly.
   const discover = async (context: DiscoveryContext): Promise<void> => {
@@ -312,12 +310,12 @@ export function TeamsScreen({
       );
       if (result.accountAlias !== context.account.alias)
         throw new Error(
-          'Group discovery returned data for a different account.',
+          'Team discovery returned data for a different account.',
         );
       const found = result.groups.filter((group) => group.active).length;
       const message = found
-        ? `Found ${plural(found, 'group')} for ${context.account.username}.`
-        : `No groups found for ${context.account.username}.`;
+        ? `Found ${plural(found, 'team')} for ${context.account.username}.`
+        : `No teams found for ${context.account.username}.`;
       // The row says what the check found; a toast repeating that sentence
       // would say it twice, so the refresh is silent.
       setResults((old) => ({ ...old, [context.store.id]: message }));
@@ -336,20 +334,20 @@ export function TeamsScreen({
   const copyId = (store: TeamStore): void => {
     void bridge
       .copyText(store.team_id_hex)
-      .then(() => toasts.show('Group ID copied.'))
+      .then(() => toasts.show('Team ID copied.'))
       .catch(onError);
   };
 
   const finishSetup = (store: TeamStore): void => {
     void bridge
       .resumeGroupCreation(store.id)
-      .then(() => onRefresh('Group creation resumed'))
+      .then(() => onRefresh('Team creation resumed'))
       .catch((error: unknown) => onMutationError(error));
   };
 
   /**
    * A row's menu: actions only, inert where they do not apply, with the same
-   * reasons the group's own page gives.
+   * reasons the team's own page gives.
    */
   const rowMenu = (store: TeamStore): ReactNode => {
     const serverName = displayServerName(snapshot, store);
@@ -396,7 +394,7 @@ export function TeamsScreen({
                   setSheet({ kind: 'admit', store });
                 }}
               >
-                Add a group…
+                Add a team…
               </MenuItem>
               <hr />
               <MenuItem
@@ -406,7 +404,7 @@ export function TeamsScreen({
                   copyId(store);
                 }}
               >
-                Copy group ID
+                Copy team ID
               </MenuItem>
               <MenuItem
                 icon="out"
@@ -430,10 +428,6 @@ export function TeamsScreen({
         key={store.id}
         snapshot={snapshot}
         store={store}
-        shared={
-          accounts.filter((account) => account.server === store.server).length >
-          1
-        }
         menu={rowMenu(store)}
         onOpen={() =>
           onNavigate({
@@ -450,8 +444,7 @@ export function TeamsScreen({
       <PageHeader
         title="Teams"
         subtitle={[
-          plural(groups.length, 'group'),
-          plural(shares.length, 'share'),
+          plural(teams.length, 'team'),
           plural(servers.size, 'server'),
         ].join(' · ')}
         action={
@@ -467,27 +460,25 @@ export function TeamsScreen({
               disabled={!acting}
               title={
                 acting
-                  ? 'Paste an invitation from an administrator of that group.'
+                  ? 'Paste an invitation from an administrator of that team.'
                   : 'No account on this device can request membership.'
               }
               onClick={() => setJoining(acting ?? null)}
             >
-              Join a group…
+              Join a team…
             </Button>
             <Button
               variant="primary"
               icon="plus"
               disabled={!canCreate || !acting}
               title={
-                canCreate
-                  ? undefined
-                  : 'No available account can create a group'
+                canCreate ? undefined : 'No available account can create a team'
               }
               onClick={() => {
                 if (acting) setSheet({ kind: 'create', store: acting });
               }}
             >
-              Create a group
+              Create a team
             </Button>
           </>
         }
@@ -495,18 +486,18 @@ export function TeamsScreen({
       <div className="body nav-rows">
         <div className="list-window">
           <div className="virtual-rows">
-            <SectionLabel>Groups</SectionLabel>
-            {groups.length ? (
-              teamRows(groups)
+            {teams.length ? (
+              teamRows(teams)
             ) : (
               <div className="empty">
                 <div className="big">
                   <Icon name="people" />
                 </div>
-                <h2>No groups yet</h2>
+                <h2>No teams yet</h2>
                 <p>
-                  Groups give a team shared items with roles. Create one on a
-                  server you have an account on, or join one with an invitation.
+                  A team shares files and channels with members based on
+                  assigned roles. Create a new team on any connected server, or
+                  enter an invitation to join an existing one.
                 </p>
                 <Button
                   variant="primary"
@@ -515,22 +506,16 @@ export function TeamsScreen({
                   title={
                     canCreate
                       ? undefined
-                      : 'No available account can create a group'
+                      : 'No available account can create a team'
                   }
                   onClick={() => {
                     if (acting) setSheet({ kind: 'create', store: acting });
                   }}
                 >
-                  Create a group
+                  Create a team
                 </Button>
               </div>
             )}
-            {shares.length ? (
-              <>
-                <SectionLabel>Shares</SectionLabel>
-                {teamRows(shares)}
-              </>
-            ) : null}
           </div>
         </div>
       </div>
@@ -591,10 +576,10 @@ export function TeamsScreen({
           profile={joining.server}
           account={joining.account}
           presentation={{
-            title: 'Join a group',
+            title: 'Join a team',
             onClose: () => setJoining(null),
           }}
-          onComplete={() => onRefresh('Group membership refreshed')}
+          onComplete={() => onRefresh('Team membership refreshed')}
         />
       ) : null}
     </>

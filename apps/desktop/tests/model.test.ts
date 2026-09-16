@@ -41,6 +41,7 @@ import {
   storeAvailability,
   storeAttentionState,
   storeDisplayOrder,
+  storeHeadingDescription,
   storeHues,
   storeNavigationOrder,
   teamCaption,
@@ -245,7 +246,7 @@ test('peopleGroups formats counts of individuals, machines and teams separately'
   // splits it out so a list row and the group page agree on "4 people".
   assert.equal(
     peopleGroups(partiesOf(FIXTURE, 'team:eng')),
-    '4 people · 1 machine · 1 group',
+    '4 people · 1 machine · 1 team',
   );
   assert.equal(peopleGroups(partiesOf(FIXTURE, 'team:household')), '2 people');
   assert.equal(peopleGroups([]), '0 people');
@@ -425,6 +426,80 @@ test('an inactive group is described as setup incomplete', () => {
   );
   assert.ok(store);
   assert.equal(storeDescription(FIXTURE, store), 'Setup incomplete');
+});
+
+test("storeHeadingDescription omits the server on the active account's own server and names it otherwise", () => {
+  const personal = FIXTURE.stores.find(
+    (candidate) => candidate.id === 'acct:personal',
+  );
+  const work = FIXTURE.stores.find((candidate) => candidate.id === 'acct:work');
+  const household = FIXTURE.stores.find(
+    (candidate) => candidate.id === 'team:household',
+  );
+  assert.ok(personal && work && household);
+
+  // With no active account supplied, behaviour is unchanged: never names a
+  // server for a normal team, and never suppresses less than before.
+  assert.equal(storeHeadingDescription(FIXTURE, household), '2 people');
+
+  // Same server as the active account: the rail header already says it, so
+  // the heading does not repeat it.
+  assert.equal(
+    storeHeadingDescription(FIXTURE, household, personal),
+    '2 people',
+  );
+  // A different server from the active account: the heading names it,
+  // because the rail header is showing the active account's server, not
+  // this store's.
+  assert.equal(
+    storeHeadingDescription(FIXTURE, household, work),
+    '2 people · Personal server',
+  );
+
+  // An account store's own heading is only ever its server name; on its own
+  // server that repeats the rail header, so it disappears entirely rather
+  // than reading "· Personal server" twice over.
+  assert.equal(storeHeadingDescription(FIXTURE, personal, personal), '');
+  assert.equal(
+    storeHeadingDescription(FIXTURE, personal, work),
+    'Personal server',
+  );
+});
+
+test('storeHeadingDescription joins a lapsed lease or unverified server with its name in one clause', () => {
+  const personal = FIXTURE.stores.find(
+    (candidate) => candidate.id === 'acct:personal',
+  );
+  const work = FIXTURE.stores.find((candidate) => candidate.id === 'acct:work');
+  const eng = FIXTURE.stores.find((candidate) => candidate.id === 'team:eng');
+  assert.ok(personal && work && eng);
+
+  const lapsed = applyLease(FIXTURE, 'lapsed', 'acme');
+  assert.equal(storeDescriptionState(lapsed, eng), 'check-in-expired');
+  // Same server as the active account: the rail header already names Acme,
+  // so the heading stays blank, as it did before this store had a problem.
+  assert.equal(storeHeadingDescription(lapsed, eng, work), '');
+  // A different server from the active account: the problem and the server
+  // it belongs to read as one clause.
+  assert.equal(
+    storeHeadingDescription(lapsed, eng, personal),
+    'Check-in expired · Acme',
+  );
+
+  const unverified = {
+    ...FIXTURE,
+    servers: FIXTURE.servers.map((server) =>
+      server.id === 'acme'
+        ? { ...server, trust: { status: 'unprobed' as const } }
+        : server,
+    ),
+  };
+  assert.equal(storeDescriptionState(unverified, eng), 'verification-required');
+  assert.equal(storeHeadingDescription(unverified, eng, work), '');
+  assert.equal(
+    storeHeadingDescription(unverified, eng, personal),
+    'Verification required · Acme',
+  );
 });
 
 test('a group-detail failure changes its caption without stopping item access', () => {
@@ -698,16 +773,16 @@ test('teamCaption drops the server on a page that is already about one', () => {
     (candidate) => candidate.id === 'team:household',
   );
   assert.ok(store && store.kind === 'team');
-  assert.equal(teamCaption(FIXTURE, store), 'Named group · Personal server');
-  assert.equal(teamCaption(FIXTURE, store, { server: false }), 'Named group');
+  assert.equal(teamCaption(FIXTURE, store), 'Named team · Personal server');
+  assert.equal(teamCaption(FIXTURE, store, { server: false }), 'Named team');
   // The account is named only where it is asked for, and after the server.
   assert.equal(
     teamCaption(FIXTURE, store, { shared: true }),
-    'Named group · Personal server · as satoshi',
+    'Named team · Personal server · as satoshi',
   );
   assert.equal(
     teamCaption(FIXTURE, store, { server: false, shared: true }),
-    'Named group · as satoshi',
+    'Named team · as satoshi',
   );
 });
 
@@ -798,6 +873,6 @@ test('team captions identify the holding account when a server has multiple acco
   };
   assert.equal(
     teamCaption(snapshot, store),
-    'Named group · Personal server · as satoshi',
+    'Named team · Personal server · as satoshi',
   );
 });

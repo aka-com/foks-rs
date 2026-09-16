@@ -3372,8 +3372,8 @@ async function loadSnapshotOnce(
         severity: 'warn' as const,
         title:
           failure.source === 'roster'
-            ? 'Group member list is unavailable'
-            : 'Group shared access is unavailable',
+            ? 'Team member list is unavailable'
+            : 'Team shared access is unavailable',
         detail: failure.message,
         action: failure.retryable ? 'Refresh' : 'Inspect',
       })),

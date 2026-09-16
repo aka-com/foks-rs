@@ -2,7 +2,7 @@
  * The global search palette (⌘K).
  *
  * One field over whatever page is open, reaching every kind the shell knows:
- * item names and paths, vaults, groups and shares, the people on a roster, and
+ * item names and paths, vaults, teams and shares, the people on a roster, and
  * the chat channels the caller can name. It replaces the "All items" page and
  * the per-page search field, which only filtered paths inside one store.
  *
@@ -52,7 +52,7 @@ export const SEARCH_SCOPES: readonly {
 }[] = [
   { id: 'all', label: 'All' },
   { id: 'items', label: 'Items' },
-  { id: 'stores', label: 'Vaults & groups' },
+  { id: 'stores', label: 'Vaults & teams' },
   { id: 'people', label: 'People' },
   { id: 'channels', label: 'Channels' },
 ];
@@ -60,7 +60,7 @@ export const SEARCH_SCOPES: readonly {
 /** The heading each scope's results sit under, in group order. */
 const GROUP_LABELS: Readonly<Record<Exclude<SearchScope, 'all'>, string>> = {
   items: 'Items',
-  stores: 'Vaults, groups and shares',
+  stores: 'Vaults, teams and shares',
   people: 'People',
   channels: 'Channels',
 };
@@ -124,7 +124,7 @@ export interface SearchChannel {
 /** What a store is called in a result's second line. */
 function storeWord(store: Store): string {
   if (store.kind === 'account') return 'Vault';
-  return store.team_kind === 'adhoc' ? 'Share' : 'Group';
+  return store.team_kind === 'adhoc' ? 'Share' : 'Team';
 }
 
 /** A store's own alias, which is a second name people search by. */
@@ -561,8 +561,8 @@ function SearchSheet({
             aria-activedescendant={
               selected < 0 ? undefined : optionId(selected)
             }
-            aria-label="Search items, vaults, groups, people, channels"
-            placeholder="Search items, vaults, groups, people, channels"
+            aria-label="Search items, vaults, teams, people, channels"
+            placeholder="Search items, vaults, teams, people, channels"
             onChange={(event) => {
               setQuery(event.target.value);
               setActive(0);

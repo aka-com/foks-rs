@@ -107,7 +107,7 @@ import { readableBy } from './scope';
 import { useToast } from '/kit/toasts';
 
 const PERSONAL_FIXED =
-  'Your Personal vault is private to your account. To share items with others, use a group.';
+  'Your Personal vault is private to your account. To share items with others, use a team.';
 
 const MISSING_SERVER_EXPLANATION =
   'The account you were creating could not be found on the server. This may happen because of a restart, server reset, or other error.';
@@ -300,7 +300,7 @@ function initialCheckpoint(
   );
 }
 
-/** Setup options for the initial screen: creating a new vault or joining an existing group. */
+/** Setup options for the initial screen: creating a new vault or joining an existing team. */
 const JOINING_OPTIONS: readonly {
   path: FirstRunPath;
   icon: FoksIconName;
@@ -316,8 +316,8 @@ const JOINING_OPTIONS: readonly {
   {
     path: 'invited',
     icon: 'people',
-    title: 'Join an existing group',
-    detail: 'Accept an invitation to join someone else’s group.',
+    title: 'Join an existing team',
+    detail: 'Accept an invitation to join someone else’s team.',
   },
 ];
 
@@ -678,11 +678,11 @@ function FirstRunSession({
         (current) => current || accountAliasFor(match.username ?? ''),
       );
   }, [accountStep, goCandidate, goCandidates, profileHostId, accountAlias]);
-  const admin = facts?.admin ?? 'group administrator';
+  const admin = facts?.admin ?? 'team administrator';
   const adminShort = facts?.admin
     ? facts.admin.split('.')[0]
-    : 'the group administrator';
-  const group = checkpoint.group?.name ?? facts?.groupName ?? 'your group';
+    : 'the team administrator';
+  const group = checkpoint.group?.name ?? facts?.groupName ?? 'your team';
   const addedStores = checkpoint.group
     ? snapshot.stores.filter(
         (store) =>
@@ -2032,7 +2032,7 @@ function FirstRunSession({
       ).length !== 1
     ) {
       setMessage(
-        'The server identity could not be confirmed. Review server settings before opening this group.',
+        'The server identity could not be confirmed. Review server settings before opening this team.',
       );
       return;
     }
@@ -2060,7 +2060,7 @@ function FirstRunSession({
     if (stores.length !== 1 || !storeReadable(refreshed, stores[0].id)) {
       commit(selected);
       setMessage(
-        'Group found; vault unavailable. Retry loading it, or finish setup later.',
+        'Team located, but the vault is currently unavailable. Retry loading the vault, or complete setup later.',
       );
       return;
     }
@@ -2102,7 +2102,7 @@ function FirstRunSession({
         )
       )
         throw new Error(
-          'Group discovery returned data for a different account.',
+          'Team discovery returned data for a different account.',
         );
       const eligible = result.groups.filter(
         (candidate) =>
@@ -2114,7 +2114,7 @@ function FirstRunSession({
         eligible.map((row) => `${row.kind}:${row.teamIdHex}:${row.alias}`),
       );
       if (unique.size !== eligible.length)
-        throw new Error('Group discovery returned conflicting group records.');
+        throw new Error('Team discovery returned conflicting team records.');
       const selected = checkpointRef.current.selectedGroup;
       const match = selected
         ? eligible.filter(
@@ -2128,13 +2128,13 @@ function FirstRunSession({
       else if (match.length > 1) {
         setDiscoveredGroups(match);
         setMessage(
-          'Choose the group you want to open. Your other memberships will remain available.',
+          'Choose the team you want to open. Your other memberships will remain available.',
         );
       } else
         setMessage(
           selected
-            ? 'Membership in the selected group could not be confirmed. Check again or choose another group.'
-            : 'No active groups found yet. You can use Personal while you wait.',
+            ? 'Membership in the selected team could not be confirmed. Check again or choose another team.'
+            : 'No active teams found yet. You can use Personal while you wait.',
         );
     } catch (error) {
       if (mounted.current) fail('group-discovery', error);
@@ -2745,7 +2745,7 @@ function FirstRunSession({
   else if (['address', 'no-address', 'error'].includes(state))
     content = (
       <Pane
-        title={checkpoint.path === 'invited' ? 'Group Server' : 'Server Setup'}
+        title={checkpoint.path === 'invited' ? 'Team Server' : 'Server Setup'}
         header={false}
         scope={
           state === 'no-address' && checkpoint.path === 'invited'
@@ -2770,7 +2770,7 @@ function FirstRunSession({
             : 'Select a server'}
         </h1>
         <p className="lead">
-          FOKS stores your account, groups, and encrypted vaults on a server.{' '}
+          FOKS stores your account, teams, and encrypted vaults on a server.{' '}
           {checkpoint.path === 'invited'
             ? `Enter the server address provided by ${adminShort}.`
             : null}
@@ -2831,18 +2831,18 @@ function FirstRunSession({
               only detail needed right now.
             </p>
             <CopyBox
-              text="What’s the address of the FOKS server our group is on?"
+              text="What’s the address of the FOKS server our team is on?"
               onCopy={(value) =>
                 void bridge
                   .copyText(value)
                   .then(() => toasts.show('Copied to clipboard.'))
               }
             >
-              “What’s the address of the FOKS server our group is on?”
+              “What’s the address of the FOKS server our team is on?”
             </CopyBox>
             <p>
               In the next step, you will choose a username and share it with
-              them so they can add you to the group.
+              them so they can add you to the team.
             </p>
           </div>
         ) : checkpoint.path === 'invited' ? (
@@ -3307,7 +3307,7 @@ function FirstRunSession({
   else if (state === 'waiting' && checkpoint.selectedGroup)
     content = (
       <Pane
-        title="Group vault unavailable"
+        title="Team vault unavailable"
         foot={
           <Foot>
             <Button onClick={() => go('checklist-invited')}>
@@ -3319,7 +3319,7 @@ function FirstRunSession({
         <h1>{checkpoint.selectedGroup.name}</h1>
         <p className="lead">
           {message ||
-            'Your group was found, but its vault is not available yet.'}
+            'Your team was found, but its vault is not available yet.'}
         </p>
         <div className="actions">
           <Button
@@ -3328,7 +3328,7 @@ function FirstRunSession({
             busy={busy}
             onClick={() => void discover()}
           >
-            {busy ? 'Retrying…' : 'Retry loading group'}
+            {busy ? 'Retrying…' : 'Retry loading team'}
           </Button>
           <Button
             onClick={() => {
@@ -3341,7 +3341,7 @@ function FirstRunSession({
               setMessage(null);
             }}
           >
-            Choose another group
+            Choose another team
           </Button>
         </div>
       </Pane>
@@ -3371,9 +3371,9 @@ function FirstRunSession({
         </p>
         {discoveredGroups.length > 1 ? (
           <div className="pcard">
-            <h3>Choose an existing group</h3>
+            <h3>Choose an existing team</h3>
             <p>
-              You’re already a member of these groups. Open one to get started.
+              You’re already a member of these teams. Open one to get started.
             </p>
             <div className="btns">
               {discoveredGroups.map((found) => (
@@ -3411,13 +3411,13 @@ function FirstRunSession({
             </div>
             <Inset className="checklist">
               <InsetRow label={<Icon name="people" />}>
-                <b>{group} will appear under GROUPS</b>
+                <b>{group} will appear under Teams</b>
                 <span className="hint">
-                  Groups appear once membership is confirmed by the server.
+                  Teams appear once membership is confirmed by the server.
                 </span>
               </InsetRow>
               <InsetRow label={<Icon name="eye" />}>
-                <b>Access depends on your group role</b>
+                <b>Access depends on your team role</b>
                 <span className="hint">
                   Roles include <b>Member</b>, <b>Admin</b>, and <b>Owner</b>.
                   You can only access items permitted by your assigned role and
@@ -3447,16 +3447,16 @@ function FirstRunSession({
                 <span className="status">
                   <Chip>{message ? 'Checked: now' : 'Not checked yet'}</Chip>
                   {message ? (
-                    <>Group not found yet. Only Personal is available.</>
+                    <>Team not found yet. Only Personal is available.</>
                   ) : null}
                 </span>
               </div>
               <p>
-                Select <b>Check now</b> to look for pending group invitations.
+                Select <b>Check now</b> to look for pending team invitations.
                 FOKS will also check automatically each time you open the app.
               </p>
-              <Band label="Group updates">
-                <b>Check now</b> checks the server for group memberships linked
+              <Band label="Team updates">
+                <b>Check now</b> checks the server for team memberships linked
                 to your account. FOKS also checks when it opens.
               </Band>
               {message ? <div className="res">{message}</div> : null}
@@ -3472,7 +3472,7 @@ function FirstRunSession({
                 </summary>
                 <p>
                   Checks your account ({checkpoint.account?.username}) on{' '}
-                  {profile?.canonicalName} and updates your group list.
+                  {profile?.canonicalName} and updates your team list.
                 </p>
               </details>
             </div>
@@ -3580,8 +3580,8 @@ function FirstRunSession({
               <span className="hint">
                 Check again after {adminShort} adds you to {group}.
               </span>
-              <Band label="Group discovery">
-                Check now looks up groups for this signed-in account.
+              <Band label="Team discovery">
+                Check now looks up teams for this signed-in account.
               </Band>
             </InsetRow>
           ) : null}
@@ -3628,7 +3628,7 @@ function FirstRunSession({
     );
   } else
     content = (
-      <Pane title={group} subtitle={`Group on ${profile?.canonicalName}`} wide>
+      <Pane title={group} subtitle={`Team on ${profile?.canonicalName}`} wide>
         <Notice
           title={addedStore ? `Joined ${group}` : `${group}: vault unavailable`}
           actions={
@@ -3648,7 +3648,7 @@ function FirstRunSession({
                       .finally(() => setPersonalRefreshing(false));
                   }}
                 >
-                  Retry loading group
+                  Retry loading team
                 </Button>
               ) : null}
               <Button
@@ -3659,13 +3659,13 @@ function FirstRunSession({
                     onNavigate({ kind: 'store', ref: addedStore });
                 }}
               >
-                Open group
+                Open team
               </Button>
             </>
           }
         >
           <p>
-            You have been added to this group as{' '}
+            You have been added to this team as{' '}
             <code>{checkpoint.account?.username}</code>. You can now access the
             items listed below when the vault is available.
           </p>

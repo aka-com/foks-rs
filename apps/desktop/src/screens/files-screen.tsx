@@ -113,7 +113,7 @@ export function FilesScreen({
     <>
       <PageHeader
         title="Files"
-        subtitle="Vaults, groups and shares on this device"
+        subtitle="Vaults, teams and shares on this device"
       />
       <div className="body nav-rows">
         <div className="list-window">
@@ -140,8 +140,8 @@ export function FilesScreen({
             </button>
             <SectionLabel>Vaults</SectionLabel>
             {vaults.length ? rows(vaults) : <p className="fn">No vaults yet</p>}
-            <SectionLabel>Groups</SectionLabel>
-            {groups.length ? rows(groups) : <p className="fn">No groups yet</p>}
+            <SectionLabel>Teams</SectionLabel>
+            {groups.length ? rows(groups) : <p className="fn">No teams yet</p>}
             {shares.length ? (
               <>
                 <SectionLabel>Shares</SectionLabel>

@@ -386,10 +386,10 @@ test('the add sheet switches between a person and another server’s group', asy
     ui.fireEvent.click(remote);
   });
   assert.ok(
-    rendered.getByRole('heading', { name: 'Add a group to Engineering' }),
+    rendered.getByRole('heading', { name: 'Add a team to Engineering' }),
   );
   const picker = document.querySelector(
-    '[role="radiogroup"][aria-label="Group"]',
+    '[role="radiogroup"][aria-label="Team"]',
   );
   assert.ok(picker);
   assert.deepEqual(
@@ -527,7 +527,7 @@ test('a group whose setup never finished has no tabs, and two ways out', async (
   const labels = [...document.querySelectorAll('.roster .inset .fr .k')].map(
     (node) => node.textContent,
   );
-  assert.deepEqual(labels, ['Account', 'Group ID']);
+  assert.deepEqual(labels, ['Account', 'Team ID']);
 });
 
 test('Finish setup resumes the existing incomplete group', async () => {
@@ -550,7 +550,7 @@ test('Finish setup resumes the existing incomplete group', async () => {
 
 test('an unavailable group displays its status and retains parent navigation', async () => {
   const rendered = await group('team:removed', 'people');
-  assert.ok(rendered.getByRole('heading', { name: 'Group unavailable' }));
+  assert.ok(rendered.getByRole('heading', { name: 'Team unavailable' }));
   // The topbar derives parent navigation from the location.
   const { parentLocation } = await import('../src/location');
   assert.deepEqual(

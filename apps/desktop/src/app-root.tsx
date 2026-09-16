@@ -1200,7 +1200,7 @@ function VaultShell({
     if (refreshingSnapshot) return;
     setRefreshingSnapshot(true);
     void refreshSnapshot(true)
-      .then(() => toasts.show('Vaults and groups refreshed'))
+      .then(() => toasts.show('Vaults and teams refreshed'))
       .catch(commandError)
       .finally(() => setRefreshingSnapshot(false));
   };
@@ -1501,7 +1501,7 @@ function VaultShell({
       onResume={async (storeId) => {
         try {
           await bridge.resumeGroupCreation(storeId);
-          await refresh('Group creation resumed');
+          await refresh('Team creation resumed');
         } catch (error) {
           await mutationError(error);
         }

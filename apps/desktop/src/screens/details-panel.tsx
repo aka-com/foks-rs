@@ -162,7 +162,7 @@ function PartyRow({
   canRead: boolean;
 }): ReactNode {
   const details = [
-    party.party_kind !== 'user' ? 'Member group' : '',
+    party.party_kind !== 'user' ? 'Member team' : '',
     canRead ? '' : 'No read access',
   ].filter(Boolean);
   return (

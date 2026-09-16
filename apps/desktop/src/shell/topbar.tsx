@@ -207,11 +207,11 @@ export function Topbar({
           variant="quiet"
           className="global-refresh"
           icon="again"
-          aria-label={refreshing ? 'Refreshing vaults and groups' : 'Refresh'}
+          aria-label={refreshing ? 'Refreshing vaults and teams' : 'Refresh'}
           title={
             refreshing
-              ? 'Refreshing vaults and groups'
-              : 'Refresh vaults and groups'
+              ? 'Refreshing vaults and teams'
+              : 'Refresh vaults and teams'
           }
           disabled={refreshing || blocked}
           onClick={onRefresh}

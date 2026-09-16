@@ -569,8 +569,8 @@ function TeamHeading({
         <Button
           variant="quiet"
           icon="gear"
-          aria-label={`Group settings for ${row.store.name}`}
-          title={`Group settings for ${row.store.name}`}
+          aria-label={`Team settings for ${row.store.name}`}
+          title={`Team settings for ${row.store.name}`}
           onClick={() => onSettings(row.store.id)}
         />
       </div>

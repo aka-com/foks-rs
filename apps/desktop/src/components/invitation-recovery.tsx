@@ -47,7 +47,7 @@ export function InvitationRecovery({
       label="Invitation activity"
       action={<Button onClick={onReview}>Review invitations</Button>}
     >
-      Recover saved invitations and finish pending requests for this group.
+      Recover saved invitations and finish pending requests for this team.
     </Band>
   ) : null;
 }

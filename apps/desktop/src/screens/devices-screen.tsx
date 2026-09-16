@@ -1363,7 +1363,7 @@ function DeviceDetail({
                   }
                 >
                   <small>
-                    {entry.name} loses access to every vault, group and chat on
+                    {entry.name} loses access to every vault, team and chat on
                     this account. Data already downloaded to it stays there.
                   </small>
                 </InsetRow>

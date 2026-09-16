@@ -8,7 +8,12 @@ import {
   storeDescriptionState,
   storeHeadingDescription,
 } from '../model';
-import type { Store, StoreDescriptionState, AgentSnapshot } from '../model';
+import type {
+  AccountStore,
+  Store,
+  StoreDescriptionState,
+  AgentSnapshot,
+} from '../model';
 import { PageHeader } from '../shell/page-header';
 
 export type AccessProblem = Exclude<StoreDescriptionState, 'normal'>;
@@ -105,7 +110,7 @@ export function accessCopy(
         detail: verified
           ? `${store.name} was created on ${serverName}, but key setup is incomplete on this device. Members and items are unavailable until setup finishes.`
           : preparing
-            ? `Creation of ${store.name} has not been submitted to ${serverName}. Continue with the saved group identity and keys.`
+            ? `Creation of ${store.name} has not been submitted to ${serverName}. Continue with the saved team identity and keys.`
             : rejected
               ? `Creation of ${store.name} was rejected. Its saved identity and keys are retained on this device.`
               : `Creation of ${store.name} must be checked on ${serverName}. Its saved identity and keys will be used to verify the result before setup continues.`,
@@ -133,6 +138,9 @@ export interface StoreAccessTakeoverProps {
    * right end, on the alert's centre line — the group page's treatment.
    */
   variant?: 'notice' | 'band';
+  /** Omitted where the header is suppressed; the header's own subtitle is the
+   * only place this store's server name is conditioned on it. */
+  activeAccount?: Pick<AccountStore, 'server'>;
 }
 
 export function StoreAccessTakeover({
@@ -143,6 +151,7 @@ export function StoreAccessTakeover({
   headerAction,
   noHeader = false,
   variant = 'notice',
+  activeAccount,
 }: StoreAccessTakeoverProps): ReactNode {
   const state = storeDescriptionState(snapshot, store);
   if (state === 'normal') return null;
@@ -168,7 +177,7 @@ export function StoreAccessTakeover({
       {noHeader ? null : (
         <PageHeader
           title={store.name}
-          subtitle={storeHeadingDescription(snapshot, store)}
+          subtitle={storeHeadingDescription(snapshot, store, activeAccount)}
           action={
             <>
               {state === 'setup-incomplete' ? null : action}

@@ -286,7 +286,7 @@ test('joining choices continue without a next-steps module', async () => {
     discoverGoProfiles: async () => ({ installed: false, candidates: [] }),
   });
   await view.findByText('How are you joining?');
-  for (const name of [/Set up my own account/, /Join an existing group/]) {
+  for (const name of [/Set up my own account/, /Join an existing team/]) {
     ui.fireEvent.click(view.getByRole('radio', { name }));
     assert.equal(view.queryByText(/What happens next/i), null);
     assert.equal(

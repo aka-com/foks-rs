@@ -161,7 +161,7 @@ test('results are grouped by kind and counted for a screen reader', async () => 
   await palette(true);
   assert.deepEqual(headings(), [
     'Items',
-    'Vaults, groups and shares',
+    'Vaults, teams and shares',
     'People',
     'Channels',
   ]);
@@ -206,7 +206,7 @@ test('arrow keys move selection across result groups', async () => {
     ui.fireEvent.keyDown(field(), { key: 'ArrowDown' });
   assert.equal(
     activeRow().closest('[role="group"]')?.getAttribute('aria-label'),
-    'Vaults, groups and shares',
+    'Vaults, teams and shares',
   );
   ui.fireEvent.keyDown(field(), { key: 'ArrowUp' });
   assert.equal(activeRow(), items[items.length - 1]);
@@ -250,7 +250,7 @@ test('each kind of result goes to the tab that owns it', async () => {
     ui.fireEvent.click(rows()[0]);
   };
 
-  openFirst('Household', 'Vaults & groups');
+  openFirst('Household', 'Vaults & teams');
   assert.deepEqual(journal.navigations.at(-1), {
     kind: 'store',
     ref: 'team:household',
@@ -289,7 +289,7 @@ test('Tab cycles the scope chips and never moves focus', async () => {
   assert.deepEqual(labels(), [
     'All',
     'Items',
-    'Vaults & groups',
+    'Vaults & teams',
     'People',
     'Channels',
   ]);
@@ -343,7 +343,7 @@ test('Escape closes the palette, and it reopens empty', async () => {
   assert.equal(field().value, '');
   assert.deepEqual(headings(), [
     'Items',
-    'Vaults, groups and shares',
+    'Vaults, teams and shares',
     'People',
     'Channels',
   ]);

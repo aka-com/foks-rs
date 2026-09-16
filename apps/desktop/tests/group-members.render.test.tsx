@@ -130,7 +130,7 @@ test('the roster is split into people, machines and admitted groups', async () =
   assert.deepEqual(sectionLabels(), [
     'People— 4 people',
     'Machines— 1 connected',
-    'Groups on other servers',
+    'Teams on other servers',
   ]);
   // A machine is an ordinary party; its line says only what kind it is.
   assert.equal(
@@ -340,17 +340,17 @@ test('a single-action alert puts its action at the right end of the alert', asyn
   assert.equal(refresh.closest('.band .a') !== null, true);
   assert.equal(alert.lastElementChild?.className, 'a');
   // Federation still loaded, so its section is drawn as usual.
-  assert.ok(sectionLabels().includes('Groups on other servers'));
+  assert.ok(sectionLabels().includes('Teams on other servers'));
   // The add-actions belong to the rows that failed to load, so they go with
   // them: the only one left is what admits another group.
   const actions = [...document.querySelectorAll('.roster-actions')];
   assert.equal(actions.length, 1);
   assert.equal(
     (actions[0].querySelector('button')?.textContent ?? '').trim(),
-    'Add a group…',
+    'Add a team…',
   );
   assert.equal(
-    rendered.queryByRole('button', { name: 'Invite to group…' }),
+    rendered.queryByRole('button', { name: 'Invite to team…' }),
     null,
   );
 });
@@ -472,7 +472,7 @@ test('the group sections are a tablist the arrow keys walk', async () => {
   const rendered = await group(await fixture());
   const tabs = document.querySelector('[role="tablist"]');
   assert.ok(tabs);
-  assert.equal(tabs.getAttribute('aria-label'), 'Group sections');
+  assert.equal(tabs.getAttribute('aria-label'), 'Team sections');
   const strip = [...tabs.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
   // Four tabs, in the order the page's addresses name them.
   assert.deepEqual(
@@ -503,7 +503,7 @@ test('the group sections are a tablist the arrow keys walk', async () => {
     ui.fireEvent.keyDown(tabs, { key: 'End' });
   });
   assert.equal(settings.getAttribute('aria-selected'), 'true');
-  assert.ok(rendered.getByText('About this group'));
+  assert.ok(rendered.getByText('About this team'));
   assert.equal(
     document
       .querySelector('[role="tabpanel"]')
@@ -534,7 +534,7 @@ test('each action follows the rows it adds to', async () => {
     [...actions[0].querySelectorAll('button')].map((node) =>
       (node.textContent ?? '').trim(),
     ),
-    ['Add someone on Acme…', 'Invite to group…'],
+    ['Add someone on Acme…', 'Invite to team…'],
   );
   // Then the admitted groups, then what admits another one.
   const federation = document.querySelector('.rt.fed');
@@ -546,12 +546,12 @@ test('each action follows the rows it adds to', async () => {
   );
   assert.equal(
     (actions[1].querySelector('button')?.textContent ?? '').trim(),
-    'Add a group…',
+    'Add a team…',
   );
   // And the sheet it opens says what it will do, in its own words, naming
   // the group it was given rather than "group".
   await ui.act(async () => {
-    ui.fireEvent.click(rendered.getByRole('button', { name: 'Add a group…' }));
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Add a team…' }));
   });
   assert.ok(rendered.getByRole('button', { name: 'Add household' }));
   assert.equal(
@@ -600,7 +600,7 @@ test('an active ad-hoc share says its membership is fixed', async () => {
   );
   const band = document.querySelector('.band.info');
   assert.ok(band);
-  assert.equal(band.querySelector('b')?.textContent, 'Ad-hoc group');
+  assert.equal(band.querySelector('b')?.textContent, 'Ad-hoc team');
   // The page always draws this one, so it names itself rather than speaking.
   assert.equal(band.getAttribute('role'), 'group');
   assert.match(band.textContent ?? '', /Memberships can’t be changed\./);
@@ -644,7 +644,7 @@ test('Members invite action opens the group invitation workflow', async () => {
   });
   await ui.act(async () => {});
   calls.length = 0;
-  ui.fireEvent.click(r.getByRole('button', { name: 'Invite to group…' }));
+  ui.fireEvent.click(r.getByRole('button', { name: 'Invite to team…' }));
   const dialog = r.getByRole('dialog');
   ui.fireEvent.click(
     ui.within(dialog).getByRole('button', { name: 'Create invitation' }),
@@ -682,7 +682,7 @@ test('an invitation prepared after unmount is recovered from the group banner', 
     return row;
   };
   const first = await group(snapshot, { invitation });
-  ui.fireEvent.click(first.getByRole('button', { name: 'Invite to group…' }));
+  ui.fireEvent.click(first.getByRole('button', { name: 'Invite to team…' }));
   ui.fireEvent.click(
     ui
       .within(first.getByRole('dialog'))

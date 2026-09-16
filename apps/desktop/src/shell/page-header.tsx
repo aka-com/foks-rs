@@ -8,7 +8,7 @@
 import type { ReactNode } from 'react';
 import { SearchField } from '../components';
 import { storeHeadingDescription, storeOf } from '../model';
-import type { AgentSnapshot } from '../model';
+import type { AccountStore, AgentSnapshot } from '../model';
 import type { Location } from '../location';
 
 export interface HeaderParts {
@@ -21,6 +21,7 @@ export interface HeaderParts {
 export function headerFor(
   snapshot: AgentSnapshot,
   location: Location,
+  activeAccount?: Pick<AccountStore, 'server'>,
 ): HeaderParts {
   if (location.kind === 'all') {
     return { title: 'All items', subtitle: '' };
@@ -30,7 +31,7 @@ export function headerFor(
   }
   const store = storeOf(snapshot, location.ref);
   if (!store) return { title: 'Unknown vault', subtitle: '' };
-  const description = storeHeadingDescription(snapshot, store);
+  const description = storeHeadingDescription(snapshot, store, activeAccount);
   return {
     title: store.name,
     subtitle: description,

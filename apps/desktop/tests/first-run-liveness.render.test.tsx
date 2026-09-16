@@ -316,10 +316,10 @@ test('multiple groups refresh the catalog and preserve a selected unavailable va
     },
   });
   ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Check now' }));
-  await rendered.view.findByText('Choose an existing group');
+  await rendered.view.findByText('Choose an existing team');
   assert.deepEqual(forces, [true]);
   ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Open “two”' }));
-  assert.ok(rendered.view.getByRole('button', { name: 'Retry loading group' }));
+  assert.ok(rendered.view.getByRole('button', { name: 'Retry loading team' }));
   const saved = h.saved()!;
   assert.equal(saved.selectedGroup?.teamIdHex, groups[1].teamIdHex);
   assert.equal(saved.added, false);
@@ -329,7 +329,7 @@ test('multiple groups refresh the catalog and preserve a selected unavailable va
     location: { kind: 'first-run', path: 'invited', step: 'waiting' },
   });
   assert.ok(resumed.view.getByText('two'));
-  assert.ok(resumed.view.getByRole('button', { name: 'Retry loading group' }));
+  assert.ok(resumed.view.getByRole('button', { name: 'Retry loading team' }));
 });
 
 test('zero groups still force catalog reconciliation', async () => {
@@ -351,7 +351,7 @@ test('zero groups still force catalog reconciliation', async () => {
     },
   );
   ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Check now' }));
-  await rendered.view.findByText(/No active groups found yet/);
+  await rendered.view.findByText(/No active teams found yet/);
   assert.equal(refreshes, 1);
 });
 

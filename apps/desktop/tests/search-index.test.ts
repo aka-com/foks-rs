@@ -92,7 +92,7 @@ test('the index holds every kind the palette searches', () => {
   assert.deepEqual(homelab.target, { kind: 'store', ref: 'team:homelab' });
   const engineering = INDEX.find((entry) => entry.name === 'Engineering');
   assert.ok(engineering);
-  assert.equal(engineering.detail, 'Group · 4 people · 1 machine · 1 group');
+  assert.equal(engineering.detail, 'Team · 4 people · 1 machine · 1 team');
   // A store answers to its alias as well as its name.
   assert.deepEqual(engineering.terms, ['Engineering', 'engineering']);
 

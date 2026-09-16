@@ -530,7 +530,7 @@ function StatusLine({
       <>
         {account ? account.username : 'No account'}
         {sep}
-        {groups.length ? plural(groups.length, 'group') : 'No groups'}
+        {groups.length ? plural(groups.length, 'team') : 'No teams'}
         {sep}Valid until {expiresShort(expiry)}
       </>
     );
@@ -1087,7 +1087,7 @@ function ServerBody({
             );
           })
         ) : (
-          <InsetRow label="Teams">No groups on this server</InsetRow>
+          <InsetRow label="Teams">No teams on this server</InsetRow>
         )}
       </Inset>
 

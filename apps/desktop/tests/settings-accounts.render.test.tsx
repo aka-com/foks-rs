@@ -125,7 +125,7 @@ test('the account panel keeps every workflow row from the accounts pane', async 
     'Sign in…',
     'Manage…',
     'Open…',
-    'Join a group…',
+    'Join a team…',
     'Settings › Account',
   ])
     assert.equal(
@@ -171,8 +171,8 @@ test('the profile lists the account’s teams, its devices and its keys', async 
   assert.ok(ui.within(teams).getByText('Setup incomplete'));
   // The caption says what the object is, as it does on Teams and on a
   // server's page — without the server, which the band above already names.
-  assert.ok(ui.within(teams).getByText(/^Named group · /));
-  assert.equal(ui.within(teams).queryByText(/Named group · foks/), null);
+  assert.ok(ui.within(teams).getByText(/^Named team · /));
+  assert.equal(ui.within(teams).queryByText(/Named team · foks/), null);
   await ui.act(async () => {
     ui.fireEvent.click(
       ui.within(teams).getByRole('button', { name: 'Open Homelab in Teams' }),
@@ -255,7 +255,7 @@ test('a group whose roster could not be read draws the chip, not the caption', a
     [...row.querySelectorAll('.chip')].map((chip) => chip.textContent)[0],
     'Roster unavailable',
   );
-  assert.equal(row.querySelector('small')?.textContent, 'Named group');
+  assert.equal(row.querySelector('small')?.textContent, 'Named team');
 });
 
 test('People lists no connected card, so it never drives the reader', async () => {

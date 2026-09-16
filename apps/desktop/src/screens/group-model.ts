@@ -67,12 +67,12 @@ export function discoveryContext(
   };
 }
 
-/** One accessible name per button, since several read "Check for groups". */
+/** One accessible name per button, since several read "Check for teams". */
 export const checkLabel = (context: DiscoveryContext): string =>
-  `Check for groups accessible to ${context.account.username} on ${serverDisplayName(context.server)}`;
+  `Check for teams accessible to ${context.account.username} on ${serverDisplayName(context.server)}`;
 
 export const unavailableTitle = (context: DiscoveryContext): string =>
-  `Restore access to ${serverDisplayName(context.server)} before checking for groups.`;
+  `Restore access to ${serverDisplayName(context.server)} before checking for teams.`;
 
 /**
  * Why an invitation cannot be written: the message names the server the
@@ -92,14 +92,14 @@ export function manageReason(
   source: 'roster' | 'federation',
 ): string | undefined {
   if (store.team_kind !== 'named')
-    return 'Memberships can’t be changed in an ad-hoc group.';
-  if (store.active === false) return 'Finish setting up this group first.';
+    return 'Memberships can’t be changed in an ad-hoc team.';
+  if (store.active === false) return 'Finish setting up this team first.';
   if (!storeReadable(snapshot, store.id))
     return `Restore access to ${serverName(snapshot, store)} first.`;
   if (groupDetailFailure(snapshot, store.id, source))
     return source === 'roster'
       ? 'The roster could not be read. Refresh before making changes.'
-      : 'The admitted groups could not be read. Refresh before making changes.';
+      : 'The admitted teams could not be read. Refresh before making changes.';
   // The role this Mac holds is a roster fact, so an unread roster is not
   // evidence that it lacks one: an admission is refused for what failed to
   // load, not for a permission nothing could have checked.
@@ -110,7 +110,7 @@ export function manageReason(
   );
   return mine && roleRank(mine.destination_role) >= 2
     ? undefined
-    : 'Only an Admin or an Owner can change this group’s members.';
+    : 'Only an Admin or an Owner can change this team’s members.';
 }
 
 /** Whether this Mac can add to or change the group's roster. */
