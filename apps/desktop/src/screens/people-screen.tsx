@@ -519,7 +519,7 @@ export function PeopleScreen({
               onSelect={(store) =>
                 onNavigate({ kind: 'people', store: store.id })
               }
-              onRefresh={() => void onRefresh('Accounts refreshed')}
+              onRefresh={() => void onRefreshSnapshot().catch(onError)}
             />
           ) : selected ? (
             <>

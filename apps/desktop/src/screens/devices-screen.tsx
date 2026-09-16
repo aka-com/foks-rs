@@ -489,7 +489,7 @@ export function DevicesScreen({
               stores={stores}
               snapshot={snapshot}
               onSelect={(store) => onNavigate(listAt(store.id))}
-              onRefresh={() => void onRefresh('Accounts refreshed')}
+              onRefresh={() => void onRefreshSnapshot().catch(onError)}
             />
           </div>
         </div>

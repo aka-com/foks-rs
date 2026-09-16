@@ -25,9 +25,13 @@ pub async fn rename_account_request(
     {
         return Err(invalid_request("Invalid account rename request."));
     }
-    let _mutation = state.begin_mutation()?;
-    let transport = state.agent.transport();
     let changed = action.is_some();
+    let _mutation = if changed {
+        Some(state.begin_mutation()?)
+    } else {
+        None
+    };
+    let transport = state.agent.transport();
     if changed {
         state.invalidate_catalog();
     }

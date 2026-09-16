@@ -85,7 +85,15 @@ pub async fn sso_request(
     if !valid_local_name(&profile) || !valid_local_name(&account_alias) || !action.validate() {
         return Err(invalid_request("Invalid account authentication request."));
     }
-    let _mutation = state.begin_mutation()?;
+    let inspecting = matches!(
+        action,
+        SsoAction::Status { .. } | SsoAction::AccountStatus { .. }
+    );
+    let _mutation = if inspecting {
+        None
+    } else {
+        Some(state.begin_mutation()?)
+    };
     let transport = state.agent.transport();
     let expected = account_alias.clone();
     let changes_account = matches!(

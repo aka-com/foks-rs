@@ -264,7 +264,7 @@ export function SettingsScreen({
                 onSelect={(store) =>
                   onNavigate({ ...location, store: store.id })
                 }
-                onRefresh={() => void onRefresh('Accounts refreshed')}
+                onRefresh={() => void onRefreshSnapshot().catch(onError)}
               />
             ) : (
               <Inset>

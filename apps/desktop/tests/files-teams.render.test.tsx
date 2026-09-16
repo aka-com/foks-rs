@@ -81,6 +81,8 @@ interface TeamsOptions {
   store?: string;
   /** The fixture scene, which may open a sheet on mount. */
   scene?: string;
+  refresh?: () => Promise<AgentSnapshot>;
+  mutationError?: () => Promise<void>;
 }
 
 async function teams(
@@ -118,13 +120,15 @@ async function teams(
           scene: options.scene ?? 'groups',
           onNavigate,
           onRefresh: async () => {},
-          onRefreshSnapshot: async () => snapshot,
+          onRefreshSnapshot: options.refresh ?? (async () => snapshot),
           onError: (error: unknown) => {
             throw error;
           },
-          onMutationError: async (error: unknown) => {
-            throw error;
-          },
+          onMutationError:
+            options.mutationError ??
+            (async (error: unknown) => {
+              throw error;
+            }),
         }),
       }),
     }),
@@ -483,4 +487,23 @@ test('same-named Files roots retain distinct server identities even with duplica
     ).size,
     rows.length,
   );
+});
+
+test('a created group closes its sheet when only the post-write refresh fails', async () => {
+  let reads = 0;
+  const rendered = await teams(() => {}, {
+    scene: 'create',
+    refresh: async () => {
+      reads++;
+      throw new Error('refresh unavailable');
+    },
+    mutationError: async () => {
+      assert.fail('applied creation must not enter mutation failure recovery');
+    },
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Create group' }));
+  });
+  await ui.waitFor(() => assert.equal(rendered.queryByRole('dialog'), null));
+  assert.equal(reads, 1);
 });

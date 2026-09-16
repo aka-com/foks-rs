@@ -133,3 +133,35 @@ fn a_catalog_load_that_lost_its_generation_is_not_accepted() {
     assert!(state.accept_catalog(second, CatalogSnapshot::default()));
     assert!(state.catalog.lock().unwrap().is_some());
 }
+
+#[test]
+fn invitation_history_does_not_retire_catalog_or_compete_with_mutations() {
+    use foks_agent_proto::invitations::InvitationAction;
+    let state = phase_four_state(vec![]);
+    let before = state.catalog_at(None).unwrap().0;
+    let writer = state.begin_mutation().unwrap();
+    for action in [
+        InvitationAction::List,
+        InvitationAction::PendingApprovals {
+            team_alias: "team".into(),
+        },
+    ] {
+        assert!(state
+            .begin_catalog_action(action.changes_catalog())
+            .unwrap()
+            .is_none());
+        assert_eq!(state.catalog_at(None).unwrap().0, before);
+        assert!(state.catalog_at(None).unwrap().1.is_some());
+    }
+    drop(writer);
+    let writer = state
+        .begin_catalog_action(
+            InvitationAction::Create {
+                team_alias: "team".into(),
+            }
+            .changes_catalog(),
+        )
+        .unwrap();
+    assert!(writer.is_some());
+    assert!(state.catalog_at(None).unwrap().1.is_none());
+}

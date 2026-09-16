@@ -114,7 +114,12 @@ pub async fn bot_account_request(
     if !valid_local_name(&profile) || !valid_local_name(&account_alias) {
         return Err(invalid_request("Invalid bot account."));
     }
-    let _mutation = state.begin_mutation()?;
+    let changes_catalog = !matches!(action, Action::List);
+    let _mutation = if changes_catalog {
+        Some(state.begin_mutation()?)
+    } else {
+        None
+    };
     let mut output = None;
     let (action, message) = match action {
         Action::LoadFile => {
@@ -208,7 +213,9 @@ pub async fn bot_account_request(
     }
     let transport = state.agent.transport();
     let guard_app = app.clone();
-    state.invalidate_catalog();
+    if changes_catalog {
+        state.invalidate_catalog();
+    }
     let result = tauri::async_runtime::spawn_blocking(move || {
         super::servers::require_transport_profile(transport.as_ref(), &profile)?;
         crate::applock::require_unlocked_generation(&guard_app, generation)?;
@@ -315,7 +322,9 @@ pub async fn bot_account_request(
     .await
     .map_err(|_| invalid_request("Bot request interrupted; recover the original enrollment."))??;
     crate::applock::require_unlocked_generation(&app, generation)?;
-    state.invalidate_catalog();
+    if changes_catalog {
+        state.invalidate_catalog();
+    }
     Ok(result)
 }
 #[cfg(test)]

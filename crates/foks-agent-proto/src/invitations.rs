@@ -103,6 +103,35 @@ impl std::fmt::Debug for InvitationAction {
     }
 }
 impl InvitationAction {
+    /// Whether this action can change account/team inventory or an operation's
+    /// durable outcome. Inspection still requires the agent's profile lock.
+    pub fn changes_catalog(&self) -> bool {
+        match self {
+            Self::List
+            | Self::PendingApprovals { .. }
+            | Self::Preview { .. }
+            | Self::PreviewRemote { .. }
+            | Self::InspectRemote { .. }
+            | Self::Inbox { .. }
+            | Self::Range { raise: false, .. } => false,
+            Self::AcceptTeam { .. }
+            | Self::AcceptTeamRemote { .. }
+            | Self::Range { raise: true, .. }
+            | Self::AcceptRemote { .. }
+            | Self::AttemptRemote { .. }
+            | Self::StatusRemote { .. }
+            | Self::ApproveRemote { .. }
+            | Self::SyncRemote { .. }
+            | Self::Create { .. }
+            | Self::Accept { .. }
+            | Self::Attempt { .. }
+            | Self::Status { .. }
+            | Self::Cancel { .. }
+            | Self::Approve { .. }
+            | Self::Reject { .. } => true,
+        }
+    }
+
     pub fn remote_profile(&self) -> Option<&str> {
         match self {
             Self::AcceptTeamRemote { remote_profile, .. }

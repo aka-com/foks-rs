@@ -133,8 +133,8 @@ pub async fn invitation_request(
     {
         return Err(invalid_request("Invalid invitation action."));
     }
-    let _mutation = state.begin_mutation()?;
-    state.invalidate_catalog();
+    let changes_catalog = action.changes_catalog();
+    let _mutation = state.begin_catalog_action(changes_catalog)?;
     let transport = state.agent.transport();
     let value = tauri::async_runtime::spawn_blocking(move || {
         super::servers::require_transport_profile(transport.as_ref(), &profile)?;
@@ -154,7 +154,9 @@ pub async fn invitation_request(
     .await
     .map_err(|_| invalid_request("Invitation interrupted; check its original operation."))??;
     crate::applock::require_unlocked_generation(webview.app_handle(), generation)?;
-    state.invalidate_catalog();
+    if changes_catalog {
+        state.invalidate_catalog();
+    }
     Ok(value)
 }
 #[cfg(test)]

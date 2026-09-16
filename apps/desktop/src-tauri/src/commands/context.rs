@@ -899,6 +899,20 @@ impl AppState {
             })
     }
 
+    /// Inspection commands do not acquire the desktop mutation gate or retire
+    /// the catalog. Their agent operations still perform checked profile access.
+    pub(super) fn begin_catalog_action(
+        &self,
+        changes_catalog: bool,
+    ) -> Result<Option<MutationGuard>, AgentError> {
+        if !changes_catalog {
+            return Ok(None);
+        }
+        let guard = self.begin_mutation()?;
+        self.invalidate_catalog();
+        Ok(Some(guard))
+    }
+
     /// Acquire this guard before any mutation. Refusal is immediate:
     /// a second write cannot proceed until the prior operation reconciles.
     pub fn begin_mutation(&self) -> Result<MutationGuard, AgentError> {

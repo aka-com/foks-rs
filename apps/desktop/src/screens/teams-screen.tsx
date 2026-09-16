@@ -1,3 +1,4 @@
+import { synchronizeApplied } from '../operation-outcome';
 import { useTabSheetState } from '../navigation-guard';
 /**
  * The Teams tab: the groups and shares on this Mac, the per-account checks that
@@ -552,7 +553,15 @@ export function TeamsScreen({
             if (next) setSheet({ kind: next, store: sheet.store });
           }}
           onApplied={async (message, created) => {
-            const next = await onRefreshSnapshot();
+            const result = await synchronizeApplied(onRefreshSnapshot);
+            if (result.synchronization === 'pending') {
+              toasts.show(
+                'Group created. Updated data could not be loaded. Use Refresh to reload it.',
+                { tone: 'warning' },
+              );
+              return;
+            }
+            const next = result.value;
             toasts.show(message);
             if (!created) return;
             const accountStore = next.stores.find(

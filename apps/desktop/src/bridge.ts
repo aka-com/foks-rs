@@ -2492,10 +2492,12 @@ export const tauriBridge: Bridge = {
       decodeBotReply,
     ),
   invitation: (profile, accountAlias, action, pin) =>
-    checked(
-      'invitation_request',
-      { profile, accountAlias, action, pin },
-      decodeInvitationReply,
+    enqueueProfileWork(tauriBridge, profile, () =>
+      checked(
+        'invitation_request',
+        { profile, accountAlias, action, pin },
+        decodeInvitationReply,
+      ),
     ),
   setLocalAccountAlias: (store, label) =>
     checked(

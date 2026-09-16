@@ -1,3 +1,4 @@
+import { synchronizeApplied } from './operation-outcome';
 import { accountStopped } from './model';
 import { DeviceCache, DeviceCacheContext } from './device-cache';
 import { useTabSheetState } from './navigation-guard';
@@ -1035,7 +1036,17 @@ function VaultShell({
 
   const refresh = useCallback(
     async (message: string): Promise<void> => {
-      await refreshSnapshot(true);
+      const result = await synchronizeApplied(() => refreshSnapshot(true));
+      if (result.synchronization === 'pending') {
+        if (isAgentReadinessError(result.error))
+          commandErrorRef.current(result.error);
+        else
+          toasts.show(
+            'Change completed. Updated data could not be loaded. Use Refresh to reload it.',
+            { tone: 'warning' },
+          );
+        return;
+      }
       toasts.show(message);
     },
     [refreshSnapshot, toasts],
@@ -1145,16 +1156,13 @@ function VaultShell({
         commandError(error, options.item, options.draft);
       await reconcileMutationFailure(
         error,
-        () =>
-          refresh(
-            options.report === false
-              ? 'Vault refreshed'
-              : 'Vault refreshed. Try again.',
-          ),
+        async () => {
+          await refreshSnapshot(true);
+        },
         commandError,
       );
     },
-    [commandError, refresh],
+    [commandError, refreshSnapshot],
   );
 
   /**

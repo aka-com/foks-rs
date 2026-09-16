@@ -63,3 +63,19 @@ test('catalog refresh failure passes error to report callback', async () => {
   );
   assert.equal(reported, refreshError);
 });
+
+test('admission refusal does not launch a refresh against the running mutation', async () => {
+  await reconcileMutationFailure(
+    {
+      code: 'mutation-in-flight',
+      message: 'busy',
+      retryable: false,
+      ambiguous: false,
+      fatal: false,
+    },
+    async () => {
+      assert.fail('pre-dispatch refusal must not refresh');
+    },
+    () => assert.fail('no refresh error'),
+  );
+});
