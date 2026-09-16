@@ -325,6 +325,18 @@ link, reservation, removal boxes, and complete request. The public journal
 excludes the reservation token, name-commitment key, removal key, PTKs, and
 hidden tree locations. This slice supports one local owner only.
 
+Historical go-foks v0.1.9 `TeamCreator` approvals and founding removal-key boxes
+can contain destination sequence zero because `MakeEldestLink` omitted the
+sequence in its returned result. Wire decoding preserves that value and all
+signed bytes. It accepts the zero representation only for owner-to-owner
+claims; membership graph traversal and removal-key use additionally bind it
+to the verified eldest transition's local user founder, source and destination
+roles, and removal-key commitment. The membership graph also checks the
+current roster. A zero claim cannot identify an arbitrary transition or a
+nested-team founder. New Rust membership and removal-key encoders remain
+strictly nonzero. The public journal and Merkle chain retain the original
+evidence; no historical payload is rewritten.
+
 Named-team addition accepts only a sealed, verified same-host user state and
 the target's current owner PUK. The actor must be exactly one unscoped admin or
 owner in the verified team roster, cannot grant above its own role, and can

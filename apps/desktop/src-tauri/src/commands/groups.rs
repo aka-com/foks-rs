@@ -80,6 +80,10 @@ pub(super) struct DiscoveredGroupResponse {
     pub(super) kind: String,
     pub(super) name: Option<String>,
     pub(super) active: bool,
+    // Creation lifecycle applies to locally created teams; discovered records
+    // carry no creation intent. Accept this optional summary field explicitly.
+    #[serde(default, rename = "creation_phase")]
+    pub(super) _creation_phase: Option<String>,
 }
 
 impl GroupDiscoveryDto {

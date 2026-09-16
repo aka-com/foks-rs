@@ -41,6 +41,8 @@ pub struct StoreDto {
     pub team_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub team_id_hex: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub creation_phase: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -184,12 +186,14 @@ fn store_dto(store: &CatalogStoreSummary) -> Result<StoreDto, AgentError> {
             active: None,
             team_kind: None,
             team_id_hex: None,
+            creation_phase: None,
         },
         CatalogStoreSummary::Team {
             store,
             kind,
             name,
             active,
+            creation_phase,
         } => {
             let team_kind = match kind.as_str() {
                 "named" => "named",
@@ -212,6 +216,7 @@ fn store_dto(store: &CatalogStoreSummary) -> Result<StoreDto, AgentError> {
                 active: Some(*active),
                 team_kind: Some(team_kind.to_owned()),
                 team_id_hex: Some(store.team_id.clone()),
+                creation_phase: creation_phase.clone(),
             }
         }
     })

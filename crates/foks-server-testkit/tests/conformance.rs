@@ -10,6 +10,8 @@ mod go_client_generic;
 mod go_client_kv;
 #[path = "conformance/go_client_merkle.rs"]
 mod go_client_merkle;
+#[path = "conformance/historical_membership.rs"]
+mod historical_membership;
 #[path = "conformance/kex.rs"]
 mod kex;
 #[path = "conformance/kv_large.rs"]

@@ -47,6 +47,7 @@ import type {
   ServerRestriction,
   Store,
   StoreRef,
+  TeamCreationPhase,
   AgentSnapshot,
 } from './model';
 import { profileInventoryComplete, serverFactAvailability } from './model';
@@ -154,6 +155,7 @@ export interface StoreDto {
   account: string;
   alias?: string;
   active?: boolean;
+  creation_phase?: TeamCreationPhase;
   team_kind?: 'named' | 'adhoc';
   team_id_hex?: string;
 }
@@ -1062,6 +1064,29 @@ function decodeRole(value: unknown, at: string): RoleDto {
   throw new Error(`${at}.role is not Member, Admin, or Owner`);
 }
 
+function decodeCreationPhase(
+  value: unknown,
+  at: string,
+): TeamCreationPhase | undefined {
+  if (value === undefined) return undefined;
+  const phase = string(value, at);
+  if (
+    ![
+      'preparing',
+      'prepared',
+      'submission-unknown',
+      'submitted',
+      'remote-verified',
+      'complete',
+      'rejected',
+      'legacy-unknown',
+    ].includes(phase)
+  ) {
+    throw new Error(`${at} is not a known creation phase`);
+  }
+  return phase as TeamCreationPhase;
+}
+
 function decodeStore(value: unknown, at: string): StoreDto {
   const item = record(value, at);
   const kind = string(item.kind, `${at}.kind`);
@@ -1084,6 +1109,10 @@ function decodeStore(value: unknown, at: string): StoreDto {
     kind,
     alias: string(item.alias, `${at}.alias`),
     active: bool(item.active, `${at}.active`),
+    creation_phase: decodeCreationPhase(
+      item.creation_phase,
+      `${at}.creation_phase`,
+    ),
     team_kind: teamKind,
     team_id_hex: string(item.team_id_hex, `${at}.team_id_hex`),
   };

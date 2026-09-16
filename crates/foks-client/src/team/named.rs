@@ -177,6 +177,33 @@ impl FoksClient {
         )
     }
 
+    /// Recovers a legacy caller-durable creation only if the exact remote team
+    /// and original PTKs can be authenticated. Never submits or creates a journal.
+    pub fn reconcile_unjournaled_named_team(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        team_name_utf8: &str,
+        secrets: &NamedTeamSecrets,
+    ) -> Result<AuthenticatedTeamOutcome> {
+        let normalized = normalize_username(team_name_utf8.as_bytes()).ok_or(
+            Error::TeamRequest("team name is not valid under FOKS v0.1.9 normalization"),
+        )?;
+        let user = self.authenticate_and_pin(host, credential)?;
+        let owner = current_owner_puk(&user)?;
+        self.wait_for_named_team(
+            host,
+            &credential.uid,
+            &credential.seed,
+            &credential.certificate_chain,
+            &user,
+            &owner.seed,
+            &secrets.team_id()?,
+            &normalized,
+            secrets,
+        )
+    }
+
     /// Reconciles a journaled named-team creation without replaying it.
     pub fn resume_single_owner_named_team(
         &self,

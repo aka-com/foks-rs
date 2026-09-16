@@ -226,6 +226,7 @@ fn catalog_dto_rejects_unknown_kinds_and_preserves_unknown_sizes() {
         kind: "mystery".to_owned(),
         name: Some("Group".to_owned()),
         active: true,
+        creation_phase: None,
     }];
     assert_eq!(
         CatalogDto::from_snapshot(&snapshot).unwrap_err().code,
@@ -707,4 +708,29 @@ fn same_handle_length_changes_are_classified_as_source_changes() {
         .unwrap_err();
         assert_eq!(error.code, "upload-source-changed");
     }
+}
+
+#[test]
+fn catalog_preserves_incomplete_creation_phase() {
+    let snapshot = CatalogSnapshot {
+        stores: vec![CatalogStoreSummary::Team {
+            store: foks_agent_proto::TeamStoreRef {
+                profile: "foks.example".to_owned(),
+                account_alias: "personal".to_owned(),
+                team_alias: "group".to_owned(),
+                team_id: "03".to_owned(),
+            },
+            kind: "named".to_owned(),
+            name: Some("Group".to_owned()),
+            active: false,
+            creation_phase: Some("preparing".to_owned()),
+        }],
+        ..CatalogSnapshot::default()
+    };
+    let dto = CatalogDto::from_snapshot(&snapshot).unwrap();
+    assert_eq!(dto.stores[0].creation_phase.as_deref(), Some("preparing"));
+    assert_eq!(
+        serde_json::to_value(dto).unwrap()["stores"][0]["creation_phase"],
+        "preparing"
+    );
 }

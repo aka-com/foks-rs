@@ -53,7 +53,7 @@ impl FoksClient {
             ))?;
         let receiver = SharedKeyDecapsulator::new(&private.seed, team.verified.team().clone())?;
         let member_host = member.scoped_host.as_ref().unwrap_or(host.host_id());
-        let (key, _) = open_team_removal_key_for_member(
+        let (key, metadata) = open_team_removal_key_for_member(
             &boxed,
             &receiver,
             &TeamRemovalKeyExpectation {
@@ -65,6 +65,15 @@ impl FoksClient {
                 source_role: member.source_role,
             },
         )?;
+        if metadata.team_sequence == 0 {
+            super::verified_historical_founding_transition(
+                &team.verified,
+                &member.party,
+                metadata.source_role,
+                metadata.destination_role,
+                Some(commitment),
+            )?;
+        }
         Ok(key)
     }
 

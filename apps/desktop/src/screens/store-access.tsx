@@ -17,6 +17,8 @@ export interface StoreAccessCopy {
   title: string;
   detail: string;
   action: 'open-server' | 'review-server' | 'finish-setup';
+  actionLabel?: string;
+  actionDisabled?: boolean;
 }
 
 function resourceSubject(store: Store): string {
@@ -93,12 +95,29 @@ export function accessCopy(
         detail: subject,
         action: 'review-server',
       };
-    case 'setup-incomplete':
+    case 'setup-incomplete': {
+      const phase = store.kind === 'team' ? store.creation_phase : undefined;
+      const verified = phase === 'remote-verified';
+      const preparing = phase === 'preparing';
+      const rejected = phase === 'rejected';
       return {
         title: 'Setup incomplete',
-        detail: `${store.name} was created on ${serverName}, but key setup is incomplete on this Mac. Members and items are unavailable until setup finishes.`,
+        detail: verified
+          ? `${store.name} was created on ${serverName}, but key setup is incomplete on this Mac. Members and items are unavailable until setup finishes.`
+          : preparing
+            ? `Creation of ${store.name} has not been submitted to ${serverName}. Continue with the saved group identity and keys.`
+            : rejected
+              ? `Creation of ${store.name} was rejected. Its saved identity and keys are retained on this Mac.`
+              : `Creation of ${store.name} must be checked on ${serverName}. Its saved identity and keys will be used to verify the result before setup continues.`,
         action: 'finish-setup',
+        actionLabel: verified
+          ? 'Finish setup'
+          : preparing
+            ? 'Continue creation'
+            : 'Check creation',
+        actionDisabled: rejected,
       };
+    }
   }
 }
 
@@ -131,8 +150,12 @@ export function StoreAccessTakeover({
   const copy = accessCopy(state, store, displayServerName(snapshot, store));
   const action =
     copy.action === 'finish-setup' ? (
-      <Button variant="primary" onClick={onFinishSetup}>
-        Finish setup
+      <Button
+        variant="primary"
+        onClick={onFinishSetup}
+        disabled={copy.actionDisabled}
+      >
+        {copy.actionLabel ?? 'Finish setup'}
       </Button>
     ) : (
       <Button onClick={() => onOpenServer(server?.id ?? store.server)}>

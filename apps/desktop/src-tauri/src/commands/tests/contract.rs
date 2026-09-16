@@ -180,6 +180,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
         account: "personal".to_owned(),
         alias: None,
         active: None,
+        creation_phase: None,
         team_kind: None,
         team_id_hex: None,
     };

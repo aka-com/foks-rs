@@ -558,3 +558,31 @@ test('an unavailable group displays its status and retains parent navigation', a
     { kind: 'teams' },
   );
 });
+
+test('incomplete group recovery describes durable creation evidence', async () => {
+  const base = await fixture();
+  for (const [phase, button, detail] of [
+    ['preparing', 'Continue creation', 'has not been submitted'],
+    ['submission-unknown', 'Check creation', 'must be checked'],
+    ['legacy-unknown', 'Check creation', 'must be checked'],
+    ['remote-verified', 'Finish setup', 'was created on'],
+  ] as const) {
+    const snapshot = {
+      ...base,
+      stores: base.stores.map((store) =>
+        store.id === 'team:homelab' && store.kind === 'team'
+          ? { ...store, creation_phase: phase }
+          : store,
+      ),
+    };
+    const rendered = await group('team:homelab', 'people', { snapshot });
+    const band = document.querySelector('.band');
+    assert.ok(band);
+    assert.ok(band.textContent?.includes(detail), phase);
+    assert.ok(band.contains(rendered.getByRole('button', { name: button })));
+    if (phase !== 'remote-verified') {
+      assert.equal(band.textContent?.includes('was created on'), false);
+    }
+    ui.cleanup();
+  }
+});

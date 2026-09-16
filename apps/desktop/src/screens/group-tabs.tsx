@@ -350,8 +350,13 @@ export function IncompleteGroupPage({
           <Band
             label={copy.title}
             action={
-              <Button variant="primary" size="sm" onClick={onFinish}>
-                Finish setup
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={onFinish}
+                disabled={copy.actionDisabled}
+              >
+                {copy.actionLabel ?? 'Finish setup'}
               </Button>
             }
           >

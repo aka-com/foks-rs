@@ -38,6 +38,16 @@ export interface AccountStore {
   account: string;
 }
 
+export type TeamCreationPhase =
+  | 'preparing'
+  | 'prepared'
+  | 'submission-unknown'
+  | 'submitted'
+  | 'remote-verified'
+  | 'complete'
+  | 'rejected'
+  | 'legacy-unknown';
+
 export interface TeamStore {
   id: StoreRef;
   kind: 'team';
@@ -45,8 +55,9 @@ export interface TeamStore {
   alias: string;
   server: string;
   account: string;
-  /** A team summary carries one state — active or not. */
   active: boolean;
+  /** Durable local preparation and submission evidence; absent for discovered teams. */
+  creation_phase?: TeamCreationPhase;
   team_kind: 'named' | 'adhoc';
   /** 66 hex characters. */
   team_id_hex: string;

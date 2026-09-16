@@ -125,6 +125,7 @@ const RAW: AgentSnapshot = {
       server: 'personal',
       account: 'personal',
       active: false,
+      creation_phase: 'remote-verified',
       team_kind: 'adhoc',
       team_id_hex:
         '038b17e4a055c93d2fe60148ab7f2c9d3140e5b8a71c6f93d20ba48e5739d1c0f6',

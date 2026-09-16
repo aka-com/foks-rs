@@ -118,6 +118,8 @@ pub struct TeamSummary {
     pub kind: String,
     pub name: Option<String>,
     pub active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creation_phase: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

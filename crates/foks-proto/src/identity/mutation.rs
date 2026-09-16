@@ -110,7 +110,7 @@ impl TeamRemovalKeyMetadata {
             destination_role: role(&destination[0])?,
             team_sequence: unsigned(&destination[1])?,
         };
-        result.validate()?;
+        result.validate_decoded()?;
         Ok(result)
     }
 
@@ -138,6 +138,14 @@ impl TeamRemovalKeyMetadata {
     }
 
     fn validate(&self) -> Result<()> {
+        self.validate_decoded()?;
+        if self.team_sequence == 0 {
+            return Err(Error::IntegerRange("team removal-key metadata"));
+        }
+        Ok(())
+    }
+
+    fn validate_decoded(&self) -> Result<()> {
         self.team.clone().require_type(ENTITY_NAMED_TEAM)?;
         self.host.clone().require_type(ENTITY_HOST)?;
         self.member_host.clone().require_type(ENTITY_HOST)?;
@@ -150,9 +158,17 @@ impl TeamRemovalKeyMetadata {
                 found: self.member.entity_type(),
             });
         }
+        // The same v0.1.9 TeamCreator result-sequence omission present in the
+        // membership link also appears in both founding removal-key boxes.
+        // Consumers accepting zero must prove the founder against the signed
+        // eldest transition; outbound metadata remains strictly nonzero.
         if self.source_role == Role::NONE
             || self.destination_role == Role::NONE
-            || self.team_sequence == 0
+            || (self.team_sequence == 0
+                && (self.member.entity_type() != ENTITY_USER
+                    || self.member_host != self.host
+                    || self.source_role != Role::OWNER
+                    || self.destination_role != Role::OWNER))
         {
             return Err(Error::IntegerRange("team removal-key metadata"));
         }

@@ -2454,6 +2454,7 @@ fn dispatch_result(
                             kind: team.kind,
                             name: team.name,
                             active: team.active,
+                            creation_phase: team.creation_phase,
                         })
                         .collect::<Vec<_>>())
                 })();

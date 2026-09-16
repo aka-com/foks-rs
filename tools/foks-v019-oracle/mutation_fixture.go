@@ -1195,6 +1195,42 @@ func writeMutationFixtures(output, userDir string) error {
 			return err
 		}
 	}
+	// Match TeamCreator.makeTeamMembershipLink rather than replacing the
+	// MakeEldestLink result with ChainEldestSeqno. In pinned v0.1.9 this result
+	// field is zero even though the signed team eldest has sequence one.
+	if namedEldest.Seqno != 0 {
+		return fmt.Errorf("historical fixture expects the v0.1.9 unset eldest result sequence")
+	}
+	historicalMembership, err := core.MakeGenericLink(
+		uid.EntityID(), revokeChange.Entity.Host, device,
+		proto.NewGenericLinkPayloadWithTeammembership(proto.TeamMembershipLink{
+			Team:    proto.FQTeam{Team: namedTeamID, Host: revokeChange.Entity.Host},
+			SrcRole: ownerRole,
+			State: proto.NewTeamMembershipDetailsWithApproved(proto.TeamMembershipApprovedDetails{
+				Dst:     proto.RoleAndSeqno{Role: ownerRole, Seqno: namedEldest.Seqno},
+				KeyComm: removalBoxes.Comm,
+			}),
+		}), proto.ChainEldestSeqno, nil, *treeRoot,
+	)
+	if err != nil {
+		return err
+	}
+	if _, err := core.OpenAndVerifyGenericLink(*historicalMembership.Link); err != nil {
+		return err
+	}
+	if err := w.object("go-creator-zero-membership-link.snowp", historicalMembership.Link); err != nil {
+		return err
+	}
+	removalMetadata.Dst.Seqno = namedEldest.Seqno
+	historicalRemovalBoxes, err := teamlib.BoxTeamRemovalKey(
+		ownerPuk, adminPublic, ownerPublic, removalMetadata, removalKey,
+	)
+	if err != nil {
+		return err
+	}
+	if err := w.object("go-creator-zero-removal-boxes.snowp", historicalRemovalBoxes); err != nil {
+		return err
+	}
 	sort.Slice(w.files, func(i, j int) bool { return w.files[i].File < w.files[j].File })
 	sort.Slice(w.rpcFiles, func(i, j int) bool { return w.rpcFiles[i].File < w.rpcFiles[j].File })
 	manifest := struct {

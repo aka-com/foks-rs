@@ -1288,7 +1288,12 @@ fn decode_team_membership_payload(value: &Value) -> Result<TeamMembershipPayload
             let destination = array(&approved[0], 2)?;
             let destination_role = role(&destination[0])?;
             let team_sequence = unsigned(&destination[1])?;
-            if team_sequence == 0 {
+            // go-foks v0.1.9 TeamCreator copies MakeEldestLink's unset result
+            // Seqno into a founding owner's approval. Preserve the signed zero
+            // here; consumers must bind this claim to the authenticated eldest
+            // transition before treating it as membership authority.
+            if team_sequence == 0 && (source_role != Role::OWNER || destination_role != Role::OWNER)
+            {
                 return Err(Error::IntegerRange("team membership sequence"));
             }
             TeamMembershipState::Approved {
@@ -1301,7 +1306,8 @@ fn decode_team_membership_payload(value: &Value) -> Result<TeamMembershipPayload
             let approved = array(variant(&state[1], "2")?, 2)?;
             let destination_role = role(&approved[0])?;
             let team_sequence = unsigned(&approved[1])?;
-            if team_sequence == 0 {
+            if team_sequence == 0 && (source_role != Role::OWNER || destination_role != Role::OWNER)
+            {
                 return Err(Error::IntegerRange("ad-hoc membership sequence"));
             }
             TeamMembershipState::ApprovedAdHoc {

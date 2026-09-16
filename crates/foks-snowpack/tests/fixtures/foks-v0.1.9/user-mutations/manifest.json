@@ -106,6 +106,16 @@
       "sha256": "503c8a9e2717cc8927282003ce4d449bc3b1428bf14c1644b2299b57e54364c0"
     },
     {
+      "file": "go-creator-zero-membership-link.snowp",
+      "bytes": 397,
+      "sha256": "d3993b9e1a5261eb551693a44c29f206c2eb1a8748b4fd90b3a2100089c6d9dd"
+    },
+    {
+      "file": "go-creator-zero-removal-boxes.snowp",
+      "bytes": 2938,
+      "sha256": "dbd22d2a9dd6e9d44c237aede2933e9ebbf8b4a17d055baaed5a494102f8814c"
+    },
+    {
       "file": "host-config-open.snowp",
       "bytes": 10,
       "sha256": "be3eacf1904099593378fb70b0dcd29192a19c1fc77edc8d1e73daece3426b45"

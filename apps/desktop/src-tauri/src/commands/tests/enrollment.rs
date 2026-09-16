@@ -127,6 +127,7 @@ fn first_run_response_projection_fails_closed() {
             kind: "named".to_owned(),
             name: Some("Engineering".to_owned()),
             active: true,
+            _creation_phase: None,
         }],
     };
     assert_eq!(
@@ -146,6 +147,7 @@ fn first_run_response_projection_fails_closed() {
                 kind: "named".to_owned(),
                 name: Some("Engineering".to_owned()),
                 active: true,
+                _creation_phase: None,
             },
             DiscoveredGroupResponse {
                 alias: "engineering".to_owned(),
@@ -154,6 +156,7 @@ fn first_run_response_projection_fails_closed() {
                 kind: "named".to_owned(),
                 name: Some("Other".to_owned()),
                 active: true,
+                _creation_phase: None,
             },
         ],
     };
@@ -174,6 +177,7 @@ fn first_run_response_projection_fails_closed() {
                 kind: "named".to_owned(),
                 name: Some(alias.to_owned()),
                 active: true,
+                _creation_phase: None,
             })
             .collect(),
     };
@@ -192,6 +196,7 @@ fn first_run_response_projection_fails_closed() {
             kind: "named".to_owned(),
             name: Some("Engineering".to_owned()),
             active: true,
+            _creation_phase: None,
         }],
     };
     assert_eq!(
@@ -214,6 +219,7 @@ fn first_run_response_projection_fails_closed() {
                 kind: kind.to_owned(),
                 name,
                 active: true,
+                _creation_phase: None,
             }],
         };
         assert_eq!(
@@ -233,6 +239,7 @@ fn first_run_response_projection_fails_closed() {
                 kind: "named".to_owned(),
                 name: Some("Engineering".to_owned()),
                 active: true,
+                _creation_phase: None,
             },
             DiscoveredGroupResponse {
                 alias: "friends".to_owned(),
@@ -241,6 +248,7 @@ fn first_run_response_projection_fails_closed() {
                 kind: "ad-hoc".to_owned(),
                 name: None,
                 active: true,
+                _creation_phase: None,
             },
         ],
     };

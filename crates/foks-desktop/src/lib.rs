@@ -335,6 +335,7 @@ pub enum CatalogStoreSummary {
         kind: String,
         name: Option<String>,
         active: bool,
+        creation_phase: Option<String>,
     },
 }
 
@@ -652,6 +653,7 @@ fn load_profile_catalog(
                                 kind: team.kind,
                                 name: team.name,
                                 active: team.active,
+                                creation_phase: team.creation_phase,
                             }
                         }));
                     }
@@ -1189,6 +1191,7 @@ fn known_catalog_store(profile: &str, store: KnownStoreSummary) -> CatalogStoreS
             .to_owned(),
             name,
             active,
+            creation_phase: None,
         },
     }
 }

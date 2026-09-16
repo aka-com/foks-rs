@@ -1,4 +1,8 @@
 use super::*;
+use foks_client_db::{AdHocTeamOperationState, TeamMutationState};
+
+#[cfg(test)]
+mod creation_tests;
 
 pub(super) const BACKGROUND_TEAM_ALIAS_PREFIX: &str = "bg_";
 
@@ -29,20 +33,8 @@ impl CheckedProfileSession<'_> {
         }
         let account = vault.account(account_alias)?;
         let mut stored = StoredTeam::random_named(team_alias, account_alias, team_name)?;
-        vault.put_team(&stored)?;
-        let host = self.pinned_host()?;
-        let secrets = stored.named_secrets()?;
-        let created = self.client.create_single_owner_named_team(
-            &host,
-            &account.credential,
-            team_name,
-            &secrets,
-        )?;
-        let report =
-            self.ensure_team_root(team_alias, &account, created.authenticated, master_key)?;
-        stored.active = true;
-        vault.put_team(&stored)?;
-        Ok(report)
+        self.persist_creation_intent(&mut stored, &account, vault)?;
+        self.continue_team_creation(stored, &account, vault, master_key)
     }
 
     pub fn create_adhoc_team(
@@ -58,17 +50,29 @@ impl CheckedProfileSession<'_> {
         }
         let account = vault.account(account_alias)?;
         let mut stored = StoredTeam::random_adhoc(team_alias, account_alias)?;
-        vault.put_team(&stored)?;
+        self.persist_creation_intent(&mut stored, &account, vault)?;
+        self.continue_team_creation(stored, &account, vault, master_key)
+    }
+
+    // The protected record binds preflight to the exact actor and host, before
+    // any network mutation. The client journal is persisted before submission.
+    fn persist_creation_intent(
+        &self,
+        stored: &mut StoredTeam,
+        account: &LoadedAccount,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<()> {
         let host = self.pinned_host()?;
-        let secrets = stored.adhoc_secrets()?;
-        let created =
-            self.client
-                .create_single_owner_adhoc_team(&host, &account.credential, &secrets)?;
-        let report =
-            self.ensure_team_root(team_alias, &account, created.authenticated, master_key)?;
-        stored.active = true;
-        vault.put_team(&stored)?;
-        Ok(report)
+        stored.creation = Some(StoredTeamCreation {
+            host_id: host.host_id().as_bytes().to_vec(),
+            actor_id: account.credential.uid.as_bytes().to_vec(),
+            device_id: account.credential.public_material()?.id.into_bytes(),
+            phase: StoredCreationPhase::Preparing,
+        });
+        vault.put_team(stored)?;
+        #[cfg(test)]
+        creation_tests::interrupt_at(creation_tests::Boundary::IntentStored)?;
+        Ok(())
     }
 
     pub fn resume_team_creation(
@@ -78,52 +82,116 @@ impl CheckedProfileSession<'_> {
         master_key: &[u8; 32],
     ) -> Result<TeamSyncReport> {
         self.profile.require(Capability::Teams)?;
-        let mut stored = vault.team(team_alias)?;
-        if stored.origin != StoredTeamOrigin::CreatedHere {
+        let stored = vault.team(team_alias)?;
+        if stored.origin != StoredTeamOrigin::CreatedHere || stored.active {
             return Err(Error::InvalidAccount(
-                "a discovered team has no local creation to resume",
+                "team has no incomplete local creation",
             ));
         }
         let account = vault.account(&stored.account_alias)?;
+        self.continue_team_creation(stored, &account, vault, master_key)
+    }
+
+    fn continue_team_creation(
+        &self,
+        mut stored: StoredTeam,
+        account: &LoadedAccount,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<TeamSyncReport> {
         let host = self.pinned_host()?;
+        if let Some(intent) = &stored.creation {
+            if intent.host_id != host.host_id().as_bytes()
+                || intent.actor_id != account.credential.uid.as_bytes()
+                || intent.device_id != account.credential.public_material()?.id.as_bytes()
+            {
+                return Err(Error::InvalidAccount("team creation actor or host changed"));
+            }
+        }
+        let journal = HardStateStore::open(&self.paths.hard_database)?;
+        let may_prepare = stored
+            .creation
+            .as_ref()
+            .is_some_and(|intent| intent.phase == StoredCreationPhase::Preparing);
         let authenticated = match stored.kind {
             StoredTeamKind::Named => {
-                self.client
-                    .resume_single_owner_named_team(
+                let secrets = stored.named_secrets()?;
+                let name = stored
+                    .name
+                    .as_deref()
+                    .ok_or(Error::InvalidAccount("named team has no stored name"))?;
+                if journal.team_mutation(&secrets.operation_id()?)?.is_some() {
+                    self.client
+                        .resume_single_owner_named_team(&host, &account.credential, name, &secrets)?
+                        .authenticated
+                } else if may_prepare {
+                    self.client
+                        .create_single_owner_named_team(&host, &account.credential, name, &secrets)?
+                        .authenticated
+                } else {
+                    // Legacy records have no proof that submission never occurred.
+                    // They can recover an authenticated remote team, never post one.
+                    self.client.reconcile_unjournaled_named_team(
                         &host,
                         &account.credential,
-                        stored
-                            .name
-                            .as_deref()
-                            .ok_or(Error::InvalidAccount("named team has no stored name"))?,
-                        &stored.named_secrets()?,
+                        name,
+                        &secrets,
                     )?
-                    .authenticated
+                }
             }
             StoredTeamKind::AdHoc => {
-                self.client
-                    .resume_single_owner_adhoc_team(
+                let secrets = stored.adhoc_secrets()?;
+                if journal
+                    .adhoc_team_operation(&secrets.operation_id()?)?
+                    .is_some()
+                {
+                    self.client
+                        .resume_single_owner_adhoc_team(&host, &account.credential, &secrets)?
+                        .authenticated
+                } else if may_prepare {
+                    self.client
+                        .create_single_owner_adhoc_team(&host, &account.credential, &secrets)?
+                        .authenticated
+                } else {
+                    self.client.reconcile_unjournaled_adhoc_team(
                         &host,
                         &account.credential,
-                        &stored.adhoc_secrets()?,
+                        &secrets,
                     )?
-                    .authenticated
+                }
             }
         };
-        let report = self.ensure_team_root(team_alias, &account, authenticated, master_key)?;
+        // Preserve the distinction between a verified remote creation and local
+        // root setup. A root write failure must never cause creation to replay.
+        stored.creation = Some(StoredTeamCreation {
+            host_id: host.host_id().as_bytes().to_vec(),
+            actor_id: account.credential.uid.as_bytes().to_vec(),
+            device_id: account.credential.public_material()?.id.into_bytes(),
+            phase: StoredCreationPhase::RemoteVerified,
+        });
+        vault.put_team(&stored)?;
+        #[cfg(test)]
+        creation_tests::interrupt_at(creation_tests::Boundary::RemoteVerified)?;
+        let report = self.ensure_team_root(&stored.alias, account, authenticated, master_key)?;
+        #[cfg(test)]
+        creation_tests::interrupt_at(creation_tests::Boundary::RootCreated)?;
         stored.active = true;
+        stored.creation.as_mut().expect("persisted above").phase = StoredCreationPhase::Complete;
         vault.put_team(&stored)?;
         Ok(report)
     }
 
     pub fn list_teams(&self, vault: &mut AccountVault<'_>) -> Result<Vec<TeamSummary>> {
         self.profile.require(Capability::Teams)?;
+        let journal = HardStateStore::open(&self.paths.hard_database)?;
         vault
             .team_aliases()?
             .into_iter()
             .map(|alias| {
                 let team = vault.team(&alias)?;
-                Ok(TeamSummary::from_stored(alias, &team))
+                let mut summary = TeamSummary::from_stored(alias, &team);
+                summary.creation_phase = team.creation_phase(&journal)?.map(str::to_owned);
+                Ok(summary)
             })
             .collect()
     }
@@ -203,12 +271,10 @@ impl CheckedProfileSession<'_> {
         for identity in discovered.into_values() {
             let alias = discovery_alias(vault, &identity)?;
             let stored = match vault.team(&alias) {
-                Ok(mut existing) => {
+                Ok(existing) => {
                     bind_existing_discovery(&existing, &identity)?;
-                    if !existing.active {
-                        existing.active = true;
-                        vault.put_team(&existing)?;
-                    }
+                    // Discovery proves remote membership, not that the original
+                    // creator finished root setup. Preserve its recovery state.
                     existing
                 }
                 Err(Error::AccountMissing) => {
@@ -1310,6 +1376,8 @@ pub struct TeamSummary {
     pub kind: String,
     pub name: Option<String>,
     pub active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub creation_phase: Option<String>,
 }
 
 impl TeamSummary {
@@ -1325,6 +1393,7 @@ impl TeamSummary {
             .to_owned(),
             name: team.name.clone(),
             active: team.active,
+            creation_phase: None,
         }
     }
 }
@@ -1425,6 +1494,22 @@ pub(super) enum StoredTeamOrigin {
     Discovered,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum StoredCreationPhase {
+    Preparing,
+    RemoteVerified,
+    Complete,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct StoredTeamCreation {
+    host_id: Vec<u8>,
+    actor_id: Vec<u8>,
+    device_id: Vec<u8>,
+    phase: StoredCreationPhase,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub(super) struct StoredTeam {
     pub(super) version: u32,
@@ -1441,6 +1526,8 @@ pub(super) struct StoredTeam {
     pub(super) removal_key: Option<[u8; 32]>,
     pub(super) name_commitment: Option<[u8; 16]>,
     pub(super) active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    creation: Option<StoredTeamCreation>,
     #[serde(default)]
     pub(super) federated_members: Vec<StoredFederatedMembership>,
     #[serde(default)]
@@ -1626,6 +1713,47 @@ impl Drop for StoredTeamRekey {
 }
 
 impl StoredTeam {
+    fn creation_phase(&self, journal: &HardStateStore) -> Result<Option<&'static str>> {
+        if self.origin != StoredTeamOrigin::CreatedHere {
+            return Ok(None);
+        }
+        if self.active {
+            return Ok(Some("complete"));
+        }
+        if self
+            .creation
+            .as_ref()
+            .is_some_and(|intent| intent.phase == StoredCreationPhase::RemoteVerified)
+        {
+            return Ok(Some("remote-verified"));
+        }
+        let phase = match self.kind {
+            StoredTeamKind::Named => journal
+                .team_mutation(&self.named_secrets()?.operation_id()?)?
+                .map(|op| match op.state {
+                    TeamMutationState::Prepared => "prepared",
+                    TeamMutationState::Submitting | TeamMutationState::SubmissionUnknown => {
+                        "submission-unknown"
+                    }
+                    TeamMutationState::Submitted => "submitted",
+                    TeamMutationState::Verified => "remote-verified",
+                    TeamMutationState::Rejected | TeamMutationState::Superseded => "rejected",
+                }),
+            StoredTeamKind::AdHoc => journal
+                .adhoc_team_operation(&self.adhoc_secrets()?.operation_id()?)?
+                .map(|op| match op.state {
+                    AdHocTeamOperationState::Prepared => "submission-unknown",
+                    AdHocTeamOperationState::Submitted => "submitted",
+                    AdHocTeamOperationState::Verified => "remote-verified",
+                }),
+        };
+        Ok(Some(phase.unwrap_or(if self.creation.is_some() {
+            "preparing"
+        } else {
+            "legacy-unknown"
+        })))
+    }
+
     pub(super) fn random_named(alias: &str, account_alias: &str, name: &str) -> Result<Self> {
         if name.trim().is_empty() || name.len() > 256 {
             return Err(Error::InvalidAccount(
@@ -1669,6 +1797,7 @@ impl StoredTeam {
             removal_key: None,
             name_commitment: None,
             active: false,
+            creation: None,
             federated_members: Vec::new(),
             invitation_members: Vec::new(),
             local_members: Vec::new(),
@@ -1726,6 +1855,7 @@ impl StoredTeam {
             removal_key: None,
             name_commitment: None,
             active: true,
+            creation: None,
             federated_members: Vec::new(),
             invitation_members: Vec::new(),
             local_members: Vec::new(),
@@ -2122,6 +2252,18 @@ fn validate_stored_team(team: &StoredTeam, expected_alias: &str) -> Result<()> {
         return Err(Error::InvalidAccount(
             "team alias uses the reserved background-sync namespace",
         ));
+    }
+    if let Some(intent) = &team.creation {
+        EntityId::from_bytes(intent.host_id.clone())?.require_type(foks_proto::ENTITY_HOST)?;
+        EntityId::from_bytes(intent.actor_id.clone())?.require_type(foks_proto::ENTITY_USER)?;
+        EntityId::from_bytes(intent.device_id.clone())?.require_type(foks_proto::ENTITY_DEVICE)?;
+        if team.origin != StoredTeamOrigin::CreatedHere
+            || team.active != (intent.phase == StoredCreationPhase::Complete)
+        {
+            return Err(Error::InvalidAccount(
+                "team creation phase does not match local state",
+            ));
+        }
     }
     let id = EntityId::from_bytes(team.team_id.clone())?;
     if team.origin == StoredTeamOrigin::Discovered {

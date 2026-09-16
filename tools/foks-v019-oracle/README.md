@@ -26,6 +26,14 @@ The live host can advance, so regeneration is an explicit review operation.
 Checked-in fixture bytes are immutable test inputs; they are not regenerated
 during ordinary Cargo tests.
 
+The mutation fixtures also retain the historical v0.1.9 `TeamCreator` founding
+sequence omission. `go-creator-zero-membership-link.snowp` and
+`go-creator-zero-removal-boxes.snowp` use the actual `MakeEldestLink` result's
+unset `Seqno`, as `TeamCreator` does, rather than substituting
+`ChainEldestSeqno`. The signed team link itself has sequence one. These fixtures
+test lossless decoding and authenticated founding-owner reconciliation; they
+do not permit new Rust requests to emit sequence zero.
+
 An existing probe fixture can be re-verified without network access:
 
 ```sh

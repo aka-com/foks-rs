@@ -35,8 +35,9 @@ use foks_proto::{
     GenericLinkPayload, HostConfig, PassphraseInfo, Role, SecretSeed, TeamChain,
     TeamMembershipPayload, TeamMembershipState, TeamViewChallenge, TeamViewRequest,
     UnsignedUserLink, UserLink, UserSettingsLinkPublic, ViewershipMode, CHAIN_TYPE_TEAM_MEMBERSHIP,
-    CHAIN_TYPE_USER_SETTINGS, ENTITY_PTK_VERIFY, ENTITY_PUK_VERIFY, LINK_OUTER_TYPE_ID,
-    LINK_OUTER_V1_TYPE_ID, MERKLE_ROOT_TYPE_ID, TEAM_VIEW_CHALLENGE_TYPE_ID, TREE_LOCATION_TYPE_ID,
+    CHAIN_TYPE_USER_SETTINGS, ENTITY_PTK_VERIFY, ENTITY_PUK_VERIFY, ENTITY_USER,
+    LINK_OUTER_TYPE_ID, LINK_OUTER_V1_TYPE_ID, MERKLE_ROOT_TYPE_ID, TEAM_VIEW_CHALLENGE_TYPE_ID,
+    TREE_LOCATION_TYPE_ID,
 };
 use foks_rpc::{
     encode_activate_team_view_request, encode_create_adhoc_team_request,
@@ -1586,7 +1587,21 @@ fn validate_membership_against_team(
             ));
         }
     };
-    let change = team.group_change_at(team_sequence)?;
+    // go-foks v0.1.9's TeamCreator emits zero for the founding owner's
+    // destination sequence because MakeEldestLink leaves its result Seqno
+    // unset. This is an interpretation of an authenticated historical claim,
+    // never a rewrite of the signed bytes or a general zero-to-one conversion.
+    let change = if team_sequence == 0 {
+        verified_historical_founding_transition(
+            team,
+            owner,
+            event.membership.source_role,
+            destination_role,
+            removal_key_commitment,
+        )?
+    } else {
+        team.group_change_at(team_sequence)?
+    };
     let matching_changes = change
         .changes
         .iter()
@@ -1620,6 +1635,45 @@ fn validate_membership_against_team(
     Ok(member.is_some_and(|member| {
         member.role == destination_role && member.removal_key_commitment == removal_key_commitment
     }))
+}
+
+/// Binds go-foks v0.1.9's unset founding sequence to a verified transition.
+/// Both signed membership claims and encrypted removal-key metadata use this
+/// proof; neither the raw payload nor its sequence is modified.
+fn verified_historical_founding_transition(
+    team: &VerifiedTeamState,
+    owner: &EntityId,
+    source_role: Role,
+    destination_role: Role,
+    removal_key_commitment: Option<[u8; 32]>,
+) -> Result<foks_proto::TeamGroupChange> {
+    let eldest = team.group_change_at(1)?;
+    if owner.entity_type() != ENTITY_USER
+        || source_role != Role::OWNER
+        || destination_role != Role::OWNER
+        || eldest.signer_owner.party != *owner
+        || eldest.signer_owner.source_role != Role::OWNER
+        || eldest
+            .changes
+            .iter()
+            .filter(|change| {
+                change.party == *owner
+                    && change.scoped_host.is_none()
+                    && change.source_role == source_role
+                    && change.role == destination_role
+                    && change
+                        .keys
+                        .as_ref()
+                        .is_some_and(|keys| keys.removal_key_commitment == removal_key_commitment)
+            })
+            .count()
+            != 1
+    {
+        return Err(Error::TeamBinding(
+            "zero membership sequence is not a founding owner approval",
+        ));
+    }
+    Ok(eldest)
 }
 
 fn validate_server_trust_against_team(
@@ -2342,6 +2396,28 @@ impl FoksClient {
             team: material.team,
             authenticated,
         })
+    }
+
+    /// Authenticates an existing legacy creation using its original identity and
+    /// PTKs. Missing local journal evidence never authorizes a new submission.
+    pub fn reconcile_unjournaled_adhoc_team(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        secrets: &AdHocTeamSecrets,
+    ) -> Result<AuthenticatedTeamOutcome> {
+        let user = self.authenticate_and_pin(host, credential)?;
+        let owner = current_owner_puk(&user)?;
+        self.wait_for_adhoc_team_with_material(
+            host,
+            &credential.uid,
+            &credential.seed,
+            &credential.certificate_chain,
+            &user,
+            &owner.seed,
+            &secrets.team_id()?,
+            secrets,
+        )
     }
 
     /// Reconciles a journaled ad-hoc creation without replaying the mutation.
@@ -3168,6 +3244,10 @@ fn team_parcel_sender_hepk<'a>(
         "team PTK parcel sender HEPK is unavailable",
     ))
 }
+
+#[cfg(test)]
+#[path = "team/historical_membership_tests.rs"]
+mod historical_membership_tests;
 
 #[cfg(test)]
 mod membership_graph_tests {
