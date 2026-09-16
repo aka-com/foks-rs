@@ -236,7 +236,6 @@ export function GoProfileConnectSheet({
       onClose={onClose}
       dismissible={!busy}
       title="Connect from FOKS CLI"
-      subtitle="Use an existing account configured with the FOKS CLI"
       footer={
         <>
           <Button disabled={busy} onClick={onClose}>
@@ -400,9 +399,8 @@ export function GoProfileConnectSheet({
                 />
               </Inset>
               <p>
-                Leave the CLI command running until pairing completes. If
-                prompted for a confirmation code in the terminal after
-                connecting, press Enter without typing a code to finish.
+                Leave the command running until pairing completes. If the
+                terminal asks for a confirmation code, press Enter.
               </p>
             </>
           ) : (
@@ -417,9 +415,8 @@ export function GoProfileConnectSheet({
                 />
               </Inset>
               <p className="notice">
-                Sharing credentials connects this app using your CLI device
-                setup. Deleting the account in the FOKS CLI will also disconnect
-                this desktop app.
+                This app shares the CLI's device. Deleting the account in the
+                CLI disconnects it here too.
               </p>
             </>
           )}

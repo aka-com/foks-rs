@@ -218,9 +218,9 @@ test('the chooser offers each way to add, and leads into pairing', async () => {
   const pairing = await ui.waitFor(() => rendered.getByRole('dialog'));
   assert.equal(
     ui.within(pairing).getByRole('heading', { level: 2 }).textContent,
-    'Set up another Mac',
+    'Pair another device',
   );
-  assert.ok(ui.within(pairing).getByText('On the other Mac'));
+  assert.ok(ui.within(pairing).getByText('On the other device'));
   // Finish belongs to a started offer, so it waits for one.
   assert.equal(
     ui
@@ -487,7 +487,7 @@ test('the chooser leads into the paper-key and provisioning sheets too', async (
   const provision = await choose(rendered, 'Connect a new YubiKey');
   assert.equal(
     ui.within(provision).getByRole('heading', { level: 2 }).textContent,
-    'Provision a YubiKey device',
+    'Connect a YubiKey',
   );
   assert.ok(ui.within(provision).getByText('YubiKey 20993145'));
 });
@@ -503,7 +503,7 @@ test('the chooser offers both pairing directions, so a phrase can be entered', a
   );
   assert.equal(
     ui.within(accepting).getByRole('heading', { level: 2 }).textContent,
-    'Set up another Mac',
+    'Pair another device',
   );
   // The sheet opens on the accepting side: the phrase is typed, not revealed.
   assert.ok(ui.within(accepting).getByLabelText('Pairing phrase'));
@@ -836,14 +836,14 @@ test('pairing is two numbered steps, and a resumed offer says the agent holds it
   };
 
   const pairing = await openPairing();
-  // Two steps, each written for the Mac it is done on.
-  assert.ok(ui.within(pairing).getByText('On this Mac'));
-  assert.ok(ui.within(pairing).getByText('On the other Mac'));
+  // Two steps, each written for the device it is done on.
+  assert.ok(ui.within(pairing).getByText('On this device'));
+  assert.ok(ui.within(pairing).getByText('On the other device'));
   // The chooser named the direction, so no control here quietly changes it.
   assert.equal(ui.within(pairing).queryByText('Get a phrase'), null);
   // Step 1 has not produced a phrase yet, so step 2 has nothing to do and
   // what it ends with cannot run.
-  assert.ok(ui.within(pairing).getByText(/^Get a pairing phrase for/));
+  assert.ok(ui.within(pairing).getByText('Get a pairing phrase.'));
   assert.equal(
     ui
       .within(pairing)

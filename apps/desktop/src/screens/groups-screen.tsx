@@ -869,7 +869,6 @@ function FederationRemovalSheet({
       onClose={onClose}
       glyph={<GroupMark store={store} />}
       title={`Remove ${entry.remote_team_alias} from ${store.name}?`}
-      subtitle="This targets the exact remote group and server shown below"
       footer={
         <>
           <Button disabled={busy} onClick={onClose}>
@@ -908,8 +907,7 @@ function FederationRemovalSheet({
           disabled={busy}
           onChange={(event) => setConfirmed(event.target.checked)}
         />
-        I understand this removes every member of the remote group and rotates
-        affected keys.
+        Remove every member of {entry.remote_team_alias} and rotate keys
       </label>
     </SheetDialog>
   );
@@ -1242,7 +1240,7 @@ export function GroupSheet({
     sheet === 'create'
       ? undefined
       : sheet === 'add'
-        ? 'Members are added by username. Roles take effect the moment you add them.'
+        ? undefined
         : sheet === 'admit'
           ? 'Every member of that group gets the same role here'
           : sheet === 'demote'
@@ -1479,9 +1477,8 @@ export function GroupSheet({
                 <span>
                   {serverName} <Chip>this group’s server</Chip>
                   <span className="hint">
-                    People must already have an account here. Someone on another
-                    server can only join as part of a group — switch to “A group
-                    on another server” above.
+                    They need an account on this server. For someone on another
+                    server, add their group instead.
                   </span>
                 </span>
               </InsetRow>
@@ -1526,7 +1523,7 @@ export function GroupSheet({
                       detail={
                         refusal ||
                         (next === 'Member'
-                          ? 'Opens items at or above its visibility band. Visibility 0 is the default.'
+                          ? 'Opens items at or above the chosen visibility.'
                           : next === 'Admin'
                             ? 'Changes items and adds or removes people. Cannot change other Admins or the Owner.'
                             : 'Everything, including deleting the group.')
@@ -1570,11 +1567,6 @@ export function GroupSheet({
                 </InsetRow>
               </Inset>
             ) : null}
-            <p className="fn">
-              They can access items allowed by their role immediately. No
-              invitation is sent; {store.name} will appear when their app checks
-              the server.
-            </p>
           </>
         ) : null}
         {sheet === 'demote' ? (

@@ -11,7 +11,7 @@
  * per-team projections `ChatInboxService` already keeps for the rail's badge —
  * so a team is listed, previewed and counted without a conversation being
  * mounted for it. Named teams whose server offers no chat sit dimmed at the
- * foot under "No chat"; shares are not listed, because chat lives in a named
+ * foot under "Not ready"; shares are not listed, because chat lives in a named
  * team. The column belongs to the tab and outlives a team switch.
  */
 
@@ -78,12 +78,12 @@ export function noChatReason(
   store: TeamStore,
 ): string {
   const server = serverFor(snapshot, store);
-  if (store.active === false) return 'Setup incomplete';
+  if (store.active === false) return 'Finish setup in Teams';
   if (!server) return 'Server unavailable';
   return `Chat not offered on ${serverDisplayName(server)}`;
 }
 
-/** Named teams with no chat at all, listed under "No chat" with the reason. */
+/** Named teams with no chat at all, listed under "Not ready" with the reason. */
 export function noChatTeams(snapshot: AgentSnapshot): TeamStore[] {
   const listed = new Set(chatTeams(snapshot).map((store) => store.id));
   return storeNavigationOrder(snapshot).filter(
@@ -256,6 +256,8 @@ export interface ChatTeamColumnProps {
   onOpen: (ref: StoreRef, channel?: string) => void;
   onNewChat: () => void;
   onSettings: (ref: StoreRef) => void;
+  /** Opens a team's page on the Teams tab, where its setup is finished. */
+  onTeams: (ref: StoreRef) => void;
 }
 
 export function ChatTeamColumn({
@@ -267,6 +269,7 @@ export function ChatTeamColumn({
   onOpen,
   onNewChat,
   onSettings,
+  onTeams,
 }: ChatTeamColumnProps): ReactNode {
   const inbox = useSidebarInbox();
   // The column searches names, not messages: the agent has no message index,
@@ -341,7 +344,6 @@ export function ChatTeamColumn({
   });
   return (
     <aside className="chat-inbox" aria-label="Chat inbox">
-      <p className="chat-inbox-scope">All accounts on this Mac</p>
       <div className="chat-inbox-top">
         {/* The field names itself, so there is no label to wrap it in: an empty
             `<label>` would be a label with nothing in it. */}
@@ -363,16 +365,16 @@ export function ChatTeamColumn({
         </div>
         <Button
           variant="primary"
+          icon="plus"
+          aria-label="New chat"
           disabled={!teams.length}
           title={
             teams.length
-              ? 'Start a conversation in one of your teams'
+              ? 'New chat'
               : 'Chat needs a named team whose server offers chat'
           }
           onClick={onNewChat}
-        >
-          New chat
-        </Button>
+        />
       </div>
       {/* Screen reader status announcement for search filtering results.
           The element is rendered persistently to ensure aria-live announcements
@@ -383,14 +385,10 @@ export function ChatTeamColumn({
           : ''}
       </p>
       <div className="chat-inbox-scroll">
-        {teams.length ? (
-          // A search that matches no conversation drops the label with them.
-          (!query || listed > 0) && <SectionLabel>Conversations</SectionLabel>
-        ) : (
-          <p className="chat-quiet chat-inbox-empty">
-            No team on this Mac has chat.
-          </p>
-        )}
+        {/* A search that matches no conversation drops the label with them. */}
+        {teams.length > 0 && (!query || listed > 0) ? (
+          <SectionLabel>Conversations</SectionLabel>
+        ) : null}
         {drawn}
         {query &&
           !listed &&
@@ -402,7 +400,7 @@ export function ChatTeamColumn({
           )}
         {dimmed.length > 0 && (
           <>
-            <SectionLabel className="chat-nochat-label">No chat</SectionLabel>
+            <SectionLabel className="chat-nochat-label">Not ready</SectionLabel>
             {dimmed.map((store) => {
               const reason = noChatReason(snapshot, store);
               return (
@@ -414,7 +412,22 @@ export function ChatTeamColumn({
                   <GroupMark store={store} size="sm" />
                   <span className="t">
                     <b>{store.name}</b>
-                    <small>{reason}</small>
+                    <small>
+                      {store.active === false ? (
+                        <>
+                          Finish setup in{' '}
+                          <button
+                            type="button"
+                            className="lnk"
+                            onClick={() => onTeams(store.id)}
+                          >
+                            Teams
+                          </button>
+                        </>
+                      ) : (
+                        reason
+                      )}
+                    </small>
                   </span>
                 </div>
               );

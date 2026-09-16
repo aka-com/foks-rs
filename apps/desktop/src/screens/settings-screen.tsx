@@ -706,13 +706,13 @@ function ResetMacSheet({
   const expiry = !answered
     ? null
     : agreed !== undefined
-      ? `Each reset confirmation expires in ${agreed} seconds and can be used once. Reopen this dialog to generate new ones.`
-      : `Each reset confirmation can be used once and has a server-specific expiration duration: ${servers
+      ? `Confirmations expire in ${agreed} seconds.`
+      : `Confirmations expire per server: ${servers
           .map(
             (server) =>
               `${serverDisplayName(server)} (${previews.get(server.id)?.expiresInSeconds} seconds)`,
           )
-          .join(', ')}. Reopen this dialog to generate new confirmations.`;
+          .join(', ')}.`;
 
   return (
     <SheetDialog
@@ -724,7 +724,6 @@ function ResetMacSheet({
         onClose();
       }}
       title="Reset this Mac?"
-      subtitle="Delete local account keys and reset server trust for every server on this Mac"
       glyph={
         <span className="server-mark danger">
           <Icon name="trash" />
@@ -770,11 +769,9 @@ function ResetMacSheet({
       }
     >
       <p>
-        This permanently deletes local account keys. Server data is not deleted,
-        but you can permanently lose access to it without another enrolled
-        device, a paper key you wrote down, or a usable external backup of your
-        local state. Your account passphrase alone cannot restore the deleted
-        keys.
+        Deletes this Mac's account keys. Your data stays on the server, but
+        without another device or a paper key you cannot get back into the
+        account. The passphrase alone is not enough.
       </p>
       <Inset>
         <InsetRow label="Unaffected">

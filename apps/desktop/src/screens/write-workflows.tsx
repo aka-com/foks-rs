@@ -804,7 +804,6 @@ function NewSheet({
         ) : null}
         <Toggle label="Advanced" className="sheet-advanced">
           <Inset>{field('Path', path, setPath, DRAFT_PATH[itemKind])}</Inset>
-          <p className="hint">The item will be saved at this vault path.</p>
         </Toggle>
       </>
     </Sheet>
@@ -847,7 +846,6 @@ function ExistsSheet({
   const clash = snapshot.items.find(
     (item) => item.store === workflow.storeId && item.path === workflow.path,
   );
-  const version = clash?.version;
   // This step still holds the draft the new-item sheet carried here, so it is
   // abandoned under the same confirmation, from a navigation or from Escape
   // and the backdrop.
@@ -890,12 +888,8 @@ function ExistsSheet({
     >
       <>
         <p>
-          An item already exists at this path. No files were overwritten
-          {version
-            ? ` in ${storeOf(snapshot, workflow.storeId)?.name ?? 'this vault'} (currently version ${version})`
-            : ''}
-          . You can open the existing item to review it, or choose a different
-          name or path.
+          Nothing was overwritten. Open the existing item, or choose another
+          path.
         </p>
       </>
     </Sheet>
@@ -1125,10 +1119,7 @@ function ConflictSheet({
             </>
           }
         >
-          <p>
-            Your draft has not been saved. Discarding will permanently delete
-            your changes. The existing item will remain unchanged.
-          </p>
+          <p>Your changes have not been saved.</p>
         </Sheet>
       </Dialog>
     );
@@ -1144,7 +1135,6 @@ function ConflictSheet({
       <Sheet
         glyph={<KindIcon kind={kindOf(workflow.item) as FilterKind} />}
         title="Item modified elsewhere"
-        subtitle="A newer version was saved from another device."
         footer={
           <>
             <Button onClick={() => setConfirmingDiscard(true)}>
@@ -1166,12 +1156,8 @@ function ConflictSheet({
       >
         <>
           <p>
-            A newer version was saved while you were editing. Review the latest
-            version and reapply your changes.
-          </p>
-          <p className="fn">
-            Refresh to compare the latest version with your draft, review
-            changes, and save your update.
+            A newer version was saved while you were editing. Refresh to see it,
+            then reapply your changes.
           </p>
         </>
       </Sheet>
@@ -1264,9 +1250,7 @@ function DeleteSheet({
         </>
       }
     >
-      <p>
-        This item will be permanently deleted. This action cannot be undone.
-      </p>
+      <p>This cannot be undone.</p>
     </SheetDialog>
   );
 }

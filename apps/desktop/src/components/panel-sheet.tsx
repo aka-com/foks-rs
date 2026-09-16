@@ -3,7 +3,7 @@
  *
  * Each panel keeps its own bridge state machine and renders its form in the
  * sheet body and its actions in the sheet footer. The header carries the
- * workflow name alone; the account it applies to is named in the subtitle.
+ * workflow name alone; the page that opened the sheet names the account.
  */
 
 import type { ReactNode } from 'react';
@@ -13,8 +13,8 @@ import { SheetDialog } from './sheet';
 export interface PanelPresentation {
   /** The workflow name. Never qualified with the account alias. */
   title: string;
-  /** `"{username} on {server}"`, or the alias when no username is known. */
-  subtitle: string;
+  /** Set only when the page that opened the sheet does not name the account. */
+  subtitle?: string;
   onClose: () => void;
 }
 

@@ -81,10 +81,7 @@ export function LocalAliasPanel({
         </>
       }
     >
-      <p>
-        Changes the name shown in this app. The username and CLI account alias
-        stay the same.
-      </p>
+      <p>Changes the name shown in this app only.</p>
       <Inset>
         <Field
           disabled={busy}

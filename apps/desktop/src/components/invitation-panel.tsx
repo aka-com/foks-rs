@@ -548,8 +548,8 @@ export function InvitationPanel({
         }
       >
         <p>
-          Paste an invitation to request membership. Files and chat open after
-          an administrator approves and this client verifies the group keys.
+          Paste an invitation to request membership. You will have access once
+          an administrator approves your request.
         </p>
         {errorLine}
         <Inset className="form">
@@ -583,7 +583,7 @@ export function InvitationPanel({
       <p>
         {teamAlias
           ? 'Issue invitations and review requests to join this group.'
-          : 'Paste an invitation to request membership. Files and chat open after an administrator approves and this client verifies the group keys.'}
+          : 'Paste an invitation to request membership. You will have access once an administrator approves your request.'}
       </p>
       {errorLine}
       {teamAlias ? (

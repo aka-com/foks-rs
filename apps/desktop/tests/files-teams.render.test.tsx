@@ -244,7 +244,6 @@ test('Find groups lists accounts under their servers', async () => {
   assert.ok(rendered.getByRole('group', { name: 'Acme' }));
   assert.ok(rendered.getByRole('menuitem', { name: 'Check as satoshi' }));
   assert.ok(rendered.getByRole('menuitem', { name: 'Check as vitalik' }));
-  assert.equal(rendered.queryByText('Send setup instructions…'), null);
   assert.ok(rendered.getByText('Create a group'));
   assert.ok(rendered.getByText('Join a group…'));
 });
@@ -460,10 +459,8 @@ test('creating and joining act as the account the address names', async () => {
     scene: 'join',
   });
   assert.ok(joining.getByRole('heading', { name: 'Join a group' }));
-  assert.equal(
-    document.querySelector('.sheet .hd small')?.textContent,
-    'vitalik on Acme',
-  );
+  // The Teams page already names the account, so the sheet does not.
+  assert.equal(document.querySelector('.sheet .hd small'), null);
 });
 
 test('same-named Files roots retain distinct server identities even with duplicate labels', async () => {

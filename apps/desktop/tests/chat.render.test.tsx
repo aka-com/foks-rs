@@ -106,7 +106,7 @@ async function setup(
                 },
                 onNewChat: () => {},
                 onSettings: () => {},
-                onCreateTeam: () => {},
+                onTeams: () => {},
               }),
         }),
       }),

@@ -160,9 +160,8 @@ export function BotPanel({
       }
     >
       <p>
-        A bot is a device credential for automation on this account. Enroll it,
-        export its token once, and keep the file to load the bot after a
-        restart.
+        A bot is a device credential for automation. Export its token once and
+        keep the file to reload it after a restart.
       </p>
       <SegmentedControl<BotPane>
         label="Bot account action"

@@ -428,7 +428,7 @@ export function NewChatSheet({
       }
       subtitle={
         step === 'team'
-          ? 'Chat happens inside a named team. There are no one-to-one messages.'
+          ? 'Pick a team.'
           : picked
             ? `${picked.store.name} · ${picked.detail}`
             : undefined
@@ -620,8 +620,8 @@ export function NewChatSheet({
                 </Inset>
                 {outstanding && !busy && (
                   <p className="hint">
-                    The server reply was lost. Recover retries the same request
-                    so the channel is not created twice.
+                    The server did not reply. Retry sends the same request; no
+                    duplicate is created.
                   </p>
                 )}
               </>

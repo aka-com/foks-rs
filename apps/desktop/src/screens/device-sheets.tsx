@@ -178,8 +178,6 @@ export function PhraseSheet({
   bridge,
   profile,
   accountAlias,
-  username,
-  server,
   seedPhrase,
   seedAlias,
   onPrepared,
@@ -191,8 +189,6 @@ export function PhraseSheet({
   bridge: Bridge;
   profile: string;
   accountAlias: string;
-  username: string;
-  server: string;
   seedPhrase?: string;
   seedAlias?: string;
   onPrepared?: (
@@ -235,7 +231,6 @@ export function PhraseSheet({
   return (
     <DeviceSheetFrame
       title={phrase ? 'Save paper key' : 'Create paper key'}
-      subtitle={`Generate a paper key for ${username} on ${server}`}
       onClose={discard}
       dismissible={!busy}
       footer={
@@ -294,9 +289,8 @@ export function PhraseSheet({
       {phrase ? (
         <>
           <p>
-            These {words.length} words are the key. Write them down now. If this
-            window loses focus, the phrase is hidden. You can show it once more
-            from Devices within two minutes. Dismissing it removes that option.
+            Write these {words.length} words down now. After you close this,
+            they can be shown once more from Devices, within two minutes.
           </p>
           <div className="words">
             {words.map((word, index) => (
@@ -327,7 +321,6 @@ export function PhraseSheet({
 export function PairSheet({
   bridge,
   store,
-  subtitle,
   initialMode,
   onCopy,
   onBack,
@@ -337,8 +330,6 @@ export function PairSheet({
 }: {
   bridge: Bridge;
   store: AccountStore;
-  /** Who this Mac pairs as, and where. */
-  subtitle: string;
   initialMode: 'offer' | 'accept';
   /** Copies the revealed phrase, which is live-form only. */
   onCopy: (text: string) => void;
@@ -419,8 +410,7 @@ export function PairSheet({
   );
   return (
     <DeviceSheetFrame
-      title="Set up another Mac"
-      subtitle={subtitle}
+      title="Pair another device"
       onClose={() => {
         if (busy) return;
         setOffer(null);
@@ -506,27 +496,23 @@ export function PairSheet({
           an offer is open, and resuming shows the same phrase again. */}
       {resumed && offer ? (
         <Band label="A pairing is waiting on this Mac">
-          {subtitle} · the agent still holds this offer, and the phrase below is
-          the same one it issued.
+          The phrase below is the one already issued.
         </Band>
       ) : null}
       {mode === 'offer' ? (
         <ol className="pair-steps">
           <li>
-            <b>On this Mac</b>
+            <b>On this device</b>
             {offer ? (
               <>
-                <p>
-                  Type this pairing phrase on the other Mac. It is shown once
-                  and is never stored on this Mac.
-                </p>
+                <p>Type this phrase on the other device. It is shown once.</p>
                 <CopyBox text={offer.phrase} onCopy={onCopy}>
                   <span className="mono">{offer.phrase}</span>
                 </CopyBox>
               </>
             ) : (
               <>
-                <p>Get a pairing phrase for {subtitle}.</p>
+                <p>Get a pairing phrase.</p>
                 <span className="steprow">
                   <Button
                     variant="primary"
@@ -553,30 +539,24 @@ export function PairSheet({
             )}
           </li>
           <li className={offer ? undefined : 'off'}>
-            <b>On the other Mac</b>
+            <b>On the other device</b>
             <p>
               Open FOKS there, choose Add a device › Pair this device with
-              another account, and type the phrase. Then finish here: Finish
-              writes the new device into the account and reloads the
-              authenticated device list.
+              another account, and type the phrase. Then click Finish here.
             </p>
           </li>
         </ol>
       ) : (
         <ol className="pair-steps">
           <li>
-            <b>On the other Mac</b>
+            <b>On the other device</b>
             <p>
               Open FOKS there, choose Add a device › Pair another Mac, and start
               a pairing. It shows a phrase once.
             </p>
           </li>
           <li>
-            <b>On this Mac</b>
-            <p>
-              Type that phrase here. Resume acceptance continues an acceptance
-              this Mac already began.
-            </p>
+            <b>On this device</b>
           </li>
         </ol>
       )}
@@ -662,10 +642,7 @@ export function RecoverSheet({
         </>
       }
     >
-      <p>
-        Recovery adds this Mac as an authorized device. If interrupted, you can
-        resume recovery from Needs attention in Accounts using the same phrase.
-      </p>
+      <p>Adds this Mac as a device on the account.</p>
       <Inset>
         <Field label="Local alias" value={target} onChange={setTarget} />
         <Field label="Device name" value={device} onChange={setDevice} />
@@ -751,7 +728,7 @@ export function EnrollSheet({
   return (
     <DeviceSheetFrame
       title="Create a YubiKey account"
-      subtitle={`Create a new account on ${store.server}`}
+      subtitle={`New account on ${store.server}`}
       onClose={() => {
         clear();
         onClose();
@@ -803,23 +780,16 @@ export function EnrollSheet({
                 .finally(() => setBusy(false));
             }}
           >
-            Prepare card and create account
+            Create account
           </Button>
         </>
       }
     >
-      <p>Before you continue:</p>
       <ol className="sheet-steps">
+        <li>If setup fails, the card must be reset, erasing its data.</li>
+        <li>The card must have factory settings.</li>
         <li>
-          <b>Credentials are written in a single operation.</b> If setup fails,
-          the card's security applet must be reset, erasing existing card data.
-        </li>
-        <li>
-          <b>The card must use default factory settings.</b> Custom-managed
-          cards are not supported.
-        </li>
-        <li>
-          <b>Save your unlock code securely.</b> It cannot be recovered if lost.
+          <b>Save your unlock code.</b> It cannot be recovered.
         </li>
       </ol>
       {card ? (
@@ -856,7 +826,6 @@ export function EnrollSheet({
             value={invite}
             onChange={(event) => setInvite(event.target.value)}
           />
-          <small>Optional server invitation code.</small>
         </InsetRow>
       </Inset>
       <details className="adv">
@@ -894,10 +863,6 @@ export function EnrollSheet({
           </InsetRow>
         </Inset>
       </details>
-      <p className="hint">
-        PIN, unlock code and invite go only to the local agent and are cleared
-        when submitted.
-      </p>
     </DeviceSheetFrame>
   );
 }
@@ -955,8 +920,7 @@ export function ProvisionSheet({
   );
   return (
     <DeviceSheetFrame
-      title="Provision a YubiKey device"
-      subtitle={`Add a security key to ${store.account}`}
+      title="Connect a YubiKey"
       onClose={() => {
         clear();
         onClose();
@@ -992,7 +956,7 @@ export function ProvisionSheet({
                 .finally(() => setBusy(false));
             }}
           >
-            Provision card
+            Connect
           </Button>
         </>
       }
@@ -1230,10 +1194,6 @@ export function YubiActionSheet({
         </>
       }
     >
-      <p>
-        The values below go only to the local agent and are cleared when
-        submitted.
-      </p>
       <Inset>
         <InsetRow label="Key alias">
           <b>{alias || 'No key enrolled'}</b>
@@ -1297,7 +1257,6 @@ export function RevokeSheet({
   return (
     <DeviceSheetFrame
       title={`Revoke ${alias}?`}
-      subtitle="Disconnects this key and updates account security"
       onClose={() => {
         if (busy) return;
         onClose();
@@ -1342,11 +1301,7 @@ export function RevokeSheet({
         </>
       }
     >
-      <p>
-        This YubiKey will immediately lose access to your account. Any data
-        previously cached on devices using this key will remain until cleared.
-        Enter the key alias to confirm revocation.
-      </p>
+      <p>This key loses access to the account. Type its alias to confirm.</p>
       <Inset>
         <InsetRow label="Confirm">
           <input
@@ -1425,9 +1380,8 @@ export function RevokeBackupSheet({
       }
     >
       <p>
-        This paper key will immediately lose future recovery access. Revocation
-        also rotates every account key it could read. Enter the paper key name
-        to confirm.
+        This paper key can no longer recover the account, and the account keys
+        are rotated. Type its name to confirm.
       </p>
       <Inset>
         <InsetRow label="Confirm">
@@ -1504,13 +1458,8 @@ export function RemoveDeviceSheet({
       }
     >
       <p>
-        This device loses future access to the account. Any data previously
-        downloaded to this device will remain until removed; change any
-        sensitive secrets if the device is not under your control.
-      </p>
-      <p className="fn">
-        You can only remove other devices here. A security key is revoked under
-        Security keys, and this Mac is removed by Reset this Mac in Settings.
+        This device loses access to the account. Data already on it stays there;
+        change any secrets it could read if it is not under your control.
       </p>
       <Inset>
         <InsetRow label="Confirm">
@@ -1656,9 +1605,7 @@ export function PassphraseSheet({
         )}
       </Inset>
       {mode === 'verify' ? (
-        <p className="hint">
-          Verify tests the passphrase with the server login challenge.
-        </p>
+        <p className="hint">Checks the passphrase with the server.</p>
       ) : null}
     </DeviceSheetFrame>
   );

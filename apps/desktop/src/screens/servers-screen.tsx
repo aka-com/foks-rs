@@ -1190,7 +1190,7 @@ function SheetFrame({
   danger = false,
 }: {
   title: string;
-  subtitle: string;
+  subtitle?: string;
   children: ReactNode;
   footer: ReactNode;
   onClose: () => void;
@@ -1240,7 +1240,6 @@ function AddServerSheet({
   return (
     <SheetFrame
       title="Add a server"
-      subtitle="Enter server connection details to verify and connect"
       onClose={onClose}
       footer={
         <>
@@ -1266,11 +1265,7 @@ function AddServerSheet({
         </>
       }
     >
-      <p>
-        Adding a server saves its profile and address on this Mac. Verify the
-        server after adding it to confirm its identity and establish the
-        connection.
-      </p>
+      <p>The server is verified after it is added.</p>
       <Inset>
         <Field label="Profile" value={profile} onChange={setProfile} />
         <Field label="Address" value={probe} onChange={setProbe} />
@@ -1303,7 +1298,7 @@ function RenameServerSheet({
   return (
     <SheetFrame
       title="Rename server"
-      subtitle="This only changes how the server is named in this app."
+      subtitle="This only changes the server name displayed locally."
       onClose={onClose}
       footer={
         <>
@@ -1384,7 +1379,6 @@ function ResetSheet({
   return (
     <SheetFrame
       title={`Erase local credentials for ${serverDisplayName(server)}?`}
-      subtitle="Delete local account keys and reset server trust on this device"
       onClose={() => {
         if (busy) return;
         onClose();
@@ -1419,11 +1413,9 @@ function ResetSheet({
       }
     >
       <p>
-        This permanently deletes local account keys for this server. Server data
-        is not deleted, but you can permanently lose access to it without
-        another enrolled device, a paper key you wrote down, or a usable
-        external backup of your local state. Your account passphrase alone
-        cannot restore the deleted keys.
+        Deletes this Mac's account keys for this server. Your data stays on the
+        server, but without another device or a paper key you cannot get back
+        into the account. The passphrase alone is not enough.
       </p>
       <Inset>
         <InsetRow label="Removed">
@@ -1472,8 +1464,7 @@ function ResetSheet({
             )}
           </Inset>
           <p className="hint">
-            This reset confirmation expires in {preview.expiresInSeconds}{' '}
-            seconds.
+            This confirmation expires in {preview.expiresInSeconds} seconds.
             {available
               ? ''
               : ' Reopen this dialog to generate a new confirmation.'}
@@ -1531,7 +1522,6 @@ function ForgetSheet({
   return (
     <SheetFrame
       title={`Remove local data for ${serverDisplayName(server)}?`}
-      subtitle="Remove all local keys and stored data for this server"
       onClose={onClose}
       danger
       footer={
@@ -1561,8 +1551,7 @@ function ForgetSheet({
       }
     >
       <p>
-        Your data on the server will not be deleted. Type the server profile
-        name to confirm.
+        Your data on the server is not deleted. Type the server name to confirm.
       </p>
       <Inset>
         <InsetRow label="Removed">

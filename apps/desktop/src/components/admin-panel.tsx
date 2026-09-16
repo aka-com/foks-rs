@@ -82,9 +82,8 @@ export function AdminPanel({
       }
     >
       <p>
-        Opens this host’s web administration panel in a private window, signed
-        in with this device’s account key. The window closes when FOKS locks.
-        Enter the address provided by the host operator.
+        Opens the host’s web admin panel in a private window that closes when
+        FOKS locks.
       </p>
       <Inset className="form">
         <InsetRow label="Admin panel address">
@@ -93,7 +92,7 @@ export function AdminPanel({
             value={destination}
             maxLength={2048}
             disabled={busy}
-            placeholder="https://admin.example/"
+            placeholder="Address from the host operator"
             onChange={(e) => setDestination(e.target.value)}
           />
         </InsetRow>

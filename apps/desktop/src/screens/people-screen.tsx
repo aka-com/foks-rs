@@ -37,7 +37,6 @@ import type { Bridge } from '../bridge';
 import {
   accountStopped,
   accountStores,
-  accountSubtitle,
   notesNow,
   parseRole,
   partiesOf,
@@ -488,7 +487,6 @@ export function PeopleScreen({
           alias={localAliasOf(snapshot, selected)}
           presentation={{
             title: 'Change local alias',
-            subtitle: accountSubtitle(snapshot, selected),
             onClose: () => setSheet(null),
           }}
           onComplete={async () => {
@@ -504,7 +502,6 @@ export function PeopleScreen({
           account={selected.account}
           presentation={{
             title: 'Change username',
-            subtitle: accountSubtitle(snapshot, selected),
             onClose: () => setSheet(null),
           }}
           onComplete={() => onRefresh('Username updated')}
@@ -517,7 +514,6 @@ export function PeopleScreen({
           account={selected.account}
           presentation={{
             title: 'Bot accounts',
-            subtitle: accountSubtitle(snapshot, selected),
             onClose: () => setSheet(null),
           }}
           onComplete={() => onRefresh('Bot account updated')}
@@ -530,7 +526,6 @@ export function PeopleScreen({
           account={selected.account}
           presentation={{
             title: 'Manage via web',
-            subtitle: accountSubtitle(snapshot, selected),
             onClose: () => setSheet(null),
           }}
         />
@@ -542,7 +537,6 @@ export function PeopleScreen({
           account={selected.account}
           presentation={{
             title: 'Join a group',
-            subtitle: accountSubtitle(snapshot, selected),
             onClose: () => setSheet(null),
           }}
           onComplete={() => onRefresh('Group membership refreshed')}
@@ -556,7 +550,6 @@ export function PeopleScreen({
           login={true}
           presentation={{
             title: 'Organization sign-in',
-            subtitle: accountSubtitle(snapshot, selected),
             onClose: () => setSheet(null),
           }}
           onComplete={() => onRefresh('Organization sign-in verified')}

@@ -499,7 +499,7 @@ test('a team whose server offers no chat sits under No chat with the reason', as
     (node) => node.textContent,
   );
   assert.ok(labels.includes('Conversations'));
-  assert.ok(labels.includes('No chat'));
+  assert.ok(labels.includes('Not ready'));
 });
 
 test('a team with a lapsed server check-in remains listed with recovery actions', async () => {
@@ -586,8 +586,7 @@ test('with no team at all the tab offers team creation', async () => {
   const journal = await mount(snapshot, { kind: 'chat' });
   await ui.screen.findByRole('heading', { name: 'No team chats yet' });
   assert.equal(ui.screen.queryByText('How chat gets turned on'), null);
-  assert.ok(ui.screen.getByText('No team on this Mac has chat.'));
-  // The "No chat" teams are still a column worth searching, so the field is
+  // The "Not ready" teams are still a column worth searching, so the field is
   // live even though New chat has no team to offer.
   const field = ui.screen.getByRole<HTMLInputElement>('searchbox', {
     name: 'Search teams and channels',
@@ -1113,7 +1112,7 @@ test('an interrupted attempt recovers the same preparation rather than a second'
     name: 'Retry channel creation',
   });
   await ui.screen.findByText('The reply was lost.');
-  await ui.screen.findByText(/Recover retries the same request/);
+  await ui.screen.findByText(/Retry sends the same request/);
   ui.fireEvent.click(recover);
   await ui.screen.findByRole('button', { name: /#design/ });
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));

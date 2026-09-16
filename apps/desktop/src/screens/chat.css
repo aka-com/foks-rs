@@ -34,6 +34,9 @@
 }
 .chat-inbox-top .btn.primary {
   flex: none;
+  width: 32px;
+  padding: 0;
+  justify-content: center;
 }
 .chat-inbox-scroll {
   flex: 1;
@@ -136,6 +139,11 @@
 .chat-team-head.off {
   padding: 6px 8px 6px 12px;
   opacity: 0.55;
+}
+.chat-team-head.off .lnk {
+  font-size: inherit;
+  padding: 0;
+  text-decoration: underline;
 }
 .chat-team-head .t {
   flex: 1;
@@ -980,11 +988,4 @@
 }
 .chat-local-settings [role='alert'] {
   color: var(--danger-ink);
-}
-
-.chat-inbox-scope {
-  margin: 0;
-  padding: 8px 12px 0;
-  color: var(--muted);
-  font-size: 12px;
 }

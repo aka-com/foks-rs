@@ -209,15 +209,15 @@ test('the chat tab opens a conversation and lists every team at once', async () 
     assert.equal(household.getAttribute('aria-current'), 'page'),
   );
   // Chat follows the server capability grant, as the rail's chat rows did:
-  // Engineering's server offers none, so it sits under "No chat", dimmed and
+  // Engineering's server offers none, so it sits under "Not ready", dimmed and
   // not selectable.
   assert.ok(engineering.classList.contains('off'));
   assert.equal(engineering.getAttribute('role'), null);
   assert.ok(
     [...column.querySelectorAll('.sec')].some(
-      (label) => label.textContent === 'No chat',
+      (label) => label.textContent === 'Not ready',
     ),
-    'the No chat group names itself',
+    'the Not ready group names itself',
   );
   // The location remembers the team the tab chose.
   await testingLibrary.waitFor(() => {

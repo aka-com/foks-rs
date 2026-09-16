@@ -209,6 +209,7 @@ export function ChatTab({
         onSettings={(next) =>
           onNavigate({ kind: 'group-settings', ref: next, tab: 'settings' })
         }
+        onTeams={(next) => onNavigate({ kind: 'teams', store: next })}
       />
       <section
         className="chat-conversation"

@@ -915,7 +915,6 @@ export function DevicesScreen({
         <PairSheet
           bridge={bridge}
           store={selected}
-          subtitle={accountSubtitle(snapshot, selected)}
           initialMode={pairMode}
           onCopy={copy}
           onBack={() => setSheet('add')}
@@ -949,11 +948,6 @@ export function DevicesScreen({
           bridge={bridge}
           profile={selected.server}
           accountAlias={selected.account}
-          username={
-            snapshot.accounts.find((entry) => entry.store === selected.id)
-              ?.username ?? selected.account
-          }
-          server={serverName(snapshot, selected)}
           seedAlias={resumedPaperKey?.alias}
           onPrepared={resumedPaperKey ? undefined : paperResume.prepare}
           onForget={paperResume.forget}

@@ -23,7 +23,6 @@ import {
 import { InvitationPanel } from '../components/invitation-panel';
 import { enqueueProfileWork } from '../bridge';
 import {
-  accountSubtitle,
   canCreateInStore,
   parseRole,
   partiesOf,
@@ -594,7 +593,6 @@ export function TeamsScreen({
           account={joining.account}
           presentation={{
             title: 'Join a group',
-            subtitle: accountSubtitle(snapshot, joining),
             onClose: () => setJoining(null),
           }}
           onComplete={() => onRefresh('Group membership refreshed')}

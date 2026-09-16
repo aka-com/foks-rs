@@ -416,7 +416,10 @@ test('the username row opens a sheet titled for the workflow, not the account', 
   const dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
   const heading = ui.within(dialog).getByRole('heading', { level: 2 });
   assert.equal(heading.textContent, 'Change username');
-  assert.ok(ui.within(dialog).getByText('satoshi on Personal server'));
+  assert.equal(
+    ui.within(dialog).queryByText('satoshi on Personal server'),
+    null,
+  );
   assert.ok(ui.within(dialog).getByLabelText('Username'));
 });
 

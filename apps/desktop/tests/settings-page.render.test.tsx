@@ -273,7 +273,7 @@ test('server display names can be set and cleared through the stable profile id'
   assert.ok(
     ui
       .within(dialog)
-      .getByText('This only changes how the server is named in this app.'),
+      .getByText('This only changes the server name displayed locally.'),
   );
   const field = ui.within(dialog).getByLabelText('Display name');
   assert.equal((field as HTMLInputElement).value, 'Personal server');
@@ -460,11 +460,7 @@ test('Reset this Mac asks for one typed profile name per server', async () => {
   assert.equal(run.hasAttribute('disabled'), false);
   // The lifetime is the one every preview reported, not a number this page
   // invented.
-  assert.ok(
-    ui
-      .within(dialog)
-      .getByText(/Each reset confirmation expires in 60 seconds/),
-  );
+  assert.ok(ui.within(dialog).getByText(/Confirmations expire in 60 seconds/));
 });
 
 test('the reset consumes each profile’s single-use confirmation token', async () => {
