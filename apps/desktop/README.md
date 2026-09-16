@@ -53,7 +53,7 @@ admission state, Restore access and Remove admission. A roster party that names
 another group is listed under Groups on other servers rather than dropped,
 once: with a "No admission record" chip where no record on this Mac matches it,
 and an "Ambiguous admission" chip where several do, in which case those records
-are not listed again beside it. Add someone on `<server>`… and Invite someone…
+are not listed again beside it. Add someone on `<server>`… and Send setup instructions…
 follow the people and machine rows and go with them when the roster could not
 be read; Add a group… follows the admitted ones. The member addition dialog
 provides two modes: person mode and federated team mode. Person mode preselects
@@ -381,14 +381,14 @@ The tab and its headings say Teams; the object in
 body copy is a group. Beside the row, not inside it, sits a menu of that
 group's actions; an action that does not apply stays, inert, with its reason in
 the item's `title` — Leave always, the server-dependent entries while its
-server is out of reach, and Invite someone… where this Mac holds no account on
+server is out of reach, and Send setup instructions… where this Mac holds no account on
 the group's own server to send it as. Below the
 list, the per-account checks are folded into one disclosure row, "Check other
 servers for groups", counting the servers those accounts sign in to: discovery
 is an occasional per-server action, not a landing surface. Opened, it is one
 row per account store, headed by the server it signs in to: what that server
 lists when Check for groups is pressed, announced on the row itself and
-nowhere else, an Invite someone… entry, and the same
+nowhere else, a Send setup instructions… entry, and the same
 abnormal-state chip at the row's end. The disclosure opens when an account
 enters an abnormal state. After the user changes the disclosure state, that
 preference is preserved. The
@@ -397,17 +397,15 @@ invitation panel. Creating and joining act as one account — the one
 `?state=teams&store=<StoreRef>` names, else this Mac's first — and the Create
 sheet opens on that account, seeded to it and saying who is creating the group
 on which server, so the account
-menu keeps the page when it switches. An invitation belongs to an account
-rather than to a group, so it is its own sheet: the account is the first choice
-on it and rewrites the consequence line, the group list and the message; the
-group below only names a group in that message. The consequence line names the
-other servers this Mac holds accounts on, each once — never the server it is
-inviting to, which would contradict the sentence it is in. No signup code or
-expiry is drawn, because the agent reports neither; what the message cannot
-vouch for is said under it instead — the download address is a placeholder
-until FOKS publishes one, and a server may require a signup code no command
-here can mint. The message asks for an account "on the server" rather than
-inventing a naming convention no server states. Devices is one page per account, with
+menu keeps the page when it switches. Setup instructions belong to an account and name its server; an optional group
+names the group the sender plans to add the recipient to. The message asks the
+sender to supply an installer and directs the recipient to the server
+administrator if a signup code is required. It contains no provisional download
+URL and grants no access. Team invitations are a separate protocol workflow:
+Members → Invitations and requests lets administrators create invitations,
+review and approve or reject requests, and recover pending operations. Join a
+group accepts those invitations and verifies membership before opening access.
+Devices is one page per account, with
 the same switcher at the top and the header counting each kind it lists —
 "2 Macs · 1 key on a card · 1 paper key · 1 enrollment", and Loading… until
 all four reads have answered, because counting what has not been read yet

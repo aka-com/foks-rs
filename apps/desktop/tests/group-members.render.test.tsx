@@ -148,6 +148,67 @@ test('the roster is split into people, machines and admitted groups', async () =
   assert.equal(rows.includes('generation'), false);
 });
 
+test('Members exposes invitation creation, requests and approval recovery for this group', async () => {
+  const calls: { profile: string; account: string; action: unknown }[] = [];
+  const snapshot = await fixture();
+  const store = snapshot.stores.find((entry) => entry.id === 'team:eng');
+  assert.ok(store?.kind === 'team');
+  const r = await group(snapshot, {
+    invitation: async (profile, account, action) => {
+      calls.push({ profile, account, action });
+      return action.action === 'inbox'
+        ? {
+            rows: [
+              {
+                request_id: '1'.repeat(32),
+                username: 'new-member',
+                verified: true,
+              },
+            ],
+          }
+        : { state: 'complete' };
+    },
+  });
+  ui.fireEvent.click(r.getByRole('button', { name: 'Invitations and requests' }));
+  for (const label of [
+    'Create invitation',
+    'Refresh requests',
+    'Approve',
+    'Reject',
+    'Show pending approvals',
+    'Show pending operations',
+  ]) {
+    ui.fireEvent.click(r.getByRole('button', { name: label }));
+    await ui.act(async () => {});
+  }
+  assert.deepEqual(
+    calls.map((call) => (call.action as { action: string }).action),
+    ['create', 'inbox', 'approve', 'reject', 'pending-approvals', 'list'],
+  );
+  assert.ok(
+    calls.every(
+      (call) => call.profile === store.server && call.account === store.account,
+    ),
+  );
+  assert.deepEqual(calls[0].action, {
+    action: 'create',
+    team_alias: store.alias,
+  });
+});
+
+test('Members does not expose invitation administration to an ordinary member', async () => {
+  const snapshot = await fixture();
+  await group({
+    ...snapshot,
+    parties: snapshot.parties.map((party) =>
+      party.store === 'team:eng' && party.label === 'you'
+        ? { ...party, destination_role: 'member' }
+        : party,
+    ),
+  });
+  assert.equal(ui.screen.queryByText('Invitations and requests'), null);
+});
+
 test('a role is one chip, with the visibility band inside it', async () => {
   await group(await fixture());
   assert.equal(
@@ -270,7 +331,7 @@ test('a single-action alert puts its action at the right end of the alert', asyn
     'Add a group…',
   );
   assert.equal(
-    rendered.queryByRole('button', { name: 'Invite someone…' }),
+    rendered.queryByRole('button', { name: 'Send setup instructions…' }),
     null,
   );
 });
@@ -454,7 +515,7 @@ test('each action follows the rows it adds to', async () => {
     [...actions[0].querySelectorAll('button')].map((node) =>
       (node.textContent ?? '').trim(),
     ),
-    ['Add someone on Acme…', 'Invite someone…'],
+    ['Add someone on Acme…', 'Send setup instructions…'],
   );
   // Then the admitted groups, then what admits another one.
   const federation = document.querySelector('.rt.fed');

@@ -1,3 +1,4 @@
+import { InvitationPanel } from '../components/invitation-panel';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
@@ -773,7 +774,7 @@ function MembersTab({
                 }
                 onClick={onInvite}
               >
-                Invite someone…
+                Send setup instructions…
               </Button>
             </div>
           ) : null}
@@ -2353,6 +2354,18 @@ export function GroupSettingsScreen({
                   rekeyOpen={rekeyArmed}
                 />
               )}
+              {tab === 'people' && canManageRoster ? (
+                <Toggle label="Invitations and requests">
+                  <InvitationPanel
+                    key={store.id}
+                    bridge={bridge}
+                    profile={store.server}
+                    account={store.account}
+                    teamAlias={store.alias}
+                    onComplete={() => onApplied('Group requests updated')}
+                  />
+                </Toggle>
+              ) : null}
               {/* The raw response belongs to the two tabs it is the response
                   for: the roster under Members, the store under Settings. */}
               {tab === 'settings' ||

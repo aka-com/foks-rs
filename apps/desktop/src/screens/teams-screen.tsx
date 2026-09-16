@@ -266,7 +266,7 @@ function AccountRow({
           }
           onClick={onInvite}
         >
-          Invite someone…
+          Send setup instructions…
         </Button>
       </span>
     </div>
@@ -447,7 +447,7 @@ export function TeamsScreen({
                   if (holder) setInviting({ account: holder, group: store });
                 }}
               >
-                Invite someone…
+                Send setup instructions…
               </MenuItem>
               <hr />
               <MenuItem

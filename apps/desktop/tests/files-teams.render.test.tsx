@@ -238,7 +238,7 @@ test('the Teams page carries one check row per account store', async () => {
   // One check and one invite entry for each account, and no repeated
   // "Needs attention" list: the rows carry each store's state.
   assert.equal(rendered.getAllByText('Check for groups').length, 2);
-  assert.equal(rendered.getAllByText('Invite someone…').length, 2);
+  assert.equal(rendered.getAllByText('Send setup instructions…').length, 2);
   assert.equal(rendered.queryByText('Needs attention'), null);
   assert.ok(rendered.getByText('Create a group'));
   assert.ok(rendered.getByText('Join a group…'));
@@ -389,7 +389,7 @@ test('a server row whose access lapsed says so with a chip', async () => {
     'as vitalik · work',
   );
   const invite = [...work.querySelectorAll('button')].find(
-    (button) => button.textContent === 'Invite someone…',
+    (button) => button.textContent === 'Send setup instructions…',
   );
   assert.ok(invite);
   assert.equal(invite.disabled, true);
@@ -454,17 +454,17 @@ test('an account row invites as its own account, and the sheet can change it', a
   const rendered = await teams();
   const work = row('Acme');
   const invite = [...work.querySelectorAll('button')].find(
-    (button) => button.textContent === 'Invite someone…',
+    (button) => button.textContent === 'Send setup instructions…',
   );
   assert.ok(invite);
   await ui.act(async () => {
     ui.fireEvent.click(invite);
   });
-  assert.ok(rendered.getByRole('heading', { name: 'Invite someone' }));
+  assert.ok(rendered.getByRole('heading', { name: 'Send setup instructions' }));
   // The account is the first choice on the sheet, seeded to the row it was
   // opened from, and it is what the consequence line and the message say.
   const picker = document.querySelector(
-    '[role="radiogroup"][aria-label="Invite as"]',
+    '[role="radiogroup"][aria-label="Send as"]',
   );
   assert.ok(picker);
   assert.equal(
@@ -473,7 +473,7 @@ test('an account row invites as its own account, and the sheet can change it', a
   );
   assert.match(
     document.querySelector('.band.info')?.textContent ?? '',
-    /You are inviting as vitalik, on Acme/,
+    /You are sending as vitalik, on Acme/,
   );
   assert.match(
     document.querySelector('.copybox .v')?.textContent ?? '',
@@ -500,7 +500,7 @@ test('an account row invites as its own account, and the sheet can change it', a
   });
   assert.match(
     document.querySelector('.band.info')?.textContent ?? '',
-    /You are inviting as satoshi, on Personal server/,
+    /You are sending as satoshi, on Personal server/,
   );
   const groups = document.querySelector(
     '[role="radiogroup"][aria-label="Which group you plan to add them to"]',
@@ -518,9 +518,9 @@ test('a group row invites as the account that holds the group, naming it', async
   const rendered = await teams();
   openRowMenu('Engineering');
   await ui.act(async () => {
-    ui.fireEvent.click(menuItem('Engineering', 'Invite someone…'));
+    ui.fireEvent.click(menuItem('Engineering', 'Send setup instructions…'));
   });
-  assert.ok(rendered.getByRole('heading', { name: 'Invite someone' }));
+  assert.ok(rendered.getByRole('heading', { name: 'Send setup instructions' }));
   assert.equal(
     document.querySelector(
       '[role="radiogroup"][aria-label="Which group you plan to add them to"] [aria-checked="true"] .t b',
@@ -530,7 +530,9 @@ test('a group row invites as the account that holds the group, naming it', async
   // The message names the group, and says the one step that grants access.
   const message = document.querySelector('.copybox .v')?.textContent ?? '';
   assert.match(message, /I'd like to add you to Engineering on FOKS\./);
-  assert.match(message, /FOKS does not use invite links/);
+  assert.match(message, /ask them for a team invitation/);
+  assert.match(message, /signup code/);
+  assert.doesNotMatch(message, /foks\.app\/download|does not use invite links/);
 });
 
 test('the per-account checks are folded into one row', async () => {

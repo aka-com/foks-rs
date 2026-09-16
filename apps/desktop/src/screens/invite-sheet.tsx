@@ -1,18 +1,4 @@
-/**
- * Invite someone to a server.
- *
- * An invitation is a message, not a link: FOKS grants nothing until an Owner
- * or an Admin adds the username someone replies with. The account is therefore
- * the first choice on the sheet — it decides the server the invitee signs up
- * on, the groups their username can later be added to, and every line of the
- * message — and the group below it only names a group in that message.
- *
- * The agent reports no signup code and no expiry for one, so neither is drawn:
- * the mock's signup-code panel would be stating a fact this Mac does not hold.
- * What the message cannot vouch for is said under it instead — the installer
- * comes from the sender, and a server may require a signup code no command
- * here can mint.
- */
+/** Setup instructions for an account on a server, separate from team invitations. */
 
 import { useState } from 'react';
 import type { ReactNode } from 'react';
@@ -79,8 +65,8 @@ function inviteMessage(
     `2. When it asks for a server address, enter ${address}`,
     // No convention is invented for the username: the server decides what it
     // will accept, and this Mac holds no rule about it.
-    '3. Create your account on the server',
-    `4. Send your username to ${inviter}. FOKS does not use invite links.`,
+    '3. Create your account on the server. If it asks for a signup code, ask the server administrator for one.',
+    `4. Send your username to ${inviter} so they can add you, or ask them for a team invitation.`,
     '',
     group
       ? `${group.name} appears for you once ${inviter} adds that username.`
@@ -145,7 +131,7 @@ export function InviteSheet({
           <Icon name="server" />
         </span>
       }
-      title="Invite someone"
+      title="Send setup instructions"
       subtitle="Send setup instructions for one server. You add their username to a group afterwards."
       footer={
         <>
@@ -163,9 +149,9 @@ export function InviteSheet({
       }
     >
       <>
-        <SectionLabel>Invite as</SectionLabel>
+        <SectionLabel>Send as</SectionLabel>
         <Inset>
-          <RadioGroup label="Invite as">
+          <RadioGroup label="Send as">
             {accounts.map((candidate) => {
               const stopped = !storeReadable(snapshot, candidate.id);
               return (
@@ -191,7 +177,7 @@ export function InviteSheet({
             decides whether it was the right one. */}
         <Band
           severity="info"
-          label={`You are inviting as ${inviter}, on ${host}`}
+          label={`You are sending as ${inviter}, on ${host}`}
         >
           They create an account on {host}, and you add that username to groups
           on {host}.
@@ -235,15 +221,15 @@ export function InviteSheet({
           text={message}
           onCopy={(text) => copy(text, 'Message copied.')}
         />
-        {/* The requirements this Mac cannot determine for another server. */}
+        {/* The requirement this Mac cannot determine for another server. */}
         <p className="fn">
           Send the installer with these instructions. {host} may require a
           signup code; get that code from the server administrator.
         </p>
         <p className="fn">
-          FOKS has no invite links. This message is plain text and grants
-          nothing by itself: access begins only when an Owner or an Admin adds
-          the username to a group.
+          These instructions grant no access. A team invitation lets someone
+          request membership; an administrator must approve it. Manage team
+          invitations and requests on the group's Members tab.
         </p>
       </>
     </SheetDialog>
