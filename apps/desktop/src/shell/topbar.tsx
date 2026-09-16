@@ -196,8 +196,8 @@ export function Topbar({
           className="side-collapse"
           icon={collapsed ? 'panel-hollow' : 'panel-filled'}
           aria-expanded={!collapsed}
-          aria-label={collapsed ? 'Expand rail' : 'Collapse rail'}
-          title={collapsed ? 'Expand rail' : 'Collapse rail'}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           disabled={blocked}
           onClick={onToggleCollapsed}
         />

@@ -382,6 +382,7 @@ export function PeopleScreen({
   return (
     <>
       <PageHeader
+        ruled
         title="Accounts"
         subtitle={subtitle}
         action={

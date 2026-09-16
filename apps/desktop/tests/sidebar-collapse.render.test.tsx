@@ -101,7 +101,7 @@ test('the toggle collapses the rail, flips its label, and stores the preference'
     false,
   );
   assert.equal(toggle().getAttribute('aria-expanded'), 'true');
-  assert.equal(toggle().title, 'Collapse rail');
+  assert.equal(toggle().title, 'Collapse sidebar');
 
   ui.fireEvent.click(toggle());
   await ui.waitFor(() => {
@@ -109,7 +109,7 @@ test('the toggle collapses the rail, flips its label, and stores the preference'
   });
   assert.ok(document.querySelector('.app.side-narrow'));
   assert.equal(toggle().getAttribute('aria-expanded'), 'false');
-  assert.equal(toggle().title, 'Expand rail');
+  assert.equal(toggle().title, 'Expand sidebar');
   assert.equal(window.localStorage.getItem('sideCollapsed'), '1');
   // Collapsing is CSS: every row is still in the document.
   assert.equal(document.querySelectorAll('.side .nav').length, rows);

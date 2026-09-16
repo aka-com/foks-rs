@@ -104,7 +104,7 @@ test('the account header names the active account and opens its menu', async () 
     button.textContent?.trim(),
   );
   assert.ok(labels.some((text) => text?.includes('satoshi')));
-  assert.ok(labels.some((text) => text === 'Add an account or server…'));
+  assert.ok(labels.some((text) => text === 'Add account or server…'));
   assert.ok(labels.some((text) => text === 'Lock'));
 });
 
@@ -172,7 +172,9 @@ test('the Files roots page lists the stores the rail used to enumerate', async (
     document.querySelector('.topbar .crumbs')?.textContent,
     'Files›Engineering',
   );
-  const back = document.querySelector<HTMLButtonElement>('.side.rail .rail-back');
+  const back = document.querySelector<HTMLButtonElement>(
+    '.side.rail .rail-back',
+  );
   assert.ok(back, 'the expanded rail carries the back chevron');
   assert.equal(back.disabled, false);
   testingLibrary.fireEvent.click(back);

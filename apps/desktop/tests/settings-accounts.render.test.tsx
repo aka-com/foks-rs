@@ -437,7 +437,7 @@ test('the switcher lists every account and switching navigates by StoreRef', asy
   assert.equal(menu.querySelectorAll('.acct').length, 2);
   assert.ok(ui.within(menu).getByLabelText('Current account'));
   assert.ok(
-    ui.within(menu).getByRole('menuitem', { name: /Add an account or server/ }),
+    ui.within(menu).getByRole('menuitem', { name: /Add account or server/ }),
   );
   await ui.act(async () =>
     ui.fireEvent.click(menu.querySelectorAll('.acct')[1]),
@@ -781,9 +781,7 @@ test('local alias appears in account controls while commands keep the original a
   );
   assert.ok(ui.within(rendered.getByRole('menu')).getByText('Private account'));
   ui.fireEvent.keyDown(rendered.getByRole('menu'), { key: 'Escape' });
-  ui.fireEvent.click(
-    rendered.getByRole('button', { name: 'Change…' }),
-  );
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Change…' }));
   ui.fireEvent.click(
     rendered.getByRole('button', { name: 'Show pending changes' }),
   );

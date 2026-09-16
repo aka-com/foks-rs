@@ -47,6 +47,8 @@ export function searchPlaceholder(title: string): string {
 export interface PageHeaderProps extends HeaderParts {
   /** A page-level action aligned at the far right of the header. */
   action?: ReactNode;
+  /** A rule under the header, for pages with no toolbar to carry one. */
+  ruled?: boolean;
   /** Omitted on a pane that has nothing to search. */
   query?: string;
   onQuery?: (query: string) => void;
@@ -56,11 +58,12 @@ export function PageHeader({
   title,
   tail,
   action,
+  ruled = false,
   query,
   onQuery,
 }: PageHeaderProps): ReactNode {
   return (
-    <div className="path">
+    <div className={ruled ? 'path ruled' : 'path'}>
       <div className="loc">
         <div className="loc-copy">
           <h1>{title}</h1>

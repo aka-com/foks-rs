@@ -42,6 +42,11 @@ export interface ToolbarProps {
   onSettings?: () => void;
 }
 
+/** The kinds the New menu offers. Links are read and followed but not
+    created here: a link points at an existing item, so it is made from that
+    item rather than from a blank sheet. */
+const NEW_ITEM_KINDS = KIND_LIST.filter((name) => name !== 'Link');
+
 /** The primary New control — kind menu, no plus, a down chevron. */
 export function NewItemButton({
   onNew,
@@ -57,7 +62,7 @@ export function NewItemButton({
     >
       {(close) => (
         <>
-          {KIND_LIST.map((name) => (
+          {NEW_ITEM_KINDS.map((name) => (
             <button
               key={name}
               type="button"

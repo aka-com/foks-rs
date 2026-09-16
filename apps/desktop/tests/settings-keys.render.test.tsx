@@ -172,9 +172,7 @@ async function choose(
   title: string,
 ): Promise<HTMLElement> {
   await ui.act(async () => {
-    ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Add a device or paper key' }),
-    );
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Add a device' }));
   });
   const chooser = await ui.waitFor(() => rendered.getByRole('dialog'));
   const card = ui
@@ -199,15 +197,18 @@ test('the chooser offers each way to add, and leads into pairing', async () => {
   });
 
   await ui.act(async () => {
-    ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Add a device or paper key' }),
-    );
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Add a device' }));
   });
   const chooser = await ui.waitFor(() => rendered.getByRole('dialog'));
   const choices = ui.within(chooser).getAllByRole('radio');
   assert.deepEqual(
     choices.map((choice) => choice.querySelector('b')?.textContent),
-    ['Pair another Mac', 'Enter a pairing phrase', 'Paper key', 'Security key'],
+    [
+      'Pair another Mac',
+      'Pair this device with another account',
+      'Create a new recovery paper key',
+      'Connect a new YubiKey',
+    ],
   );
   await ui.act(async () => {
     ui.fireEvent.click(
@@ -235,9 +236,7 @@ test('starting a pairing reveals the phrase with a way to copy it', async () => 
     store: 'acct:personal',
   });
   await ui.act(async () => {
-    ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Add a device or paper key' }),
-    );
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Add a device' }));
   });
   await ui.act(async () => {
     ui.fireEvent.click(rendered.getByRole('button', { name: 'Continue' }));
@@ -295,7 +294,7 @@ test('a stopped account lists nothing and says why every action is off', async (
   assert.ok(rendered.getByText('Account access is stopped'));
   assert.ok(rendered.getAllByText('Not listed while access is stopped').length);
   const add = rendered.getByRole('button', {
-    name: 'Add a device or paper key',
+    name: 'Add a device',
   });
   assert.equal(add.hasAttribute('disabled'), true);
   assert.match(add.getAttribute('title') ?? '', /Check-in expired/);
@@ -473,7 +472,7 @@ test('the chooser leads into the paper-key and provisioning sheets too', async (
     store: 'acct:personal',
   });
 
-  const paper = await choose(rendered, 'Paper key');
+  const paper = await choose(rendered, 'Create a new recovery paper key');
   assert.equal(
     ui.within(paper).getByRole('heading', { level: 2 }).textContent,
     'Create paper key',
@@ -485,7 +484,7 @@ test('the chooser leads into the paper-key and provisioning sheets too', async (
     );
   });
 
-  const provision = await choose(rendered, 'Security key');
+  const provision = await choose(rendered, 'Connect a new YubiKey');
   assert.equal(
     ui.within(provision).getByRole('heading', { level: 2 }).textContent,
     'Provision a YubiKey device',
@@ -498,7 +497,10 @@ test('the chooser offers both pairing directions, so a phrase can be entered', a
     store: 'acct:personal',
   });
 
-  const accepting = await choose(rendered, 'Enter a pairing phrase');
+  const accepting = await choose(
+    rendered,
+    'Pair this device with another account',
+  );
   assert.equal(
     ui.within(accepting).getByRole('heading', { level: 2 }).textContent,
     'Set up another Mac',
@@ -824,7 +826,7 @@ test('pairing is two numbered steps, and a resumed offer says the agent holds it
   const openPairing = async (): Promise<HTMLElement> => {
     await ui.act(async () => {
       ui.fireEvent.click(
-        rendered.getByRole('button', { name: 'Add a device or paper key' }),
+        rendered.getByRole('button', { name: 'Add a device' }),
       );
     });
     await ui.act(async () => {
@@ -889,9 +891,7 @@ test('switching accounts drops the last account’s lists and closes an open she
   assert.ok(rendered.getByText('paper-backup'));
 
   await ui.act(async () => {
-    ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Add a device or paper key' }),
-    );
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Add a device' }));
   });
   assert.ok(await ui.waitFor(() => rendered.getByRole('dialog')));
 

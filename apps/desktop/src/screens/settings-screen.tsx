@@ -163,7 +163,7 @@ export function SettingsScreen({
   if (location.profile)
     return (
       <>
-        <PageHeader title="Settings" subtitle="Servers" />
+        <PageHeader ruled title="Settings" subtitle="Servers" />
         <div className="body">
           <div className="settings-main">{serversSection}</div>
         </div>
@@ -173,6 +173,7 @@ export function SettingsScreen({
   return (
     <>
       <PageHeader
+        ruled
         title="Settings"
         subtitle="Servers, account credentials and this Mac"
       />

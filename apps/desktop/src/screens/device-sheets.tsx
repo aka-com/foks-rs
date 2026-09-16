@@ -51,7 +51,7 @@ export type SimpleYubiAction =
   | 'rotate';
 
 /**
- * What "Add a device or paper key" leads to. Pairing is two directions, and
+ * What "Add a device" leads to. Pairing is two directions, and
  * each is its own card: this Mac hands out a phrase, or types the one the
  * other Mac is showing.
  */
@@ -82,19 +82,16 @@ export const YUBI_ACTION_LABELS: Readonly<Record<SimpleYubiAction, string>> = {
  * gains a key, each leading to the sheet that already did it.
  */
 export function AddDeviceSheet({
-  subtitle,
   onChoose,
   onClose,
 }: {
-  subtitle: string;
   onChoose: (choice: AddChoice) => void;
   onClose: () => void;
 }): ReactNode {
   const [choice, setChoice] = useState<AddChoice>('pair');
   return (
     <DeviceSheetFrame
-      title="Add a device, paper key, or security key"
-      subtitle={subtitle}
+      title="Add a device"
       onClose={onClose}
       footer={
         <>
@@ -105,36 +102,32 @@ export function AddDeviceSheet({
         </>
       }
     >
-      <p>
-        Every device holds its own key. Nothing here copies a key between
-        devices.
-      </p>
       <RadioGroup label="What to add">
         <RadioCard
           icon="laptop"
           title="Pair another Mac"
-          detail="Get a pairing phrase here and type it on the Mac you are adding."
+          detail="Get a pairing phrase here, to type on the device you are adding."
           selected={choice === 'pair'}
           onSelect={() => setChoice('pair')}
         />
         <RadioCard
           icon="laptop"
-          title="Enter a pairing phrase"
-          detail="Add this Mac to the account by entering the pairing phrase displayed on your other device."
+          title="Pair this device with another account"
+          detail="Add this device to another account, by entering the pairing phrase displayed on your other device."
           selected={choice === 'pair-accept'}
           onSelect={() => setChoice('pair-accept')}
         />
         <RadioCard
           icon="file"
-          title="Paper key"
-          detail="A phrase you write down and can recover this account with."
+          title="Create a new recovery paper key"
+          detail="Add a phrase you can recover this account with."
           selected={choice === 'phrase'}
           onSelect={() => setChoice('phrase')}
         />
         <RadioCard
           icon="key"
-          title="Security key"
-          detail="Add the connected YubiKey as an authorized device for this account."
+          title="Connect a new YubiKey"
+          detail="Add a connected YubiKey as an authorized device for this account."
           selected={choice === 'provision'}
           onSelect={() => setChoice('provision')}
         />
@@ -154,7 +147,7 @@ function DeviceSheetFrame({
   dismissible = true,
 }: {
   title: string;
-  subtitle: string;
+  subtitle?: string;
   children: ReactNode;
   footer: ReactNode;
   onClose: () => void;
@@ -508,11 +501,6 @@ export function PairSheet({
         </>
       }
     >
-      <p>
-        {mode === 'offer'
-          ? 'Complete step 1 here and step 2 on the other Mac, then return here to finish setup.'
-          : 'Do step 1 on the other Mac and step 2 here.'}
-      </p>
       {/* The agent holds at most one offer per account and reports neither
           when it was made nor when it expires, so the band says what is true:
           an offer is open, and resuming shows the same phrase again. */}
@@ -567,8 +555,8 @@ export function PairSheet({
           <li className={offer ? undefined : 'off'}>
             <b>On the other Mac</b>
             <p>
-              Open FOKS there, choose Add a device or paper key › Enter a
-              pairing phrase, and type the phrase. Then finish here: Finish
+              Open FOKS there, choose Add a device › Pair this device with
+              another account, and type the phrase. Then finish here: Finish
               writes the new device into the account and reloads the
               authenticated device list.
             </p>
@@ -579,8 +567,8 @@ export function PairSheet({
           <li>
             <b>On the other Mac</b>
             <p>
-              Open FOKS there, choose Add a device or paper key › Pair another
-              Mac, and start a pairing. It shows a phrase once.
+              Open FOKS there, choose Add a device › Pair another Mac, and start
+              a pairing. It shows a phrase once.
             </p>
           </li>
           <li>
@@ -1009,7 +997,6 @@ export function ProvisionSheet({
         </>
       }
     >
-      <p>Enter a new alias and select a connected card.</p>
       {cards.length ? null : (
         <Band label="Connect a YubiKey">
           No security key is currently detected.

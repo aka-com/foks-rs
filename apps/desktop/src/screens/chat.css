@@ -44,15 +44,6 @@
 .chat-inbox-scroll .sec {
   margin: 8px 12px 2px;
 }
-.chat-inbox-foot {
-  flex: none;
-  display: grid;
-  padding: 10px 12px;
-  border-top: 1px solid var(--line-soft);
-}
-.chat-inbox-foot .btn {
-  justify-content: center;
-}
 .chat-inbox-empty {
   padding: 22px 16px;
   text-align: center;

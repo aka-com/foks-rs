@@ -605,11 +605,6 @@ test('with no team at all the tab offers team creation', async () => {
   ui.fireEvent.change(field, { target: { value: '' } });
   // Nothing is selected, so nothing is navigated to.
   assert.equal(journal.length, 0);
-  // Creating or joining a team is the Teams tab.
-  ui.fireEvent.click(
-    ui.screen.getAllByRole('button', { name: 'Create or join a team' })[0],
-  );
-  assert.deepEqual(journal.at(-1), { kind: 'teams' });
 });
 
 test('the note names the conversation the tab chose and leaves focus in the pane', async () => {

@@ -256,7 +256,6 @@ export interface ChatTeamColumnProps {
   onOpen: (ref: StoreRef, channel?: string) => void;
   onNewChat: () => void;
   onSettings: (ref: StoreRef) => void;
-  onCreateTeam: () => void;
 }
 
 export function ChatTeamColumn({
@@ -268,7 +267,6 @@ export function ChatTeamColumn({
   onOpen,
   onNewChat,
   onSettings,
-  onCreateTeam,
 }: ChatTeamColumnProps): ReactNode {
   const inbox = useSidebarInbox();
   // The column searches names, not messages: the agent has no message index,
@@ -423,9 +421,6 @@ export function ChatTeamColumn({
             })}
           </>
         )}
-      </div>
-      <div className="chat-inbox-foot">
-        <Button onClick={onCreateTeam}>Create or join a team</Button>
       </div>
     </aside>
   );

@@ -408,7 +408,7 @@ export function DevicesScreen({
   if (!selected && requested)
     return (
       <>
-        <PageHeader title="Devices" subtitle="" />
+        <PageHeader ruled title="Devices" subtitle="" />
         <div className="body">
           <div className="settings-main">
             <UnavailableAccount
@@ -427,7 +427,7 @@ export function DevicesScreen({
   if (!selected)
     return (
       <>
-        <PageHeader title="Devices" subtitle="" />
+        <PageHeader ruled title="Devices" subtitle="" />
         <div className="body">
           <div className="settings-main">
             <Notice
@@ -487,6 +487,7 @@ export function DevicesScreen({
       ) : (
         <>
           <PageHeader
+            ruled
             title="Devices"
             subtitle={subtitle}
             action={
@@ -497,7 +498,7 @@ export function DevicesScreen({
                 title={why}
                 onClick={() => setSheet('add')}
               >
-                Add a device or paper key
+                Add a device
               </Button>
             }
           />
@@ -889,7 +890,6 @@ export function DevicesScreen({
       )}
       {sheet === 'add' && selected ? (
         <AddDeviceSheet
-          subtitle={accountSubtitle(snapshot, selected)}
           onClose={() => setSheet(null)}
           onChoose={(choice) => {
             // The chooser names the direction, so accepting a phrase has an
@@ -1127,6 +1127,7 @@ function DeviceDetail({
     return (
       <>
         <PageHeader
+          ruled
           title="Devices"
           subtitle={accountSubtitle(snapshot, store)}
         />
@@ -1171,6 +1172,7 @@ function DeviceDetail({
   return (
     <>
       <PageHeader
+        ruled
         title={entry.name}
         // An enrollment is the server's, not this account's, and the caption
         // says so rather than naming an account the agent did not answer for.

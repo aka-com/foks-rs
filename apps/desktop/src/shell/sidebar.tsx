@@ -481,7 +481,7 @@ export function AccountHeader({
               }}
             >
               <Icon name="plus" />
-              Add an account or server…
+              Add account or server…
             </button>
             {onLock ? (
               <button
@@ -656,14 +656,14 @@ export function Sidebar({
             type="button"
             className="nav side-collapse"
             aria-expanded={!collapsed}
-            aria-label={collapsed ? 'Expand rail' : 'Collapse rail'}
-            title={collapsed ? 'Expand rail' : 'Collapse rail'}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             disabled={blocked}
             onClick={onToggleCollapsed}
           >
             <Icon name={collapsed ? 'panel-hollow' : 'panel-filled'} />
             <span className="t">
-              {collapsed ? 'Expand rail' : 'Collapse rail'}
+              {collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             </span>
           </button>
         ) : null}

@@ -298,7 +298,7 @@ test('the account menu switches account, adds one, and locks the app', async () 
 
   menu = await open();
   const add = [...menu.querySelectorAll('button')].find(
-    (button) => button.textContent === 'Add an account or server…',
+    (button) => button.textContent === 'Add account or server…',
   );
   assert.ok(add);
   ui.fireEvent.click(add);
@@ -376,10 +376,10 @@ test('native titlebar controls follow rail collapse and expansion', async () => 
   };
   const r = ui.render(createElement(App, { snapshot: FIXTURE, bridge }));
   await ui.waitFor(() => assert.equal(calls.at(-1), true));
-  ui.fireEvent.click(r.getByRole('button', { name: 'Collapse rail' }));
+  ui.fireEvent.click(r.getByRole('button', { name: 'Collapse sidebar' }));
   await ui.waitFor(() => assert.equal(calls.at(-1), false));
   assert.ok(document.querySelector('.app.side-narrow'));
-  ui.fireEvent.click(r.getByRole('button', { name: 'Expand rail' }));
+  ui.fireEvent.click(r.getByRole('button', { name: 'Expand sidebar' }));
   await ui.waitFor(() => assert.equal(calls.at(-1), true));
   window.localStorage.clear();
 });
