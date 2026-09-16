@@ -1996,9 +1996,56 @@ impl CheckedProfileSession<'_> {
         credentials: &ClientCredentials,
         master_key: &[u8; 32],
     ) -> Result<JobRunReport> {
+        self.run_due_jobs_with_federation_config(
+            now,
+            unlocked,
+            local_vault,
+            registry,
+            credentials,
+            master_key,
+            SchedulerConfig::default(),
+        )
+    }
+
+    /// Claims at most one job, leaving all other jobs unleased. The caller must
+    /// finish its checked session and release admission before calling again.
+    /// Keep `now` fixed across a pass so a rescheduled job cannot run twice.
+    pub fn run_next_due_job_with_federation(
+        &self,
+        now: u64,
+        local_vault: &mut AccountVault<'_>,
+        registry: &ProfileRegistry,
+        credentials: &ClientCredentials,
+        master_key: &[u8; 32],
+    ) -> Result<JobRunReport> {
+        self.run_due_jobs_with_federation_config(
+            now,
+            &[],
+            local_vault,
+            registry,
+            credentials,
+            master_key,
+            SchedulerConfig {
+                claim_limit: 1,
+                ..SchedulerConfig::default()
+            },
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_due_jobs_with_federation_config(
+        &self,
+        now: u64,
+        unlocked: &[UnlockedYubiActor<'_, '_>],
+        local_vault: &mut AccountVault<'_>,
+        registry: &ProfileRegistry,
+        credentials: &ClientCredentials,
+        master_key: &[u8; 32],
+        config: SchedulerConfig,
+    ) -> Result<JobRunReport> {
         self.profile.require(Capability::UserSync)?;
         let _scheduler_lock = super::runtime::ProfileLock::scheduler(&self.paths)?;
-        self.run_due_jobs_locked_with(now, local_vault, master_key, |job, local_vault| {
+        self.run_due_jobs_locked_with(now, local_vault, master_key, config, |job, local_vault| {
             let binding = self
                 .protected_job_binding(job, local_vault)
                 .map_err(|error| error.to_string())?;

@@ -1049,9 +1049,15 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<JobRunReport> {
-        self.run_due_jobs_locked_with(now, vault, master_key, |_, _| {
-            Err("federation reconciliation requires access to the remote profile".to_owned())
-        })
+        self.run_due_jobs_locked_with(
+            now,
+            vault,
+            master_key,
+            SchedulerConfig::default(),
+            |_, _| {
+                Err("federation reconciliation requires access to the remote profile".to_owned())
+            },
+        )
     }
 
     pub(super) fn run_due_jobs_locked_with(
@@ -1059,13 +1065,14 @@ impl CheckedProfileSession<'_> {
         now: u64,
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
+        scheduler_config: SchedulerConfig,
         mut federation: impl FnMut(
             &foks_client_db::ScheduledJob,
             &mut AccountVault<'_>,
         ) -> std::result::Result<Option<String>, String>,
     ) -> Result<JobRunReport> {
         self.ensure_default_refresh_jobs(vault, now)?;
-        let scheduler = FoksScheduler::new(&self.paths.hard_database, SchedulerConfig::default())?;
+        let scheduler = FoksScheduler::new(&self.paths.hard_database, scheduler_config)?;
         // Deferrals are reported alongside the scheduler's own outcome rather
         // than through it: a deferred run is a successful, non-backed-off run
         // that could not run because the required credential was unavailable.
@@ -3939,6 +3946,101 @@ mod tests {
             .as_micros()
             .try_into()
             .unwrap()
+    }
+
+    #[test]
+    fn single_job_federation_batches_leave_other_jobs_unleased() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let credentials =
+            crate::ClientCredentials::initialize(&root, crate::CredentialBackend::PrivateFile)
+                .unwrap();
+        let mut registry = crate::ProfileRegistry::open(&root).unwrap();
+        registry
+            .add(crate::Profile {
+                name: "local".to_owned(),
+                label: None,
+                probe: "foks.app".to_owned(),
+                protocol: crate::ProtocolPolicy::V019,
+                trust: crate::TrustRoot::WebPki,
+            })
+            .unwrap();
+        let session = crate::ProfileSession::open(&registry, "local").unwrap();
+        let master = credentials.master_key().unwrap();
+        let verified = foks_verify::verify_public_host(
+            "foks.app",
+            include_bytes!(
+                "../../foks-snowpack/tests/fixtures/foks-v0.1.9/foks.app/probe-response.snowp"
+            ),
+        )
+        .unwrap();
+        credentials
+            .with_checked_session(&session, |session| {
+                HardStateStore::open(&session.paths.hard_database)?
+                    .accept_verified_host(&verified.snapshot)?;
+                let scheduler =
+                    FoksScheduler::new(&session.paths.hard_database, SchedulerConfig::default())?;
+                for id in 1..=3 {
+                    scheduler.register(ScheduledJobRegistration {
+                        job_id: [id; 16],
+                        kind: ScheduledJobKind::MutationReconcile,
+                        host_id: verified.snapshot.host_id().to_vec(),
+                        scope_id: vec![id; 16],
+                        interval_micros: 1000,
+                        first_run_at: 10,
+                        registered_at: 1,
+                    })?;
+                }
+                Ok::<_, crate::Error>(())
+            })
+            .unwrap();
+        // Each call reopens checked state, verifying the preceding checkpoint.
+        // Handler failures are durable outcomes and must not abandon later jobs.
+        for completed in 1..=3 {
+            let report = credentials
+                .with_checked_session(&session, |session| {
+                    let mut secrets = MemorySecretStore::default();
+                    session.run_next_due_job_with_federation(
+                        10,
+                        &mut AccountVault::new(&mut secrets),
+                        &registry,
+                        &credentials,
+                        &master,
+                    )
+                })
+                .unwrap();
+            assert_eq!(report.runs.len(), 1);
+            assert!(!report.runs[0].completed);
+            let store = HardStateStore::open(&session.paths.hard_database).unwrap();
+            let jobs = (1..=3)
+                .map(|id| store.scheduled_job(&[id; 16]).unwrap().unwrap())
+                .collect::<Vec<_>>();
+            assert!(jobs.iter().all(|job| job.lease_until.is_none()));
+            assert_eq!(
+                jobs.iter().filter(|job| job.failure_count == 1).count(),
+                completed
+            );
+            assert_eq!(
+                jobs.iter().filter(|job| job.next_run_at == 10).count(),
+                3 - completed
+            );
+        }
+        let empty = credentials
+            .with_checked_session(&session, |session| {
+                let mut secrets = MemorySecretStore::default();
+                session.run_next_due_job_with_federation(
+                    10,
+                    &mut AccountVault::new(&mut secrets),
+                    &registry,
+                    &credentials,
+                    &master,
+                )
+            })
+            .unwrap();
+        assert!(
+            empty.runs.is_empty(),
+            "failed jobs cannot retry within the same cutoff"
+        );
     }
 
     #[test]

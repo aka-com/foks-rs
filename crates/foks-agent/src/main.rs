@@ -347,67 +347,103 @@ async fn run_scheduled_profiles(
         .map(|profile| profile.name.clone())
         .collect::<Vec<_>>();
     drop(registry);
+    // A fixed cutoff keeps completed or failed jobs from becoming due again
+    // within this pass, even if a different job takes a long time.
+    let now = match now_microseconds() {
+        Ok(now) => now,
+        Err(error) => {
+            eprintln!("foks-agent scheduler could not read time: {error}");
+            return;
+        }
+    };
     for profile in profiles {
         if cancellation.is_cancelled() {
             break;
         }
-        // Federation jobs can discover further profiles while executing. Take
-        // the root barrier before worker capacity, in the same order as callers.
+        let state = state_dir.clone();
+        let result = run_scheduled_batches(
+            &state_dir,
+            timeout,
+            cancellation.clone(),
+            workers.clone(),
+            move |remaining, control| {
+                run_scheduled_profile(&state, &profile, now, remaining, control)
+                    .map_err(|error| error.to_string())
+            },
+        )
+        .await;
+        if let Err(error) = result {
+            eprintln!("foks-agent scheduled refresh failed: {error}");
+        }
+    }
+}
+
+const SCHEDULED_JOBS_PER_PROFILE: usize = 16;
+
+// Each worker runs one job through checkpoint publication. No protected state
+// or lock survives into the next reservation, and no unstarted job is leased.
+async fn run_scheduled_batches(
+    state_dir: &Path,
+    timeout: Duration,
+    cancellation: CancellationToken,
+    workers: Arc<Semaphore>,
+    run_one: impl Fn(Duration, CancellationToken) -> Result<bool, String> + Send + Sync + 'static,
+) -> Result<(), String> {
+    let run_one = Arc::new(run_one);
+    for _ in 0..SCHEDULED_JOBS_PER_PROFILE {
+        if cancellation.is_cancelled() {
+            break;
+        }
+        // Federation can discover additional profiles during execution. Keep
+        // root admission, but rejoin its fair queue after every completed job.
         let started = Instant::now();
-        let admission = match profile_work::coordinator()
-            .acquire(&state_dir, profile_work::Scope::Root, timeout)
+        let admission = profile_work::coordinator()
+            .acquire(state_dir, profile_work::Scope::Root, timeout)
             .await
-        {
-            Ok(permit) => permit,
-            Err(error) => {
-                eprintln!("foks-agent scheduled refresh deferred: {error}");
-                continue;
-            }
-        };
-        let permit = match tokio::time::timeout(
+            .map_err(|error| error.to_string())?;
+        let permit = tokio::time::timeout(
             timeout.saturating_sub(started.elapsed()),
             workers.clone().acquire_owned(),
         )
         .await
-        {
-            Ok(Ok(permit)) => permit,
-            _ => continue,
-        };
+        .map_err(|_| "scheduled worker capacity timed out".to_owned())?
+        .map_err(|error| error.to_string())?;
         if cancellation.is_cancelled() {
             break;
         }
         let remaining = timeout.saturating_sub(started.elapsed());
         if remaining.is_zero() {
-            continue;
+            break;
         }
-        let state = state_dir.clone();
         let control = cancellation.clone();
-        let result = tokio::task::spawn_blocking(move || {
+        let run_one = run_one.clone();
+        let ran_job = tokio::task::spawn_blocking(move || {
             let _admission = admission;
             let _permit = permit;
-            run_scheduled_profile(&state, &profile, remaining, control)
-                .map_err(|error| error.to_string())
+            run_one(remaining, control)
         })
-        .await;
-        match result {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => eprintln!("foks-agent scheduled refresh failed: {error}"),
-            Err(_) => eprintln!("foks-agent scheduled refresh worker failed"),
+        .await
+        .map_err(|error| error.to_string())??;
+        if !ran_job {
+            break;
         }
+        // Give ready requests a chance to enqueue before reserving again.
+        tokio::task::yield_now().await;
     }
+    Ok(())
 }
 
 fn run_scheduled_profile(
     state_dir: &Path,
     profile: &str,
+    now: u64,
     timeout: Duration,
     cancellation: CancellationToken,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<bool, Box<dyn std::error::Error>> {
     let registry = ProfileRegistry::open(state_dir)?;
     let session =
         ProfileSession::open_with_control(&registry, profile, timeout, cancellation.clone())?;
     let credentials = ClientCredentials::open(state_dir)?;
-    let now = now_microseconds()?;
     profile_work::with_control(timeout, cancellation, || {
         checked_session(&credentials, &session, |session| {
             let master = credentials.master_key()?;
@@ -415,17 +451,16 @@ fn run_scheduled_profile(
                 &session.paths().credential_store,
                 derive_vault_key(&master),
             )?;
-            session.run_due_jobs_with_federation(
+            let report = session.run_next_due_job_with_federation(
                 now,
                 &mut AccountVault::new(&mut store),
                 &registry,
                 &credentials,
                 &master,
             )?;
-            Ok(())
+            Ok(!report.runs.is_empty())
         })
-    })?;
-    Ok(())
+    })
 }
 
 async fn refresh_hosted_profiles(
@@ -5988,6 +6023,153 @@ mod tests {
             .try_acquire(root, profile_work::Scope::profile("a"))
             .unwrap()
             .is_some());
+    }
+
+    #[tokio::test]
+    async fn scheduled_batches_release_admission_for_queued_foreground_work() {
+        use std::future::Future as _;
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().to_path_buf();
+        let workers = Arc::new(Semaphore::new(1));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        let counts = calls.clone();
+        let task_root = root.clone();
+        let task_workers = workers.clone();
+        let scheduled = tokio::spawn(async move {
+            run_scheduled_batches(
+                &task_root,
+                Duration::from_secs(5),
+                CancellationToken::new(),
+                task_workers,
+                move |_, _| {
+                    let n = counts.fetch_add(1, Ordering::SeqCst);
+                    if n == 0 {
+                        started_tx.send(()).unwrap();
+                        release_rx
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(Duration::from_secs(5))
+                            .unwrap();
+                    }
+                    Ok(n == 0)
+                },
+            )
+            .await
+        });
+        started_rx.recv().await.unwrap();
+        let mut foreground = Box::pin(profile_work::coordinator().acquire(
+            &root,
+            profile_work::Scope::profile("a"),
+            Duration::from_secs(5),
+        ));
+        std::future::poll_fn(|cx| {
+            assert!(foreground.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        assert_eq!(workers.available_permits(), 0);
+        release_tx.send(()).unwrap();
+        let foreground = foreground.await.unwrap();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "foreground runs before the next job"
+        );
+        assert_eq!(workers.available_permits(), 1);
+        drop(foreground);
+        scheduled.await.unwrap().unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn scheduled_batches_stop_at_limit_empty_error_or_cancellation() {
+        for case in ["limit", "empty", "error", "cancel"] {
+            let temporary = tempfile::tempdir().unwrap();
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counts = calls.clone();
+            let workers = Arc::new(Semaphore::new(1));
+            let result = run_scheduled_batches(
+                temporary.path(),
+                Duration::from_secs(5),
+                CancellationToken::new(),
+                workers.clone(),
+                move |_, control| {
+                    counts.fetch_add(1, Ordering::SeqCst);
+                    match case {
+                        "empty" => Ok(false),
+                        "error" => Err("storage failed".to_owned()),
+                        "cancel" => {
+                            control.cancel();
+                            Ok(true)
+                        }
+                        _ => Ok(true),
+                    }
+                },
+            )
+            .await;
+            assert_eq!(result.is_err(), case == "error");
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                if case == "limit" {
+                    SCHEDULED_JOBS_PER_PROFILE
+                } else {
+                    1
+                }
+            );
+            assert_eq!(workers.available_permits(), 1);
+            assert!(profile_work::coordinator()
+                .try_acquire(temporary.path(), profile_work::Scope::Root)
+                .unwrap()
+                .is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_scheduler_keeps_admission_until_its_worker_exits() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().to_path_buf();
+        let workers = Arc::new(Semaphore::new(1));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let started_tx = Mutex::new(Some(started_tx));
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        let task_root = root.clone();
+        let task_workers = workers.clone();
+        let scheduled = tokio::spawn(async move {
+            run_scheduled_batches(
+                &task_root,
+                Duration::from_secs(5),
+                CancellationToken::new(),
+                task_workers,
+                move |_, _| {
+                    started_tx.lock().unwrap().take().unwrap().send(()).unwrap();
+                    release_rx
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(5))
+                        .unwrap();
+                    Ok(true)
+                },
+            )
+            .await
+        });
+        started_rx.await.unwrap();
+        scheduled.abort();
+        assert!(scheduled.await.unwrap_err().is_cancelled());
+        assert!(profile_work::coordinator()
+            .try_acquire(&root, profile_work::Scope::Root)
+            .unwrap()
+            .is_none());
+        assert_eq!(workers.available_permits(), 0);
+        release_tx.send(()).unwrap();
+        let _foreground = profile_work::coordinator()
+            .acquire(&root, profile_work::Scope::Root, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(workers.available_permits(), 1);
     }
 
     #[tokio::test]
