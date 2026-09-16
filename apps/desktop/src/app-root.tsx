@@ -1,3 +1,4 @@
+import { useTabSheetState } from './navigation-guard';
 import type { DeviceLabel } from './model';
 import { ChatInboxProvider } from './chat/inbox-provider';
 /**
@@ -830,22 +831,16 @@ function VaultShell({
   );
   const [agentCatalogReady, setAgentCatalogReady] = useState(true);
   const [refreshingSnapshot, setRefreshingSnapshot] = useState(false);
-  const [workflow, setWorkflow] = useState<WriteWorkflow>(() =>
-    initialWriteWorkflow(
-      typeof window === 'undefined' ? '' : window.location.search,
-      agentSnapshot,
-    ),
+  const [workflow, setWorkflow] = useTabSheetState<WriteWorkflow>(
+    'write.workflow',
+    () =>
+      initialWriteWorkflow(
+        typeof window === 'undefined' ? '' : window.location.search,
+        agentSnapshot,
+      ),
+    (value) => value?.kind === 'new',
+    locations,
   );
-  // The new-item sheet is not addressable, so it does not outlive the page it
-  // was opened over. A draft with something in it has already been confirmed
-  // by the sheet's own guard, which closes the workflow as it confirms; this
-  // closes the one that had nothing to ask about.
-  const sheetLocation = useRef(state.location);
-  useEffect(() => {
-    if (sheetLocation.current === state.location) return;
-    sheetLocation.current = state.location;
-    setWorkflow((current) => (current?.kind === 'new' ? null : current));
-  }, [state.location]);
   const [toasts] = useState(() => new ToastController());
   // Handles navigation guard outcomes: `prompt` renders the confirmation dialog
   // below, and `refuse` displays an alert toast. The active pending navigation is
@@ -1089,7 +1084,7 @@ function VaultShell({
         typed.code === 'catalog-required' ? undefined : { tone: 'warning' },
       );
     },
-    [toasts],
+    [toasts, setWorkflow],
   );
   commandErrorRef.current = commandError;
 
@@ -1194,7 +1189,7 @@ function VaultShell({
         } else await mutationError(error);
       }
     },
-    [bridge, mutationError, refresh, shown],
+    [bridge, mutationError, refresh, shown, setWorkflow],
   );
 
   const refreshAll = (): void => {
@@ -1288,7 +1283,13 @@ function VaultShell({
       if (state.location.kind !== 'first-run')
         void recoverAgentReadiness(false).catch(commandError);
     },
-    [agentController, commandError, recoverAgentReadiness, state.location.kind],
+    [
+      agentController,
+      commandError,
+      recoverAgentReadiness,
+      state.location.kind,
+      setWorkflow,
+    ],
   );
 
   useEffect(
@@ -1326,7 +1327,7 @@ function VaultShell({
       alive = false;
       window.clearInterval(timer);
     };
-  }, [agentController, bridge, commandError]);
+  }, [agentController, bridge, commandError, setWorkflow]);
 
   const appRef = useRef<HTMLDivElement>(null);
   const portalRoot = useMemo(

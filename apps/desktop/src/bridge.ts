@@ -534,6 +534,9 @@ export interface ResetPreview {
 export interface YubiEnrollment {
   alias: string;
   state: 'pending' | 'complete';
+  /** The same authenticated key id carried by AccountDevice.id. */
+  deviceId?: string;
+  cardSerial?: number;
 }
 
 export interface CreateYubiAccountRequest {
@@ -1981,7 +1984,24 @@ export const decodeYubiAccounts = (value: unknown): YubiEnrollment[] =>
     const state = string(item.state, `${at}.state`);
     if (state !== 'pending' && state !== 'complete')
       throw new Error(`${at}.state is invalid`);
-    return { alias: string(item.alias, `${at}.alias`), state };
+    const deviceId =
+      item.deviceId == null
+        ? undefined
+        : deviceMemberId(item.deviceId, `${at}.deviceId`);
+    if (deviceId && !deviceId.startsWith('08'))
+      throw new Error(`${at}.deviceId is not a card key`);
+    const cardSerial =
+      item.cardSerial == null
+        ? undefined
+        : integer(item.cardSerial, `${at}.cardSerial`);
+    if (cardSerial !== undefined && cardSerial <= 0)
+      throw new Error(`${at}.cardSerial is invalid`);
+    return {
+      alias: string(item.alias, `${at}.alias`),
+      state,
+      ...(deviceId ? { deviceId } : {}),
+      ...(cardSerial ? { cardSerial } : {}),
+    };
   });
 
 export function decodeYubiResult(

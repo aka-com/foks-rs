@@ -219,6 +219,8 @@ export type KindFilter = 'All' | 'Password' | 'Resource' | 'File' | 'Link';
 export type SortKey = 'name' | 'kind' | 'group';
 
 export interface LocationState {
+  /** Front-end sheet drafts only; never part of Location or URL encoding. */
+  sheet?: Readonly<Record<string, unknown>>;
   location: Location;
   selection: Selection;
   /** The search field's contents — client-side search over paths. */
@@ -279,7 +281,7 @@ export interface NavigateOptions extends GuardedOptions {
  * has on screen, so both are offered.
  */
 export type NavigationIntent =
-  | { kind: 'navigate'; location: Location }
+  | { kind: 'navigate'; location: Location; tab?: boolean }
   | { kind: 'select'; selection: Selection };
 
 /**
@@ -364,6 +366,7 @@ export function transition(
       return {
         ...state,
         location: action.location,
+        ...(state.sheet ? { sheet: undefined } : {}),
         selection: null,
         folder: '',
         closedFolders: [],
@@ -1046,7 +1049,26 @@ export class LocationStore {
   private readonly tabs = new Map<RailTab, LocationState>();
 
   clearTabMemory(): void {
+    this.clearSheet();
     this.tabs.clear();
+  }
+
+  private readonly sheetRestoration = new Map<symbol, boolean>();
+  setSheetRestorable(id: symbol, restorable: boolean | undefined): void {
+    if (restorable === undefined) this.sheetRestoration.delete(id);
+    else this.sheetRestoration.set(id, restorable);
+  }
+
+  setSheetField(key: string, value: unknown): void {
+    if (Object.is(this.current.sheet?.[key], value)) return;
+    this.publish({
+      ...this.current,
+      sheet: { ...this.current.sheet, [key]: value },
+    });
+  }
+
+  clearSheet(): void {
+    if (this.current.sheet) this.publish({ ...this.current, sheet: undefined });
   }
 
   /**
@@ -1086,6 +1108,7 @@ export class LocationStore {
     ) {
       const account = this.getAccount();
       const changed = location.store !== account;
+      if (changed && saved) saved = { ...saved, sheet: undefined };
       location = { ...location, store: account };
       if (changed && location.kind === 'devices') delete location.device;
       if (changed && location.kind === 'settings') delete location.profile;
@@ -1110,7 +1133,7 @@ export class LocationStore {
       );
     };
     this.guarded(
-      { kind: 'navigate', location: target.location },
+      { kind: 'navigate', location: target.location, tab: true },
       apply,
       options,
     );
@@ -1249,9 +1272,14 @@ export class LocationStore {
    */
   private guarded(
     intent: NavigationIntent,
-    apply: () => void,
+    applyRequested: () => void,
     options: GuardedOptions,
   ): void {
+    const apply = (): void => {
+      if ([...this.sheetRestoration.values()].includes(false))
+        this.clearSheet();
+      applyRequested();
+    };
     const verdict = options.force ? null : this.navigationVerdict(intent);
     // A refusal changes nothing, including an open prompt about another move.
     if (verdict?.verdict === 'refuse') {
@@ -1277,6 +1305,7 @@ export class LocationStore {
         this.pendingPrompt = null;
         if (!confirmed) return;
         verdict.onConfirm?.();
+        this.clearSheet();
         apply();
       },
       () => {

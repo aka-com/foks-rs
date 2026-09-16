@@ -181,7 +181,7 @@ test('unsaved invitation input prompts before navigation and clears on confirmat
   assert.equal((field as HTMLInputElement).value, '');
 });
 
-test('an invitation call still out refuses the move', async () => {
+test('a durable invitation creation allows navigation', async () => {
   const h = await harness();
   const { store, rendered } = await invitationPanel(
     h,
@@ -194,12 +194,9 @@ test('an invitation call still out refuses the move', async () => {
     );
     await Promise.resolve();
   });
-  assert.deepEqual(h.verdict(store), {
-    verdict: 'refuse',
-    reason: 'Wait for the invitation to finish.',
-  });
+  assert.equal(h.verdict(store), null);
   await h.leave(store);
-  assert.deepEqual(store.getSnapshot().location, { kind: 'all' });
+  assert.deepEqual(store.getSnapshot().location, AWAY);
 });
 
 /* ------------------------------------------------------- group sheets -- */

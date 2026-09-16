@@ -409,6 +409,8 @@ pub struct YubiRevocationReport {
 pub struct YubiAccountSummary {
     pub alias: String,
     pub state: YubiEnrollmentState,
+    pub device_id_hex: Option<String>,
+    pub card_serial: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -464,11 +466,41 @@ impl AccountVault<'_> {
             .collect::<Vec<_>>();
         let mut accounts = Vec::with_capacity(records.len());
         for (alias, state) in records {
-            match state {
-                YubiEnrollmentState::Pending => drop(self.pending_yubi(&alias)?),
-                YubiEnrollmentState::Complete => drop(self.stored_yubi(&alias)?),
-            }
-            accounts.push(YubiAccountSummary { alias, state });
+            let (locator, card_serial) = match state {
+                YubiEnrollmentState::Pending => {
+                    let pending = self.pending_yubi(&alias)?;
+                    let serial = pending
+                        .locator
+                        .as_ref()
+                        .map(|locator| locator.card.serial)
+                        .or_else(|| {
+                            pending
+                                .preparation
+                                .as_ref()
+                                .map(|preparation| preparation.card.serial)
+                        });
+                    (pending.locator.clone(), serial)
+                }
+                YubiEnrollmentState::Complete => {
+                    let stored = self.stored_yubi(&alias)?;
+                    (
+                        Some(stored.locator.clone()),
+                        Some(stored.locator.card.serial),
+                    )
+                }
+            };
+            // The authenticated device list uses this same EntityId encoding.
+            let device_id_hex = locator.map(|locator| {
+                let mut id = vec![foks_proto::ENTITY_YUBI];
+                id.extend_from_slice(&locator.signing_public_key);
+                hex(&id)
+            });
+            accounts.push(YubiAccountSummary {
+                alias,
+                state,
+                device_id_hex,
+                card_serial,
+            });
         }
         accounts.sort_by(|left, right| {
             left.alias
@@ -2689,10 +2721,18 @@ mod tests {
                     YubiAccountSummary {
                         alias: "hardware".to_owned(),
                         state: YubiEnrollmentState::Complete,
+                        device_id_hex: Some(hex(&[
+                            &[foks_proto::ENTITY_YUBI][..],
+                            &stored.locator.signing_public_key
+                        ]
+                        .concat())),
+                        card_serial: Some(stored.locator.card.serial),
                     },
                     YubiAccountSummary {
                         alias: "hardware-pending".to_owned(),
                         state: YubiEnrollmentState::Pending,
+                        device_id_hex: None,
+                        card_serial: Some(stored.locator.card.serial),
                     },
                 ]
             );

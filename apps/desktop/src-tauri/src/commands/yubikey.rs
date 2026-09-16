@@ -66,9 +66,21 @@ pub(super) fn yubi_enrollment_dtos(
                     "The agent response contains an invalid or duplicate security key enrollment.",
                 ));
             }
+            if row
+                .device_id_hex
+                .as_ref()
+                .is_some_and(|id| !valid_typed_yubi_id_hex(id))
+                || row.card_serial == Some(0)
+            {
+                return Err(invalid_response(
+                    "The enrollment has an invalid card identity.",
+                ));
+            }
             Ok(YubiEnrollmentDto {
                 alias: row.alias,
                 state,
+                device_id: row.device_id_hex,
+                card_serial: row.card_serial,
             })
         })
         .collect()
@@ -315,6 +327,10 @@ pub struct YubiCardDto {
 pub struct YubiEnrollmentDto {
     pub alias: String,
     pub state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card_serial: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -396,6 +412,8 @@ struct YubiCardResponse {
 struct YubiEnrollmentResponse {
     alias: String,
     state: String,
+    device_id_hex: Option<String>,
+    card_serial: Option<u32>,
 }
 
 #[derive(Deserialize)]

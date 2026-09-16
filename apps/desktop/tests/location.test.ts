@@ -1145,7 +1145,11 @@ test('a rail tab and a selection are guarded like any other move', () => {
   store.navigateTab('teams');
   store.select({ store: 'team:eng', path: '/a' });
   assert.deepEqual(seen, [
-    { kind: 'navigate', location: { kind: 'teams', store: undefined } },
+    {
+      kind: 'navigate',
+      location: { kind: 'teams', store: undefined },
+      tab: true,
+    },
     { kind: 'select', selection: { store: 'team:eng', path: '/a' } },
   ]);
   assert.deepEqual(store.getSnapshot().location, { kind: 'all' });
@@ -1216,4 +1220,33 @@ test('a chat channel returns to its team inbox, whose back target is disabled', 
   });
   assert.deepEqual(parent, { kind: 'chat', ref: 'team:eng' });
   assert.equal(parentLocation(parent), null);
+});
+
+test('tab sheet drafts stay in memory and explicit navigation clears them', () => {
+  const store = new LocationStore(at({ kind: 'files' }));
+  store.setSheetField('new.site', 'draft.example');
+  const address = encodeLocation(store.getSnapshot().location);
+  assert.equal(JSON.stringify(address).includes('draft.example'), false);
+  store.navigateTab('teams');
+  store.navigateTab('files');
+  assert.deepEqual(store.getSnapshot().sheet, { 'new.site': 'draft.example' });
+  store.navigate({ kind: 'all' });
+  assert.equal(store.getSnapshot().sheet, undefined);
+});
+
+test('an unsafe sheet cannot leave a restorable draft when navigation applies', () => {
+  const store = new LocationStore(at({ kind: 'files' }));
+  const id = Symbol();
+  store.setSheetField('new.site', 'draft.example');
+  store.setSheetRestorable(id, false);
+  store.navigationVerdict({
+    kind: 'navigate',
+    location: { kind: 'teams' },
+    tab: true,
+  });
+  assert.ok(store.getSnapshot().sheet, 'asking for a verdict is pure');
+  store.navigateTab('teams');
+  store.setSheetRestorable(id, undefined);
+  store.navigateTab('files');
+  assert.equal(store.getSnapshot().sheet, undefined);
 });

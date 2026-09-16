@@ -1,3 +1,4 @@
+import { useTabSheetState } from '../navigation-guard';
 /**
  * New chat: pick a team, then pick or create a channel in it.
  *
@@ -98,15 +99,28 @@ export function NewChatSheet({
   // back to, so it opens on the channel it was asked for — the create step —
   // and leaves by being cancelled.
   const fixedTeam = team !== undefined;
-  const [chosen, setChosen] = useState<StoreRef | undefined>(team);
-  const [step, setStep] = useState<'team' | 'channel'>(
+  const [chosen, setChosen] = useTabSheetState<StoreRef | undefined>(
+    'channel.chosen',
+    team,
+  );
+  const [step, setStep] = useTabSheetState<'team' | 'channel'>(
+    'channel.step',
     team ? 'channel' : 'team',
   );
-  const [channel, setChannel] = useState<string | undefined>();
-  const [creating, setCreating] = useState(fixedTeam);
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [admin, setAdmin] = useState(false);
+  const [channel, setChannel] = useTabSheetState<string | undefined>(
+    'channel.channel',
+    undefined,
+  );
+  const [creating, setCreating] = useTabSheetState(
+    'channel.creating',
+    fixedTeam,
+  );
+  const [name, setName] = useTabSheetState('channel.name', '');
+  const [description, setDescription] = useTabSheetState(
+    'channel.description',
+    '',
+  );
+  const [admin, setAdmin] = useTabSheetState('channel.admin', false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   // The preparation the agent has been given but has not finished: the
@@ -264,7 +278,7 @@ export function NewChatSheet({
       onConfirm: () => closeRef.current(),
     };
   }, []);
-  useNavigationGuard(formGuard);
+  useNavigationGuard(formGuard, [], !locked);
   const create = async () => {
     if (sending.current || !picked) return;
     const store = picked.store;

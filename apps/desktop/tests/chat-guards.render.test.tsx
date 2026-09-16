@@ -490,3 +490,18 @@ test('the tab’s own resolution of a chat location is not put to the guards', a
   assert.equal(here.kind === 'chat' ? here.ref : undefined, 'team:eng');
   assert.equal(dialog(), null);
 });
+
+test('a new channel resumes its name after a rail tab switch', async () => {
+  const { store } = await setup();
+  const name = await openChannelSheet();
+  ui.fireEvent.change(name, { target: { value: 'Design notes' } });
+  await ui.act(async () => {
+    store.navigateTab('files');
+  });
+  assert.equal(dialog(), null);
+  await ui.act(async () => {
+    store.navigateTab('chat');
+  });
+  const restored = await ui.screen.findByLabelText('Channel name');
+  assert.equal((restored as HTMLInputElement).value, 'Design notes');
+});

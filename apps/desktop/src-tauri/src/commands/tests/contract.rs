@@ -352,6 +352,8 @@ fn wire_contract_fixture_matches_serialized_shapes() {
         serde_json::to_value(YubiEnrollmentDto {
             alias: "work_key".to_owned(),
             state: "complete",
+            device_id: None,
+            card_serial: None,
         })
         .unwrap(),
         fixture["yubiEnrollment"]

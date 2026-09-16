@@ -1,3 +1,4 @@
+import { useTabSheetState } from '../navigation-guard';
 /**
  * The Devices tab: one page per account, with no sub-navigation.
  *
@@ -75,6 +76,8 @@ import {
 import type { SimpleYubiAction } from './device-sheets';
 import {
   deviceAt,
+  enrollmentForCard,
+  enrollmentForDevice,
   deviceIsCard,
   deviceName,
   readAccountAndProfileKeys,
@@ -159,12 +162,19 @@ export function DevicesScreen({
   const stopped = selected
     ? accountStopped(snapshot, selected)
     : { stopped: true, reason: 'No account on this Mac' };
-  const [sheet, setSheet] = useState<Sheet>(() =>
-    enteredScene === 'settings-phrase'
-      ? 'phrase'
-      : enteredScene === 'settings-enrol'
-        ? 'enrol'
-        : null,
+  const [pairMode, setPairMode] = useTabSheetState<'offer' | 'accept'>(
+    'devices.pairMode',
+    'offer',
+  );
+  const [sheet, setSheet] = useTabSheetState<Sheet>(
+    'devices.sheet',
+    () =>
+      enteredScene === 'settings-phrase'
+        ? 'phrase'
+        : enteredScene === 'settings-enrol'
+          ? 'enrol'
+          : null,
+    (value) => value === 'pair' && pairMode === 'accept',
   );
   const paperResume = paperKeyResume(bridge, selected?.id ?? '');
   const retainedPaperKey = useSyncExternalStore(
@@ -183,7 +193,6 @@ export function DevicesScreen({
   // calls answer rather than reporting three zeroes.
   const [loading, setLoading] = useState(true);
   const [pendingYubi, setPendingYubi] = useState<SimpleYubiAction | null>(null);
-  const [pairMode, setPairMode] = useState<'offer' | 'accept'>('offer');
   const [removing, setRemoving] = useState<AccountDevice | null>(null);
   const [revoking, setRevoking] = useState<BackupEnrollment | null>(null);
   // Which enrollment a per-row key action acts on. The row is the only thing
@@ -218,7 +227,7 @@ export function DevicesScreen({
     setRemoving(null);
     setRevoking(null);
     setActingKey(null);
-  }, [paperResume]);
+  }, [paperResume, setSheet]);
 
   // A phrase, a PIN or an unlock code must not stay on screen behind another
   // window.
@@ -377,7 +386,8 @@ export function DevicesScreen({
           // count per object, under the name that object carries everywhere.
           plural(yubi.length, 'enrollment'),
         ].join(' · ');
-  const complete = yubi.find((entry) => entry.state === 'complete');
+  const completed = yubi.filter((entry) => entry.state === 'complete');
+  const complete = completed.length === 1 ? completed[0] : undefined;
   const pending = yubi.find((entry) => entry.state === 'pending');
   const why = stopped.stopped ? stopped.reason : undefined;
   const openYubi = (action: SimpleYubiAction, entry?: YubiEnrollment): void => {
@@ -399,7 +409,11 @@ export function DevicesScreen({
           ? undefined
           : 'No enrollment on the connected card'
         : 'No security key is connected';
-    return complete ? undefined : 'No complete enrollment found';
+    return complete
+      ? undefined
+      : completed.length > 1
+        ? 'Choose a specific enrollment to continue.'
+        : 'No complete enrollment found';
   };
   // The key a `device=` address names, once the four lists have answered.
   const detail = location.device
@@ -477,6 +491,11 @@ export function DevicesScreen({
           snapshot={snapshot}
           store={selected}
           entry={detail}
+          deviceEnrollment={
+            detail?.source.kind === 'device'
+              ? enrollmentForDevice(yubi, detail.source.device.id)
+              : undefined
+          }
           loading={loading}
           stopped={stopped}
           onBack={backToList}
@@ -816,11 +835,10 @@ export function DevicesScreen({
                         </span>
                         <span className="t">
                           <b>{entry.alias}</b>
-                          {/* The agent reports no serial for an enrollment, so the
-                          row says so rather than leaving the reader to match
-                          it against the card below. */}
                           <small>
-                            Serial number unavailable for an enrollment
+                            {entry.cardSerial
+                              ? `Card serial ${entry.cardSerial}`
+                              : 'This enrollment cannot be matched to a card on this Mac.'}
                           </small>
                         </span>
                       </InsetRow>
@@ -849,10 +867,21 @@ export function DevicesScreen({
                             </Button>
                             <Button
                               size="sm"
-                              disabled={yubiReason('pin-status') !== undefined}
-                              title={yubiReason('pin-status')}
+                              disabled={
+                                stopped.stopped ||
+                                !enrollmentForCard(yubi, card.serial)
+                              }
+                              title={
+                                why ??
+                                (!enrollmentForCard(yubi, card.serial)
+                                  ? 'Choose an enrollment matched to this card.'
+                                  : undefined)
+                              }
                               onClick={() =>
-                                openYubi('pin-status', complete ?? pending)
+                                openYubi(
+                                  'pin-status',
+                                  enrollmentForCard(yubi, card.serial),
+                                )
                               }
                             >
                               PIN status
@@ -889,7 +918,7 @@ export function DevicesScreen({
                           })
                         }
                       >
-                        Settings › Account
+                        Settings › Server
                       </Button>
                     }
                   >
@@ -1116,6 +1145,7 @@ function DeviceDetail({
   snapshot,
   store,
   entry,
+  deviceEnrollment,
   loading,
   stopped,
   onBack,
@@ -1129,6 +1159,7 @@ function DeviceDetail({
   store: AccountStore;
   /** The key the address names, once the lists have answered. */
   entry?: DeviceEntry;
+  deviceEnrollment?: YubiEnrollment;
   loading: boolean;
   stopped: { stopped: boolean; reason: string };
   onBack: () => void;
@@ -1244,7 +1275,9 @@ function DeviceDetail({
                   <>
                     {entry.name}
                     <small>
-                      This enrollment cannot be matched to a card on this Mac.
+                      {enrollment?.cardSerial
+                        ? `Card serial ${enrollment.cardSerial}; no device key recorded.`
+                        : 'This enrollment cannot be matched to a card on this Mac.'}
                     </small>
                   </>
                 )}
@@ -1276,12 +1309,12 @@ function DeviceDetail({
                       onClick={() =>
                         onNavigate({
                           kind: 'settings',
-                          section: 'credentials',
-                          store: store.id,
+                          section: 'servers',
+                          profile: store.server,
                         })
                       }
                     >
-                      Settings › Account
+                      Settings › Server
                     </Button>
                   }
                 >
@@ -1314,10 +1347,15 @@ function DeviceDetail({
                           kind: 'devices',
                           section: 'keys',
                           store: store.id,
+                          ...(deviceEnrollment
+                            ? { device: `yubi:${deviceEnrollment.alias}` }
+                            : {}),
                         })
                       }
                     >
-                      Go to Security key enrollments
+                      {deviceEnrollment
+                        ? `Open ${deviceEnrollment.alias}`
+                        : 'Go to Security key enrollments'}
                     </Button>
                   }
                 >

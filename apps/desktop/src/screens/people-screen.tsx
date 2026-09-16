@@ -1,3 +1,4 @@
+import { useTabSheetState } from '../navigation-guard';
 /**
  * The Accounts tab: what needs attention, then the accounts on this Mac.
  *
@@ -318,7 +319,9 @@ export function PeopleScreen({
     ? stores.find((store) => store.id === requested)
     : stores[0];
   const unavailable = requested !== undefined && selected === undefined;
-  const [sheet, setSheet] = useState<AccountSheet | 'go-profile' | null>(null);
+  const [sheet, setSheet] = useTabSheetState<
+    AccountSheet | 'go-profile' | null
+  >('people.sheet', null, (value) => value === 'join');
   const [pairingProfile, setPairingProfile] = useState<Server | undefined>();
   // What this account holds: the keys are read here because the profile lists
   // them, not because anything on this page acts on one.
@@ -349,7 +352,7 @@ export function PeopleScreen({
       window.removeEventListener('blur', conceal);
       document.removeEventListener('visibilitychange', concealWhenHidden);
     };
-  }, []);
+  }, [setSheet]);
 
   // Normalize the route to the active account's StoreRef. Because the
   // destination matches the current location, navigation guards are bypassed
@@ -437,6 +440,7 @@ export function PeopleScreen({
     recoverCatalog,
     selectedId,
     selectedProfile,
+    setSheet,
   ]);
 
   const subtitle = plural(stores.length, 'account');

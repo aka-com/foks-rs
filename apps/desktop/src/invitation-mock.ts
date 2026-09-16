@@ -30,6 +30,7 @@ export function mockInvitations(
         const row = {
           operation_id: id,
           state: 'prepared',
+          team_id: team?.kind === 'team' ? team.team_id_hex : undefined,
           invite: `Fixture invitation for ${key}`,
         };
         operations.set(id, { owner, row });

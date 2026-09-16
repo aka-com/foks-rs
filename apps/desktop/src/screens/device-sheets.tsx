@@ -1,3 +1,4 @@
+import { useTabSheetState } from '../navigation-guard';
 /**
  * The sheets that act on one account's devices, keys and passphrase.
  *
@@ -360,9 +361,21 @@ export function PairSheet({
   const [offer, setOffer] = useState<PairingOffer | null>(null);
   /** Whether the phrase on screen came from an offer the agent still held. */
   const [resumed, setResumed] = useState(false);
-  const [target, setTarget] = useState(store.account);
-  const [device, setDevice] = useState('This Mac');
-  const [phrase, setPhrase] = useState('');
+  const [target, setTarget] = useTabSheetState(
+    'pairing.target',
+    store.account,
+    mode === 'accept',
+  );
+  const [device, setDevice] = useTabSheetState(
+    'pairing.device',
+    'This Mac',
+    mode === 'accept',
+  );
+  const [phrase, setPhrase] = useTabSheetState(
+    'pairing.phrase',
+    '',
+    mode === 'accept',
+  );
   const [busy, setBusy] = useState(false);
   const queued = <T,>(task: () => Promise<T>): Promise<T> =>
     enqueueProfileWork(bridge, store.server, task);
@@ -409,6 +422,7 @@ export function PairSheet({
             },
           }
         : null,
+    mode === 'accept' && !busy,
   );
   return (
     <DeviceSheetFrame
@@ -1041,6 +1055,7 @@ export function ProvisionSheet({
 export function YubiActionSheet({
   bridge,
   store,
+  profile,
   action,
   alias,
   onClose,
@@ -1048,7 +1063,8 @@ export function YubiActionSheet({
   onError,
 }: {
   bridge: Bridge;
-  store: AccountStore;
+  store?: AccountStore;
+  profile?: string;
   action: SimpleYubiAction;
   alias: string;
   onClose: () => void;
@@ -1110,24 +1126,26 @@ export function YubiActionSheet({
         : null,
   );
   const submit = (): void => {
+    const profileName = store?.server ?? profile;
+    if (!profileName) return;
     let command: YubiCommand;
     switch (action) {
       case 'sync':
         command = {
           command: 'sync_yubi_account',
-          args: { profile: store.server, alias, pin, withFederation: true },
+          args: { profile: profileName, alias, pin, withFederation: true },
         };
         break;
       case 'pin-status':
         command = {
           command: 'yubi_pin_status',
-          args: { profile: store.server, alias },
+          args: { profile: profileName, alias },
         };
         break;
       case 'change-pin':
         command = {
           command: 'change_yubi_pin',
-          args: { profile: store.server, alias, oldPin: pin, newPin: other },
+          args: { profile: profileName, alias, oldPin: pin, newPin: other },
         };
         break;
       case 'set-passphrase':
@@ -1138,7 +1156,7 @@ export function YubiActionSheet({
               ? 'set_yubi_passphrase'
               : 'change_yubi_passphrase',
           args: {
-            profile: store.server,
+            profile: profileName,
             alias,
             pin,
             passphrase: other,
@@ -1149,22 +1167,23 @@ export function YubiActionSheet({
       case 'verify-passphrase':
         command = {
           command: 'verify_yubi_passphrase',
-          args: { profile: store.server, alias, pin, passphrase: other },
+          args: { profile: profileName, alias, pin, passphrase: other },
         };
         break;
       case 'unblock':
         command = {
           command: 'unblock_yubi_pin',
-          args: { profile: store.server, alias, puk: pin, newPin: other },
+          args: { profile: profileName, alias, puk: pin, newPin: other },
         };
         break;
       case 'change-puk':
         command = {
           command: 'change_yubi_puk',
-          args: { profile: store.server, alias, oldPuk: pin, newPuk: other },
+          args: { profile: profileName, alias, oldPuk: pin, newPuk: other },
         };
         break;
       case 'recover-management':
+        if (!store) return;
         command = {
           command: 'recover_yubi_management_key',
           args: { accountStoreId: store.id, yubiAlias: alias },
@@ -1173,25 +1192,25 @@ export function YubiActionSheet({
       case 'recover-subkey':
         command = {
           command: 'recover_yubi_subkey',
-          args: { profile: store.server, alias, pin },
+          args: { profile: profileName, alias, pin },
         };
         break;
       case 'resume-enrollment':
         command = {
           command: 'resume_yubi_account',
-          args: { profile: store.server, alias, pin },
+          args: { profile: profileName, alias, pin },
         };
         break;
       case 'resume-rotation':
         command = {
           command: 'resume_yubi_management_key',
-          args: { profile: store.server, alias, ...(pin ? { pin } : {}) },
+          args: { profile: profileName, alias, ...(pin ? { pin } : {}) },
         };
         break;
       case 'rotate':
         command = {
           command: 'rotate_yubi_management_key',
-          args: { profile: store.server, alias, pin },
+          args: { profile: profileName, alias, pin },
         };
         break;
     }

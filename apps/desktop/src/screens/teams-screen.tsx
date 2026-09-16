@@ -1,3 +1,4 @@
+import { useTabSheetState } from '../navigation-guard';
 /**
  * The Teams tab: the groups and shares on this Mac, the per-account checks that
  * find more of them, and the entries that create or join one.
@@ -309,11 +310,16 @@ export function TeamsScreen({
     (location.store
       ? accounts.find((store) => store.id === location.store)
       : undefined) ?? accounts[0];
-  const [sheet, setSheet] = useState<ListSheet | null>(() =>
-    scene === 'create' && acting ? { kind: 'create', store: acting } : null,
+  const [sheet, setSheet] = useTabSheetState<ListSheet | null>(
+    'teams.sheet',
+    () =>
+      scene === 'create' && acting ? { kind: 'create', store: acting } : null,
+    (value) => value?.kind === 'create' || value?.kind === 'add',
   );
-  const [joining, setJoining] = useState<AccountStore | null>(() =>
-    scene === 'join' ? (acting ?? null) : null,
+  const [joining, setJoining] = useTabSheetState<AccountStore | null>(
+    'teams.join',
+    () => (scene === 'join' ? (acting ?? null) : null),
+    (value) => value !== null,
   );
   // The invitation is an account's; a group only names itself in the message.
   const [inviting, setInviting] = useState<{

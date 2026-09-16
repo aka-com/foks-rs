@@ -43,6 +43,7 @@ import {
 import type { MutationFailureHandler } from '../mutation-recovery';
 import type { Server, StoreRef, TeamStore, AgentSnapshot } from '../model';
 import { AccountMark } from './account-switcher';
+import { ProfileKeys } from './profile-keys';
 import { GroupMark } from './group-mark';
 
 interface Props {
@@ -497,6 +498,15 @@ export function ServersSection({
           onAdd={() => setSheet('add')}
         />
       )}
+      {selected ? (
+        <ProfileKeys
+          key={selected.id}
+          snapshot={agentSnapshot}
+          server={selected}
+          bridge={bridge}
+          onError={onError}
+        />
+      ) : null}
       {overlay}
     </>
   );

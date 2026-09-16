@@ -129,7 +129,7 @@ test('the page holds servers, credentials, about, this Mac and the danger zone',
 
   for (const label of [
     'Account',
-    'Security key credentials · satoshi on Personal server',
+    'Security key enrollments',
     'About',
     'This Mac',
     'Danger zone',
@@ -164,32 +164,24 @@ test('a section address puts the page and the keyboard on that section', async (
     );
   });
   // The card credentials name the account they act on.
-  assert.ok(
-    rendered.getByText('Security key credentials · satoshi on Personal server'),
-  );
+  assert.ok(rendered.getByText('Security key enrollments'));
 });
 
-test('the card credentials name an account the reader can change', async () => {
+test('Settings links to profile-scoped security key management', async () => {
   const chosen: Location[] = [];
   const rendered = await renderSettings(await fixture(), {
     where: { section: 'credentials' },
     onNavigate: (location) => chosen.push(location),
   });
-
-  const group = rendered.getByRole('group', {
-    name: 'Security key credentials · satoshi on Personal server',
-  });
-  const accounts = ui.within(group).getAllByRole('button');
-  assert.equal(accounts.length, 2);
-  await ui.act(async () => {
-    ui.fireEvent.click(accounts[1]);
-  });
-  // The switch keeps the address the page was reached by.
+  ui.fireEvent.click(
+    rendered.getAllByRole('button', { name: 'Open security keys' })[0],
+  );
   assert.deepEqual(chosen.at(-1), {
     kind: 'settings',
-    section: 'credentials',
-    store: 'acct:work',
+    section: 'servers',
+    profile: 'personal',
   });
+  assert.equal(rendered.queryByRole('button', { name: 'Change PIN…' }), null);
 });
 
 test('an address naming an account this Mac lost does not claim facts about it', async () => {
@@ -606,4 +598,48 @@ test('device notification preferences are reachable without a channel and recove
   assert.equal(enable.checked, false);
   assert.equal(configurations, 1);
   assert.equal(rendered.queryByLabelText('Channel alerts'), null);
+});
+
+test('server security-key actions name the selected enrollment across accounts', async () => {
+  const calls: unknown[] = [];
+  const rendered = await renderSettings(await fixture(), {
+    where: { section: 'servers', profile: 'personal' },
+    decorate: (base) => ({
+      ...base,
+      listYubiAccounts: async () => [
+        { alias: 'first', state: 'complete' },
+        { alias: 'travel', state: 'complete' },
+      ],
+      runYubi: async (command) => {
+        calls.push(command);
+        return { applied: true };
+      },
+    }),
+  });
+  await rendered.findByText('travel');
+  const row = rendered.getByText('travel').parentElement;
+  assert.ok(row);
+  ui.fireEvent.click(
+    ui.within(row).getByRole('button', { name: 'Change PIN…' }),
+  );
+  const dialog = rendered.getByRole('dialog');
+  ui.fireEvent.change(ui.within(dialog).getByLabelText('Card PIN'), {
+    target: { value: '123456' },
+  });
+  ui.fireEvent.change(ui.within(dialog).getByLabelText('New PIN'), {
+    target: { value: '654321' },
+  });
+  ui.fireEvent.click(
+    ui.within(dialog).getByRole('button', { name: 'Continue' }),
+  );
+  await ui.waitFor(() => assert.equal(calls.length, 1));
+  assert.deepEqual(calls[0], {
+    command: 'change_yubi_pin',
+    args: {
+      profile: 'personal',
+      alias: 'travel',
+      oldPin: '123456',
+      newPin: '654321',
+    },
+  });
 });

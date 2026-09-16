@@ -1,3 +1,5 @@
+import { useTabSheetState } from '../navigation-guard';
+import { InvitationRecovery } from '../components/invitation-recovery';
 import { InvitationPanel } from '../components/invitation-panel';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -1160,26 +1162,33 @@ export function GroupSheet({
   ) => Promise<void>;
   onMutationError: MutationFailureHandler;
 }): ReactNode {
-  const [username, setUsername] = useState(SUGGESTED_MEMBER);
-  const [visibility, setVisibility] = useState(0);
+  const [username, setUsername] = useTabSheetState(
+    'group.username',
+    SUGGESTED_MEMBER,
+  );
+  const [visibility, setVisibility] = useTabSheetState('group.visibility', 0);
   const callerParty = partiesOf(snapshot, store.id).find(
     (candidate) => candidate.label === 'you',
   );
   const callerRank = callerParty ? roleRank(callerParty.destination_role) : 0;
-  const [role, setRole] = useState<RoleDto>({
+  const [role, setRole] = useTabSheetState<RoleDto>('group.role', {
     role: 'Member',
     visibility: 0,
   });
   const [busy, setBusy] = useState(false);
-  const [name, setName] = useState(SUGGESTED_GROUP);
-  const [createKind, setCreateKind] = useState<'named' | 'adhoc'>('named');
+  const [name, setName] = useTabSheetState('group.name', SUGGESTED_GROUP);
+  const [createKind, setCreateKind] = useTabSheetState<'named' | 'adhoc'>(
+    'group.createKind',
+    'named',
+  );
   const creationAccounts = snapshot.stores.filter(
     (candidate): candidate is AccountStore =>
       candidate.kind === 'account' && canCreateInStore(snapshot, candidate.id),
   );
   // Creating acts as the account the page acts as: the sheet's own store when
   // that store is an account that can create, else this Mac's first such one.
-  const [accountStoreId, setAccountStoreId] = useState(
+  const [accountStoreId, setAccountStoreId] = useTabSheetState(
+    'group.accountStoreId',
     () =>
       creationAccounts.find((candidate) => candidate.id === store.id)?.id ??
       creationAccounts[0]?.id ??
@@ -1193,7 +1202,10 @@ export function GroupSheet({
       storeReadable(snapshot, candidate.id) &&
       candidate.server !== store.server,
   );
-  const [remoteStoreId, setRemoteStoreId] = useState(remotes[0]?.id ?? '');
+  const [remoteStoreId, setRemoteStoreId] = useTabSheetState(
+    'group.remoteStoreId',
+    remotes[0]?.id ?? '',
+  );
   const creationAccount = creationAccounts.find(
     (candidate) => candidate.id === accountStoreId,
   );
@@ -1291,6 +1303,7 @@ export function GroupSheet({
               },
             }
           : null,
+    !busy && (sheet === 'add' || sheet === 'create'),
   );
   const apply = async (): Promise<void> => {
     if (busy || requiredFailure) return;
@@ -1843,16 +1856,28 @@ export function GroupSettingsScreen({
   const [tab, setTab] = useState<Tab>(
     () => location.tab ?? tabFromState(initial),
   );
-  const [sheet, setSheet] = useState<Sheet>(() =>
-    ['add', 'demote', 'remove', 'admit', 'party-remove'].includes(initial)
-      ? initial === 'party-remove'
-        ? 'remove'
-        : (initial as Sheet)
-      : null,
+  const [sheet, setSheet] = useTabSheetState<Sheet>(
+    'groups.sheet',
+    () =>
+      ['add', 'demote', 'remove', 'admit', 'party-remove'].includes(initial)
+        ? initial === 'party-remove'
+          ? 'remove'
+          : (initial as Sheet)
+        : null,
+    (value) => value === 'add' || value === 'create',
   );
-  // The invitation is an account's, not a group's, so it is its own sheet.
-  const [inviting, setInviting] = useState(initial === 'invite');
-  const [addingChannel, setAddingChannel] = useState(false);
+  // Group invitation creation and request review share one sheet.
+  const [inviting, setInviting] = useTabSheetState(
+    'groups.inviting',
+    initial === 'invite',
+    (value) => value,
+  );
+  const [recoverInvitations, setRecoverInvitations] = useState(false);
+  const [addingChannel, setAddingChannel] = useTabSheetState(
+    'groups.channel',
+    false,
+    (value) => value,
+  );
   // A New chat sheet whose submission is unresolved cannot be dismissed, and a
   // store switch must not take it away either: a submission has to be settled
   // where it was made.
@@ -2013,7 +2038,7 @@ export function GroupSettingsScreen({
       if (!channelUnresolved.current) setAddingChannel(false);
     }
     seenStore.current = storeId;
-  }, [storeId]);
+  }, [storeId, setAddingChannel, setInviting, setSheet]);
   const mutate = async (
     action: () => Promise<unknown>,
     message: string,
@@ -2091,13 +2116,18 @@ export function GroupSettingsScreen({
   const inviteSheet = inviting ? (
     <InvitationPanel
       bridge={bridge}
+      recover={recoverInvitations}
+      teamId={store.team_id_hex}
       profile={store.server}
       account={store.account}
       teamAlias={store.alias}
       presentation={{
         title: 'Invitations and requests',
         subtitle: store.name,
-        onClose: () => setInviting(false),
+        onClose: () => {
+          setInviting(false);
+          setRecoverInvitations(false);
+        },
       }}
       onComplete={() => onApplied('Group requests updated')}
     />
@@ -2214,6 +2244,17 @@ export function GroupSettingsScreen({
         />
       ) : (
         <>
+          {canManageRoster ? (
+            <InvitationRecovery
+              bridge={bridge}
+              store={store}
+              onError={onError}
+              onReview={() => {
+                setRecoverInvitations(true);
+                setInviting(true);
+              }}
+            />
+          ) : null}
           {membershipPending.map((operation) => (
             <Band
               key={`${operation.kind}:${operation.target ?? ''}`}

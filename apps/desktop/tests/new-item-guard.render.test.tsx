@@ -235,3 +235,33 @@ test('Escape on a sheet with something in it asks the same question', async () =
   });
   await ui.waitFor(() => assert.equal(rendered.queryByText('New link'), null));
 });
+
+test('a new item resumes its typed input after a rail tab switch', async () => {
+  const { rendered, store } = await mount();
+  await openSheet(rendered, 'Password');
+  ui.fireEvent.change(rendered.getByLabelText('Site'), {
+    target: { value: 'draft.example' },
+  });
+  await ui.act(async () => {
+    store.navigateTab('teams');
+  });
+  assert.equal(confirmation(), null);
+  assert.equal(rendered.queryByText('New password'), null);
+  await ui.act(async () => {
+    store.navigateTab('files');
+  });
+  await rendered.findByText('New password');
+  assert.equal(
+    (rendered.getByLabelText('Site') as HTMLInputElement).value,
+    'draft.example',
+  );
+  assert.equal(window.location.search.includes('draft.example'), false);
+  await leave(store);
+  ui.fireEvent.click(dialogButton('Discard'));
+  await ui.act(async () => {});
+  await ui.act(async () => {
+    store.navigateTab('files');
+  });
+  assert.equal(rendered.queryByText('New password'), null);
+  assert.equal(store.getSnapshot().sheet, undefined);
+});

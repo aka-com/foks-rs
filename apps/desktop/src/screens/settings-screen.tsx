@@ -12,11 +12,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { useToast } from '/kit/toasts';
 import { enqueueProfileWork, normalizeCommandError } from '../bridge';
-import type { AppInfo, Bridge, ResetPreview, YubiEnrollment } from '../bridge';
+import type { AppInfo, Bridge, ResetPreview } from '../bridge';
 import {
   Band,
   Button,
-  Chip,
   Icon,
   Inset,
   InsetRow,
@@ -40,10 +39,10 @@ import type { MutationFailureHandler } from '../mutation-recovery';
 import { agentLifecycleLabel, type AgentLifecycle } from '../agent-lifecycle';
 import { NotificationSettings } from '../chat/notification-provider';
 import { ServersSection } from './servers-screen';
-import { AccountMark, AccountSwitcher } from './account-switcher';
+import { AccountMark } from './account-switcher';
 import { UnavailableAccount } from './people-screen';
-import { PassphraseSheet, YubiActionSheet } from './device-sheets';
-import type { PassphraseMode, SimpleYubiAction } from './device-sheets';
+import { PassphraseSheet } from './device-sheets';
+import type { PassphraseMode } from './device-sheets';
 
 export interface SettingsScreenProps {
   snapshot: AgentSnapshot;
@@ -62,7 +61,7 @@ export interface SettingsScreenProps {
 
 /** A sheet this page owns. Add a server and the per-server reset are the
  *  Servers section's own. */
-type Sheet = 'passphrase' | 'yubi' | 'reset-mac' | null;
+type Sheet = 'passphrase' | 'reset-mac' | null;
 
 export function SettingsScreen({
   snapshot,
@@ -93,8 +92,6 @@ export function SettingsScreen({
     store: AccountStore;
     mode: PassphraseMode;
   } | null>(null);
-  const [yubiAction, setYubiAction] = useState<SimpleYubiAction>('change-pin');
-  const [yubi, setYubi] = useState<YubiEnrollment[]>([]);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
 
   // A passphrase, a PIN or an unlock code must not stay on screen behind
@@ -127,42 +124,6 @@ export function SettingsScreen({
       alive = false;
     };
   }, [bridge, onError]);
-
-  // The card rows act on the addressed account's enrolled key; the key itself
-  // is listed on Devices.
-  const profile = addressed?.server;
-  const keysStopped = addressed
-    ? accountStopped(snapshot, addressed).stopped
-    : true;
-  useEffect(() => {
-    let alive = true;
-    setYubi([]);
-    if (!profile || keysStopped) return;
-    void enqueueProfileWork(bridge, profile, () =>
-      bridge.listYubiAccounts(profile),
-    )
-      .then((entries) => {
-        if (alive) setYubi(entries);
-      })
-      .catch((error: unknown) => {
-        if (alive && normalizeCommandError(error).code !== 'catalog-required')
-          onError(error);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [bridge, keysStopped, onError, profile]);
-
-  const enrolled = yubi.find((entry) => entry.state === 'complete');
-  const openYubi = (action: SimpleYubiAction): void => {
-    setYubiAction(action);
-    setSheet('yubi');
-  };
-  const cardReason = keysStopped
-    ? 'Account access is stopped'
-    : enrolled
-      ? undefined
-      : 'No complete enrollment found';
 
   // A `section=` address scrolls to its section and puts the keyboard there.
   const anchors = {
@@ -292,24 +253,8 @@ export function SettingsScreen({
               )}
             </Inset>
             <SectionLabel id="settings-card-label">
-              {addressed
-                ? `Security key credentials · ${accountSubtitle(snapshot, addressed)}`
-                : 'Security key credentials'}
+              Security key enrollments
             </SectionLabel>
-            {/* The label names one account, so the reader is given the way to
-                choose another rather than a fact about an account they did
-                not pick. */}
-            {unavailable ? null : (
-              <AccountSwitcher
-                snapshot={snapshot}
-                stores={stores}
-                selected={addressed}
-                labelledBy="settings-card-label"
-                onSwitch={(store) =>
-                  onNavigate({ ...location, store: store.id })
-                }
-              />
-            )}
             {unavailable ? (
               <UnavailableAccount
                 stores={stores}
@@ -320,80 +265,33 @@ export function SettingsScreen({
                 onRefresh={() => void onRefresh('Accounts refreshed')}
               />
             ) : (
-              <Inset className="settings-inset middle wide">
-                <InsetRow
-                  label="Enrolled key"
-                  action={
-                    <Button
-                      size="sm"
-                      onClick={() =>
-                        onNavigate({
-                          kind: 'devices',
-                          // The address this page carries, so a stale reference
-                          // travels and is reported there rather than dropped.
-                          ...((location.store ?? addressed?.id)
-                            ? { store: location.store ?? addressed?.id }
-                            : {}),
-                        })
-                      }
-                    >
-                      Open Devices
-                    </Button>
-                  }
-                >
-                  {enrolled ? (
-                    <>
-                      <b>{enrolled.alias}</b> <Chip tone="ok">Enrolled</Chip>
-                    </>
-                  ) : (
-                    'No security key is enrolled on this account.'
-                  )}
-                  <small>
-                    The key itself, its enrollment and PIN status are on the
-                    Devices page.
-                  </small>
-                </InsetRow>
-                <InsetRow
-                  label="Card PIN"
-                  action={
-                    <Button
-                      size="sm"
-                      disabled={cardReason !== undefined}
-                      title={cardReason}
-                      onClick={() => openYubi('change-pin')}
-                    >
-                      Change PIN…
-                    </Button>
-                  }
-                >
-                  Enter the current PIN and a new PIN.
-                </InsetRow>
-                <InsetRow
-                  label="Unlock code"
-                  action={
-                    <>
+              <Inset>
+                {snapshot.servers.map((server) => (
+                  <InsetRow
+                    key={server.id}
+                    label={
+                      server.label
+                        ? `${serverDisplayName(server)} · ${server.name}`
+                        : serverDisplayName(server)
+                    }
+                    action={
                       <Button
-                        size="sm"
-                        disabled={cardReason !== undefined}
-                        title={cardReason}
-                        onClick={() => openYubi('unblock')}
+                        onClick={() =>
+                          onNavigate({
+                            kind: 'settings',
+                            section: 'servers',
+                            profile: server.id,
+                          })
+                        }
                       >
-                        Unblock PIN…
+                        Open security keys
                       </Button>
-                      <Button
-                        size="sm"
-                        disabled={cardReason !== undefined}
-                        title={cardReason}
-                        onClick={() => openYubi('change-puk')}
-                      >
-                        Change unlock code…
-                      </Button>
-                    </>
-                  }
-                >
-                  Use the unlock code (PUK) to set a new PIN, or set a new
-                  unlock code.
-                </InsetRow>
+                    }
+                  >
+                    Manage enrollments and card credentials for all accounts on
+                    this server.
+                  </InsetRow>
+                ))}
               </Inset>
             )}
           </div>
@@ -464,20 +362,6 @@ export function SettingsScreen({
             setSheet(null);
             setPassphrase(null);
             void onRefresh(message).catch((error) => onMutationError(error));
-          }}
-          onError={(error) => void onMutationError(error)}
-        />
-      ) : null}
-      {sheet === 'yubi' && addressed ? (
-        <YubiActionSheet
-          bridge={bridge}
-          store={addressed}
-          action={yubiAction}
-          alias={enrolled?.alias ?? ''}
-          onClose={() => setSheet(null)}
-          onDone={async () => {
-            setSheet(null);
-            await onRefresh('Security key updated.');
           }}
           onError={(error) => void onMutationError(error)}
         />

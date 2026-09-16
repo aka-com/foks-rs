@@ -1,3 +1,4 @@
+import { useTabSheetState } from '../navigation-guard';
 import { useCallback, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { Dialog, DismissibleDialog } from '/kit/overlay-primitives';
@@ -445,13 +446,17 @@ function NewSheet({
   accessNow,
 }: NewSheetProps): ReactNode {
   // If the specified store is not available locally, fall back to the default vault.
-  const [storeId, setStoreId] = useState(() =>
+  const [storeId, setStoreId] = useTabSheetState('item.storeId', () =>
     storeOf(snapshot, workflow.storeId)
       ? workflow.storeId
       : (defaultCreateStore(snapshot) ?? workflow.storeId),
   );
-  const [site, setSite] = useState(workflow.draft?.site ?? '');
-  const [path, setPath] = useState(
+  const [site, setSite] = useTabSheetState(
+    'item.site',
+    workflow.draft?.site ?? '',
+  );
+  const [path, setPath] = useTabSheetState(
+    'item.path',
     workflow.draft?.path ??
       (workflow.itemKind === 'Password'
         ? namedPath(
@@ -461,21 +466,40 @@ function NewSheet({
           )
         : defaultPath(workflow.itemKind, workflow.initialFolder)),
   );
-  const [username, setUsername] = useState(workflow.draft?.username ?? '');
-  const [password, setPassword] = useState(workflow.draft?.password ?? '');
-  const [website, setWebsite] = useState(workflow.draft?.website ?? '');
-  const [value, setValue] = useState(workflow.draft?.value ?? '');
-  const [resourceName, setResourceName] = useState(
+  const [username, setUsername] = useTabSheetState(
+    'item.username',
+    workflow.draft?.username ?? '',
+  );
+  const [password, setPassword] = useTabSheetState(
+    'item.password',
+    workflow.draft?.password ?? '',
+  );
+  const [website, setWebsite] = useTabSheetState(
+    'item.website',
+    workflow.draft?.website ?? '',
+  );
+  const [value, setValue] = useTabSheetState(
+    'item.value',
+    workflow.draft?.value ?? '',
+  );
+  const [resourceName, setResourceName] = useTabSheetState(
+    'item.resourceName',
     workflow.draft?.resourceName ?? '',
   );
-  const [target, setTarget] = useState(workflow.draft?.target ?? '');
-  const [sourcePath, setSourcePath] = useState<string | null>(
+  const [target, setTarget] = useTabSheetState(
+    'item.target',
+    workflow.draft?.target ?? '',
+  );
+  const [sourcePath, setSourcePath] = useTabSheetState<string | null>(
+    'item.sourcePath',
     workflow.draft?.sourcePath ?? null,
   );
-  const [readRole, setReadRole] = useState<KvRoleInput>(
+  const [readRole, setReadRole] = useTabSheetState<KvRoleInput>(
+    'item.readRole',
     workflow.draft?.readRole ?? DEFAULT_READ_ROLE,
   );
-  const [writeRole, setWriteRole] = useState<KvRoleInput>(
+  const [writeRole, setWriteRole] = useTabSheetState<KvRoleInput>(
+    'item.writeRole',
     workflow.draft?.writeRole ?? DEFAULT_WRITE_ROLE,
   );
   const [hovering, setHovering] = useState(false);
@@ -535,6 +559,7 @@ function NewSheet({
       : hasContent
         ? discardNewItem(itemKind, close)
         : null,
+    !saving,
   );
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const toasts = useToast();

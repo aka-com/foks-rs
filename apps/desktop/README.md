@@ -838,8 +838,13 @@ this stylesheet.
 
 ## Navigation guards
 
-No sheet is addressable by the location, so any navigation unmounts whatever
-workflow is open on the page. Every entry point — the rail's tabs, Control-Tab,
+Sheets are not addressable by `Location` or a URL. Rail-tab switches retain
+approved input forms in the optional `LocationState.sheet` memory: new items,
+new channels, member addition, group creation, invitation details, and typed
+pairing acceptance. Screens explicitly opt their selectors and fields into
+`useTabSheetState`; PINs, passphrases, paper-key reveals, card setup, revocation,
+and in-flight writes are not restored. Confirming a discard clears this memory.
+Other navigation still unmounts the workflow and asks its guard. Every entry point — the rail's tabs, Control-Tab,
 the topbar's back chevron, the account switcher, the ⌘K palette, attention
 links, the trackpad's back swipe — reaches the same three methods on
 `LocationStore`: `navigate`, `navigateTab` and `select`. Guards allow the active

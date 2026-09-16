@@ -1,3 +1,4 @@
+import { useTabSheetState } from '../navigation-guard';
 import { useEffect, useRef, useState } from 'react';
 import { normalizeCommandError, type Bridge } from '../bridge';
 import { useSheetGuard } from '../navigation-guard';
@@ -17,43 +18,60 @@ import {
   SectionLabel,
 } from './index';
 import type { PanelPresentation } from './index';
+export const INVITATION_ACTIVITY = 'foks:invitation-activity';
+
 export function InvitationPanel({
   bridge,
   profile,
   account,
   teamAlias,
+  teamId,
   presentation,
+  recover = false,
   onComplete,
 }: {
   bridge: Bridge;
   profile: string;
   account: string;
   teamAlias?: string;
+  teamId?: string;
   /**
    * Render the join flow as a modal sheet instead of a card: the form in the
    * body and its actions in the footer.
    */
   presentation?: PanelPresentation;
+  recover?: boolean;
   onComplete: () => Promise<void> | void;
 }) {
-  const [invite, setInvite] = useState('');
-  const [remote, setRemote] = useState('');
-  const [sourceTeam, setSourceTeam] = useState('');
-  const [sourceRole, setSourceRole] = useState('admin');
-  const [role, setRole] = useState('member');
+  const [invite, setInvite] = useTabSheetState('invitation.invite', '');
+  const [remote, setRemote] = useTabSheetState('invitation.remote', '');
+  const [sourceTeam, setSourceTeam] = useTabSheetState(
+    'invitation.sourceTeam',
+    '',
+  );
+  const [sourceRole, setSourceRole] = useTabSheetState(
+    'invitation.sourceRole',
+    'admin',
+  );
+  const [role, setRole] = useTabSheetState('invitation.role', 'member');
   const [pin, setPin] = useState('');
   const [preview, setPreview] = useState<InvitationRow | null>(null);
   const [reply, setReply] = useState<InvitationReply | null>(null);
   const [rows, setRows] = useState<InvitationRow[]>([]);
   const [busy, setBusy] = useState(false);
+  const [resumable, setResumable] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const identity = `${profile}/${account}/${teamAlias ?? ''}`;
   const active = useRef(identity);
+  const priorIdentity = useRef(identity);
   useEffect(() => {
     active.current = identity;
-    setInvite('');
-    setRemote('');
-    setSourceTeam('');
+    if (priorIdentity.current !== identity) {
+      setInvite('');
+      setRemote('');
+      setSourceTeam('');
+    }
+    priorIdentity.current = identity;
     setPin('');
     setPreview(null);
     setReply(null);
@@ -63,18 +81,70 @@ export function InvitationPanel({
     return () => {
       active.current = '';
     };
-  }, [identity]);
+  }, [identity, setInvite, setRemote, setSourceTeam]);
+  useEffect(() => {
+    if (!recover || !teamAlias) return;
+    let live = true;
+    setBusy(true);
+    void Promise.all([
+      bridge.invitation(profile, account, { action: 'list' }, null),
+      bridge.invitation(
+        profile,
+        account,
+        {
+          action: 'pending-approvals',
+          team_alias: teamAlias,
+        },
+        null,
+      ),
+    ])
+      .then((values) => {
+        if (live)
+          setReply(
+            values.flatMap((value, index) => {
+              const rows = Array.isArray(value)
+                ? value
+                : (value.rows ?? [value]);
+              return index === 0 && teamId
+                ? rows.filter((row) => row.team_id === teamId)
+                : rows;
+            }),
+          );
+      })
+      .catch((failure: unknown) => {
+        if (live) setError(normalizeCommandError(failure).message);
+      })
+      .finally(() => {
+        if (live) setBusy(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [bridge, profile, account, teamAlias, teamId, recover]);
   const nativeRole = (value: string): InvitationRole =>
     value === 'member'
       ? { member: { visibility: 0 } }
       : (value as 'admin' | 'owner');
   const run = async (action: InvitationAction) => {
     setBusy(true);
+    // These native actions retain their prepared operation or approval record.
+    setResumable(
+      ['create', 'approve', 'reject', 'attempt', 'status'].includes(
+        action.action,
+      ),
+    );
     setError(null);
     const secret = pin || null;
     setPin('');
     try {
       const value = await bridge.invitation(profile, account, action, secret);
+      if (
+        !Array.isArray(value) &&
+        (value.membership_verified ||
+          (['approve', 'approve-remote'].includes(action.action) &&
+            value.state === 'complete'))
+      )
+        await onComplete();
       if (active.current !== identity) return;
       setReply(value);
       if (!Array.isArray(value)) {
@@ -87,26 +157,23 @@ export function InvitationPanel({
               r.request_id === value.request_id ? { ...r, ...value } : r,
             ),
           );
-        if (
-          value.membership_verified ||
-          (['approve', 'approve-remote'].includes(action.action) &&
-            value.state === 'complete')
-        )
-          await onComplete();
       }
     } catch (e) {
       if (active.current === identity)
         setError(normalizeCommandError(e).message);
     } finally {
       if (active.current === identity) setBusy(false);
+      if (active.current !== identity)
+        window.dispatchEvent(new Event(INVITATION_ACTIVITY));
     }
   };
-  // An approval, a rejection and a created invitation are all answers this
-  // panel is the only report of: the reply carries the invitation itself, or
-  // the state the request reached. What is only typed is asked about instead.
+  // Local mutations are listed durably by the agent and recovered from the
+  // group banner. Other calls still require their reply before navigation.
   useSheetGuard(
     busy
-      ? { verdict: 'refuse', reason: 'Wait for the invitation to finish.' }
+      ? resumable
+        ? null
+        : { verdict: 'refuse', reason: 'Wait for the invitation to finish.' }
       : invite || remote || sourceTeam || pin
         ? {
             verdict: 'prompt',
@@ -123,6 +190,7 @@ export function InvitationPanel({
             },
           }
         : null,
+    !busy && !pin,
   );
   const reports = reply ? (Array.isArray(reply) ? reply : [reply]) : [];
   const requestMembership = () => {

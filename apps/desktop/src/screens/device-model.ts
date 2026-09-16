@@ -151,15 +151,16 @@ function backupEntry(backup: BackupEnrollment): DeviceEntry {
 }
 
 /**
- * An enrollment has an alias and a state; the agent reports no id for it, and
- * lists it for the server profile rather than for one account on it.
+ * An enrollment belongs to the server profile. Once its key is prepared, its
+ * device id matches the authenticated device list; early preparations have none.
  */
 function yubiEntry(entry: YubiEnrollment): DeviceEntry {
   return {
     address: `yubi:${entry.alias}`,
     name: entry.alias,
     kind: 'Enrollment',
-    keyLabel: 'Enrollment',
+    keyId: entry.deviceId,
+    keyLabel: 'Device key',
     icon: 'key',
     current: false,
     scope: 'profile',
@@ -182,4 +183,22 @@ export function deviceAt(
   address: string,
 ): DeviceEntry | undefined {
   return deviceEntries(lists).find((entry) => entry.address === address);
+}
+
+/** Select only an exact, unambiguous native identity; list order is not identity. */
+export function enrollmentForCard(
+  enrollments: readonly YubiEnrollment[],
+  serial: number,
+): YubiEnrollment | undefined {
+  const matches = enrollments.filter((entry) => entry.cardSerial === serial);
+  return matches.length === 1 ? matches[0] : undefined;
+}
+export function enrollmentForDevice(
+  enrollments: readonly YubiEnrollment[],
+  id: string,
+): YubiEnrollment | undefined {
+  const matches = enrollments.filter(
+    (entry) => entry.deviceId === id && entry.state === 'complete',
+  );
+  return matches.length === 1 ? matches[0] : undefined;
 }

@@ -249,10 +249,16 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
   // `list_yubi_accounts` returns results for a single profile. The mock tracks
   // the associated server and enrollment status per account, filtering
   // enrollments by account and marking incomplete enrollments as pending.
-  const yubi = snapshot.yubiAccounts.map((entry) => ({
+  const yubi: {
+    alias: string;
+    server: string;
+    state: 'pending' | 'complete';
+    serial?: number;
+  }[] = snapshot.yubiAccounts.map((entry) => ({
     alias: entry.alias,
     server: entry.server,
     state: entry.state,
+    serial: entry.serial,
   }));
   const accountStore = (id: string) =>
     stores.find((store) => store.id === id && store.kind === 'account');
@@ -1303,7 +1309,11 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     listYubiAccounts: async (profile) =>
       yubi
         .filter((entry) => entry.server === profile)
-        .map((entry) => ({ alias: entry.alias, state: entry.state })),
+        .map((entry) => ({
+          alias: entry.alias,
+          state: entry.state,
+          cardSerial: entry.serial,
+        })),
     runYubi: async ({ command, args }) => {
       if (
         command === 'yubi_pin_status' ||

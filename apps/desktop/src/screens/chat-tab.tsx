@@ -1,3 +1,4 @@
+import { useTabSheetState } from '../navigation-guard';
 /**
  * The Chat tab: the inbox column beside one conversation.
  *
@@ -97,7 +98,11 @@ export function ChatTab({
     : teams.find((store) => store.id === openingRef);
   const ref: StoreRef | undefined = open?.id;
   const [info, setInfo] = useState(false);
-  const [newChat, setNewChat] = useState<{ team?: StoreRef } | null>(null);
+  const [newChat, setNewChat] = useTabSheetState<{ team?: StoreRef } | null>(
+    'chat.sheet',
+    null,
+    (value) => value !== null,
+  );
   // The ⓘ toggle takes focus back when the panel it opened closes, and the
   // conversation takes it when the note that was focused is dismissed.
   const infoToggle = useRef<HTMLButtonElement | null>(null);
@@ -134,9 +139,12 @@ export function ChatTab({
   // a notification activation, say — closes it rather than rebinding it to the
   // team that arrives. A submission the agent has already been given is the
   // exception: it has to be settled where it was made.
+  const priorTeam = useRef(ref);
   useEffect(() => {
-    if (!newChatUnresolved.current) setNewChat(null);
-  }, [ref]);
+    if (priorTeam.current !== ref && !newChatUnresolved.current)
+      setNewChat(null);
+    priorTeam.current = ref;
+  }, [ref, setNewChat]);
   // The rail's Chat tab returns to the team and channel that were open. A
   // location naming a team without chat does not erase that memory: only the
   // remembered team losing chat forgets it. The teams are a newline-joined

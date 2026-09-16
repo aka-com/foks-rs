@@ -169,6 +169,8 @@ test('Members exposes invitation creation, requests and approval recovery for th
         : { state: 'complete' };
     },
   });
+  await ui.act(async () => {});
+  calls.length = 0;
   ui.fireEvent.click(
     r.getByRole('button', { name: 'Invitations and requests' }),
   );
@@ -625,6 +627,8 @@ test('Members invite action opens the group invitation workflow', async () => {
       return { state: 'complete' };
     },
   });
+  await ui.act(async () => {});
+  calls.length = 0;
   ui.fireEvent.click(r.getByRole('button', { name: 'Invite to group…' }));
   const dialog = r.getByRole('dialog');
   ui.fireEvent.click(
@@ -632,4 +636,52 @@ test('Members invite action opens the group invitation workflow', async () => {
   );
   await ui.act(async () => {});
   assert.deepEqual(calls, [{ action: 'create', team_alias: 'engineering' }]);
+});
+
+test('an invitation prepared after unmount is recovered from the group banner', async () => {
+  const snapshot = await fixture();
+  const team = snapshot.stores.find((entry) => entry.id === 'team:eng');
+  assert.ok(team?.kind === 'team');
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let prepared = false;
+  const row = {
+    operation_id: 'a'.repeat(32),
+    team_id: team.team_id_hex,
+    state: 'prepared',
+  };
+  const invitation: Bridge['invitation'] = async (
+    _profile,
+    _account,
+    action,
+  ) => {
+    if (action.action === 'list') return prepared ? [row] : [];
+    if (action.action === 'pending-approvals') return [];
+    if (action.action === 'create') {
+      await gate;
+      prepared = true;
+      return row;
+    }
+    return row;
+  };
+  const first = await group(snapshot, { invitation });
+  ui.fireEvent.click(first.getByRole('button', { name: 'Invite to group…' }));
+  ui.fireEvent.click(
+    ui
+      .within(first.getByRole('dialog'))
+      .getByRole('button', { name: 'Create invitation' }),
+  );
+  first.unmount();
+  await ui.act(async () => {
+    release();
+  });
+  const returned = await group(snapshot, { invitation });
+  ui.fireEvent.click(
+    await returned.findByRole('button', { name: 'Review invitations' }),
+  );
+  const dialog = returned.getByRole('dialog');
+  await ui.within(dialog).findByText('prepared');
+  assert.ok(ui.within(dialog).getByRole('button', { name: 'Submit' }));
 });

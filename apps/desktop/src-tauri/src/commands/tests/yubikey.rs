@@ -358,3 +358,18 @@ fn security_key_resume_re_resolves_one_pending_journal_before_one_attempt() {
         ]
     );
 }
+
+#[test]
+fn enrollment_identity_is_preserved_and_validated() {
+    let id = format!("0802{}", "ab".repeat(32));
+    let rows = yubi_enrollment_dtos(serde_json::json!([{
+        "alias": "travel", "state": "complete", "device_id_hex": id, "card_serial": 123
+    }]))
+    .unwrap();
+    assert_eq!(rows[0].device_id.as_deref(), Some(id.as_str()));
+    assert_eq!(rows[0].card_serial, Some(123));
+    assert!(yubi_enrollment_dtos(serde_json::json!([{
+        "alias": "bad", "state": "complete", "device_id_hex": "bad", "card_serial": 123
+    }]))
+    .is_err());
+}

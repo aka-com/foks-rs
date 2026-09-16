@@ -788,10 +788,8 @@ test('a paper key and an enrollment each carry their own page', async () => {
   assert.ok(key.getByText('Personal server'));
   assert.ok(key.getByText('This enrollment applies across the server.'));
   assert.equal(key.queryByText('satoshi'), null);
-  assert.ok(
-    key.getByText('This enrollment cannot be matched to a card on this Mac.'),
-  );
-  assert.ok(key.getByRole('button', { name: 'Settings › Account' }));
+  assert.ok(key.getByText(/Card serial .*; no device key recorded\./));
+  assert.ok(key.getByRole('button', { name: 'Settings › Server' }));
   await ui.act(async () => {
     ui.fireEvent.click(key.getByRole('button', { name: 'Revoke…' }));
   });
@@ -922,4 +920,65 @@ test('a paper key hidden by blur can be recovered once', async () => {
     null,
   );
   assert.deepEqual(committed, []);
+});
+
+test('PIN status selects the enrollment on the requested card rather than list order', async () => {
+  const calls: unknown[] = [];
+  const rendered = await renderDevices(await fixture(), {
+    store: 'acct:personal',
+    decorate: (base) => ({
+      ...base,
+      listYubiCards: async () => [{ serial: 111 }, { serial: 222 }],
+      listYubiAccounts: async () => [
+        { alias: 'second', state: 'complete', cardSerial: 222 },
+        { alias: 'first', state: 'complete', cardSerial: 111 },
+      ],
+      runYubi: async (command) => {
+        calls.push(command);
+        return { remaining: 3, blocked: false };
+      },
+    }),
+  });
+  const buttons = await rendered.findAllByRole('button', {
+    name: 'PIN status',
+  });
+  ui.fireEvent.click(buttons[0]);
+  const dialog = rendered.getByRole('dialog');
+  assert.ok(ui.within(dialog).getAllByText('first').length);
+  ui.fireEvent.click(
+    ui.within(dialog).getByRole('button', { name: 'Continue' }),
+  );
+  await ui.waitFor(() => assert.equal(calls.length, 1));
+  assert.deepEqual(calls[0], {
+    command: 'yubi_pin_status',
+    args: { profile: 'personal', alias: 'first' },
+  });
+});
+
+test('a card-backed device opens its enrollment by the native key id', async () => {
+  const id = '0802' + 'ab'.repeat(32);
+  const locations: Location[] = [];
+  const rendered = await renderDevices(await fixture(), {
+    store: 'acct:personal',
+    device: id,
+    onNavigate: (at) => locations.push(at),
+    decorate: (base) => ({
+      ...base,
+      listAccountDevices: async () => [
+        { id, name: 'Travel device', role: 'owner', current: false },
+      ],
+      listYubiAccounts: async () => [
+        { alias: 'travel', state: 'complete', deviceId: id, cardSerial: 111 },
+      ],
+    }),
+  });
+  ui.fireEvent.click(
+    await rendered.findByRole('button', { name: 'Open travel' }),
+  );
+  assert.deepEqual(locations.at(-1), {
+    kind: 'devices',
+    section: 'keys',
+    store: 'acct:personal',
+    device: 'yubi:travel',
+  });
 });
