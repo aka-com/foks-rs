@@ -175,7 +175,7 @@ export function SettingsScreen({
       <PageHeader
         ruled
         title="Settings"
-        subtitle="Servers, account credentials and this Mac"
+        subtitle="Servers, account credentials and this device"
       />
       <div className="body">
         <div className="settings-main">
@@ -252,7 +252,7 @@ export function SettingsScreen({
                   );
                 })
               ) : (
-                <InsetRow label="None">No accounts on this Mac.</InsetRow>
+                <InsetRow label="None">No accounts on this device.</InsetRow>
               )}
             </Inset>
             <SectionLabel id="settings-card-label">
@@ -324,7 +324,7 @@ export function SettingsScreen({
           <Inset className="settings-inset middle wide danger-box">
             <InsetRow
               className="dangerrow"
-              label="Reset this Mac"
+              label="Reset this device"
               action={
                 <Button
                   size="sm"
@@ -333,17 +333,17 @@ export function SettingsScreen({
                   title={
                     snapshot.servers.length
                       ? undefined
-                      : 'No server is configured on this Mac'
+                      : 'No server is configured on this device'
                   }
                   onClick={() => setSheet('reset-mac')}
                 >
-                  Reset this Mac…
+                  Reset this device…
                 </Button>
               }
             >
               <small>
                 Removes the local account keys, trust history, cache and
-                unfinished operations this Mac holds for every server. Your
+                unfinished operations this device holds for every server. Your
                 accounts keep existing on their servers and other devices are
                 untouched.
               </small>
@@ -545,7 +545,7 @@ function AboutSection({
         role="region"
         aria-labelledby="settings-this-mac-label"
       >
-        <SectionLabel id="settings-this-mac-label">This Mac</SectionLabel>
+        <SectionLabel id="settings-this-mac-label">This device</SectionLabel>
         <Inset className="settings-inset wide">
           <InsetRow
             label="Transfer FOKS state"
@@ -723,7 +723,7 @@ function ResetMacSheet({
         if (busy) return;
         onClose();
       }}
-      title="Reset this Mac?"
+      title="Reset this device?"
       glyph={
         <span className="server-mark danger">
           <Icon name="trash" />
@@ -763,22 +763,22 @@ function ResetMacSheet({
               })();
             }}
           >
-            Reset this Mac
+            Reset this device
           </Button>
         </>
       }
     >
       <p>
-        Deletes this Mac's account keys. Your data stays on the server, but
+        Deletes this device's account keys. Your data stays on the server, but
         without another device or a paper key you cannot get back into the
         account. The passphrase alone is not enough.
       </p>
       <Inset>
         <InsetRow label="Unaffected">
-          Your accounts on their servers, and every other device. Only what this
-          Mac holds is erased.
+          Your accounts on their servers, and every other device. Only data
+          stored on this device is erased.
         </InsetRow>
-        <InsetRow label="Accounts on this Mac">
+        <InsetRow label="Accounts on this device">
           {stores.length
             ? stores
                 .map(
@@ -846,7 +846,7 @@ function ResetMacSheet({
         );
       })}
       {servers.length ? null : (
-        <Band label="No servers on this Mac">
+        <Band label="No servers on this device">
           There is nothing for this reset to erase.
         </Band>
       )}

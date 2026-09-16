@@ -217,8 +217,9 @@ test('the profile lists the account’s teams, its devices and its keys', async 
   assert.ok(ui.within(keys).getByText('Enrollment · on Personal server'));
   // The only verification this page can state is this Mac's own key.
   assert.equal(
-    ui.within(keys).getAllByRole('img', { name: 'Authenticated on this Mac' })
-      .length,
+    ui
+      .within(keys)
+      .getAllByRole('img', { name: 'Authenticated on this device' }).length,
     1,
   );
 });
@@ -304,7 +305,7 @@ test('a failed key read says so rather than reporting no keys', async () => {
   assert.equal(
     ui
       .within(keys)
-      .queryByText('No keys are listed for this account on this Mac.'),
+      .queryByText('No keys are listed for this account on this device.'),
     null,
     'a read that failed is not an account with no keys',
   );
@@ -436,7 +437,7 @@ test('the switcher lists every account and switching navigates by StoreRef', asy
   );
   assert.ok(trigger, 'the selector sits beside the account header');
   await ui.act(async () => ui.fireEvent.click(trigger));
-  const menu = rendered.getByRole('menu', { name: 'Accounts on this Mac' });
+  const menu = rendered.getByRole('menu', { name: 'Accounts on this device' });
   assert.equal(menu.querySelectorAll('.acct').length, 2);
   assert.ok(ui.within(menu).getByLabelText('Current account'));
   assert.ok(
@@ -664,7 +665,7 @@ test('a stopped account disables username changes while recovery remains enabled
       rendered.container.querySelector('.account-dropdown-trigger')!,
     ),
   );
-  const menu = rendered.getByRole('menu', { name: 'Accounts on this Mac' });
+  const menu = rendered.getByRole('menu', { name: 'Accounts on this device' });
   assert.ok(ui.within(menu).getByText('Verification failed'));
   await ui.act(async () => ui.fireEvent.keyDown(menu, { key: 'Escape' }));
   for (const name of ['Sign in…', 'Manage…', 'Open…'])
@@ -684,7 +685,7 @@ test('a stale address says the account is no longer available', async () => {
   );
 
   assert.ok(rendered.getByText('Account no longer available'));
-  assert.ok(rendered.getByRole('button', { name: 'Refresh the catalog' }));
+  assert.ok(rendered.getByRole('button', { name: 'Refresh' }));
   await ui.act(async () => {
     ui.fireEvent.click(
       rendered.getByRole('button', { name: 'personal · Personal server' }),

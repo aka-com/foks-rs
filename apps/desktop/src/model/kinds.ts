@@ -1,24 +1,22 @@
 /**
  * Client-side item classification and display metadata.
  *
- * Classifies filesystem nodes into user-facing product kinds:
+ * Classifies filesystem nodes into two user-facing product kinds:
  *   - Password: Secret node containing a password field or located under `/logins/`
- *   - File: File node, or a small-file node under `/documents/`
- *   - Resource: Any other Secret node
- *   - Link: Symlink node
+ *   - Document: any other Secret node, and every File node
  *
  * The v0.1.9 KV format stores every value up to 2,040 bytes as one `small-file`
- * node whether it was written as a note or as a file, so the protocol node type
- * cannot separate the two. The File product always files its items under
- * `/documents/`, which is the same kind of path convention the app already uses
- * to read a `/logins/` secret as a Password; an explicitly custom path on a
- * small file remains the one case this cannot recover.
+ * node whether it was typed into the app or brought in from disk, so a note
+ * and a small file are the same thing to the protocol and are one kind here.
+ * Whether an item shows a value or a download is decided by its node kind, not
+ * its product kind. Symlink nodes are dropped when the agent's snapshot is
+ * decoded and never reach this module.
  */
 
 import type { Item, ItemKind, NodeKind, NodeType } from './types';
 
 export interface KindMeta {
-  /** Display label for the kind (e.g. Note for Resource). */
+  /** Display label for the kind. */
   label: string;
   plural: string;
   /** A `FoksIconName`; kept as a plain string so the model imports no view. */
@@ -26,36 +24,22 @@ export interface KindMeta {
   blurb: string;
 }
 
-export const KINDS: Readonly<
-  Record<'Password' | 'Resource' | 'File' | 'Link', KindMeta>
-> = {
+export const KINDS: Readonly<Record<'Password' | 'Document', KindMeta>> = {
   Password: {
     label: 'Password',
     plural: 'Passwords',
     icon: 'key',
     blurb: 'Keep passwords, secrets, and tokens here.',
   },
-  Resource: {
-    label: 'Note',
-    plural: 'Notes',
-    icon: 'term',
-    blurb: 'Keep keys, tokens, connection strings, and notes here.',
-  },
-  File: {
-    label: 'File',
-    plural: 'Files',
+  Document: {
+    label: 'Document',
+    plural: 'Documents',
     icon: 'file',
-    blurb: 'Keep documents and files in encrypted storage.',
-  },
-  Link: {
-    label: 'Link',
-    plural: 'Links',
-    icon: 'link',
-    blurb: 'Keep links and shortcuts to other items in this vault.',
+    blurb: 'Keep notes, keys, and files in encrypted storage.',
   },
 };
 
-/** The word a person sees for a kind. Resource is Note. */
+/** The word a person sees for a kind. */
 export function kindLabel(kind: keyof typeof KINDS): string {
   return KINDS[kind].label;
 }
@@ -65,15 +49,15 @@ export const KIND_LIST = Object.keys(KINDS) as (keyof typeof KINDS)[];
 
 const PASSWORD_LINE = /^password:/m;
 
-const DOCUMENT_PREFIX = '/documents/';
-
 /** The kind a person reads this item as. */
 export function kindOf(item: Pick<Item, 'kind' | 'path' | 'value'>): ItemKind {
-  if (item.kind !== 'Secret') return item.kind;
-  if (PASSWORD_LINE.test(item.value ?? '') || item.path.startsWith('/logins/'))
+  if (item.kind === 'Folder') return 'Folder';
+  if (
+    item.kind === 'Secret' &&
+    (PASSWORD_LINE.test(item.value ?? '') || item.path.startsWith('/logins/'))
+  )
     return 'Password';
-  if (item.path.startsWith(DOCUMENT_PREFIX)) return 'File';
-  return 'Resource';
+  return 'Document';
 }
 
 const NODE_TYPES: Readonly<Record<NodeKind, NodeType>> = {

@@ -72,7 +72,7 @@ test('the rail draws the six tabs, the unread badge and the attention dot', () =
   // the only place attention is advertised.
   const dot = document.querySelector('.side.rail .attn');
   assert.ok(dot, 'the account avatar carries the attention dot');
-  assert.equal(dot.getAttribute('aria-label'), '2 things need attention');
+  assert.equal(dot.getAttribute('aria-label'), '2 items need attention');
   assert.equal(document.querySelector('.rail-tabs .dot'), null);
   // Files is the tab that owns All items, the shell's starting location.
   assert.equal(tabs[0].getAttribute('aria-current'), 'page');
@@ -209,15 +209,15 @@ test('the chat tab opens a conversation and lists every team at once', async () 
     assert.equal(household.getAttribute('aria-current'), 'page'),
   );
   // Chat follows the server capability grant, as the rail's chat rows did:
-  // Engineering's server offers none, so it sits under "Not ready", dimmed and
+  // Engineering's server offers none, so it sits under "Chat unavailable", dimmed and
   // not selectable.
   assert.ok(engineering.classList.contains('off'));
   assert.equal(engineering.getAttribute('role'), null);
   assert.ok(
     [...column.querySelectorAll('.sec')].some(
-      (label) => label.textContent === 'Not ready',
+      (label) => label.textContent === 'Chat unavailable',
     ),
-    'the Not ready group names itself',
+    'the Chat unavailable section header is displayed',
   );
   // The location remembers the team the tab chose.
   await testingLibrary.waitFor(() => {
@@ -303,7 +303,7 @@ test('Accounts, Devices and Settings draw no StoreRef', async () => {
 
   for (const [name, settled] of [
     ['Accounts', 'Actions on this account'],
-    ['Devices', 'Macs and device keys'],
+    ['Devices', 'Computers and security keys'],
     ['Settings', 'Danger zone'],
   ] as const) {
     testingLibrary.fireEvent.click(tab(name));

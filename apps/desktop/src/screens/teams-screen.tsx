@@ -139,7 +139,7 @@ function FindGroups({
                     const context = discoveryContext(snapshot, store.id);
                     const busy = discovering === store.id;
                     const reason = !context
-                      ? 'This account is not signed in on this Mac.'
+                      ? 'This account is not signed in on this device.'
                       : !context.available
                         ? unavailableTitle(context)
                         : discovering
@@ -468,7 +468,7 @@ export function TeamsScreen({
               title={
                 acting
                   ? 'Paste an invitation from an administrator of that group.'
-                  : 'No account on this Mac can request membership.'
+                  : 'No account on this device can request membership.'
               }
               onClick={() => setJoining(acting ?? null)}
             >
@@ -505,9 +505,8 @@ export function TeamsScreen({
                 </div>
                 <h2>No groups yet</h2>
                 <p>
-                  A group is a shared store with roles. Create one on a server
-                  this Mac holds an account on, or ask a server whether it
-                  already lists you in one.
+                  Groups give a team shared items with roles. Create one on a
+                  server you have an account on, or join one with an invitation.
                 </p>
                 <Button
                   variant="primary"

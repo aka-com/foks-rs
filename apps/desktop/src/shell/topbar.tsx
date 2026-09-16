@@ -40,7 +40,7 @@ const SETTINGS_SECTION_LABEL: Readonly<Record<string, string>> = {
 };
 
 const DEVICES_SECTION_LABEL: Readonly<Record<string, string>> = {
-  macs: 'Macs',
+  macs: 'Computers',
   keys: 'Security keys',
 };
 

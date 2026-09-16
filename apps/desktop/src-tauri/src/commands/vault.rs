@@ -508,7 +508,7 @@ pub(super) fn parse_item_role(value: &str) -> Result<KvRole, AgentError> {
             };
             let parsed = visibility.parse::<i16>().map_err(|_| {
                 invalid_request(
-                    "Member role visibility must be a valid 16-bit signed integer (e.g. Member:10).",
+                    "Visibility level must be a whole number between -32,768 and 32,767 (for example Member:10).",
                 )
             })?;
             if parsed.to_string() != visibility {

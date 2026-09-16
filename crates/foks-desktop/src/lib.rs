@@ -1658,7 +1658,7 @@ impl DesktopModel {
             return Err("device serial must be positive");
         }
         if phrase.expose().split_whitespace().count() != 13 {
-            return Err("pairing phrase must contain exactly 13 tokens");
+            return Err("pairing phrase must contain exactly 13 words");
         }
         Ok(Operation::AcceptDevicePairing {
             profile,
@@ -2329,7 +2329,7 @@ fn validate_team_party_input(
 
 fn validate_backup_phrase(phrase: &SecretString) -> Result<(), &'static str> {
     if phrase.expose().split_whitespace().count() != 17 {
-        return Err("backup phrase must contain exactly 17 tokens");
+        return Err("backup phrase must contain exactly 17 words");
     }
     Ok(())
 }
@@ -3496,7 +3496,7 @@ mod tests {
                 1,
                 SecretString::new("too short"),
             ),
-            Err("pairing phrase must contain exactly 13 tokens")
+            Err("pairing phrase must contain exactly 13 words")
         );
         let phrase = SecretString::new("one 1 two 2 three 3 four 4 five 5 six 6 seven");
         assert_eq!(
@@ -3809,7 +3809,7 @@ mod tests {
                 "Recovery laptop",
                 3,
             ),
-            Err("backup phrase must contain exactly 17 tokens")
+            Err("backup phrase must contain exactly 17 words")
         );
     }
 

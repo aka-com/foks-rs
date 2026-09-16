@@ -213,7 +213,7 @@ export type Selection = { store: StoreRef; path: string } | null;
 export type ViewMode = 'list' | 'grid' | 'folders';
 
 /** Kind filter selection, where 'All' disables kind filtering. */
-export type KindFilter = 'All' | 'Password' | 'Resource' | 'File' | 'Link';
+export type KindFilter = 'All' | 'Password' | 'Document';
 
 /** The sort menu's choice. */
 export type SortKey = 'name' | 'kind' | 'group';
@@ -917,9 +917,7 @@ const SCENE_ALIASES: Readonly<Record<string, Partial<Scene>>> = {
     lease: 'lapsed',
   },
   'groups-inactive': { location: { kind: 'store', ref: 'team:homelab' } },
-  'group-new-text': { location: { kind: 'store', ref: 'team:eng' } },
-  'group-new-link': { location: { kind: 'store', ref: 'team:eng' } },
-  'group-new-file': { location: { kind: 'store', ref: 'team:eng' } },
+  'group-new-document': { location: { kind: 'store', ref: 'team:eng' } },
   // `grid` is `all` seen as cards.
   grid: { view: 'grid' },
   folders: { view: 'folders' },
@@ -932,13 +930,13 @@ const SCENE_ALIASES: Readonly<Record<string, Partial<Scene>>> = {
 };
 
 const VIEWS: readonly ViewMode[] = ['list', 'grid', 'folders'];
-const KIND_FILTERS: readonly KindFilter[] = [
-  'All',
-  'Password',
-  'Resource',
-  'File',
-  'Link',
-];
+const KIND_FILTERS: readonly KindFilter[] = ['All', 'Password', 'Document'];
+/** Kind values older URLs carried, before Notes, Files and Links became Documents. */
+const LEGACY_KINDS: Readonly<Record<string, KindFilter>> = {
+  Resource: 'Document',
+  File: 'Document',
+  Link: 'Document',
+};
 const SORTS: readonly SortKey[] = ['name', 'kind', 'group'];
 
 function oneOf<T extends string>(
@@ -987,6 +985,7 @@ export function decodeScene(search: string): Scene {
     view: oneOf(VIEWS, params.get('view')) ?? alias.view ?? INITIAL_SCENE.view,
     kind:
       oneOf(KIND_FILTERS, params.get('kind')) ??
+      LEGACY_KINDS[params.get('kind') ?? ''] ??
       alias.kind ??
       INITIAL_SCENE.kind,
     sort: oneOf(SORTS, params.get('sort')) ?? alias.sort ?? INITIAL_SCENE.sort,

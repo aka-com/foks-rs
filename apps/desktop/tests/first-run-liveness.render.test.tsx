@@ -573,7 +573,7 @@ test('acknowledged signup is persisted before refresh and resumes read-only afte
   ui.fireEvent.change(rendered.view.getByPlaceholderText('yourname'), {
     target: { value: 'personal' },
   });
-  ui.fireEvent.change(rendered.view.getByPlaceholderText('Your Mac'), {
+  ui.fireEvent.change(rendered.view.getByPlaceholderText('Your device'), {
     target: { value: 'Mac' },
   });
   ui.fireEvent.click(
@@ -641,7 +641,7 @@ for (const method of ['recovery', 'sso'] as const) {
         },
       },
     );
-    ui.fireEvent.change(rendered.view.getByPlaceholderText('Your Mac'), {
+    ui.fireEvent.change(rendered.view.getByPlaceholderText('Your device'), {
       target: { value: 'Mac' },
     });
     if (method === 'recovery') {

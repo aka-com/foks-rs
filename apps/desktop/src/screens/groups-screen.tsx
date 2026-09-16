@@ -243,7 +243,7 @@ function targetReason(
     roleRank(party.destination_role) >= roleRank(mine.destination_role)
   )
     return 'An Admin cannot change another Admin or the Owner.';
-  return 'This member cannot be changed from this Mac.';
+  return 'This member cannot be changed from this device.';
 }
 
 /** The mark before a member's name: an initial, or a machine's glyph. */
@@ -632,7 +632,7 @@ function FederationRows({
           key={party.party_id_hex}
           party={party}
           chip="No admission record"
-          chipTitle="The roster lists this group as a member, but no admission record on this Mac matches it."
+          chipTitle="The roster lists this group as a member, but no admission record on this device matches it."
         />
       ))}
       {ambiguous.map((party) => (
@@ -640,7 +640,7 @@ function FederationRows({
           key={party.party_id_hex}
           party={party}
           chip="Ambiguous admission"
-          chipTitle="The roster lists this group once, but several admission records on this Mac match it, so none of them can be acted on."
+          chipTitle="The roster lists this group once, but several admission records on this device match it, so none of them can be acted on."
         />
       ))}
     </div>
@@ -772,7 +772,7 @@ function MembersTab({
                 disabled={!manageable || !onInvite}
                 title={
                   !onInvite
-                    ? `No account on this Mac signs in to ${serverName}.`
+                    ? `No account on this device signs in to ${serverName}.`
                     : readable
                       ? undefined
                       : inviteUnavailableTitle(serverName)
@@ -1088,11 +1088,11 @@ function SettingsTab({
         >
           <span className="t">
             <b>
-              Reset this Mac’s state for{' '}
+              Reset this device’s state for{' '}
               {server ? serverDisplayName(server) : store.server}
             </b>
             <small>
-              Removes locally stored keys and server data from this Mac.
+              Removes locally stored keys and server data from this device.
             </small>
           </span>
         </InsetRow>
@@ -1699,9 +1699,9 @@ export function GroupSheet({
               )}
             </Inset>
             <p className="fn">
-              The command admits a group this Mac already holds, so the choice
-              is over the remote groups it holds: one on another server, active,
-              and reachable right now.
+              The command admits a group this device already holds, so the
+              choice is over the remote groups it holds: one on another server,
+              active, and reachable right now.
             </p>
             <SectionLabel>Role for its members</SectionLabel>
             <Inset>
@@ -2044,7 +2044,7 @@ export function GroupSettingsScreen({
         <PageHeader title="Group unavailable" subtitle="" />
         <div className="body">
           <Notice title="This group is no longer available">
-            Refresh the catalog or choose another group from Teams.
+            Refresh or choose another group from Teams.
           </Notice>
         </div>
       </>

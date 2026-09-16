@@ -62,7 +62,7 @@ function noChannelsReason(
   if (store.team_kind !== 'named')
     return 'An ad-hoc share has no chat: chat lives in a named group.';
   const server = serverOf(snapshot, store.id);
-  if (!server) return 'This group’s server is not configured on this Mac.';
+  if (!server) return 'This group’s server is not configured on this device.';
   if (!server.capabilities.chat)
     return `${serverDisplayName(server)} does not offer chat, so this group has no channels.`;
   return undefined;
@@ -362,7 +362,7 @@ export function IncompleteGroupPage({
           >
             {copy.detail}
           </Band>
-          <SectionLabel>What this Mac knows</SectionLabel>
+          <SectionLabel>Local details</SectionLabel>
           <Inset>
             <InsetRow
               label="Account"

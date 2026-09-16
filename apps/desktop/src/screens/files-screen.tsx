@@ -113,7 +113,7 @@ export function FilesScreen({
     <>
       <PageHeader
         title="Files"
-        subtitle="Vaults, groups and shares on this Mac"
+        subtitle="Vaults, groups and shares on this device"
       />
       <div className="body nav-rows">
         <div className="list-window">
@@ -130,7 +130,7 @@ export function FilesScreen({
                 <span className="tt">
                   <span>All items</span>
                 </span>
-                <small>Every store on this Mac</small>
+                <small>Every store on this device</small>
               </span>
               <span className="tail">
                 <span className="go" aria-hidden="true">

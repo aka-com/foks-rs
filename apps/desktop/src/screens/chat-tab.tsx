@@ -350,10 +350,10 @@ function NoChatForTeam({
       ? store
       : undefined;
   const reason = !store
-    ? 'This team is not on this Mac.'
+    ? 'This team is not on this device.'
     : team
       ? `${noChatReason(snapshot, team)}.`
-      : 'Chat is available in named teams whose server offers it. Vaults and shares never have chat.';
+      : 'Chat is only available in teams whose server supports it. Personal vaults and shares do not include chat.';
   const elsewhere = chatTeams(snapshot).find((candidate) =>
     chatAvailable(snapshot, candidate, accessOptions),
   );
@@ -389,8 +389,8 @@ function NoTeamWithChat({
       </span>
       <h2>No team chats yet</h2>
       <p>
-        Chat is available in named teams whose server offers it. No team on this
-        Mac has one.
+        Chat is available in teams when supported by their server. Create or
+        join a team to get started.
       </p>
       <Button variant="primary" onClick={() => onNavigate({ kind: 'teams' })}>
         Create or join a team

@@ -197,7 +197,7 @@ test('a save already with the agent refuses the navigation', async () => {
 
 test('Escape on a sheet with something in it asks the same question', async () => {
   const { rendered } = await mount();
-  await openSheet(rendered, 'Note');
+  await openSheet(rendered, 'Document');
   ui.fireEvent.change(rendered.getByLabelText('Value'), {
     target: { value: '/ssh/id_ed25519' },
   });
@@ -213,7 +213,7 @@ test('Escape on a sheet with something in it asks the same question', async () =
   assert.equal(panel.querySelector('.hd h2')?.textContent, 'Discard new item?');
   assert.equal(
     panel.querySelector('.sb p')?.textContent,
-    'Your new note has not been saved.',
+    'Your new document has not been saved.',
   );
   // The draft survives the question until it is answered.
   await ui.act(async () => {
@@ -233,7 +233,9 @@ test('Escape on a sheet with something in it asks the same question', async () =
     ui.fireEvent.click(dialogButton('Discard'));
     await Promise.resolve();
   });
-  await ui.waitFor(() => assert.equal(rendered.queryByText('New note'), null));
+  await ui.waitFor(() =>
+    assert.equal(rendered.queryByText('New document'), null),
+  );
 });
 
 test('a new item resumes its typed input after a rail tab switch', async () => {

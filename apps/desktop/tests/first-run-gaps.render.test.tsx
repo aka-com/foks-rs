@@ -164,7 +164,7 @@ test('local setup without a managed server reports why it cannot continue', asyn
   await rendered.view.findByText(/No local server is running/);
   assert.ok(
     rendered.view.getByText(
-      'No local server is running on this Mac. Connect to an existing server to continue.',
+      'No local server is running on this device. Connect to an existing server to continue.',
     ),
   );
   assert.equal(

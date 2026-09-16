@@ -103,11 +103,11 @@ export function accessCopy(
       return {
         title: 'Setup incomplete',
         detail: verified
-          ? `${store.name} was created on ${serverName}, but key setup is incomplete on this Mac. Members and items are unavailable until setup finishes.`
+          ? `${store.name} was created on ${serverName}, but key setup is incomplete on this device. Members and items are unavailable until setup finishes.`
           : preparing
             ? `Creation of ${store.name} has not been submitted to ${serverName}. Continue with the saved group identity and keys.`
             : rejected
-              ? `Creation of ${store.name} was rejected. Its saved identity and keys are retained on this Mac.`
+              ? `Creation of ${store.name} was rejected. Its saved identity and keys are retained on this device.`
               : `Creation of ${store.name} must be checked on ${serverName}. Its saved identity and keys will be used to verify the result before setup continues.`,
         action: 'finish-setup',
         actionLabel: verified

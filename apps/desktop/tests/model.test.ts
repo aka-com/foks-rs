@@ -278,36 +278,28 @@ test('kindOf classifies Secret items as Password or Resource based on path and c
     kindOf(item(FIXTURE, 'team:household|/wifi/guest-password')),
     'Password',
   );
-  // Any other Secret is a Resource.
+  // Any other Secret is a Document, wherever it is filed.
   assert.equal(
     kindOf(item(FIXTURE, 'acct:personal|/env/prod/DATABASE_URL')),
-    'Resource',
+    'Document',
   );
   assert.equal(
     kindOf(item(FIXTURE, 'acct:personal|/agents/anthropic-api-key')),
-    'Resource',
+    'Document',
   );
-  // A small file is stored as the same `small-file` node as a note, so the
-  // File product's /documents/ path is what keeps its kind as File even
-  // when its bytes happen to be UTF-8 text.
   assert.equal(
     kindOf({
       kind: 'Secret',
       path: '/documents/readme.txt',
       value: 'plain UTF-8 text',
     }),
-    'File',
+    'Document',
   );
-  assert.equal(
-    kindOf({ kind: 'Secret', path: '/documents/empty.csv', value: '' }),
-    'File',
-  );
-  // File and Link items preserve their declared kinds.
+  // So is every File node.
   assert.equal(
     kindOf(item(FIXTURE, 'acct:personal|/documents/passport-scan.pdf')),
-    'File',
+    'Document',
   );
-  assert.equal(kindOf(item(FIXTURE, 'acct:personal|/latest-key')), 'Link');
   assert.equal(kindOf(item(FIXTURE, 'acct:personal|/ssh')), 'Folder');
 });
 
@@ -320,7 +312,6 @@ test('isLogin returns true only for items under /logins/', () => {
     isLogin(item(FIXTURE, 'team:household|/streaming/netflix')),
     false,
   );
-  assert.equal(isLogin(item(FIXTURE, 'acct:personal|/latest-key')), false);
 });
 
 test('rtype maps UI item kinds to underlying node storage types', () => {
@@ -501,8 +492,8 @@ test('lapsed lease disables reads and writes for affected server stores', () => 
   assert.equal(storeReadable(lapsed, 'team:household'), true);
 
   // Folders and items on lapsed servers are excluded from the catalog.
-  assert.equal(catalog(FIXTURE).length, 14);
-  assert.equal(catalog(lapsed).length, 10);
+  assert.equal(catalog(FIXTURE).length, 13);
+  assert.equal(catalog(lapsed).length, 9);
 
   // applyLease does not mutate the input state.
   assert.equal(storeReadable(FIXTURE, 'team:eng'), true);

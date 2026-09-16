@@ -860,7 +860,7 @@ fn account_command(
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, master| {
                 let report = session.resume_account(&alias, vault, master)?;
-                output(json, &report, "account creation reconciled")
+                output(json, &report, "account created")
             })
         }
         AccountCommand::Sync { profile, alias } => {
@@ -1171,7 +1171,7 @@ fn device_command(
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, master| {
                 let report = session.resume_owner_device_provision(&target_alias, vault, master)?;
-                output(json, &report, "owner device provision reconciled")
+                output(json, &report, "device linked")
             })
         }
         DeviceCommand::PairOffer {
@@ -1201,7 +1201,7 @@ fn device_command(
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, master| {
                 let report = session.finish_owner_device_pairing(&account_alias, vault, master)?;
-                output(json, &report, "interactive owner-device pairing completed")
+                output(json, &report, "device pairing completed")
             })
         }
         DeviceCommand::PairAccept {
@@ -1735,7 +1735,7 @@ fn team_command(
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, master| {
                 let report = session.resume_team_creation(&team_alias, vault, master)?;
-                output(json, &report, "team creation reconciled")
+                output(json, &report, "team created")
             })
         }
         TeamCommand::Sync {

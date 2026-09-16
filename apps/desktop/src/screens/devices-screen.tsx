@@ -163,7 +163,7 @@ export function DevicesScreen({
     : stores[0];
   const stopped = selected
     ? accountStopped(snapshot, selected)
-    : { stopped: true, reason: 'No account on this Mac' };
+    : { stopped: true, reason: 'No account on this device' };
   const [pairMode, setPairMode] = useTabSheetState<'offer' | 'accept'>(
     'devices.pairMode',
     'offer',
@@ -358,7 +358,7 @@ export function DevicesScreen({
       ? // Counting what has not been read yet would report three zeroes.
         'Loading…'
       : [
-          plural(devices.length - cardKeys, 'Mac'),
+          plural(devices.length - cardKeys, 'computer'),
           ...(cardKeys
             ? [plural(cardKeys, 'key on a card', 'keys on cards')]
             : []),
@@ -549,7 +549,7 @@ export function DevicesScreen({
                     a device key on a card is one of them; naming it for the
                     Macs alone would name half of what it encloses. */}
                 <SectionLabel id="devices-macs-label">
-                  Macs and device keys
+                  Computers and security keys
                 </SectionLabel>
                 <Inset className="settings-inset middle wide">
                   {loading ? (
@@ -613,7 +613,7 @@ export function DevicesScreen({
                     <InsetRow label="None">
                       {stopped.stopped
                         ? 'Not listed while access is stopped'
-                        : 'No Macs or keys on cards are authenticated on this account.'}
+                        : 'No computers or security keys are authenticated on this account.'}
                     </InsetRow>
                   )}
                 </Inset>
@@ -685,7 +685,7 @@ export function DevicesScreen({
                     <InsetRow label="None">
                       {stopped.stopped
                         ? 'Not listed while access is stopped'
-                        : 'No paper keys stored on this Mac for this account.'}
+                        : 'No paper keys stored on this device for this account.'}
                     </InsetRow>
                   )}
                   <InsetRow
@@ -807,7 +807,7 @@ export function DevicesScreen({
                           <small>
                             {entry.cardSerial
                               ? `Card serial ${entry.cardSerial}`
-                              : 'This enrollment cannot be matched to a card on this Mac.'}
+                              : 'This enrollment cannot be matched to a card on this device.'}
                           </small>
                         </span>
                       </InsetRow>
@@ -1158,7 +1158,7 @@ function DeviceDetail({
                   ? stopped.reason
                   : loading
                     ? 'Loading devices, paper keys, and security keys…'
-                    : 'The address names a key this account no longer holds on this Mac.'}
+                    : 'This key is no longer associated with this account on this device.'}
               </p>
             </Notice>
           </div>
@@ -1237,14 +1237,14 @@ function DeviceDetail({
                     <small>
                       {enrollment?.cardSerial
                         ? `Card serial ${enrollment.cardSerial}; no device key recorded.`
-                        : 'This enrollment cannot be matched to a card on this Mac.'}
+                        : 'This enrollment cannot be matched to a card on this device.'}
                     </small>
                   </>
                 )}
               </InsetRow>
               {entry.current ? (
                 <InsetRow label="Status">
-                  Authenticated on this Mac now
+                  Authenticated on this device now
                   <small>
                     This is the key the agent signs this account’s operations
                     with here.
@@ -1327,7 +1327,7 @@ function DeviceDetail({
               ) : entry.current ? (
                 <InsetRow
                   className="dangerrow"
-                  label="This Mac cannot remove itself"
+                  label="This device cannot be removed here"
                   action={
                     <Button
                       size="sm"
@@ -1340,8 +1340,8 @@ function DeviceDetail({
                   }
                 >
                   <small>
-                    A device is removed from another device. Reset this Mac, in
-                    Settings, erases what this Mac holds for every server.
+                    Remove this device from another device. Reset this device,
+                    in Settings, erases everything it holds for every server.
                   </small>
                 </InsetRow>
               ) : source.kind === 'device' ? (

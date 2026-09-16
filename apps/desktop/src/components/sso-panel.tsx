@@ -384,7 +384,7 @@ export function SsoPanel({
     <p>
       {login
         ? 'Sign in through your organization’s identity provider to restore access on this device.'
-        : 'Your identity provider supplies your username and email. The username above is this Mac’s label for the account.'}
+        : 'Your identity provider supplies your username and email. The username above is this device’s label for the account.'}
     </p>
   );
   const statusLine = progress ? (
@@ -437,7 +437,7 @@ export function SsoPanel({
           <SegmentedControl
             label="Where to create keys"
             items={[
-              { id: 'device', label: 'This Mac' },
+              { id: 'device', label: 'This computer' },
               { id: 'security-key', label: 'Security key' },
             ]}
             value={hardware ? 'security-key' : 'device'}

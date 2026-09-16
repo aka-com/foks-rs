@@ -107,7 +107,7 @@ test('a drag over a vault names the destination, and the drop uploads there', as
 
   await driver.hover(true);
   assert.ok(rendered.getByText('Drop to upload to Personal'));
-  assert.ok(rendered.getByText(/Saved in \/documents/));
+  assert.ok(rendered.getByText(/Saved at the top level/));
 
   await driver.hover(false);
   assert.equal(rendered.queryByText('Drop to upload to Personal'), null);
@@ -142,7 +142,7 @@ test('a drop into a group uses the roles the new-item sheet defaults to', async 
   await ui.waitFor(() => assert.equal(uploads.length, 1));
   assert.deepEqual(uploads[0], {
     storeId: 'team:eng',
-    path: '/documents/backup.tar',
+    path: '/backup.tar',
     sourcePath: '/Users/ray/keys/backup.tar',
     readRole: 'Member:0',
     writeRole: 'Admin',
@@ -170,12 +170,13 @@ test('dropping several files at once uploads none of them', async () => {
 });
 
 test('dropping a file onto an existing path displays the conflict resolution step instead of overwriting', async () => {
-  const { rendered, driver, snapshot } = await mount({
-    kind: 'store',
-    ref: 'acct:personal',
-  });
-  // A drop with no folder selected saves under /documents, where the
-  // fixture already keeps a file of this name.
+  // The drop lands in the selected folder, where the fixture already keeps
+  // a file of this name.
+  const { rendered, driver, snapshot } = await mount(
+    { kind: 'store', ref: 'acct:personal' },
+    {},
+    { folder: '/documents' },
+  );
   const taken = snapshot.items.find(
     (item) =>
       item.store === 'acct:personal' && item.path.startsWith('/documents/'),
@@ -248,8 +249,10 @@ test('the new-item sheet keeps the drop while it is open', async () => {
   );
   await ui.waitFor(() => assert.ok(rendered.getAllByText('Personal').length));
   ui.fireEvent.click(rendered.getByRole('button', { name: 'New' }));
-  ui.fireEvent.click(await rendered.findByRole('menuitem', { name: 'File' }));
-  await ui.waitFor(() => assert.ok(rendered.getByText('New file')));
+  ui.fireEvent.click(
+    await rendered.findByRole('menuitem', { name: 'Document' }),
+  );
+  await ui.waitFor(() => assert.ok(rendered.getByText('New document')));
 
   await driver.hover(true);
   assert.equal(rendered.queryByText(/Drop to upload/), null);

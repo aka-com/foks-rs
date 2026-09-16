@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createElement, StrictMode } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 import type { Bridge, ReadItemResponse } from '../src/bridge';
-import type { GuardVerdict, LocationStore, Selection } from '../src/location';
+import type { GuardVerdict, LocationStore } from '../src/location';
 import type { DetailsPanelProps } from '../src/screens/details-panel';
 import { installDom } from './lib/dom-harness';
 
@@ -48,19 +48,15 @@ async function setup(
   const { mockBridge } = (await vite.ssrLoadModule(
     '/src/mock-bridge.ts',
   )) as typeof import('../src/mock-bridge');
-  const link = FIXTURE.items.find(
-    selectItem ?? ((item) => item.kind === 'Link'),
+  const subject = FIXTURE.items.find(
+    selectItem ?? ((item) => item.path === '/env/prod/DATABASE_URL'),
   )!;
-  assert.ok(link);
+  assert.ok(subject);
   const bridge = mockBridge();
-  const selected: Selection[] = [];
   const props: DetailsPanelProps = {
     snapshot: FIXTURE,
     bridge: readItem ? { ...bridge, readItem } : bridge,
-    selection: { store: link.store, path: link.path },
-    onSelect: (selection) => {
-      selected.push(selection);
-    },
+    selection: { store: subject.store, path: subject.path },
     onClose: () => {},
     onDelete: () => {},
     onConflict: () => {},
@@ -81,47 +77,30 @@ async function setup(
         ? createElement(NavigationGuardProvider, { store, children: panel() })
         : panel(),
     );
-  return { props, draw, selected, link, bridge };
+  return { props, draw, subject, bridge };
 }
 
-test('link target loads at the selected version and opens in one click, including after blur', async () => {
-  const p = await setup();
-  const expected = await p.bridge.readItem({
-    storeId: p.link.store,
-    path: p.link.path,
-    version: p.link.version,
-  });
-  const r = ui.render(p.draw());
-  await ui.waitFor(() =>
-    assert.ok(r.getByText(expected.value, { exact: false })),
-  );
-  ui.fireEvent(window, new Event('blur'));
-  assert.ok(r.getByText(expected.value, { exact: false }));
-  ui.fireEvent.click(r.getByRole('button', { name: 'Open target' }));
-  assert.deepEqual(p.selected, [{ store: p.link.store, path: expected.value }]);
-});
-
-test('a pending link read cannot reveal into a different selection', async () => {
+test('a pending read cannot reveal into a different selection', async () => {
   let finish!: (response: ReadItemResponse) => void;
   const pending = new Promise<ReadItemResponse>((resolve) => {
     finish = resolve;
   });
   const p = await setup(() => pending);
   const r = ui.render(p.draw());
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show' }));
   const other = p.props.snapshot.items.find((item) => item.kind === 'Secret')!;
   p.props.selection = { store: other.store, path: other.path };
   r.rerender(p.draw());
   await ui.act(async () => {
     finish({
-      store: p.link.store,
-      path: p.link.path,
-      version: p.link.version,
+      store: p.subject.store,
+      path: p.subject.path,
+      version: p.subject.version,
       value: '/late-target',
     });
     await pending;
   });
   assert.ok(r.queryByText('/late-target', { exact: false }) === null);
-  assert.deepEqual(p.selected, []);
 });
 
 test('an access generation quarantines old read flights across expiry and renewal', async () => {
@@ -134,10 +113,11 @@ test('an access generation quarantines old read flights across expiry and renewa
     });
   });
   const r = ui.render(p.draw());
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show' }));
   await ui.waitFor(() => assert.equal(reads, 1));
 
   const store = p.props.snapshot.stores.find(
-    (entry) => entry.id === p.link.store,
+    (entry) => entry.id === p.subject.store,
   );
   assert.ok(store);
   p.props.snapshot = {
@@ -156,9 +136,9 @@ test('an access generation quarantines old read flights across expiry and renewa
   r.rerender(p.draw());
   await ui.act(async () => {
     pending[0]?.({
-      store: p.link.store,
-      path: p.link.path,
-      version: p.link.version,
+      store: p.subject.store,
+      path: p.subject.path,
+      version: p.subject.version,
       value: '/expired-flight',
     });
   });
@@ -181,12 +161,15 @@ test('an access generation quarantines old read flights across expiry and renewa
   };
   p.props.accessGeneration = 2;
   r.rerender(p.draw());
+  await ui.waitFor(() =>
+    ui.fireEvent.click(r.getByRole('button', { name: 'Show' })),
+  );
   await ui.waitFor(() => assert.equal(reads, 2));
   await ui.act(async () => {
     pending[1]?.({
-      store: p.link.store,
-      path: p.link.path,
-      version: p.link.version,
+      store: p.subject.store,
+      path: p.subject.path,
+      version: p.subject.version,
       value: '/renewed-flight',
     });
   });
@@ -203,21 +186,23 @@ test('a remounted unlocked session cannot join an older pending read', async () 
     return new Promise<ReadItemResponse>((resolve) => pending.push(resolve));
   });
   const first = ui.render(p.draw());
+  ui.fireEvent.click(first.getByRole('button', { name: 'Show' }));
   await ui.waitFor(() => assert.equal(reads, 1));
   first.unmount();
   const second = ui.render(p.draw());
+  ui.fireEvent.click(second.getByRole('button', { name: 'Show' }));
   await ui.waitFor(() => assert.equal(reads, 2));
   await ui.act(async () => {
     pending[0]?.({
-      store: p.link.store,
-      path: p.link.path,
-      version: p.link.version,
+      store: p.subject.store,
+      path: p.subject.path,
+      version: p.subject.version,
       value: '/old-session',
     });
     pending[1]?.({
-      store: p.link.store,
-      path: p.link.path,
-      version: p.link.version,
+      store: p.subject.store,
+      path: p.subject.path,
+      version: p.subject.version,
       value: '/new-session',
     });
   });
@@ -227,7 +212,7 @@ test('a remounted unlocked session cannot join an older pending read', async () 
   );
 });
 
-test('a mismatched link version is rejected and Open target retries the read', async () => {
+test('a mismatched version is rejected and Show retries the read', async () => {
   let reads = 0;
   const p = await setup(async (request) => {
     reads++;
@@ -239,12 +224,12 @@ test('a mismatched link version is rejected and Open target retries the read', a
     };
   });
   const r = ui.render(p.draw());
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show' }));
   await ui.waitFor(() => assert.ok(r.getByRole('alert')));
   assert.ok(r.queryByText('/wrong-target', { exact: false }) === null);
   const before = reads;
-  ui.fireEvent.click(r.getByRole('button', { name: 'Open target' }));
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show' }));
   await ui.waitFor(() => assert.ok(reads > before));
-  assert.deepEqual(p.selected, []);
 });
 
 test('a login edits in structured fields and serializes through the existing draft value', async () => {

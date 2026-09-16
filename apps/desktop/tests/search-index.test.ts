@@ -68,7 +68,7 @@ test('the index holds every kind the palette searches', () => {
   const database = items.find((entry) => entry.name === 'DATABASE_URL');
   assert.ok(database);
   // The kind rule reads the item, so a connection string is a Note.
-  assert.equal(database.detail, 'Note · env/prod · Personal');
+  assert.equal(database.detail, 'Document · env/prod · Personal');
   assert.equal(database.where, 'Personal server');
   assert.deepEqual(database.target, {
     kind: 'item',

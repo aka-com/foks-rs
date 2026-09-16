@@ -493,13 +493,13 @@ test('a team whose server offers no chat sits under No chat with the reason', as
   assert.match(
     engineering.querySelector('small:not(.chat-row-identity)')?.textContent ??
       '',
-    /^Chat not offered on /,
+    /^Chat is not enabled on /,
   );
   const labels = [...document.querySelectorAll('.sec')].map(
     (node) => node.textContent,
   );
   assert.ok(labels.includes('Conversations'));
-  assert.ok(labels.includes('Not ready'));
+  assert.ok(labels.includes('Chat unavailable'));
 });
 
 test('a team with a lapsed server check-in remains listed with recovery actions', async () => {
@@ -586,7 +586,7 @@ test('with no team at all the tab offers team creation', async () => {
   const journal = await mount(snapshot, { kind: 'chat' });
   await ui.screen.findByRole('heading', { name: 'No team chats yet' });
   assert.equal(ui.screen.queryByText('How chat gets turned on'), null);
-  // The "Not ready" teams are still a column worth searching, so the field is
+  // The "Chat unavailable" teams are still a column worth searching, so the field is
   // live even though New chat has no team to offer.
   const field = ui.screen.getByRole<HTMLInputElement>('searchbox', {
     name: 'Search teams and channels',
@@ -721,7 +721,7 @@ test('saved work that is accounted for says so rather than vanishing', async () 
     ui.screen.getByRole('button', { name: 'Cancel preparation' }),
   );
   await ui.screen.findByText(
-    'All caught up. Everything saved on this Mac has been accounted for.',
+    'All caught up. Everything saved on this device has been accounted for.',
   );
   assert.equal(ui.screen.queryByText('Needs attention'), null);
 });
@@ -782,7 +782,7 @@ test('New chat picks a team, states why one cannot be picked, and opens a channe
   assert.equal((engineering as HTMLButtonElement).disabled, false);
   assert.equal(engineering.getAttribute('aria-disabled'), 'true');
   assert.equal(engineering.tabIndex, 0);
-  assert.match(engineering.textContent ?? '', /Chat not offered on /);
+  assert.match(engineering.textContent ?? '', /Chat is not enabled on /);
   // Inert means inert: pressing it does not choose the team.
   ui.fireEvent.click(engineering);
   assert.equal(engineering.getAttribute('aria-checked'), 'false');
@@ -1112,7 +1112,7 @@ test('an interrupted attempt recovers the same preparation rather than a second'
     name: 'Retry channel creation',
   });
   await ui.screen.findByText('The reply was lost.');
-  await ui.screen.findByText(/Retry sends the same request/);
+  await ui.screen.findByText(/Select Retry to resend the request without creating a duplicate/);
   ui.fireEvent.click(recover);
   await ui.screen.findByRole('button', { name: /#design/ });
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));

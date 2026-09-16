@@ -124,14 +124,14 @@ async function renderSettings(
   return rendered;
 }
 
-test('the page holds servers, credentials, about, this Mac and the danger zone', async () => {
+test('the page holds servers, credentials, about, this device and the danger zone', async () => {
   const rendered = await renderSettings(await fixture());
 
   for (const label of [
     'Account',
     'Security key enrollments',
     'About',
-    'This Mac',
+    'This device',
     'Danger zone',
   ])
     assert.ok(rendered.getAllByText(label).length, `${label} is on the page`);
@@ -184,7 +184,7 @@ test('Settings links to profile-scoped security key management', async () => {
   assert.equal(rendered.queryByRole('button', { name: 'Change PIN…' }), null);
 });
 
-test('an address naming an account this Mac lost does not claim facts about it', async () => {
+test('an address naming an account this device lost does not claim facts about it', async () => {
   const rendered = await renderSettings(await fixture(), {
     where: { section: 'credentials', store: 'acct:nope' },
   });
@@ -239,9 +239,9 @@ test('a profile address opens that server instead of the page', async () => {
   assert.ok(rendered.getByRole('button', { name: 'Erase and reset…' }));
   // The page's own sections are not drawn behind a server: the danger zone
   // here is this server's, and the Mac-wide reset is not on it.
-  assert.equal(rendered.queryByText('This Mac'), null);
+  assert.equal(rendered.queryByText('This device'), null);
   assert.equal(
-    rendered.queryByRole('button', { name: 'Reset this Mac…' }),
+    rendered.queryByRole('button', { name: 'Reset this device…' }),
     null,
   );
   assert.equal(rendered.queryByRole('button', { name: 'Lock now' }), null);
@@ -436,12 +436,12 @@ test('a lapsed server can be checked from its row in the list', async () => {
   assert.ok(rendered.getAllByText('Check-in expired').length);
 });
 
-test('Reset this Mac asks for one typed profile name per server', async () => {
+test('Reset this device asks for one typed profile name per server', async () => {
   const rendered = await renderSettings(await fixture());
 
   await ui.act(async () => {
     ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Reset this Mac…' }),
+      rendered.getByRole('button', { name: 'Reset this device…' }),
     );
   });
   const dialog = await ui.waitFor(() => rendered.getByRole('alertdialog'));
@@ -450,7 +450,9 @@ test('Reset this Mac asks for one typed profile name per server', async () => {
   });
   const confirms = ui.within(dialog).getAllByPlaceholderText(/to confirm$/);
   assert.equal(confirms.length, 3);
-  const run = ui.within(dialog).getByRole('button', { name: 'Reset this Mac' });
+  const run = ui
+    .within(dialog)
+    .getByRole('button', { name: 'Reset this device' });
   assert.equal(run.hasAttribute('disabled'), true);
 
   for (const [index, profile] of ['personal', 'acme', 'partner'].entries())
@@ -483,7 +485,7 @@ test('the reset consumes each profile’s single-use confirmation token', async 
 
   await ui.act(async () => {
     ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Reset this Mac…' }),
+      rendered.getByRole('button', { name: 'Reset this device…' }),
     );
   });
   const dialog = await ui.waitFor(() => rendered.getByRole('alertdialog'));
@@ -497,7 +499,7 @@ test('the reset consumes each profile’s single-use confirmation token', async 
     });
   await ui.act(async () => {
     ui.fireEvent.click(
-      ui.within(dialog).getByRole('button', { name: 'Reset this Mac' }),
+      ui.within(dialog).getByRole('button', { name: 'Reset this device' }),
     );
   });
 
@@ -533,7 +535,7 @@ test('a reset that fails part way reloads every preview', async () => {
 
   await ui.act(async () => {
     ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Reset this Mac…' }),
+      rendered.getByRole('button', { name: 'Reset this device…' }),
     );
   });
   const dialog = await ui.waitFor(() => rendered.getByRole('alertdialog'));
@@ -548,7 +550,7 @@ test('a reset that fails part way reloads every preview', async () => {
     });
   await ui.act(async () => {
     ui.fireEvent.click(
-      ui.within(dialog).getByRole('button', { name: 'Reset this Mac' }),
+      ui.within(dialog).getByRole('button', { name: 'Reset this device' }),
     );
   });
 

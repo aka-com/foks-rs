@@ -71,7 +71,7 @@ export type Store = AccountStore | TeamStore;
 export type NodeKind = 'Secret' | 'File' | 'Folder' | 'Link';
 
 /** The kind rule's reading of a node — client-side, no protocol meaning. */
-export type ItemKind = 'Password' | 'Resource' | 'File' | 'Link' | 'Folder';
+export type ItemKind = 'Password' | 'Document' | 'Folder';
 
 /** The node type a `NodeKind` is a reading of. */
 export type NodeType = 'small_file' | 'file' | 'symlink' | 'directory';

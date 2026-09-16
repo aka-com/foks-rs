@@ -251,7 +251,7 @@ function AttentionList({
                     <Button
                       variant="primary"
                       disabled={busy.has(note.id)}
-                      title="Retry loading catalog"
+                      title="Retry loading"
                       onClick={() => retry(note)}
                     >
                       {note.action}
@@ -837,7 +837,7 @@ function TeamsOnAccount({
           })
         ) : (
           <InsetRow label="None">
-            This account belongs to no group this Mac holds.
+            This account is not in any group on this device.
           </InsetRow>
         )}
       </Inset>
@@ -899,7 +899,7 @@ function DeviceSummary({
                     ? 'Could not retrieve keys from the background service. Please retry or check service status.'
                     : keys.length
                       ? keys.map((entry) => entry.name).join(' · ')
-                      : 'Nothing is listed for this account on this Mac.'}
+                      : 'Nothing is listed for this account on this device.'}
             </small>
           </span>
         </InsetRow>
@@ -960,7 +960,7 @@ function KeyList({
                   <span
                     className="verified"
                     role="img"
-                    aria-label="Authenticated on this Mac"
+                    aria-label="Authenticated on this device"
                   >
                     <Icon name="check" />
                   </span>
@@ -988,7 +988,7 @@ function KeyList({
           ))
         ) : (
           <InsetRow label="None">
-            No keys are listed for this account on this Mac.
+            No keys are listed for this account on this device.
           </InsetRow>
         )}
       </Inset>
@@ -1015,7 +1015,7 @@ export function UnavailableAccount({
       actions={
         <>
           <Button variant="primary" onClick={onRefresh}>
-            Refresh the catalog
+            Refresh
           </Button>
           {stores.map((store) => (
             <Button key={store.id} onClick={() => onSelect(store)}>
@@ -1026,13 +1026,13 @@ export function UnavailableAccount({
       }
     >
       <p>
-        This account is no longer available on this Mac. Select another account
-        below or refresh the catalog.
+        This account is no longer available on this device. Select another
+        account below or refresh.
       </p>
       {stores.length ? null : (
         <p>
-          This Mac has no active account. Add and verify a server, then create
-          or recover an account.
+          This device has no active account. Add and verify a server, then
+          create or recover an account.
         </p>
       )}
     </Notice>
@@ -1047,7 +1047,7 @@ function NoAvailableAccount({
 }): ReactNode {
   return (
     <Notice
-      title="No available account on this Mac"
+      title="No available account on this device"
       actions={
         <Button variant="primary" onClick={onConnectGoProfile}>
           Connect existing account

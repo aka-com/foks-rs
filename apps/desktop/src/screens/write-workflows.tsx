@@ -95,7 +95,6 @@ export interface NewDraft {
   website: string;
   value: string;
   resourceName: string;
-  target: string;
   sourcePath: string | null;
   readRole: KvRoleInput;
   writeRole: KvRoleInput;
@@ -121,24 +120,15 @@ export type WriteWorkflow =
   | { kind: 'agent-lost'; message?: string }
   | null;
 
-const DRAFT_PATH: Readonly<Record<NewKind, string>> = {
+/** What the Path field shows while it is empty. */
+const PATH_HINT: Readonly<Record<NewKind, string>> = {
   Password: '/logins/github.com',
-  Resource: '/agents/anthropic-api-key',
-  File: '/documents/emergency.pdf',
-  Link: '/latest-key',
+  Document: '/passport-scan.pdf',
 };
 
-function defaultPath(itemKind: NewKind, folder?: string): string {
-  if (!folder || folder === '/') return DRAFT_PATH[itemKind];
-  const name = DRAFT_PATH[itemKind].split('/').at(-1) ?? 'new-item';
-  return `${folder.replace(/\/$/, '')}/${name}`;
-}
-
-/** The vault path a dropped file takes: the current folder, else /documents. */
+/** The vault path a dropped file takes: the current folder, else the root. */
 export function fileDropPath(name: string, folder?: string): string {
-  return folder && folder !== '/'
-    ? `${folder.replace(/\/$/, '')}/${name}`
-    : `/documents/${name}`;
+  return namedPath(name, '/', folder);
 }
 
 function namedPath(
@@ -146,8 +136,9 @@ function namedPath(
   defaultDirectory: string,
   folder?: string,
 ): string {
-  const directory =
-    folder && folder !== '/' ? folder.replace(/\/$/, '') : defaultDirectory;
+  const directory = (
+    folder && folder !== '/' ? folder : defaultDirectory
+  ).replace(/\/$/, '');
   return `${directory}/${name}`;
 }
 
@@ -164,7 +155,6 @@ export function droppedFileDraft(path: string, sourcePath: string): NewDraft {
     website: '',
     value: '',
     resourceName: '',
-    target: '',
     sourcePath,
     readRole: DEFAULT_READ_ROLE,
     writeRole: DEFAULT_WRITE_ROLE,
@@ -179,25 +169,17 @@ export function initialWriteWorkflow(
   if (state === 'new')
     return { kind: 'new', itemKind: 'Password', storeId: 'team:household' };
   if (state === 'new-group')
-    return { kind: 'new', itemKind: 'Resource', storeId: 'team:eng' };
-  if (state === 'new-resource')
-    return { kind: 'new', itemKind: 'Resource', storeId: 'acct:personal' };
-  if (state === 'new-file')
-    return { kind: 'new', itemKind: 'File', storeId: 'team:household' };
-  if (state === 'new-link')
-    return { kind: 'new', itemKind: 'Link', storeId: 'acct:personal' };
-  if (state === 'group-new-text')
-    return { kind: 'new', itemKind: 'Resource', storeId: 'team:eng' };
-  if (state === 'group-new-link')
-    return { kind: 'new', itemKind: 'Link', storeId: 'team:eng' };
-  if (state === 'group-new-file')
-    return { kind: 'new', itemKind: 'File', storeId: 'team:eng' };
+    return { kind: 'new', itemKind: 'Document', storeId: 'team:eng' };
+  if (state === 'new-document')
+    return { kind: 'new', itemKind: 'Document', storeId: 'acct:personal' };
+  if (state === 'group-new-document')
+    return { kind: 'new', itemKind: 'Document', storeId: 'team:eng' };
   if (state === 'exists') {
     return {
       kind: 'exists',
       itemKind: 'Password',
       storeId: 'acct:personal',
-      path: DRAFT_PATH.Password,
+      path: PATH_HINT.Password,
     };
   }
   if (state === 'agent-lost') return { kind: 'agent-lost' };
@@ -261,11 +243,11 @@ export function writeBlockReason(
 ): string | null {
   if (canCreateInStore(snapshot, store.id)) return null;
   if (leaseLapsed(snapshot, store.id))
-    return 'The signed server check-in expired. Check in again before retrying.';
+    return 'Your server session has expired. Check in again to save changes.';
   if (serverBlocked(snapshot, store.id))
     return 'Server access is blocked. Cannot create items in this vault.';
   if (serverLeaseUnavailable(snapshot, store.id))
-    return 'No usable signed server check-in is available. Cannot create items in this vault.';
+    return 'The server connection is unavailable. New items cannot be saved to this vault right now.';
   if (store.kind === 'team' && !store.active)
     return 'Group setup is incomplete. Complete setup before adding items.';
   if (store.kind === 'team')
@@ -464,7 +446,7 @@ function NewSheet({
             '/logins',
             workflow.initialFolder,
           )
-        : defaultPath(workflow.itemKind, workflow.initialFolder)),
+        : namedPath('', '/', workflow.initialFolder)),
   );
   const [username, setUsername] = useTabSheetState(
     'item.username',
@@ -485,10 +467,6 @@ function NewSheet({
   const [resourceName, setResourceName] = useTabSheetState(
     'item.resourceName',
     workflow.draft?.resourceName ?? '',
-  );
-  const [target, setTarget] = useTabSheetState(
-    'item.target',
-    workflow.draft?.target ?? '',
   );
   const [sourcePath, setSourcePath] = useTabSheetState<string | null>(
     'item.sourcePath',
@@ -514,7 +492,7 @@ function NewSheet({
 
   useFileDrop({
     bridge,
-    active: itemKind === 'File',
+    active: itemKind === 'Document',
     onHover: setHovering,
     onPaths: (paths) => {
       setHovering(false);
@@ -547,7 +525,6 @@ function NewSheet({
       website ||
       value ||
       resourceName ||
-      target ||
       sourcePath,
     ) || path !== openedPath;
   const close = useCallback(() => setWorkflow(null), [setWorkflow]);
@@ -598,25 +575,18 @@ function NewSheet({
           value: `user: ${username}\npassword: ${password}\nurl: ${website}`,
           ...roleArgs,
         });
-      } else if (itemKind === 'Resource') {
-        await bridge.createTextItem({
-          storeId: store.id,
-          path,
-          value,
-          ...roleArgs,
-        });
-      } else if (itemKind === 'Link') {
-        await bridge.createLink({
-          storeId: store.id,
-          path,
-          target,
-          ...roleArgs,
-        });
       } else if (sourcePath) {
         await bridge.importDroppedFile({
           storeId: store.id,
           path,
           sourcePath,
+          ...roleArgs,
+        });
+      } else if (value.trim()) {
+        await bridge.createTextItem({
+          storeId: store.id,
+          path,
+          value,
           ...roleArgs,
         });
       } else {
@@ -645,7 +615,6 @@ function NewSheet({
             website,
             value,
             resourceName,
-            target,
             sourcePath,
             readRole,
             writeRole,
@@ -697,7 +666,7 @@ function NewSheet({
           >
             {saving
               ? 'Creating…'
-              : itemKind === 'File' && !sourcePath
+              : itemKind === 'Document' && !sourcePath && !value.trim()
                 ? 'Choose file and create'
                 : 'Create item'}
           </Button>
@@ -738,7 +707,9 @@ function NewSheet({
         ) : null}
         <SectionLabel>{kindLabel(itemKind)}</SectionLabel>
         <Inset
-          className={itemKind === 'File' && hovering ? 'drop-hover' : undefined}
+          className={
+            itemKind === 'Document' && hovering ? 'drop-hover' : undefined
+          }
         >
           {itemKind === 'Password' ? (
             <>
@@ -761,7 +732,7 @@ function NewSheet({
               )}
             </>
           ) : null}
-          {itemKind === 'Resource' ? (
+          {itemKind === 'Document' ? (
             <>
               {field(
                 'Name',
@@ -772,29 +743,24 @@ function NewSheet({
                     setPath(
                       namedPath(
                         next.toLowerCase().replace(/[^a-z0-9._-]+/g, '-'),
-                        '/agents',
+                        '/',
                         workflow.initialFolder,
                       ),
                     );
                 },
-                'e.g. ANTHROPIC_API_KEY',
+                'e.g. api-key',
               )}
-              {field('Value', value, setValue, 'sk-ant-…', true)}
+              {field('Value', value, setValue, 'A note, key, or token', true)}
+              <InsetRow label="File">
+                <span className={sourcePath ? 'mono' : 'dim'}>
+                  {sourcePath
+                    ? sourcePath.split(/[\\/]/).at(-1)
+                    : hovering
+                      ? 'Drop to use this file'
+                      : 'Drop a file here, or choose a file'}
+                </span>
+              </InsetRow>
             </>
-          ) : null}
-          {itemKind === 'Link'
-            ? field('Target path', target, setTarget, '/ssh/id_ed25519', true)
-            : null}
-          {itemKind === 'File' ? (
-            <InsetRow label="File">
-              <span className={sourcePath ? 'mono' : 'dim'}>
-                {sourcePath
-                  ? sourcePath.split(/[\\/]/).at(-1)
-                  : hovering
-                    ? 'Drop to use this file'
-                    : 'Drop a file here, or choose a file'}
-              </span>
-            </InsetRow>
           ) : null}
         </Inset>
         {fileError ? (
@@ -803,7 +769,7 @@ function NewSheet({
           </p>
         ) : null}
         <Toggle label="Advanced" className="sheet-advanced">
-          <Inset>{field('Path', path, setPath, DRAFT_PATH[itemKind])}</Inset>
+          <Inset>{field('Path', path, setPath, PATH_HINT[itemKind])}</Inset>
         </Toggle>
       </>
     </Sheet>

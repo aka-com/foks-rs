@@ -177,7 +177,7 @@ test('results are grouped by kind and counted for a screen reader', async () => 
   assert.equal(rows()[0].querySelector('.t b em')?.textContent, 'prod');
   assert.equal(
     rows()[1].querySelector('.t small')?.textContent,
-    'Note · env/prod · Personal',
+    'Document · env/prod · Personal',
   );
 
   const count = document.querySelector('.pal-count');

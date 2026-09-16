@@ -18,7 +18,6 @@ import {
 import type { FilterKind } from '../components';
 import {
   canChangeItem,
-  catalog,
   fmtSize,
   formatRole,
   isLogin,
@@ -30,8 +29,6 @@ import {
   partyName,
   peopleLabel,
   readersOf,
-  serverOf,
-  serverDisplayName,
   storeAvailability,
   storeOf,
 } from '../model';
@@ -192,7 +189,6 @@ export interface DetailsPanelProps {
   /** Key of an item requested to be revealed immediately on render. */
   revealRequest?: string | null;
   onRevealHandled?: () => void;
-  onSelect: (selection: Selection) => void;
   onClose: () => void;
   onDelete: (item: Item) => void;
   onConflict: (item: Item, draft: string) => void;
@@ -221,7 +217,6 @@ export function DetailsPanel({
   selection,
   revealRequest = null,
   onRevealHandled,
-  onSelect,
   onClose,
   onDelete,
   onConflict,
@@ -377,13 +372,18 @@ export function DetailsPanel({
   // Conceal sensitive values when the window loses focus.
   useEffect(() => {
     const conceal = (): void => {
-      if (item && kindOf(item) === 'Link') return;
       concealEpoch.current += 1;
       setRead(null);
     };
     window.addEventListener('blur', conceal);
     return () => window.removeEventListener('blur', conceal);
   }, [item]);
+
+  // A read in flight when access changes generation is dropped when it lands,
+  // so the control it disabled is released now instead of reading forever.
+  useEffect(() => {
+    setRead((current) => (current?.state === 'loading' ? null : current));
+  }, [accessGeneration]);
 
   useEffect(() => {
     if (!concealSignal) return;
@@ -395,11 +395,6 @@ export function DetailsPanel({
     setEditPasswordShown(false);
     setReplacementPath(null);
   }, [accessGeneration, concealSignal]);
-
-  // Link destinations are navigation metadata; load the exact selected version.
-  useEffect(() => {
-    if (item && kindOf(item) === 'Link') void show();
-  }, [item, show]);
 
   useEffect(() => {
     if (!item || !resumeDraft) return;
@@ -413,8 +408,7 @@ export function DetailsPanel({
     setEditing(true);
   }, [item, resumeDraft]);
 
-  const selectedKind = item ? kindOf(item) : null;
-  const selectedFileMode = selectedKind === 'File' || binaryFile;
+  const selectedFileMode = item?.kind === 'File' || binaryFile;
   useFileDrop({
     bridge,
     active: editing && selectedFileMode,
@@ -517,11 +511,11 @@ export function DetailsPanel({
   }
 
   const store = storeOf(snapshot, item.store);
-  const server = serverOf(snapshot, item.store);
-  const serverName = server ? serverDisplayName(server) : '';
+  // A Document is read as a value or as a file by its node kind: a typed value
+  // is a Secret, a file brought in from disk is a File.
   const kind = kindOf(item) as FilterKind;
-  const fileMode = kind === 'File' || binaryFile;
-  const displayKind: FilterKind = fileMode ? 'File' : kind;
+  const fileMode = item.kind === 'File' || binaryFile;
+  const displayKind: FilterKind = kind;
   const team = store?.kind === 'team';
   const canChange = canChangeItem(snapshot, item);
   const readers = readersOf(snapshot, item);
@@ -737,7 +731,7 @@ export function DetailsPanel({
             ),
         )}
       </Inset>
-    ) : kind === 'Resource' && !fileMode ? (
+    ) : kind === 'Document' && !fileMode ? (
       <Inset variant="preview">
         <InsetRow
           className="rev"
@@ -782,7 +776,7 @@ export function DetailsPanel({
           {shownValue ?? MASK}
         </InsetRow>
       </Inset>
-    ) : fileMode ? (
+    ) : (
       <Inset variant="preview">
         <div className="pad">
           <div className="fileglyph">
@@ -823,62 +817,6 @@ export function DetailsPanel({
           </div>
         </div>
       </Inset>
-    ) : (
-      <Inset variant="preview">
-        <div className="pad">
-          <div className="fileglyph">
-            <span className="g Link">
-              <Icon name="link" />
-            </span>
-            <span>
-              <b>{nameOf(item.path)}</b>
-              <span>
-                {shownValue === null ? (
-                  reading ? (
-                    'Reading target…'
-                  ) : (
-                    'Target unavailable'
-                  )
-                ) : (
-                  <>
-                    {shownValue}
-                    {serverName ? ` on ${serverName}` : ''}
-                  </>
-                )}
-              </span>
-            </span>
-          </div>
-          <div className="row2">
-            <Button
-              variant="primary"
-              disabled={reading}
-              onClick={() => {
-                const requestKey = key;
-                const epoch = concealEpoch.current;
-                void (async () => {
-                  const path = shownValue ?? (await show());
-                  if (
-                    path === undefined ||
-                    keyRef.current !== requestKey ||
-                    epoch !== concealEpoch.current
-                  )
-                    return;
-                  const target = catalog(snapshot).find(
-                    (candidate) =>
-                      candidate.store === item.store && candidate.path === path,
-                  );
-                  if (target)
-                    onSelect({ store: target.store, path: target.path });
-                  else toasts.show(`Linked item not found: ${path}`);
-                })();
-              }}
-            >
-              Open target
-              <Icon name="arrowUpRight" />
-            </Button>
-          </div>
-        </div>
-      </Inset>
     );
 
   return (
@@ -902,7 +840,7 @@ export function DetailsPanel({
         </button>
       </div>
       <div className="scroll">
-        {editing || (displayKind !== 'Resource' && displayKind !== 'File') ? (
+        {editing || displayKind !== 'Document' ? (
           <SectionLabel>
             {editing
               ? 'Edit'
@@ -946,13 +884,11 @@ export function DetailsPanel({
             <>
               <Button
                 icon="pencil"
-                disabled={!canChange || kind === 'Link' || saving}
+                disabled={!canChange || saving}
                 title={
                   !canChange
                     ? `You need ${roleText(item.write)} permissions to edit this item.`
-                    : kind === 'Link'
-                      ? 'To update this link’s destination, delete it and create a new link.'
-                      : 'Edit this item'
+                    : 'Edit this item'
                 }
                 onClick={() => void beginEdit()}
               >
@@ -1001,7 +937,8 @@ export function DetailsPanel({
             <>
               <p>
                 {peopleLabel(readers.length)} in {store?.name} with{' '}
-                <b>{roleText(item.read)}</b> access or higher can read this item.
+                <b>{roleText(item.read)}</b> access or higher can read this
+                item.
               </p>
               {parties.map((party) => (
                 <PartyRow

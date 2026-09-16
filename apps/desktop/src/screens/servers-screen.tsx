@@ -737,11 +737,11 @@ function ServerList({
       ) : null}
       {!rows.length ? (
         <>
-          <SectionLabel action={add}>Servers on this Mac</SectionLabel>
+          <SectionLabel action={add}>Servers on this device</SectionLabel>
           <Inset className="settings-inset">
             <div className="sempty">
               <ServerMark state="unprobed" />
-              <b>No servers on this Mac yet</b>
+              <b>No servers on this device yet</b>
               <p>Add a server using the field above to begin.</p>
             </div>
           </Inset>
@@ -829,7 +829,7 @@ function StatusBand({
         }
       >
         The server certificate or security history does not match the pinned
-        identity on this Mac. Access has been blocked for your security.
+        identity on this device. Access has been blocked for your security.
       </Band>
     );
   if (state === 'schema')
@@ -952,7 +952,7 @@ function ServerBody({
             <InsetRow label="Status">
               {checked
                 ? 'Last checked: now. Trust history unchanged.'
-                : 'Identity pinned on this Mac.'}
+                : 'Identity pinned on this device.'}
               <small>History is checked before every operation.</small>
             </InsetRow>
             <InsetRow label="Expires">
@@ -1115,8 +1115,8 @@ function ServerBody({
               <code>{shortId(host.hostId, 8)}</code>
             </span>
             <small>
-              Pinned on this Mac. Hover to view the full ID, or Copy to copy the
-              full value.
+              Pinned on this device. Hover to view the full ID, or Copy to copy
+              the full value.
             </small>
           </InsetRow>
           {/* `chain` and `epoch` are a length and a checkpoint number, not
@@ -1160,7 +1160,7 @@ function ServerBody({
             </Button>
           }
         >
-          <small>Removes this server from this Mac.</small>
+          <small>Removes this server from this device.</small>
         </InsetRow>
         <InsetRow
           className="dangerrow"
@@ -1413,9 +1413,9 @@ function ResetSheet({
       }
     >
       <p>
-        Deletes this Mac's account keys for this server. Your data stays on the
-        server, but without another device or a paper key you cannot get back
-        into the account. The passphrase alone is not enough.
+        Deletes this device's account keys for this server. Your data stays on
+        the server, but without another device or a paper key you cannot get
+        back into the account. The passphrase alone is not enough.
       </p>
       <Inset>
         <InsetRow label="Removed">

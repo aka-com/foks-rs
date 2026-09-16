@@ -590,7 +590,7 @@ test('settings scene aliases map to specific account stores', () => {
 });
 
 test('group creation scenes default to engineering vault context', () => {
-  for (const state of ['group-new-text', 'group-new-link', 'group-new-file']) {
+  for (const state of ['group-new-document']) {
     assert.deepEqual(
       decodeScene(`?state=${state}`).location,
       { kind: 'store', ref: 'team:eng' },

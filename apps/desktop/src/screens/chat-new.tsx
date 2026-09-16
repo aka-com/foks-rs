@@ -620,8 +620,8 @@ export function NewChatSheet({
                 </Inset>
                 {outstanding && !busy && (
                   <p className="hint">
-                    The server did not reply. Retry sends the same request; no
-                    duplicate is created.
+                    The server did not respond. Select Retry to resend the
+                    request without creating a duplicate.
                   </p>
                 )}
               </>

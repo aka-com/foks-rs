@@ -290,9 +290,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .kic.big{width:48px;height:48px;border-radius:var(--radius-lg);font-size:23px}.kic.big .ic{font-size:26px}
 .kic.md{width:30px;height:30px;border-radius:8px;font-size:15px}.kic.md .ic{font-size:17px}
 .kic.Password{background:rgba(59,130,246,.12);color:var(--c-password)}
-.kic.File{background:rgba(100,116,139,.13);color:var(--c-file)}
-.kic.Resource{background:rgba(217,119,6,.13);color:var(--c-resource)}
-.kic.Link{background:rgba(124,58,237,.12);color:var(--c-link)}
+.kic.Document{background:rgba(100,116,139,.13);color:var(--c-file)}
 .acts{display:flex;justify-content:flex-end;gap:2px;opacity:0;transition:opacity .12s}
 .acts button{width:28px;height:28px;border-radius:var(--radius-sm);display:grid;place-items:center;color:var(--ink-3);font-size:16px}
 .acts button:hover{background:rgba(0,0,0,.08)}.acts button.danger:hover{background:var(--danger-wash);color:var(--danger-ink)}
@@ -344,8 +342,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .tile:hover .glyph .kico.big,.tile.sel .glyph .kico.big,.tile:hover .glyph .kic.big,.tile.sel .glyph .kic.big{transform:translateY(-16px)}
 .kico.big{width:48px;height:48px;border-radius:var(--radius-lg);font-size:23px}.kico.big .ic{font-size:26px}
 .kico.md{width:30px;height:30px;border-radius:8px;font-size:15px}.kico.md .ic{font-size:17px}
-.kico.Password{background:var(--c-password)}.kico.Resource{background:var(--c-resource)}
-.kico.File{background:var(--c-file)}.kico.Link{background:var(--c-link)}
+.kico.Password{background:var(--c-password)}.kico.Document{background:var(--c-file)}
 .kico.danger{background:var(--danger-wash);color:var(--danger-ink)}.kico.danger .ic{color:var(--danger-ink)}
 
 /* Notices, cards, and content panes */
@@ -529,7 +526,7 @@ details.dd li b{color:var(--ink-2)}
 .prev .pad{padding:12px}
 .prev .row2{display:flex;gap:8px;margin-top:10px}.prev .row2 .btn{height:30px;padding:0 11px;font-size:13px}
 .prev .fileglyph{display:flex;align-items:center;gap:12px}
-.prev .fileglyph .g{font-size:34px;color:var(--c-file)}.prev .fileglyph .g.Link{color:var(--c-link)}
+.prev .fileglyph .g{font-size:34px;color:var(--c-file)}
 .prev .fileglyph>span:last-child{min-width:0;overflow-wrap:anywhere}
 .prev .fileglyph b{display:block;font-weight:600}.prev .fileglyph span{font-size:12.5px;color:var(--muted)}
 .prev code{font:12.5px var(--mono)}

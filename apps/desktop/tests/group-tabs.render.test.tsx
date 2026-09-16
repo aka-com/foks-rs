@@ -503,7 +503,7 @@ test('add member dialog rejects usernames already present in roster', async () =
 });
 
 test('a group whose setup never finished has no tabs, and two ways out', async () => {
-  // Homelab was created but its key setup never finished on this Mac.
+  // Homelab was created but its key setup never finished on this device.
   const rendered = await group('team:homelab', 'people');
   assert.equal(document.querySelector('[role="tablist"]'), null);
   const band = document.querySelector('.band');
@@ -513,7 +513,7 @@ test('a group whose setup never finished has no tabs, and two ways out', async (
   // takeover cannot describe it differently.
   assert.match(
     band.textContent ?? '',
-    /Homelab was created on Personal server, but key setup is incomplete on this Mac\./,
+    /Homelab was created on Personal server, but key setup is incomplete on this device\./,
   );
   assert.equal(band.textContent?.includes('Nothing runs while FOKS'), false);
   assert.ok(

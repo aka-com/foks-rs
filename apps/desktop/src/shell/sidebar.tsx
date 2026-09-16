@@ -276,7 +276,7 @@ export function AccountHeader({
     snapshot.accounts.find((entry) => entry.store === store.id)?.username ??
     store.account;
   const username = active ? usernameOf(active) : 'No account';
-  const server = active ? serverName(snapshot, active) : 'None on this Mac';
+  const server = active ? serverName(snapshot, active) : 'None on this device';
   // Preserve account-scoped locations when selecting an account; otherwise,
   // open Accounts.
   const selectAccount = (store: AccountStore): void => {
@@ -333,13 +333,13 @@ export function AccountHeader({
           className="attn"
           aria-label={
             attention === 1
-              ? '1 thing needs attention'
-              : `${attention} things need attention`
+              ? '1 item needs attention'
+              : `${attention} items need attention`
           }
           title={
             attention === 1
-              ? '1 thing needs attention'
-              : `${attention} things need attention`
+              ? '1 item needs attention'
+              : `${attention} items need attention`
           }
           onClick={() => {
             if (onTabNavigate) onTabNavigate('people');
@@ -359,7 +359,7 @@ export function AccountHeader({
             className="menu rail-account-menu"
             anchorRef={anchorRef}
             onClose={close}
-            aria-label="Accounts on this Mac"
+            aria-label="Accounts on this device"
           >
             {servers.map((serverId) => (
               <div key={serverId}>

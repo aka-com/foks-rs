@@ -1483,7 +1483,10 @@ export function decodeCatalog(value: unknown): CatalogDto {
     stores: array(item.stores, 'stores', decodeStore),
     knownStores: array(item.knownStores, 'knownStores', decodeStore),
     inventory: array(item.inventory, 'inventory', decodeInventory),
-    items: array(item.items, 'items', decodeItem),
+    // Symlinks are a protocol node the app no longer shows or creates.
+    items: array(item.items, 'items', decodeItem).filter(
+      (entry) => entry.kind !== 'Link',
+    ),
     failures: array(item.failures, 'failures', decodeFailure),
     blockedProfiles: array(item.blockedProfiles, 'blockedProfiles', string),
     ...(item.generation === undefined

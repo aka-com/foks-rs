@@ -634,9 +634,9 @@ export function InvitationPanel({
           <details className="dd">
             <summary>Group nesting order</summary>
             <p>
-              Joining groups must have a lower signed index range than their
-              destination. These changes narrow this group's range and are
-              checked against existing memberships.
+              A group that joins another must sit lower in the nesting order
+              than its destination. These controls move this group's position
+              and are checked against its existing memberships.
             </p>
             <div className="btns">
               <Button

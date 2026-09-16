@@ -131,16 +131,16 @@ test('one page lists the Macs, the paper keys and the security keys', async () =
     store: 'acct:personal',
   });
 
-  assert.ok(rendered.getByText('Macs and device keys'));
+  assert.ok(rendered.getByText('Computers and security keys'));
   assert.ok(rendered.getByText('Paper keys'));
   assert.ok(rendered.getByText('Security key enrollments'));
   assert.equal(
-    rendered.queryByText('Only paper keys stored on this Mac are listed.'),
+    rendered.queryByText('Only paper keys stored on this device are listed.'),
     null,
   );
   assert.equal(rendered.queryByText(/Enrollments are listed for/), null);
   assert.equal(
-    rendered.queryByRole('group', { name: 'Accounts on this Mac' }),
+    rendered.queryByRole('group', { name: 'Accounts on this device' }),
     null,
   );
 
@@ -148,7 +148,9 @@ test('one page lists the Macs, the paper keys and the security keys', async () =
   // and the key on a card is neither — it is revoked under its enrollment.
   assert.ok(rendered.getByText('This device'));
   assert.equal(rendered.getAllByRole('button', { name: 'Remove…' }).length, 1);
-  const macs = rendered.getByRole('region', { name: 'Macs and device keys' });
+  const macs = rendered.getByRole('region', {
+    name: 'Computers and security keys',
+  });
   assert.ok(ui.within(macs).getByText('Pocket YubiKey'));
   assert.ok(ui.within(macs).getByText('Key on a card'));
   assert.equal(
@@ -204,7 +206,7 @@ test('the chooser offers each way to add, and leads into pairing', async () => {
   assert.deepEqual(
     choices.map((choice) => choice.querySelector('b')?.textContent),
     [
-      'Pair another Mac',
+      'Pair another device',
       'Pair this device with another account',
       'Create a new recovery paper key',
       'Connect a new YubiKey',
@@ -355,7 +357,9 @@ test('a Devices address written before the page was one lands on its section', a
     );
   });
   // The Macs are still on the same page, not behind a pane.
-  assert.ok(rendered.getByRole('region', { name: 'Macs and device keys' }));
+  assert.ok(
+    rendered.getByRole('region', { name: 'Computers and security keys' }),
+  );
 });
 
 test('the YubiKey scene still opens its sheet on Devices', async () => {
@@ -584,7 +588,7 @@ test('navigating to an unavailable account displays an error and lists available
   // The notice is the only list of the accounts this Mac does hold: the
   // switcher beside it would offer the same accounts a second time.
   assert.equal(
-    rendered.queryByRole('group', { name: 'Accounts on this Mac' }),
+    rendered.queryByRole('group', { name: 'Accounts on this device' }),
     null,
   );
   await ui.act(async () => {
@@ -665,9 +669,9 @@ test('the card this Mac is authenticated with is not told to remove itself', asy
   // Its kind decides this before its currency does: a card's key is revoked
   // under its enrollment either way, and no Mac is being asked to remove
   // itself.
-  assert.ok(page.getByText('Authenticated on this Mac now'));
+  assert.ok(page.getByText('Authenticated on this device now'));
   assert.ok(page.getByText('Revoked under its enrollment'));
-  assert.equal(page.queryByText('This Mac cannot remove itself'), null);
+  assert.equal(page.queryByText('This device cannot be removed here'), null);
 });
 
 /** The mock bridge's id for a fixture device: `02…` is stored as `04…`. */
@@ -739,8 +743,8 @@ test('the local device detail page disables device removal', async () => {
     onNavigate: (location) => chosen.push(location),
   });
 
-  assert.ok(page.getByText('Authenticated on this Mac now'));
-  assert.ok(page.getByText('This Mac cannot remove itself'));
+  assert.ok(page.getByText('Authenticated on this device now'));
+  assert.ok(page.getByText('This device cannot be removed here'));
   assert.equal(
     page.queryByRole('button', { name: 'Remove this device…' }),
     null,
@@ -879,7 +883,9 @@ test('pairing is two numbered steps, and a resumed offer says the agent holds it
       ui.within(resumed).getByRole('button', { name: 'Resume offer' }),
     );
   });
-  assert.ok(ui.within(resumed).getByText('A pairing is waiting on this Mac'));
+  assert.ok(
+    ui.within(resumed).getByText('A pairing is waiting on this device'),
+  );
   assert.ok(ui.within(resumed).getByText('cobalt window'));
 });
 
@@ -901,7 +907,7 @@ test('switching accounts drops the last account’s lists and closes an open she
   assert.equal(rendered.queryByText('Travel Mac'), null);
   assert.equal(rendered.queryByText('paper-backup'), null);
   assert.ok(
-    rendered.getByText('No paper keys stored on this Mac for this account.'),
+    rendered.getByText('No paper keys stored on this device for this account.'),
   );
 });
 
@@ -1010,7 +1016,7 @@ test('Devices reads only the current account and follows sidebar account changes
   assert.ok(await rendered.findByText('Personal Mac'));
   assert.equal(rendered.queryByText('Work Mac'), null);
   assert.equal(
-    rendered.queryByRole('group', { name: 'Accounts on this Mac' }),
+    rendered.queryByRole('group', { name: 'Accounts on this device' }),
     null,
   );
   assert.ok(rendered.getByText('No YubiKey enrolled.'));

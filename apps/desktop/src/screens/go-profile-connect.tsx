@@ -264,7 +264,7 @@ export function GoProfileConnectSheet({
                 }
                 onClick={() => void pair(false)}
               >
-                Pair this Mac
+                Pair this device
               </Button>
             </>
           ) : checked && method === 'copy' ? (
@@ -296,7 +296,7 @@ export function GoProfileConnectSheet({
       ) : null}
       {candidates.length && !selected ? (
         <>
-          <SectionLabel>CLI accounts on this Mac</SectionLabel>
+          <SectionLabel>CLI accounts on this device</SectionLabel>
           <GoProfileChooser
             candidates={candidates}
             selected={null}
@@ -360,7 +360,7 @@ export function GoProfileConnectSheet({
               disabled={busy || !selected.copyable}
               onClick={() => setMethod('copy')}
             >
-              Import this Mac’s FOKS CLI credentials
+              Import this device’s FOKS CLI credentials
             </Button>
             <p>Share existing credentials with the FOKS CLI</p>
           </Inset>

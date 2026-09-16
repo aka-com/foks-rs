@@ -657,7 +657,7 @@ impl FoksClient {
                 == 1
         {
             return Err(Error::AccountRequest(
-                "cannot revoke the final owner device",
+                "cannot remove the only remaining device",
             ));
         }
         let expected_roles = authenticated

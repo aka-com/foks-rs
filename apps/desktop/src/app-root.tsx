@@ -240,7 +240,7 @@ function AgentStopNotice({
         : null}
       {lifecycle.state === 'restart-required' ? (
         <p className="calm">
-          Your vaults remain on this Mac and on their configured servers.
+          Your vaults remain on this device and on their configured servers.
         </p>
       ) : null}
       {failure ? (
@@ -1184,7 +1184,7 @@ function VaultShell({
         if (normalizeCommandError(error).code === 'already-exists') {
           setWorkflow({
             kind: 'exists',
-            itemKind: 'File',
+            itemKind: 'Document',
             storeId,
             path,
             draft: droppedFileDraft(path, sourcePath),
@@ -1702,9 +1702,6 @@ function VaultShell({
             revealRequest={revealRequest}
             onRevealHandled={() => setRevealRequest(null)}
             selection={state.selection}
-            onSelect={(selection) => {
-              locations.select(selection);
-            }}
             onClose={() => {
               locations.setDetails(false);
             }}
@@ -1952,7 +1949,8 @@ function demoSelection(
     item = candidates
       .filter(
         (candidate) =>
-          kindOf(candidate) === 'Resource' &&
+          candidate.kind === 'Secret' &&
+          kindOf(candidate) === 'Document' &&
           storeOf(agentSnapshot, candidate.store)?.kind === 'account',
       )
       .sort((left, right) =>
@@ -1962,13 +1960,11 @@ function demoSelection(
     item = candidates
       .filter(
         (candidate) =>
-          kindOf(candidate) === 'File' &&
+          candidate.kind === 'File' &&
           storeOf(agentSnapshot, candidate.store)?.kind === 'team',
       )
       .sort((left, right) => right.version - left.version)[0];
-  } else if (demo === 'link')
-    item = candidates.find((candidate) => kindOf(candidate) === 'Link');
-  else {
+  } else {
     item = candidates
       .filter(
         (candidate) =>

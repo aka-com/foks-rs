@@ -1158,7 +1158,7 @@ export function FirstRunExperience({
     setManagedStatus(null);
     if (!managedProfile) {
       setManagedStatusError(
-        'No local server is running on this Mac. Connect to an existing server to continue.',
+        'No local server is running on this device. Connect to an existing server to continue.',
       );
       return;
     }
@@ -2650,7 +2650,7 @@ export function FirstRunExperience({
         <h3>Recover with your backup phrase</h3>
         <p>
           Enter all 17 words from your backup phrase to restore full access on
-          this Mac.
+          this device.
         </p>
         <Inset className="recovery-fields">
           {bridge.native ? (
@@ -2670,10 +2670,10 @@ export function FirstRunExperience({
               onChange={(event) => setRecoveryPhrase(event.target.value)}
             />
           </InsetRow>
-          <InsetRow label="This Mac’s name">
+          <InsetRow label="This device’s name">
             <input
               value={deviceName}
-              placeholder="Your Mac"
+              placeholder="Your device"
               onChange={(event) => setDeviceName(event.target.value)}
             />
           </InsetRow>
@@ -2686,7 +2686,7 @@ export function FirstRunExperience({
       </div>
       {goCandidate?.copyable ? (
         <div className="pcard">
-          <h3>Import this Mac’s FOKS CLI credentials</h3>
+          <h3>Import this device’s FOKS CLI credentials</h3>
           <p>
             Both apps will share the same device credentials. This may require a
             Keychain prompt. Revoking the device in either client will disable
@@ -2744,11 +2744,11 @@ export function FirstRunExperience({
                 onChange={(event) => setRecoveryAlias(event.target.value)}
               />
             </InsetRow>
-            <InsetRow label="This Mac’s name">
+            <InsetRow label="This device’s name">
               <input
                 aria-label="Pairing device name"
                 value={deviceName}
-                placeholder="Your Mac"
+                placeholder="Your device"
                 onChange={(event) => setDeviceName(event.target.value)}
               />
             </InsetRow>
@@ -2983,8 +2983,8 @@ export function FirstRunExperience({
       >
         <h1>Set up FOKS</h1>
         <p className="lead">
-          A private FOKS server is already running on this Mac. Use it to create
-          your Personal vault.
+          A private FOKS server is already running on this device. Use it to
+          create your Personal vault.
         </p>
         <div className="local-server-card">
           <div className="local-server-head">
@@ -2993,7 +2993,7 @@ export function FirstRunExperience({
             </span>
             <span className="local-server-title">
               <b>Local server</b>
-              <small>On this Mac</small>
+              <small>On this device</small>
             </span>
             <span className="local-ready">
               <i />
@@ -3049,7 +3049,7 @@ export function FirstRunExperience({
     !goScanError
   )
     content = (
-      <Pane title="Checking this Mac" header={false}>
+      <Pane title="Checking this device" header={false}>
         <h1>Looking for existing FOKS accounts</h1>
         <p className="lead">
           Checking for existing accounts from the official FOKS CLI. No changes
@@ -3404,7 +3404,7 @@ export function FirstRunExperience({
             <span>Device name</span>
             <input
               value={deviceName}
-              placeholder="Your Mac"
+              placeholder="Your device"
               disabled={Boolean(checkpoint.account)}
               onChange={(event) => setDeviceName(event.target.value)}
             />
@@ -3483,10 +3483,10 @@ export function FirstRunExperience({
             onChange={(event) => editUsername(event.target.value)}
           />
         </InsetRow>
-        <InsetRow label="This Mac’s name">
+        <InsetRow label="This device’s name">
           <input
             value={deviceName}
-            placeholder="Your Mac"
+            placeholder="Your device"
             onChange={(event) => setDeviceName(event.target.value)}
           />
         </InsetRow>
@@ -3559,7 +3559,7 @@ export function FirstRunExperience({
               {goCandidate ? ' or connect using the official FOKS CLI' : ''}.
             </>
           ) : (
-            'Your account keys are generated on this Mac; only the public keys are sent to the server.'
+            'Your account keys are generated on this device; only the public keys are sent to the server.'
           )}
         </p>
         <Inset>
@@ -3567,7 +3567,7 @@ export function FirstRunExperience({
             <div className="choice">
               <RadioCard
                 title="Create a new account"
-                detail="Set up a new FOKS account on this Mac."
+                detail="Set up a new FOKS account on this device."
                 selected={!signingIn && !ssoSelected}
                 disabled={Boolean(checkpoint.sso)}
                 onSelect={() => {
@@ -3674,7 +3674,7 @@ export function FirstRunExperience({
             <div className="choice">
               <RadioCard
                 title="Sign in to an existing account"
-                detail="Add this Mac to an account you already have."
+                detail="Add this device to an account you already have."
                 selected={signingIn}
                 onSelect={() => {
                   if (signingIn) return;
@@ -3698,7 +3698,7 @@ export function FirstRunExperience({
             {duplicateAlias && !busy && !identityLoading ? (
               <div className="band info" role="status">
                 <span className="t">
-                  “{duplicateAlias.alias}” is already set up on this Mac for
+                  “{duplicateAlias.alias}” is already set up on this device for
                   this server. Use that account, or choose a different username.
                 </span>
                 <span className="a">
@@ -3806,7 +3806,7 @@ export function FirstRunExperience({
           </Foot>
         }
       >
-        <h1>Add this Mac to your account</h1>
+        <h1>Add this device to your account</h1>
         <p className="lead">
           Your account already exists on {profile?.canonicalName}. Recover it
           with your backup phrase
@@ -3850,8 +3850,8 @@ export function FirstRunExperience({
       >
         <h1>Set up account recovery</h1>
         <p className="lead">
-          Set up a backup phrase now so you can recover your account if this Mac
-          is lost.
+          Set up a backup phrase now so you can recover your account if this
+          device is lost.
         </p>
         <div className="local-recovery-card">
           <div className="local-recovery-head">
@@ -3860,7 +3860,7 @@ export function FirstRunExperience({
           </div>
           <p>
             Write down these 17 words and keep them somewhere other than this
-            Mac. Anyone with them can recover your account.
+            device. Anyone with them can recover your account.
           </p>
           {state === 'phrase' ? (
             <>
@@ -3971,7 +3971,7 @@ export function FirstRunExperience({
           </h1>
           <p className="lead">
             {personalAvailable
-              ? 'Your account is connected to the local server on this Mac.'
+              ? 'Your account is connected to the local server on this device.'
               : accountStoreRecord
                 ? `Your Personal vault is unavailable (${storeDescription(snapshot, accountStoreRecord).toLowerCase()}). Your setup progress is saved. Check server settings to restore access.`
                 : 'FOKS could not load your Personal vault. Your setup progress is saved. Retry loading the vault to continue.'}
@@ -4040,7 +4040,7 @@ export function FirstRunExperience({
           <div className="pcard">
             <h3>Passphrase</h3>
             <p>
-              Protects the keys stored on this Mac with a password. Optional.
+              Protects the keys stored on this device with a password. Optional.
             </p>
             <Inset>
               <InsetRow label="Passphrase">
@@ -4090,7 +4090,7 @@ export function FirstRunExperience({
             <>
               <p>
                 Anyone with these words can access your account. Store them
-                somewhere other than this Mac.
+                somewhere other than this device.
               </p>
               {backupPhrase ? (
                 <div className="words">
@@ -4241,8 +4241,8 @@ export function FirstRunExperience({
               <InsetRow label={<Icon name="door" />}>
                 <b>You can close FOKS anytime</b>
                 <span className="hint">
-                  Your account and server settings are saved on this Mac. When
-                  you reopen FOKS, you can continue setup.
+                  Your account and server settings are saved on this device.
+                  When you reopen FOKS, you can continue setup.
                 </span>
               </InsetRow>
             </Inset>
@@ -4403,7 +4403,7 @@ export function FirstRunExperience({
         {recoverySet ? null : (
           <div className="checklist-notice">
             <Band
-              label={`Only this Mac can recover ${checkpoint.account?.username}`}
+              label={`Recovery keys for ${checkpoint.account?.username} are only saved on this device.`}
               action={
                 <Button
                   size="sm"
@@ -4415,7 +4415,7 @@ export function FirstRunExperience({
               }
             >
               Without a backup method, this account can’t be recovered if this
-              Mac is lost.
+              device is lost.
             </Band>
           </div>
         )}

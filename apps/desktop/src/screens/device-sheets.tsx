@@ -105,7 +105,7 @@ export function AddDeviceSheet({
       <RadioGroup label="What to add">
         <RadioCard
           icon="laptop"
-          title="Pair another Mac"
+          title="Pair another device"
           detail="Get a pairing phrase here, to type on the device you are adding."
           selected={choice === 'pair'}
           onSelect={() => setChoice('pair')}
@@ -352,7 +352,7 @@ export function PairSheet({
   );
   const [device, setDevice] = useTabSheetState(
     'pairing.device',
-    'This Mac',
+    'This device',
     mode === 'accept',
   );
   const [phrase, setPhrase] = useTabSheetState(
@@ -495,7 +495,7 @@ export function PairSheet({
           when it was made nor when it expires, so the band says what is true:
           an offer is open, and resuming shows the same phrase again. */}
       {resumed && offer ? (
-        <Band label="A pairing is waiting on this Mac">
+        <Band label="A pairing is waiting on this device">
           The phrase below is the one already issued.
         </Band>
       ) : null}
@@ -551,8 +551,8 @@ export function PairSheet({
           <li>
             <b>On the other device</b>
             <p>
-              Open FOKS there, choose Add a device › Pair another Mac, and start
-              a pairing. It shows a phrase once.
+              Open FOKS there, choose Add a device › Pair another device, and
+              start a pairing. It shows a phrase once.
             </p>
           </li>
           <li>
@@ -590,7 +590,7 @@ export function RecoverSheet({
   onError: (error: unknown) => void;
 }): ReactNode {
   const [target, setTarget] = useState(store.account);
-  const [device, setDevice] = useState('This Mac');
+  const [device, setDevice] = useState('This device');
   const [phrase, setPhrase] = useState('');
   const [busy, setBusy] = useState(false);
   // Recovery adds a device: once the phrase has been sent, the sheet is where
@@ -613,7 +613,7 @@ export function RecoverSheet({
   );
   return (
     <DeviceSheetFrame
-      title="Recover on this Mac"
+      title="Recover on this device"
       subtitle="Use your paper key"
       onClose={() => {
         setPhrase('');
@@ -642,7 +642,7 @@ export function RecoverSheet({
         </>
       }
     >
-      <p>Adds this Mac as a device on the account.</p>
+      <p>Adds this device to the account.</p>
       <Inset>
         <Field label="Local alias" value={target} onChange={setTarget} />
         <Field label="Device name" value={device} onChange={setDevice} />

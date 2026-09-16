@@ -183,16 +183,6 @@ const RAW: AgentSnapshot = {
     },
     {
       store: 'acct:personal',
-      path: '/latest-key',
-      kind: 'Link',
-      size: 22,
-      version: 2,
-      read: 'Owner',
-      write: 'Owner',
-      target: '/ssh/id_ed25519',
-    },
-    {
-      store: 'acct:personal',
       path: '/documents/passport-scan.pdf',
       kind: 'File',
       size: 2841992,

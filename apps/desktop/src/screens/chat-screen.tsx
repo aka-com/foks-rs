@@ -199,8 +199,8 @@ export function ChatScreen({
           {storeDescription(agentSnapshot, store, describeOptions)} on{' '}
           {serverName(agentSnapshot, store)}.{' '}
           {lapsed
-            ? 'Every store on that server is unavailable until the server is checked again. Messages already on this Mac are kept.'
-            : 'Messages already on this Mac are kept.'}
+            ? 'Every store on that server is unavailable until the server is checked again. Messages already on this device are kept.'
+            : 'Messages already on this device are kept.'}
         </p>
         <div className="chat-locked-actions">
           {lapsed && (
@@ -231,8 +231,8 @@ export function ChatScreen({
         <Notice severity="crit" title="Chat stopped">
           <p role="alert">{blocked}</p>
           <p>
-            Check the account and server, then lock and unlock the desktop to
-            start a fresh chat session.
+            Check the account and server connection, then lock and unlock FOKS
+            to start a new chat session.
           </p>
         </Notice>
       </div>
@@ -242,10 +242,7 @@ export function ChatScreen({
           <Icon name="people" />
         </span>
         <h2>Chat unavailable</h2>
-        <p>
-          Chat works in active named teams. Pick one in the column to open its
-          conversations.
-        </p>
+        <p>Select an active team in the sidebar to open its conversations.</p>
       </div>
     ) : (
       <>
@@ -287,8 +284,8 @@ export function ChatScreen({
               remain available.
             </p>
             <p>
-              Check the account and server, then lock and unlock the desktop to
-              revalidate this channel.
+              Check the account and server connection, then lock and unlock FOKS
+              to revalidate this channel.
             </p>
           </div>
         ) : channel ? (
@@ -385,7 +382,7 @@ export function ChatScreen({
           <section className="chat-recovery caught-up" aria-label="Saved work">
             <p className="chat-quiet" role="status">
               <Icon name="check" size={13} /> All caught up. Everything saved on
-              this Mac has been accounted for.
+              this device has been accounted for.
             </p>
           </section>
         )

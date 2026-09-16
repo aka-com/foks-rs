@@ -14,7 +14,6 @@ import { NewItemButton, Toolbar } from '../shell/toolbar';
 import {
   KINDS,
   canChangeItem,
-  catalog,
   defaultCreateStore,
   fmtSize,
   kindOf,
@@ -74,7 +73,6 @@ interface ItemActionProps {
   onReveal: () => void;
   onCopyValue: () => void;
   onDownload: () => void;
-  onOpen: () => void;
   onDelete: () => void;
   deleteDisabled: boolean;
 }
@@ -84,7 +82,6 @@ function ItemActions({
   onReveal,
   onCopyValue,
   onDownload,
-  onOpen,
   onDelete,
   deleteDisabled,
 }: ItemActionProps): ReactNode {
@@ -112,7 +109,9 @@ function ItemActions({
   );
   return (
     <span className="acts">
-      {kind === 'Password' || kind === 'Resource' ? (
+      {item.kind === 'File' ? (
+        action('Download', 'download', onDownload)
+      ) : (
         <>
           {action(
             kind === 'Password' ? 'Show password' : 'Show value',
@@ -125,10 +124,6 @@ function ItemActions({
             onCopyValue,
           )}
         </>
-      ) : kind === 'File' ? (
-        action('Download', 'download', onDownload)
-      ) : (
-        action('Open linked item', 'arrow', onOpen)
       )}
       {action(
         deleteDisabled
@@ -191,11 +186,9 @@ function Tile({
   onReveal,
   onCopyValue,
   onDownload,
-  onOpen,
   onDelete,
   deleteDisabled,
 }: Omit<RowProps, 'searching' | 'snapshot'> & ItemActionProps): ReactNode {
-  const kind = kindOf(item);
   return (
     <div
       className={selected ? 'tile sel' : 'tile'}
@@ -218,7 +211,6 @@ function Tile({
               onReveal,
               onCopyValue,
               onDownload,
-              onOpen,
               onDelete,
               deleteDisabled,
             }}
@@ -228,11 +220,7 @@ function Tile({
       <div className="cap">
         <div className="nm">{nameOf(item.path)}</div>
         <div className="sub">
-          {kind === 'Link' ? (
-            <>
-              <PathChip path={item.path} /> Link
-            </>
-          ) : kind === 'File' ? (
+          {item.kind === 'File' ? (
             <>
               <PathChip path={item.path} /> {fmtSize(item.size)}
             </>
@@ -670,7 +658,7 @@ function VaultDropZone({
           {uploading
             ? 'Encrypting and saving the file.'
             : (target.blocked ??
-              `Saved in ${folder ?? '/documents'} · one file at a time`)}
+              `${folder ? `Saved in ${folder}` : 'Saved at the vault root'} · one file at a time`)}
         </small>
       </div>
     </div>
@@ -891,30 +879,6 @@ export function ItemsScreen({
         report,
       );
   };
-  const openLink = (item: Item): void => {
-    if (!accessAvailable(item)) return;
-    void bridge
-      .readItem(requestOf(item))
-      .then((response) => {
-        if (!accessAvailable(item)) return;
-        if (
-          response.store !== item.store ||
-          response.path !== item.path ||
-          response.version !== item.version
-        ) {
-          throw new Error('Could not verify link destination.');
-        }
-        // Resolve against the catalog to ensure the target is an item and not a folder.
-        const target = catalog(snapshot).find(
-          (candidate) =>
-            candidate.store === item.store && candidate.path === response.value,
-        );
-        if (target)
-          locations.select({ store: target.store, path: target.path });
-        else toasts.show(`Linked item not found: ${response.value}`);
-      }, report)
-      .catch(report);
-  };
   const reveal = (item: Item): void => {
     if (!accessAvailable(item)) return;
     locations.select({ store: item.store, path: item.path });
@@ -936,7 +900,6 @@ export function ItemsScreen({
     onReveal: () => reveal(item),
     onCopyValue: () => copyValue(item),
     onDownload: () => download(item),
-    onOpen: () => openLink(item),
     onDelete: () => {
       if (!accessAvailable(item)) return;
       locations.select({ store: item.store, path: item.path });

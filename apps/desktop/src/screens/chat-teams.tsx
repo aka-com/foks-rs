@@ -11,7 +11,7 @@
  * per-team projections `ChatInboxService` already keeps for the rail's badge —
  * so a team is listed, previewed and counted without a conversation being
  * mounted for it. Named teams whose server offers no chat sit dimmed at the
- * foot under "Not ready"; shares are not listed, because chat lives in a named
+ * foot under "Chat unavailable"; shares are not listed, because chat lives in a named
  * team. The column belongs to the tab and outlives a team switch.
  */
 
@@ -80,10 +80,10 @@ export function noChatReason(
   const server = serverFor(snapshot, store);
   if (store.active === false) return 'Finish setup in Teams';
   if (!server) return 'Server unavailable';
-  return `Chat not offered on ${serverDisplayName(server)}`;
+  return `Chat is not enabled on ${serverDisplayName(server)}`;
 }
 
-/** Named teams with no chat at all, listed under "Not ready" with the reason. */
+/** Named teams with no chat at all, listed under "Chat unavailable" with the reason. */
 export function noChatTeams(snapshot: AgentSnapshot): TeamStore[] {
   const listed = new Set(chatTeams(snapshot).map((store) => store.id));
   return storeNavigationOrder(snapshot).filter(
@@ -371,7 +371,7 @@ export function ChatTeamColumn({
           title={
             teams.length
               ? 'New chat'
-              : 'Chat needs a named team whose server offers chat'
+              : 'Chat requires a team on a server with chat enabled'
           }
           onClick={onNewChat}
         />
@@ -400,7 +400,9 @@ export function ChatTeamColumn({
           )}
         {dimmed.length > 0 && (
           <>
-            <SectionLabel className="chat-nochat-label">Not ready</SectionLabel>
+            <SectionLabel className="chat-nochat-label">
+              Chat unavailable
+            </SectionLabel>
             {dimmed.map((store) => {
               const reason = noChatReason(snapshot, store);
               return (

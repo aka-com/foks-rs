@@ -164,7 +164,7 @@ for (const notifyGlobally of [false, true]) {
         },
       });
       await ui.waitFor(() =>
-        assert.ok(rendered.getByText('Finish preparing this Mac')),
+        assert.ok(rendered.getByText('Finish preparing this device')),
       );
       const saved = harness.checkpoint();
       assert.ok(saved);
@@ -180,7 +180,7 @@ for (const notifyGlobally of [false, true]) {
         1,
         'discovery waits for the refreshed catalog too',
       );
-      assert.ok(rendered.getByText('Finish preparing this Mac'));
+      assert.ok(rendered.getByText('Finish preparing this device'));
       assert.equal(harness.checkpoint(), saved);
       await ui.act(async () => {
         releaseCatalog?.();
@@ -215,7 +215,7 @@ for (const code of ['agent-lost', 'version-mismatch']) {
       },
     });
     await ui.waitFor(() =>
-      assert.ok(rendered.getByText('Finish preparing this Mac')),
+      assert.ok(rendered.getByText('Finish preparing this device')),
     );
     assert.equal(
       rendered.queryByText(/Could not check existing CLI profiles/),
@@ -448,7 +448,7 @@ test('disables account selection and dialog dismissal while server verification 
       'Server verification failed: the server does not match the selected CLI account.',
     ),
   );
-  assert.equal(rendered.queryByText('Pair this Mac'), null);
+  assert.equal(rendered.queryByText('Pair this device'), null);
 });
 
 test('first-run waits for shared readiness and never initializes itself', async () => {
@@ -531,7 +531,7 @@ test('first-run exposes shared agent recovery without discarding its current ste
       }),
     }),
   );
-  assert.ok(rendered.getByText('Finish preparing this Mac'));
+  assert.ok(rendered.getByText('Finish preparing this device'));
   assert.equal(rendered.queryByLabelText('Server address'), null);
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Retry setup' }));
   await ui.waitFor(() => assert.equal(retries, 1));
@@ -652,7 +652,7 @@ test('native-shaped account creation is not rewound by the pre-mutation inventor
   ui.fireEvent.change(view.getByPlaceholderText('yourname'), {
     target: { value: 'native-user' },
   });
-  ui.fireEvent.change(view.getByPlaceholderText('Your Mac'), {
+  ui.fireEvent.change(view.getByPlaceholderText('Your device'), {
     target: { value: 'Native Mac' },
   });
   ui.fireEvent.click(view.getByRole('button', { name: 'Create my account' }));
@@ -737,7 +737,7 @@ test('first-run account navigation, server edits, and connection errors stay sco
   );
   ui.fireEvent.click(view.getByRole('button', { name: 'Use this server' }));
   await view.findByRole('button', { name: 'Details' });
-  assert.ok(view.queryByText('Pinned on this Mac') === null);
+  assert.ok(view.queryByText('Pinned on this device') === null);
   const addressField = view.getByLabelText('Server address');
   addressField.focus();
   ui.fireEvent.change(addressField, { target: { value: 'changed.example' } });
@@ -752,14 +752,14 @@ test('first-run account navigation, server edits, and connection errors stay sco
   );
   assert.deepEqual(titles, [
     'Recover with your backup phrase',
-    'Import this Mac’s FOKS CLI credentials',
+    'Import this device’s FOKS CLI credentials',
     'Use the CLI to approve this as a new device',
   ]);
   ui.fireEvent.click(view.getByRole('button', { name: 'Import credentials' }));
   const copyError = await view.findByText('Copy failed');
   assert.equal(
     copyError.closest('.pcard')?.querySelector('h3')?.textContent,
-    'Import this Mac’s FOKS CLI credentials',
+    'Import this device’s FOKS CLI credentials',
   );
   ui.fireEvent.change(view.getByLabelText('Backup phrase'), {
     target: { value: 'one two three' },
@@ -774,7 +774,7 @@ test('first-run account navigation, server edits, and connection errors stay sco
   // drawn under it without leaving the page.
   ui.fireEvent.click(view.getByRole('radio', { name: /Create a new account/ }));
   assert.ok(view.getByPlaceholderText('yourname'));
-  assert.ok(view.getByPlaceholderText('Your Mac'));
+  assert.ok(view.getByPlaceholderText('Your device'));
   assert.equal(view.queryByText('Recover with your backup phrase'), null);
   ui.fireEvent.click(
     view.getByRole('radio', { name: /Sign in to an existing account/ }),
@@ -940,7 +940,7 @@ test('resumed sign-in step rediscovers the CLI profile for the verified server',
     ),
   );
   await rendered.findByText('Recover with your backup phrase');
-  await rendered.findByText('Import this Mac’s FOKS CLI credentials');
+  await rendered.findByText('Import this device’s FOKS CLI credentials');
   rendered.getByText('Use the CLI to approve this as a new device');
   assert.equal(scans, 1);
   assert.equal(
@@ -1207,7 +1207,7 @@ test('a server added after unmount is listed on Accounts and pairs without anoth
   assert.ok(ui.within(row).getByText('Connected, not yet paired'));
   ui.fireEvent.click(ui.within(row).getByRole('button', { name: 'Pair' }));
   ui.fireEvent.click(await accounts.findByRole('radio', { name: /cli-owner/ }));
-  assert.ok(accounts.getByRole('button', { name: 'Pair this Mac' }));
+  assert.ok(accounts.getByRole('button', { name: 'Pair this device' }));
   assert.ok(accounts.getByRole('button', { name: 'Resume pairing' }));
   assert.equal(accounts.queryByRole('button', { name: 'Add server' }), null);
   assert.equal(adds, 1);
