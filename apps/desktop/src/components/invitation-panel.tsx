@@ -479,7 +479,7 @@ export function InvitationPanel({
         {reportsNode}
       </PanelSheet>
     );
-  return (
+  const content = (
     <section
       className="pcard"
       aria-label={
@@ -667,5 +667,20 @@ export function InvitationPanel({
       )}
       {reportsNode}
     </section>
+  );
+  return presentation ? (
+    <PanelSheet
+      presentation={presentation}
+      busy={busy}
+      footer={
+        <Button disabled={busy} onClick={presentation.onClose}>
+          Close
+        </Button>
+      }
+    >
+      {content}
+    </PanelSheet>
+  ) : (
+    content
   );
 }

@@ -169,7 +169,9 @@ test('Members exposes invitation creation, requests and approval recovery for th
         : { state: 'complete' };
     },
   });
-  ui.fireEvent.click(r.getByRole('button', { name: 'Invitations and requests' }));
+  ui.fireEvent.click(
+    r.getByRole('button', { name: 'Invitations and requests' }),
+  );
   for (const label of [
     'Create invitation',
     'Refresh requests',
@@ -331,7 +333,7 @@ test('a single-action alert puts its action at the right end of the alert', asyn
     'Add a group…',
   );
   assert.equal(
-    rendered.queryByRole('button', { name: 'Send setup instructions…' }),
+    rendered.queryByRole('button', { name: 'Invite to group…' }),
     null,
   );
 });
@@ -515,7 +517,7 @@ test('each action follows the rows it adds to', async () => {
     [...actions[0].querySelectorAll('button')].map((node) =>
       (node.textContent ?? '').trim(),
     ),
-    ['Add someone on Acme…', 'Send setup instructions…'],
+    ['Add someone on Acme…', 'Invite to group…'],
   );
   // Then the admitted groups, then what admits another one.
   const federation = document.querySelector('.rt.fed');
@@ -613,4 +615,21 @@ test('the Settings tab states the name, the join policy and why leaving is not o
   assert.equal(account?.querySelector('.v')?.textContent, 'vitalik · Admin');
   assert.equal(rendered.queryByRole('button', { name: 'Leave…' }), null);
   assert.equal(rendered.queryByRole('button', { name: 'Delete…' }), null);
+});
+
+test('Members invite action opens the group invitation workflow', async () => {
+  const calls: unknown[] = [];
+  const r = await group(await fixture(), {
+    invitation: async (_profile, _account, action) => {
+      calls.push(action);
+      return { state: 'complete' };
+    },
+  });
+  ui.fireEvent.click(r.getByRole('button', { name: 'Invite to group…' }));
+  const dialog = r.getByRole('dialog');
+  ui.fireEvent.click(
+    ui.within(dialog).getByRole('button', { name: 'Create invitation' }),
+  );
+  await ui.act(async () => {});
+  assert.deepEqual(calls, [{ action: 'create', team_alias: 'engineering' }]);
 });

@@ -76,7 +76,6 @@ import {
 } from './group-tabs';
 import { GroupMark } from './group-mark';
 import { inviteUnavailableTitle, manageReason } from './group-model';
-import { InviteSheet } from './invite-sheet';
 import { StoreAccessTakeover } from './store-access';
 import { useToast } from '/kit/toasts';
 
@@ -767,7 +766,7 @@ function MembersTab({
                 Add someone on {serverName}…
               </Button>
               <Button
-                disabled={!readable || !onInvite}
+                disabled={!manageable || !onInvite}
                 title={
                   !onInvite
                     ? `No account on this Mac signs in to ${serverName}.`
@@ -777,7 +776,7 @@ function MembersTab({
                 }
                 onClick={onInvite}
               >
-                Send setup instructions…
+                Invite to group…
               </Button>
             </div>
           ) : null}
@@ -2089,17 +2088,20 @@ export function GroupSettingsScreen({
       'Group creation resumed',
     );
   };
-  const inviteSheet =
-    inviting && groupAccount ? (
-      <InviteSheet
-        snapshot={snapshot}
-        bridge={bridge}
-        account={groupAccount}
-        group={store}
-        onClose={() => setInviting(false)}
-        onError={onError}
-      />
-    ) : null;
+  const inviteSheet = inviting ? (
+    <InvitationPanel
+      bridge={bridge}
+      profile={store.server}
+      account={store.account}
+      teamAlias={store.alias}
+      presentation={{
+        title: 'Invitations and requests',
+        subtitle: store.name,
+        onClose: () => setInviting(false),
+      }}
+      onComplete={() => onApplied('Group requests updated')}
+    />
+  ) : null;
   return (
     <>
       <div className="ghero">

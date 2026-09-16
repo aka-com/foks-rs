@@ -790,7 +790,7 @@ test('a paper key and an enrollment each carry their own page', async () => {
   assert.equal(key.queryByText('satoshi'), null);
   assert.ok(
     key.getByText(
-      'The agent reports no key id for an enrollment, and no serial for the card it was made on.',
+      'This enrollment cannot be matched to a card on this Mac.',
     ),
   );
   assert.ok(key.getByRole('button', { name: 'Settings › Account' }));

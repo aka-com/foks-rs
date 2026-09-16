@@ -1176,8 +1176,7 @@ function DeviceDetail({
                   <>
                     {entry.name}
                     <small>
-                      The agent reports no key id for an enrollment, and no
-                      serial for the card it was made on.
+                      This enrollment cannot be matched to a card on this Mac.
                     </small>
                   </>
                 )}
