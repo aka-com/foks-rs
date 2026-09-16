@@ -1443,11 +1443,20 @@ export function RemoveDeviceSheet({
     <DeviceSheetFrame
       title={`Remove ${device.name ?? 'device'}?`}
       subtitle={`${store.account} · ${device.id}`}
-      onClose={onClose}
+      // A removal already handed to the agent cannot be called back, so
+      // Escape, the backdrop and Cancel all stop answering while it runs —
+      // the same guard the revoke sheets carry.
+      onClose={() => {
+        if (busy) return;
+        onClose();
+      }}
       danger
+      dismissible={!busy}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button disabled={busy} onClick={onClose}>
+            Cancel
+          </Button>
           <Button
             variant="danger"
             disabled={confirmation !== expected || busy}

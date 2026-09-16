@@ -389,6 +389,31 @@ export interface FirstRunExperienceProps {
   managedProfile?: string;
 }
 
+/**
+ * A reported failure: the sentence the agent produced, and behind a
+ * disclosure, the raw error chain it kept out of that sentence. Every first-run
+ * failure reports through here, so the detail a server check offers is the
+ * detail account creation, recovery, pairing and the rest offer too.
+ */
+function FailureText({
+  text,
+  reason,
+}: {
+  text: string;
+  reason?: string;
+}): ReactNode {
+  return (
+    <>
+      {text}
+      {reason ? (
+        <Toggle label="Details">
+          <pre>{reason}</pre>
+        </Toggle>
+      ) : null}
+    </>
+  );
+}
+
 export function FirstRunExperience(props: FirstRunExperienceProps): ReactNode {
   const [session, setSession] = useState(0);
   const [sessionEntry, setSessionEntry] = useState<FirstRunCheckpoint | null>(
@@ -547,6 +572,10 @@ function FirstRunSession({
     end: number | null;
   } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  // The failure the message on screen came from, so a banner can offer the
+  // raw chain behind it. Only `fail` sets it, and the reason is offered only
+  // while the text it reported is still the text being shown.
+  const [lastFailure, setLastFailure] = useState<FirstRunFailure | null>(null);
   const [serverCheckFailure, setServerCheckFailure] =
     useState<FirstRunFailure | null>(null);
   const [managedStatus, setManagedStatus] =
@@ -632,6 +661,18 @@ function FirstRunSession({
         !goScanError) ||
       (state === 'local' && !managedStatus && !managedStatusError),
   );
+  /**
+   * The raw error chain behind a reported failure, offered only while the
+   * text that failure reported is still the text on screen. A later message
+   * from anywhere else clears it rather than carrying a stale chain.
+   */
+  const reasonFor = (shown: string | null): string | undefined => {
+    if (!shown || !lastFailure) return undefined;
+    const presented = presentFirstRunFailure(lastFailure);
+    return shown === lastFailure.error.message || shown === presented.detail
+      ? presented.reason
+      : undefined;
+  };
   const serverCheckPresentation = serverCheckFailure
     ? presentFirstRunFailure(serverCheckFailure)
     : null;
@@ -830,6 +871,7 @@ function FirstRunSession({
       report: (message: string) => void = setMessage,
     ): void => {
       const failure = classifyFirstRunFailure(operation, error);
+      setLastFailure(failure);
       if (operation === 'server-check') setServerCheckFailure(failure);
       // The command layer sets its write gate when a first-run mutation
       // returns an ambiguous or response-binding result, and only a fresh
@@ -2280,7 +2322,10 @@ function FirstRunSession({
         </Inset>
         {connectionErrors.recover ? (
           <p className="crit" role="alert">
-            {connectionErrors.recover}
+            <FailureText
+              text={connectionErrors.recover}
+              reason={reasonFor(connectionErrors.recover)}
+            />
           </p>
         ) : null}
       </div>
@@ -2302,7 +2347,10 @@ function FirstRunSession({
           </Button>
           {connectionErrors.copy ? (
             <p className="crit" role="alert">
-              {connectionErrors.copy}
+              <FailureText
+                text={connectionErrors.copy}
+                reason={reasonFor(connectionErrors.copy)}
+              />
             </p>
           ) : null}
         </div>
@@ -2364,7 +2412,10 @@ function FirstRunSession({
           </div>
           {connectionErrors.pair ? (
             <p className="crit" role="alert">
-              {connectionErrors.pair}
+              <FailureText
+                text={connectionErrors.pair}
+                reason={reasonFor(connectionErrors.pair)}
+              />
             </p>
           ) : null}
         </div>
@@ -2953,7 +3004,11 @@ function FirstRunSession({
             Username must contain at least one letter or number.
           </p>
         ) : null}
-        {message ? <p className="crit">{message}</p> : null}
+        {message ? (
+          <p className="crit">
+            <FailureText text={message} reason={reasonFor(message)} />
+          </p>
+        ) : null}
         {duplicateAlias && !busy && !identityLoading ? (
           <div className="band info" role="status">
             <span className="t">
@@ -3204,7 +3259,11 @@ function FirstRunSession({
         </Inset>
         {signingIn ? null : (
           <>
-            {message ? <p className="crit">{message}</p> : null}
+            {message ? (
+              <p className="crit">
+                <FailureText text={message} reason={reasonFor(message)} />
+              </p>
+            ) : null}
             {duplicateAlias && !busy && !identityLoading ? (
               <div className="band info" role="status">
                 <span className="t">
