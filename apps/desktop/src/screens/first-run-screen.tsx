@@ -1,3 +1,24 @@
+import { AccountFields } from './first-run-account-step';
+import { LocalCompleteStep } from './first-run-complete-step';
+import { ServerVerificationStep } from './first-run-server-step';
+import { RecoveryStep } from './first-run-recovery-step';
+import {
+  stepOf,
+  SetupSidebar,
+  FirstRunAppSidebar,
+  AddedDetails,
+  Foot,
+  Pane,
+} from './first-run-view';
+export { FirstRunChecklistStatus } from './first-run-view';
+import { useFirstRunController } from '../use-first-run-controller';
+import {
+  retainSetup,
+  retainedSetups,
+  sameSetupTarget,
+  updateRetainedSetup,
+} from '../first-run-recovery';
+import { resolveSetupEntry, setupActions } from '../first-run-controller';
 import { SsoPanel } from '../components/sso-panel';
 import {
   resolveProvisionedIdentity,
@@ -9,7 +30,6 @@ import {
   executeProvisioning,
   provisioningInFlight,
   persistFirstRun,
-  FIRST_RUN_PROGRESS_EVENT,
 } from '../first-run-operations';
 import type { ProvisioningIntent } from '../first-run-state';
 import { sharedSetupRead, useSlowSetup } from '../first-run-loading';
@@ -37,7 +57,6 @@ import {
   RadioCard,
   RadioGroup,
   SectionLabel,
-  SheetDialog,
   Toggle,
 } from '../components';
 import type { FilterKind } from '../components';
@@ -62,11 +81,10 @@ import {
   completedFirstRunSteps,
   firstRunStepCount,
   decodeFirstRunCheckpoint,
-  encodeFirstRunCheckpoint,
   initialFirstRun,
   isFirstRunState,
-  reconcileFirstRunCheckpoint,
   transitionFirstRun,
+  setupBackTarget,
 } from '../first-run-state';
 import type {
   FirstRunCheckpoint,
@@ -82,30 +100,14 @@ import {
 } from '../first-run-failure';
 import type { FoksIconName } from '../icons';
 import type { Location } from '../location';
-import { NavRow, Sidebar, TrafficStrip } from '../shell/sidebar';
-import {
-  formatRole,
-  kindOf,
-  parseRole,
-  plural,
-  profileInventoryComplete,
-  storeDescription,
-  storeReadable,
-} from '../model';
-import type { RoleWire, AgentSnapshot } from '../model';
-import { PageHeader } from '../shell/page-header';
+import { kindOf, storeReadable } from '../model';
+import type { AgentSnapshot } from '../model';
 import { GoProfileChooser } from './go-profile-chooser';
 import { readableBy } from './scope';
 import { useToast } from '/kit/toasts';
 
 const PERSONAL_FIXED =
   'Your Personal vault is private to your account. To share items with others, use a group.';
-
-const DEFINITIVE_IDENTITY_PROBLEMS: readonly IdentityProblem[] = [
-  'account-missing',
-  'profile-missing',
-  'host-mismatch',
-];
 
 const MISSING_SERVER_EXPLANATION =
   'The account you were creating could not be found on the server. This may happen because of a restart, server reset, or other error.';
@@ -121,37 +123,6 @@ function MissingServerWarning({ action }: { action: ReactNode }): ReactNode {
     </div>
   );
 }
-
-const stepOf = (state: FirstRunStateName): number => {
-  if (state === 'boot') return 0;
-  if (state === 'local') return 0;
-  if (state === 'who') return 0;
-  if (['address', 'no-address', 'checked', 'compare', 'error'].includes(state))
-    return 1;
-  if (
-    state === 'account' ||
-    state === 'existing' ||
-    state === 'identity-pending' ||
-    state === 'operation-pending'
-  )
-    return 2;
-  if (state === 'protect' || state === 'phrase') return 3;
-  if (state === 'waiting') return 4;
-  return 5;
-};
-
-const localStepOf = (state: FirstRunStateName): number => {
-  if (state === 'local') return 0;
-  if (
-    state === 'account' ||
-    state === 'existing' ||
-    state === 'identity-pending' ||
-    state === 'operation-pending'
-  )
-    return 1;
-  if (state === 'protect' || state === 'phrase') return 2;
-  return 3;
-};
 
 /**
  * Terminal first-run states where account setup is complete, all user input is
@@ -272,53 +243,6 @@ function fixtureSeed(
   return next;
 }
 
-function authoritativeSetupFacts(
-  snapshot: AgentSnapshot,
-  checkpoint: FirstRunCheckpoint,
-): Parameters<typeof reconcileFirstRunCheckpoint>[1] {
-  const server = checkpoint.profile
-    ? snapshot.servers.find(
-        (candidate) => candidate.id === checkpoint.profile?.profile,
-      )
-    : undefined;
-  const profile = checkpoint.profile
-    ? !profileInventoryComplete(snapshot, 'profiles')
-      ? 'unknown'
-      : !server
-        ? 'missing'
-        : server.host_id === null
-          ? 'unknown'
-          : server.host_id === checkpoint.profile.hostId
-            ? 'present'
-            : 'missing'
-    : 'unknown';
-  const account = checkpoint.account
-    ? profileInventoryComplete(snapshot, 'accounts')
-      ? snapshot.accounts.some(
-          (candidate) =>
-            candidate.server === checkpoint.profile?.profile &&
-            candidate.alias === checkpoint.account?.alias,
-        )
-        ? 'present'
-        : 'missing'
-      : 'unknown'
-    : 'unknown';
-  const group = checkpoint.group
-    ? profileInventoryComplete(snapshot, 'teams')
-      ? snapshot.stores.some(
-          (candidate) =>
-            candidate.kind === 'team' &&
-            candidate.server === checkpoint.profile?.profile &&
-            candidate.alias === checkpoint.group?.alias &&
-            candidate.team_id_hex === checkpoint.group.teamIdHex,
-        )
-        ? 'present'
-        : 'missing'
-      : 'unknown'
-    : 'unknown';
-  return { profile, account, group };
-}
-
 function initialCheckpoint(
   bridge: Bridge,
   snapshot: AgentSnapshot,
@@ -341,397 +265,15 @@ function initialCheckpoint(
   const namedReviewState = isFirstRunState(queryState);
   if (bridge.firstRunFixture && namedReviewState)
     return fixtureSeed(bridge, path, location.step as FirstRunStateName);
-  const reconcile = (checkpoint: FirstRunCheckpoint): FirstRunCheckpoint =>
-    resolveProvisionedIdentity(
-      snapshot,
-      reconcileFirstRunCheckpoint(
-        checkpoint,
-        authoritativeSetupFacts(snapshot, checkpoint),
-      ),
-    );
-  // URL/navigation state must never offer an acknowledged mutation again.
-  if (saved?.provisionedAccount || saved?.provisioning) return reconcile(saved);
-  if (
-    location.step === 'identity-pending' ||
-    location.step === 'operation-pending'
-  )
-    return saved ? reconcile(saved) : initialFirstRun(path, 'who');
-  if (automaticEntry && saved) return reconcile(saved);
-  // Phrase state is not persisted across reloads; resume at 'protect'.
-  const state: FirstRunStateName =
-    location.step === 'phrase'
-      ? 'protect'
-      : location.step === 'boot' || !isFirstRunState(location.step)
-        ? 'who'
-        : location.step;
-  if (
-    !saved ||
-    (location.path !== undefined && location.path !== saved.path) ||
-    (state === 'who' && saved.state !== 'who')
-  ) {
-    return initialFirstRun(path, state);
-  }
-  return reconcile({ ...saved, path: location.path ?? saved.path, state });
-}
-
-function SetupSidebar({
-  checkpoint,
-  pendingPath,
-  native = false,
-  onCancel,
-  cancelDisabled = false,
-  onAnotherServer,
-  onRecoverAccount,
-  recoverEnabled = false,
-}: {
-  checkpoint: FirstRunCheckpoint;
-  /** The OS draws the window controls over the step list's own drag strip. */
-  native?: boolean;
-  /** Path selected on the 'who' screen before confirmation. */
-  pendingPath?: FirstRunPath | null;
-  onCancel?: () => void;
-  cancelDisabled?: boolean;
-  onAnotherServer?: () => void;
-  onRecoverAccount?: () => void;
-  recoverEnabled?: boolean;
-}): ReactNode {
-  if (checkpoint.managedLocal) {
-    const current = localStepOf(checkpoint.state);
-    const labels = ['Local server', 'Create account', 'Account recovery'];
-    return (
-      <nav className="side setup-side" aria-label="Setup steps">
-        <TrafficStrip native={native} />
-        <div className="setup-steps">
-          {labels.map((label, index) => (
-            <div
-              key={label}
-              className={`setup-step${index === current ? ' on' : ''}${index < current ? ' done' : ''}`}
-              aria-current={index === current ? 'step' : undefined}
-            >
-              <span className="setup-mark" aria-hidden="true">
-                {index < current ? '✓' : index + 1}
-              </span>
-              <span className="t">{label}</span>
-            </div>
-          ))}
-        </div>
-        {onAnotherServer || onRecoverAccount || onCancel ? (
-          <div className="foot">
-            {onAnotherServer ? (
-              <button type="button" className="nav" onClick={onAnotherServer}>
-                <Icon name="server" />
-                <span className="t">Connect to another server</span>
-              </button>
-            ) : null}
-            {onRecoverAccount ? (
-              <button
-                type="button"
-                className="nav"
-                disabled={!recoverEnabled}
-                onClick={onRecoverAccount}
-              >
-                <Icon name="person" />
-                <span className="t">Recover account</span>
-              </button>
-            ) : null}
-            {onCancel ? (
-              <button
-                type="button"
-                className="nav"
-                disabled={cancelDisabled}
-                onClick={onCancel}
-              >
-                <Icon name="x" />
-                <span className="t">
-                  {checkpoint.account ||
-                  checkpoint.provisionedAccount ||
-                  checkpoint.provisioning
-                    ? 'Finish later'
-                    : 'Leave setup'}
-                </span>
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-      </nav>
-    );
-  }
-  const current = stepOf(checkpoint.state);
-  // Display neutral step labels until the user selects a path.
-  const choosing = checkpoint.state === 'who';
-  const path = choosing ? (pendingPath ?? null) : checkpoint.path;
-  const labels = [
-    'Get started',
-    'Select a server',
-    'Create account',
-    'Save recovery codes',
-    ...(path === 'invited' ? ['Join a group'] : []),
-    'Complete',
-  ];
-  return (
-    <nav className="side setup-side" aria-label="Setup steps">
-      <TrafficStrip native={native} />
-      <div className="setup-steps">
-        {labels.map((label, index) => (
-          <div
-            key={label}
-            className={`setup-step${index === current ? ' on' : ''}${index < current ? ' done' : ''}`}
-            aria-current={index === current ? 'step' : undefined}
-          >
-            <span className="setup-mark">
-              {index < current ? '✓' : index + 1}
-            </span>
-            <span className="t">{label}</span>
-          </div>
-        ))}
-      </div>
-      {onCancel ? (
-        <div className="foot">
-          <button
-            type="button"
-            className="nav"
-            disabled={cancelDisabled}
-            onClick={onCancel}
-          >
-            <Icon name="x" />
-            <span className="t">
-              {checkpoint.account ||
-              checkpoint.provisionedAccount ||
-              checkpoint.provisioning
-                ? 'Finish later'
-                : 'Leave setup'}
-            </span>
-          </button>
-        </div>
-      ) : null}
-    </nav>
-  );
-}
-
-export function FirstRunChecklistStatus({
-  checkpoint,
-  active = false,
-  onNavigate,
-}: {
-  checkpoint: FirstRunCheckpoint;
-  active?: boolean;
-  onNavigate: (location: Location) => void;
-}): ReactNode {
-  const completed = completedFirstRunSteps(checkpoint);
-  const total = firstRunStepCount(checkpoint);
-  // Completed setup leaves no checklist row in the rail.
-  if (completed >= total) return null;
-  const name = checkpoint.account ? 'Setup checklist' : 'Continue setup';
-  return (
-    <>
-      <NavRow
-        active={active}
-        glyph={<Icon name="flag" />}
-        name={name}
-        title={name}
-        onSelect={() =>
-          onNavigate({
-            kind: 'first-run',
-            step: checkpoint.state,
-            path: checkpoint.path,
-          })
-        }
-      />
-    </>
-  );
-}
-
-function FirstRunAppSidebar({
-  snapshot,
-  checkpoint,
-  groupName,
-  location,
-  native,
-  onNavigate,
-  onReenter,
-}: {
-  snapshot: AgentSnapshot;
-  native: boolean;
-  checkpoint: FirstRunCheckpoint;
-  groupName: string;
-  location: Location;
-  onNavigate: (location: Location) => void;
-  onReenter: () => void;
-}): ReactNode {
-  // Render setup progress in the sidebar status slot.
-  const status = (
-    <>
-      <FirstRunChecklistStatus
-        checkpoint={checkpoint}
-        active
-        onNavigate={onNavigate}
-      />
-      {checkpoint.path === 'invited' && !checkpoint.added ? (
-        <p className="side-note">
-          {groupName} will appear under Teams once your access is approved. FOKS
-          checks for group access at launch. You can also click Check now.
-        </p>
-      ) : null}
-    </>
-  );
-  return (
-    <Sidebar
-      snapshot={snapshot}
-      location={location}
-      attention={checkpoint.path === 'invited' && !checkpoint.added ? 1 : 0}
-      nativeChrome={native}
-      onNavigate={onNavigate}
-      status={status}
-      onReenter={onReenter}
-    />
-  );
-}
-
-function AddedDetails({
-  snapshot,
-  storeId,
-}: {
-  snapshot: AgentSnapshot;
-  storeId?: string;
-}): ReactNode {
-  const store = snapshot.stores.find((candidate) => candidate.id === storeId);
-  const item = snapshot.items.find(
-    (candidate) =>
-      candidate.store === storeId && candidate.path.includes('staging-token'),
-  );
-  if (!item)
-    return (
-      <aside className="details">
-        <div className="dh">
-          <span className="t">
-            <h2>Details</h2>
-            <small>Select an item to view details</small>
-          </span>
-        </div>
-      </aside>
-    );
-  const name = item.path.split('/').at(-1);
-  const kind = kindOf(item) as FilterKind;
-  return (
-    <aside className="details">
-      <div className="dh">
-        <KindIcon kind={kind} />
-        <span className="t">
-          <h2>{name}</h2>
-          <small>
-            {kind.charAt(0).toUpperCase() + kind.slice(1)} in{' '}
-            {store?.name ?? 'this group'}
-          </small>
-        </span>
-      </div>
-      <div className="scroll">
-        <SectionLabel>Value</SectionLabel>
-        <Inset variant="preview">
-          <InsetRow
-            label="Value"
-            valueClass="mask"
-            action={
-              <Button size="sm" disabled>
-                Show
-              </Button>
-            }
-          >
-            Locked
-          </InsetRow>
-        </Inset>
-        <p className="pfn">
-          Access to this item depends on your role in the group.
-        </p>
-        <SectionLabel>Info</SectionLabel>
-        <div className="meta">
-          <b>Location</b>
-          <code>{item.path}</code>
-          <b>Kind</b>
-          <span>{kind}</span>
-          <b>Version</b>
-          <span>{item.version}</span>
-          <b>Size</b>
-          <span>
-            {item.size === null
-              ? 'Size unavailable'
-              : plural(item.size, 'byte')}
-          </span>
-          <b>Read permission</b>
-          <Chip>{roleText(item.read)}</Chip>
-          <b>Write permission</b>
-          <Chip>{roleText(item.write)}</Chip>
-        </div>
-        <SectionLabel>Sharing</SectionLabel>
-        <p>
-          Members of {store?.name ?? 'this group'} with the required role or
-          higher can view this item based on the current member list.
-        </p>
-      </div>
-    </aside>
-  );
-}
-
-function roleText(role: RoleWire): string {
-  const parsed = parseRole(role);
-  if (parsed) return formatRole(parsed);
-  return typeof role === 'string' ? role : role.role;
-}
-
-function Foot({
-  children,
-  back,
-  note,
-}: {
-  children?: ReactNode;
-  back?: () => void;
-  note?: ReactNode;
-}): ReactNode {
-  return (
-    <div className="pfoot">
-      {back ? (
-        <Button className="lnk" onClick={back}>
-          Back
-        </Button>
-      ) : null}
-      {note ? <span className="note">{note}</span> : null}
-      <span className="spacer" />
-      {children}
-    </div>
-  );
-}
-
-function Pane({
-  title,
-  subtitle,
-  scope,
-  header = true,
-  wide = false,
-  children,
-  foot,
-}: {
-  title: string;
-  /** Only rendered when `header` is true. */
-  subtitle?: string;
-  scope?: string;
-  header?: boolean;
-  wide?: boolean;
-  children: ReactNode;
-  foot?: ReactNode;
-}): ReactNode {
-  return (
-    <>
-      {header ? (
-        <PageHeader
-          title={title}
-          subtitle={subtitle ?? ''}
-          tail={scope ? <span className="scope">{scope}</span> : null}
-        />
-      ) : null}
-      <div className="body pb">
-        <div className={`pane${wide ? ' wide' : ''}`}>{children}</div>
-      </div>
-      {foot}
-    </>
+  const state =
+    location.step === 'boot' || !isFirstRunState(location.step)
+      ? 'who'
+      : location.step;
+  return resolveSetupEntry(
+    snapshot,
+    saved,
+    { state, path: location.path },
+    automaticEntry,
   );
 }
 
@@ -824,7 +366,30 @@ export interface FirstRunExperienceProps {
   managedProfile?: string;
 }
 
-export function FirstRunExperience({
+export function FirstRunExperience(props: FirstRunExperienceProps): ReactNode {
+  const [session, setSession] = useState(0);
+  const [sessionEntry, setSessionEntry] = useState<FirstRunCheckpoint | null>(
+    null,
+  );
+  return (
+    <FirstRunSession
+      key={session}
+      sessionEntry={sessionEntry}
+      {...props}
+      onReplaceSession={(next) => {
+        setSessionEntry(next);
+        props.onNavigate({
+          kind: 'first-run',
+          step: next.state,
+          path: next.path,
+        });
+        setSession((value) => value + 1);
+      }}
+    />
+  );
+}
+
+function FirstRunSession({
   snapshot,
   bridge,
   location,
@@ -836,28 +401,26 @@ export function FirstRunExperience({
   onAgentReadinessFailure,
   automaticEntry = false,
   managedProfile,
-}: FirstRunExperienceProps): ReactNode {
+  onReplaceSession,
+  sessionEntry,
+}: FirstRunExperienceProps & {
+  onReplaceSession: (next: FirstRunCheckpoint) => void;
+  sessionEntry: FirstRunCheckpoint | null;
+}): ReactNode {
   const toasts = useToast();
-  const [checkpoint, setCheckpoint] = useState(() =>
-    initialCheckpoint(bridge, snapshot, location, automaticEntry),
-  );
-  const checkpointRef = useRef(checkpoint);
+  const { checkpoint, checkpointRef, mounted, commit, send } =
+    useFirstRunController({
+      initial: () =>
+        sessionEntry ??
+        initialCheckpoint(bridge, snapshot, location, automaticEntry),
+      snapshot,
+      bridge,
+      location,
+      onNavigate,
+      agentReady,
+    });
   const setupEnvironment = useRef({ snapshot, onRefreshSnapshot });
   setupEnvironment.current = { snapshot, onRefreshSnapshot };
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
-  const [existingBack, setExistingBack] = useState<FirstRunStateName>(() =>
-    checkpoint.returning
-      ? checkpoint.managedLocal
-        ? 'local'
-        : 'checked'
-      : 'account',
-  );
   const facts = bridge.firstRunFixture?.[checkpoint.path];
   const [address, setAddress] = useState(
     () => checkpoint.serverAddress ?? facts?.server ?? '',
@@ -874,7 +437,8 @@ export function FirstRunExperience({
   );
   const [email, setEmail] = useState('');
   const [invite, setInvite] = useState('');
-  const [showSso, setShowSso] = useState(() => Boolean(checkpoint.sso));
+  const showSso =
+    checkpoint.accountMethod === 'organization' || Boolean(checkpoint.sso);
   const [ssoPrimarySlot, setSsoPrimarySlot] = useState<HTMLElement | null>(
     null,
   );
@@ -888,6 +452,7 @@ export function FirstRunExperience({
   const [goCandidate, setGoCandidate] = useState<GoProfileCandidate | null>(
     null,
   );
+  const goCandidateExplicit = useRef(false);
   const [goChooserDismissed, setGoChooserDismissed] = useState(false);
   const [goScanError, setGoScanError] = useState<string | null>(null);
   const [goScanAttempt, setGoScanAttempt] = useState(0);
@@ -952,9 +517,6 @@ export function FirstRunExperience({
   >(null);
   const [agentRetrying, setAgentRetrying] = useState(false);
   const [agentRetryError, setAgentRetryError] = useState<string | null>(null);
-  const [accountBack, setAccountBack] = useState<FirstRunStateName | null>(
-    null,
-  );
   const [connectionErrors, setConnectionErrors] = useState<
     Record<'copy' | 'recover' | 'pair', string | null>
   >({ copy: null, recover: null, pair: null });
@@ -973,21 +535,10 @@ export function FirstRunExperience({
     null,
   );
   const [managedStatusAttempt, setManagedStatusAttempt] = useState(0);
-  const automaticEntryPending = useRef(automaticEntry);
   const backupPreparation = useRef<{
     key: string;
     promise: Promise<{ backupAlias: string; phrase: string }>;
   } | null>(null);
-
-  useEffect(() => {
-    if (!automaticEntryPending.current) return;
-    automaticEntryPending.current = false;
-    onNavigate({
-      kind: 'first-run',
-      step: checkpoint.state,
-      path: checkpoint.path,
-    });
-  }, [checkpoint.path, checkpoint.state, onNavigate]);
 
   useEffect(() => {
     if (checkpoint.account?.deviceName || facts?.deviceName) return;
@@ -1224,63 +775,6 @@ export function FirstRunExperience({
     };
   }, [bridge, managedProfile, managedStatusAttempt, state, agentReady]);
 
-  const commit = useCallback(
-    (next: FirstRunCheckpoint): void => {
-      checkpointRef.current = next;
-      if (!mounted.current) return;
-      setCheckpoint(next);
-      try {
-        window.localStorage.setItem(
-          FIRST_RUN_CHECKPOINT_KEY,
-          encodeFirstRunCheckpoint(next),
-        );
-      } catch {
-        /* unavailable storage */
-      }
-      onNavigate({ kind: 'first-run', step: next.state, path: next.path });
-    },
-    [onNavigate],
-  );
-  const lastReconciledSnapshot = useRef(snapshot);
-  useEffect(() => {
-    const update = () => {
-      const current = checkpointRef.current;
-      if (!current.provisioning) return;
-      const next = decodeFirstRunCheckpoint(
-        window.localStorage.getItem(FIRST_RUN_CHECKPOINT_KEY),
-      );
-      if (
-        next &&
-        next.profile?.hostId === current.profile?.hostId &&
-        next.profile?.profile === current.profile?.profile &&
-        (next.provisioning?.id === current.provisioning.id ||
-          next.provisionedAccount?.alias === current.provisioning.alias ||
-          next.state === current.provisioning.back)
-      )
-        commit(next);
-    };
-    window.addEventListener(FIRST_RUN_PROGRESS_EVENT, update);
-    return () => window.removeEventListener(FIRST_RUN_PROGRESS_EVENT, update);
-  }, [commit]);
-  useEffect(() => {
-    if (!agentReady || bridge.firstRunFixture) return;
-    if (lastReconciledSnapshot.current === snapshot) return;
-    lastReconciledSnapshot.current = snapshot;
-    const reconciled = resolveProvisionedIdentity(
-      snapshot,
-      reconcileFirstRunCheckpoint(
-        checkpoint,
-        authoritativeSetupFacts(snapshot, checkpoint),
-      ),
-    );
-    if (reconciled !== checkpoint) commit(reconciled);
-  }, [agentReady, bridge.firstRunFixture, checkpoint, commit, snapshot]);
-  const send = useCallback(
-    (event: Parameters<typeof transitionFirstRun>[1]): void => {
-      commit(transitionFirstRun(checkpointRef.current, event));
-    },
-    [commit],
-  );
   const go = useCallback(
     (next: FirstRunStateName): void => {
       setMessage(null);
@@ -1302,17 +796,20 @@ export function FirstRunExperience({
         }
         setPhraseWritten(false);
       }
-      send({ type: 'go', state: next });
+      const current = checkpointRef.current;
+      if (next === setupBackTarget(current)) send({ type: 'back' });
+      else if (next === 'account' || next === 'existing')
+        send({
+          type: 'select-account-method',
+          method: next === 'existing' ? 'recover' : 'create',
+        });
+      else send({ type: 'navigate', state: next });
     },
-    [checkpoint.backupCommitted, send, state],
+    [checkpoint.backupCommitted, checkpointRef, send, state],
   );
-  const openExisting = useCallback(
-    (from: FirstRunStateName): void => {
-      setExistingBack(from);
-      go('existing');
-    },
-    [go],
-  );
+  const openExisting = useCallback((): void => {
+    go('existing');
+  }, [go]);
   const fail = useCallback(
     (
       operation: FirstRunOperation,
@@ -1363,7 +860,7 @@ export function FirstRunExperience({
   }, [agentReady]);
 
   const refreshAccountIdentity = async (
-    saved = checkpointRef.current,
+    saved: FirstRunCheckpoint = checkpointRef.current,
     attempt = 0,
   ): Promise<void> => {
     if (!saved.provisionedAccount || !agentReady) return;
@@ -1487,6 +984,21 @@ export function FirstRunExperience({
     details: { resume?: boolean; phrase?: string } = {},
   ): Promise<void> => {
     const current = checkpointRef.current;
+    // A new wizard must explicitly reconcile a retained attempt on this target.
+    if (!current.provisioning) {
+      const retained = retainedSetups().find((entry) =>
+        sameSetupTarget(entry.checkpoint, {
+          ...current,
+          provisionedAccount: { alias, deviceName: deviceName.trim() },
+        }),
+      );
+      if (retained) {
+        persistFirstRun(retained.checkpoint);
+        mounted.current = false;
+        onReplaceSession(retained.checkpoint);
+        return;
+      }
+    }
     const saved: FirstRunCheckpoint = current.provisioning
       ? current
       : {
@@ -1547,7 +1059,12 @@ export function FirstRunExperience({
       );
       commit(saved);
       const result = await task;
-      if (!mounted.current) return;
+      if (
+        !mounted.current ||
+        (checkpointRef.current.provisioning &&
+          checkpointRef.current.provisioning.id !== saved.provisioning?.id)
+      )
+        return;
       commit(result.checkpoint);
       if (result.error) {
         const typed = normalizeCommandError(result.error);
@@ -1575,7 +1092,7 @@ export function FirstRunExperience({
   };
 
   const checkOperationStatus = async (
-    saved = checkpointRef.current,
+    saved: FirstRunCheckpoint = checkpointRef.current,
   ): Promise<void> => {
     const intent = saved.provisioning;
     if (!intent || !saved.profile || !agentReady || identityLoading) return;
@@ -1778,7 +1295,7 @@ export function FirstRunExperience({
     if (autoProbedKey.current === probeKey) return;
     autoProbedKey.current = probeKey;
     if (mounted.current) automaticProbe.current();
-  }, [agentReady, busy, identityLoading, probeKey]);
+  }, [agentReady, busy, identityLoading, mounted, probeKey]);
 
   const acknowledgeExistingAccount = async (
     alias: string,
@@ -1811,6 +1328,12 @@ export function FirstRunExperience({
   };
 
   const discardProvisioning = (): void => {
+    try {
+      retainSetup(checkpointRef.current);
+    } catch (error) {
+      setRestartError(normalizeCommandError(error).message);
+      return;
+    }
     commit(
       transitionFirstRun(checkpointRef.current, {
         type: 'discard-provisioning',
@@ -1824,6 +1347,12 @@ export function FirstRunExperience({
   };
 
   const discardProvisionedAccount = (): void => {
+    try {
+      retainSetup(checkpointRef.current);
+    } catch (error) {
+      setRestartError(normalizeCommandError(error).message);
+      return;
+    }
     commit(
       transitionFirstRun(checkpointRef.current, {
         type: 'discard-provisioned-account',
@@ -1933,6 +1462,39 @@ export function FirstRunExperience({
     mutationBusy &&
     busyOperation !== 'server-check' &&
     !checkpoint.provisioning;
+
+  const recoveryActions = setupActions(checkpoint, {
+    mutating: mutationBusy,
+    operationRunning,
+    inFlight: Boolean(
+      checkpoint.provisioning &&
+      provisioningInFlight(bridge, checkpoint.provisioning.id),
+    ),
+  });
+  const [restartError, setRestartError] = useState<string | null>(null);
+  const replaceSession = (next: FirstRunCheckpoint): void => {
+    persistFirstRun(next);
+    clearSecrets();
+    mounted.current = false;
+    identityGeneration.current++;
+    onReplaceSession(next);
+  };
+  const restartSetup = (): void => {
+    if (!recoveryActions.canRestart) return;
+    try {
+      retainSetup(checkpointRef.current);
+      replaceSession(initialFirstRun(checkpoint.path));
+    } catch (error) {
+      setRestartError(normalizeCommandError(error).message);
+    }
+  };
+  let savedAttempts: ReturnType<typeof retainedSetups> = [];
+  let savedAttemptsError: string | null = null;
+  try {
+    savedAttempts = retainedSetups();
+  } catch {
+    savedAttemptsError = 'Saved setup attempts could not be read.';
+  }
 
   /**
    * Setup is left through the sidebar, which clears what was typed on the way
@@ -2097,6 +1659,7 @@ export function FirstRunExperience({
         start: input.selectionStart,
         end: input.selectionEnd,
       };
+    if (!goCandidateExplicit.current) setGoCandidate(null);
     addressRevision.current++;
     setAddress(value);
     setAddressInvalid(false);
@@ -2109,7 +1672,7 @@ export function FirstRunExperience({
     if (!agentReady) return;
     if (!address.trim()) {
       setAddressInvalid(true);
-      if (state === 'error') send({ type: 'go', state: 'address' });
+      if (state === 'error') send({ type: 'navigate', state: 'address' });
       return;
     }
     const revision = addressRevision.current;
@@ -2145,7 +1708,7 @@ export function FirstRunExperience({
     } catch (error) {
       if (revision !== addressRevision.current) return;
       fail('server-check', error);
-      send({ type: 'go', state: 'error' });
+      send({ type: 'navigate', state: 'error' });
     } finally {
       setBusy(false);
     }
@@ -2336,7 +1899,7 @@ export function FirstRunExperience({
     setBusy(true);
     setMessage(null);
     try {
-      let next = checkpoint;
+      let next: FirstRunCheckpoint = checkpoint;
       if (passphrase || confirmation) {
         await bridge.setFirstRunPassphrase({
           profile: profile.profile,
@@ -2350,7 +1913,7 @@ export function FirstRunExperience({
       setConfirmation('');
       commit(
         transitionFirstRun(next, {
-          type: 'go',
+          type: 'navigate',
           state: checkpoint.path === 'invited' ? 'waiting' : 'checklist-own',
         }),
       );
@@ -2372,7 +1935,7 @@ export function FirstRunExperience({
     setBusy(true);
     setMessage(null);
     try {
-      let next = checkpoint;
+      let next: FirstRunCheckpoint = checkpoint;
       if (passphrase || confirmation) {
         await bridge.setFirstRunPassphrase({
           profile: profile.profile,
@@ -2403,7 +1966,7 @@ export function FirstRunExperience({
 
   const collapseLocalBackup = (): void => {
     setMessage(null);
-    send({ type: 'go', state: 'protect' });
+    send({ type: 'navigate', state: 'protect' });
   };
 
   const commitBackup = async (): Promise<void> => {
@@ -2411,7 +1974,7 @@ export function FirstRunExperience({
     if (!profile || !backupPhrase || !phraseWritten) return;
     if (checkpoint.backupCommitted) {
       setPhraseWritten(false);
-      send({ type: 'go', state: 'protect' });
+      send({ type: 'navigate', state: 'protect' });
       return;
     }
     setBusy(true);
@@ -2596,7 +2159,6 @@ export function FirstRunExperience({
       );
       return;
     }
-    if (returning) setExistingBack('local');
     send({
       type: 'managed-profile-selected',
       address: managedStatus.configuredProbe,
@@ -2791,8 +2353,7 @@ export function FirstRunExperience({
     </div>
   );
   /* Where the account page's Back goes; signing in shares it. */
-  const accountBackTarget =
-    accountBack ?? (checkpoint.managedLocal ? 'local' : 'checked');
+  const accountBackTarget = checkpoint.managedLocal ? 'local' : 'checked';
   if (state === 'operation-pending') {
     const intent = checkpoint.provisioning;
     const settled =
@@ -2802,7 +2363,10 @@ export function FirstRunExperience({
       !(intent && provisioningInFlight(bridge, intent.id));
     const adoptable = existingAccountAdoptable && settled;
     const abortable =
-      operationChecked && operationStatus && !operationResumable && settled;
+      operationChecked &&
+      operationStatus &&
+      settled &&
+      recoveryActions.canChooseAnotherAccount;
     const runningLabel =
       intent?.kind === 'recovery'
         ? 'Recovering…'
@@ -2948,13 +2512,12 @@ export function FirstRunExperience({
         </div>
         {identityProblem &&
         identityProblem !== 'profile-missing' &&
-        DEFINITIVE_IDENTITY_PROBLEMS.includes(identityProblem) &&
         !identityLoading ? (
           <div className="alt-path">
             <div className="t">
               <b>Set up a different account</b>
               <span>
-                This account couldn’t be found on the server.
+                Your existing accounts and server settings will be kept.
               </span>
             </div>
             <Button onClick={discardProvisionedAccount}>
@@ -3077,7 +2640,10 @@ export function FirstRunExperience({
         <GoProfileChooser
           candidates={goCandidates}
           selected={goCandidate?.candidateId ?? null}
-          onSelect={setGoCandidate}
+          onSelect={(candidate) => {
+            goCandidateExplicit.current = true;
+            setGoCandidate(candidate);
+          }}
         />
         <div className="actions">
           <Button
@@ -3098,6 +2664,7 @@ export function FirstRunExperience({
           </Button>
           <Button
             onClick={() => {
+              goCandidateExplicit.current = false;
               setGoCandidate(null);
               setGoChooserDismissed(true);
             }}
@@ -3267,91 +2834,22 @@ export function FirstRunExperience({
         ) : null}
       </Pane>
     );
-  else if (state === 'checked' || state === 'compare')
+  else if ((state === 'checked' || state === 'compare') && profile)
     content = (
-      <Pane
-        title={
-          checkpoint.path === 'invited' ? 'Group server' : 'Server details'
+      <ServerVerificationStep
+        checkpoint={checkpoint}
+        state={state}
+        profile={profile}
+        address={address}
+        busy={busy}
+        inputRef={serverAddressInput}
+        onBack={() => go('address')}
+        onContinue={() =>
+          checkpoint.returning ? openExisting() : go('account')
         }
-        header={false}
-        scope="Server verified and pinned. No user data sent."
-        foot={
-          <Foot back={() => go('address')}>
-            <Button
-              variant="primary"
-              disabled={!profile}
-              onClick={() =>
-                checkpoint.returning ? openExisting('checked') : go('account')
-              }
-            >
-              Continue
-            </Button>
-          </Foot>
-        }
-      >
-        <h1>Select a server</h1>
-        <p className="lead">
-          FOKS synchronizes your account, groups, and encrypted vaults through a
-          server.
-        </p>
-        <Inset className="checked-address">
-          <InsetRow
-            label="Address"
-            action={
-              <Button disabled={busy} onClick={() => void checkServer()}>
-                Check again
-              </Button>
-            }
-          >
-            <input
-              value={address}
-              placeholder="e.g. foks.app:4430"
-              spellCheck={false}
-              ref={serverAddressInput}
-              aria-label="Server address"
-              onChange={(event) => editServerAddress(event.target.value)}
-            />
-          </InsetRow>
-        </Inset>
-        <div className="pcard ok">
-          <h3>
-            <Icon name="server" /> {profile?.canonicalName} verified{' '}
-          </h3>
-          <p>
-            The server certificate was verified on first connection, and its
-            host ID is now pinned for future connections.
-          </p>
-          <Toggle label="Details" defaultOpen={state === 'compare'}>
-            <div className="dbody">
-              <div className="facts">
-                <div>
-                  <span className="k">Lookup name</span>
-                  <code>{profile?.lookupName}</code>
-                </div>
-                <div>
-                  <span className="k">Confirmed name</span>
-                  <code>{profile?.canonicalName}</code>
-                </div>
-                <div>
-                  <span className="k">Server version</span>
-                  <span>{profile?.chain}</span>
-                </div>
-                <div>
-                  <span className="k">Verified</span>
-                  <span>
-                    {profile
-                      ? new Date(profile.epoch * 1000).toLocaleDateString()
-                      : '—'}
-                  </span>
-                </div>
-              </div>
-              <Toggle label="Inspect response">
-                <pre>{JSON.stringify(profile, null, 1)}</pre>
-              </Toggle>
-            </div>
-          </Toggle>
-        </div>
-      </Pane>
+        onCheck={() => void checkServer()}
+        onAddressChange={editServerAddress}
+      />
     );
   else if (state === 'account' && checkpoint.managedLocal)
     content = (
@@ -3359,7 +2857,7 @@ export function FirstRunExperience({
         title="Your account"
         header={false}
         foot={
-          <Foot back={() => go(accountBack ?? 'local')}>
+          <Foot back={() => go('local')}>
             <Button
               variant="primary"
               disabled={
@@ -3455,7 +2953,7 @@ export function FirstRunExperience({
         ) : null}
         <button
           className="lnk local-recover-link"
-          onClick={() => openExisting('account')}
+          onClick={() => openExisting()}
         >
           Recover an existing account…
         </button>
@@ -3475,22 +2973,13 @@ export function FirstRunExperience({
     const ssoSelected = !signingIn && ssoAvailable && showSso;
     // Both ways of creating an account need the same two fields.
     const accountFields = (
-      <Inset className="account-form">
-        <InsetRow label="Username">
-          <input
-            value={username}
-            placeholder="yourname"
-            onChange={(event) => editUsername(event.target.value)}
-          />
-        </InsetRow>
-        <InsetRow label="This device’s name">
-          <input
-            value={deviceName}
-            placeholder="Your device"
-            onChange={(event) => setDeviceName(event.target.value)}
-          />
-        </InsetRow>
-      </Inset>
+      <AccountFields
+        username={checkpoint.account?.username ?? username}
+        deviceName={checkpoint.account?.deviceName ?? deviceName}
+        disabled={Boolean(checkpoint.account)}
+        onUsername={editUsername}
+        onDeviceName={setDeviceName}
+      />
     );
     content = (
       <Pane
@@ -3509,7 +2998,7 @@ export function FirstRunExperience({
                 signingIn
                   ? checkpoint.account
                     ? 'protect'
-                    : existingBack
+                    : accountBackTarget
                   : accountBackTarget,
               )
             }
@@ -3571,9 +3060,6 @@ export function FirstRunExperience({
                 selected={!signingIn && !ssoSelected}
                 disabled={Boolean(checkpoint.sso)}
                 onSelect={() => {
-                  setShowSso(false);
-                  if (!signingIn) return;
-                  setAccountBack(existingBack);
                   go('account');
                 }}
               />
@@ -3610,10 +3096,11 @@ export function FirstRunExperience({
                   detail="Create the account through your organization’s identity provider."
                   selected={ssoSelected}
                   onSelect={() => {
-                    setShowSso(true);
-                    if (!signingIn) return;
-                    setAccountBack(existingBack);
-                    go('account');
+                    clearSecrets();
+                    send({
+                      type: 'select-account-method',
+                      method: 'organization',
+                    });
                   }}
                 />
                 {ssoSelected ? (
@@ -3649,6 +3136,24 @@ export function FirstRunExperience({
                       executeSignup={executeSsoSignup}
                       onProgress={(progress, hardware) => {
                         if (
+                          [
+                            'cancelled',
+                            'expired',
+                            'denied',
+                            'rejected',
+                          ].includes(progress.state) &&
+                          !checkpointRef.current.provisioning
+                        ) {
+                          const next = {
+                            ...checkpointRef.current,
+                            sso: undefined,
+                            accountMethod: 'create' as const,
+                          };
+                          updateRetainedSetup(checkpointRef.current, next);
+                          commit(next);
+                          return;
+                        }
+                        if (
                           progress.operationId &&
                           !checkpointRef.current.provisioning &&
                           !checkpointRef.current.provisionedAccount
@@ -3678,7 +3183,7 @@ export function FirstRunExperience({
                 selected={signingIn}
                 onSelect={() => {
                   if (signingIn) return;
-                  openExisting(accountBackTarget);
+                  openExisting();
                 }}
               />
               {signingIn ? (
@@ -3787,14 +3292,15 @@ export function FirstRunExperience({
         scope="Device authorization required"
         wide
         foot={
-          <Foot back={() => go(checkpoint.account ? 'protect' : existingBack)}>
+          <Foot
+            back={() => go(checkpoint.account ? 'protect' : accountBackTarget)}
+          >
             {checkpoint.account ? (
               <Button onClick={() => go('protect')}>Resume protection</Button>
             ) : (
               <>
                 <Button
                   onClick={() => {
-                    setAccountBack('existing');
                     go('account');
                   }}
                 >
@@ -3815,308 +3321,42 @@ export function FirstRunExperience({
         {existingCards}
       </Pane>
     );
-  else if (
-    (state === 'protect' || state === 'phrase') &&
-    checkpoint.managedLocal
-  )
+  else if (state === 'protect' || state === 'phrase')
     content = (
-      <Pane
-        title="Recovery"
-        header={false}
-        foot={
-          <Foot
-            back={() => go(checkpoint.returning ? 'existing' : 'account')}
-            note={
-              <button
-                className="lnk"
-                onClick={() => void finishLocalProtection(true)}
-              >
-                Do this later
-              </button>
-            }
-          >
-            <Button
-              variant="primary"
-              disabled={
-                busy ||
-                (state === 'phrase' && (!backupPhrase || !phraseWritten))
-              }
-              onClick={() => void finishLocalProtection()}
-            >
-              Start using FOKS
-            </Button>
-          </Foot>
-        }
-      >
-        <h1>Set up account recovery</h1>
-        <p className="lead">
-          Set up a backup phrase now so you can recover your account if this
-          device is lost.
-        </p>
-        <div className="local-recovery-card">
-          <div className="local-recovery-head">
-            <h2>Backup phrase</h2>
-            <Chip>Recommended</Chip>
-          </div>
-          <p>
-            Write down these 17 words and keep them somewhere other than this
-            device. Anyone with them can recover your account.
-          </p>
-          {state === 'phrase' ? (
-            <>
-              {backupPhrase ? (
-                <div className="words">
-                  {backupPhrase.split(/\s+/).map((word, index) => (
-                    <div className="word" key={`${index}-${word}`}>
-                      <i>{index + 1}</i>
-                      {word}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p>Preparing your phrase…</p>
-              )}
-              <label className="local-confirm">
-                <input
-                  type="checkbox"
-                  checked={phraseWritten}
-                  onChange={(event) => setPhraseWritten(event.target.checked)}
-                />
-                <span>I have written down all 17 words.</span>
-              </label>
-              <button
-                className="lnk local-quiet-link"
-                onClick={collapseLocalBackup}
-              >
-                Hide recovery phrase
-              </button>
-            </>
-          ) : (
-            <Button
-              variant="primary"
-              disabled={checkpoint.backupCommitted || busy}
-              onClick={() => go('phrase')}
-            >
-              {checkpoint.backupCommitted
-                ? 'Recovery phrase saved'
-                : 'Show recovery phrase'}
-            </Button>
-          )}
-        </div>
-        <div className="local-other-protection">
-          <div className="local-quiet-card">
-            <b>Passphrase</b>
-            <span>Add one later from Settings.</span>
-          </div>
-        </div>
-        {message ? <p className="crit">{message}</p> : null}
-      </Pane>
+      <RecoveryStep
+        state={state}
+        checkpoint={checkpoint}
+        busy={busy}
+        backupPhrase={backupPhrase}
+        phraseWritten={phraseWritten}
+        setPhraseWritten={setPhraseWritten}
+        go={go}
+        finishLocalProtection={finishLocalProtection}
+        collapseLocalBackup={collapseLocalBackup}
+        message={message}
+        passphrase={passphrase}
+        confirmation={confirmation}
+        setPassphrase={setPassphrase}
+        setConfirmation={setConfirmation}
+        continueProtection={continueProtection}
+        mutationBusy={mutationBusy}
+        commitBackup={commitBackup}
+      />
     );
   else if (state === 'local-done')
     content = (
-      <Pane
-        title="Ready"
-        subtitle="Setup complete"
-        header={false}
-        foot={
-          <Foot>
-            {!personalAvailable ? (
-              <>
-                {accountStoreRecord ? (
-                  <Button
-                    onClick={() =>
-                      onNavigate({
-                        kind: 'settings',
-                        section: 'servers',
-                        profile: profile?.profile,
-                      })
-                    }
-                  >
-                    Review server settings
-                  </Button>
-                ) : null}
-                <Button
-                  variant="primary"
-                  disabled={personalRefreshing}
-                  onClick={retryPersonal}
-                >
-                  {personalRefreshing
-                    ? 'Loading Personal vault…'
-                    : 'Retry loading Personal vault'}
-                </Button>
-              </>
-            ) : (
-              <Button
-                variant="primary"
-                disabled={!accountStore}
-                onClick={() => {
-                  if (accountStore)
-                    onNavigate({ kind: 'store', ref: accountStore });
-                }}
-              >
-                Open Personal
-              </Button>
-            )}
-          </Foot>
-        }
-      >
-        <div className="local-success">
-          <span className="local-success-mark" aria-hidden="true">
-            ✓
-          </span>
-          <h1>
-            {personalAvailable
-              ? 'Your Personal vault is ready'
-              : 'Setup is complete'}
-          </h1>
-          <p className="lead">
-            {personalAvailable
-              ? 'Your account is connected to the local server on this device.'
-              : accountStoreRecord
-                ? `Your Personal vault is unavailable (${storeDescription(snapshot, accountStoreRecord).toLowerCase()}). Your setup progress is saved. Check server settings to restore access.`
-                : 'FOKS could not load your Personal vault. Your setup progress is saved. Retry loading the vault to continue.'}
-          </p>
-          {personalRefreshError ? (
-            <p className="crit" role="alert">
-              {personalRefreshError}
-            </p>
-          ) : null}
-          <div className="local-vault-preview">
-            <div className="local-vault-head">
-              <Icon name="vault" />
-              <b>Personal</b>
-              <code>{profile?.canonicalName}</code>
-            </div>
-            <div className="local-vault-empty">
-              {!personalAvailable
-                ? 'Personal vault unavailable'
-                : accountItemCount === 0
-                  ? 'No items yet'
-                  : plural(accountItemCount, 'item')}
-            </div>
-          </div>
-        </div>
-      </Pane>
-    );
-  else if (state === 'protect' || state === 'phrase')
-    content = (
-      <Pane
-        title="Save recovery phrase"
-        header={false}
-        scope="Configure account recovery"
-        wide
-        foot={
-          <Foot back={() => go('account')}>
-            <Button
-              variant="primary"
-              disabled={busy || passphrase !== confirmation}
-              onClick={() => void continueProtection()}
-            >
-              Continue
-            </Button>
-          </Foot>
-        }
-      >
-        <h1>Save recovery phrase</h1>
-        <p className="lead">
-          The keys controlling this account are only saved on this device. Add
-          at least one recovery method now. You can manage recovery methods
-          later in Settings.
-        </p>
-        <div className="two">
-          <div className="pcard">
-            <h3>Backup phrase</h3>
-            <p>
-              Write down these 17 words to recover your account if every device
-              is lost.
-            </p>
-            <Button
-              disabled={busy || (checkpoint.backupCommitted && !backupPhrase)}
-              onClick={() => go('phrase')}
-            >
-              Show my phrase
-            </Button>
-          </div>
-          <div className="pcard">
-            <h3>Passphrase</h3>
-            <p>
-              Protects the keys stored on this device with a password. Optional.
-            </p>
-            <Inset>
-              <InsetRow label="Passphrase">
-                <input
-                  type="password"
-                  aria-label="Passphrase"
-                  placeholder="••••••••••••"
-                  value={passphrase}
-                  onChange={(event) => setPassphrase(event.target.value)}
-                />
-              </InsetRow>
-              <InsetRow label="Confirm">
-                <input
-                  type="password"
-                  aria-label="Confirm passphrase"
-                  placeholder="••••••••••••"
-                  value={confirmation}
-                  onChange={(event) => setConfirmation(event.target.value)}
-                />
-              </InsetRow>
-            </Inset>
-          </div>
-        </div>
-        {message ? <p className="crit">{message}</p> : null}
-        {state === 'phrase' ? (
-          <SheetDialog
-            width="wide"
-            dismissible={!mutationBusy}
-            onClose={() => go('protect')}
-            glyph={<Icon name="key" />}
-            title="Save your recovery phrase"
-            footer={
-              <>
-                <Button disabled={mutationBusy} onClick={() => go('protect')}>
-                  Not now
-                </Button>
-                <Button
-                  variant="primary"
-                  disabled={!backupPhrase || !phraseWritten || busy}
-                  onClick={() => void commitBackup()}
-                >
-                  Done
-                </Button>
-              </>
-            }
-          >
-            <>
-              <p>
-                Anyone with these words can access your account. Store them
-                somewhere other than this device.
-              </p>
-              {backupPhrase ? (
-                <div className="words">
-                  {backupPhrase.split(/\s+/).map((word, index) => (
-                    <div className="word" key={`${index}-${word}`}>
-                      <i>{index + 1}</i>
-                      {word}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p>Preparing your phrase…</p>
-              )}
-              <button
-                type="button"
-                aria-label="I have written this down"
-                className={`check${phraseWritten ? ' on' : ''}`}
-                onClick={() => setPhraseWritten((value) => !value)}
-              >
-                <span className="bx">{phraseWritten ? '✓' : ''}</span>I have
-                written this down
-              </button>
-            </>
-          </SheetDialog>
-        ) : null}
-      </Pane>
+      <LocalCompleteStep
+        personalAvailable={personalAvailable}
+        accountStoreRecord={accountStoreRecord}
+        accountStore={accountStore}
+        personalRefreshing={personalRefreshing}
+        retryPersonal={retryPersonal}
+        onNavigate={onNavigate}
+        profile={profile}
+        snapshot={snapshot}
+        accountItemCount={accountItemCount}
+        personalRefreshError={personalRefreshError}
+      />
     );
   else if (state === 'waiting' && checkpoint.selectedGroup)
     content = (
@@ -4556,7 +3796,7 @@ export function FirstRunExperience({
           groupName={checkpoint.group?.name ?? group}
           location={location}
           onNavigate={onNavigate}
-          onReenter={() => send({ type: 'reenter' })}
+          onReenter={restartSetup}
         />
       ) : (
         <SetupSidebar
@@ -4567,6 +3807,7 @@ export function FirstRunExperience({
             !busy &&
             checkpoint.managedLocal &&
             !checkpoint.account &&
+            !checkpoint.provisioning &&
             !checkpoint.provisionedAccount
               ? () => send({ type: 'choose', path: 'own' })
               : undefined
@@ -4575,22 +3816,62 @@ export function FirstRunExperience({
             !busy &&
             checkpoint.managedLocal &&
             !checkpoint.account &&
+            !checkpoint.provisioning &&
             !checkpoint.provisionedAccount
               ? () => selectManagedProfile(true)
               : undefined
           }
           recoverEnabled={Boolean(managedReport)}
           cancelDisabled={leaveDisabled}
+          onRestart={restartSetup}
+          restartDisabled={!recoveryActions.canRestart}
+          restartReason={recoveryActions.restartReason}
           onCancel={() => {
             // Clear entered values before navigating so the guard allows the
             // exit.
             clearSecrets();
-            if (state === 'phrase') send({ type: 'go', state: 'protect' });
+            if (state === 'phrase')
+              send({ type: 'navigate', state: 'protect' });
             onNavigate({ kind: 'all' });
           }}
         />
       )}
       <main className="main first-run-main" aria-busy={agentReady && busy}>
+        {restartError ? (
+          <p role="alert" className="crit">
+            {restartError}
+          </p>
+        ) : null}
+        {(state === 'who' || state === 'local') &&
+        (savedAttempts.length > 0 || savedAttemptsError) ? (
+          <section className="bandstrip" aria-label="Saved setup attempts">
+            <p>
+              Your existing accounts and server settings are kept. You can
+              continue an earlier setup below.
+            </p>
+            {savedAttemptsError ? (
+              <p role="alert">{savedAttemptsError}</p>
+            ) : null}
+            {savedAttempts.map((entry) => (
+              <Button
+                key={entry.id}
+                onClick={() => {
+                  try {
+                    replaceSession(entry.checkpoint);
+                  } catch (error) {
+                    setRestartError(normalizeCommandError(error).message);
+                  }
+                }}
+              >
+                Continue saved setup for{' '}
+                {entry.checkpoint.provisioning?.alias ??
+                  entry.checkpoint.provisionedAccount?.alias ??
+                  entry.checkpoint.sso?.alias}{' '}
+                on {entry.checkpoint.profile?.canonicalName}
+              </Button>
+            ))}
+          </section>
+        ) : null}
         {slow || phraseOperation ? (
           <div className="bandstrip">
             <div className="band" role="status">

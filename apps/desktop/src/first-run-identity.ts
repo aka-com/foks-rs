@@ -3,6 +3,7 @@ import { transitionFirstRun, type FirstRunCheckpoint } from './first-run-state';
 
 export type IdentityProblem =
   | 'inventory-unavailable'
+  | 'server-unverified'
   | 'profile-missing'
   | 'host-mismatch'
   | 'account-missing'
@@ -11,6 +12,8 @@ export type IdentityProblem =
 export const identityProblemText: Record<IdentityProblem, string> = {
   'inventory-unavailable':
     'Couldn’t load your account details. Try again, or finish setup later.',
+  'server-unverified':
+    'Couldn’t verify this server’s identity. Review server settings or try again.',
   'profile-missing': 'The server saved for this account is missing.',
   'host-mismatch':
     'The saved server identity no longer matches this server. Review your server settings to continue.',
@@ -34,7 +37,7 @@ export function provisionedIdentityProblem(
   );
   if (servers.length === 0) return 'profile-missing';
   if (servers.length !== 1) return 'duplicate-records';
-  if (!servers[0].host_id) return 'inventory-unavailable';
+  if (!servers[0].host_id) return 'server-unverified';
   if (servers[0].host_id !== profile.hostId) return 'host-mismatch';
   if (
     snapshot.profileInventory.find((row) => row.profile === profile.profile)

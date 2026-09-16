@@ -892,7 +892,7 @@ test('resumed sign-in step rediscovers the CLI profile for the verified server',
   window.localStorage.setItem(
     FIRST_RUN_CHECKPOINT_KEY,
     encodeFirstRunCheckpoint(
-      transitionFirstRun(checked, { type: 'go', state: 'existing' }),
+      transitionFirstRun(checked, { type: 'select-account-method', method: 'recover' }),
     ),
   );
   const snapshot = {

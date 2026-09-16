@@ -103,6 +103,8 @@ export function SsoPanel({
   const owner = `${profile}/${account}/${login}`;
   const active = useRef(owner);
   const complete = useRef(onComplete);
+  const reportProgress = useRef(onProgress);
+  reportProgress.current = onProgress;
   useEffect(() => {
     complete.current = onComplete;
   }, [onComplete]);
@@ -130,6 +132,7 @@ export function SsoPanel({
         )
           throw new Error('Authentication belongs to a different account.');
         setProgress(p);
+        reportProgress.current?.(p, initialHardware);
         if (
           !login &&
           (p.state === 'complete' || p.state === 'service-unavailable')
@@ -145,7 +148,7 @@ export function SsoPanel({
     return () => {
       alive = false;
     };
-  }, [bridge, profile, account, initialOperationId, login]);
+  }, [bridge, profile, account, initialOperationId, login, initialHardware]);
   const run = async (action: SsoAction) => {
     setBusy(true);
     setError(null);

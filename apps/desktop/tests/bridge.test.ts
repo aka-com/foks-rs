@@ -1299,6 +1299,49 @@ test('loadSnapshot makes a single catalog call and does not leak fixture data in
   };
   const snapshot = await loadSnapshot(bridge, FIXTURE);
   assert.equal(calls, 1);
+  assert.equal(snapshot.servers[0].host_id, checkedHost.hostId);
+  assert.equal(snapshot.servers[0].chain, checkedHost.chain);
+  assert.equal(snapshot.servers[0].epoch, checkedHost.epoch);
+  const { resolveProvisionedIdentity, provisionedIdentityProblem } =
+    await import('../src/first-run-identity');
+  const { initialFirstRun } = await import('../src/first-run-state');
+  const pending = {
+    ...initialFirstRun('own', 'identity-pending'),
+    profile: {
+      ...checkedHost,
+      profile: 'foks.example.net',
+      acceptance: 'unchanged' as const,
+    },
+    serverAddress: 'foks.example.net',
+    provisionedAccount: { alias: 'satoshi', deviceName: 'Device' },
+  };
+  assert.equal(resolveProvisionedIdentity(snapshot, pending).state, 'protect');
+  assert.equal(
+    provisionedIdentityProblem(snapshot, {
+      ...pending,
+      profile: { ...pending.profile, hostId: `02${'f'.repeat(64)}` },
+    }),
+    'host-mismatch',
+  );
+  const unverified = await loadSnapshot(
+    {
+      ...bridge,
+      describeServerStatus: async () => ({
+        profile: 'foks.example.net',
+        configuredProbe: 'foks.example.net',
+        host: null,
+        leaseRequired: false,
+        leaseExpiresAt: null,
+        chatAvailable: false,
+      }),
+    },
+    snapshot,
+  );
+  assert.equal(unverified.servers[0].host_id, null);
+  assert.equal(
+    provisionedIdentityProblem(unverified, pending),
+    'server-unverified',
+  );
   assert.deepEqual(snapshot.stores, catalog.stores);
   assert.deepEqual(snapshot.accounts, [
     {

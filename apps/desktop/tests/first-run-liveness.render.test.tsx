@@ -990,10 +990,7 @@ test('an unreadable receipt still probes pending operations and reports the rece
       /\(Details: This setup attempt does not match the current account or workspace\.\)/,
     ),
   );
-  assert.equal(
-    rendered.view.queryByRole('button', { name: 'Start over' }),
-    null,
-  );
+  assert.ok(rendered.view.getByRole('button', { name: 'Start over' }));
   assert.equal(
     rendered.view.queryByRole('button', {
       name: 'Continue with existing account',
@@ -1093,11 +1090,10 @@ test('shows option to set up a different account when identity is missing', asyn
   ui.cleanup();
   const unavailable = h.render(pending, { bridge });
   await unavailable.view.findByText(/Couldn’t load your account details/);
-  assert.equal(
-    unavailable.view.queryByRole('button', {
+  assert.ok(
+    unavailable.view.getByRole('button', {
       name: 'Set up a different account',
     }),
-    null,
   );
 });
 
@@ -1177,6 +1173,14 @@ test('cannot discard account setup while it is still running', async () => {
   assert.equal(
     rendered.view.queryByRole('button', { name: 'Start over' }),
     null,
+  );
+  assert.equal(
+    (
+      rendered.view.getByRole('button', {
+        name: 'Start setup over',
+      }) as HTMLButtonElement
+    ).disabled,
+    true,
   );
   assert.equal(h.saved()?.state, 'operation-pending');
 });

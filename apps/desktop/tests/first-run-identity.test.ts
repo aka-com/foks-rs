@@ -40,6 +40,19 @@ const snapshot = {
 test('identity conflicts distinguish incomplete inventory from missing and inconsistent records', () => {
   assert.equal(
     provisionedIdentityProblem(
+      {
+        ...snapshot,
+        servers: snapshot.servers.map((server) => ({
+          ...server,
+          host_id: null,
+        })),
+      },
+      pending,
+    ),
+    'server-unverified',
+  );
+  assert.equal(
+    provisionedIdentityProblem(
       { ...snapshot, profileInventoryStatus: 'unavailable', servers: [] },
       pending,
     ),
@@ -111,7 +124,7 @@ test('acknowledged provisioning round-trips a secret-free pending checkpoint', (
 
 test('acknowledged provisioning cannot be rewound by navigation or missing inventory', () => {
   assert.equal(
-    transitionFirstRun(pending, { type: 'go', state: 'account' }),
+    transitionFirstRun(pending, { type: 'navigate', state: 'account' }),
     pending,
   );
   assert.equal(

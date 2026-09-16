@@ -25,6 +25,7 @@ export const FIRST_RUN_STATES = [
 export type FirstRunStateName = (typeof FIRST_RUN_STATES)[number];
 export type FirstRunPath = 'invited' | 'own';
 export type FirstRunGroupKind = 'named' | 'adhoc';
+export type FirstRunAccountMethod = 'create' | 'recover' | 'organization';
 
 export interface FirstRunGroupIdentity {
   readonly name: string;
@@ -38,6 +39,8 @@ export interface FirstRunCheckpoint {
   readonly path: FirstRunPath;
   readonly state: FirstRunStateName;
   readonly managedLocal: boolean;
+  /** Account methods share one step and one deterministic Back destination. */
+  readonly accountMethod?: FirstRunAccountMethod;
   readonly profile?: CheckedProfileResponse;
   readonly serverAddress?: string;
   /** Nonsecret intent retained until a command acknowledges its outcome. */
@@ -84,7 +87,9 @@ export type FirstRunEvent =
       profile: CheckedProfileResponse;
       returning?: boolean;
     }
-  | { type: 'go'; state: FirstRunStateName }
+  | { type: 'navigate'; state: FirstRunStateName }
+  | { type: 'back' }
+  | { type: 'select-account-method'; method: FirstRunAccountMethod }
   | { type: 'server-edited'; address: string }
   | {
       type: 'profile-checked';
@@ -126,6 +131,112 @@ export function initialFirstRun(
     added: false,
     returning: false,
   };
+}
+
+/** Runtime-validated state used by the controller; the disk codec accepts the broad input shape. */
+export type ResolvedFirstRunCheckpoint = FirstRunCheckpoint &
+  (
+    | { state: 'boot' | 'who' | 'local' | 'address' | 'no-address' | 'error' }
+    | {
+        state: 'checked' | 'compare' | 'account' | 'existing';
+        profile: CheckedProfileResponse;
+      }
+    | {
+        state: 'operation-pending';
+        profile: CheckedProfileResponse;
+        provisioning: ProvisioningIntent;
+      }
+    | {
+        state: 'identity-pending';
+        profile: CheckedProfileResponse;
+        provisionedAccount: NonNullable<
+          FirstRunCheckpoint['provisionedAccount']
+        >;
+      }
+    | {
+        state:
+          | 'protect'
+          | 'phrase'
+          | 'waiting'
+          | 'added'
+          | 'local-done'
+          | 'checklist-invited'
+          | 'checklist-own';
+        profile: CheckedProfileResponse;
+        account: NonNullable<FirstRunCheckpoint['account']>;
+      }
+  );
+
+export function normalizeFirstRunCheckpoint(
+  saved: FirstRunCheckpoint,
+): ResolvedFirstRunCheckpoint {
+  // Only this boundary promotes a decoded/draft checkpoint to a renderable state.
+  return resolvePrerequisites(saved) as ResolvedFirstRunCheckpoint;
+}
+
+/** Resolve incomplete entry requests without inventing server/account evidence. */
+function resolvePrerequisites(saved: FirstRunCheckpoint): FirstRunCheckpoint {
+  if ((saved.provisioning || saved.provisionedAccount) && !saved.profile)
+    throw new Error('Account setup is missing its server identity.');
+  if (saved.provisioning)
+    return saved.state === 'operation-pending'
+      ? saved
+      : { ...saved, state: 'operation-pending' };
+  if (saved.provisionedAccount)
+    return saved.state === 'identity-pending'
+      ? saved
+      : { ...saved, state: 'identity-pending' };
+  const accountStates: readonly FirstRunStateName[] = [
+    'protect',
+    'phrase',
+    'waiting',
+    'added',
+    'local-done',
+    'checklist-invited',
+    'checklist-own',
+  ];
+  const profileStates: readonly FirstRunStateName[] = [
+    'checked',
+    'compare',
+    'account',
+    'existing',
+    ...accountStates,
+  ];
+  if (profileStates.includes(saved.state) && !saved.profile)
+    return {
+      ...initialFirstRun(saved.path, saved.serverAddress ? 'address' : 'who'),
+      serverAddress: saved.serverAddress,
+    };
+  if (accountStates.includes(saved.state) && !saved.account)
+    return {
+      ...saved,
+      state: saved.returning ? 'existing' : 'account',
+      passphraseSet: false,
+      backupCommitted: false,
+      protectSkipped: false,
+      group: undefined,
+      selectedGroup: undefined,
+      added: false,
+    };
+  if (saved.state === 'identity-pending' || saved.state === 'operation-pending')
+    return { ...saved, state: saved.profile ? 'account' : 'who' };
+  return saved;
+}
+
+export function setupBackTarget(state: FirstRunCheckpoint): FirstRunStateName {
+  switch (state.state) {
+    case 'account':
+    case 'existing':
+      return state.managedLocal ? 'local' : 'checked';
+    case 'protect':
+    case 'phrase':
+      return state.returning ? 'existing' : 'account';
+    case 'checked':
+    case 'compare':
+      return 'address';
+    default:
+      return 'who';
+  }
 }
 
 /** Pure state transition function. */
@@ -172,8 +283,27 @@ export function transitionFirstRun(
         profile: event.profile,
         returning: event.returning ?? false,
       };
-    case 'go':
-      return { ...state, state: event.state };
+    case 'back':
+      return transitionFirstRun(state, {
+        type: 'navigate',
+        state: setupBackTarget(state),
+      });
+    case 'select-account-method':
+      return normalizeFirstRunCheckpoint({
+        ...state,
+        state: event.method === 'recover' ? 'existing' : 'account',
+        accountMethod: event.method,
+      });
+    case 'navigate': {
+      const next = normalizeFirstRunCheckpoint({
+        ...state,
+        state: event.state,
+      });
+      // A phrase reveal is allowed only as an explicit live transition.
+      return event.state === 'phrase' && state.profile && state.account
+        ? { ...next, state: 'phrase' }
+        : next;
+    }
     case 'server-edited':
       return {
         ...initialFirstRun(state.path, 'address'),
@@ -200,6 +330,7 @@ export function transitionFirstRun(
       return {
         ...state,
         state: 'protect',
+        sso: undefined,
         provisionedAccount: undefined,
         account: {
           alias: event.alias,
@@ -248,6 +379,7 @@ const ROOT_KEYS = new Set([
   'path',
   'state',
   'managedLocal',
+  'accountMethod',
   'profile',
   'serverAddress',
   'provisioning',
@@ -317,6 +449,7 @@ export function encodeFirstRunCheckpoint(state: FirstRunCheckpoint): string {
     path: state.path,
     state: safeResumeState(state.state),
     managedLocal: state.managedLocal,
+    accountMethod: state.accountMethod,
     profile: state.profile,
     serverAddress: state.serverAddress,
     account: state.account,
@@ -349,6 +482,13 @@ export function decodeFirstRunCheckpoint(
     )
       return null;
     const base = initialFirstRun(item.path, safeResumeState(item.state));
+    if (
+      item.accountMethod !== undefined &&
+      !['create', 'recover', 'organization'].includes(
+        String(item.accountMethod),
+      )
+    )
+      return null;
     let sso: FirstRunCheckpoint['sso'];
     if (item.sso !== undefined) {
       const value = item.sso;
@@ -588,6 +728,9 @@ export function decodeFirstRunCheckpoint(
     return {
       ...base,
       managedLocal: item.managedLocal as boolean,
+      ...(item.accountMethod
+        ? { accountMethod: item.accountMethod as FirstRunAccountMethod }
+        : {}),
       profile,
       serverAddress:
         typeof item.serverAddress === 'string' ? item.serverAddress : undefined,

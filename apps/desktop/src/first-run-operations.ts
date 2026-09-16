@@ -1,3 +1,4 @@
+import { updateRetainedSetup } from './first-run-recovery';
 import { normalizeCommandError, type Bridge } from './bridge';
 import {
   decodeFirstRunCheckpoint,
@@ -78,5 +79,6 @@ export async function executeProvisioning(
     window.localStorage.getItem(FIRST_RUN_CHECKPOINT_KEY),
   );
   if (current?.provisioning?.id === intent.id) persistFirstRun(next);
+  updateRetainedSetup(saved, next);
   return { checkpoint: next, ...(failure ? { error: failure } : {}) };
 }

@@ -49,7 +49,7 @@ test('re-entering first-run resets server and account state', () => {
     deviceName: 'Sol Mac',
   });
   state = transitionFirstRun(state, { type: 'passphrase-set' });
-  state = transitionFirstRun(state, { type: 'go', state: 'waiting' });
+  state = transitionFirstRun(state, { type: 'navigate', state: 'waiting' });
   state = transitionFirstRun(state, { type: 'reenter' });
   assert.equal(state.state, 'who');
   assert.equal(state.profile, undefined);
@@ -383,10 +383,18 @@ test('invited and own paths transition to distinct completion states', () => {
     { state: 'added', added: true },
   );
 
-  const own = transitionFirstRun(initialFirstRun('own', 'protect'), {
-    type: 'go',
-    state: 'checklist-own',
-  });
+  const own = transitionFirstRun(
+    {
+      ...initialFirstRun('own', 'protect'),
+      profile: checked,
+      serverAddress: 'foks.example',
+      account: { alias: 'personal', username: 'sol', deviceName: 'Device' },
+    },
+    {
+      type: 'navigate',
+      state: 'checklist-own',
+    },
+  );
   assert.equal(own.state, 'checklist-own');
   assert.equal(own.group, undefined);
 });
@@ -414,7 +422,7 @@ test('setting a passphrase after skipping produces a valid decodable checkpoint'
   assert.equal(state.protectSkipped, true);
   assert.ok(decodeFirstRunCheckpoint(encodeFirstRunCheckpoint(state)));
 
-  state = transitionFirstRun(state, { type: 'go', state: 'protect' });
+  state = transitionFirstRun(state, { type: 'navigate', state: 'protect' });
   state = transitionFirstRun(state, { type: 'passphrase-set' });
   assert.equal(state.passphraseSet, true);
   assert.equal(state.protectSkipped, false);
@@ -526,7 +534,7 @@ test('discarding an uncertain attempt is the only event that clears provisioning
     },
   };
   const blocked: FirstRunEvent[] = [
-    { type: 'go', state: 'account' },
+    { type: 'navigate', state: 'account' },
     { type: 'choose', path: 'own' },
     { type: 'server-edited', address: 'other.example' },
     { type: 'account-provisioned', alias: 'personal', deviceName: 'Mac' },
@@ -579,7 +587,7 @@ test('discarding a connected account returns to the account step without adoptin
     provisionedAccount: { alias: 'personal', deviceName: 'Mac' },
   };
   const blocked: FirstRunEvent[] = [
-    { type: 'go', state: 'account' },
+    { type: 'navigate', state: 'account' },
     { type: 'choose', path: 'own' },
     { type: 'server-edited', address: 'other.example' },
     {
@@ -618,4 +626,26 @@ test('discarding a connected account returns to the account step without adoptin
   );
   assert.equal(returning.state, 'existing');
   assert.ok(decodeFirstRunCheckpoint(encodeFirstRunCheckpoint(returning)));
+});
+
+test('account method is nonsecret progress with a shared Back destination', () => {
+  const selected = transitionFirstRun(
+    {
+      ...initialFirstRun('own', 'account'),
+      profile: checked,
+      serverAddress: 'foks.example',
+    },
+    { type: 'select-account-method', method: 'organization' },
+  );
+  assert.equal(
+    decodeFirstRunCheckpoint(encodeFirstRunCheckpoint(selected))?.accountMethod,
+    'organization',
+  );
+  assert.equal(transitionFirstRun(selected, { type: 'back' }).state, 'checked');
+  const recovery = transitionFirstRun(selected, {
+    type: 'select-account-method',
+    method: 'recover',
+  });
+  assert.equal(recovery.state, 'existing');
+  assert.equal(transitionFirstRun(recovery, { type: 'back' }).state, 'checked');
 });

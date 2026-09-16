@@ -3113,6 +3113,9 @@ async function loadSnapshotOnce(
       };
     return {
       ...server,
+      host_id: status.host?.hostId ?? null,
+      chain: status.host?.chain ?? null,
+      epoch: status.host?.epoch ?? null,
       trust: status.host
         ? { status: 'verified' as const }
         : { status: 'unprobed' as const },

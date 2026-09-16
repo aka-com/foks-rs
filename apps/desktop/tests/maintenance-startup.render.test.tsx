@@ -157,7 +157,7 @@ test('mounted shell ignores duplicate maintenance completion side effects', asyn
   await ui.waitFor(() => {
     assert.ok(document.querySelector('.side.rail .who .t'));
   });
-  assert.equal(listeners.size, 1);
+  await ui.waitFor(() => assert.equal(listeners.size, 1));
 
   snapshot = {
     state: 'active',

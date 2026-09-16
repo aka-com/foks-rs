@@ -1,3 +1,4 @@
+import { retainSetup, retainedSetups } from '../src/first-run-recovery';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { installDom } from './lib/dom-harness';
@@ -117,4 +118,41 @@ test('unclassified failures cannot authorize another initial mutation', async ()
   });
   assert.equal(read()?.provisioning?.id, saved.provisioning?.id);
   assert.equal(read()?.state, 'operation-pending');
+});
+
+test('restarting the wizard preserves a late acknowledgement without restoring the old wizard', async () => {
+  window.localStorage.clear();
+  let complete!: () => void;
+  const pending = executeProvisioning(
+    {} as Bridge,
+    saved,
+    () =>
+      new Promise<void>((resolve) => {
+        complete = resolve;
+      }),
+  );
+  retainSetup(saved);
+  window.localStorage.setItem(
+    FIRST_RUN_CHECKPOINT_KEY,
+    encodeFirstRunCheckpoint(initialFirstRun()),
+  );
+  complete();
+  await pending;
+  assert.equal(read()?.state, 'who');
+  assert.equal(retainedSetups()[0].checkpoint.state, 'identity-pending');
+  assert.equal(
+    retainedSetups()[0].checkpoint.provisionedAccount?.alias,
+    'personal',
+  );
+});
+
+test('retained attempts reject malformed secret-bearing intents', () => {
+  window.localStorage.clear();
+  assert.throws(() =>
+    retainSetup({
+      ...saved,
+      provisioning: { ...saved.provisioning!, phrase: 'SECRET' },
+    } as FirstRunCheckpoint),
+  );
+  assert.deepEqual(retainedSetups(), []);
 });
