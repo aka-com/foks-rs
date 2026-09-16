@@ -6,6 +6,8 @@ import {
   Band,
   Button,
   CardSelect,
+  DocumentSourceRow,
+  DocumentSourceSwitch,
   Field,
   Icon,
   Inset,
@@ -18,7 +20,7 @@ import {
   SheetDialog,
   Toggle,
 } from '../components';
-import type { CardOption, FilterKind } from '../components';
+import type { CardOption, DocumentSourceKind, FilterKind } from '../components';
 import {
   isLogin,
   itemKey,
@@ -471,6 +473,11 @@ function NewSheet({
   const [sourcePath, setSourcePath] = useTabSheetState<string | null>(
     'item.sourcePath',
     workflow.draft?.sourcePath ?? null,
+  ); // A document is typed text or an imported file; the switch picks which, and
+  // dropping a file selects the File option automatically.
+  const [source, setSource] = useTabSheetState<DocumentSourceKind>(
+    'item.source',
+    workflow.draft?.sourcePath ? 'file' : 'text',
   );
   const [readRole, setReadRole] = useTabSheetState<KvRoleInput>(
     'item.readRole',
@@ -504,6 +511,7 @@ function NewSheet({
       const first = paths[0];
       if (!first) return;
       setSourcePath(first);
+      setSource('file');
       setFileError(null);
       const name = first.split(/[\\/]/).at(-1);
       if (name) setPath(fileDropPath(name, workflow.initialFolder));
@@ -575,27 +583,27 @@ function NewSheet({
           value: `user: ${username}\npassword: ${password}\nurl: ${website}`,
           ...roleArgs,
         });
-      } else if (sourcePath) {
+      } else if (source === 'file' && sourcePath) {
         await bridge.importDroppedFile({
           storeId: store.id,
           path,
           sourcePath,
           ...roleArgs,
         });
-      } else if (value.trim()) {
-        await bridge.createTextItem({
-          storeId: store.id,
-          path,
-          value,
-          ...roleArgs,
-        });
-      } else {
+      } else if (source === 'file') {
         const result = await bridge.pickAndImportFile({
           storeId: store.id,
           path,
           ...roleArgs,
         });
         if (!result.applied) return;
+      } else {
+        await bridge.createTextItem({
+          storeId: store.id,
+          path,
+          value,
+          ...roleArgs,
+        });
       }
       await onApplied(`${kindLabel(itemKind)} created in ${store.name}`);
       setWorkflow(null);
@@ -661,12 +669,17 @@ function NewSheet({
           <Button onClick={() => setWorkflow(null)}>Cancel</Button>
           <Button
             variant="primary"
-            disabled={!canWrite || saving || !pathName}
+            disabled={
+              !canWrite ||
+              saving ||
+              !pathName ||
+              (itemKind === 'Document' && source === 'text' && !value.trim())
+            }
             onClick={() => void submit()}
           >
             {saving
               ? 'Creating…'
-              : itemKind === 'Document' && !sourcePath && !value.trim()
+              : itemKind === 'Document' && source === 'file' && !sourcePath
                 ? 'Choose file and create'
                 : 'Create item'}
           </Button>
@@ -705,7 +718,15 @@ function NewSheet({
             onWriteRole={setWriteRole}
           />
         ) : null}
-        <SectionLabel>{kindLabel(itemKind)}</SectionLabel>
+        <SectionLabel
+          action={
+            itemKind === 'Document' ? (
+              <DocumentSourceSwitch value={source} onChange={setSource} />
+            ) : undefined
+          }
+        >
+          {kindLabel(itemKind)}
+        </SectionLabel>
         <Inset
           className={
             itemKind === 'Document' && hovering ? 'drop-hover' : undefined
@@ -750,16 +771,13 @@ function NewSheet({
                 },
                 'e.g. api-key',
               )}
-              {field('Value', value, setValue, 'A note, key, or token', true)}
-              <InsetRow label="File">
-                <span className={sourcePath ? 'mono' : 'dim'}>
-                  {sourcePath
-                    ? sourcePath.split(/[\\/]/).at(-1)
-                    : hovering
-                      ? 'Drop to use this file'
-                      : 'Drop a file here, or choose a file'}
-                </span>
-              </InsetRow>
+              <DocumentSourceRow
+                source={source}
+                value={value}
+                onValue={setValue}
+                sourcePath={sourcePath}
+                hovering={hovering}
+              />
             </>
           ) : null}
         </Inset>

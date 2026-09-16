@@ -553,7 +553,7 @@ export function DevicesScreen({
                 </SectionLabel>
                 <Inset className="settings-inset middle wide">
                   {loading ? (
-                    <InsetRow label="None">Loading devices…</InsetRow>
+                    <InsetRow label="Devices">Loading devices…</InsetRow>
                   ) : devices.length ? (
                     devices.map((device) => (
                       <InsetRow
@@ -610,7 +610,7 @@ export function DevicesScreen({
                       </InsetRow>
                     ))
                   ) : (
-                    <InsetRow label="None">
+                    <InsetRow label="Devices">
                       {stopped.stopped
                         ? 'Not listed while access is stopped'
                         : 'No computers or security keys are authenticated on this account.'}
@@ -643,7 +643,7 @@ export function DevicesScreen({
                 </SectionLabel>
                 <Inset className="settings-inset middle wide">
                   {loading ? (
-                    <InsetRow label="None">Loading paper keys…</InsetRow>
+                    <InsetRow label="Saved">Loading paper keys…</InsetRow>
                   ) : backups.length ? (
                     backups.map((backup) => (
                       <InsetRow
@@ -682,14 +682,14 @@ export function DevicesScreen({
                       </InsetRow>
                     ))
                   ) : (
-                    <InsetRow label="None">
+                    <InsetRow label="Saved">
                       {stopped.stopped
                         ? 'Not listed while access is stopped'
                         : 'No paper keys stored on this device for this account.'}
                     </InsetRow>
                   )}
                   <InsetRow
-                    label="Recover an account"
+                    label="Recovery"
                     action={
                       <Button
                         size="sm"
@@ -753,11 +753,11 @@ export function DevicesScreen({
                     </MenuButton>
                   }
                 >
-                  Security key enrollments
+                  Security keys
                 </SectionLabel>
                 <Inset className="settings-inset middle wide">
                   {loading ? (
-                    <InsetRow label="None">Loading keys…</InsetRow>
+                    <InsetRow label="Enrolled">Loading keys…</InsetRow>
                   ) : yubi.length ? (
                     yubi.map((entry) => (
                       <InsetRow
@@ -813,7 +813,7 @@ export function DevicesScreen({
                       </InsetRow>
                     ))
                   ) : (
-                    <InsetRow label="None">
+                    <InsetRow label="Enrolled">
                       {stopped.stopped
                         ? 'Not listed while access is stopped'
                         : 'No YubiKey enrolled.'}
@@ -823,7 +823,7 @@ export function DevicesScreen({
                     cards.map((card) => (
                       <InsetRow
                         key={card.serial}
-                        label="Connected now"
+                        label="Connected"
                         action={
                           <>
                             <Button
@@ -866,14 +866,14 @@ export function DevicesScreen({
                       </InsetRow>
                     ))
                   ) : (
-                    <InsetRow label="Connected now">
+                    <InsetRow label="Connected">
                       {stopped.stopped
                         ? 'Not read while access is stopped'
                         : 'No security key connected.'}
                     </InsetRow>
                   )}
                   <InsetRow
-                    label="Card PIN"
+                    label="PIN"
                     action={
                       <Button
                         size="sm"
@@ -891,7 +891,8 @@ export function DevicesScreen({
                       </Button>
                     }
                   >
-                    Changed with the other credentials you type.
+                    Set in Settings › Server, along with the key’s other
+                    credentials.
                   </InsetRow>
                 </Inset>
               </div>
@@ -1262,7 +1263,7 @@ function DeviceDetail({
               <SectionLabel id="device-card-label">Card</SectionLabel>
               <Inset className="settings-inset middle wide">
                 <InsetRow
-                  label="Card PIN"
+                  label="PIN"
                   action={
                     <Button
                       size="sm"
@@ -1278,7 +1279,8 @@ function DeviceDetail({
                     </Button>
                   }
                 >
-                  Changed with the other credentials you type.
+                  Set in Settings › Server, along with the key’s other
+                  credentials.
                 </InsetRow>
               </Inset>
             </div>
@@ -1315,13 +1317,13 @@ function DeviceDetail({
                     >
                       {deviceEnrollment
                         ? `Open ${deviceEnrollment.alias}`
-                        : 'Go to Security key enrollments'}
+                        : 'Go to Security keys'}
                     </Button>
                   }
                 >
                   <small>
-                    A key on a card is revoked under Security key enrollments,
-                    where the enrollment it was made under is listed.
+                    A key on a card is revoked under Security keys, where its
+                    enrollment is listed.
                   </small>
                 </InsetRow>
               ) : entry.current ? (

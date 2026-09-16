@@ -255,9 +255,7 @@ export function SettingsScreen({
                 <InsetRow label="None">No accounts on this device.</InsetRow>
               )}
             </Inset>
-            <SectionLabel id="settings-card-label">
-              Security key enrollments
-            </SectionLabel>
+            <SectionLabel id="settings-card-label">Security keys</SectionLabel>
             {unavailable ? (
               <UnavailableAccount
                 stores={stores}

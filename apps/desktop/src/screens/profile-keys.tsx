@@ -45,8 +45,8 @@ export function ProfileKeys({
     };
   }, []);
   return (
-    <section aria-label="Security key enrollments">
-      <SectionLabel>Security key enrollments</SectionLabel>
+    <section aria-label="Security keys">
+      <SectionLabel>Security keys</SectionLabel>
 
       <Inset>
         {!available ? (

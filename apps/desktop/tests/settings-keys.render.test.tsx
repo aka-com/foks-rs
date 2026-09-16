@@ -133,7 +133,7 @@ test('one page lists the Macs, the paper keys and the security keys', async () =
 
   assert.ok(rendered.getByText('Computers and security keys'));
   assert.ok(rendered.getByText('Paper keys'));
-  assert.ok(rendered.getByText('Security key enrollments'));
+  assert.ok(rendered.getByText('Security keys'));
   assert.equal(
     rendered.queryByText('Only paper keys stored on this device are listed.'),
     null,
@@ -353,7 +353,7 @@ test('a Devices address written before the page was one lands on its section', a
   await ui.waitFor(() => {
     assert.equal(
       document.activeElement,
-      rendered.getByRole('region', { name: 'Security key enrollments' }),
+      rendered.getByRole('region', { name: 'Security keys' }),
     );
   });
   // The Macs are still on the same page, not behind a pane.
@@ -387,7 +387,7 @@ test('the YubiKey scene still opens its sheet on Devices', async () => {
   await ui.waitFor(() => {
     assert.equal(
       document.activeElement,
-      rendered.getByRole('region', { name: 'Security key enrollments' }),
+      rendered.getByRole('region', { name: 'Security keys' }),
     );
   });
 });
@@ -535,7 +535,7 @@ test('a revoke acts on the key whose row was pressed', async () => {
   const rendered = await renderDevices(twoKeys, { store: 'acct:personal' });
 
   const keys = rendered.getByRole('region', {
-    name: 'Security key enrollments',
+    name: 'Security keys',
   });
   const revokes = ui.within(keys).getAllByRole('button', { name: 'Revoke…' });
   assert.equal(revokes.length, 2);
@@ -556,7 +556,7 @@ test('an unfinished enrollment says so and cannot be revoked', async () => {
   const rendered = await renderDevices(await fixture(), { store: 'acct:work' });
 
   const keys = rendered.getByRole('region', {
-    name: 'Security key enrollments',
+    name: 'Security keys',
   });
   assert.ok(ui.within(keys).getByText('work key'));
   assert.equal(ui.within(keys).queryByText('primary key'), null);
@@ -568,7 +568,7 @@ test('an unfinished enrollment says so and cannot be revoked', async () => {
   // Switching back lists the other account's key and nothing of this one's.
   await rendered.showAccount('acct:personal');
   const listed = rendered.getByRole('region', {
-    name: 'Security key enrollments',
+    name: 'Security keys',
   });
   assert.ok(ui.within(listed).getByText('primary key'));
   assert.equal(ui.within(listed).queryByText('work key'), null);
@@ -640,7 +640,7 @@ test('a key on a card is revoked under its enrollment, not removed here', async 
   // The row is not a dead end: it leads to the section that revokes the key.
   await ui.act(async () => {
     ui.fireEvent.click(
-      page.getByRole('button', { name: 'Go to Security key enrollments' }),
+      page.getByRole('button', { name: 'Go to Security keys' }),
     );
   });
   assert.deepEqual(chosen.at(-1), {

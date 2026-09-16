@@ -129,7 +129,7 @@ test('the page holds servers, credentials, about, this device and the danger zon
 
   for (const label of [
     'Account',
-    'Security key enrollments',
+    'Security keys',
     'About',
     'This device',
     'Danger zone',
@@ -164,7 +164,7 @@ test('a section address puts the page and the keyboard on that section', async (
     );
   });
   // The card credentials name the account they act on.
-  assert.ok(rendered.getByText('Security key enrollments'));
+  assert.ok(rendered.getByText('Security keys'));
 });
 
 test('Settings links to profile-scoped security key management', async () => {

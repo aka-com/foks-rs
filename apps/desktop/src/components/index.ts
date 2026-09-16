@@ -6,6 +6,7 @@ export * from './button';
 export * from './card-select';
 export * from './chips';
 export * from './copy-box';
+export * from './document-source';
 export * from './field';
 export * from './icon';
 export * from './inset';
