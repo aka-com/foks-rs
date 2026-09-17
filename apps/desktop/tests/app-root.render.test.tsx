@@ -81,7 +81,7 @@ test('the rail draws the six tabs, the unread badge and the Settings dot', () =>
   // live once its lease is actually expired, which the running demo agent
   // has not made true here), so the Settings tab carries the amber dot for
   // Partner alone.
-  const settingsDot = tabs[5].querySelector('.tabdot');
+  const settingsDot = tabs[5].querySelector('.rail-tail.dot');
   assert.ok(settingsDot, 'the Settings tab carries its own dot');
   assert.ok(settingsDot.classList.contains('warn'));
   assert.equal(
@@ -91,8 +91,8 @@ test('the rail draws the six tabs, the unread badge and the Settings dot', () =>
   // The Teams and Devices badges depend on a page having already loaded
   // their signal this session; neither Teams nor Devices has been visited
   // yet, so both are silent rather than guessing.
-  assert.equal(tabs[2].querySelector('.chat-unread'), null);
-  assert.equal(tabs[3].querySelector('.tabdot'), null);
+  assert.equal(tabs[2].querySelector('.rail-tail'), null);
+  assert.equal(tabs[3].querySelector('.rail-tail'), null);
   // Files is the tab that owns All items, the shell's starting location.
   assert.equal(tabs[0].getAttribute('aria-current'), 'page');
   assert.equal(tabs[4].getAttribute('aria-current'), null);
@@ -157,10 +157,7 @@ test('a tab navigates, and Control-Tab walks the six of them', async () => {
 
   testingLibrary.fireEvent.click(tab('Files'));
   await testingLibrary.waitFor(() => {
-    assert.equal(
-      document.querySelector('.loc .crumbs .cur')?.textContent,
-      'Files',
-    );
+    assert.equal(document.querySelector('.loc h1')?.textContent, 'Files');
   });
   testingLibrary.fireEvent.click(
     testingLibrary.screen.getByRole('button', { name: 'Back' }),
@@ -169,10 +166,7 @@ test('a tab navigates, and Control-Tab walks the six of them', async () => {
 
 test('the Files tree lists the stores the roots page used to enumerate', async () => {
   await testingLibrary.waitFor(() => {
-    assert.equal(
-      document.querySelector('.loc .crumbs .cur')?.textContent,
-      'Files',
-    );
+    assert.equal(document.querySelector('.loc h1')?.textContent, 'Files');
   });
   const rows = [
     ...document.querySelectorAll<HTMLButtonElement>('.tpane .fselect'),
@@ -189,10 +183,7 @@ test('the Files tree lists the stores the roots page used to enumerate', async (
   assert.ok(engineering);
   testingLibrary.fireEvent.click(engineering);
   await testingLibrary.waitFor(() => {
-    assert.equal(
-      document.querySelector('.loc .crumbs .cur')?.textContent,
-      'Engineering',
-    );
+    assert.equal(document.querySelector('.loc h1')?.textContent, 'Engineering');
   });
   // Browsing a store through the tree is client-side selection, not a
   // location change, but the topbar reads that same selection: its own crumb
@@ -214,10 +205,7 @@ test('the Files tree lists the stores the roots page used to enumerate', async (
   // One step back deselects the store rather than leaving the Files tab: the
   // tree itself is still the root there is nowhere further back from.
   await testingLibrary.waitFor(() => {
-    assert.equal(
-      document.querySelector('.loc .crumbs .cur')?.textContent,
-      'Files',
-    );
+    assert.equal(document.querySelector('.loc h1')?.textContent, 'Files');
   });
   assert.equal(document.querySelector('.topbar .crumbs')?.textContent, 'Files');
   assert.equal(back.disabled, true);
@@ -292,10 +280,7 @@ test('opens on All items, in the folder browser', async () => {
   assert.ok(all);
   testingLibrary.fireEvent.click(all);
   await testingLibrary.waitFor(() => {
-    assert.equal(
-      document.querySelector('.loc .crumbs .cur')?.textContent,
-      'All items',
-    );
+    assert.equal(document.querySelector('.loc h1')?.textContent, 'All items');
   });
   assert.ok(
     document.querySelector('.folder-layout'),

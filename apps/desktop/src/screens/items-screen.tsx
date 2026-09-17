@@ -13,7 +13,6 @@ import { Band, Button, Icon, KindIcon } from '../components';
 import type { FilterKind } from '../components';
 import type { FoksIconName } from '../icons';
 import { PageHeader } from '../shell/page-header';
-import type { Crumb } from '../shell/page-header';
 import { NewItemButton, Toolbar } from '../shell/toolbar';
 import {
   KINDS,
@@ -542,41 +541,18 @@ export function ItemsScreen({
     );
   };
 
-  // The page header's own breadcrumb: the store, then each folder down to the
-  // one open now, or a single, uncurrent crumb when nothing is picked yet.
-  const crumbs: Crumb[] = [];
-  if (selected.store === ALL_ITEMS) {
-    crumbs.push({ label: 'All items' });
-  } else if (selectedTree && selectedNode) {
-    crumbs.push({
-      label: selectedTree.store.name,
-      onClick:
-        selected.path !== '/'
-          ? () => selectFolder(selectedTree.store, '/')
-          : undefined,
-    });
-    let path = '';
-    const parts = selectedNode.path.split('/').filter(Boolean);
-    parts.forEach((part, index) => {
-      path += `/${part}`;
-      const at = path;
-      crumbs.push({
-        label: part,
-        onClick:
-          index === parts.length - 1
-            ? undefined
-            : () => selectFolder(selectedTree.store, at),
-      });
-    });
-  } else {
-    crumbs.push({ label: 'Files' });
-  }
-  const headerTitle = crumbs[crumbs.length - 1]?.label ?? 'Files';
+  // The page header names only the open folder; the topbar carries its path.
+  const headerTitle =
+    selected.store === ALL_ITEMS
+      ? 'All items'
+      : selectedTree && selectedNode
+        ? (selectedNode.path.split('/').filter(Boolean).at(-1) ??
+          selectedTree.store.name)
+        : 'Files';
   const head = (
     <PageHeader
       ruled
       title={headerTitle}
-      crumbs={crumbs}
       query={state.query}
       onQuery={(query) => {
         locations.search(query);

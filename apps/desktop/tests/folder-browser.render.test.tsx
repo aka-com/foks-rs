@@ -64,16 +64,16 @@ function treeRow(name: string): HTMLButtonElement {
   return node;
 }
 
-/** The page header's current (last, unclickable) breadcrumb segment. */
-function currentCrumb(): string | undefined {
-  return document.querySelector('.loc .crumbs .cur')?.textContent ?? undefined;
+/** The page header's current folder title. */
+function currentTitle(): string | undefined {
+  return document.querySelector('.loc h1')?.textContent ?? undefined;
 }
 
 test('a store with nothing in it is still reachable from the tree', async () => {
   await mount({ kind: 'all' });
   // "Work (Acme)" carries no items in the fixture.
   ui.fireEvent.click(treeRow('Work (Acme)'));
-  await ui.waitFor(() => assert.equal(currentCrumb(), 'Work (Acme)'));
+  await ui.waitFor(() => assert.equal(currentTitle(), 'Work (Acme)'));
   assert.ok(
     document.querySelector('.lpane .empty h2')?.textContent === 'No items yet',
   );
@@ -93,28 +93,19 @@ test('the tree\'s "All items" leaf flattens every store, last under its own head
   const all = treeRow('All items');
   assert.equal(all.getAttribute('aria-current'), null);
   ui.fireEvent.click(all);
-  await ui.waitFor(() => assert.equal(currentCrumb(), 'All items'));
+  await ui.waitFor(() => assert.equal(currentTitle(), 'All items'));
   assert.equal(treeRow('All items').getAttribute('aria-current'), 'location');
   const rows = document.querySelectorAll('.lpane .body .row');
   assert.ok(rows.length > 1, 'items from more than one store are listed');
 });
 
-test('a deep folder draws every ancestor in the breadcrumb, each but the current one clickable', async () => {
+test('a deep folder header shows only the current folder title', async () => {
   await mount({ kind: 'store', ref: 'acct:personal' }, { folder: '/env/prod' });
-  const crumbs = [
-    ...document.querySelectorAll('.loc .crumbs > button, .loc .crumbs > .cur'),
-  ];
-  assert.deepEqual(
-    crumbs.map((crumb) => crumb.textContent),
-    ['Personal', 'env', 'prod'],
-  );
-  // The current folder is the page's heading, at the size every other page
-  // draws its own title; only the folders above it are buttons.
-  assert.equal(crumbs.at(-1)?.tagName, 'H1');
-  assert.ok(crumbs.slice(0, -1).every((crumb) => crumb.tagName === 'BUTTON'));
+  assert.equal(currentTitle(), 'prod');
+  assert.equal(document.querySelector('.loc .crumbs'), null);
 
-  ui.fireEvent.click(crumbs[1]);
-  await ui.waitFor(() => assert.equal(currentCrumb(), 'env'));
+  ui.fireEvent.click(treeRow('env'));
+  await ui.waitFor(() => assert.equal(currentTitle(), 'env'));
   // Landing on the parent folder shows its own child, "prod".
   assert.ok(document.querySelector('.lpane .row.folder'));
 });

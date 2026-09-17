@@ -1176,7 +1176,6 @@ export function AbandonGroupSheet({
       dismissible={!busy}
       glyph={<GroupMark store={store} />}
       title={`Remove ${store.name}?`}
-      subtitle={`Setup never finished · ${serverName}`}
       footer={
         <>
           <Button disabled={busy} onClick={onClose}>
@@ -1328,16 +1327,6 @@ export function GroupSheet({
       : sheet === 'remove'
         ? `Remove ${target ? partyName(target) : 'them'} from ${store.name}?`
         : 'Create a team';
-  const subtitle =
-    sheet === 'create'
-      ? undefined
-      : sheet === 'add'
-        ? undefined
-        : sheet === 'admit'
-          ? 'Every member of that team gets the same role here'
-          : sheet === 'demote'
-            ? `${target ? roleText(target) : ''} in ${store.name} today`
-            : '';
   const [demotion, setDemotion] = useState<RoleDto | null>(() =>
     target ? demotionFor(target) : null,
   );
@@ -1478,7 +1467,6 @@ export function GroupSheet({
         )
       }
       title={title}
-      subtitle={subtitle}
       footer={
         <>
           <Button disabled={busy} onClick={onClose}>
@@ -1547,8 +1535,8 @@ export function GroupSheet({
             label="What to add"
             value={sheet}
             items={[
-              { id: 'add' as const, label: 'A person or machine' },
-              { id: 'admit' as const, label: 'A team on another server' },
+              { id: 'add' as const, label: 'Add a person' },
+              { id: 'admit' as const, label: 'Add a team on another server' },
             ]}
             onChange={(next) => {
               if (next !== sheet) onSwitch(next);
@@ -1568,14 +1556,8 @@ export function GroupSheet({
                   setRefused('');
                 }}
               />
-              <InsetRow label="Server">
-                <span>
-                  {serverName} <Chip>this team’s server</Chip>
-                  <span className="hint">
-                    They need an account on this server. For someone on another
-                    server, add their team instead.
-                  </span>
-                </span>
+              <InsetRow label="Server" action={<Chip>this team’s server</Chip>}>
+                {serverName}
               </InsetRow>
             </Inset>
             {addRefusal ? (
@@ -1592,7 +1574,7 @@ export function GroupSheet({
                 You still add the username yourself when they reply.
               </p>
             ) : null}
-            <SectionLabel>Role in {store.name}</SectionLabel>
+            <SectionLabel>Role</SectionLabel>
             <Inset>
               <RadioGroup label={`Role in ${store.name}`}>
                 {(['Owner', 'Admin', 'Member'] as const).map((next) => {
@@ -1618,10 +1600,10 @@ export function GroupSheet({
                       detail={
                         refusal ||
                         (next === 'Member'
-                          ? 'Opens items at or above the chosen visibility.'
+                          ? 'Can only read items.'
                           : next === 'Admin'
-                            ? 'Changes items and adds or removes people. Cannot change other Admins or the Owner.'
-                            : 'Everything, including deleting the team.')
+                            ? 'Manage vault items and team members, excluding other admins and owners.'
+                            : 'Manage vault items, members, permissions, or delete the team.')
                       }
                     />
                   );
@@ -1629,7 +1611,7 @@ export function GroupSheet({
               </RadioGroup>
             </Inset>
             {role.role === 'Member' ? (
-              <Inset>
+              <Inset className="visibility-inset">
                 <InsetRow
                   label="Visibility"
                   action={
@@ -1657,7 +1639,8 @@ export function GroupSheet({
                   }
                 >
                   <span className="hint">
-                    Members open items at or above this band. 0 is the default.
+                    Grants access to items matching or exceeding this visibility
+                    level. (Default: 0)
                   </span>
                 </InsetRow>
               </Inset>
@@ -1793,11 +1776,6 @@ export function GroupSheet({
                 </InsetRow>
               )}
             </Inset>
-            <p className="fn">
-              The command admits a team this device already holds, so the choice
-              is over the remote teams it holds: one on another server, active,
-              and reachable right now.
-            </p>
             <SectionLabel>Role for its members</SectionLabel>
             <Inset>
               <InsetRow label="Role">
@@ -1831,14 +1809,6 @@ export function GroupSheet({
                 }
               />
             </Inset>
-            <Band severity="info" label="How admission works">
-              {store.name} asks{' '}
-              {remote ? displayServerName(snapshot, remote) : 'that server'} who
-              is in {remote?.alias ?? 'that team'} and syncs that list. People
-              are added and removed there, not here, and one of them cannot be
-              changed or removed on their own: only the whole admission can be
-              removed, which rotates {store.name}’s key.
-            </Band>
             <p className="fn">
               If the remote server becomes unreachable, the federated team
               status changes to Inactive and its members cannot access items in
@@ -2223,7 +2193,6 @@ export function GroupSettingsScreen({
       teamAlias={store.alias}
       presentation={{
         title: 'Invitations and requests',
-        subtitle: store.name,
         onClose: () => {
           setInviting(false);
           setRecoverInvitations(false);
@@ -2281,7 +2250,7 @@ export function GroupSettingsScreen({
                   >
                     <span className="menu-choice">
                       <b>A user</b>
-                      <small>By username on {serverName}.</small>
+                      <small>Invite by their username</small>
                     </span>
                   </MenuItem>
                   <MenuItem
@@ -2294,7 +2263,7 @@ export function GroupSettingsScreen({
                   >
                     <span className="menu-choice">
                       <b>A team from another server</b>
-                      <small>By federation</small>
+                      <small>Add a remote team via federation</small>
                     </span>
                   </MenuItem>
                   <div className="menu-separator" role="separator" />

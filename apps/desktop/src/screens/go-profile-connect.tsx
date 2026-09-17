@@ -295,14 +295,11 @@ export function GoProfileConnectSheet({
         </Inset>
       ) : null}
       {candidates.length && !selected ? (
-        <>
-          <SectionLabel>CLI accounts on this device</SectionLabel>
-          <GoProfileChooser
-            candidates={candidates}
-            selected={null}
-            onSelect={choose}
-          />
-        </>
+        <GoProfileChooser
+          candidates={candidates}
+          selected={null}
+          onSelect={choose}
+        />
       ) : null}
       {selected && !checked ? (
         <>

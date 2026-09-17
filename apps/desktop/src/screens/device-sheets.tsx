@@ -140,7 +140,6 @@ export function AddDeviceSheet({
 /** The frame every sheet on this page shares: a glyph, a title and a footer. */
 function DeviceSheetFrame({
   title,
-  subtitle,
   children,
   footer,
   onClose,
@@ -148,7 +147,6 @@ function DeviceSheetFrame({
   dismissible = true,
 }: {
   title: string;
-  subtitle?: string;
   children: ReactNode;
   footer: ReactNode;
   onClose: () => void;
@@ -162,7 +160,6 @@ function DeviceSheetFrame({
       onClose={onClose}
       dismissible={dismissible}
       title={title}
-      subtitle={subtitle}
       footer={footer}
       glyph={
         <span className={`server-mark ${danger ? 'danger' : ''}`}>
@@ -633,7 +630,6 @@ export function RecoverSheet({
   return (
     <DeviceSheetFrame
       title="Recover on this device"
-      subtitle="Use your paper key"
       onClose={() => {
         setPhrase('');
         onClose();
@@ -747,7 +743,6 @@ export function EnrollSheet({
   return (
     <DeviceSheetFrame
       title="Create a YubiKey account"
-      subtitle={`New account on ${store.server}`}
       onClose={() => {
         clear();
         onClose();
@@ -1197,7 +1192,6 @@ export function YubiActionSheet({
   return (
     <DeviceSheetFrame
       title={YUBI_ACTION_LABELS[action]}
-      subtitle={alias || 'Choose an enrolled key alias'}
       onClose={() => {
         setPin('');
         setOther('');
@@ -1360,7 +1354,6 @@ export function RevokeBackupSheet({
   return (
     <DeviceSheetFrame
       title={`Revoke ${backup.backupAlias}?`}
-      subtitle={`${store.account} · ${backup.backupId}`}
       onClose={() => {
         if (busy) return;
         onClose();
@@ -1442,7 +1435,6 @@ export function RemoveDeviceSheet({
   return (
     <DeviceSheetFrame
       title={`Remove ${device.name ?? 'device'}?`}
-      subtitle={`${store.account} · ${device.id}`}
       // A removal already handed to the agent cannot be called back, so
       // Escape, the backdrop and Cancel all stop answering while it runs —
       // the same guard the revoke sheets carry.
@@ -1505,7 +1497,6 @@ export function RemoveDeviceSheet({
 export function PassphraseSheet({
   bridge,
   store,
-  subtitle,
   initialMode,
   onClose,
   onDone,
@@ -1513,7 +1504,6 @@ export function PassphraseSheet({
 }: {
   bridge: Bridge;
   store: AccountStore;
-  subtitle: string;
   initialMode: PassphraseMode;
   onClose: () => void;
   onDone: (message: string) => void;
@@ -1573,7 +1563,6 @@ export function PassphraseSheet({
   return (
     <DeviceSheetFrame
       title="Account passphrase"
-      subtitle={subtitle}
       onClose={() => {
         if (busy) return;
         setPassphrase('');

@@ -113,6 +113,29 @@ const PERSONAL_FIXED =
 const MISSING_SERVER_EXPLANATION =
   'The account you were creating could not be found on the server. This may happen because of a restart, server reset, or other error.';
 
+/** Authentication methods for an existing account. */
+type SigninMethod = 'recover' | 'import' | 'pair';
+
+/**
+ * A section label with its position in the pane's sequence. The account
+ * pages are read top to bottom, each section unlocking the next, so the
+ * labels are numbered over the sections actually shown.
+ */
+function StepLabel({
+  n,
+  children,
+}: {
+  n: number;
+  children: ReactNode;
+}): ReactNode {
+  return (
+    <SectionLabel className="step">
+      <span className="n">{n}</span>
+      {children}
+    </SectionLabel>
+  );
+}
+
 /**
  * The profile identifier a server address suggests: the host as letters,
  * digits, and dashes, keeping a port only when it is not the default. So
@@ -508,6 +531,10 @@ function FirstRunSession({
   const [confirmation, setConfirmation] = useState('');
   const [recoveryPhrase, setRecoveryPhrase] = useState('');
   const [pairingPhrase, setPairingPhrase] = useState('');
+  // The sign-in method the user picked on the sign-in step. Not persisted:
+  // it is a choice within one page, and leaving the sign-in path clears it.
+  const [chosenSigninMethod, setChosenSigninMethod] =
+    useState<SigninMethod | null>(null);
   const [goDiscovery, setGoDiscovery] = useState<GoProfileDiscovery | null>(
     null,
   );
@@ -667,6 +694,13 @@ function FirstRunSession({
   ]);
 
   const state = checkpoint.state;
+  // Navigating away from sign-in resets the selected sign-in method. Failed
+  // operations transition through `operation-pending` back to this view,
+  // preserving the selected method and displaying the error inline.
+  useEffect(() => {
+    if (state !== 'existing' && state !== 'operation-pending')
+      setChosenSigninMethod(null);
+  }, [state]);
   const slow = useSlowSetup(
     busy ||
       identityLoading ||
@@ -2276,50 +2310,28 @@ function FirstRunSession({
       Review server settings
     </Button>
   );
-  /* The ways into an account that already exists: recovery by backup phrase,
-     and, with an eligible FOKS CLI profile, credential import or pairing.
-     Drawn under the "Sign in to an existing account" choice on Select an
-     account, and on the managed-local path's own page. */
-  const recoverButton = (
-    <Button
-      variant="primary"
-      disabled={
-        busy || !accountAlias || !recoveryPhrase.trim() || !deviceName.trim()
-      }
-      onClick={() => void recover()}
-    >
-      {pending.some(
-        (row) => row.kind === 'account-recovery' && row.alias === accountAlias,
-      )
-        ? 'Resume recovery'
-        : 'Recover'}
-    </Button>
-  );
   /* The account alias and this device’s name identify the same account
-     whichever way it is reached, so both account pages draw them once, above
-     the ways in. */
-  const identityFields = (
+     whichever way it is reached, so both account pages draw the same two
+     rows. On the sign-in path the chosen method's own row joins them. */
+  const identityRows = (
     <>
-      <SectionLabel>Account and device</SectionLabel>
-      <Inset className="account-form">
-        <InsetRow label="Account alias">
-          <input
-            aria-label="Account alias"
-            value={checkpoint.account?.username ?? username}
-            placeholder="yourname"
-            disabled={Boolean(checkpoint.account)}
-            onChange={(event) => editUsername(event.target.value)}
-          />
-        </InsetRow>
-        <InsetRow label="This device’s name">
-          <input
-            value={checkpoint.account?.deviceName ?? deviceName}
-            placeholder="Your device"
-            disabled={Boolean(checkpoint.account)}
-            onChange={(event) => setDeviceName(event.target.value)}
-          />
-        </InsetRow>
-      </Inset>
+      <InsetRow label="Account alias">
+        <input
+          aria-label="Account alias"
+          value={checkpoint.account?.username ?? username}
+          placeholder="yourname"
+          disabled={Boolean(checkpoint.account)}
+          onChange={(event) => editUsername(event.target.value)}
+        />
+      </InsetRow>
+      <InsetRow label="This device’s name">
+        <input
+          value={checkpoint.account?.deviceName ?? deviceName}
+          placeholder="Your device"
+          disabled={Boolean(checkpoint.account)}
+          onChange={(event) => setDeviceName(event.target.value)}
+        />
+      </InsetRow>
     </>
   );
   const aliasInvalidNotice = usernameAliasInvalid ? (
@@ -2327,127 +2339,191 @@ function FirstRunSession({
       Account alias must contain at least one letter or number.
     </p>
   ) : null;
-  // The ways into an existing account. Recovery's primary button is
-  // `recoverButton`, drawn in the page foot; the CLI cards keep their own.
-  const existingCards = (
-    <div className="signin-methods">
-      <div className="pcard">
-        <h3>Recover with your backup phrase</h3>
-        <p>
-          Enter all 17 words from your backup phrase to restore full access on
-          this device.
-        </p>
-        <Inset className="recovery-fields">
-          <InsetRow label="Phrase">
-            <input
-              type="password"
-              aria-label="Backup phrase"
-              value={recoveryPhrase}
-              onChange={(event) => setRecoveryPhrase(event.target.value)}
+  /* Sign-in authentication methods: backup phrase recovery, or credential
+     import and pairing when an eligible FOKS CLI profile is detected. When only
+     one method is available, it is selected automatically. */
+  const signinMethods: SigninMethod[] = [
+    'recover',
+    ...(goCandidate?.copyable ? (['import'] as const) : []),
+    ...(goCandidate?.pairable ? (['pair'] as const) : []),
+  ];
+  const pendingFor = (kind: PendingOperation['kind']): boolean =>
+    pending.some((row) => row.kind === kind && row.alias === accountAlias);
+  const signinMethod: SigninMethod | null =
+    chosenSigninMethod && signinMethods.includes(chosenSigninMethod)
+      ? chosenSigninMethod
+      : signinMethods.length === 1
+        ? 'recover'
+        : signinMethods.includes('pair') && pendingFor('pairing-acceptance')
+          ? 'pair'
+          : pendingFor('account-recovery')
+            ? 'recover'
+            : null;
+  /* The page foot's primary action follows the method. Recovery and pairing
+     need their phrase typed first; import needs only the alias. */
+  const signinPrimary =
+    signinMethod === 'recover' ? (
+      <Button
+        variant="primary"
+        disabled={
+          busy || !accountAlias || !recoveryPhrase.trim() || !deviceName.trim()
+        }
+        onClick={() => void recover()}
+      >
+        {pendingFor('account-recovery') ? 'Resume recovery' : 'Recover'}
+      </Button>
+    ) : signinMethod === 'import' ? (
+      <Button
+        variant="primary"
+        disabled={busy || !accountAlias}
+        onClick={() => void copyGoCandidate()}
+      >
+        Import credentials
+      </Button>
+    ) : signinMethod === 'pair' ? (
+      <Button
+        variant="primary"
+        disabled={
+          busy || !accountAlias || !deviceName.trim() || !pairingPhrase.trim()
+        }
+        onClick={() => void acceptPairing(false)}
+      >
+        Accept pairing
+      </Button>
+    ) : (
+      <Button variant="primary" disabled>
+        Continue
+      </Button>
+    );
+  const methodError = (key: keyof typeof connectionErrors): ReactNode => {
+    const text = connectionErrors[key];
+    return text ? (
+      <p className="crit" role="alert">
+        <FailureText text={text} reason={reasonFor(text)} />
+      </p>
+    ) : null;
+  };
+  /* The sign-in pages' numbered sections: the method, then, once one is
+     chosen, the account and device rows with the method's own row and notes.
+     `first` is the number of the method section, since Set up your account
+     draws its setup-method group before these. */
+  const signinSections = (first: number): ReactNode => (
+    <>
+      <StepLabel n={first}>How do you want to sign in?</StepLabel>
+      <Inset>
+        <RadioGroup label="Sign-in method">
+          <RadioCard
+            title="Recover with your backup phrase"
+            detail="Enter all 17 words from your backup phrase to restore full access on this device."
+            selected={signinMethod === 'recover'}
+            onSelect={() => setChosenSigninMethod('recover')}
+          />
+          {goCandidate?.copyable ? (
+            <RadioCard
+              title="Import this device’s FOKS CLI credentials"
+              detail="Both apps share the same device credentials. This may require a Keychain prompt."
+              selected={signinMethod === 'import'}
+              onSelect={() => setChosenSigninMethod('import')}
             />
-          </InsetRow>
-        </Inset>
-        {connectionErrors.recover ? (
-          <p className="crit" role="alert">
-            <FailureText
-              text={connectionErrors.recover}
-              reason={reasonFor(connectionErrors.recover)}
-            />
-          </p>
-        ) : null}
-      </div>
-      {goCandidate?.copyable ? (
-        <div className="pcard">
-          <h3>Import this device’s FOKS CLI credentials</h3>
-          <p>
-            Both apps will share the same device credentials. This may require a
-            Keychain prompt. Revoking the device in either client will disable
-            both.
-          </p>
-          <Button
-            variant="primary"
-            className="copy-device"
-            disabled={busy || !accountAlias}
-            onClick={() => void copyGoCandidate()}
-          >
-            Import credentials
-          </Button>
-          {connectionErrors.copy ? (
-            <p className="crit" role="alert">
-              <FailureText
-                text={connectionErrors.copy}
-                reason={reasonFor(connectionErrors.copy)}
-              />
-            </p>
           ) : null}
-        </div>
-      ) : null}
-      {goCandidate?.pairable ? (
-        <div className="pcard">
-          <h3>Use the CLI to approve this as a new device</h3>
-          <p>
-            In Terminal, switch the official FOKS CLI to this account, then run:
-          </p>
-          <CopyBox
-            text="foks --simple-ui key assist"
-            onCopy={(value) =>
-              void bridge
-                .copyText(value)
-                .then(() => toasts.show('Command copied.'))
-            }
-          >
-            <code>foks --simple-ui key assist</code>
-          </CopyBox>
-          <p>
-            Select the account in the CLI, enter the pairing code below, and
-            follow the terminal prompts to complete pairing. Or,{' '}
-            <button
-              type="button"
-              className="lnk"
-              aria-label="Resume pairing"
-              disabled={busy || !accountAlias || !deviceName.trim()}
-              onClick={() => void acceptPairing(true)}
-            >
-              resume pairing
-            </button>{' '}
-            a past account.
-          </p>
-          <Inset className="recovery-fields">
-            <InsetRow label="Pairing phrase">
-              <input
-                type="password"
-                aria-label="Pairing phrase"
-                placeholder="Enter pairing phrase"
-                value={pairingPhrase}
-                onChange={(event) => setPairingPhrase(event.target.value)}
-              />
-            </InsetRow>
-          </Inset>
-          <div className="btns">
-            <Button
-              variant="primary"
-              disabled={
-                busy ||
-                !accountAlias ||
-                !deviceName.trim() ||
-                !pairingPhrase.trim()
+          {goCandidate?.pairable ? (
+            <RadioCard
+              title="Use the CLI to approve this as a new device"
+              detail={
+                <>
+                  Pair with <code>foks --simple-ui key assist</code> in
+                  Terminal.
+                </>
               }
-              onClick={() => void acceptPairing(false)}
-            >
-              Accept pairing
-            </Button>
-          </div>
-          {connectionErrors.pair ? (
-            <p className="crit" role="alert">
-              <FailureText
-                text={connectionErrors.pair}
-                reason={reasonFor(connectionErrors.pair)}
-              />
+              selected={signinMethod === 'pair'}
+              onSelect={() => setChosenSigninMethod('pair')}
+            />
+          ) : null}
+        </RadioGroup>
+      </Inset>
+      {/* If the account already exists, display its details as read-only fields
+          regardless of the selected sign-in method. */}
+      {signinMethod || checkpoint.account ? (
+        <>
+          <StepLabel n={first + 1}>Account and device</StepLabel>
+          {signinMethod === 'pair' ? (
+            <>
+              <p className="hint">
+                In Terminal, switch the official FOKS CLI to this account, then
+                run:
+              </p>
+              <CopyBox
+                text="foks --simple-ui key assist"
+                onCopy={(value) =>
+                  void bridge
+                    .copyText(value)
+                    .then(() => toasts.show('Command copied.'))
+                }
+              >
+                <code>foks --simple-ui key assist</code>
+              </CopyBox>
+            </>
+          ) : null}
+          <Inset className="account-form">
+            {identityRows}
+            {signinMethod === 'recover' ? (
+              <InsetRow label="Phrase">
+                <input
+                  type="password"
+                  aria-label="Backup phrase"
+                  value={recoveryPhrase}
+                  onChange={(event) => setRecoveryPhrase(event.target.value)}
+                />
+              </InsetRow>
+            ) : null}
+            {signinMethod === 'pair' ? (
+              <InsetRow label="Pairing phrase">
+                <input
+                  type="password"
+                  aria-label="Pairing phrase"
+                  placeholder="Enter pairing phrase"
+                  value={pairingPhrase}
+                  onChange={(event) => setPairingPhrase(event.target.value)}
+                />
+              </InsetRow>
+            ) : null}
+          </Inset>
+          {aliasInvalidNotice}
+          {signinMethod === 'import' ? (
+            <p className="hint">
+              Both apps will share the same device credentials. This may require
+              a Keychain prompt. Revoking the device in either client will
+              disable both.
             </p>
           ) : null}
-        </div>
+          {signinMethod === 'pair' ? (
+            <p className="hint">
+              Select the account in the CLI, enter the pairing phrase above, and
+              follow the terminal prompts to complete pairing. Or,{' '}
+              <button
+                type="button"
+                className="lnk"
+                aria-label="Resume pairing"
+                disabled={busy || !accountAlias || !deviceName.trim()}
+                onClick={() => void acceptPairing(true)}
+              >
+                resume pairing
+              </button>{' '}
+              for an existing account.
+            </p>
+          ) : null}
+          {signinMethod
+            ? methodError(
+                signinMethod === 'recover'
+                  ? 'recover'
+                  : signinMethod === 'import'
+                    ? 'copy'
+                    : 'pair',
+              )
+            : null}
+        </>
       ) : null}
-    </div>
+    </>
   );
   /* Where the account page's Back goes; signing in shares it. */
   const accountBackTarget = checkpoint.managedLocal ? 'local' : 'checked';
@@ -2864,7 +2940,7 @@ function FirstRunSession({
               disabled={busy}
               onClick={() => void checkServer()}
             >
-              Use this server
+              Continue
             </Button>
           </Foot>
         }
@@ -3092,7 +3168,8 @@ function FirstRunSession({
     (state === 'existing' && !checkpoint.managedLocal)
   ) {
     // Both choices render on this one page. `existing` is the same page with
-    // "Sign in to an existing account" selected and its cards under the radios.
+    // "Sign in to an existing account" selected and the sign-in method group
+    // drawn as the next section.
     const signingIn = state === 'existing';
     // Organization sign-up is a third choice in the same radio group. It is
     // offered only while the server is known and no account exists yet, and
@@ -3125,7 +3202,7 @@ function FirstRunSession({
               checkpoint.account ? (
                 <Button onClick={() => go('protect')}>Resume protection</Button>
               ) : (
-                recoverButton
+                signinPrimary
               )
             ) : ssoSelected ? (
               <span className="foot-slot" ref={setSsoPrimarySlot} />
@@ -3169,9 +3246,7 @@ function FirstRunSession({
             'Your account keys are generated on this device; only the public keys are sent to the server.'
           )}
         </p>
-        {identityFields}
-        {aliasInvalidNotice}
-        <SectionLabel>Setup method</SectionLabel>
+        <StepLabel n={1}>Setup method</StepLabel>
         <Inset>
           <RadioGroup label="Account setup">
             <div className="choice">
@@ -3305,14 +3380,16 @@ function FirstRunSession({
                   openExisting();
                 }}
               />
-              {signingIn ? (
-                <div className="choice-body">{existingCards}</div>
-              ) : null}
             </div>
           </RadioGroup>
         </Inset>
-        {signingIn ? null : (
+        {signingIn ? (
+          signinSections(2)
+        ) : (
           <>
+            <StepLabel n={2}>Account and device</StepLabel>
+            <Inset className="account-form">{identityRows}</Inset>
+            {aliasInvalidNotice}
             {message ? (
               <p className="crit" role="alert">
                 <FailureText text={message} reason={reasonFor(message)} />
@@ -3340,7 +3417,8 @@ function FirstRunSession({
     );
   }
   // Only the managed-local path keeps a separate page for an existing account;
-  // its Create your account pane has no radios to draw the cards under.
+  // its Create your account pane has no setup-method radios, so the sign-in
+  // method is this page's first section.
   else if (state === 'existing')
     content = (
       <Pane
@@ -3363,7 +3441,7 @@ function FirstRunSession({
                 >
                   Create a new account
                 </Button>
-                {recoverButton}
+                {signinPrimary}
               </>
             )}
           </Foot>
@@ -3375,9 +3453,7 @@ function FirstRunSession({
           with your backup phrase
           {goCandidate ? ' or connect using the official FOKS CLI' : ''}.
         </p>
-        {identityFields}
-        {aliasInvalidNotice}
-        {existingCards}
+        {signinSections(1)}
       </Pane>
     );
   else if (state === 'protect' || state === 'phrase')

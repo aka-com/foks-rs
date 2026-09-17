@@ -1179,14 +1179,12 @@ function ServerBody({
 
 function SheetFrame({
   title,
-  subtitle,
   children,
   footer,
   onClose,
   danger = false,
 }: {
   title: string;
-  subtitle?: string;
   children: ReactNode;
   footer: ReactNode;
   onClose: () => void;
@@ -1198,7 +1196,6 @@ function SheetFrame({
       danger={danger}
       onClose={onClose}
       title={title}
-      subtitle={subtitle}
       footer={footer}
       glyph={
         <span className={`server-mark ${danger ? 'danger' : ''}`}>
@@ -1294,7 +1291,6 @@ function RenameServerSheet({
   return (
     <SheetFrame
       title="Rename server"
-      subtitle="This only changes the server name displayed locally."
       onClose={onClose}
       footer={
         <>

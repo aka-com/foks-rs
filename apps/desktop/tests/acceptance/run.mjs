@@ -646,7 +646,7 @@ async function firstRunWalk(context, origin) {
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
     await reloadAt('Select a server address');
     await page
-      .getByRole('button', { name: 'Use this server', exact: true })
+      .getByRole('button', { name: 'Continue', exact: true })
       .click();
     await page.locator('.pane', { hasText: 'verified' }).waitFor();
     await reloadAt('verified');

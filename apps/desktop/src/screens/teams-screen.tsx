@@ -430,10 +430,8 @@ export function TeamsScreen({
                 }}
               >
                 <span className="menu-choice">
-                  <b>A user</b>
-                  <small>
-                    By username on {displayServerName(snapshot, store)}.
-                  </small>
+                  <b>Add a user…</b>
+                  <small>Invite by their username</small>
                 </span>
               </MenuItem>
               <MenuItem
@@ -445,8 +443,8 @@ export function TeamsScreen({
                 }}
               >
                 <span className="menu-choice">
-                  <b>A team from another server</b>
-                  <small>By federation</small>
+                  <b>Add a team from another server…</b>
+                  <small>Add a remote team via federation</small>
                 </span>
               </MenuItem>
               <div className="menu-separator" role="separator" />

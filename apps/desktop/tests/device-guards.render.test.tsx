@@ -276,7 +276,6 @@ test('a typed passphrase is asked about and an outstanding change is not', async
     createElement(h.sheets.PassphraseSheet, {
       bridge,
       store: h.account,
-      subtitle: 'satoshi on Personal server',
       initialMode: 'change',
       onClose: () => {},
       onDone: () => {},

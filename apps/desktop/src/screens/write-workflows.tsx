@@ -1097,7 +1097,6 @@ function DeleteSheet({
         </span>
       }
       title={`Delete ${nameOf(workflow.item.path)}?`}
-      subtitle={workflow.item.path}
       footer={
         <>
           <Button onClick={() => setWorkflow(null)}>Cancel</Button>

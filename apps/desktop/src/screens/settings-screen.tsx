@@ -38,7 +38,6 @@ import { useSheetGuard } from '../navigation-guard';
 import {
   accountStopped,
   accountStores,
-  accountSubtitle,
   plural,
   serverDisplayName,
   serverName,
@@ -314,7 +313,6 @@ export function SettingsScreen({
         <PassphraseSheet
           bridge={bridge}
           store={passphrase.store}
-          subtitle={accountSubtitle(snapshot, passphrase.store)}
           initialMode={passphrase.mode}
           onClose={() => {
             setSheet(null);

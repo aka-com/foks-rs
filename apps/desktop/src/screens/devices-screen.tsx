@@ -54,7 +54,6 @@ import {
   accountSubtitle,
   plural,
   serverName,
-  shortId,
   usernameOf,
 } from '../model';
 import type { Location, NavigateOptions } from '../location';
@@ -725,11 +724,6 @@ export function DevicesScreen({
                         <span className="t">
                           <b>{entry.name}</b>
                           <small>{kindLabel(entry.kind)}</small>
-                          {entry.source.kind !== 'yubi' && entry.keyId ? (
-                            <span className="kid" title={entry.keyId}>
-                              {shortId(entry.keyId, 10)}
-                            </span>
-                          ) : null}
                         </span>
                       </InsetRow>
                     ))
@@ -746,7 +740,7 @@ export function DevicesScreen({
               </div>
               {/* The two actions that make an account rather than act on a
                   device in the list above. */}
-              <p className="fn">
+              <p className="fn account-more">
                 <Button
                   variant="plain"
                   size="sm"
@@ -757,7 +751,6 @@ export function DevicesScreen({
                 >
                   Recover an account with a paper key…
                 </Button>
-                {' · '}
                 <Button
                   variant="plain"
                   size="sm"
@@ -1085,10 +1078,6 @@ function DeviceDetail({
           >
             <SectionLabel id="device-facts-label">This key</SectionLabel>
             <Inset className="settings-inset middle wide">
-              <InsetRow label="Kind">{kindLabel(entry.kind)}</InsetRow>
-              {entry.role ? (
-                <InsetRow label="Role on the account">{entry.role}</InsetRow>
-              ) : null}
               {entry.scope === 'profile' ? (
                 <InsetRow label="Server">
                   <b>{serverName(snapshot, store)}</b>
@@ -1102,6 +1091,10 @@ function DeviceDetail({
                   <small>on {serverName(snapshot, store)}</small>
                 </InsetRow>
               )}
+              {entry.role ? (
+                <InsetRow label="Role on the account">{entry.role}</InsetRow>
+              ) : null}
+              <InsetRow label="Kind">{kindLabel(entry.kind)}</InsetRow>
               <InsetRow label={entry.keyLabel}>
                 {entry.keyId ? (
                   <CopyBox text={entry.keyId} onCopy={onCopy}>

@@ -272,10 +272,7 @@ test('Add channel opens the New channel step scoped to this group', async () => 
   // group, not the channel picker and not the cross-team one.
   assert.ok(rendered.getByRole('heading', { name: 'New channel' }));
   assert.ok(rendered.getByLabelText('Channel name'));
-  assert.match(
-    document.querySelector('.sheet .hd small')?.textContent ?? '',
-    /^Household · /,
-  );
+  assert.equal(document.querySelector('.sheet .hd small'), null);
   // This flow has no preceding team step, so the left button cancels instead
   // of opening the team picker.
   assert.equal(rendered.queryByRole('button', { name: 'Back' }), null);
@@ -353,7 +350,21 @@ test('the add sheet switches between a person and another server’s group', asy
     ...seg.querySelectorAll<HTMLButtonElement>('button'),
   ];
   assert.equal(person.getAttribute('aria-pressed'), 'true');
+  assert.equal(person.textContent, 'Add a person');
   assert.equal(remote.getAttribute('aria-pressed'), 'false');
+  assert.equal(remote.textContent, 'Add a team on another server');
+  const serverRow = [...document.querySelectorAll('.sheet .fr')].find(
+    (row) => row.querySelector('.k')?.textContent === 'Server',
+  );
+  assert.ok(serverRow);
+  assert.equal(
+    serverRow.querySelector('.a .chip')?.textContent,
+    'this team’s server',
+  );
+  assert.doesNotMatch(
+    document.querySelector('.sheet')?.textContent ?? '',
+    /They need an account on this server/,
+  );
 
   // The person half: the username, the server it is fixed to, and one role
   // card per role, with the one this account cannot grant kept and explained.
@@ -390,8 +401,7 @@ test('the add sheet switches between a person and another server’s group', asy
     'Visibility -1',
   );
 
-  // The group half: a picker over the remote groups this Mac holds, and the
-  // sentence that says what admitting one does.
+  // The group half: a picker over the remote groups this Mac holds.
   await ui.act(async () => {
     ui.fireEvent.click(remote);
   });
@@ -408,11 +418,10 @@ test('the add sheet switches between a person and another server’s group', asy
     ),
     ['household'],
   );
-  const band = document.querySelector('.sheet .band.info');
-  assert.equal(band?.querySelector('b')?.textContent, 'How admission works');
-  assert.match(
-    band?.textContent ?? '',
-    /only the whole admission can be removed/,
+  assert.equal(document.querySelector('.sheet .band.info'), null);
+  assert.doesNotMatch(
+    document.querySelector('.sheet')?.textContent ?? '',
+    /The command admits a team/,
   );
   // The band the person half was given belongs to that half: this one starts
   // where a new admission starts, not where the other answer was left.

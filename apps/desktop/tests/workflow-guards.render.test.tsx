@@ -365,7 +365,6 @@ test('local alias draft prompts on navigation and an active save refuses it', as
       alias: 'personal',
       presentation: {
         title: 'Change local alias',
-        subtitle: 'Account',
         onClose: () => {},
       },
       onComplete: async () => {},

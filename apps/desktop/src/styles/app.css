@@ -545,6 +545,23 @@ body {
   gap: 6px;
 }
 
+.settings-main .account-fact-link {
+  height: auto;
+  padding: 2px 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--accent-ink);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.settings-main .account-fact-link:not([disabled]):hover {
+  background: none;
+  text-decoration: underline;
+}
+
 .group-settings p.fn,
 .settings-main p.fn,
 .settings-main .fn {
@@ -1171,6 +1188,7 @@ body {
   padding-top: 2px;
 }
 
+.pcard > .toggle,
 .pcard details.dd,
 .panel-body details.dd {
   margin-top: 0;
@@ -1218,9 +1236,24 @@ body {
   opacity: 0.55;
 }
 
-/* ---------- account setup choices ----------
-   Each radio owns the form it needs; the selected one expands in place under
-   its card, indented to the card's text column (radio dot + gap). */
+/* Account setup choices */
+.first-run-main .sec.step {
+  gap: 8px;
+}
+
+.first-run-main .sec.step .n {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--chip-bg);
+  color: var(--chip-ink);
+  letter-spacing: 0;
+}
+
+/* Setup radio panel */
 .first-run-main .choice + .choice > .radio {
   border-top: 1px solid var(--line-soft);
 }
@@ -1253,34 +1286,6 @@ body {
 /* Setup primary action */
 .pfoot .foot-slot {
   display: contents;
-}
-
-.first-run-main .recovery-fields .fr {
-  align-items: stretch;
-  min-height: 36px;
-  gap: 0;
-  padding: 0;
-}
-
-.first-run-main .recovery-fields .fr .k {
-  display: flex;
-  align-items: center;
-  width: 140px;
-  padding: 0 14px;
-  white-space: nowrap;
-}
-
-.first-run-main .recovery-fields .fr .v {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-}
-
-.first-run-main .recovery-fields .fr input {
-  align-self: stretch;
-  width: 100%;
-  padding: 0 14px;
-  background: var(--main-surface);
 }
 
 .first-run-main .account-form .fr {
@@ -1320,6 +1325,11 @@ body {
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-md);
   background: var(--surface);
+}
+
+.pcard.ok .facts {
+  border-color: var(--ok-border);
+  background: color-mix(in srgb, var(--ok-solid) 8%, transparent);
 }
 
 .facts > div {
@@ -1929,9 +1939,6 @@ body {
 }
 .first-run-main .official-server {
   margin-top: 16px;
-}
-.first-run-main .copy-device {
-  align-self: flex-start;
 }
 
 /* Account sheet panels */

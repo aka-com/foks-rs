@@ -138,6 +138,12 @@ test('the account panel keeps every workflow row from the accounts pane', async 
       1,
       `expected one "${name}" button`,
     );
+  for (const name of ['Settings › Servers', 'Devices ›', 'Teams ›'])
+    assert.ok(
+      rendered
+        .getByRole('button', { name })
+        .classList.contains('account-fact-link'),
+    );
   // The row names the account by the label this Mac gave it. The StoreRef the
   // address resolves against is opaque and is not drawn anywhere on the page.
   const aliasRow = rendered.getByText('Shown as').parentElement;
@@ -161,12 +167,12 @@ test('the profile’s Teams and Devices facts summarize the account and link to 
     (location) => chosen.push(location),
   );
 
-  // Teams: the names this account belongs to, not a row per team — each
-  // team's own state is Teams' to show.
+  // Teams: a count rather than a list — each team's own state is Teams' to show.
   const teamsButton = rendered.getByRole('button', { name: 'Teams ›' });
   const teamsRow = teamsButton.closest('.fr');
   assert.ok(teamsRow);
-  assert.match(teamsRow?.textContent ?? '', /Household/);
+  assert.ok(ui.within(teamsRow as HTMLElement).getByText('2 teams'));
+  assert.ok(teamsRow?.parentElement?.classList.contains('middle'));
   await ui.act(async () => {
     ui.fireEvent.click(teamsButton);
   });
@@ -189,7 +195,7 @@ test('the profile’s Teams and Devices facts summarize the account and link to 
   assert.equal(rendered.queryByText('paper-backup · Paper key'), null);
 });
 
-test('a group whose roster could not be read still names the team on the Teams fact', async () => {
+test('a team whose roster could not be read remains in the Teams count', async () => {
   const snapshot = await fixture();
   const { rendered } = await renderPeople({
     ...snapshot,
@@ -209,10 +215,9 @@ test('a group whose roster could not be read still names the team on the Teams f
     ],
   });
 
-  // The Teams fact is a plain list of names; whether a team's own roster
-  // could be read is Teams' own state to show, not repeated here.
+  // The Teams fact remains a count when one team's roster cannot be read.
   const teamsButton = rendered.getByRole('button', { name: 'Teams ›' });
-  assert.match(teamsButton.closest('.fr')?.textContent ?? '', /Household/);
+  assert.match(teamsButton.closest('.fr')?.textContent ?? '', /2 teams/);
 });
 
 test('People lists no connected card, so it never drives the reader', async () => {

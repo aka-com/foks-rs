@@ -270,7 +270,7 @@ test('the passphrase sheet opens in the mode its row names, Verify included', as
     ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
     'Account passphrase',
   );
-  assert.ok(ui.within(dialog).getByText('satoshi on Personal server'));
+  assert.equal(dialog.querySelector('.hd small'), null);
   assert.ok(
     ui.within(dialog).getByRole('button', { name: 'Verify passphrase' }),
   );
@@ -338,11 +338,7 @@ test('server display names can be set and cleared through the stable profile id'
     ui.fireEvent.click(rendered.getByRole('button', { name: 'Rename…' }));
   });
   let dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
-  assert.ok(
-    ui
-      .within(dialog)
-      .getByText('This only changes the server name displayed locally.'),
-  );
+  assert.equal(dialog.querySelector('.hd small'), null);
   const field = ui.within(dialog).getByLabelText('Display name');
   assert.equal((field as HTMLInputElement).value, 'Personal server');
   await ui.act(async () => {

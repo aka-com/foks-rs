@@ -745,11 +745,19 @@ for (const method of ['copy', 'pair', 'resume-pair'] as const) {
         name: 'Use the official FOKS server',
       }),
     );
-    ui.fireEvent.click(
-      rendered.view.getByRole('button', { name: 'Use this server' }),
-    );
+    ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Continue' }));
     await rendered.view.findByRole('button', { name: 'Details' });
     ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Continue' }));
+    // Three sign-in methods are available, so a method must be selected before
+    // the footer action appears.
+    ui.fireEvent.click(
+      rendered.view.getByRole('radio', {
+        name:
+          method === 'copy'
+            ? /Import this device’s FOKS CLI credentials/
+            : /Use the CLI to approve this as a new device/,
+      }),
+    );
     if (method === 'copy')
       ui.fireEvent.click(
         rendered.view.getByRole('button', { name: 'Import credentials' }),

@@ -22,8 +22,6 @@ export interface SheetProps {
   /** The tinted mark beside the title — a `KindIcon`, a server mark, a glyph. */
   glyph?: ReactNode;
   title: ReactNode;
-  /** The quiet line under the title. */
-  subtitle?: ReactNode;
   width?: SheetWidth;
   /** The controls along the bottom. Primary action last, as the design sets. */
   footer?: ReactNode;
@@ -38,7 +36,6 @@ export interface SheetProps {
 export function Sheet({
   glyph,
   title,
-  subtitle,
   width = 'base',
   footer,
   titleId,
@@ -51,7 +48,6 @@ export function Sheet({
         {glyph}
         <span className="t">
           <h2 id={titleId}>{title}</h2>
-          {subtitle === undefined ? null : <small>{subtitle}</small>}
         </span>
       </div>
       <div className="sb">{children}</div>

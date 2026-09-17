@@ -178,6 +178,77 @@ test('resumed sign-in and create share a deterministic server Back destination',
   ui.fireEvent.click(r.view.getByRole('button', { name: 'Back' }));
   assert.equal(h.saved()?.state, 'checked');
 });
+test('the account pages are numbered sections and a lone sign-in method is preselected', async () => {
+  const h = await harness();
+  const steps = (view: ReturnType<typeof ui.render>) =>
+    [...view.container.querySelectorAll('.sec.step')].map((el) => [
+      el.querySelector('.n')?.textContent,
+      el.textContent?.slice(1),
+    ]);
+  // Sign-in off the managed path: setup method, sign-in method, then the
+  // account rows. Without a CLI candidate recovery is the only way in, so it
+  // is chosen and its phrase row is drawn with the account rows.
+  const r = h.render({
+    ...h.checkpoint,
+    managedLocal: false,
+    account: undefined,
+    state: 'existing',
+  });
+  assert.deepEqual(steps(r.view), [
+    ['1', 'Setup method'],
+    ['2', 'How do you want to sign in?'],
+    ['3', 'Account and device'],
+  ]);
+  const methods = r.view.getByRole('radiogroup', { name: 'Sign-in method' });
+  assert.deepEqual(
+    ui
+      .within(methods)
+      .getAllByRole('radio')
+      .map((el) => el.getAttribute('aria-checked')),
+    ['true'],
+  );
+  const form = r.view
+    .getByLabelText('Backup phrase')
+    .closest<HTMLElement>('.inset');
+  assert.ok(form);
+  assert.ok(ui.within(form).getByLabelText('Account alias'));
+  assert.ok(ui.within(form).getByLabelText('This device’s name'));
+  assert.ok(r.view.getByRole('button', { name: 'Recover' }));
+  assert.equal(r.view.queryByRole('button', { name: 'Continue' }), null);
+  // Create: no sign-in method group, and the account rows come second.
+  ui.fireEvent.click(
+    r.view.getByRole('radio', { name: /Create a new account/ }),
+  );
+  assert.deepEqual(steps(r.view), [
+    ['1', 'Setup method'],
+    ['2', 'Account and device'],
+  ]);
+  assert.equal(
+    r.view.queryByRole('radiogroup', { name: 'Sign-in method' }),
+    null,
+  );
+  assert.equal(r.view.queryByLabelText('Backup phrase'), null);
+  assert.ok(r.view.getByRole('button', { name: 'Create my account' }));
+  ui.cleanup();
+  // The managed-local page has no setup-method group, so the sign-in method
+  // is its first section.
+  const local = h.render({
+    ...h.checkpoint,
+    account: undefined,
+    state: 'existing',
+  });
+  assert.ok(
+    local.view.getByRole('heading', {
+      name: 'Add this device to your account',
+    }),
+  );
+  assert.deepEqual(steps(local.view), [
+    ['1', 'How do you want to sign in?'],
+    ['2', 'Account and device'],
+  ]);
+  assert.ok(local.view.getByLabelText('Backup phrase'));
+  assert.ok(local.view.getByRole('button', { name: 'Recover' }));
+});
 test('local recover/create choices cannot create a Back cycle', async () => {
   const h = await harness();
   const r = h.render({ ...h.checkpoint, account: undefined, state: 'account' });
@@ -369,7 +440,7 @@ test('changing servers drops an automatically selected CLI host binding', async 
   ui.fireEvent.change(r.view.getByLabelText('Server address'), {
     target: { value: 'other.example:4430' },
   });
-  ui.fireEvent.click(r.view.getByRole('button', { name: 'Use this server' }));
+  ui.fireEvent.click(r.view.getByRole('button', { name: 'Continue' }));
   await ui.waitFor(() => assert.equal(ordinaryChecks, 1));
   assert.equal(goChecks, 0);
 });

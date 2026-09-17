@@ -13,8 +13,6 @@ import { SheetDialog } from './sheet';
 export interface PanelPresentation {
   /** The workflow name. Never qualified with the account alias. */
   title: string;
-  /** Set only when the page that opened the sheet does not name the account. */
-  subtitle?: string;
   onClose: () => void;
 }
 
@@ -40,7 +38,6 @@ export function PanelSheet({
     <SheetDialog
       width="wide"
       title={presentation.title}
-      subtitle={presentation.subtitle}
       dismissible={!busy}
       onClose={presentation.onClose}
       footer={footer}

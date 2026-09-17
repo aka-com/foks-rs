@@ -612,11 +612,11 @@ test('Add people offers a person or a team from another server, each in its own 
   const team = addPeopleItem('A team from another server');
   assert.equal(
     person.querySelector('.menu-choice small')?.textContent,
-    'By username on Acme.',
+    'Invite by their username',
   );
   assert.equal(
     team.querySelector('.menu-choice small')?.textContent,
-    'By federation',
+    'Add a remote team via federation',
   );
   // And the sheet it opens says what it will do, in its own words, naming
   // the group it was given rather than "group".

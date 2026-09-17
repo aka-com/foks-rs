@@ -679,7 +679,7 @@ function AccountPanel({
         </Band>
       ) : null}
       {notices}
-      <Inset className="settings-inset wide">
+      <Inset className="settings-inset middle wide">
         <InsetRow
           label="Username"
           action={
@@ -716,6 +716,7 @@ function AccountPanel({
           action={
             <Button
               size="sm"
+              className="account-fact-link"
               onClick={() =>
                 onNavigate({
                   kind: 'settings',
@@ -740,6 +741,7 @@ function AccountPanel({
           action={
             <Button
               size="sm"
+              className="account-fact-link"
               disabled={stopped.stopped}
               title={reason}
               onClick={() => onNavigate({ kind: 'devices', store: store.id })}
@@ -761,13 +763,14 @@ function AccountPanel({
           action={
             <Button
               size="sm"
+              className="account-fact-link"
               onClick={() => onNavigate({ kind: 'teams', store: store.id })}
             >
               Teams ›
             </Button>
           }
         >
-          {teams.length ? teams.map((team) => team.name).join(', ') : 'None'}
+          {plural(teams.length, 'team')}
         </InsetRow>
       </Inset>
       <div className="fn account-more">

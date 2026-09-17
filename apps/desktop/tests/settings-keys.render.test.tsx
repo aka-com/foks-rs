@@ -162,6 +162,7 @@ test('one page lists every device, paper key and security key together', async (
   // Every row's caption names its type, not its role — the role moved to the
   // key's own page.
   assert.equal(rendered.getAllByText('Computer').length, 2);
+  assert.equal(document.querySelector('.devrow .kid'), null);
   assert.ok(rendered.getByText('paper-backup'));
   assert.ok(rendered.getByText('Paper key'));
   assert.ok(rendered.getByText('primary key'));
@@ -188,11 +189,11 @@ test('one page lists every device, paper key and security key together', async (
   assert.equal(rendered.queryByRole('button', { name: 'More…' }), null);
   assert.ok(rendered.getByRole('button', { name: 'Add a device' }));
   // The recovery action is still reachable, as a quiet link below the list.
-  assert.ok(
-    rendered.getByRole('button', {
-      name: 'Recover an account with a paper key…',
-    }),
-  );
+  const recover = rendered.getByRole('button', {
+    name: 'Recover an account with a paper key…',
+  });
+  assert.ok(recover);
+  assert.doesNotMatch(recover.parentElement?.textContent ?? '', /·/);
 });
 
 /** Open the chooser and continue on the card with this title. */
@@ -822,6 +823,13 @@ test('the local device detail page disables device removal', async () => {
     onNavigate: (location) => chosen.push(location),
   });
 
+  const facts = page.getByRole('region', { name: 'This key' });
+  assert.deepEqual(
+    [...facts.querySelectorAll('.fr > .k')]
+      .slice(0, 3)
+      .map((label) => label.textContent),
+    ['Account', 'Role on the account', 'Kind'],
+  );
   assert.ok(page.getByText('Authenticated on this device now'));
   assert.ok(page.getByText('This device cannot be removed here'));
   assert.equal(

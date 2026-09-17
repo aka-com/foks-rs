@@ -280,22 +280,14 @@ test('app stylesheet uses design tokens and declares no hardcoded colors', async
     app,
     /\.local-field-row\s*\{[^}]*min-height: 36px;[^}]*padding: 0 16px;/,
   );
+  // The account pages' numbered section labels: the numeral is an 18px disc
+  // drawn from the chip tokens, and the phrase rows joined the account form,
+  // so no separate `.recovery-fields` geometry survives.
   assert.match(
     app,
-    /\.first-run-main \.recovery-fields \.fr\s*\{[^}]*align-items: stretch;[^}]*min-height: 36px;[^}]*padding: 0;/,
+    /\.first-run-main \.sec\.step \.n\s*\{[^}]*width: 18px;[^}]*height: 18px;[^}]*border-radius: 50%;[^}]*background: var\(--chip-bg\);/,
   );
-  assert.match(
-    app,
-    /\.first-run-main \.recovery-fields \.fr \.k\s*\{[^}]*display: flex;[^}]*align-items: center;[^}]*width: 140px;[^}]*white-space: nowrap;/,
-  );
-  assert.match(
-    app,
-    /\.first-run-main \.recovery-fields \.fr \.v\s*\{[^}]*display: flex;[^}]*flex: 1;/,
-  );
-  assert.match(
-    app,
-    /\.first-run-main \.recovery-fields \.fr input\s*\{[^}]*align-self: stretch;[^}]*width: 100%;[^}]*padding: 0 14px;/,
-  );
+  assert.doesNotMatch(app, /\.recovery-fields|\.signin-methods/);
   assert.match(
     app,
     /\.first-run-main \.account-form \.fr\s*\{[^}]*align-items: stretch;[^}]*min-height: 36px;[^}]*padding: 0;/,

@@ -843,12 +843,30 @@
   border-color: var(--accent);
   outline-offset: 0;
 }
-/* New chat's team and channel picks: the group's own mark rides in the row's
-   first line, so a team is recognized by the mark it carries everywhere. */
-.chat-pick .radio b {
-  display: flex;
+/* New-chat channel selection uses a two-column grid for team avatars and text. */
+.chat-pick .radio:has(.kico) {
   align-items: center;
-  gap: 8px;
+}
+.chat-pick .radio:has(.kico) .rb {
+  margin-top: 0;
+}
+.chat-pick .radio .t:has(.kico) {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: center;
+  min-height: 26px;
+}
+.chat-pick .radio .t:has(.kico) b {
+  display: contents;
+}
+.chat-pick .radio .t .kico {
+  grid-row: 1 / 3;
+}
+.chat-pick .radio .t:has(.kico) small {
+  grid-column: 2;
+  margin-top: 0;
+  line-height: 1.3;
 }
 .chat-create .inset + .sec {
   margin-top: 14px;

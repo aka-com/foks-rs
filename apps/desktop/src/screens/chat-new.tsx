@@ -426,13 +426,6 @@ export function NewChatSheet({
             ? 'New chat'
             : 'Pick a channel'
       }
-      subtitle={
-        step === 'team'
-          ? 'Pick a team.'
-          : picked
-            ? `${picked.store.name} · ${picked.detail}`
-            : undefined
-      }
       onClose={onClose}
       dismissible={!locked}
       footer={

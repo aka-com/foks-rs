@@ -5,10 +5,12 @@
  * account header that names the active account and opens the account menu, and
  * over the agent light at the foot. The rail's top is the window's traffic-light
  * strip: there is no title bar above it. The rail does not enumerate stores;
- * Files and Teams list them on their own pages. Control-Tab walks the six tabs.
- * Chat and Teams carry a count on the tab that can resolve it; Devices and
- * Settings carry a dot instead, since neither has a number to substantiate.
- * * The rail is 200px open and 46px collapsed. The width is selected by the user
+ * Files and Teams list them on their own pages. Control-Tab cycles through the
+ * six tabs. Every tab's indicator sits in one trailing slot: Chat and Teams
+ * carry a
+ * muted count, Devices and Settings a dot, since neither has a number to
+ * substantiate, and Chat a spinner while its counts load.
+ * The rail is 200px open and 46px collapsed. The width is selected by the user
  * from the rail itself: it never expands on hover or focus.
  */
 
@@ -413,7 +415,7 @@ export function AccountHeader({
                     return entry.label ? (
                       <>
                         {name}
-                        <span className="host">{` · ${entry.name}`}</span>
+                        <span className="host">{` ${entry.name}`}</span>
                       </>
                     ) : (
                       name
@@ -547,7 +549,7 @@ export function AccountHeader({
 function railChatUnread(
   snapshot: AgentSnapshot,
   inbox: ReturnType<typeof useSidebarInbox>,
-): { label: string; description: string } | null {
+): RailCount | { loading: true; description: string } | null {
   let total = 0;
   let known = false;
   let pending = false;
@@ -563,7 +565,41 @@ function railChatUnread(
     }
   }
   if (known) return { label: String(total), description: `${total} unread` };
-  return pending ? { label: '…', description: 'Loading unread counts' } : null;
+  return pending
+    ? { loading: true, description: 'Loading unread counts' }
+    : null;
+}
+
+type RailCount = { label: string; description: string };
+
+/**
+ * Standard trailing status slot for each tab. Unread counts use neutral text,
+ * dots indicate actionable status without a numeric value, `warn` uses amber,
+ * and `loading` renders a ring spinner.
+ */
+function RailTail({
+  kind,
+  description,
+  children,
+}: {
+  kind: 'count' | 'dot' | 'dot warn' | 'loading';
+  description: string;
+  children?: ReactNode;
+}): ReactNode {
+  return (
+    <span
+      className={`rail-tail ${kind}`}
+      role={kind === 'loading' ? 'status' : undefined}
+      aria-label={description}
+      title={description}
+    >
+      {kind === 'loading' ? (
+        <i className="spin" aria-hidden="true" />
+      ) : (
+        children
+      )}
+    </span>
+  );
 }
 
 export function Sidebar({
@@ -591,47 +627,35 @@ export function Sidebar({
   const unread = snapshot ? railChatUnread(snapshot, chatInbox) : null;
   const here = railTabOf(location);
   /**
-   * A tab's own badge: a count in `railChatUnread`'s own markup for Chat and
-   * Teams, a plain dot for Devices, and an amber one for Settings. The
-   * collapsed rail rides every one of these on the icon's own corner, the
-   * same rule `chat-unread` already follows there.
+   * A tab's own indicator: a muted count for Chat and Teams, a spinner for
+   * Chat while its counts load, a dot for Devices, and an amber one for
+   * Settings. In collapsed mode, indicators render as overlay badges on the
+   * icon's upper corner.
    */
   const railTail = (tab: RailTab): ReactNode => {
-    if (tab === 'chat')
-      return unread ? (
-        <span
-          className="chat-unread"
-          aria-label={unread.description}
-          title={unread.description}
-        >
+    if (tab === 'chat') {
+      if (!unread) return undefined;
+      if ('loading' in unread)
+        return <RailTail kind="loading" description={unread.description} />;
+      return (
+        <RailTail kind="count" description={unread.description}>
           {unread.label}
-        </span>
-      ) : undefined;
+        </RailTail>
+      );
+    }
     if (tab === 'teams')
       return teamRequests ? (
-        <span
-          className="chat-unread"
-          aria-label={teamRequests.description}
-          title={teamRequests.description}
-        >
+        <RailTail kind="count" description={teamRequests.description}>
           {teamRequests.label}
-        </span>
+        </RailTail>
       ) : undefined;
     if (tab === 'devices')
       return devicesAlert ? (
-        <span
-          className="tabdot"
-          aria-label={devicesAlert.description}
-          title={devicesAlert.description}
-        />
+        <RailTail kind="dot" description={devicesAlert.description} />
       ) : undefined;
     if (tab === 'settings')
       return settingsAlert ? (
-        <span
-          className="tabdot warn"
-          aria-label={settingsAlert.description}
-          title={settingsAlert.description}
-        />
+        <RailTail kind="dot warn" description={settingsAlert.description} />
       ) : undefined;
     return undefined;
   };

@@ -250,7 +250,7 @@ test('first-run keeps a newly verified server across shell navigation', async ()
   ui.fireEvent.click(
     rendered.getByRole('button', { name: 'Use the official FOKS server' }),
   );
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Use this server' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Continue' }));
 
   await ui.waitFor(() => assert.equal(checks, 1));
   await rendered.findByRole('button', { name: 'Details' });
@@ -368,7 +368,7 @@ test('discovers Go CLI profile in StrictMode and passes profile credentials to s
     (rendered.getByLabelText('Server address') as HTMLInputElement).value,
     'foks.app:4430',
   );
-  ui.fireEvent.click(rendered.getByRole('button', { name: /Use this server/ }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: /Continue/ }));
   await ui.waitFor(() => assert.equal(checks.length, 1));
   assert.equal(checks[0][0], candidate.candidateId);
   assert.equal(checks[0][1], candidate.hostId);
@@ -508,6 +508,7 @@ test('disables account selection and dialog dismissal while server verification 
   await ui.waitFor(() =>
     assert.ok(rendered.getByRole('radio', { name: /cli-owner/ })),
   );
+  assert.equal(rendered.queryByText('CLI accounts on this device'), null);
   ui.fireEvent.click(rendered.getByRole('radio', { name: /cli-owner/ }));
   ui.fireEvent.click(
     rendered.getByRole('button', { name: 'Use official FOKS server' }),
@@ -741,7 +742,7 @@ test('native-shaped account creation is not rewound by the pre-mutation inventor
   ui.fireEvent.click(
     view.getByRole('button', { name: 'Use the official FOKS server' }),
   );
-  ui.fireEvent.click(view.getByRole('button', { name: 'Use this server' }));
+  ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));
   await view.findByRole('button', { name: 'Details' });
   assert.equal(checks, 1);
   ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));
@@ -840,7 +841,7 @@ test('first-run account navigation, server edits, and connection errors stay sco
   ui.fireEvent.click(
     view.getByRole('button', { name: 'Use the official FOKS server' }),
   );
-  ui.fireEvent.click(view.getByRole('button', { name: 'Use this server' }));
+  ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));
   await view.findByRole('button', { name: 'Details' });
   assert.ok(view.queryByText('Pinned on this device') === null);
   const addressField = view.getByLabelText('Server address');
@@ -848,44 +849,94 @@ test('first-run account navigation, server edits, and connection errors stay sco
   ui.fireEvent.change(addressField, { target: { value: 'changed.example' } });
   assert.equal(document.activeElement, view.getByLabelText('Server address'));
   assert.ok(view.queryByRole('button', { name: 'Details' }) === null);
-  assert.ok(view.queryByRole('button', { name: 'Continue' }) === null);
-  ui.fireEvent.click(view.getByRole('button', { name: 'Use this server' }));
-  await view.findByRole('button', { name: 'Continue' });
   ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));
-  const titles = [...view.container.querySelectorAll('.pcard h3')].map(
-    (el) => el.textContent,
+  await view.findByRole('button', { name: 'Details' });
+  ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));
+  // The sign-in method is a second radio group, at the same width as the
+  // setup-method group; with three ways in, none is chosen yet, so the
+  // account rows and the foot's action wait for the choice.
+  const methods = view.getByRole('radiogroup', { name: 'Sign-in method' });
+  assert.deepEqual(
+    ui
+      .within(methods)
+      .getAllByRole('radio')
+      .map((el) => el.textContent),
+    [
+      'Recover with your backup phraseEnter all 17 words from your backup phrase to restore full access on this device.',
+      'Import this device’s FOKS CLI credentialsBoth apps share the same device credentials. This may require a Keychain prompt.',
+      'Use the CLI to approve this as a new devicePair with foks --simple-ui key assist in Terminal.',
+    ],
   );
-  assert.deepEqual(titles, [
-    'Recover with your backup phrase',
-    'Import this device’s FOKS CLI credentials',
-    'Use the CLI to approve this as a new device',
-  ]);
-  ui.fireEvent.click(view.getByRole('button', { name: 'Import credentials' }));
-  const copyError = await view.findByText('Copy failed');
+  assert.deepEqual(
+    [...view.container.querySelectorAll('.sec.step')].map(
+      (el) => el.textContent,
+    ),
+    ['1Setup method', '2How do you want to sign in?'],
+  );
+  assert.equal(view.queryByLabelText('Account alias'), null);
+  assert.ok(
+    (view.getByRole('button', { name: 'Continue' }) as HTMLButtonElement)
+      .disabled,
+  );
+  ui.fireEvent.click(
+    view.getByRole('radio', { name: /Import this device’s FOKS CLI/ }),
+  );
   assert.equal(
-    copyError.closest('.pcard')?.querySelector('h3')?.textContent,
-    'Import this device’s FOKS CLI credentials',
+    view.container.querySelectorAll('.sec.step')[2]?.textContent,
+    '3Account and device',
+  );
+  assert.ok(view.getByLabelText('Account alias'));
+  assert.equal(view.queryByLabelText('Backup phrase'), null);
+  ui.fireEvent.click(view.getByRole('button', { name: 'Import credentials' }));
+  await view.findByText('Copy failed');
+  ui.fireEvent.click(
+    view.getByRole('radio', { name: /Recover with your backup phrase/ }),
+  );
+  assert.equal(view.queryByText('Copy failed'), null);
+  assert.equal(
+    view.queryByRole('button', { name: 'Import credentials' }),
+    null,
   );
   ui.fireEvent.change(view.getByLabelText('Backup phrase'), {
     target: { value: 'one two three' },
   });
   ui.fireEvent.click(view.getByRole('button', { name: 'Recover' }));
-  const recoverError = await view.findByText('Recovery failed');
-  assert.equal(
-    recoverError.closest('.pcard')?.querySelector('h3')?.textContent,
-    'Recover with your backup phrase',
-  );
-  // Both choices live on Set up your account: switching the radio swaps what is
-  // drawn under it without leaving the page.
+  await view.findByText('Recovery failed');
+  // Both choices live on Set up your account: switching the radio swaps the
+  // sections under it without leaving the page, and returning to sign-in
+  // starts the method choice over.
   ui.fireEvent.click(view.getByRole('radio', { name: /Create a new account/ }));
   assert.ok(view.getByPlaceholderText('yourname'));
   assert.ok(view.getByPlaceholderText('Your device'));
-  assert.equal(view.queryByText('Recover with your backup phrase'), null);
+  assert.equal(
+    view.queryByRole('radiogroup', { name: 'Sign-in method' }),
+    null,
+  );
+  assert.deepEqual(
+    [...view.container.querySelectorAll('.sec.step')].map(
+      (el) => el.textContent,
+    ),
+    ['1Setup method', '2Account and device'],
+  );
   ui.fireEvent.click(
     view.getByRole('radio', { name: /Sign in to an existing account/ }),
   );
-  assert.ok(view.getByText('Recover with your backup phrase'));
   assert.ok(view.getByRole('heading', { name: 'Set up your account' }));
+  assert.equal(
+    view
+      .getByRole('radio', { name: /Recover with your backup phrase/ })
+      .getAttribute('aria-checked'),
+    'false',
+  );
+  assert.equal(view.queryByLabelText('Backup phrase'), null);
+  ui.fireEvent.click(
+    view.getByRole('radio', { name: /Use the CLI to approve/ }),
+  );
+  assert.ok(view.getByLabelText('Pairing phrase'));
+  assert.ok(
+    (view.getByRole('button', { name: 'Accept pairing' }) as HTMLButtonElement)
+      .disabled,
+  );
   ui.fireEvent.click(view.getByRole('button', { name: 'Resume pairing' }));
   await view.findByRole('heading', { name: 'Check account setup' });
   assert.equal(view.queryByRole('button', { name: 'Recover' }), null);
@@ -1051,6 +1102,11 @@ test('resumed sign-in step rediscovers the CLI profile for the verified server',
   await rendered.findByText('Import this device’s FOKS CLI credentials');
   rendered.getByText('Use the CLI to approve this as a new device');
   assert.equal(scans, 1);
+  // The account rows follow the method choice.
+  assert.equal(rendered.queryByLabelText('Account alias'), null);
+  ui.fireEvent.click(
+    rendered.getByRole('radio', { name: /Recover with your backup phrase/ }),
+  );
   assert.equal(
     (rendered.getByLabelText('Account alias') as HTMLInputElement).value,
     'cli-owner',

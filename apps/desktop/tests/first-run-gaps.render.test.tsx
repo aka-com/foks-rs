@@ -372,7 +372,7 @@ test('allows leaving setup during server verification, but disables leaving duri
     },
   );
   ui.fireEvent.click(
-    address.view.getByRole('button', { name: 'Use this server' }),
+    address.view.getByRole('button', { name: 'Continue' }),
   );
   const leave = address.view.getByRole('button', {
     name: 'Leave setup',

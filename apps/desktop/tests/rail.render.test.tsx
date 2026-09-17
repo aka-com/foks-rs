@@ -141,14 +141,21 @@ test('the rail draws six tabs and marks the one that owns the location', async (
 
 test('Chat displays total unread and the avatar displays an attention indicator', async () => {
   const { journal } = await rail({ kind: 'all' }, '2', 3);
+  // While unread counts load, Chat displays a status spinner with an
+  // accessible label.
+  const spinner = document.querySelector('.side.rail .rail-tail.loading');
+  assert.ok(spinner, 'the Chat tab spins while its counts load');
+  assert.equal(spinner.getAttribute('role'), 'status');
+  assert.equal(spinner.getAttribute('aria-label'), 'Loading unread counts');
+  assert.ok(spinner.querySelector('.spin'));
   // The badge is one number over every team whose chat this Mac can read: the
   // fixture's two readable groups, two unread apiece.
   const badge = await ui.waitFor(() => {
-    const node = document.querySelector('.side.rail .chat-unread');
-    assert.ok(node, 'the Chat tab draws its badge');
-    assert.notEqual(node.textContent, '…');
+    const node = document.querySelector('.side.rail .rail-tail.count');
+    assert.ok(node, 'the Chat tab draws its count');
     return node;
   });
+  assert.equal(document.querySelector('.side.rail .rail-tail.loading'), null);
   assert.equal(badge.textContent, '4');
   assert.equal(badge.getAttribute('aria-label'), '4 unread');
   // Attention is advertised on the account avatar, not on a tab, and the dot
@@ -166,9 +173,11 @@ test('no unread and nothing to attend to leaves both marks off', async () => {
   await ui.waitFor(() => {
     assert.ok(document.querySelector('.side.rail .rail-tabs .nav'));
   });
-  assert.equal(document.querySelector('.side.rail .chat-unread'), null);
+  await ui.waitFor(() => {
+    assert.equal(document.querySelector('.side.rail .rail-tail.loading'), null);
+  });
+  assert.equal(document.querySelector('.side.rail .rail-tail'), null);
   assert.equal(document.querySelector('.side.rail .attn'), null);
-  assert.equal(document.querySelector('.side.rail .tabdot'), null);
 });
 
 test('renders a Teams count, Devices and Settings dots, and no empty indicators', async () => {
@@ -183,21 +192,21 @@ test('renders a Teams count, Devices and Settings dots, and no empty indicators'
     { description: 'foks.partner.dev: not verified' },
   );
   const [, , teamsTab, devicesTab, , settingsTab] = tabs();
-  const teamsBadge = teamsTab.querySelector('.chat-unread');
-  assert.ok(teamsBadge, 'Teams carries a badge in the chat-unread markup');
+  const teamsBadge = teamsTab.querySelector('.rail-tail.count');
+  assert.ok(teamsBadge, 'Teams carries a count in the same slot as Chat');
   assert.equal(teamsBadge.textContent, '2');
   assert.equal(
     teamsBadge.getAttribute('aria-label'),
     '2 requests to join a team',
   );
-  const devicesDot = devicesTab.querySelector('.tabdot');
+  const devicesDot = devicesTab.querySelector('.rail-tail.dot');
   assert.ok(devicesDot, 'Devices carries its dot');
   assert.equal(devicesDot.classList.contains('warn'), false);
   assert.equal(
     devicesDot.getAttribute('aria-label'),
     'An account has no paper key',
   );
-  const settingsDot = settingsTab.querySelector('.tabdot');
+  const settingsDot = settingsTab.querySelector('.rail-tail.dot');
   assert.ok(settingsDot, 'Settings carries its dot');
   assert.ok(settingsDot.classList.contains('warn'));
   assert.equal(
@@ -205,8 +214,8 @@ test('renders a Teams count, Devices and Settings dots, and no empty indicators'
     'foks.partner.dev: not verified',
   );
 
-  // Collapsed, every badge still draws — riding the icon's own corner, the
-  // rule `chat-unread` already followed there.
+  // Collapsed, every indicator still draws, in the same slot the stylesheet
+  // folds to the icon's corner.
   await rail(
     { kind: 'all' },
     '0',
@@ -217,9 +226,9 @@ test('renders a Teams count, Devices and Settings dots, and no empty indicators'
     { description: 'An account has no paper key' },
     { description: 'foks.partner.dev: not verified' },
   );
-  assert.ok(document.querySelector('.side.rail.is-narrow .chat-unread'));
+  assert.ok(document.querySelector('.side.rail.is-narrow .rail-tail.count'));
   assert.equal(
-    document.querySelectorAll('.side.rail.is-narrow .tabdot').length,
+    document.querySelectorAll('.side.rail.is-narrow .rail-tail.dot').length,
     2,
   );
 });
@@ -227,9 +236,9 @@ test('renders a Teams count, Devices and Settings dots, and no empty indicators'
 test('with nothing known, Teams, Devices and Settings draw nothing', async () => {
   await rail({ kind: 'all' }, '0', 0);
   const [, , teamsTab, devicesTab, , settingsTab] = tabs();
-  assert.equal(teamsTab.querySelector('.chat-unread'), null);
-  assert.equal(devicesTab.querySelector('.tabdot'), null);
-  assert.equal(settingsTab.querySelector('.tabdot'), null);
+  assert.equal(teamsTab.querySelector('.rail-tail'), null);
+  assert.equal(devicesTab.querySelector('.rail-tail'), null);
+  assert.equal(settingsTab.querySelector('.rail-tail'), null);
 });
 
 test('the rail foot reports the connection, and says nothing about the step', async () => {
@@ -351,7 +360,7 @@ test('the account menu switches account, adds one, and locks the app', async () 
   let menu = await open();
   assert.ok(
     [...menu.querySelectorAll('.cap')].some(
-      (entry) => entry.textContent === 'Personal server · foks.example.net',
+      (entry) => entry.textContent === 'Personal server foks.example.net',
     ),
   );
   const other = [...menu.querySelectorAll('button')].find((button) =>
