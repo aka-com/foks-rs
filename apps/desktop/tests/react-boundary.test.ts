@@ -128,7 +128,7 @@ test('icons are structured data, not markup strings', async () => {
     body.match(/^ {2}(?:'[a-z][a-z0-9-]*'|[A-Za-z][A-Za-z0-9]*): \[/gm) ?? [];
   assert.equal(
     names.length,
-    50,
-    'all shell icons, including sort marks, the chat glyph, the composer marks the agent has no action for, the sidebar panel marks, the Devices laptop glyph and first-run’s local door icon, are ported',
+    37,
+    'all shell icons, including the sort marks, the chat glyph, the sidebar panel marks, the Devices laptop glyph and first-run’s local door icon, are ported; an icon no screen draws is deleted rather than kept',
   );
 });

@@ -225,6 +225,7 @@ function TreeRow({
         <button
           type="button"
           className={open ? 'twist open' : 'twist'}
+          aria-expanded={open}
           aria-label={open ? `Collapse ${name}` : `Expand ${name}`}
           onClick={(event) => {
             event.stopPropagation();

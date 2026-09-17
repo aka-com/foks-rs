@@ -275,6 +275,7 @@ export function SettingsScreen({
     <div className="settingslayout">
       <nav className="side subnav-side" aria-label="Settings sections">
         <Tabs
+          orientation="vertical"
           label="Settings sections"
           idBase={SETTINGS_TABS}
           value={section}

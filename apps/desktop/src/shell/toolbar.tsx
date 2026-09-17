@@ -115,7 +115,7 @@ export function Toolbar({
               <button
                 key={key}
                 type="button"
-                role="menuitem"
+                role="menuitemradio"
                 className={sort === key ? 'on' : ''}
                 aria-checked={sort === key}
                 onClick={() => {

@@ -30,10 +30,6 @@ export const FOKS_ICONS = {
     ],
     ['path', { d: 'M14 3v4h4' }],
   ],
-  link: [
-    ['path', { d: 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1' }],
-    ['path', { d: 'M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1' }],
-  ],
   people: [
     ['circle', { cx: 9, cy: 8, r: 3.2 }],
     ['path', { d: 'M3 19c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5' }],
@@ -59,12 +55,6 @@ export const FOKS_ICONS = {
     ['rect', { x: 4, y: 13.5, width: 6.5, height: 6.5, rx: 1.5 }],
     ['rect', { x: 13.5, y: 13.5, width: 6.5, height: 6.5, rx: 1.5 }],
   ],
-  list: [
-    ['path', { d: 'M9 6h11M9 12h11M9 18h11' }],
-    ['circle', { cx: 5, cy: 6, r: 1, fill: 'currentColor' }],
-    ['circle', { cx: 5, cy: 12, r: 1, fill: 'currentColor' }],
-    ['circle', { cx: 5, cy: 18, r: 1, fill: 'currentColor' }],
-  ],
   chev: [['path', { d: 'M6 9l6 6 6-6' }]],
   info: [
     ['circle', { cx: 12, cy: 12, r: 8.5 }],
@@ -74,11 +64,6 @@ export const FOKS_ICONS = {
   copy: [
     ['rect', { x: 9, y: 9, width: 11, height: 11, rx: 2 }],
     ['path', { d: 'M5 15V5a1 1 0 0 1 1-1h10' }],
-  ],
-  path: [
-    ['circle', { cx: 6, cy: 6, r: 2 }],
-    ['circle', { cx: 18, cy: 18, r: 2 }],
-    ['path', { d: 'M8 6h5a4 4 0 0 1 0 8h-2a4 4 0 0 0 0 4h5' }],
   ],
   trash: [['path', { d: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13' }]],
   eye: [
@@ -93,10 +78,7 @@ export const FOKS_ICONS = {
       },
     ],
   ],
-  bell: [['path', { d: 'M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4' }]],
   plus: [['path', { d: 'M12 5v14M5 12h14' }]],
-  arrow: [['path', { d: 'M5 12h14M13 6l6 6-6 6' }]],
-  arrowUpRight: [['path', { d: 'M6 18L18 6M6 6h12v12' }]],
   folder: [
     [
       'path',
@@ -119,10 +101,6 @@ export const FOKS_ICONS = {
     ['path', { d: 'M12 4l8 4-8 4-8-4z' }],
     ['path', { d: 'M4 12l8 4 8-4' }],
     ['path', { d: 'M4 16l8 4 8-4' }],
-  ],
-  sortTime: [
-    ['circle', { cx: 12, cy: 12, r: 8.5 }],
-    ['path', { d: 'M12 7.5V12l3 2' }],
   ],
   x: [['path', { d: 'M6 6l12 12M18 6L6 18' }]],
   gear: [
@@ -153,7 +131,6 @@ export const FOKS_ICONS = {
     ['circle', { cx: 12, cy: 12, r: 8.5 }],
     ['path', { d: 'M12 8v5M12 16h.01' }],
   ],
-  minus: [['path', { d: 'M5 12h14' }]],
   again: [
     ['path', { d: 'M20 12a8 8 0 1 1-2.6-5.9' }],
     ['path', { d: 'M20 4v4h-4' }],
@@ -171,12 +148,7 @@ export const FOKS_ICONS = {
       },
     ],
   ],
-  mail: [
-    ['rect', { x: 3, y: 5, width: 18, height: 14, rx: 2 }],
-    ['path', { d: 'M3 7l9 6 9-6' }],
-  ],
   flag: [['path', { d: 'M5 21V4h13l-2.5 4L18 12H5' }]],
-  plug: [['path', { d: 'M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4' }]],
   door: [
     ['path', { d: 'M5 21V3h9v18M14 21h5M3 21h2' }],
     ['circle', { cx: 11.5, cy: 12, r: 1, fill: 'currentColor' }],
@@ -190,22 +162,6 @@ export const FOKS_ICONS = {
     ],
   ],
   /* The composer's three controls the agent has no action for. */
-  attach: [
-    [
-      'path',
-      {
-        d: 'M20 11.5 12 19.5a4.5 4.5 0 0 1-6.4-6.4l8-8a3 3 0 0 1 4.3 4.3l-8 8a1.5 1.5 0 0 1-2.2-2.2l7.3-7.3',
-      },
-    ],
-  ],
-  smile: [
-    ['circle', { cx: 12, cy: 12, r: 9 }],
-    ['path', { d: 'M8.5 14.5a4.5 4.5 0 0 0 7 0M9 9.5v.5M15 9.5v.5' }],
-  ],
-  timer: [
-    ['circle', { cx: 12, cy: 13, r: 8 }],
-    ['path', { d: 'M12 9v4l2.5 2M9 2h6' }],
-  ],
   /* Sidebar collapse toggle, expanded state. */
   'panel-filled': [
     ['rect', { x: 3, y: 4, width: 18, height: 16, rx: 2 }],
@@ -229,6 +185,3 @@ export const FOKS_ICONS = {
 
 /** Every icon name the shell can draw. */
 export type FoksIconName = keyof typeof FOKS_ICONS;
-
-/** The names, in the order `shell.js` declares them. */
-export const FOKS_ICON_NAMES = Object.keys(FOKS_ICONS) as FoksIconName[];

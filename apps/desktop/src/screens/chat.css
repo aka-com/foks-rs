@@ -463,25 +463,6 @@
   display: flex;
   gap: 9px;
 }
-.chat-how {
-  margin-top: 18px;
-  max-width: 430px;
-  padding: 10px 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  text-align: left;
-  font-size: 12px;
-}
-.chat-how h3 {
-  margin: 0 0 4px;
-  font-size: 12px;
-}
-.chat-how ol {
-  margin: 0;
-  padding-left: 18px;
-  color: var(--muted);
-}
 
 /* Begin channel info panel. */
 .chat-info {
@@ -588,12 +569,7 @@
 .chat-info .chat-local-settings select {
   margin-left: auto;
 }
-.chat-info-foot {
-  margin: 0;
-  padding: 10px 14px;
-  font-size: 12px;
-  color: var(--muted);
-}
+
 .chat-conversation > .band {
   flex: none;
   margin: 12px 20px 0;

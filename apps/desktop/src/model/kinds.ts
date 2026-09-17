@@ -13,7 +13,7 @@
  * decoded and never reach this module.
  */
 
-import type { Item, ItemKind, NodeKind, NodeType } from './types';
+import type { Item, ItemKind } from './types';
 
 export interface KindMeta {
   /** Display label for the kind. */
@@ -58,30 +58,6 @@ export function kindOf(item: Pick<Item, 'kind' | 'path' | 'value'>): ItemKind {
   )
     return 'Password';
   return 'Document';
-}
-
-const NODE_TYPES: Readonly<Record<NodeKind, NodeType>> = {
-  Secret: 'small_file',
-  File: 'file',
-  Link: 'symlink',
-  Folder: 'directory',
-};
-
-/** Maps an item kind to its underlying filesystem node type. */
-export function rtype(item: Pick<Item, 'kind'>): NodeType {
-  return NODE_TYPES[item.kind];
-}
-
-const NODE_WORDS: Readonly<Record<NodeKind, string>> = {
-  Secret: 'a Secret',
-  File: 'a file',
-  Link: 'a link',
-  Folder: 'a folder',
-};
-
-/** How the details panel names the node type in prose. */
-export function rtypeWords(item: Pick<Item, 'kind'>): string {
-  return NODE_WORDS[item.kind];
 }
 
 /** A Password that is also filed under `/logins/` — the site-tile case. */

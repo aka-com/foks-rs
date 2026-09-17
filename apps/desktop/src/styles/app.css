@@ -59,10 +59,6 @@ body {
   z-index: 3;
 }
 
-.body.group-panel-open {
-  padding-right: 320px;
-}
-
 .main > .details .dh h2 {
   display: flex;
   gap: 6px;
@@ -317,13 +313,6 @@ body {
   min-width: 0;
 }
 
-.rfoot {
-  font-size: 12.5px;
-  color: var(--muted);
-  margin: 10px 2px 0;
-  line-height: 1.5;
-}
-
 /* Member roster sections */
 .sec .count {
   margin-left: 6px;
@@ -498,84 +487,6 @@ body {
   opacity: 1;
 }
 
-/* The per-account checks are folded into one row: an occasional action, not a
-   landing surface. The head is a disclosure button, the body its rows. */
-.disc {
-  /* The page around it is full-bleed, so the box carries the 20px inset the
-     rows draw for themselves. */
-  margin: 16px 20px 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-}
-
-.disc-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  border: 0;
-  background: none;
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  padding: 11px 14px;
-  cursor: pointer;
-}
-
-.disc-head:hover {
-  background: var(--hover);
-}
-
-.disc-head .chev {
-  display: grid;
-  place-items: center;
-  flex: none;
-  color: var(--muted);
-  transition: transform 0.12s ease;
-  transform: rotate(-90deg);
-}
-
-.disc.open .disc-head .chev {
-  transform: rotate(0deg);
-}
-
-.disc-head .name {
-  flex: 1;
-  min-width: 0;
-}
-
-.disc-head .name .tt {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  font-weight: 600;
-}
-
-.disc-head .name small {
-  display: block;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.disc-head .tail {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 8px;
-}
-
-.disc-head .tail .summary {
-  color: var(--muted);
-  font-size: 12.5px;
-}
-
-.disc-body {
-  border-top: 1px solid var(--line-soft);
-  padding: 2px 6px;
-}
-
 .callout {
   display: flex;
   align-items: center;
@@ -606,53 +517,6 @@ body {
 .callout .btn {
   height: 28px;
   font-size: 13px;
-}
-
-.rlist {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--main-surface);
-  overflow: hidden;
-}
-
-.rlist .ir {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-top: 1px solid var(--line-soft);
-  font-size: 13px;
-  min-width: 0;
-}
-
-.rlist .ir:first-child {
-  border-top: 0;
-}
-
-.rlist .ir .kic {
-  width: 22px;
-  height: 22px;
-  font-size: 13px;
-}
-
-.rlist .ir .ipth {
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.rlist .ir .pchip {
-  flex: none;
-}
-
-.rlist .ir.no {
-  color: var(--faint);
-}
-
-.rlist .ir.no .kic {
-  opacity: 0.45;
 }
 
 .details .meta {
@@ -761,7 +625,6 @@ body {
 
 /* Shared card border */
 .pcard,
-.fcard,
 .local-quiet-card,
 .local-field-card,
 .local-more,
@@ -771,21 +634,12 @@ body {
   border-radius: var(--radius-lg);
 }
 
-.pcard,
-.fcard {
+.pcard {
   padding: 12px 14px;
 }
 
-.pcard,
-.fcard,
-.dz {
+.pcard {
   margin-top: 12px;
-}
-
-.fcard .inset {
-  border-top: 1px solid var(--line);
-  padding-top: 8px;
-  margin-top: 8px;
 }
 
 /* Onboarding flow layout overrides */
@@ -1203,12 +1057,6 @@ body {
   margin-top: 22px;
 }
 
-.actions .alt {
-  margin-left: auto;
-  font-size: 13px;
-  color: var(--muted);
-}
-
 .pcard {
   display: flex;
   flex-direction: column;
@@ -1261,27 +1109,6 @@ body {
   gap: 8px;
   margin-top: auto;
   padding-top: 6px;
-}
-
-.check-row {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  color: var(--ink-2);
-  font-size: 13px;
-}
-
-.check-row input {
-  width: 15px;
-  height: 15px;
-  margin: 0;
-  flex: none;
-  accent-color: var(--accent);
-}
-
-/* Under the account form, off the inset's edge. */
-.first-run-main .pane > .check-row {
-  margin: 14px 2px 0;
 }
 
 .pcard .local-field-card,
@@ -1556,7 +1383,6 @@ body {
   color: var(--amber-ink);
 }
 
-.res.miss,
 .first-run-main .crit {
   border-color: var(--danger-border);
   background: var(--danger-wash);
@@ -1681,22 +1507,6 @@ body {
   }
 }
 
-.go-profile-connect .crit {
-  margin-top: 10px;
-  margin-bottom: 16px;
-  padding: 12px 14px;
-  border: 1px solid var(--danger-border);
-  border-radius: var(--radius-md);
-  background: var(--danger-wash);
-  color: var(--danger-text);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.go-profile-connect .crit b {
-  display: block;
-}
-
 .check {
   display: flex;
   gap: 9px;
@@ -1811,16 +1621,6 @@ body {
     grid-template-columns: 1fr;
     gap: 4px;
   }
-}
-
-.strike {
-  text-decoration: line-through;
-}
-
-.dz {
-  border: 1px solid var(--danger-border);
-  border-radius: var(--radius-lg);
-  padding: 10px 14px 12px;
 }
 
 .sheet .fn {

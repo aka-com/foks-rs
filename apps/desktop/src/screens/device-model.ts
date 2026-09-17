@@ -10,15 +10,12 @@
  * came from.
  */
 
-import { enqueueProfileWork } from '../bridge';
 import type {
   AccountDevice,
   BackupEnrollment,
-  Bridge,
   YubiEnrollment,
 } from '../bridge';
 import type { FoksIconName } from '../icons';
-import type { StoreRef } from '../model';
 
 /** What the two per-account and the two per-profile calls answered with. */
 export interface DeviceLists {
@@ -39,29 +36,6 @@ export const NO_DEVICES: DeviceLists = {
   yubi: [],
   cards: [],
 };
-
-/**
- * Read one account's keys and its profile's card enrollments, in one turn of
- * that profile's work queue. The calls fail separately, and a caller decides
- * what to do with the failure; they are read together because both pages list
- * them together. Asking which card is in the port drives the reader, so a
- * caller that does not list the connected card asks for no card probe.
- */
-export function readAccountAndProfileKeys(
-  bridge: Bridge,
-  profile: string,
-  store: StoreRef,
-  options: { cards?: boolean } = {},
-): Promise<DeviceLists> {
-  return enqueueProfileWork(bridge, profile, async () => {
-    const devices = await bridge.listAccountDevices(store);
-    const backups = await bridge.listBackupEnrollments(store);
-    const cards =
-      options.cards === false ? [] : await bridge.listYubiCards(profile);
-    const yubi = await bridge.listYubiAccounts(profile);
-    return { devices, backups, cards, yubi };
-  });
-}
 
 /**
  * What a key is, as the row and the detail page name it. A card holds two

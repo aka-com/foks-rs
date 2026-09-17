@@ -22,6 +22,12 @@ export interface TabsProps<T extends string> {
    * which only works where the panel does not need to point back.
    */
   idBase?: string;
+  /**
+   * Which way the strip runs. A vertical strip answers Up and Down instead of
+   * Left and Right, and says so, because a screen reader announces the keys
+   * from `aria-orientation` rather than from the layout.
+   */
+  orientation?: 'horizontal' | 'vertical';
 }
 
 /** The id of one tab, for a panel's `aria-labelledby`. */
@@ -40,6 +46,7 @@ export function Tabs<T extends string>({
   onChange,
   label,
   idBase,
+  orientation = 'horizontal',
 }: TabsProps<T>): ReactNode {
   const generated = useId();
   const base = idBase ?? generated;
@@ -61,11 +68,14 @@ export function Tabs<T extends string>({
       className="tabs"
       role="tablist"
       aria-label={label}
+      aria-orientation={orientation}
       ref={strip}
       onKeyDown={(event) => {
         if (index < 0) return;
-        if (event.key === 'ArrowRight') moveTo(index + 1);
-        else if (event.key === 'ArrowLeft') moveTo(index - 1);
+        const next = orientation === 'vertical' ? 'ArrowDown' : 'ArrowRight';
+        const previous = orientation === 'vertical' ? 'ArrowUp' : 'ArrowLeft';
+        if (event.key === next) moveTo(index + 1);
+        else if (event.key === previous) moveTo(index - 1);
         else if (event.key === 'Home') moveTo(0);
         else if (event.key === 'End') moveTo(items.length - 1);
         else return;

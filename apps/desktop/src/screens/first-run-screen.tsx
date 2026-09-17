@@ -2296,7 +2296,7 @@ function FirstRunSession({
     </>
   );
   const aliasInvalidNotice = usernameAliasInvalid ? (
-    <p className="crit">
+    <p className="crit" role="alert">
       Account alias must contain at least one letter or number.
     </p>
   ) : null;
@@ -2641,7 +2641,7 @@ function FirstRunSession({
           </dl>
         </div>
         {managedStatusError ? (
-          <div className="crit">
+          <div className="crit" role="alert">
             <b>Local server unavailable</b>
             {managedStatusError}
             <div className="btns">
@@ -2749,7 +2749,7 @@ function FirstRunSession({
           server in the next steps.
         </p>
         {goScanError ? (
-          <div className="crit">
+          <div className="crit" role="alert">
             Could not check existing CLI profiles: {goScanError}
             <Button
               onClick={() => {
@@ -2855,7 +2855,7 @@ function FirstRunSession({
           Use the official FOKS server
         </Button>
         {state === 'error' && !addressInvalid ? (
-          <div className="crit">
+          <div className="crit" role="alert">
             <b>
               {serverCheckPresentation?.title ??
                 message ??
@@ -3000,12 +3000,12 @@ function FirstRunSession({
           </label>
         </details>
         {usernameAliasInvalid ? (
-          <p className="crit">
+          <p className="crit" role="alert">
             Username must contain at least one letter or number.
           </p>
         ) : null}
         {message ? (
-          <p className="crit">
+          <p className="crit" role="alert">
             <FailureText text={message} reason={reasonFor(message)} />
           </p>
         ) : null}
@@ -3260,7 +3260,7 @@ function FirstRunSession({
         {signingIn ? null : (
           <>
             {message ? (
-              <p className="crit">
+              <p className="crit" role="alert">
                 <FailureText text={message} reason={reasonFor(message)} />
               </p>
             ) : null}

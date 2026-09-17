@@ -1409,10 +1409,6 @@ export class LocationStore {
     this.dispatch({ type: 'search', query });
   }
 
-  setView(view: ViewMode): void {
-    this.dispatch({ type: 'view', view });
-  }
-
   setDetails(open: boolean): void {
     this.dispatch({ type: 'details', open });
   }

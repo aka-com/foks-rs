@@ -35,7 +35,6 @@ import {
   roleRank,
   serverDisplayName,
   serverName,
-  rtype,
   safestRemovalTarget,
   storeReadable,
   storeAvailability,
@@ -313,13 +312,6 @@ test('isLogin returns true only for items under /logins/', () => {
     isLogin(item(FIXTURE, 'team:household|/streaming/netflix')),
     false,
   );
-});
-
-test('rtype maps UI item kinds to underlying node storage types', () => {
-  assert.equal(rtype({ kind: 'Secret' }), 'small_file');
-  assert.equal(rtype({ kind: 'File' }), 'file');
-  assert.equal(rtype({ kind: 'Link' }), 'symlink');
-  assert.equal(rtype({ kind: 'Folder' }), 'directory');
 });
 
 test('nameOf and prefixOf extract filename and parent directory from path', () => {

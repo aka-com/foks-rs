@@ -19,7 +19,7 @@
  * column belongs to the tab and outlives a team switch.
  */
 
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import type { ReactNode, Ref } from 'react';
 import { Button, Icon, SectionLabel } from '../components';
 import {
@@ -602,6 +602,9 @@ function TeamHeading({
   // that the team cannot be reached, that its count is degraded, that it is
   // going stale. Collapsed, the channels are not drawn at all, so the heading
   // carries their total instead — nothing is lost by folding the list away.
+  // The channel list this team’s twist expands, named so the twist can point
+  // at it rather than leaving the relationship to visual order alone.
+  const channelListId = useId();
   const state = row.badge && !plainCount(row.badge.label) ? row.badge : null;
   const collapsedTotal = collapsed ? channelUnreadTotal(channels) : 0;
   const badge =
@@ -626,6 +629,7 @@ function TeamHeading({
           type="button"
           className={collapsed ? 'chat-twist' : 'chat-twist open'}
           aria-expanded={!collapsed}
+          aria-controls={channelListId}
           aria-label={
             collapsed
               ? `Expand ${row.store.name}`
@@ -664,6 +668,7 @@ function TeamHeading({
           tab order while it cannot be seen. */}
       {!collapsed && (
         <div
+          id={channelListId}
           className="chat-channel-list"
           role="group"
           aria-label={row.store.name}
