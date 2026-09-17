@@ -48,7 +48,6 @@ const STATES = [
   'grid',
   'lease',
   'inactive',
-  'issues',
   'agent-lost',
   'groups',
   'join',
@@ -202,7 +201,7 @@ async function visit(context, url, shot) {
     new URL(url).searchParams.get('state') === 'link'
   ) {
     await page
-      .getByRole('button', { name: 'Read target', exact: true })
+      .getByRole('button', { name: 'Reveal target', exact: true })
       .waitFor({ timeout: 5000 })
       .catch(() =>
         problems.push(
@@ -278,7 +277,7 @@ async function personaWalks(context, origin) {
       .locator('.details .party')
       .filter({ hasText: 'deploy-bot' });
     check(
-      (await deployBot.textContent())?.includes('cannot read this'),
+      (await deployBot.textContent())?.includes('no read access'),
       'Sharing did not show that deploy-bot cannot read production-token',
     );
     await page
@@ -289,7 +288,7 @@ async function personaWalks(context, origin) {
       .locator('.details .party')
       .filter({ hasText: 'deploy-bot' });
     check(
-      !(await stagingBot.textContent())?.includes('cannot read this'),
+      !(await stagingBot.textContent())?.includes('no read access'),
       'Sharing did not show that deploy-bot can read staging-token',
     );
   } catch (error) {
@@ -317,7 +316,7 @@ async function writeWalk(context, origin) {
     await page.locator('input[aria-label="Value"]').fill('acceptance value');
     // Submit creation in target vault.
     await page
-      .getByRole('button', { name: 'Create in this vault', exact: true })
+      .getByRole('button', { name: 'Create item', exact: true })
       .click();
     await toast(page, 'created in Personal');
     // Verify the item appears in the list under the selected vault.
@@ -330,7 +329,7 @@ async function writeWalk(context, origin) {
       failures.push('the created item did not appear in Personal');
 
     await page.goto(`${origin}/?state=exists`, { waitUntil: 'load' });
-    await page.getByRole('button', { name: /Open version/ }).click();
+    await page.getByRole('button', { name: /Open existing item/ }).click();
     await page.locator('.details .dh h2', { hasText: 'github.com' }).waitFor();
 
     await page.goto(`${origin}/?state=agent-lost`, { waitUntil: 'load' });
@@ -433,7 +432,7 @@ async function groupItemWalk(context, origin) {
       .getByRole('radio', { name: /^Admin/ })
       .click();
     const preview = await page.locator('.sheet').textContent();
-    const count = /would be readable by (\d+) of (\d+)/.exec(preview ?? '');
+    const count = /readable by (\d+) of (\d+)/.exec(preview ?? '');
     if (!count)
       failures.push('group create did not render a computed reader preview');
     await page
@@ -443,7 +442,7 @@ async function groupItemWalk(context, origin) {
       .getByRole('textbox', { name: 'Value', exact: true })
       .fill('browser value');
     await page
-      .getByRole('button', { name: 'Create in this vault', exact: true })
+      .getByRole('button', { name: 'Create item', exact: true })
       .click();
     await toast(page, 'created in Engineering');
     const created = page
@@ -466,9 +465,9 @@ async function groupItemWalk(context, origin) {
     await page.getByRole('button', { name: 'Edit', exact: true }).click();
     await page.locator('.details textarea').fill('edited browser value');
     await page
-      .getByRole('button', { name: 'Save version 2', exact: true })
+      .getByRole('button', { name: 'Save changes', exact: true })
       .click();
-    await toast(page, 'Saved version 2');
+    await toast(page, 'Changes saved');
     // Verify the updated version number is rendered.
     await page.locator('.details', { hasText: 'Version2' }).waitFor();
     // The confirmation sheet adds a second "Remove", so each click is scoped.
@@ -480,15 +479,15 @@ async function groupItemWalk(context, origin) {
       .locator('.sheet')
       .getByRole('button', { name: 'Remove', exact: true })
       .click();
-    await toast(page, 'Removed version 2');
+    await toast(page, 'Removed phase7_browser_key');
     await created.waitFor({ state: 'detached' });
 
     await page.goto(`${origin}/?state=group-new-link`, { waitUntil: 'load' });
     await page
-      .getByRole('textbox', { name: 'Points to', exact: true })
+      .getByRole('textbox', { name: 'Target path', exact: true })
       .fill('/deploy/staging-token');
     await page
-      .getByRole('button', { name: 'Create in this vault', exact: true })
+      .getByRole('button', { name: 'Create item', exact: true })
       .click();
     await page
       .locator('.body .row')
@@ -529,7 +528,7 @@ async function firstRunWalk(context, origin) {
     await page.evaluate("window.localStorage.removeItem('foks.first-run.v1')");
     await page.reload({ waitUntil: 'load' });
     // Select joining path and proceed.
-    await page.getByRole('radio', { name: /Someone invited me/ }).click();
+    await page.getByRole('radio', { name: /Join an existing group/ }).click();
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
     await reloadAt('Select a server address');
     await page
@@ -578,9 +577,9 @@ async function firstRunWalk(context, origin) {
       .getByRole('button', { name: 'Check now', exact: true })
       .click();
     await page
-      .locator('.notice', { hasText: 'You’re in Engineering' })
+      .locator('.notice', { hasText: 'Joined Engineering' })
       .waitFor();
-    await reloadAt('You’re in Engineering');
+    await reloadAt('Joined Engineering');
 
     const checkpoint = await page.evaluate(
       "window.localStorage.getItem('foks.first-run.v1') ?? ''",
@@ -618,7 +617,7 @@ async function adeWalk(context, origin) {
 
     // Verify host ID consistency across the tooltip, check response, and display.
     await page
-      .locator('summary', { hasText: 'Inspect last check response' })
+      .locator('summary', { hasText: 'View diagnostic response' })
       .click()
       .catch(() => {});
     const response = await page.locator('.main pre').first().textContent();
@@ -642,14 +641,14 @@ async function adeWalk(context, origin) {
     await page.locator('.sheet', { hasText: 'team-creation' }).waitFor();
     await page.locator('.sheet input').fill('personal');
     await page
-      .getByRole('button', { name: 'Reset local state', exact: true })
+      .getByRole('button', { name: 'Erase credentials and reset', exact: true })
       .click();
     await page.waitForSelector('.sheet', { state: 'detached' });
     // Resetting local state should retain the server configuration.
-    await toast(page, 'check it again before using it');
+    await toast(page, 'has been reset');
     await page.locator('.main', { hasText: 'foks.example.net' }).waitFor();
     const stillConfigured = await page
-      .getByRole('button', { name: 'Reset…', exact: true })
+      .getByRole('button', { name: 'Erase and reset…', exact: true })
       .count();
     if (!stillConfigured)
       failures.push('the reset server is no longer configured on this Mac');
