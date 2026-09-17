@@ -1,0 +1,60 @@
+# A member of the root workspace (../Cargo.toml) so a single Cargo.lock covers
+# the whole tree; only *built* where the platform webview toolchain exists.
+# Mirrors src-tauri's arrangement for the same reason (see ../Cargo.toml).
+[package]
+name = "foks-desktop-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Standalone FOKS desktop client."
+
+[lib]
+name = "foks_desktop_app"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "foks-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+foks-agent-client = { workspace = true }
+foks-agent-proto = { workspace = true }
+foks-compat-artifact = { workspace = true }
+foks-crypto = { workspace = true }
+foks-desktop = { path = "../crates/foks-desktop", default-features = false }
+foks-protocol-metadata = { workspace = true }
+# No "tray-icon": FOKS has no menu bar presence. No "macos-private-api": that
+# feature exists for AKA's transparent NSPanel windows, which FOKS does not have.
+tauri = { version = "2", features = [] }
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+fs2 = { workspace = true }
+getrandom = { workspace = true }
+libc = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
+zeroize = { workspace = true }
+tempfile = { workspace = true }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+zbus = "5"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSPasteboard"] }
+objc2-foundation = { version = "0.3", features = ["NSString"] }
+objc2-local-authentication = { version = "0.3.2", default-features = false, features = ["LAContext", "LAError", "LAPublicDefines", "block2", "std"] }
+
+[lints]
+workspace = true

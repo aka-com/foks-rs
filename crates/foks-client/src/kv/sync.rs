@@ -6,17 +6,19 @@ use std::path::Path;
 use foks_client_db::{KvDirectoryProjection, KvLargeFileStage, KvProjectedEntry, SoftStateStore};
 use foks_crypto::{derive_subkey_id, open_kv_chunk, open_kv_dirent_name};
 use foks_proto::{
-    KvDirectoryPair, KvDirectoryStatus, KvEncryptedChunk, KvListResponse, KvNode, KvNodeType,
-    KvParty, KvRoot, KvSmallFilePlaintext, SecretSeed, MAXIMUM_KV_DIRECTORIES, MAXIMUM_KV_DIRENTS,
-    MAXIMUM_KV_LIST_PAGE_ENTRIES, MAXIMUM_KV_LIST_RESPONSE_BYTES,
+    KvDirectoryPair, KvDirectoryStatus, KvEncryptedChunk, KvListResponse, KvNode, KvNodeId,
+    KvNodeType, KvParty, KvRoot, KvSmallFilePlaintext, SecretSeed, MAXIMUM_KV_DIRECTORIES,
+    MAXIMUM_KV_DIRENTS, MAXIMUM_KV_LIST_PAGE_ENTRIES, MAXIMUM_KV_LIST_RESPONSE_BYTES,
 };
 use foks_rpc::{KvAuth, KvListCursor};
 use foks_verify::VerifiedUserState;
+use zeroize::{Zeroize as _, Zeroizing};
 
 use super::rpc::KvRequest;
 use super::support::{
     kv_key, kv_version_vector, reachable_kv_tree, user_kv_keys, validate_kv_symlink,
 };
+use super::{KvFetchedChunk, KvFetchedNode};
 use super::{KvPrivateKeyRef, KvWriteSession, OwnedKvAuth, MAX_KV_FILE_BYTES};
 use crate::{
     AuthenticatedTeamOutcome, DeviceCredential, Error, FoksClient, PinnedHost,
@@ -24,6 +26,137 @@ use crate::{
 };
 
 impl FoksClient {
+    /// Fetches and decrypts exactly one node in a personal KV namespace.
+    /// Unlike [`Self::sync_user_kv`], this does not stage plaintext.
+    pub fn read_user_kv_node(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        user: &VerifiedUserState,
+        puks: &[UserPrivateKey],
+        node: KvNodeId,
+    ) -> Result<KvFetchedNode> {
+        if user.uid() != &credential.uid || user.host() != host.host_id() {
+            return Err(Error::UserBinding(
+                "KV user state does not match the credential and pinned host",
+            ));
+        }
+        let keys = user_kv_keys(user, puks)?;
+        let mut connection = self.kv_connection_with_material(
+            host,
+            &credential.seed,
+            &credential.certificate_chain,
+        )?;
+        read_kv_node_with_fetch(node, &keys, KvAuth::User, |auth, request| {
+            connection.call(auth, request)
+        })
+    }
+
+    /// Fetches a bounded plaintext range from one personal large-file node.
+    /// Only encrypted chunks for the selected node are requested.
+    #[allow(clippy::too_many_arguments)]
+    pub fn read_user_kv_chunk(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        user: &VerifiedUserState,
+        puks: &[UserPrivateKey],
+        node: KvNodeId,
+        offset: u64,
+        length: usize,
+    ) -> Result<KvFetchedChunk> {
+        if user.uid() != &credential.uid || user.host() != host.host_id() {
+            return Err(Error::UserBinding(
+                "KV user state does not match the credential and pinned host",
+            ));
+        }
+        let keys = user_kv_keys(user, puks)?;
+        let mut connection = self.kv_connection_with_material(
+            host,
+            &credential.seed,
+            &credential.certificate_chain,
+        )?;
+        read_kv_chunk_with_fetch(
+            node,
+            offset,
+            length,
+            &keys,
+            KvAuth::User,
+            |auth, request| connection.call(auth, request),
+        )
+    }
+
+    /// Fetches and decrypts exactly one node in a team KV namespace.
+    pub fn read_team_kv_node(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        team: &AuthenticatedTeamOutcome,
+        node: KvNodeId,
+    ) -> Result<KvFetchedNode> {
+        if team.verified.host() != host.host_id() {
+            return Err(Error::TeamBinding("KV team state belongs to another host"));
+        }
+        let keys = team
+            .ptks
+            .iter()
+            .map(|key| KvPrivateKeyRef {
+                role: key.role,
+                generation: key.generation,
+                seed: &key.seed,
+            })
+            .collect::<Vec<_>>();
+        let mut connection = self.kv_connection_with_material(
+            host,
+            &credential.seed,
+            &credential.certificate_chain,
+        )?;
+        read_kv_node_with_fetch(
+            node,
+            &keys,
+            KvAuth::Team(&team.view_token),
+            |auth, request| connection.call(auth, request),
+        )
+    }
+
+    /// Fetches a bounded plaintext range from one team large-file node.
+    #[allow(clippy::too_many_arguments)]
+    pub fn read_team_kv_chunk(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        team: &AuthenticatedTeamOutcome,
+        node: KvNodeId,
+        offset: u64,
+        length: usize,
+    ) -> Result<KvFetchedChunk> {
+        if team.verified.host() != host.host_id() {
+            return Err(Error::TeamBinding("KV team state belongs to another host"));
+        }
+        let keys = team
+            .ptks
+            .iter()
+            .map(|key| KvPrivateKeyRef {
+                role: key.role,
+                generation: key.generation,
+                seed: &key.seed,
+            })
+            .collect::<Vec<_>>();
+        let mut connection = self.kv_connection_with_material(
+            host,
+            &credential.seed,
+            &credential.certificate_chain,
+        )?;
+        read_kv_chunk_with_fetch(
+            node,
+            offset,
+            length,
+            &keys,
+            KvAuth::Team(&team.view_token),
+            |auth, request| connection.call(auth, request),
+        )
+    }
+
     /// Verifies and projects the complete reachable personal KV tree. The PUK
     /// remains caller-owned; only encrypted wire objects and decrypted file
     /// projections are written to the separate soft-state database.
@@ -55,6 +188,42 @@ impl FoksClient {
             KvAuth::User,
             &keys,
             soft_database_path,
+            |auth, request| connection.call(auth, request),
+        )
+    }
+
+    /// Authenticates and traverses the personal KV namespace for a live
+    /// catalog without downloading file plaintext or updating the local
+    /// content projection.
+    pub fn list_user_kv_metadata(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        user: &VerifiedUserState,
+        puks: &[UserPrivateKey],
+        soft_database_path: &Path,
+    ) -> Result<Vec<KvDirectoryProjection>> {
+        if user.uid() != &credential.uid || user.host() != host.host_id() {
+            return Err(Error::UserBinding(
+                "KV user state does not match the credential and pinned host",
+            ));
+        }
+        let keys = user_kv_keys(user, puks)?;
+        let mut connection = self.kv_connection_with_material(
+            host,
+            &credential.seed,
+            &credential.certificate_chain,
+        )?;
+        self.sync_kv_with_fetch_mode(
+            host,
+            KvParty {
+                party: credential.uid.clone(),
+                host: host.host_id.clone(),
+            },
+            KvAuth::User,
+            &keys,
+            soft_database_path,
+            KvSyncMode::Metadata,
             |auth, request| connection.call(auth, request),
         )
     }
@@ -135,6 +304,46 @@ impl FoksClient {
             KvAuth::Team(&team.view_token),
             &keys,
             soft_database_path,
+            |auth, request| connection.call(auth, request),
+        )
+    }
+
+    /// Authenticates and traverses a team KV namespace for a live catalog
+    /// without downloading file plaintext or updating the local projection.
+    pub fn list_team_kv_metadata(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        team: &AuthenticatedTeamOutcome,
+        soft_database_path: &Path,
+    ) -> Result<Vec<KvDirectoryProjection>> {
+        if team.verified.host() != host.host_id() {
+            return Err(Error::TeamBinding("KV team state belongs to another host"));
+        }
+        let keys = team
+            .ptks
+            .iter()
+            .map(|key| KvPrivateKeyRef {
+                role: key.role,
+                generation: key.generation,
+                seed: &key.seed,
+            })
+            .collect::<Vec<_>>();
+        let mut connection = self.kv_connection_with_material(
+            host,
+            &credential.seed,
+            &credential.certificate_chain,
+        )?;
+        self.sync_kv_with_fetch_mode(
+            host,
+            KvParty {
+                party: team.verified.team().clone(),
+                host: host.host_id.clone(),
+            },
+            KvAuth::Team(&team.view_token),
+            &keys,
+            soft_database_path,
+            KvSyncMode::Metadata,
             |auth, request| connection.call(auth, request),
         )
     }
@@ -335,6 +544,54 @@ impl FoksClient {
         auth: KvAuth<'_>,
         private_keys: &[KvPrivateKeyRef<'_>],
         soft_database_path: &Path,
+        fetch: F,
+    ) -> Result<Vec<KvDirectoryProjection>>
+    where
+        F: FnMut(KvAuth<'_>, &KvRequest) -> Result<Vec<u8>>,
+    {
+        self.sync_kv_with_fetch_mode(
+            host,
+            party,
+            auth,
+            private_keys,
+            soft_database_path,
+            KvSyncMode::Content,
+            fetch,
+        )
+    }
+
+    pub(crate) fn list_kv_metadata_with_fetch<F>(
+        &self,
+        host: &PinnedHost,
+        party: KvParty,
+        auth: KvAuth<'_>,
+        private_keys: &[KvPrivateKeyRef<'_>],
+        soft_database_path: &Path,
+        fetch: F,
+    ) -> Result<Vec<KvDirectoryProjection>>
+    where
+        F: FnMut(KvAuth<'_>, &KvRequest) -> Result<Vec<u8>>,
+    {
+        self.sync_kv_with_fetch_mode(
+            host,
+            party,
+            auth,
+            private_keys,
+            soft_database_path,
+            KvSyncMode::Metadata,
+            fetch,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn sync_kv_with_fetch_mode<F>(
+        &self,
+        host: &PinnedHost,
+        party: KvParty,
+        auth: KvAuth<'_>,
+        private_keys: &[KvPrivateKeyRef<'_>],
+        soft_database_path: &Path,
+        mode: KvSyncMode,
         mut fetch: F,
     ) -> Result<Vec<KvDirectoryProjection>>
     where
@@ -414,6 +671,11 @@ impl FoksClient {
                                 directory: directory_id,
                                 cursor,
                                 number: PAGE_SIZE,
+                                // Metadata traversal must authenticate each small node's
+                                // encrypted role header even though it discards plaintext.
+                                // Asking kvList for its existing extended side table avoids
+                                // one extra RPC per small file and keeps small-file-heavy
+                                // traversals within the server's per-session request budget.
                                 load_small_files: true,
                             },
                         )?;
@@ -511,20 +773,31 @@ impl FoksClient {
                                             (boxed, Some(bytes))
                                         }
                                     };
+                                    // The extended response omits the exact node frame, but
+                                    // content consumers still need authenticated key-role/type
+                                    // metadata. Re-encoding the decoded ciphertext is the same
+                                    // fallback metadata mode uses and retains no extra plaintext.
+                                    projected.node_bytes = Some(match exact {
+                                        Some(bytes) => bytes,
+                                        None => KvNode::SmallFile(boxed.clone()).encoded()?,
+                                    });
                                     let keys =
                                         kv_key(private_keys, boxed.key.role, boxed.key.generation)?;
-                                    let KvSmallFilePlaintext::File(content) =
+                                    let KvSmallFilePlaintext::File(mut content) =
                                         keys.open_small_file(entry.value, &boxed)?
                                     else {
                                         return Err(Error::KvResponse(
                                             "small-file plaintext type mismatch",
                                         ));
                                     };
-                                    projected.node_bytes = exact;
-                                    total_inline_content_bytes = total_inline_content_bytes
-                                        .checked_add(content.len())
-                                        .ok_or(Error::KvResponse("content size overflow"))?;
-                                    projected.content = Some(content);
+                                    if mode == KvSyncMode::Content {
+                                        total_inline_content_bytes = total_inline_content_bytes
+                                            .checked_add(content.len())
+                                            .ok_or(Error::KvResponse("content size overflow"))?;
+                                        projected.content = Some(content);
+                                    } else {
+                                        content.zeroize();
+                                    }
                                 }
                                 KvNodeType::Symlink => {
                                     let bytes = fetch(auth, &KvRequest::Node(entry.value))?;
@@ -533,9 +806,10 @@ impl FoksClient {
                                             "symlink node type mismatch",
                                         ));
                                     };
+                                    projected.node_bytes = Some(bytes);
                                     let keys =
                                         kv_key(private_keys, boxed.key.role, boxed.key.generation)?;
-                                    let KvSmallFilePlaintext::Symlink(target) =
+                                    let KvSmallFilePlaintext::Symlink(mut target) =
                                         keys.open_small_file(entry.value, &boxed)?
                                     else {
                                         return Err(Error::KvResponse(
@@ -543,11 +817,14 @@ impl FoksClient {
                                         ));
                                     };
                                     validate_kv_symlink(&target)?;
-                                    projected.node_bytes = Some(bytes);
-                                    total_inline_content_bytes = total_inline_content_bytes
-                                        .checked_add(target.len())
-                                        .ok_or(Error::KvResponse("content size overflow"))?;
-                                    projected.symlink = Some(target);
+                                    if mode == KvSyncMode::Content {
+                                        total_inline_content_bytes = total_inline_content_bytes
+                                            .checked_add(target.len())
+                                            .ok_or(Error::KvResponse("content size overflow"))?;
+                                        projected.symlink = Some(target);
+                                    } else {
+                                        target.zeroize();
+                                    }
                                 }
                                 KvNodeType::File => {
                                     let bytes = fetch(auth, &KvRequest::Node(entry.value))?;
@@ -556,6 +833,18 @@ impl FoksClient {
                                             "large-file node type mismatch",
                                         ));
                                     };
+                                    projected.node_bytes = Some(bytes);
+                                    if mode == KvSyncMode::Metadata {
+                                        let keys = kv_key(
+                                            private_keys,
+                                            metadata.key.role,
+                                            metadata.key.generation,
+                                        )?;
+                                        let _file_seed =
+                                            keys.open_file_seed(entry.value, &metadata)?;
+                                        entries.push(projected);
+                                        continue;
+                                    }
                                     let keys = kv_key(
                                         private_keys,
                                         metadata.key.role,
@@ -614,7 +903,6 @@ impl FoksClient {
                                         large_files.push(stage);
                                         size
                                     };
-                                    projected.node_bytes = Some(bytes);
                                     projected.large_file_size = Some(size);
                                 }
                                 KvNodeType::None => unreachable!("rejected above"),
@@ -662,6 +950,10 @@ impl FoksClient {
                 let combined = reachable_kv_tree(root.root, combined)?;
                 let final_versions = kv_version_vector(root.version, &combined);
                 fetch(auth, &KvRequest::CacheCheck(final_versions))?;
+                if mode == KvSyncMode::Metadata {
+                    store.project_reachable_metadata(&projections)?;
+                    return Ok(projections);
+                }
                 store.project_reachable_tree_with_large_files(&projections, &large_files)?;
                 Ok(store.tree(host.host_id.as_bytes(), party.party.as_bytes())?)
             })();
@@ -674,6 +966,176 @@ impl FoksClient {
             "KV cache changed during three synchronization attempts",
         ))
     }
+}
+
+pub(crate) fn read_kv_node_with_fetch<F>(
+    node: KvNodeId,
+    private_keys: &[KvPrivateKeyRef<'_>],
+    auth: KvAuth<'_>,
+    mut fetch: F,
+) -> Result<KvFetchedNode>
+where
+    F: FnMut(KvAuth<'_>, &KvRequest) -> Result<Vec<u8>>,
+{
+    let bytes = fetch(auth, &KvRequest::Node(node))?;
+    match (node.node_type()?, KvNode::decode(&bytes)?) {
+        (KvNodeType::SmallFile, KvNode::SmallFile(boxed)) => {
+            let keys = kv_key(private_keys, boxed.key.role, boxed.key.generation)?;
+            let KvSmallFilePlaintext::File(content) = keys.open_small_file(node, &boxed)? else {
+                return Err(Error::KvResponse("small-file plaintext type mismatch"));
+            };
+            Ok(KvFetchedNode::SmallFile(content))
+        }
+        (KvNodeType::Symlink, KvNode::Symlink(boxed)) => {
+            let keys = kv_key(private_keys, boxed.key.role, boxed.key.generation)?;
+            let KvSmallFilePlaintext::Symlink(target) = keys.open_small_file(node, &boxed)? else {
+                return Err(Error::KvResponse("symlink plaintext type mismatch"));
+            };
+            validate_kv_symlink(&target)?;
+            Ok(KvFetchedNode::Symlink(target))
+        }
+        (KvNodeType::Directory, KvNode::Directory(directory)) => {
+            if directory.active.id != node.object_id()
+                || directory.active.status != KvDirectoryStatus::Active
+                || directory.encrypting.as_ref().is_some_and(|encrypting| {
+                    encrypting.id != node.object_id()
+                        || encrypting.status != KvDirectoryStatus::Encrypting
+                })
+            {
+                return Err(Error::KvResponse("directory response ID mismatch"));
+            }
+            for generation in std::iter::once(&directory.active).chain(directory.encrypting.iter())
+            {
+                let keys = kv_key(private_keys, generation.key.role, generation.key.generation)?;
+                let _ = keys.open_directory_seed(generation)?;
+            }
+            Ok(KvFetchedNode::Directory)
+        }
+        (KvNodeType::File, KvNode::File(metadata)) => {
+            let keys = kv_key(private_keys, metadata.key.role, metadata.key.generation)?;
+            let file_seed = keys.open_file_seed(node, &metadata)?;
+            let mut offset = 0u64;
+            for _ in 0..4096 {
+                let chunk_bytes = fetch(auth, &KvRequest::Chunk { file: node, offset })?;
+                let chunk = KvEncryptedChunk::decode(&chunk_bytes)?;
+                let clear = Zeroizing::new(open_kv_chunk(&file_seed, node, offset, &chunk)?);
+                if clear.is_empty() && !chunk.final_chunk {
+                    return Err(Error::KvResponse("empty non-final file chunk"));
+                }
+                offset = validate_large_file_append(offset, clear.len())?;
+                if chunk.final_chunk {
+                    return Ok(KvFetchedNode::LargeFile { size: offset });
+                }
+            }
+            Err(Error::KvResponse("file chunk limit exceeded"))
+        }
+        _ => Err(Error::KvResponse("KV node response type mismatch")),
+    }
+}
+
+pub(crate) fn read_kv_chunk_with_fetch<F>(
+    node: KvNodeId,
+    requested_offset: u64,
+    length: usize,
+    private_keys: &[KvPrivateKeyRef<'_>],
+    auth: KvAuth<'_>,
+    mut fetch: F,
+) -> Result<KvFetchedChunk>
+where
+    F: FnMut(KvAuth<'_>, &KvRequest) -> Result<Vec<u8>>,
+{
+    if node.node_type()? != KvNodeType::File {
+        return Err(Error::KvResponse("KV chunk node is not a large file"));
+    }
+    let node_bytes = fetch(auth, &KvRequest::Node(node))?;
+    let KvNode::File(metadata) = KvNode::decode(&node_bytes)? else {
+        return Err(Error::KvResponse("large-file node type mismatch"));
+    };
+    let keys = kv_key(private_keys, metadata.key.role, metadata.key.generation)?;
+    let file_seed = keys.open_file_seed(node, &metadata)?;
+    let requested_end = requested_offset
+        .checked_add(u64::try_from(length).map_err(|_| Error::KvResponse("KV range overflow"))?)
+        .ok_or(Error::KvResponse("KV range overflow"))?;
+    if length == 0 {
+        return Err(Error::KvResponse("KV range length is zero"));
+    }
+
+    // Desktop callers advance by their prior response length. Most FOKS
+    // writers use stable chunk sizes, so that offset is normally an exact
+    // stored-chunk boundary. Try it first; an older writer may have chosen a
+    // larger chunk, in which case the server's no-entry response is safe to
+    // fall back from to the bounded sequential scan below.
+    if requested_offset >= length as u64 {
+        match fetch(
+            auth,
+            &KvRequest::Chunk {
+                file: node,
+                offset: requested_offset,
+            },
+        ) {
+            Ok(chunk_bytes) => {
+                let chunk = KvEncryptedChunk::decode(&chunk_bytes)?;
+                let clear =
+                    Zeroizing::new(open_kv_chunk(&file_seed, node, requested_offset, &chunk)?);
+                if clear.is_empty() && !chunk.final_chunk {
+                    return Err(Error::KvResponse("empty non-final file chunk"));
+                }
+                let chunk_end = validate_large_file_append(requested_offset, clear.len())?;
+                let count = length.min(clear.len());
+                return Ok(KvFetchedChunk {
+                    content: clear[..count].to_vec(),
+                    eof: chunk.final_chunk && requested_end >= chunk_end,
+                });
+            }
+            Err(Error::Rpc(foks_rpc::Error::RemoteStatus { code: 8016, .. })) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    let mut output = Vec::with_capacity(length);
+    let mut chunk_offset = 0u64;
+    for _ in 0..4096 {
+        let chunk_bytes = fetch(
+            auth,
+            &KvRequest::Chunk {
+                file: node,
+                offset: chunk_offset,
+            },
+        )?;
+        let chunk = KvEncryptedChunk::decode(&chunk_bytes)?;
+        let clear = Zeroizing::new(open_kv_chunk(&file_seed, node, chunk_offset, &chunk)?);
+        if clear.is_empty() && !chunk.final_chunk {
+            return Err(Error::KvResponse("empty non-final file chunk"));
+        }
+        let chunk_end = validate_large_file_append(chunk_offset, clear.len())?;
+        if chunk_end > requested_offset && chunk_offset < requested_end {
+            let start = requested_offset.saturating_sub(chunk_offset) as usize;
+            let end = requested_end.min(chunk_end).saturating_sub(chunk_offset) as usize;
+            output.extend_from_slice(&clear[start..end]);
+        }
+        if chunk.final_chunk {
+            if requested_offset > chunk_end {
+                return Err(Error::KvResponse("KV range starts beyond end of file"));
+            }
+            return Ok(KvFetchedChunk {
+                content: output,
+                eof: requested_end >= chunk_end,
+            });
+        }
+        chunk_offset = chunk_end;
+        if chunk_offset >= requested_end {
+            return Ok(KvFetchedChunk {
+                content: output,
+                eof: false,
+            });
+        }
+    }
+    Err(Error::KvResponse("file chunk limit exceeded"))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum KvSyncMode {
+    Content,
+    Metadata,
 }
 
 fn validate_large_file_append(current_size: u64, chunk_size: usize) -> Result<u64> {

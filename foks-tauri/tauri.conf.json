@@ -1,0 +1,52 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "foks-desktop",
+  "identifier": "org.foks.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm run foks:dev:frontend",
+    "devUrl": "http://127.0.0.1:1421",
+    "beforeBuildCommand": "pnpm run foks:build:frontend",
+    "frontendDist": "../foks-ui/dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "FOKS",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true,
+        "visible": true,
+        "dragDropEnabled": true,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 14, "y": 24 },
+        "url": "index.html"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; script-src 'self'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "category": "Utility",
+    "shortDescription": "Desktop client for FOKS identity and encrypted vaults.",
+    "longDescription": "Manage FOKS servers, accounts, groups, devices, and encrypted vault items through a local managed agent.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "entitlements": "../packaging/foks-desktop/macos/entitlements.plist"
+    }
+  }
+}

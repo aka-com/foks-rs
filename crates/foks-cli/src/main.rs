@@ -82,6 +82,7 @@ enum ProfileCommand {
         name: String,
     },
     Add(ProfileAdd),
+    Verify(ProfileAdd),
     Remove {
         name: String,
     },
@@ -620,6 +621,38 @@ fn initialize(
     )
 }
 
+fn profile_from_arguments(arguments: ProfileAdd) -> Result<Profile, Box<dyn std::error::Error>> {
+    let protocol = match arguments.generation {
+        ProfileGeneration::V019 => {
+            if arguments.canary_public_key.is_some() || arguments.canary_url.is_some() {
+                return Err(
+                    "v0.1.9 profiles do not support compatibility-lease configuration".into(),
+                );
+            }
+            ProtocolPolicy::V019
+        }
+        ProfileGeneration::CurrentProbeOnly => ProtocolPolicy::CurrentProbeOnly {
+            canary_public_key: arguments
+                .canary_public_key
+                .ok_or("current profiles require --canary-public-key")?,
+            lease_url: arguments
+                .canary_url
+                .ok_or("current profiles require --canary-url")?,
+            last_artifact: None,
+        },
+    };
+    let trust = match arguments.ca_der {
+        Some(path) => TrustRoot::CertificateDer { path },
+        None => TrustRoot::WebPki,
+    };
+    Ok(Profile {
+        name: arguments.name,
+        probe: arguments.target,
+        protocol,
+        trust,
+    })
+}
+
 fn profile_command(
     state_dir: &Path,
     json: bool,
@@ -640,35 +673,21 @@ fn profile_command(
             )
         }
         ProfileCommand::Add(arguments) => {
-            let protocol = match arguments.generation {
-                ProfileGeneration::V019 => {
-                    if arguments.canary_public_key.is_some() || arguments.canary_url.is_some() {
-                        return Err("v0.1.9 profiles do not take canary configuration".into());
-                    }
-                    ProtocolPolicy::V019
-                }
-                ProfileGeneration::CurrentProbeOnly => ProtocolPolicy::CurrentProbeOnly {
-                    canary_public_key: arguments
-                        .canary_public_key
-                        .ok_or("current profiles require --canary-public-key")?,
-                    lease_url: arguments
-                        .canary_url
-                        .ok_or("current profiles require --canary-url")?,
-                    last_artifact: None,
-                },
-            };
-            let trust = match arguments.ca_der {
-                Some(path) => TrustRoot::CertificateDer { path },
-                None => TrustRoot::WebPki,
-            };
-            let profile = Profile {
-                name: arguments.name,
-                probe: arguments.target,
-                protocol,
-                trust,
-            };
+            let profile = profile_from_arguments(arguments)?;
             registry.add(profile.clone())?;
             output(json, &profile, "profile added")
+        }
+        ProfileCommand::Verify(arguments) => {
+            let expected = profile_from_arguments(arguments)?;
+            let configured = registry.profile(&expected.name)?;
+            if configured != &expected {
+                return Err(format!(
+                    "FOKS profile '{}' does not match the required configuration",
+                    expected.name
+                )
+                .into());
+            }
+            output(json, configured, "profile verified")
         }
         ProfileCommand::Remove { name } => {
             let removed = registry.remove(&name)?;
@@ -1150,8 +1169,16 @@ fn recovery_command(
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, _| {
-                let phrase = session.enroll_owner_backup(&account_alias, &backup_alias, vault)?;
+                let phrase = session
+                    .prepare_owner_backup(&account_alias, &backup_alias, vault)?
+                    .expose_joined();
                 write_new_private(&destination, phrase.as_bytes())?;
+                session.commit_owner_backup(
+                    &account_alias,
+                    &backup_alias,
+                    Zeroizing::new(phrase.as_str().to_owned()),
+                    vault,
+                )?;
                 output(
                     json,
                     &serde_json::json!({
@@ -2162,6 +2189,56 @@ mod tests {
         assert!(state.join("profiles.toml").is_file());
         assert!(state.join("master.key").is_file());
         assert_eq!(ProfileRegistry::open(&state).unwrap().profiles().len(), 1);
+        profile_command(
+            &state,
+            false,
+            ProfileCommand::Verify(ProfileAdd {
+                name: "local".to_owned(),
+                target: "localhost:4430".to_owned(),
+                generation: ProfileGeneration::V019,
+                ca_der: Some(state.join("local-ca.der")),
+                canary_public_key: None,
+                canary_url: None,
+            }),
+        )
+        .unwrap();
+        for (target, ca_der) in [
+            ("localhost:4431", state.join("local-ca.der")),
+            ("localhost:4430", state.join("other-ca.der")),
+        ] {
+            let error = profile_command(
+                &state,
+                false,
+                ProfileCommand::Verify(ProfileAdd {
+                    name: "local".to_owned(),
+                    target: target.to_owned(),
+                    generation: ProfileGeneration::V019,
+                    ca_der: Some(ca_der),
+                    canary_public_key: None,
+                    canary_url: None,
+                }),
+            )
+            .unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("does not match the required configuration"));
+        }
+        let error = profile_command(
+            &state,
+            false,
+            ProfileCommand::Verify(ProfileAdd {
+                name: "local".to_owned(),
+                target: "localhost:4430".to_owned(),
+                generation: ProfileGeneration::CurrentProbeOnly,
+                ca_der: Some(state.join("local-ca.der")),
+                canary_public_key: Some("00".to_owned()),
+                canary_url: Some("https://localhost/canary".to_owned()),
+            }),
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("does not match the required configuration"));
     }
 
     #[cfg(unix)]

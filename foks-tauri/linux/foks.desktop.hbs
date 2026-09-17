@@ -1,8 +1,12 @@
 [Desktop Entry]
 Type=Application
 Name=FOKS
-Comment=Standalone FOKS client
-Exec=foks-desktop-launcher
+{{#if comment}}
+Comment={{comment}}
+{{/if}}
+Exec={{exec}}
+Icon={{icon}}
 Terminal=false
 Categories=Network;Security;
 StartupNotify=true
+StartupWMClass={{exec}}

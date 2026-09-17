@@ -10,6 +10,11 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 pub const ARTIFACT_SCHEMA_VERSION: u64 = 2;
+/// SHA-256 of the protocol metadata artifact accepted by clients and desktop
+/// profile validators. Keeping this beside the metadata parser gives every
+/// consumer one policy value instead of hand-copied literals.
+pub const PINNED_PROTOCOL_METADATA_SHA256: &str =
+    "cc3c55378ec57b77bbb951c35723bc198c112563909178806d8db33762ed7939";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

@@ -31,4 +31,7 @@ The authenticated slice exposes `verify_user_chain` and
 the signed SQLite pin, stacked signatures, HEPK bindings, tree-location
 commitments, every presence proof, the next-link absence proof, device
 provisioning and revocation, and PUK generation rotation. The same replay path
-handles both an eldest-only chain and later transitions.
+handles both an eldest-only chain and later transitions. Authenticated
+device-name commitment openings are retained as an optional device-ID-indexed
+display projection; Go-compatible non-self responses that omit those openings
+produce no name rather than an inferred label.

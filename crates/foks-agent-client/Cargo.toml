@@ -9,6 +9,7 @@ publish = false
 foks-agent-proto = { workspace = true }
 thiserror = { workspace = true }
 rustix = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

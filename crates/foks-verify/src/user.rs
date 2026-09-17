@@ -3,7 +3,7 @@
 use foks_proto::UserMemberKeys;
 use unicode_normalization::{char::is_combining_mark, UnicodeNormalization as _};
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     commitment, encode, prefixed_hash, user_transition::user_member_hepk_matches,
@@ -207,6 +207,7 @@ pub struct VerifiedUserState {
     username: Vec<u8>,
     username_utf8: Vec<u8>,
     username_sequence: u64,
+    device_display_names: BTreeMap<Vec<u8>, String>,
     devices: Vec<VerifiedDevice>,
     shared_keys: Vec<VerifiedSharedKey>,
     shared_key_history: Vec<VerifiedSharedKey>,
@@ -274,6 +275,15 @@ impl VerifiedUserState {
 
     pub fn devices(&self) -> &[VerifiedDevice] {
         &self.devices
+    }
+
+    /// Authenticated presentation name committed by the device's provisioning
+    /// link. Non-self Go chain loads intentionally omit these openings, so a
+    /// verified device can truthfully have no display name.
+    pub fn device_display_name(&self, device: &EntityId) -> Option<&str> {
+        self.device_display_names
+            .get(device.as_bytes())
+            .map(String::as_str)
     }
 
     /// Returns every authenticated provisioning incarnation for `device`.
@@ -764,6 +774,8 @@ fn verify_user_chain_at_root(
     }
     let (devices, shared_keys, shared_key_history, stale_shared_key_roles) =
         replay_state.into_parts();
+    let device_display_names =
+        authenticated_device_display_names(&chain, allow_omitted_device_names, BTreeMap::new())?;
     Ok(VerifiedUserState {
         uid: expected_uid.clone(),
         host: expected_host.clone(),
@@ -778,6 +790,7 @@ fn verify_user_chain_at_root(
         username,
         username_utf8,
         username_sequence,
+        device_display_names,
         devices,
         shared_keys,
         shared_key_history,
@@ -949,6 +962,11 @@ fn verify_user_chain_increment_at_root(
     }
     let (devices, shared_keys, shared_key_history, stale_shared_key_roles) =
         replay_state.into_parts();
+    let device_display_names = authenticated_device_display_names(
+        &chain,
+        allow_omitted_device_names,
+        prior.device_display_names.clone(),
+    )?;
     Ok(VerifiedUserState {
         uid: expected_uid.clone(),
         host: expected_host.clone(),
@@ -966,6 +984,7 @@ fn verify_user_chain_increment_at_root(
         username,
         username_utf8,
         username_sequence,
+        device_display_names,
         devices,
         shared_keys,
         shared_key_history,
@@ -1225,6 +1244,58 @@ fn verify_incremental_user_disclosures(
         }
     }
     Ok((username, chain.username_utf8.clone(), username_sequence))
+}
+
+fn authenticated_device_display_names(
+    chain: &UserChain,
+    allow_omitted_device_names: bool,
+    mut names: BTreeMap<Vec<u8>, String>,
+) -> Result<BTreeMap<Vec<u8>, String>> {
+    let omitted = allow_omitted_device_names && chain.device_names.is_empty();
+    let mut disclosed = chain.device_names.iter();
+    for link in &chain.links {
+        let change = link.decode_group_change()?;
+        let count = change
+            .metadata
+            .iter()
+            .filter(|metadata| matches!(metadata, ChangeMetadata::DeviceName(_)))
+            .count();
+        if count == 0 {
+            continue;
+        }
+        if count != 1 {
+            return Err(Error::UserDisclosure);
+        }
+        let device = if change.seqno == 1 {
+            link.decode_eldest()?.member
+        } else {
+            let mut added = change
+                .changes
+                .iter()
+                .filter(|member| member.source_role == Role::NONE && member.role != Role::NONE);
+            let device = added.next().ok_or(Error::UserDisclosure)?.entity.clone();
+            if added.next().is_some() {
+                return Err(Error::UserDisclosure);
+            }
+            device
+        };
+        if omitted {
+            // Do not retain an older name if the same device ID is provisioned
+            // again through a disclosure-omitting non-self suffix.
+            names.remove(device.as_bytes());
+            continue;
+        }
+        let display_name = disclosed.next().ok_or(Error::UserDisclosure)?;
+        names.insert(
+            device.as_bytes().to_vec(),
+            String::from_utf8(display_name.display_name.clone())
+                .map_err(|_| Error::UserDisclosure)?,
+        );
+    }
+    if disclosed.next().is_some() {
+        return Err(Error::UserDisclosure);
+    }
+    Ok(names)
 }
 
 fn verify_user_disclosures(
@@ -1574,7 +1645,7 @@ mod incremental_tests {
         .unwrap();
         let replay = UserReplayState::from_eldest(
             VerifiedDevice {
-                id: eldest.member,
+                id: eldest.member.clone(),
                 role: Role::OWNER,
                 hepk: find_hepk(&chain.hepks, eldest.member_hepk_fingerprint).unwrap(),
                 subkey: eldest.member_subkey,
@@ -1604,6 +1675,10 @@ mod incremental_tests {
             username: final_state.username.clone(),
             username_utf8: final_state.username_utf8.clone(),
             username_sequence: final_state.username_sequence,
+            device_display_names: BTreeMap::from([(
+                eldest.member.as_bytes().to_vec(),
+                String::from_utf8(chain.device_names[0].display_name.clone()).unwrap(),
+            )]),
             devices,
             shared_keys,
             shared_key_history,

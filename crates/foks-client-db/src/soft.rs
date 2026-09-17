@@ -15,6 +15,28 @@ use crate::{sqlite_integer, stored_unsigned, Acceptance, Error, Result};
 pub const MAX_DISCOVERY_HINTS: usize = 128;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KnownTeamStore {
+    pub account_alias: String,
+    pub team_alias: String,
+    pub team_id_hex: String,
+    pub team_kind: String,
+    pub display_name: Option<String>,
+    pub active: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum KnownStore {
+    Account {
+        account_alias: String,
+        last_seen_at: u64,
+    },
+    Team {
+        store: KnownTeamStore,
+        last_seen_at: u64,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KvProjectedEntry {
     pub dirent_id: [u8; 16],
     pub node_id: [u8; 17],
@@ -85,18 +107,133 @@ impl SoftStateStore {
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
             | OpenFlags::SQLITE_OPEN_FULL_MUTEX
             | OpenFlags::SQLITE_OPEN_NOFOLLOW;
-        let mut connection = Connection::open_with_flags(database_path, flags)?;
+        let mut connection = Connection::open_with_flags(&database_path, flags)?;
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.pragma_update(None, "foreign_keys", true)?;
         connection.pragma_update(None, "trusted_schema", false)?;
         connection.pragma_update(None, "secure_delete", true)?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
-        initialize(&mut connection)?;
+        initialize(&mut connection, &database_path)?;
         Ok(Self {
             connection,
             owned_stages: std::collections::BTreeSet::new(),
         })
+    }
+
+    pub fn replace_known_accounts(&mut self, aliases: &[String], observed_at: u64) -> Result<()> {
+        let observed_at = sqlite_integer("known-store observation time", observed_at)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute("DELETE FROM known_stores WHERE kind = 1", [])?;
+        {
+            let mut insert = transaction.prepare(
+                "INSERT INTO known_stores
+                     (kind, account_alias, team_alias, last_seen_at)
+                 VALUES (1, ?1, '', ?2)",
+            )?;
+            for alias in aliases {
+                insert.execute(params![alias, observed_at])?;
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn replace_known_teams(
+        &mut self,
+        teams: &[KnownTeamStore],
+        observed_at: u64,
+    ) -> Result<()> {
+        let observed_at = sqlite_integer("known-store observation time", observed_at)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute("DELETE FROM known_stores WHERE kind = 2", [])?;
+        {
+            let mut insert = transaction.prepare(
+                "INSERT INTO known_stores
+                     (kind, account_alias, team_alias, team_id_hex, team_kind,
+                      display_name, active, last_seen_at)
+                 VALUES (2, ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?;
+            for team in teams {
+                insert.execute(params![
+                    team.account_alias,
+                    team.team_alias,
+                    team.team_id_hex,
+                    team.team_kind,
+                    team.display_name,
+                    i64::from(team.active),
+                    observed_at,
+                ])?;
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn known_stores(&self) -> Result<Vec<KnownStore>> {
+        let mut statement = self.connection.prepare(
+            "SELECT kind, account_alias, team_alias, team_id_hex, team_kind,
+                    display_name, active, last_seen_at
+             FROM known_stores
+             ORDER BY kind, account_alias, team_alias",
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<i64>>(6)?,
+                    row.get::<_, i64>(7)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(
+                |(
+                    kind,
+                    account_alias,
+                    team_alias,
+                    team_id_hex,
+                    team_kind,
+                    display_name,
+                    active,
+                    last_seen_at,
+                )| {
+                    let last_seen_at =
+                        stored_unsigned("known-store observation time", last_seen_at)?;
+                    match (kind, team_id_hex, team_kind, active) {
+                        (1, None, None, None) if team_alias.is_empty() => Ok(KnownStore::Account {
+                            account_alias,
+                            last_seen_at,
+                        }),
+                        (2, Some(team_id_hex), Some(team_kind), Some(active))
+                            if !team_alias.is_empty() =>
+                        {
+                            Ok(KnownStore::Team {
+                                store: KnownTeamStore {
+                                    account_alias,
+                                    team_alias,
+                                    team_id_hex,
+                                    team_kind,
+                                    display_name,
+                                    active: active != 0,
+                                },
+                                last_seen_at,
+                            })
+                        }
+                        _ => Err(Error::InvalidKnownStore),
+                    }
+                },
+            )
+            .collect()
     }
 
     /// Stores an authenticated routing hint and evicts the least-recently-used
@@ -309,7 +446,7 @@ impl SoftStateStore {
         snapshots: &[KvDirectoryProjection],
         large_files: &[KvLargeFileStage],
     ) -> Result<Acceptance> {
-        self.project_tree_impl(snapshots, large_files, false)
+        self.project_tree_impl(snapshots, large_files, false, false)
     }
 
     /// Replaces verified stale directories and removes only directory/file
@@ -319,7 +456,17 @@ impl SoftStateStore {
         snapshots: &[KvDirectoryProjection],
         large_files: &[KvLargeFileStage],
     ) -> Result<Acceptance> {
-        self.project_tree_impl(snapshots, large_files, true)
+        self.project_tree_impl(snapshots, large_files, true, false)
+    }
+
+    /// Records a complete authenticated metadata traversal under the same
+    /// rollback and fork checks as a content projection, while deliberately
+    /// omitting plaintext and large-file stages.
+    pub fn project_reachable_metadata(
+        &mut self,
+        snapshots: &[KvDirectoryProjection],
+    ) -> Result<Acceptance> {
+        self.project_tree_impl(snapshots, &[], true, true)
     }
 
     fn project_tree_impl(
@@ -327,6 +474,7 @@ impl SoftStateStore {
         snapshots: &[KvDirectoryProjection],
         large_files: &[KvLargeFileStage],
         prune: bool,
+        metadata_only: bool,
     ) -> Result<Acceptance> {
         let Some(root) = snapshots.first() else {
             return Err(Error::InvalidKvProjection);
@@ -342,7 +490,7 @@ impl SoftStateStore {
         let mut directory_ids = std::collections::BTreeSet::new();
         let mut used_large_files = std::collections::BTreeSet::new();
         for snapshot in snapshots {
-            validate(snapshot)?;
+            validate(snapshot, metadata_only)?;
             if snapshot.host_id != root.host_id
                 || snapshot.party_id != root.party_id
                 || snapshot.root_version != root.root_version
@@ -543,7 +691,7 @@ impl SoftStateStore {
                         entry.dirent_bytes
                     ],
                 )?;
-                let large_file_id = if entry.node_id[0] == 2 {
+                let large_file_id = if entry.node_id[0] == 2 && !metadata_only {
                     let stage = large_files
                         .get(&entry.node_id)
                         .ok_or(Error::InvalidKvProjection)?;
@@ -800,6 +948,74 @@ impl SoftStateStore {
         }
         Ok(Some(size))
     }
+
+    /// Reads one bounded range from a complete projected large file without
+    /// materializing the rest of the plaintext. The returned size is the
+    /// authenticated projected size used to compute EOF.
+    pub fn read_large_file_chunk(
+        &self,
+        host_id: &[u8],
+        party_id: &[u8],
+        node_id: &[u8; 17],
+        offset: u64,
+        length: usize,
+    ) -> Result<Option<(Vec<u8>, u64)>> {
+        let file = self
+            .connection
+            .query_row(
+                "SELECT f.id, f.size FROM kv_large_files f WHERE f.host_id = ?1 AND f.party_id = ?2 \
+                 AND f.node_id = ?3 AND f.complete = 1 AND EXISTS (SELECT 1 FROM kv_entries e \
+                 WHERE e.large_file_id = f.id) ORDER BY f.id DESC LIMIT 1",
+                params![host_id, party_id, node_id.as_slice()],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+        let Some((file_id, size)) = file else {
+            return Ok(None);
+        };
+        let size = stored_unsigned("KV large file size", size)?;
+        if offset > size {
+            return Err(Error::InvalidKvProjection);
+        }
+        let wanted_end = offset
+            .checked_add(length as u64)
+            .ok_or(Error::InvalidKvProjection)?
+            .min(size);
+        let mut output = Vec::with_capacity((wanted_end - offset) as usize);
+        let mut expected_offset = offset;
+        let mut statement = self.connection.prepare(
+            "SELECT offset, content FROM kv_large_file_chunks WHERE file_id = ?1 \
+             AND offset < ?2 AND offset + length(content) > ?3 ORDER BY offset",
+        )?;
+        let mut rows = statement.query(params![
+            file_id,
+            sqlite_integer("KV chunk range end", wanted_end)?,
+            sqlite_integer("KV chunk range offset", offset)?,
+        ])?;
+        let mut first = true;
+        while let Some(row) = rows.next()? {
+            let chunk_offset = stored_unsigned("KV chunk offset", row.get(0)?)?;
+            let content: Vec<u8> = row.get(1)?;
+            let chunk_end = chunk_offset
+                .checked_add(content.len() as u64)
+                .ok_or(Error::InvalidKvProjection)?;
+            if (first && (chunk_offset > expected_offset || chunk_end <= expected_offset))
+                || (!first && chunk_offset != expected_offset)
+            {
+                return Err(Error::InvalidKvProjection);
+            }
+            let start = (expected_offset - chunk_offset) as usize;
+            let end_offset = wanted_end.min(chunk_end);
+            let end = (end_offset - chunk_offset) as usize;
+            output.extend_from_slice(&content[start..end]);
+            expected_offset = end_offset;
+            first = false;
+        }
+        if expected_offset != wanted_end || output.len() as u64 != wanted_end - offset {
+            return Err(Error::InvalidKvProjection);
+        }
+        Ok(Some((output, size)))
+    }
 }
 
 impl Drop for SoftStateStore {
@@ -850,7 +1066,7 @@ fn ensure_complete_tree(
     Ok(())
 }
 
-fn initialize(connection: &mut Connection) -> Result<()> {
+fn initialize(connection: &mut Connection, path: &Path) -> Result<()> {
     let application_id: i64 =
         connection.pragma_query_value(None, "application_id", |row| row.get(0))?;
     let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
@@ -881,6 +1097,7 @@ fn initialize(connection: &mut Connection) -> Result<()> {
     }
     if version != VERSION {
         return Err(Error::UnsupportedSoftSchema {
+            path: path.display().to_string(),
             found: version,
             supported: VERSION,
         });
@@ -888,7 +1105,7 @@ fn initialize(connection: &mut Connection) -> Result<()> {
     Ok(())
 }
 
-fn validate(snapshot: &KvDirectoryProjection) -> Result<()> {
+fn validate(snapshot: &KvDirectoryProjection, metadata_only: bool) -> Result<()> {
     if snapshot.host_id.len() != 33
         || snapshot.party_id.len() != 33
         || snapshot.root_version == 0
@@ -904,28 +1121,46 @@ fn validate(snapshot: &KvDirectoryProjection) -> Result<()> {
                     (entry.write_role_type, entry.write_role_visibility),
                     (1, -32768..=32767) | (2 | 3, 0)
                 )
-                || match entry.node_id[0] {
-                    1 => {
-                        entry.content.is_some()
-                            || entry.symlink.is_some()
-                            || entry.large_file_size.is_some()
+                || if metadata_only {
+                    match entry.node_id[0] {
+                        1 => {
+                            entry.node_bytes.is_some()
+                                || entry.content.is_some()
+                                || entry.symlink.is_some()
+                                || entry.large_file_size.is_some()
+                        }
+                        2..=4 => {
+                            entry.node_bytes.is_none()
+                                || entry.content.is_some()
+                                || entry.symlink.is_some()
+                                || entry.large_file_size.is_some()
+                        }
+                        _ => true,
                     }
-                    2 => {
-                        entry.content.is_some()
-                            || entry.symlink.is_some()
-                            || entry.large_file_size.is_none()
+                } else {
+                    match entry.node_id[0] {
+                        1 => {
+                            entry.content.is_some()
+                                || entry.symlink.is_some()
+                                || entry.large_file_size.is_some()
+                        }
+                        2 => {
+                            entry.content.is_some()
+                                || entry.symlink.is_some()
+                                || entry.large_file_size.is_none()
+                        }
+                        3 => {
+                            entry.content.is_none()
+                                || entry.symlink.is_some()
+                                || entry.large_file_size.is_some()
+                        }
+                        4 => {
+                            entry.content.is_some()
+                                || entry.symlink.is_none()
+                                || entry.large_file_size.is_some()
+                        }
+                        _ => true,
                     }
-                    3 => {
-                        entry.content.is_none()
-                            || entry.symlink.is_some()
-                            || entry.large_file_size.is_some()
-                    }
-                    4 => {
-                        entry.content.is_some()
-                            || entry.symlink.is_none()
-                            || entry.large_file_size.is_some()
-                    }
-                    _ => true,
                 }
         })
     {
@@ -1047,6 +1282,85 @@ mod tests {
 
     fn host(fill: u8) -> EntityId {
         EntityId::from_bytes([vec![ENTITY_HOST], vec![fill; 32]].concat()).unwrap()
+    }
+
+    #[test]
+    fn unsupported_soft_schema_names_the_safe_recovery_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("soft.sqlite3");
+        drop(SoftStateStore::open(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        connection.pragma_update(None, "user_version", 3).unwrap();
+        drop(connection);
+
+        let error = match SoftStateStore::open(&path) {
+            Ok(_) => panic!("unsupported schema opened"),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+        assert!(message.contains(path.canonicalize().unwrap().to_str().unwrap()));
+        assert!(message.contains("Quit FOKS"));
+        assert!(message.contains("delete"));
+        assert!(message.contains("credentials"));
+        assert!(message.contains("server trust state"));
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn known_store_sources_replace_independently_and_survive_reopen() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("soft.sqlite3");
+        let mut store = SoftStateStore::open(&path).unwrap();
+        store
+            .replace_known_accounts(&["personal".to_owned()], 10)
+            .unwrap();
+        store
+            .replace_known_teams(
+                &[KnownTeamStore {
+                    account_alias: "personal".to_owned(),
+                    team_alias: "household".to_owned(),
+                    team_id_hex: "03aa".to_owned(),
+                    team_kind: "named".to_owned(),
+                    display_name: Some("Household".to_owned()),
+                    active: true,
+                }],
+                11,
+            )
+            .unwrap();
+        store
+            .replace_known_accounts(&["work".to_owned()], 12)
+            .unwrap();
+        drop(store);
+
+        let mut store = SoftStateStore::open(&path).unwrap();
+        assert_eq!(
+            store.known_stores().unwrap(),
+            vec![
+                KnownStore::Account {
+                    account_alias: "work".to_owned(),
+                    last_seen_at: 12,
+                },
+                KnownStore::Team {
+                    store: KnownTeamStore {
+                        account_alias: "personal".to_owned(),
+                        team_alias: "household".to_owned(),
+                        team_id_hex: "03aa".to_owned(),
+                        team_kind: "named".to_owned(),
+                        display_name: Some("Household".to_owned()),
+                        active: true,
+                    },
+                    last_seen_at: 11,
+                },
+            ],
+        );
+        store.replace_known_teams(&[], 13).unwrap();
+        assert_eq!(
+            store.known_stores().unwrap(),
+            vec![KnownStore::Account {
+                account_alias: "work".to_owned(),
+                last_seen_at: 12,
+            }],
+        );
     }
 
     #[test]
@@ -1339,6 +1653,30 @@ mod tests {
             Some(5)
         );
         assert_eq!(output, b"abcde");
+        assert_eq!(
+            store
+                .read_large_file_chunk(&projected.host_id, &projected.party_id, &node_id, 1, 3,)
+                .unwrap(),
+            Some((b"bcd".to_vec(), 5))
+        );
+        assert_eq!(
+            store
+                .read_large_file_chunk(&projected.host_id, &projected.party_id, &node_id, 0, 2,)
+                .unwrap(),
+            Some((b"ab".to_vec(), 5))
+        );
+        assert_eq!(
+            store
+                .read_large_file_chunk(&projected.host_id, &projected.party_id, &node_id, 4, 8,)
+                .unwrap(),
+            Some((b"e".to_vec(), 5))
+        );
+        assert_eq!(
+            store
+                .read_large_file_chunk(&projected.host_id, &projected.party_id, &node_id, 5, 8,)
+                .unwrap(),
+            Some((Vec::new(), 5))
+        );
 
         projected.directory_version = 2;
         projected.directory_bytes = vec![10];
@@ -1357,6 +1695,51 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn metadata_projection_pins_versions_without_plaintext_or_file_stages() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("metadata.sqlite3");
+        let mut store = SoftStateStore::open(&path).unwrap();
+        let mut projected = snapshot();
+        projected.directory_version = 2;
+        projected.directory_bytes = vec![2];
+        let mut node_id = [9; 17];
+        node_id[0] = 2;
+        projected.entries = vec![KvProjectedEntry {
+            dirent_id: [7; 16],
+            node_id,
+            version: 4,
+            directory_version: 2,
+            name: b"large.bin".to_vec(),
+            write_role_type: 2,
+            write_role_visibility: 0,
+            creation_time: 7,
+            dirent_bytes: vec![7],
+            node_bytes: Some(vec![8]),
+            content: None,
+            symlink: None,
+            large_file_size: None,
+        }];
+        store
+            .project_reachable_metadata(&[projected.clone()])
+            .unwrap();
+        let stored = store.tree(&projected.host_id, &projected.party_id).unwrap();
+        assert_eq!(stored[0].entries[0].node_bytes, Some(vec![8]));
+        assert!(stored[0].entries[0].content.is_none());
+        assert!(stored[0].entries[0].large_file_size.is_none());
+
+        let mut rollback = projected;
+        rollback.directory_version = 1;
+        rollback.directory_bytes = vec![1];
+        assert!(matches!(
+            store.project_reachable_metadata(&[rollback]),
+            Err(Error::KvDirectoryRollback {
+                stored: 2,
+                received: 1
+            })
+        ));
     }
 
     #[test]

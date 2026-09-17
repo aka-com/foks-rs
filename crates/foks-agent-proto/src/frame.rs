@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-use crate::{Request, Response, PROTOCOL_VERSION};
+use crate::{KvUploadFrame, Request, Response, PROTOCOL_VERSION};
 
 pub const MAXIMUM_MESSAGE_BYTES: usize = 1024 * 1024;
 
@@ -20,6 +20,11 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+#[derive(Deserialize)]
+struct VersionEnvelope {
+    version: u32,
+}
+
 pub fn encode<T: Serialize>(message: &T) -> Result<Zeroizing<Vec<u8>>> {
     let payload = Zeroizing::new(serde_json::to_vec(message)?);
     if payload.len() > MAXIMUM_MESSAGE_BYTES {
@@ -33,19 +38,37 @@ pub fn encode<T: Serialize>(message: &T) -> Result<Zeroizing<Vec<u8>>> {
 }
 
 pub fn decode_request(frame: &[u8]) -> Result<Request> {
+    validate_version(frame)?;
     let request: Request = decode(frame)?;
-    if request.version != PROTOCOL_VERSION {
-        return Err(Error::Version);
-    }
     Ok(request)
 }
 
+/// Recovers a correlation ID from a length-valid JSON envelope even when the
+/// version or operation is unsupported. Malformed frames intentionally have
+/// no response ID.
+pub fn request_id(frame: &[u8]) -> Option<u64> {
+    let value: serde_json::Value = decode(frame).ok()?;
+    value.get("id")?.as_u64()
+}
+
 pub fn decode_response(frame: &[u8]) -> Result<Response> {
+    validate_version(frame)?;
     let response: Response = decode(frame)?;
-    if response.version != PROTOCOL_VERSION {
+    Ok(response)
+}
+
+pub fn decode_upload_frame(frame: &[u8]) -> Result<KvUploadFrame> {
+    validate_version(frame)?;
+    let frame: KvUploadFrame = decode(frame)?;
+    Ok(frame)
+}
+
+fn validate_version(frame: &[u8]) -> Result<()> {
+    let envelope: VersionEnvelope = decode(frame)?;
+    if envelope.version != PROTOCOL_VERSION {
         return Err(Error::Version);
     }
-    Ok(response)
+    Ok(())
 }
 
 fn decode<T: for<'de> Deserialize<'de>>(frame: &[u8]) -> Result<T> {

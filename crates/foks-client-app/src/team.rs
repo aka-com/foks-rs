@@ -10,6 +10,10 @@ pub(super) fn is_background_team_alias(alias: &str) -> bool {
 static TEST_FAIL_AFTER_MEMBER_EDIT_COMMIT: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+#[cfg(test)]
+static TEST_FAIL_AFTER_DISCOVERY_PERSIST: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 impl CheckedProfileSession<'_> {
     pub fn create_named_team(
         &self,
@@ -75,6 +79,11 @@ impl CheckedProfileSession<'_> {
     ) -> Result<TeamSyncReport> {
         self.profile.require(Capability::Teams)?;
         let mut stored = vault.team(team_alias)?;
+        if stored.origin != StoredTeamOrigin::CreatedHere {
+            return Err(Error::InvalidAccount(
+                "a discovered team has no local creation to resume",
+            ));
+        }
         let account = vault.account(&stored.account_alias)?;
         let host = self.pinned_host()?;
         let authenticated = match stored.kind {
@@ -114,20 +123,116 @@ impl CheckedProfileSession<'_> {
             .into_iter()
             .map(|alias| {
                 let team = vault.team(&alias)?;
-                Ok(TeamSummary {
-                    alias,
-                    account_alias: team.account_alias.clone(),
-                    team_id_hex: hex(&team.team_id),
-                    kind: match team.kind {
-                        StoredTeamKind::Named => "named",
-                        StoredTeamKind::AdHoc => "ad-hoc",
-                    }
-                    .to_owned(),
-                    name: team.name.clone(),
-                    active: team.active,
-                })
+                Ok(TeamSummary::from_stored(alias, &team))
             })
             .collect()
+    }
+
+    /// Discovers teams that the selected account can currently authenticate,
+    /// gives previously unknown teams stable local aliases, and persists the
+    /// bindings before returning them. Each team record is independent, so a
+    /// retry after interruption reuses every binding already written.
+    pub fn discover_teams(
+        &self,
+        account_alias: &str,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<TeamDiscoveryReport> {
+        self.profile.require(Capability::Teams)?;
+        let account = vault.account(account_alias)?;
+        let host = self.pinned_host()?;
+        let user = self
+            .client
+            .authenticate_and_pin(&host, &account.credential)?;
+        let graph = self.client.discover_local_team_graph(
+            &host,
+            &account.credential,
+            &user.verified,
+            &user.puks,
+        )?;
+
+        let mut discovered = std::collections::BTreeMap::<Vec<u8>, StoredTeam>::new();
+        for authenticated in graph.teams {
+            if authenticated.verified.host() != host.host_id() {
+                return Err(foks_client::Error::TeamBinding(
+                    "team discovery response changed the authenticated host",
+                )
+                .into());
+            }
+            // The authenticated graph also contains teams reachable through
+            // another local team. Ordinary desktop store operations reopen a
+            // team with this account's user credential, so persist only teams
+            // whose current authenticated roster directly contains that user.
+            if !authenticated
+                .verified
+                .members()
+                .iter()
+                .any(|member| member.party == *user.verified.uid() && member.scoped_host.is_none())
+            {
+                continue;
+            }
+            let direct = self.client.load_and_pin_team(
+                &host,
+                &account.credential,
+                &user.verified,
+                &user.puks,
+                authenticated.verified.team(),
+            )?;
+            if direct.verified.team() != authenticated.verified.team()
+                || direct.verified.host() != authenticated.verified.host()
+            {
+                return Err(foks_client::Error::TeamBinding(
+                    "direct team discovery changed authenticated identity",
+                )
+                .into());
+            }
+            let identity = StoredTeam::discovered(account_alias, &direct)?;
+            let key = identity.team_id.clone();
+            if let Some(prior) = discovered.get(&key) {
+                if prior.kind != identity.kind || prior.name != identity.name {
+                    return Err(foks_client::Error::TeamBinding(
+                        "one discovered team has conflicting authenticated identities",
+                    )
+                    .into());
+                }
+            } else {
+                discovered.insert(key, identity);
+            }
+        }
+
+        let mut teams = Vec::with_capacity(discovered.len());
+        for identity in discovered.into_values() {
+            let alias = discovery_alias(vault, &identity)?;
+            let stored = match vault.team(&alias) {
+                Ok(mut existing) => {
+                    bind_existing_discovery(&existing, &identity)?;
+                    if !existing.active {
+                        existing.active = true;
+                        vault.put_team(&existing)?;
+                    }
+                    existing
+                }
+                Err(Error::AccountMissing) => {
+                    let mut identity = identity;
+                    identity.alias = alias.clone();
+                    vault.put_team(&identity)?;
+                    identity
+                }
+                Err(error) => return Err(error),
+            };
+            teams.push(TeamSummary::from_stored(alias, &stored));
+
+            #[cfg(test)]
+            if TEST_FAIL_AFTER_DISCOVERY_PERSIST.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                return Err(Error::InvalidAccount(
+                    "test interrupted team discovery after one persisted binding",
+                ));
+            }
+        }
+        teams.sort_by(|left, right| left.alias.cmp(&right.alias));
+        Ok(TeamDiscoveryReport {
+            account_alias: account_alias.to_owned(),
+            teams,
+        })
     }
 
     pub fn sync_team(
@@ -161,6 +266,49 @@ impl CheckedProfileSession<'_> {
             &self.paths.soft_database,
         )?;
         Ok(TeamSyncReport::new(team_alias, &team, &tree))
+    }
+
+    /// Returns one live metadata snapshot for a team store. Every component
+    /// of the caller's store reference is checked before network access so a
+    /// cursor or selection cannot be replayed against another party.
+    pub fn list_team_kv_metadata(
+        &self,
+        account_alias: &str,
+        team_alias: &str,
+        team_id_hex: &str,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<KvCatalogReport> {
+        self.profile.require(Capability::Teams)?;
+        self.profile.require(Capability::Kv)?;
+        let stored = vault.team(team_alias)?;
+        if !stored.active {
+            return Err(Error::InvalidAccount("team creation is still pending"));
+        }
+        if stored.account_alias != account_alias || hex(&stored.team_id) != team_id_hex {
+            return Err(Error::InvalidAccount(
+                "team store reference does not match the stored team",
+            ));
+        }
+        let account = vault.account(account_alias)?;
+        let host = self.pinned_host()?;
+        let user = self
+            .client
+            .authenticate_and_pin(&host, &account.credential)?;
+        let team_id = EntityId::from_bytes(stored.team_id.clone())?;
+        let team = self.client.load_and_pin_team(
+            &host,
+            &account.credential,
+            &user.verified,
+            &user.puks,
+            &team_id,
+        )?;
+        let tree = self.client.list_team_kv_metadata(
+            &host,
+            &account.credential,
+            &team,
+            &self.paths.soft_database,
+        )?;
+        KvCatalogReport::from_tree(&tree)
     }
 
     pub fn list_team_members(
@@ -391,27 +539,110 @@ impl CheckedProfileSession<'_> {
     pub fn demote_local_team_member(
         &self,
         team_alias: &str,
-        username: &str,
+        party_id_hex: &str,
         destination: TeamMemberRole,
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<TeamMemberMutationReport> {
-        self.change_local_team_member(team_alias, username, Some(destination), vault, master_key)
+        self.change_local_team_member(
+            team_alias,
+            party_id_hex,
+            Some(destination),
+            None,
+            vault,
+            master_key,
+        )
     }
 
     pub fn remove_local_team_member(
         &self,
         team_alias: &str,
-        username: &str,
+        party_id_hex: &str,
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<TeamMemberMutationReport> {
-        self.change_local_team_member(team_alias, username, None, vault, master_key)
+        self.change_local_team_member(team_alias, party_id_hex, None, None, vault, master_key)
+    }
+
+    pub(super) fn demote_local_team_member_with_parties(
+        &self,
+        team_alias: &str,
+        party_id_hex: &str,
+        destination: TeamMemberRole,
+        parties: &std::collections::BTreeMap<
+            super::runtime::TeamRefreshPartyKey,
+            super::runtime::TeamRefreshParty,
+        >,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<TeamMemberMutationReport> {
+        self.change_local_team_member(
+            team_alias,
+            party_id_hex,
+            Some(destination),
+            Some(parties),
+            vault,
+            master_key,
+        )
+    }
+
+    pub(super) fn remove_local_team_member_with_parties(
+        &self,
+        team_alias: &str,
+        party_id_hex: &str,
+        parties: &std::collections::BTreeMap<
+            super::runtime::TeamRefreshPartyKey,
+            super::runtime::TeamRefreshParty,
+        >,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<TeamMemberMutationReport> {
+        self.change_local_team_member(
+            team_alias,
+            party_id_hex,
+            None,
+            Some(parties),
+            vault,
+            master_key,
+        )
     }
 
     pub fn resume_local_team_member_edit(
         &self,
         team_alias: &str,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<TeamMemberMutationReport> {
+        self.resume_local_team_member_edit_with_parties(team_alias, None, vault, master_key)
+    }
+
+    pub(super) fn resume_local_team_member_edit_with_authenticated_parties(
+        &self,
+        team_alias: &str,
+        parties: &std::collections::BTreeMap<
+            super::runtime::TeamRefreshPartyKey,
+            super::runtime::TeamRefreshParty,
+        >,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<TeamMemberMutationReport> {
+        self.resume_local_team_member_edit_with_parties(
+            team_alias,
+            Some(parties),
+            vault,
+            master_key,
+        )
+    }
+
+    fn resume_local_team_member_edit_with_parties(
+        &self,
+        team_alias: &str,
+        supplied_parties: Option<
+            &std::collections::BTreeMap<
+                super::runtime::TeamRefreshPartyKey,
+                super::runtime::TeamRefreshParty,
+            >,
+        >,
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<TeamMemberMutationReport> {
@@ -456,7 +687,8 @@ impl CheckedProfileSession<'_> {
             )
         } else {
             let target_id = EntityId::from_bytes(pending.target_id.clone())?;
-            let (target_member, target_user, remaining) = local_edit_parties(&context, &target_id)?;
+            let (target_member, target_user, remaining) =
+                local_edit_parties(&context, &target_id, supplied_parties)?;
             if target_member.source_role != pending.source_role.role()? {
                 return Err(foks_client::Error::OperationBinding(
                     "pending member edit source role changed",
@@ -549,8 +781,14 @@ impl CheckedProfileSession<'_> {
     fn change_local_team_member(
         &self,
         team_alias: &str,
-        username: &str,
+        party_id_hex: &str,
         destination: Option<TeamMemberRole>,
+        supplied_parties: Option<
+            &std::collections::BTreeMap<
+                super::runtime::TeamRefreshPartyKey,
+                super::runtime::TeamRefreshParty,
+            >,
+        >,
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<TeamMemberMutationReport> {
@@ -566,14 +804,10 @@ impl CheckedProfileSession<'_> {
             ));
         }
         let context = self.load_local_team_context(team_alias, vault)?;
-        require_local_user_roster(&context)?;
-        let target_id = self.client.resolve_username(
-            &context.host,
-            &context.account.credential,
-            username,
-            true,
-        )?;
-        let (target_member, target_user, remaining) = local_edit_parties(&context, &target_id)?;
+        let target_id = entity_id_from_hex(party_id_hex)?;
+        target_id.clone().require_type(foks_proto::ENTITY_USER)?;
+        let (target_member, target_user, remaining) =
+            local_edit_parties(&context, &target_id, supplied_parties)?;
         let destination_role = destination.map_or(Role::NONE, TeamMemberRole::role);
         if destination_role >= target_member.role {
             return Err(foks_client::Error::TeamRequest(
@@ -784,6 +1018,65 @@ struct LocalTeamContext {
     users: std::collections::BTreeMap<Vec<u8>, foks_verify::VerifiedUserState>,
 }
 
+fn discovery_alias(vault: &mut AccountVault<'_>, identity: &StoredTeam) -> Result<String> {
+    let aliases = vault.team_aliases()?;
+    let mut exact = Vec::new();
+    for alias in &aliases {
+        if vault.team(alias)?.team_id == identity.team_id {
+            exact.push(alias.clone());
+        }
+    }
+    match exact.as_slice() {
+        // Team refresh rejects duplicate local aliases for one team ID. Reuse
+        // that sole binding here; `bind_existing_discovery` then verifies it
+        // belongs to the selected account rather than silently rebinding it.
+        [alias] => return Ok(alias.clone()),
+        [] => {}
+        _ => {
+            return Err(Error::InvalidAccount(
+                "more than one local alias names the discovered team",
+            ))
+        }
+    }
+
+    let occupied = aliases
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    if !occupied.contains(&identity.alias) {
+        return Ok(identity.alias.clone());
+    }
+    let id = hex(&identity.team_id);
+    for suffix_bytes in (6..=16).step_by(2) {
+        let suffix = &id[..suffix_bytes * 2];
+        let keep = 64usize
+            .checked_sub(suffix.len() + 1)
+            .ok_or(Error::InvalidAccount("discovered team alias is excessive"))?;
+        let base = &identity.alias[..identity.alias.len().min(keep)];
+        let candidate = format!("{base}_{suffix}");
+        if !occupied.contains(&candidate) {
+            validate_name(&candidate)?;
+            return Ok(candidate);
+        }
+    }
+    Err(Error::InvalidAccount(
+        "discovered team alias namespace is exhausted",
+    ))
+}
+
+fn bind_existing_discovery(existing: &StoredTeam, identity: &StoredTeam) -> Result<()> {
+    if existing.team_id != identity.team_id
+        || existing.account_alias != identity.account_alias
+        || existing.kind != identity.kind
+        || existing.name != identity.name
+    {
+        return Err(foks_client::Error::TeamBinding(
+            "stored team account or identity differs from authenticated discovery",
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn require_named_active_team(team: &StoredTeam) -> Result<()> {
     if !team.active || team.kind != StoredTeamKind::Named {
         return Err(Error::InvalidAccount(
@@ -793,27 +1086,20 @@ fn require_named_active_team(team: &StoredTeam) -> Result<()> {
     Ok(())
 }
 
-fn require_local_user_roster(context: &LocalTeamContext) -> Result<()> {
-    if context.team.verified.members().iter().any(|member| {
-        member.scoped_host.is_some() || member.party.entity_type() != foks_proto::ENTITY_USER
-    }) {
-        return Err(foks_client::Error::TeamRequest(
-            "direct local-member edits currently require a local-user-only roster",
-        )
-        .into());
-    }
-    Ok(())
-}
-
 fn local_edit_parties<'a>(
     context: &'a LocalTeamContext,
     target_id: &EntityId,
+    supplied_parties: Option<
+        &'a std::collections::BTreeMap<
+            super::runtime::TeamRefreshPartyKey,
+            super::runtime::TeamRefreshParty,
+        >,
+    >,
 ) -> Result<(
     &'a foks_verify::VerifiedTeamMemberState,
     &'a foks_verify::VerifiedUserState,
     Vec<foks_client::VerifiedMemberParty<'a>>,
 )> {
-    require_local_user_roster(context)?;
     let mut matches = context
         .team
         .verified
@@ -833,15 +1119,46 @@ fn local_edit_parties<'a>(
             .ok_or(foks_client::Error::TeamBinding(
                 "target local user state is unavailable",
             ))?;
-    let remaining = context
-        .users
-        .iter()
-        .filter(|(uid, _)| {
-            uid.as_slice() != context.account.credential.uid.as_bytes()
-                && uid.as_slice() != target_id.as_bytes()
-        })
-        .map(|(_, user)| foks_client::VerifiedMemberParty::User(user))
-        .collect();
+    if target.party.entity_type() != foks_proto::ENTITY_USER {
+        return Err(foks_client::Error::TeamRequest(
+            "only an authenticated local user row can be edited",
+        )
+        .into());
+    }
+    let mut remaining = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for member in context.team.verified.members() {
+        if (member.party == context.account.credential.uid && member.scoped_host.is_none())
+            || (member.party == *target_id && member.scoped_host.is_none())
+        {
+            continue;
+        }
+        let key = (
+            member.party.as_bytes().to_vec(),
+            member
+                .scoped_host
+                .as_ref()
+                .map(|host| host.as_bytes().to_vec()),
+        );
+        if !seen.insert(key.clone()) {
+            return Err(
+                foks_client::Error::TeamBinding("authenticated roster party is ambiguous").into(),
+            );
+        }
+        if member.scoped_host.is_none() && member.party.entity_type() == foks_proto::ENTITY_USER {
+            let user = context.users.get(member.party.as_bytes()).ok_or(
+                foks_client::Error::TeamBinding("remaining local user state is unavailable"),
+            )?;
+            remaining.push(foks_client::VerifiedMemberParty::User(user));
+        } else {
+            let party = supplied_parties
+                .and_then(|parties| parties.get(&key))
+                .ok_or(foks_client::Error::TeamBinding(
+                    "remaining non-local roster party lacks an authenticated recipient",
+                ))?;
+            remaining.push(party.verified());
+        }
+    }
     Ok((target, target_user, remaining))
 }
 
@@ -965,6 +1282,29 @@ pub struct TeamSummary {
     pub active: bool,
 }
 
+impl TeamSummary {
+    fn from_stored(alias: String, team: &StoredTeam) -> Self {
+        Self {
+            alias,
+            account_alias: team.account_alias.clone(),
+            team_id_hex: hex(&team.team_id),
+            kind: match team.kind {
+                StoredTeamKind::Named => "named",
+                StoredTeamKind::AdHoc => "ad-hoc",
+            }
+            .to_owned(),
+            name: team.name.clone(),
+            active: team.active,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct TeamDiscoveryReport {
+    pub account_alias: String,
+    pub teams: Vec<TeamSummary>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TeamSyncReport {
     pub alias: String,
@@ -1048,11 +1388,19 @@ pub(super) enum StoredTeamKind {
     AdHoc,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum StoredTeamOrigin {
+    CreatedHere,
+    Discovered,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub(super) struct StoredTeam {
     pub(super) version: u32,
     pub(super) alias: String,
     pub(super) account_alias: String,
+    pub(super) origin: StoredTeamOrigin,
     pub(super) kind: StoredTeamKind,
     pub(super) name: Option<String>,
     pub(super) team_id: Vec<u8>,
@@ -1245,6 +1593,7 @@ impl StoredTeam {
             version: CREDENTIAL_VERSION,
             alias: alias.to_owned(),
             account_alias: account_alias.to_owned(),
+            origin: StoredTeamOrigin::CreatedHere,
             kind,
             name: None,
             team_id: Vec::new(),
@@ -1260,8 +1609,64 @@ impl StoredTeam {
         })
     }
 
+    fn discovered(account_alias: &str, authenticated: &AuthenticatedTeamOutcome) -> Result<Self> {
+        validate_name(account_alias)?;
+        let kind = match authenticated.verified.team().entity_type() {
+            foks_proto::ENTITY_NAMED_TEAM => StoredTeamKind::Named,
+            foks_proto::ENTITY_AD_HOC_TEAM => StoredTeamKind::AdHoc,
+            _ => {
+                return Err(foks_client::Error::TeamBinding(
+                    "discovery returned an unsupported team identity",
+                )
+                .into())
+            }
+        };
+        let (alias, name) = match kind {
+            StoredTeamKind::Named => {
+                let name = String::from_utf8(authenticated.verified.team_name_utf8().to_vec())
+                    .map_err(|_| Error::InvalidAccount("authenticated team name is not UTF-8"))?;
+                if name.trim().is_empty() || name.len() > 256 {
+                    return Err(Error::InvalidAccount(
+                        "authenticated team name is missing or excessive",
+                    ));
+                }
+                let mut alias = String::from_utf8(authenticated.verified.team_name().to_vec())
+                    .map_err(|_| {
+                        Error::InvalidAccount("authenticated normalized team name is not UTF-8")
+                    })?;
+                if is_background_team_alias(&alias) {
+                    alias = format!("group_{alias}");
+                }
+                validate_name(&alias)?;
+                (alias, Some(name))
+            }
+            StoredTeamKind::AdHoc => {
+                let id = hex(authenticated.verified.team().as_bytes());
+                (format!("adhoc_{}", &id[..16]), None)
+            }
+        };
+        Ok(Self {
+            version: CREDENTIAL_VERSION,
+            alias,
+            account_alias: account_alias.to_owned(),
+            origin: StoredTeamOrigin::Discovered,
+            kind,
+            name,
+            team_id: authenticated.verified.team().as_bytes().to_vec(),
+            member_min: [0; 32],
+            member: [0; 32],
+            admin: [0; 32],
+            owner: [0; 32],
+            removal_key: None,
+            name_commitment: None,
+            active: true,
+            federated_members: Vec::new(),
+            local_members: Vec::new(),
+        })
+    }
+
     fn named_secrets(&self) -> Result<NamedTeamSecrets> {
-        if self.kind != StoredTeamKind::Named {
+        if self.kind != StoredTeamKind::Named || self.origin != StoredTeamOrigin::CreatedHere {
             return Err(Error::InvalidAccount("team is not named"));
         }
         Ok(NamedTeamSecrets {
@@ -1280,7 +1685,7 @@ impl StoredTeam {
     }
 
     fn adhoc_secrets(&self) -> Result<AdHocTeamSecrets> {
-        if self.kind != StoredTeamKind::AdHoc {
+        if self.kind != StoredTeamKind::AdHoc || self.origin != StoredTeamOrigin::CreatedHere {
             return Err(Error::InvalidAccount("team is not ad-hoc"));
         }
         Ok(AdHocTeamSecrets {
@@ -1559,27 +1964,58 @@ fn validate_stored_team(team: &StoredTeam, expected_alias: &str) -> Result<()> {
         ));
     }
     let id = EntityId::from_bytes(team.team_id.clone())?;
-    let derived = match team.kind {
-        StoredTeamKind::Named => {
-            if team.name.as_deref().is_none_or(str::is_empty)
-                || team.removal_key.is_none()
-                || team.name_commitment.is_none()
-            {
-                return Err(Error::InvalidAccount("named team material is incomplete"));
+    if team.origin == StoredTeamOrigin::Discovered {
+        let identity_is_valid = match team.kind {
+            StoredTeamKind::Named => {
+                id.entity_type() == foks_proto::ENTITY_NAMED_TEAM
+                    && team
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| !name.trim().is_empty() && name.len() <= 256)
             }
-            team.named_secrets()?.team_id()?
-        }
-        StoredTeamKind::AdHoc => {
-            if team.name.is_some() || team.removal_key.is_some() || team.name_commitment.is_some() {
-                return Err(Error::InvalidAccount("ad-hoc team has named-team material"));
+            StoredTeamKind::AdHoc => {
+                id.entity_type() == foks_proto::ENTITY_AD_HOC_TEAM && team.name.is_none()
             }
-            team.adhoc_secrets()?.team_id()?
+        };
+        if !identity_is_valid
+            || !team.active
+            || team.member_min != [0; 32]
+            || team.member != [0; 32]
+            || team.admin != [0; 32]
+            || team.owner != [0; 32]
+            || team.removal_key.is_some()
+            || team.name_commitment.is_some()
+        {
+            return Err(Error::InvalidAccount(
+                "discovered team identity or creator material is invalid",
+            ));
         }
-    };
-    if id != derived {
-        return Err(Error::InvalidAccount(
-            "team ID does not match protected PTKs",
-        ));
+    } else {
+        let derived = match team.kind {
+            StoredTeamKind::Named => {
+                if team.name.as_deref().is_none_or(str::is_empty)
+                    || team.removal_key.is_none()
+                    || team.name_commitment.is_none()
+                {
+                    return Err(Error::InvalidAccount("named team material is incomplete"));
+                }
+                team.named_secrets()?.team_id()?
+            }
+            StoredTeamKind::AdHoc => {
+                if team.name.is_some()
+                    || team.removal_key.is_some()
+                    || team.name_commitment.is_some()
+                {
+                    return Err(Error::InvalidAccount("ad-hoc team has named-team material"));
+                }
+                team.adhoc_secrets()?.team_id()?
+            }
+        };
+        if id != derived {
+            return Err(Error::InvalidAccount(
+                "team ID does not match protected PTKs",
+            ));
+        }
     }
     let mut bindings = std::collections::BTreeSet::new();
     for member in &team.federated_members {
@@ -1730,6 +2166,230 @@ mod tests {
     }
 
     #[test]
+    fn discovery_persists_and_supports_invited_admin_mutations_after_interruption() {
+        let environment = TestEnvironment::new().unwrap();
+        let _server = environment.start_server().unwrap();
+        let addresses = environment.addresses().unwrap();
+
+        let initialize = |label: &str| {
+            let state = environment.client_path(label, "state").unwrap();
+            let root = environment.client_path(label, "probe-root.der").unwrap();
+            environment.write_probe_root(&root).unwrap();
+            crate::ClientCredentials::initialize(&state, crate::CredentialBackend::PrivateFile)
+                .unwrap();
+            let mut registry = crate::ProfileRegistry::open(&state).unwrap();
+            registry
+                .add(crate::Profile {
+                    name: "local".to_owned(),
+                    probe: format!("localhost:{}", addresses.probe.port()),
+                    protocol: crate::ProtocolPolicy::V019,
+                    trust: crate::TrustRoot::CertificateDer { path: root },
+                })
+                .unwrap();
+            let session = crate::ProfileSession::open(&registry, "local").unwrap();
+            let credentials = crate::ClientCredentials::open(&state).unwrap();
+            credentials
+                .with_checked_session(&session, |session| {
+                    session.probe_and_pin()?;
+                    Ok::<_, crate::Error>(())
+                })
+                .unwrap();
+            state
+        };
+
+        let member_state = initialize("team-discovery-member");
+        let member_registry = crate::ProfileRegistry::open(&member_state).unwrap();
+        let member_session = crate::ProfileSession::open(&member_registry, "local").unwrap();
+        let member_credentials = crate::ClientCredentials::open(&member_state).unwrap();
+        let member_master = member_credentials.master_key().unwrap();
+        member_credentials
+            .with_checked_session(&member_session, |session| {
+                let mut store = EncryptedFileSecretStore::open(
+                    &session.paths().credential_store,
+                    crate::derive_vault_key(&member_master),
+                )?;
+                session.create_account(
+                    "personal",
+                    "invitedmember",
+                    "member laptop",
+                    "member@example.test",
+                    "",
+                    None,
+                    &mut AccountVault::new(&mut store),
+                    &member_master,
+                )?;
+                Ok::<_, crate::Error>(())
+            })
+            .unwrap();
+
+        let owner_state = initialize("team-discovery-owner");
+        let owner_registry = crate::ProfileRegistry::open(&owner_state).unwrap();
+        let owner_session = crate::ProfileSession::open(&owner_registry, "local").unwrap();
+        let owner_credentials = crate::ClientCredentials::open(&owner_state).unwrap();
+        let owner_master = owner_credentials.master_key().unwrap();
+        owner_credentials
+            .with_checked_session(&owner_session, |session| {
+                let mut store = EncryptedFileSecretStore::open(
+                    &session.paths().credential_store,
+                    crate::derive_vault_key(&owner_master),
+                )?;
+                let mut vault = AccountVault::new(&mut store);
+                session.create_account(
+                    "owner",
+                    "discoveryowner",
+                    "owner laptop",
+                    "owner@example.test",
+                    "",
+                    None,
+                    &mut vault,
+                    &owner_master,
+                )?;
+                session.create_account(
+                    "target",
+                    "discoverytarget",
+                    "target laptop",
+                    "target@example.test",
+                    "",
+                    None,
+                    &mut vault,
+                    &owner_master,
+                )?;
+                session.create_named_team(
+                    "owner",
+                    "alpha-local",
+                    "invited-alpha",
+                    &mut vault,
+                    &owner_master,
+                )?;
+                session.add_local_team_member(
+                    "alpha-local",
+                    "invitedmember",
+                    TeamMemberRole::Admin,
+                    &mut vault,
+                    &owner_master,
+                )?;
+                Ok::<_, crate::Error>(())
+            })
+            .unwrap();
+
+        member_credentials
+            .with_checked_session(&member_session, |session| {
+                let collision_id = {
+                    let mut store = EncryptedFileSecretStore::open(
+                        &session.paths().credential_store,
+                        crate::derive_vault_key(&member_master),
+                    )?;
+                    let mut vault = AccountVault::new(&mut store);
+                    let collision = StoredTeam::random_adhoc("invited_alpha", "personal")?;
+                    let collision_id = collision.team_id.clone();
+                    vault.put_team(&collision)?;
+                    TEST_FAIL_AFTER_DISCOVERY_PERSIST
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    let interrupted = session
+                        .discover_teams("personal", &mut vault)
+                        .expect_err("the discovery failpoint interrupts after one durable record");
+                    assert_eq!(
+                        session.list_teams(&mut vault)?.len(),
+                        2,
+                        "unexpected discovery error: {interrupted:?}"
+                    );
+                    collision_id
+                };
+
+                // Reopen the protected store to model process interruption,
+                // not merely a retry through the same in-memory vault value.
+                let mut store = EncryptedFileSecretStore::open(
+                    &session.paths().credential_store,
+                    crate::derive_vault_key(&member_master),
+                )?;
+                let mut vault = AccountVault::new(&mut store);
+
+                let report = session.discover_teams("personal", &mut vault)?;
+                assert_eq!(report.account_alias, "personal");
+                assert_eq!(report.teams.len(), 1);
+                assert_eq!(
+                    report
+                        .teams
+                        .iter()
+                        .filter_map(|team| team.name.as_deref())
+                        .collect::<std::collections::BTreeSet<_>>(),
+                    std::collections::BTreeSet::from(["invited-alpha"])
+                );
+                assert!(report.teams.iter().all(|team| {
+                    team.account_alias == "personal" && team.kind == "named" && team.active
+                }));
+                assert!(report.teams.iter().any(|team| {
+                    team.name.as_deref() == Some("invited-alpha")
+                        && team.alias.starts_with("invited_alpha_")
+                }));
+                let preserved_collision = vault.team("invited_alpha")?;
+                assert_eq!(preserved_collision.team_id, collision_id);
+                assert_eq!(preserved_collision.origin, StoredTeamOrigin::CreatedHere);
+                assert!(!preserved_collision.active);
+
+                let repeated = session.discover_teams("personal", &mut vault)?;
+                assert_eq!(repeated, report);
+                assert_eq!(session.list_teams(&mut vault)?.len(), 2);
+
+                // One team ID has one account-bound local store. A second
+                // account must not silently reuse or replace that binding;
+                // an explicit rebind policy would be needed to change it.
+                let bound = vault.team(&report.teams[0].alias)?;
+                let mut other_account = vault.team(&report.teams[0].alias)?;
+                other_account.account_alias = "other-account".to_owned();
+                assert!(matches!(
+                    bind_existing_discovery(&bound, &other_account),
+                    Err(Error::Client(foks_client::Error::TeamBinding(
+                        "stored team account or identity differs from authenticated discovery"
+                    )))
+                ));
+
+                let admin_alias = report
+                    .teams
+                    .iter()
+                    .find(|team| team.name.as_deref() == Some("invited-alpha"))
+                    .map(|team| team.alias.as_str())
+                    .expect("the invited admin team was discovered");
+                session.add_local_team_member(
+                    admin_alias,
+                    "discoverytarget",
+                    TeamMemberRole::Member { visibility: 0 },
+                    &mut vault,
+                    &member_master,
+                )?;
+                let discovered_target = session
+                    .list_team_members(admin_alias, &mut vault)?
+                    .into_iter()
+                    .find(|member| member.username.as_deref() == Some("discoverytarget"))
+                    .expect("the added discovery target is in the authenticated roster");
+                let mut malformed_journal = vault.team(admin_alias)?;
+                malformed_journal.local_members[0].expected_seqno = 0;
+                assert!(vault.put_team(&malformed_journal).is_err());
+                session.remove_local_team_member(
+                    admin_alias,
+                    &discovered_target.party_id_hex,
+                    &mut vault,
+                    &member_master,
+                )?;
+                assert!(session
+                    .list_team_members(admin_alias, &mut vault)?
+                    .iter()
+                    .all(|member| member.username.as_deref() != Some("discoverytarget")));
+                for team in &report.teams {
+                    assert!(session
+                        .list_team_members(&team.alias, &mut vault)?
+                        .iter()
+                        .any(|member| member.username.as_deref() == Some("invitedmember")));
+                    let stored = vault.team(&team.alias)?;
+                    assert_eq!(stored.origin, StoredTeamOrigin::Discovered);
+                    assert_eq!(stored.member, [0; 32]);
+                }
+                Ok::<_, crate::Error>(())
+            })
+            .unwrap();
+    }
+
+    #[test]
     fn local_member_surface_adds_demotes_lists_and_removes() {
         let environment = TestEnvironment::new().unwrap();
         let _server = environment.start_server().unwrap();
@@ -1814,6 +2474,11 @@ mod tests {
                         && member.destination_role == TeamMemberRole::Admin
                         && member.locally_manageable
                 }));
+                let managed_party_id = members
+                    .iter()
+                    .find(|member| member.username.as_deref() == Some("managedmember"))
+                    .map(|member| member.party_id_hex.clone())
+                    .expect("the managed member has an authenticated party ID");
                 let member = vault.account("member")?;
                 let host = session.pinned_host()?;
                 assert_eq!(
@@ -1829,7 +2494,7 @@ mod tests {
                 session
                     .demote_local_team_member(
                         "managed-team",
-                        "managedmember",
+                        &managed_party_id,
                         TeamMemberRole::Member { visibility: 0 },
                         &mut vault,
                         &master,
@@ -1853,7 +2518,12 @@ mod tests {
                     }));
 
                 let removed = session
-                    .remove_local_team_member("managed-team", "managedmember", &mut vault, &master)
+                    .remove_local_team_member(
+                        "managed-team",
+                        &managed_party_id,
+                        &mut vault,
+                        &master,
+                    )
                     .expect("application local-member removal succeeds");
                 assert_eq!(removed.team_chain_sequence, 4);
                 assert_eq!(removed.destination_role, None);

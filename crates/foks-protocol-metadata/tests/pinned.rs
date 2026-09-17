@@ -1,6 +1,6 @@
 use foks_protocol_metadata::{
     merge, parse_artifact, parse_policy, render_contract, render_digest_manifest,
-    render_protocol_ids, render_routes, render_status_codes,
+    render_protocol_ids, render_routes, render_status_codes, PINNED_PROTOCOL_METADATA_SHA256,
 };
 
 const UPSTREAM: &str = include_str!("../../foks-server/protocol/upstream-v0.1.9.json");
@@ -24,6 +24,15 @@ fn checked_outputs_are_the_exact_policy_merge() {
         render_digest_manifest(UPSTREAM.as_bytes(), &artifact),
         DIGEST
     );
+}
+
+#[test]
+fn client_policy_pin_is_the_checked_artifact_digest() {
+    let digest = DIGEST
+        .lines()
+        .find_map(|line| line.strip_prefix("artifact_sha256  "))
+        .expect("digest manifest has an artifact checksum");
+    assert_eq!(PINNED_PROTOCOL_METADATA_SHA256, digest);
 }
 
 #[test]

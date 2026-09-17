@@ -200,9 +200,12 @@ mod tests {
     use super::*;
     use std::collections::VecDeque;
 
-    use crate::kv::{read_kv_upload_chunk, read_kv_upload_chunk_with_carry, KvRequest};
+    use crate::kv::{
+        read_kv_chunk_with_fetch, read_kv_node_with_fetch, read_kv_upload_chunk,
+        read_kv_upload_chunk_with_carry, KvRequest,
+    };
     use foks_client_db::SoftStateStore;
-    use foks_proto::{KvListResponse, KvParty};
+    use foks_proto::{KvListResponse, KvNode, KvParty};
     use foks_rpc::KvAuth;
     use foks_verify::verify_merkle_advance;
 
@@ -486,11 +489,19 @@ mod tests {
         };
         let party = EntityId::from_bytes(team).unwrap();
         let seed = SecretSeed::new(fixture("team-ptk-member-min-seed.bin").try_into().unwrap());
-        let private_keys = [KvPrivateKeyRef {
-            role: Role::member(-16_384),
-            generation: 1,
-            seed: &seed,
-        }];
+        let wrong_owner_seed = SecretSeed::new([0x97; 32]);
+        let private_keys = [
+            KvPrivateKeyRef {
+                role: Role::member(-16_384),
+                generation: 1,
+                seed: &seed,
+            },
+            KvPrivateKeyRef {
+                role: Role::OWNER,
+                generation: 1,
+                seed: &wrong_owner_seed,
+            },
+        ];
         let token: [u8; 16] = std::array::from_fn(|index| 0x40 + index as u8);
         let listing = KvListResponse::decode(&fixture("kv-list.snowp")).unwrap();
         let symlink_request =
@@ -555,6 +566,16 @@ mod tests {
             projections[0].entries[2].content.as_deref(),
             Some(fixture("kv-small-plaintext.bin").as_slice())
         );
+        assert!(matches!(
+            KvNode::decode(
+                projections[0].entries[2]
+                    .node_bytes
+                    .as_deref()
+                    .expect("content projection retains small-file metadata")
+            )
+            .unwrap(),
+            KvNode::SmallFile(_)
+        ));
         let large_node = projections[0].entries[0].node_id;
         let store = SoftStateStore::open(&soft_path).unwrap();
         let stored = store
@@ -631,6 +652,272 @@ mod tests {
         assert!(cached_transcript.is_empty());
         assert_eq!(cache_checks, 1);
         assert_eq!(cached, stored.into_iter().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn catalog_traversal_authenticates_but_does_not_stage_file_plaintext() {
+        let fixture = |name: &str| {
+            std::fs::read(format!(
+                "../foks-snowpack/tests/fixtures/foks-v0.1.9/user/{name}"
+            ))
+            .unwrap()
+        };
+        let public = verify_public_host("foks.app", PROBE).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let hard_path = directory.path().join("hard.sqlite3");
+        HardStateStore::open(&hard_path)
+            .unwrap()
+            .accept_verified_host(&public.snapshot)
+            .unwrap();
+        let client = FoksClient::webpki();
+        let host = client.pinned_host("foks.app", &hard_path).unwrap();
+        let Value::Binary(team) = decode(&fixture("team-id.snowp")).unwrap() else {
+            panic!("team fixture is not binary");
+        };
+        let party = EntityId::from_bytes(team).unwrap();
+        let seed = SecretSeed::new(fixture("team-ptk-member-min-seed.bin").try_into().unwrap());
+        let private_keys = [KvPrivateKeyRef {
+            role: Role::member(-16_384),
+            generation: 1,
+            seed: &seed,
+        }];
+        let token: [u8; 16] = std::array::from_fn(|index| 0x40 + index as u8);
+        let root = foks_proto::KvRoot::decode(&fixture("kv-root.snowp")).unwrap();
+        let metadata_list_request = KvRequest::List {
+            directory: root.root,
+            cursor: foks_rpc::KvListCursor::None,
+            number: foks_proto::MAXIMUM_KV_LIST_PAGE_ENTRIES as u64,
+            load_small_files: true,
+        }
+        .encode(KvAuth::Team(&token), 1)
+        .unwrap();
+        let listing = KvListResponse::decode(&fixture("kv-list.snowp")).unwrap();
+        let symlink_request =
+            foks_rpc::encode_kv_get_node_request(KvAuth::Team(&token), listing.entries[1].value)
+                .unwrap();
+        let mut transcript = VecDeque::from([
+            (
+                fixture("kv-get-root-request.frame"),
+                fixture("kv-root.snowp"),
+            ),
+            (
+                fixture("kv-get-dir-request.frame"),
+                fixture("kv-root-dir.snowp"),
+            ),
+            (metadata_list_request.clone(), fixture("kv-list.snowp")),
+            (symlink_request, fixture("kv-symlink-node.snowp")),
+            (
+                fixture("kv-get-large-node-request.frame"),
+                fixture("kv-large-node.snowp"),
+            ),
+        ]);
+        let catalog_soft_path = directory.path().join("catalog-soft.sqlite3");
+        let metadata = client
+            .list_kv_metadata_with_fetch(
+                &host,
+                KvParty {
+                    party: party.clone(),
+                    host: host.host_id.clone(),
+                },
+                KvAuth::Team(&token),
+                &private_keys,
+                &catalog_soft_path,
+                |auth, request| {
+                    if matches!(request, KvRequest::CacheCheck(_)) {
+                        return Ok(Vec::new());
+                    }
+                    let request = request.encode(auth, 1)?;
+                    let (expected, response) = transcript
+                        .pop_front()
+                        .ok_or(Error::KvResponse("unexpected catalog fixture request"))?;
+                    if request != expected {
+                        return Err(Error::KvResponse("catalog fixture request mismatch"));
+                    }
+                    Ok(response)
+                },
+            )
+            .unwrap();
+        assert!(
+            transcript.is_empty(),
+            "catalog fetched an unplanned payload"
+        );
+        assert_eq!(metadata.len(), 1);
+        assert!(metadata[0].entries.iter().all(|entry| {
+            entry.content.is_none()
+                && entry.symlink.is_none()
+                && entry.large_file_size.is_none()
+                && entry.node_bytes.is_some()
+        }));
+        assert!(
+            SoftStateStore::open(&catalog_soft_path)
+                .unwrap()
+                .version_vector(&metadata[0].host_id, &metadata[0].party_id)
+                .unwrap()
+                .is_some(),
+            "metadata traversal did not durably pin its authenticated version vector"
+        );
+
+        let mut tampered = KvListResponse::decode(&fixture("kv-list.snowp")).unwrap();
+        tampered.extended[0].small_file.key.role = Role::OWNER;
+        let tampered =
+            KvListResponse::new(tampered.entries, tampered.final_page, tampered.extended)
+                .unwrap()
+                .encoded()
+                .to_vec();
+        let mut tampered_transcript = VecDeque::from([
+            (
+                fixture("kv-get-root-request.frame"),
+                fixture("kv-root.snowp"),
+            ),
+            (
+                fixture("kv-get-dir-request.frame"),
+                fixture("kv-root-dir.snowp"),
+            ),
+            (metadata_list_request, tampered),
+        ]);
+        let result = client.list_kv_metadata_with_fetch(
+            &host,
+            KvParty {
+                party,
+                host: host.host_id.clone(),
+            },
+            KvAuth::Team(&token),
+            &private_keys,
+            &directory.path().join("tampered-catalog-soft.sqlite3"),
+            |auth, request| {
+                let request = request.encode(auth, 1)?;
+                let (expected, response) = tampered_transcript
+                    .pop_front()
+                    .ok_or(Error::KvResponse("unexpected tampered catalog request"))?;
+                if request != expected {
+                    return Err(Error::KvResponse(
+                        "tampered catalog fixture request mismatch",
+                    ));
+                }
+                Ok(response)
+            },
+        );
+        assert!(result.is_err(), "tampered read-role header was accepted");
+        assert!(tampered_transcript.is_empty());
+    }
+
+    #[test]
+    fn single_node_reads_fetch_only_the_selected_content() {
+        let fixture = |name: &str| {
+            std::fs::read(format!(
+                "../foks-snowpack/tests/fixtures/foks-v0.1.9/user/{name}"
+            ))
+            .unwrap()
+        };
+        let seed = SecretSeed::new(fixture("team-ptk-member-min-seed.bin").try_into().unwrap());
+        let private_keys = [KvPrivateKeyRef {
+            role: Role::member(-16_384),
+            generation: 1,
+            seed: &seed,
+        }];
+        let token: [u8; 16] = std::array::from_fn(|index| 0x40 + index as u8);
+        let listing = KvListResponse::decode(&fixture("kv-list.snowp")).unwrap();
+        let small = listing
+            .extended
+            .iter()
+            .find(|extended| {
+                listing.entries[extended.position as usize]
+                    .value
+                    .node_type()
+                    .unwrap()
+                    == foks_proto::KvNodeType::SmallFile
+            })
+            .unwrap();
+        let small_id = listing.entries[small.position as usize].value;
+        let small_node = KvNode::SmallFile(small.small_file.clone())
+            .encoded()
+            .unwrap();
+        let mut requests = Vec::new();
+        let fetched = read_kv_node_with_fetch(
+            small_id,
+            &private_keys,
+            KvAuth::Team(&token),
+            |_, request| {
+                requests.push(request.clone());
+                Ok(small_node.clone())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            fetched,
+            KvFetchedNode::SmallFile(fixture("kv-small-plaintext.bin"))
+        );
+        assert!(matches!(requests.as_slice(), [KvRequest::Node(id)] if *id == small_id));
+
+        let large_id = listing
+            .entries
+            .iter()
+            .find(|entry| entry.value.node_type().unwrap() == foks_proto::KvNodeType::File)
+            .unwrap()
+            .value;
+        let large_node = fixture("kv-large-node.snowp");
+        let large_chunk = fixture("kv-large-chunk.snowp");
+        let mut inspect_requests = VecDeque::from([
+            (KvRequest::Node(large_id), large_node.clone()),
+            (
+                KvRequest::Chunk {
+                    file: large_id,
+                    offset: 0,
+                },
+                large_chunk.clone(),
+            ),
+        ]);
+        let inspected = read_kv_node_with_fetch(
+            large_id,
+            &private_keys,
+            KvAuth::Team(&token),
+            |_, request| {
+                let (expected, response) = inspect_requests.pop_front().unwrap();
+                assert_eq!(
+                    request.encode(KvAuth::Team(&token), 1).unwrap(),
+                    expected.encode(KvAuth::Team(&token), 1).unwrap()
+                );
+                Ok(response)
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            inspected,
+            KvFetchedNode::LargeFile {
+                size: fixture("kv-large-plaintext.bin").len() as u64
+            }
+        );
+        assert!(inspect_requests.is_empty());
+
+        let mut requests = VecDeque::from([
+            (KvRequest::Node(large_id), large_node),
+            (
+                KvRequest::Chunk {
+                    file: large_id,
+                    offset: 0,
+                },
+                large_chunk,
+            ),
+        ]);
+        let fetched = read_kv_chunk_with_fetch(
+            large_id,
+            1,
+            3,
+            &private_keys,
+            KvAuth::Team(&token),
+            |_, request| {
+                let (expected, response) = requests.pop_front().unwrap();
+                assert_eq!(
+                    request.encode(KvAuth::Team(&token), 1).unwrap(),
+                    expected.encode(KvAuth::Team(&token), 1).unwrap()
+                );
+                Ok(response)
+            },
+        )
+        .unwrap();
+        assert_eq!(fetched.content, fixture("kv-large-plaintext.bin")[1..4]);
+        assert!(!fetched.eof);
+        assert!(requests.is_empty());
     }
 
     #[test]

@@ -11,6 +11,7 @@ foks-compat-artifact = { workspace = true }
 foks-crypto = { workspace = true }
 foks-keystore = { workspace = true }
 foks-proto = { workspace = true }
+foks-protocol-metadata = { workspace = true }
 foks-rpc = { workspace = true }
 foks-verify = { workspace = true }
 foks-yubi = { workspace = true }
@@ -21,6 +22,7 @@ rustls = { workspace = true }
 rustls-pki-types = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 url = { workspace = true }
@@ -30,7 +32,6 @@ zeroize = { workspace = true }
 foks-client = { workspace = true, features = ["test-support"] }
 foks-server-testkit = { workspace = true }
 rusqlite = { workspace = true }
-sha2 = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

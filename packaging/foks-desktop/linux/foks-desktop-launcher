@@ -1,4 +1,0 @@
-#!/bin/sh
-set -eu
-state=${XDG_DATA_HOME:-"$HOME/.local/share"}/foks-rs
-exec foks-desktop --state-dir "$state"

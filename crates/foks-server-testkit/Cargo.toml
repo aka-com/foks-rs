@@ -18,8 +18,12 @@ tempfile = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+foks-agent-client = { workspace = true }
+foks-agent-proto = { workspace = true }
 foks-client = { workspace = true, features = ["test-support"] }
+foks-client-app = { workspace = true }
 foks-client-db = { workspace = true }
+foks-compat-artifact = { workspace = true }
 foks-crypto = { workspace = true }
 foks-merkle-store = { workspace = true }
 foks-rpc = { workspace = true }
@@ -28,6 +32,7 @@ foks-verify = { workspace = true }
 foks-yubi = { workspace = true }
 rusqlite = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 toml = { workspace = true }
 
 [lints]

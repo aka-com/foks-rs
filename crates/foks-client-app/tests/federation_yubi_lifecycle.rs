@@ -197,11 +197,20 @@ fn yubi_only_administrator_defers_unattended_and_runs_the_explicit_federation_re
     credentials
         .with_checked_session(&remote, |remote| {
             let mut store = open_store(remote.paths(), &master)?;
+            let mut vault = AccountVault::new(&mut store);
+            let party_id = remote
+                .list_team_members("remote-team", &mut vault)?
+                .into_iter()
+                .find(|member| member.username.as_deref() == Some("yubifedremotemember"))
+                .map(|member| member.party_id_hex)
+                .ok_or(foks_client_app::Error::InvalidAccount(
+                    "remote member is missing from the authenticated roster",
+                ))?;
             remote.demote_local_team_member(
                 "remote-team",
-                "yubifedremotemember",
+                &party_id,
                 TeamMemberRole::Member { visibility: 0 },
-                &mut AccountVault::new(&mut store),
+                &mut vault,
                 &master,
             )?;
             Ok::<_, foks_client_app::Error>(())
@@ -511,11 +520,20 @@ fn two_hardware_only_profiles_refresh_through_the_explicit_two_key_workflow() {
     credentials
         .with_checked_session(&remote, |remote| {
             let mut store = open_store(remote.paths(), &master)?;
+            let mut vault = AccountVault::new(&mut store);
+            let party_id = remote
+                .list_team_members("remote-team", &mut vault)?
+                .into_iter()
+                .find(|member| member.username.as_deref() == Some("twokeyremotemember"))
+                .map(|member| member.party_id_hex)
+                .ok_or(foks_client_app::Error::InvalidAccount(
+                    "remote member is missing from the authenticated roster",
+                ))?;
             remote.demote_local_team_member(
                 "remote-team",
-                "twokeyremotemember",
+                &party_id,
                 TeamMemberRole::Member { visibility: 0 },
-                &mut AccountVault::new(&mut store),
+                &mut vault,
                 &master,
             )?;
             Ok::<_, foks_client_app::Error>(())

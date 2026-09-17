@@ -38,7 +38,7 @@ impl KvWriteSession<'_> {
     pub fn sync(&mut self) -> Result<Vec<KvDirectoryProjection>> {
         let auth = self.auth.borrowed();
         let connection = &mut self.connection;
-        self.client.sync_kv_with_fetch(
+        self.client.list_kv_metadata_with_fetch(
             &self.host,
             self.party.clone(),
             auth,

@@ -934,6 +934,24 @@ mod tests {
             &advance,
         )
         .unwrap();
+        let eldest = chain.links[0].decode_eldest().unwrap();
+        assert_eq!(
+            baseline.device_display_name(&eldest.member),
+            Some("fixture-device")
+        );
+        let provision = chain.links[1].decode_group_change().unwrap();
+        let provisioned = provision
+            .changes
+            .iter()
+            .find(|member| member.source_role == Role::NONE && member.role != Role::NONE)
+            .expect("fixture provisioning link adds one device");
+        assert_eq!(
+            baseline.device_display_name(&provisioned.entity),
+            Some(
+                std::str::from_utf8(&chain.device_names[1].display_name)
+                    .expect("fixture device display name is UTF-8")
+            )
+        );
 
         let mut tampered = USER_CHAIN.to_vec();
         for index in 0..tampered.len() {
@@ -1027,7 +1045,7 @@ mod tests {
             ),
             Err(Error::UserDisclosure)
         ));
-        verify_non_self_user_chain(
+        let verified = verify_non_self_user_chain(
             &omitted,
             &uid,
             &host,
@@ -1035,6 +1053,10 @@ mod tests {
             &advance,
         )
         .unwrap();
+        assert!(verified
+            .devices()
+            .iter()
+            .all(|device| verified.device_display_name(&device.id).is_none()));
     }
 
     #[test]

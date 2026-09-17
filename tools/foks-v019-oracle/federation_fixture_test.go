@@ -113,7 +113,7 @@ func TestCheckedFederationRPCFixtures(t *testing.T) {
 			make: func() ([]byte, error) {
 				arg := rem.LoadTeamChainArg{
 					Team: proto.FQTeam{Team: team, Host: remoteHost},
-					Tok: rem.NewTokenVariantWithPermission(token), Start: proto.ChainEldestSeqno,
+					Tok:  rem.NewTokenVariantWithPermission(token), Start: proto.ChainEldestSeqno,
 				}
 				return rpcRequestFrame(rem.TeamLoaderProtocolID, 3, arg.Export())
 			},
