@@ -400,6 +400,45 @@ test('a conceal does not reopen the sheet a scene opened with the page', async (
   rendered.unmount();
 });
 
+test('in-shell stop notice renders outside the inert main container', async () => {
+  const { rendered } = await shellOverlay(restartRequired);
+  const dialog = document.querySelector('.stopveil');
+  assert.ok(dialog);
+  // The dialog isolates the shell grid; a notice inside that grid would be
+  // inert along with it and its Restart and Quit buttons unreachable.
+  assert.equal(
+    document.querySelector('.app')?.getAttribute('aria-hidden'),
+    'true',
+  );
+  assert.equal(dialog.closest('[aria-hidden="true"]'), null);
+  assert.ok(document.querySelector('.window > .stopveil'));
+  // The rail and topbar beside the veil are dimmed and disabled.
+  assert.ok(document.querySelector('.rail-body.is-blocked'));
+  for (const tab of document.querySelectorAll('.rail-tabs .nav'))
+    assert.ok(tab.hasAttribute('disabled'));
+  rendered.unmount();
+});
+
+test('lost-connection dialog renders beside a dimmed navigation rail', async () => {
+  const { App, FIXTURE, mockBridge } = await modules();
+  window.history.replaceState(null, '', '/?state=agent-lost');
+  const bridge: Bridge = { ...mockBridge(FIXTURE), native: true };
+  const rendered = ui.render(createElement(App, { bridge }));
+  await ui.waitFor(() => {
+    assert.ok(document.querySelector('.stopwrap'));
+  });
+  const dialog = document.querySelector('.stopwrap');
+  assert.ok(dialog);
+  assert.equal(dialog.closest('[aria-hidden="true"]'), null);
+  assert.ok(document.querySelector('.window > .stopwrap'));
+  assert.ok(document.querySelector('.side.rail .rail-tabs'));
+  assert.ok(document.querySelector('.rail-body.is-blocked'));
+  assert.ok(
+    document.querySelector('.topbar .topsearch')?.hasAttribute('disabled'),
+  );
+  rendered.unmount();
+});
+
 test('active maintenance overlay renders no action buttons', async () => {
   const { rendered } = await shellOverlay({
     state: 'active',

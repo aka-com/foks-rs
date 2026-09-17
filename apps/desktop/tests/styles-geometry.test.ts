@@ -155,10 +155,21 @@ test('shell stylesheet contains required grid and flexbox layout rules', async (
     shell,
     /\.app\.with-details\{grid-template-columns:var\(--side-track\) minmax\(0,1fr\) var\(--details-w\)\}/,
   );
-  // Layout tokens live on `.app`, never on `:root`.
-  assert.match(shell, /\.app\{[^}]*--side-w-open:224px[;}]/);
+  // Layout tokens live on the shell, never on `:root`. The rail width is on
+  // `.window` rather than `.app` because the takeovers that leave the rail
+  // visible are siblings of `.app`, outside the background a dialog makes
+  // inert.
+  assert.match(shell, /\.window\{[^}]*--side-w-open:224px[;}]/);
   assert.match(shell, /\.app\{[^}]*--details-w:300px[;}]/);
-  assert.match(shell, /\.app\.side-narrow\{--side-w:46px\}/);
+  assert.match(shell, /\.window:has\(>\.app\.side-narrow\)\{--side-w:46px\}/);
+  assert.match(
+    shell,
+    /\.stopwrap\{position:absolute;inset:44px 0 0 var\(--side-w\);/,
+  );
+  assert.match(
+    shell,
+    /\.stopveil\{position:absolute;inset:44px 0 0 var\(--side-w\);/,
+  );
   // The collapsed rail is a fixed track: no hover or focus expansion.
   assert.match(shell, /\.side\.is-narrow[^{]*\{/);
   assert.doesNotMatch(shell, /\.side\.is-narrow[^{]*:hover/);

@@ -185,6 +185,19 @@ function agentStopDetail(lifecycle: AgentStop): string {
   }
 }
 
+/** The lifecycle as a stop state, or null while the agent runs or starts. */
+function agentStop(lifecycle: AgentLifecycle): AgentStop | null {
+  switch (lifecycle.state) {
+    case 'maintenance':
+    case 'restart-required':
+    case 'recovery-required':
+    case 'restoration-failed':
+      return lifecycle;
+    default:
+      return null;
+  }
+}
+
 function AgentStopNotice({
   lifecycle,
   bridge,
@@ -1640,6 +1653,11 @@ function VaultShell({
     <PlaceholderScreen location={here} />
   );
 
+  // Render takeover overlays as siblings of the main grid so they remain
+  // interactive while the grid is inert. The adjacent rail and topbar use the
+  // same disabled styling as `BlockedShell`.
+  const stop = agentStop(agentLifecycle);
+  const takeover = stop !== null || workflow?.kind === 'agent-lost';
   const shell = (
     <div
       className={[
@@ -1715,11 +1733,19 @@ function VaultShell({
               }
               onToggleCollapsed={toggleSidebar}
               collapsed={sideCollapsed}
-              agent={railAgentState(agentLifecycle.state, shown.agent.state)}
+              // The lost-connection dialog is the rail's own statement that
+              // the agent is gone, whichever path raised it.
+              agent={
+                workflow?.kind === 'agent-lost'
+                  ? 'stopped'
+                  : railAgentState(agentLifecycle.state, shown.agent.state)
+              }
               nativeChrome={bridge.native}
+              blocked={takeover}
             />
             <main className="main">
               <Topbar
+                blocked={takeover}
                 deviceLabel={deviceLabel}
                 snapshot={shown}
                 location={here}
@@ -1759,20 +1785,17 @@ function VaultShell({
             resumeDraft={resumeDraft}
           />
         ) : null}
-        {agentLifecycle.state === 'maintenance' ||
-        agentLifecycle.state === 'restart-required' ||
-        agentLifecycle.state === 'recovery-required' ||
-        agentLifecycle.state === 'restoration-failed' ? (
-          <AgentStopNotice
-            lifecycle={agentLifecycle}
-            bridge={bridge}
-            placement="shell"
-            onRetryRestoration={() => {
-              void recoverAgentReadiness(true).catch(commandError);
-            }}
-          />
-        ) : null}
       </div>
+      {stop ? (
+        <AgentStopNotice
+          lifecycle={stop}
+          bridge={bridge}
+          placement="shell"
+          onRetryRestoration={() => {
+            void recoverAgentReadiness(true).catch(commandError);
+          }}
+        />
+      ) : null}
       <ShellSearch
         snapshot={shown}
         open={searchOpen}
