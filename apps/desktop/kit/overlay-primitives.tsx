@@ -97,6 +97,10 @@ export function OverlayProvider({
   );
 }
 
+export function useHasOverlayProvider(): boolean {
+  return useContext(OverlayContext) !== null;
+}
+
 function useOverlayEnvironment(): OverlayEnvironment {
   const environment = useContext(OverlayContext);
   if (!environment) {

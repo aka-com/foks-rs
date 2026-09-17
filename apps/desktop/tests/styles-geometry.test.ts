@@ -159,16 +159,18 @@ test('shell stylesheet contains required grid and flexbox layout rules', async (
   // `.window` rather than `.app` because the takeovers that leave the rail
   // visible are siblings of `.app`, outside the background a dialog makes
   // inert.
+  assert.match(shell, /\.window\{[^}]*--topbar-h:44px[;}]/);
   assert.match(shell, /\.window\{[^}]*--side-w-open:224px[;}]/);
   assert.match(shell, /\.app\{[^}]*--details-w:300px[;}]/);
   assert.match(shell, /\.window:has\(>\.app\.side-narrow\)\{--side-w:46px\}/);
   assert.match(
     shell,
-    /\.stopwrap\{position:absolute;inset:44px 0 0 var\(--side-w\);/,
+    /\.takeover\{position:absolute;inset:var\(--topbar-h\) 0 0 var\(--side-w\);z-index:18;display:grid;place-items:center;padding:20px;overflow:auto\}/,
   );
+  assert.doesNotMatch(shell, /\.stop(?:wrap|veil)\{[^}]*inset:/);
   assert.match(
     shell,
-    /\.stopveil\{position:absolute;inset:44px 0 0 var\(--side-w\);/,
+    /\.window:has\(>\.app>\.first-run-main\)>\.takeover\{top:0\}/,
   );
   // The collapsed rail is a fixed track: no hover or focus expansion.
   assert.match(shell, /\.side\.is-narrow[^{]*\{/);
@@ -178,7 +180,7 @@ test('shell stylesheet contains required grid and flexbox layout rules', async (
   // the page; the page header below it carries none.
   assert.match(
     shell,
-    /\.topbar\{height:44px;[^}]*border-bottom:1px solid var\(--line-soft\)/,
+    /\.topbar\{height:var\(--topbar-h\);[^}]*border-bottom:1px solid var\(--line-soft\)/,
   );
   assert.match(shell, /\.topbar \.topsearch\{[^}]*width:240px/);
   // Allow main column flex shrinking to prevent horizontal window overflow.

@@ -66,6 +66,7 @@ export function SetupSidebar({
   onRecoverAccount,
   recoverEnabled = false,
   agent = 'ready',
+  blocked = false,
 }: {
   checkpoint: FirstRunCheckpoint;
   /** The OS draws the window controls over the step list's own drag strip. */
@@ -82,12 +83,13 @@ export function SetupSidebar({
   recoverEnabled?: boolean;
   /** Connection status displayed in the rail footer. */
   agent?: RailAgentState;
+  blocked?: boolean;
 }): ReactNode {
   const restart = onRestart ? (
     <button
       type="button"
       className="nav"
-      disabled={restartDisabled}
+      disabled={blocked || restartDisabled}
       title={restartReason}
       onClick={onRestart}
     >
@@ -101,7 +103,7 @@ export function SetupSidebar({
     return (
       <nav className="side rail setup-side" aria-label="Setup steps">
         <TrafficStrip native={native} />
-        <div className="setup-steps">
+        <div className={`setup-steps${blocked ? ' is-blocked' : ''}`}>
           {labels.map((label, index) => (
             <div
               key={label}
@@ -117,7 +119,12 @@ export function SetupSidebar({
         </div>
         <div className="side-bottom">
           {onAnotherServer ? (
-            <button type="button" className="nav" onClick={onAnotherServer}>
+            <button
+              type="button"
+              className="nav"
+              disabled={blocked}
+              onClick={onAnotherServer}
+            >
               <Icon name="server" />
               <span className="t">Connect to another server</span>
             </button>
@@ -126,7 +133,7 @@ export function SetupSidebar({
             <button
               type="button"
               className="nav"
-              disabled={!recoverEnabled}
+              disabled={blocked || !recoverEnabled}
               onClick={onRecoverAccount}
             >
               <Icon name="person" />
@@ -138,7 +145,7 @@ export function SetupSidebar({
             <button
               type="button"
               className="nav"
-              disabled={cancelDisabled}
+              disabled={blocked || cancelDisabled}
               onClick={onCancel}
             >
               <Icon name="x" />
@@ -173,7 +180,7 @@ export function SetupSidebar({
   return (
     <nav className="side rail setup-side" aria-label="Setup steps">
       <TrafficStrip native={native} />
-      <div className="setup-steps">
+      <div className={`setup-steps${blocked ? ' is-blocked' : ''}`}>
         {labels.map((label, index) => (
           <div
             key={label}
@@ -194,7 +201,7 @@ export function SetupSidebar({
             <button
               type="button"
               className="nav"
-              disabled={cancelDisabled}
+              disabled={blocked || cancelDisabled}
               onClick={onCancel}
             >
               <Icon name="x" />
@@ -262,6 +269,7 @@ export function FirstRunAppSidebar({
   collapsed = false,
   onToggleCollapsed,
   agent = 'ready',
+  blocked = false,
   devicesAlert = null,
 }: {
   snapshot: AgentSnapshot;
@@ -275,6 +283,7 @@ export function FirstRunAppSidebar({
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
   agent?: RailAgentState;
+  blocked?: boolean;
   /** The Devices tab's dot, as the shell computes it elsewhere. */
   devicesAlert?: { description: string } | null;
 }): ReactNode {
@@ -316,6 +325,7 @@ export function FirstRunAppSidebar({
       collapsed={collapsed}
       onToggleCollapsed={onToggleCollapsed}
       agent={agent}
+      blocked={blocked}
     />
   );
 }

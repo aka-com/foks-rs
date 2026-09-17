@@ -27,6 +27,7 @@ import {
   Dialog,
   OverlayProvider,
   anyDialogOpen,
+  useHasOverlayProvider,
 } from '/kit/overlay-primitives';
 import { ToastController, ToastProvider } from '/kit/toasts';
 import {
@@ -198,15 +199,59 @@ function agentStop(lifecycle: AgentLifecycle): AgentStop | null {
   }
 }
 
-function AgentStopNotice({
+type ShellBlock =
+  | { kind: 'starting' }
+  | { kind: 'locked' }
+  | { kind: 'boot-error'; message: string }
+  | { kind: 'stop'; lifecycle: AgentStop }
+  | { kind: 'disconnected'; message?: string };
+
+function shellBlock(
+  lifecycle: AgentLifecycle,
+  startup?: { locked: boolean; error: string | null; pending: boolean },
+): ShellBlock | null {
+  if (startup) {
+    if (startup.locked) return { kind: 'locked' };
+    if (startup.error !== null)
+      return { kind: 'boot-error', message: startup.error };
+    if (!startup.pending) return null;
+    const stop = agentStop(lifecycle);
+    return stop && stop.state !== 'maintenance'
+      ? { kind: 'stop', lifecycle: stop }
+      : { kind: 'starting' };
+  }
+  const stop = agentStop(lifecycle);
+  if (stop) return { kind: 'stop', lifecycle: stop };
+  return lifecycle.state === 'disconnected'
+    ? { kind: 'disconnected', message: lifecycle.error }
+    : null;
+}
+
+function shellChrome(
+  block: ShellBlock | null,
+  lifecycle: AgentLifecycle['state'] = 'ready',
+  snapshotAgent?: AgentSnapshot['agent']['state'],
+): { blocked: boolean; agent: RailAgentState } {
+  return {
+    blocked: block !== null,
+    agent: !block
+      ? railAgentState(lifecycle, snapshotAgent)
+      : block.kind === 'locked'
+        ? 'locked'
+        : block.kind === 'starting' ||
+            (block.kind === 'stop' && block.lifecycle.state === 'maintenance')
+          ? 'starting'
+          : 'stopped',
+  };
+}
+
+function AgentStopCard({
   lifecycle,
   bridge,
-  placement,
   onRetryRestoration,
 }: {
   lifecycle: AgentStop;
   bridge: Bridge;
-  placement: 'startup' | 'shell';
   onRetryRestoration: () => void;
 }): ReactNode {
   const [failure, setFailure] = useState<string | null>(null);
@@ -278,7 +323,7 @@ function AgentStopNotice({
       {actions ? <div className="acts2">{actions}</div> : null}
     </>
   );
-  const card = (
+  return (
     <div className="card stopcard">
       <h2>
         <Icon name="alert" />
@@ -287,28 +332,9 @@ function AgentStopNotice({
       {body}
     </div>
   );
-  // Before the shell mounts there is no overlay environment to isolate the
-  // background from, and the frame behind this card is already inert.
-  if (placement === 'startup') {
-    return (
-      <div
-        className="stopveil"
-        role="alertdialog"
-        aria-modal="true"
-        aria-label={label}
-      >
-        {card}
-      </div>
-    );
-  }
-  return (
-    <Dialog className="stopveil" role="alertdialog" aria-label={label}>
-      {card}
-    </Dialog>
-  );
 }
 
-function AgentLostDialog({
+function AgentLostCard({
   message,
   bridge,
   onRetryAgent,
@@ -320,78 +346,124 @@ function AgentLostDialog({
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   return (
-    <Dialog
-      className="stopwrap"
-      role="alertdialog"
-      aria-label="Connection to background service lost"
-    >
-      <div className="notice stop">
-        <h2>Connection to background service lost</h2>
-        <p>
-          The background service stopped responding. Click Retry to reconnect.
+    <div className="notice stop">
+      <h2>Connection to background service lost</h2>
+      <p>
+        The background service stopped responding. Click Retry to reconnect.
+      </p>
+      {message ? <p className="fn">{message}</p> : null}
+      {failure ? (
+        <p className="fn" role="alert">
+          {failure}
         </p>
-        {message ? <p className="fn">{message}</p> : null}
-        {failure ? (
-          <p className="fn" role="alert">
-            {failure}
-          </p>
-        ) : null}
-        <div className="acts2">
-          <Button
-            variant="primary"
-            disabled={busy}
-            onClick={() => {
-              setBusy(true);
-              setFailure(null);
-              void (async () => {
-                try {
-                  await onRetryAgent();
-                } catch (error) {
-                  setFailure(normalizeCommandError(error).message);
-                } finally {
-                  setBusy(false);
-                }
-              })();
-            }}
-          >
-            Retry
-          </Button>
-          <Button
-            disabled={busy}
-            onClick={() => {
-              void bridge
-                .quitApp()
-                .catch((error) =>
-                  setFailure(normalizeCommandError(error).message),
-                );
-            }}
-          >
-            Quit FOKS
-          </Button>
-        </div>
+      ) : null}
+      <div className="acts2">
+        <Button
+          variant="primary"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            setFailure(null);
+            void (async () => {
+              try {
+                await onRetryAgent();
+              } catch (error) {
+                setFailure(normalizeCommandError(error).message);
+              } finally {
+                setBusy(false);
+              }
+            })();
+          }}
+        >
+          Retry
+        </Button>
+        <Button
+          disabled={busy}
+          onClick={() => {
+            void bridge
+              .quitApp()
+              .catch((error) =>
+                setFailure(normalizeCommandError(error).message),
+              );
+          }}
+        >
+          Quit FOKS
+        </Button>
       </div>
-    </Dialog>
+    </div>
+  );
+}
+
+function Takeover({
+  block,
+  children,
+}: {
+  block: ShellBlock;
+  children?: ReactNode;
+}): ReactNode {
+  const modal = useHasOverlayProvider();
+  const identity =
+    block.kind === 'stop'
+      ? `${block.kind}:${block.lifecycle.state}:${block.lifecycle.generation}`
+      : block.kind;
+  if (block.kind === 'starting')
+    return (
+      <div className="takeover">
+        <StartingScreen />
+      </div>
+    );
+  const className = `takeover ${
+    block.kind === 'stop'
+      ? 'stopveil'
+      : block.kind === 'disconnected'
+        ? 'stopwrap'
+        : 'lock-back'
+  }`;
+  const label =
+    block.kind === 'stop'
+      ? agentLifecycleLabel(block.lifecycle)
+      : block.kind === 'disconnected'
+        ? 'Connection to background service lost'
+        : block.kind === 'locked'
+          ? 'FOKS is locked'
+          : 'Couldn’t load FOKS';
+  const role = block.kind === 'locked' ? 'dialog' : 'alertdialog';
+  if (modal)
+    return (
+      <Dialog
+        key={identity}
+        className={className}
+        role={role}
+        aria-label={label}
+      >
+        {children}
+      </Dialog>
+    );
+  // Before the shell mounts there is no overlay environment to isolate the
+  // background from, and the frame behind this card is already inert.
+  return (
+    <div className={className} role={role} aria-modal="true" aria-label={label}>
+      {children}
+    </div>
   );
 }
 
 /**
- * The shell's frame with nothing in it: the rail and the topbar, dimmed and
- * inert, around whatever a blocking state puts in the content area. Starting,
- * stopped and locked all draw it, so the window keeps its shape from the first
- * paint to the first page.
+ * Empty shell layout rendering a dimmed, disabled rail and topbar beside the
+ * takeover container. Shared by starting, stopped, and locked states to
+ * preserve window geometry across transitions.
  */
 function BlockedShell({
   bridge,
-  agent,
+  block,
   children,
-  overlay,
 }: {
   bridge?: Bridge | null;
-  agent: RailAgentState;
+  block: ShellBlock;
   children?: ReactNode;
-  overlay?: ReactNode;
 }): ReactNode {
   const nowhere = (): void => undefined;
+  const chrome = shellChrome(block);
   return (
     <div
       className={[
@@ -403,21 +475,20 @@ function BlockedShell({
         <Sidebar
           location={{ kind: 'files' }}
           onNavigate={nowhere}
-          agent={agent}
+          agent={chrome.agent}
           nativeChrome={Boolean(bridge?.native)}
-          blocked
+          blocked={chrome.blocked}
         />
         <main className="main">
           <Topbar
             location={{ kind: 'files' }}
             onNavigate={nowhere}
             collapsed={false}
-            blocked
+            blocked={chrome.blocked}
           />
-          {children}
         </main>
-        {overlay}
       </div>
+      <Takeover block={block}>{children}</Takeover>
     </div>
   );
 }
@@ -684,151 +755,121 @@ export function App({
     return true;
   }, [activeBridge]);
 
-  if (lockState && activeBridge) {
+  const block = shellBlock(agentLifecycle, {
+    locked: Boolean(lockState && activeBridge),
+    error: loadError,
+    pending: !loaded || !activeBridge || !agentController,
+  });
+
+  if (block?.kind === 'locked' && lockState && activeBridge) {
     const mechanism =
       lockState.mechanism === 'biometry'
         ? 'Touch ID or your Mac password'
         : 'your operating-system password';
     return (
-      <BlockedShell
-        bridge={activeBridge}
-        agent="locked"
-        overlay={
-          <div
-            className="lock-back"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="app-lock-title"
-          >
-            <div className="card lockcard">
-              <span className="glyph" aria-hidden="true">
-                <Icon name="shield" />
-              </span>
-              <h2 id="app-lock-title">FOKS is locked</h2>
-              <p>Authenticate with {mechanism} to unlock FOKS.</p>
-              {lockError ? (
-                <p className="action-error" role="alert">
-                  {lockError}
-                </p>
-              ) : null}
-              <Button
-                variant="primary"
-                disabled={unlocking}
-                onClick={() => {
-                  setUnlocking(true);
-                  setLockError(null);
-                  void activeBridge
-                    .unlockApp()
-                    .then(
-                      (next) => {
-                        if (next.locked) {
-                          setLockState(next);
-                          return;
-                        }
-                        setLockState(null);
-                        setActiveBridge(null);
-                        setBootEpoch((value) => value + 1);
-                      },
-                      (error) =>
-                        setLockError(normalizeCommandError(error).message),
-                    )
-                    .finally(() => setUnlocking(false));
-                }}
-              >
-                Unlock
-              </Button>
-            </div>
-          </div>
-        }
-      />
-    );
-  }
-
-  if (loadError) {
-    return (
-      <BlockedShell
-        bridge={activeBridge}
-        agent="stopped"
-        overlay={
-          <div
-            className="lock-back"
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="app-boot-error-title"
-          >
-            <div className="card lockcard">
-              <span className="glyph warn" aria-hidden="true">
-                <Icon name="alert" />
-              </span>
-              <h2 id="app-boot-error-title">Couldn’t load FOKS</h2>
-              <p className="action-error" role="alert">
-                {loadError}
-              </p>
-              <Button
-                variant="primary"
-                onClick={() => {
-                  setLoadError(null);
-                  setLoaded(null);
-                  setActiveBridge(null);
-                  setBootEpoch((value) => value + 1);
-                }}
-              >
-                Retry
-              </Button>
-            </div>
-          </div>
-        }
-      />
-    );
-  }
-  if (!loaded || !activeBridge || !agentController) {
-    if (
-      activeBridge &&
-      (agentLifecycle.state === 'recovery-required' ||
-        agentLifecycle.state === 'restart-required' ||
-        agentLifecycle.state === 'restoration-failed')
-    ) {
-      return (
-        <BlockedShell
-          bridge={activeBridge}
-          agent="stopped"
-          overlay={
-            <AgentStopNotice
-              lifecycle={agentLifecycle}
-              bridge={activeBridge}
-              placement="startup"
-              onRetryRestoration={() => {
-                const controller = agentController;
-                if (!controller) return;
-                void controller
-                  .establish(true)
-                  .then(() => setBootEpoch((value) => value + 1))
-                  .catch((error) => {
-                    // A successful native restoration publishes a newer
-                    // maintenance snapshot while retryAgentConnection is
-                    // still awaited. That transition intentionally makes
-                    // this older establish attempt stale; the startup
-                    // listener above owns the boot continuation.
-                    const current = controller.snapshot();
-                    if (
-                      current.state === 'checking' ||
-                      current.state === 'ready'
-                    )
+      <BlockedShell bridge={activeBridge} block={block}>
+        <div className="card lockcard">
+          <span className="glyph" aria-hidden="true">
+            <Icon name="shield" />
+          </span>
+          <h2 id="app-lock-title">FOKS is locked</h2>
+          <p>Authenticate with {mechanism} to unlock FOKS.</p>
+          {lockError ? (
+            <p className="action-error" role="alert">
+              {lockError}
+            </p>
+          ) : null}
+          <Button
+            variant="primary"
+            disabled={unlocking}
+            onClick={() => {
+              setUnlocking(true);
+              setLockError(null);
+              void activeBridge
+                .unlockApp()
+                .then(
+                  (next) => {
+                    if (next.locked) {
+                      setLockState(next);
                       return;
-                    setLoadError(normalizeCommandError(error).message);
-                  });
-              }}
-            />
-          }
-        />
-      );
-    }
-    return (
-      <BlockedShell bridge={activeBridge} agent="starting">
-        <StartingScreen />
+                    }
+                    setLockState(null);
+                    setActiveBridge(null);
+                    setBootEpoch((value) => value + 1);
+                  },
+                  (error) => setLockError(normalizeCommandError(error).message),
+                )
+                .finally(() => setUnlocking(false));
+            }}
+          >
+            Unlock
+          </Button>
+        </div>
       </BlockedShell>
     );
   }
+
+  if (block?.kind === 'boot-error') {
+    return (
+      <BlockedShell bridge={activeBridge} block={block}>
+        <div className="card lockcard">
+          <span className="glyph warn" aria-hidden="true">
+            <Icon name="alert" />
+          </span>
+          <h2 id="app-boot-error-title">Couldn’t load FOKS</h2>
+          <p className="action-error" role="alert">
+            {block.message}
+          </p>
+          <Button
+            variant="primary"
+            onClick={() => {
+              setLoadError(null);
+              setLoaded(null);
+              setActiveBridge(null);
+              setBootEpoch((value) => value + 1);
+            }}
+          >
+            Retry
+          </Button>
+        </div>
+      </BlockedShell>
+    );
+  }
+  if (block?.kind === 'stop' && activeBridge) {
+    return (
+      <BlockedShell bridge={activeBridge} block={block}>
+        <AgentStopCard
+          lifecycle={block.lifecycle}
+          bridge={activeBridge}
+          onRetryRestoration={() => {
+            const controller = agentController;
+            if (!controller) return;
+            void controller
+              .establish(true)
+              .then(() => setBootEpoch((value) => value + 1))
+              .catch((error) => {
+                // A successful native restoration publishes a newer
+                // maintenance snapshot while retryAgentConnection is
+                // still awaited. That transition intentionally makes
+                // this older establish attempt stale; the startup
+                // listener above owns the boot continuation.
+                const current = controller.snapshot();
+                if (current.state === 'checking' || current.state === 'ready')
+                  return;
+                setLoadError(normalizeCommandError(error).message);
+              });
+          }}
+        />
+      </BlockedShell>
+    );
+  }
+  if (
+    block?.kind === 'starting' ||
+    !loaded ||
+    !activeBridge ||
+    !agentController
+  )
+    return <BlockedShell bridge={activeBridge} block={{ kind: 'starting' }} />;
   return (
     <VaultShell
       snapshot={loaded}
@@ -1733,8 +1774,8 @@ function VaultShell({
   // Render takeover overlays as siblings of the main grid so they remain
   // interactive while the grid is inert. The adjacent rail and topbar use the
   // same disabled styling as `BlockedShell`.
-  const stop = agentStop(agentLifecycle);
-  const takeover = stop !== null || agentLifecycle.state === 'disconnected';
+  const block = shellBlock(agentLifecycle);
+  const chrome = shellChrome(block, agentLifecycle.state, shown.agent.state);
   const shell = (
     <div
       className={[
@@ -1786,7 +1827,8 @@ function VaultShell({
               onAgentReadinessFailure={handleAgentReadinessFailure}
               automaticEntry={automaticFirstRun}
               managedProfile={managedProfile ?? undefined}
-              agent={railAgentState(agentLifecycle.state, shown.agent.state)}
+              agent={chrome.agent}
+              blocked={chrome.blocked}
               collapsed={sideCollapsed}
               onToggleCollapsed={toggleSidebar}
               devicesAlert={devicesAlertSummary(shown, deviceAlerts)}
@@ -1820,13 +1862,13 @@ function VaultShell({
                 collapsed={sideCollapsed}
                 // The lifecycle is the rail's own authority for whether the
                 // agent is gone, whichever path raised the disconnect.
-                agent={railAgentState(agentLifecycle.state, shown.agent.state)}
+                agent={chrome.agent}
                 nativeChrome={bridge.native}
-                blocked={takeover}
+                blocked={chrome.blocked}
               />
               <main className="main">
                 <Topbar
-                  blocked={takeover}
+                  blocked={chrome.blocked}
                   deviceLabel={deviceLabel}
                   snapshot={shown}
                   location={here}
@@ -1931,22 +1973,24 @@ function VaultShell({
           onCancel={() => settlePrompt(false)}
         />
       ) : null}
-      {stop ? (
-        <AgentStopNotice
-          lifecycle={stop}
-          bridge={bridge}
-          placement="shell"
-          onRetryRestoration={() => {
-            void recoverAgentReadiness(true).catch(commandError);
-          }}
-        />
-      ) : null}
-      {agentLifecycle.state === 'disconnected' ? (
-        <AgentLostDialog
-          message={agentLifecycle.error}
-          bridge={bridge}
-          onRetryAgent={() => recoverAgentReadiness(true)}
-        />
+      {block ? (
+        <Takeover block={block}>
+          {block.kind === 'stop' ? (
+            <AgentStopCard
+              lifecycle={block.lifecycle}
+              bridge={bridge}
+              onRetryRestoration={() => {
+                void recoverAgentReadiness(true).catch(commandError);
+              }}
+            />
+          ) : block.kind === 'disconnected' ? (
+            <AgentLostCard
+              message={block.message}
+              bridge={bridge}
+              onRetryAgent={() => recoverAgentReadiness(true)}
+            />
+          ) : null}
+        </Takeover>
       ) : null}
     </div>
   );

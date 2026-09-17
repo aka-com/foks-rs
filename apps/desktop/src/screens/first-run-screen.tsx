@@ -390,6 +390,7 @@ export interface FirstRunExperienceProps {
   managedProfile?: string;
   /** Connection status indicator in the sidebar footer during first-run setup. */
   agent?: RailAgentState;
+  blocked?: boolean;
   /** The rail's width, carried in and out of setup. */
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
@@ -458,6 +459,7 @@ function FirstRunSession({
   automaticEntry = false,
   managedProfile,
   agent = 'ready',
+  blocked = false,
   collapsed = false,
   onToggleCollapsed,
   devicesAlert = null,
@@ -3817,6 +3819,7 @@ function FirstRunSession({
           collapsed={collapsed}
           onToggleCollapsed={onToggleCollapsed}
           agent={agent}
+          blocked={blocked}
           devicesAlert={devicesAlert}
         />
       ) : (
@@ -3824,6 +3827,7 @@ function FirstRunSession({
           checkpoint={checkpoint}
           native={Boolean(bridge.native)}
           agent={agent}
+          blocked={blocked}
           pendingPath={pendingPath}
           onAnotherServer={
             !busy &&

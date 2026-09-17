@@ -23,10 +23,6 @@ a{color:inherit;text-decoration:none}
 svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none}
 
 /* Window container */
-/* The rail's width is declared on the window rather than on the grid because
-   the takeovers that leave the rail visible (`.stopveil`, `.stopwrap`) are
-   siblings of the grid, not children: a dialog inside the grid would be inside
-   the background it makes inert. */
 .window{position:relative;width:min(1180px,96vw);height:min(760px,88vh);background:var(--main-surface);border-radius:var(--radius-lg);border:1px solid rgba(0,0,0,.16);box-shadow:0 24px 60px rgba(15,20,45,.26),0 2px 8px rgba(15,20,45,.12);overflow:hidden;display:flex;flex-direction:column;--topbar-h:44px;--side-w-open:224px;--side-w:var(--side-w-open)}
 /* Shell grid */
 .app{flex:1;min-height:0;display:grid;position:relative;--side-track:auto;--side-pad:10px;--side-head-pad:10px;--side-open-content:calc(var(--side-w-open) - var(--side-pad) * 2);--details-w:300px;grid-template-columns:var(--side-track) minmax(0,1fr);transition:grid-template-columns .2s ease}
@@ -110,9 +106,8 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side.rail .setup-step:not(.on):not(.done) .setup-mark{border-color:rgba(255,255,255,.4);color:rgba(255,255,255,.75)}
 .side.rail .setup-step.done .setup-mark,.side.rail .setup-step.on .setup-mark{background:#fff;border-color:#fff;color:var(--rail)}
 .side.rail .setup-mark .ic{width:12px;height:12px;font-size:12px;stroke-width:2.6}
-/* The header and the tabs, dimmed together while a blocking state owns the
-   window: the frame is drawn, and none of it acts. */
-.side.rail .rail-body.is-blocked{opacity:.45;pointer-events:none}
+/* Blocked rail state */
+.side.rail .rail-body.is-blocked,.side.rail .setup-steps.is-blocked{opacity:.45;pointer-events:none}
 /* Account header */
 .side.rail .rail-head{position:relative;border-bottom:1px solid var(--rail-line)}
 /* Account button */
@@ -198,7 +193,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 /* Main content area */
 .main{position:relative;min-width:0;min-height:0;display:flex;flex-direction:column;background:#fff;container-type:inline-size}
 /* Topbar */
-.topbar{height:44px;flex:none;display:flex;align-items:center;gap:8px;padding:0 20px 0 16px;border-bottom:1px solid var(--line-soft);user-select:none}
+.topbar{height:var(--topbar-h);flex:none;display:flex;align-items:center;gap:8px;padding:0 20px 0 16px;border-bottom:1px solid var(--line-soft);user-select:none}
 .topbar .back{width:28px;height:28px;flex:none;border-radius:var(--radius-sm);display:grid;place-items:center;color:var(--muted);font-size:17px}
 .topbar .back:hover{background:var(--hover);color:var(--ink)}
 .topbar .back[disabled]{opacity:.35;cursor:default}
@@ -368,30 +363,20 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .plain p{color:var(--muted);margin-bottom:12px}
 .plain code{font:12.5px var(--mono)}
 .plain .btn{margin-top:4px}
-/* The takeover for a lost agent connection. Like `.stopveil` below, it covers
-   the page under the topbar and leaves the rail, which the shell dims. Both
-   takeovers sit above the menus (16) and the search palette (14), which a
-   lost connection does not close, and below the toasts (20) and the lock
-   (40). */
-.stopwrap{position:absolute;inset:44px 0 0 var(--side-w);background:var(--main-surface);z-index:18;display:flex;flex-direction:column;overflow:auto;padding:0 20px}
-.stopwrap .notice{margin-top:120px}
+/* Takeover frame */
+.takeover{position:absolute;inset:var(--topbar-h) 0 0 var(--side-w);z-index:18;display:grid;place-items:center;padding:20px;overflow:auto}
+.stopwrap{background:var(--main-surface)}
+.stopwrap .notice{width:min(470px,100%);margin:0}
 
-/* ---------- blocking states ----------
-   Three takeovers, each leaving as much of the shell readable as it safely
-   can. Starting draws the frame and puts the spinner in the content area; a
-   stopped agent veils the page below the topbar, so the reader can still see
-   which page they were on; the lock covers the rail as well, because the rail
-   names accounts and counts unread messages. */
+/* Blocking states */
 .booting{flex:1;min-height:0;display:grid;place-items:center;align-content:center;gap:12px;padding:20px;text-align:center;color:var(--muted)}
 .booting b{color:var(--ink);font-weight:600;font-size:15px}
 .booting .line{font-size:12.5px;max-width:420px}
 .booting .spin{width:26px;height:26px;border:2.5px solid var(--line-mid);border-top-color:var(--accent);border-radius:50%;animation:btn-spin .8s linear infinite}
 @media (prefers-reduced-motion:reduce){.booting .spin{animation:none}}
-.stopveil{position:absolute;inset:44px 0 0 var(--side-w);z-index:18;display:grid;place-items:center;padding:20px;background:color-mix(in srgb,var(--main-surface) 84%,transparent);backdrop-filter:blur(2px)}
-/* First run has no topbar: its column reserves the traffic strip and starts
-   its heading there, so a takeover that began 44px down would cut through
-   the heading it is meant to cover. */
-.window:has(>.app>.first-run-main) .stopveil,.window:has(>.app>.first-run-main) .stopwrap{top:0}
+.stopveil{background:color-mix(in srgb,var(--main-surface) 84%,transparent);backdrop-filter:blur(2px)}
+/* First run takeover offset */
+.window:has(>.app>.first-run-main)>.takeover{top:0}
 .stopcard{display:block;width:min(470px,100%);max-height:100%;overflow:auto;padding:22px 24px;background:var(--main-surface);box-shadow:var(--shadow-sheet)}
 .stopcard h2{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:17px;font-weight:650;letter-spacing:-.01em}
 .stopcard h2 .ic{flex:none;font-size:18px;color:var(--danger-ink)}
@@ -399,7 +384,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .stopcard p.calm{margin-top:12px;color:var(--muted);font-size:12.5px}
 .stopcard .copybox{margin-bottom:6px}
 .stopcard .acts2{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
-.lock-back{position:absolute;inset:0;z-index:40;display:grid;place-items:center;padding:20px;background:rgba(28,30,44,.55);backdrop-filter:blur(6px)}
+.lock-back{inset:0;z-index:40;background:rgba(28,30,44,.55);backdrop-filter:blur(6px)}
 .lockcard{display:block;width:min(400px,100%);padding:26px 26px 22px;text-align:center;background:var(--main-surface);box-shadow:var(--shadow-sheet)}
 .lockcard .glyph{width:56px;height:56px;margin:0 auto 14px;border-radius:50%;display:grid;place-items:center;background:var(--accent-wash-2);color:var(--accent-ink);font-size:26px}
 .lockcard .glyph.warn{background:var(--danger-wash);color:var(--danger-ink)}

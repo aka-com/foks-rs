@@ -140,6 +140,12 @@ async function startupOverlay(
   await ui.waitFor(() => {
     assert.ok(document.querySelector('.stopcard'));
   });
+  assert.equal(document.querySelectorAll('.takeover').length, 1);
+  assert.ok(document.querySelector('.window > .takeover'));
+  assert.equal(
+    document.querySelector('.takeover')?.hasAttribute('tabindex'),
+    false,
+  );
   return { rendered, bridge };
 }
 
@@ -177,8 +183,110 @@ async function shellOverlay(
   await ui.waitFor(() => {
     assert.ok(document.querySelector('.stopveil'));
   });
+  assert.equal(document.querySelectorAll('.takeover').length, 1);
+  assert.ok(document.querySelector('.window > .takeover'));
+  assert.equal(
+    document.querySelector('.takeover')?.getAttribute('role'),
+    'alertdialog',
+  );
+  assert.equal(
+    document.querySelector('.takeover')?.getAttribute('tabindex'),
+    '-1',
+  );
   return { rendered, bridge };
 }
+
+test('initial startup uses the shared takeover frame', async () => {
+  const { App, FIXTURE, mockBridge } = await modules();
+  const lock = deferred<Awaited<ReturnType<Bridge['appLockState']>>>();
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    native: true,
+    appLockState: () => lock.promise,
+  };
+  const rendered = ui.render(createElement(App, { bridge }));
+  const status = await rendered.findByRole('status');
+  const takeover = status.closest('.takeover');
+  assert.ok(takeover);
+  assert.equal(document.querySelectorAll('.takeover').length, 1);
+  assert.equal(takeover.parentElement, document.querySelector('.window'));
+  rendered.unmount();
+});
+
+test('locked startup outranks maintenance and keeps unlock errors in its card', async () => {
+  const { App, FIXTURE, mockBridge } = await modules();
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    native: true,
+    clientStateMaintenanceStatus: async () => ({
+      state: 'complete',
+      generation: 2,
+      revision: 4,
+      kind: 'relocate',
+      operation: { status: 'completed' },
+      disposition: {
+        status: 'restart-selected-root',
+        root: '/moved/foks-rs',
+      },
+    }),
+    appLockState: async () => ({
+      locked: true,
+      available: true,
+      mechanism: 'password',
+    }),
+    unlockApp: async () => {
+      throw new Error('Authentication was refused.');
+    },
+  };
+  const rendered = ui.render(createElement(App, { bridge }));
+  const dialog = await rendered.findByRole('dialog', {
+    name: 'FOKS is locked',
+  });
+  assert.ok(dialog.classList.contains('takeover'));
+  assert.ok(dialog.classList.contains('lock-back'));
+  assert.equal(dialog.parentElement, document.querySelector('.window'));
+  assert.equal(document.querySelector('.stopcard'), null);
+  assert.ok(document.querySelector('.status.agent-locked'));
+  await ui.act(async () => {
+    rendered.getByRole('button', { name: 'Unlock' }).click();
+    await Promise.resolve();
+  });
+  const error = await rendered.findByRole('alert');
+  assert.match(error.textContent ?? '', /Authentication was refused/);
+  assert.ok(dialog.contains(error));
+  rendered.unmount();
+});
+
+test('boot error retry restarts startup', async () => {
+  const { App, FIXTURE, mockBridge } = await modules();
+  let statusCalls = 0;
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    native: true,
+    agentStatus: async () => {
+      statusCalls++;
+      if (statusCalls === 1) throw new Error('The agent status failed.');
+      return { state: 'ready' };
+    },
+  };
+  const rendered = ui.render(createElement(App, { bridge }));
+  const dialog = await rendered.findByRole('alertdialog', {
+    name: 'Couldn’t load FOKS',
+  });
+  assert.ok(dialog.classList.contains('takeover'));
+  assert.ok(dialog.classList.contains('lock-back'));
+  assert.match(dialog.textContent ?? '', /The agent status failed/);
+  await ui.act(async () => {
+    rendered.getByRole('button', { name: 'Retry' }).click();
+    await Promise.resolve();
+  });
+  await ui.waitFor(() =>
+    assert.equal(document.querySelector('.takeover'), null),
+  );
+  assert.ok(document.querySelector('.status.agent-ready'));
+  assert.ok(statusCalls >= 2);
+  rendered.unmount();
+});
 
 test('the agent-lost dialog shows the reason it was given', async () => {
   const { rendered } = await agentLostOverlay({
@@ -186,6 +294,8 @@ test('the agent-lost dialog shows the reason it was given', async () => {
   });
   const dialog = document.querySelector('.stopwrap');
   assert.ok(dialog);
+  assert.ok(dialog.classList.contains('takeover'));
+  assert.equal(document.querySelectorAll('.takeover').length, 1);
   assert.match(
     dialog.textContent ?? '',
     /The agent socket closed while reading the catalog\./,
@@ -720,6 +830,113 @@ test('maintenance cannot be overwritten by duplicate agent loss', async () => {
   rendered.unmount();
 });
 
+test('takeover transitions restore focus without releasing retained isolation', async () => {
+  const { App, FIXTURE, mockBridge } = await modules();
+  const listeners = new Set<(value: MaintenanceSnapshot) => void>();
+  let current: MaintenanceSnapshot = {
+    state: 'idle',
+    generation: 0,
+    revision: 0,
+  };
+  const connectionLoss = deferred<string | null>();
+  let lossConsumed = false;
+  let retries = 0;
+  let restarts = 0;
+  let quits = 0;
+  window.history.replaceState(null, '', '/?state=new');
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    native: true,
+    clientStateMaintenanceStatus: async () => current,
+    onMaintenanceStatus: async (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    takeAgentConnectionLoss: () => {
+      if (lossConsumed) return Promise.resolve(null);
+      return connectionLoss.promise.then((message) => {
+        lossConsumed = true;
+        return message;
+      });
+    },
+    retryAgentConnection: async () => {
+      retries++;
+      return { state: 'ready' };
+    },
+    restartApp: async () => {
+      restarts++;
+    },
+    quitApp: async () => {
+      quits++;
+    },
+  };
+  const rendered = ui.render(createElement(App, { bridge }));
+  const input = await rendered.findByLabelText('Site');
+  const sheet = input.closest<HTMLElement>('[aria-label="New password"]');
+  assert.ok(sheet);
+  await ui.act(async () => {
+    connectionLoss.resolve('The agent socket closed.');
+    await Promise.resolve();
+  });
+  const retry = await rendered.findByRole('button', { name: 'Retry' });
+  const app = document.querySelector<HTMLElement>('.app');
+  assert.ok(app);
+  assert.equal(document.activeElement, retry);
+  assert.equal(app.inert, true);
+  assert.equal(sheet.inert, true);
+
+  current = {
+    state: 'active',
+    generation: 7,
+    revision: 1,
+    kind: 'export',
+    phase: 'running',
+  };
+  await ui.act(async () => {
+    for (const listener of listeners) listener(current);
+    await Promise.resolve();
+  });
+  const maintenance = await rendered.findByRole('alertdialog', {
+    name: 'export · running',
+  });
+  assert.ok(document.activeElement === maintenance);
+  assert.equal(document.querySelectorAll('.takeover').length, 1);
+  assert.equal(
+    document.querySelectorAll('.takeover:not([aria-hidden="true"])').length,
+    1,
+  );
+  assert.equal(app.inert, true);
+  assert.equal(sheet.inert, true);
+  assert.equal(maintenance.querySelectorAll('button').length, 0);
+
+  current = {
+    state: 'complete',
+    generation: 7,
+    revision: 2,
+    kind: 'export',
+    operation: { status: 'completed' },
+    disposition: { status: 'restart-selected-root', root: '/moved/foks-rs' },
+  };
+  await ui.act(async () => {
+    for (const listener of listeners) listener(current);
+    await Promise.resolve();
+  });
+  const restart = await rendered.findByRole('button', { name: 'Restart FOKS' });
+  assert.ok(document.activeElement === restart);
+  assert.equal(document.querySelectorAll('.takeover').length, 1);
+  assert.equal(
+    document.querySelectorAll('.takeover:not([aria-hidden="true"])').length,
+    1,
+  );
+  assert.equal(app.inert, true);
+  assert.equal(sheet.inert, true);
+  assert.deepEqual(
+    { retries, restarts, quits },
+    { retries: 0, restarts: 0, quits: 0 },
+  );
+  rendered.unmount();
+});
+
 test('command-only agent loss preserves the active write workflow', async () => {
   const { App, FIXTURE, mockBridge } = await modules();
   window.history.replaceState(null, '', '/?state=new');
@@ -758,6 +975,60 @@ test('command-only agent loss preserves the active write workflow', async () => 
   assert.equal(document.querySelector('[aria-label="New password"]'), sheet);
   assert.equal(rendered.getByLabelText('Site'), site);
   assert.equal(site.value, 'command.example');
+  rendered.unmount();
+});
+
+test('first-run loss blocks the setup rail without adding a topbar', async () => {
+  const { App, FIXTURE, mockBridge } = await modules();
+  let connectionLoss: string | null = 'The first-run agent disconnected.';
+  window.history.replaceState(null, '', '/?state=first-run&step=who');
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    native: true,
+    takeAgentConnectionLoss: async () => {
+      const pending = connectionLoss;
+      connectionLoss = null;
+      return pending;
+    },
+  };
+  const rendered = ui.render(createElement(App, { snapshot: FIXTURE, bridge }));
+  await rendered.findByRole('alertdialog', {
+    name: 'Connection to background service lost',
+  });
+  assert.ok(document.querySelector('.first-run-main'));
+  assert.equal(document.querySelector('.topbar'), null);
+  assert.ok(document.querySelector('.setup-steps.is-blocked'));
+  assert.ok(document.querySelector('.status.agent-stopped'));
+  assert.ok(document.querySelector('.window > .takeover.stopwrap'));
+  for (const button of document.querySelectorAll('.setup-side button'))
+    assert.ok((button as HTMLButtonElement).disabled);
+  rendered.unmount();
+});
+
+test('first-run maintenance blocks the setup rail with a starting light', async () => {
+  const { App, FIXTURE, mockBridge } = await modules();
+  window.history.replaceState(null, '', '/?state=first-run&step=who');
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    native: true,
+    clientStateMaintenanceStatus: async () => ({
+      state: 'active',
+      generation: 3,
+      revision: 1,
+      kind: 'verify',
+      phase: 'running',
+    }),
+    onMaintenanceStatus: async () => () => {},
+  };
+  const rendered = ui.render(createElement(App, { snapshot: FIXTURE, bridge }));
+  await ui.waitFor(() => assert.ok(document.querySelector('.stopveil')));
+  assert.ok(document.querySelector('.first-run-main'));
+  assert.equal(document.querySelector('.topbar'), null);
+  assert.ok(document.querySelector('.setup-steps.is-blocked'));
+  assert.ok(document.querySelector('.status.agent-starting'));
+  assert.ok(document.querySelector('.window > .takeover.stopveil'));
+  for (const button of document.querySelectorAll('.setup-side button'))
+    assert.ok((button as HTMLButtonElement).disabled);
   rendered.unmount();
 });
 
