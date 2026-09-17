@@ -20,6 +20,8 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+foks-client-app = { workspace = true }
+foks-yubi = { workspace = true, features = ["hardware"] }
 foks-agent-client = { workspace = true }
 foks-agent-proto = { workspace = true }
 foks-compat-artifact = { workspace = true }

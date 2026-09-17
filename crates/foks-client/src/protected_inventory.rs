@@ -73,10 +73,27 @@ pub struct ProtectedRecordDescriptor {
 }
 
 impl ProtectedRecordDescriptor {
-    /// Terminal material may be omitted by portability only through its owner
-    /// contract. Retention itself preserves it for that workflow's cleanup.
+    /// Exportability is an owner-state rule, independent of material presence.
+    /// Existing terminal bytes still require typed validation before transfer.
     pub fn exportable(&self) -> bool {
-        self.presence != ProtectedPresence::TerminalCleanup
+        match &self.owner {
+            ProtectedRecordOwner::Mutation(op) => op.state.is_terminal(),
+            ProtectedRecordOwner::Chat(op) => op.state.is_terminal(),
+            ProtectedRecordOwner::Sso(flow) => matches!(
+                flow.state,
+                SsoFlowState::Complete
+                    | SsoFlowState::Cancelled
+                    | SsoFlowState::Expired
+                    | SsoFlowState::Rejected
+                    | SsoFlowState::Denied
+            ),
+            ProtectedRecordOwner::Team(op) => matches!(
+                op.state,
+                foks_client_db::TeamMutationState::Verified
+                    | foks_client_db::TeamMutationState::Rejected
+                    | foks_client_db::TeamMutationState::Superseded
+            ),
+        }
     }
 
     /// Fingerprint and typed scope validation lives with the owning workflow.

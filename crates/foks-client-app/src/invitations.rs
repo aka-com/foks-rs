@@ -611,3 +611,66 @@ mod tests;
 mod admission;
 mod remote;
 pub(super) use remote::StoredInvitationMembership;
+
+/// Validate known vault families without refreshing or accepting an invitation.
+pub(crate) fn validate_inventory_record(
+    vault: &mut AccountVault<'_>,
+    family: &str,
+    suffix: &str,
+    hard: &HardStateStore,
+) -> Result<bool> {
+    let bytes = vault.store.get(&format!("{family}.{suffix}"))?;
+    if family == "invitation-inbox" {
+        crate::portability::trust::validate_digest(suffix)?;
+        let rows: Vec<InboxHandle> = serde_json::from_slice(&bytes)?;
+        if rows.len() > 1000 {
+            return Err(Error::InvalidAccount(
+                "invitation inbox inventory exceeds limit",
+            ));
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        for row in &rows {
+            handle(&row.id)?;
+            if !ids.insert(&row.id) || foks_proto::decode_team_inbox(&row.row)?.len() != 1 {
+                return Err(Error::InvalidAccount("invalid invitation inbox record"));
+            }
+        }
+        return Ok(true);
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Receipt {
+        invite: Option<String>,
+        receipt: Option<Vec<u8>>,
+    }
+    impl Drop for Receipt {
+        fn drop(&mut self) {
+            if let Some(v) = &mut self.invite {
+                v.zeroize();
+            }
+            if let Some(v) = &mut self.receipt {
+                v.zeroize();
+            }
+        }
+    }
+    let id = handle(suffix)?;
+    let receipt: Receipt = serde_json::from_slice(&bytes)?;
+    match (&receipt.invite, &receipt.receipt) {
+        (Some(invite), None) => {
+            TeamInvite::import(invite)?;
+        }
+        (None, Some(receipt)) => {
+            foks_proto::TeamRsvp::decode(receipt)?;
+        }
+        _ => return Err(Error::InvalidAccount("invalid invitation receipt record")),
+    }
+    let op = hard.mutation(&id)?.ok_or(Error::InvalidAccount(
+        "invitation receipt has no journal owner",
+    ))?;
+    if op.kind != MutationKind::Invitation {
+        return Err(Error::InvalidAccount(
+            "invitation receipt has wrong journal owner",
+        ));
+    }
+    Ok(op.state.is_terminal())
+}

@@ -334,6 +334,9 @@ pub(super) fn reset_preview_response(
                 "external-rollback-checkpoint"
             }
             foks_agent_proto::ResetArtifactKind::ExternalDatabaseClaim => "external-database-claim",
+            foks_agent_proto::ResetArtifactKind::ExternalImportReadiness => {
+                "external-import-readiness"
+            }
             foks_agent_proto::ResetArtifactKind::ExternalPublicationAuthorization => {
                 "external-publication-authorization"
             }

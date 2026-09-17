@@ -21,6 +21,8 @@ use foks_desktop::{CatalogItem, CatalogStoreRef, KvAccountMutation};
 struct Arguments {
     #[arg(long)]
     agent_socket: PathBuf,
+    #[arg(long, default_value_t = 15)]
+    request_timeout_seconds: u64,
     #[command(subcommand)]
     command: Command,
 }
@@ -479,7 +481,10 @@ fn main() {
 
 fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     let call = backend_call_for_command(arguments.command)?;
-    let client = AgentClient::new(arguments.agent_socket);
+    let mut client = AgentClient::new(arguments.agent_socket);
+    client.set_timeout(std::time::Duration::from_secs(
+        arguments.request_timeout_seconds,
+    ))?;
     let response = match call {
         BackendCall::Operation(operation) => client.call(operation)?,
         BackendCall::Upload { header, mut source } => client.put_kv_stream(header, &mut source)?,

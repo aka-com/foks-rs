@@ -2450,3 +2450,6 @@ mod tests {
             .is_err());
     }
 }
+
+mod inventory;
+pub(crate) use inventory::{validate_archive_vault_key, VaultRecordDescriptor};

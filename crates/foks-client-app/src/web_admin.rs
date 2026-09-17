@@ -111,6 +111,25 @@ impl CheckedProfileSession<'_> {
     }
 }
 
+pub(crate) fn validate_inventory_record(
+    vault: &mut AccountVault<'_>,
+    alias: &str,
+    host: &[u8],
+) -> Result<()> {
+    let raw = vault.store.get(&policy_key(alias))?;
+    let policy: Policy = serde_json::from_slice(&raw)?;
+    let uid = match vault.account(alias) {
+        Ok(a) => a.credential.uid,
+        Err(Error::AccountMissing) => vault.yubi_account(alias)?.uid,
+        Err(e) => return Err(e),
+    };
+    if policy.host != host || policy.uid != uid.as_bytes() {
+        return Err(foks_client::WebAdminError::WrongAccount.into());
+    }
+    AdminDestination::new(&policy.destination)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 19;
+pub const PROTOCOL_VERSION: u32 = 20;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -214,6 +214,7 @@ pub enum ResetArtifactKind {
     ExternalRollbackCheckpoint,
     ExternalDatabaseClaim,
     ExternalPublicationAuthorization,
+    ExternalImportReadiness,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1962,6 +1963,7 @@ pub enum ErrorCode {
     BotToken,
     BotTokenLocked,
     ReauthenticationRequired,
+    ImportVerificationRequired,
     ChatInvalidInput,
     ChatUnsupported,
     ChatAccessDenied,

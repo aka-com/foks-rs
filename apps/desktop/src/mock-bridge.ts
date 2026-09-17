@@ -359,6 +359,12 @@ export function mockBridge(world: World = FIXTURE): Bridge {
   const chat = mockChat(world);
   return {
     native: false,
+    maintainClientState: async () => {
+      throw new Error('State maintenance requires the native application.');
+    },
+    relocateClientState: async () => {
+      throw new Error('State maintenance requires the native application.');
+    },
     chat,
     cancelChat: chat.cancel,
     fixtureWorld: world,

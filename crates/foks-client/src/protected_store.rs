@@ -57,6 +57,29 @@ impl EncryptedFileMutationStore {
         })
     }
 
+    /// Opens an existing exclusively reserved directory without creation or permission repair.
+    pub fn inspect_existing(
+        directory: impl AsRef<Path>,
+        master_key: Zeroizing<[u8; 32]>,
+    ) -> Result<Self, ProtectedStoreError> {
+        let path = directory.as_ref();
+        let metadata = fs::symlink_metadata(path).map_err(io_backend)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(backend("protected directory is not real"));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            if metadata.permissions().mode() & 0o077 != 0 {
+                return Err(backend("protected directory is not private"));
+            }
+        }
+        Ok(Self {
+            directory: path.canonicalize().map_err(io_backend)?,
+            master_key,
+        })
+    }
+
     /// Enumerates only while the embedding application holds writer exclusion.
     pub fn temporary_scan(&self) -> Result<ProtectedTemporaryScan, ProtectedStoreError> {
         Ok(ProtectedTemporaryScan {
@@ -233,7 +256,7 @@ impl EncryptedFileMutationStore {
         path: &Path,
         key: &[u8],
     ) -> Result<Zeroizing<Vec<u8>>, ProtectedStoreError> {
-        let mut file = open_record_for_read(path)?;
+        let file = open_record_for_read(path)?;
         let metadata = file.metadata().map_err(io_backend)?;
         let maximum_file_len = FILE_MAGIC.len() as u64
             + NONCE_BYTES as u64
@@ -244,7 +267,12 @@ impl EncryptedFileMutationStore {
         }
 
         let mut encoded = Zeroizing::new(Vec::new());
-        file.read_to_end(&mut encoded).map_err(io_backend)?;
+        file.take(maximum_file_len + 1)
+            .read_to_end(&mut encoded)
+            .map_err(io_backend)?;
+        if encoded.len() as u64 > maximum_file_len {
+            return Err(backend("protected record grew beyond limit"));
+        }
         if encoded.len() < FILE_MAGIC.len() + NONCE_BYTES + TAG_BYTES
             || &encoded[..FILE_MAGIC.len()] != FILE_MAGIC
         {

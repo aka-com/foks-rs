@@ -10,7 +10,7 @@ pub(super) static TEST_FAIL_AFTER_RESET_STAGING: std::sync::atomic::AtomicBool =
 
 const PROFILE_PUBLICATION_AUTHORIZATION_PREFIX: &str = "profile-publication.";
 pub(super) const NATIVE_MANIFEST_RECORD: &str = "native-state-v1";
-const NATIVE_MANIFEST_VERSION: u32 = 1;
+const NATIVE_MANIFEST_VERSION: u32 = 2;
 const MAXIMUM_NATIVE_MANIFEST_BYTES: usize = 1024 * 1024;
 const MAXIMUM_NATIVE_MANIFEST_RECORDS: usize = 1024;
 const MAXIMUM_NATIVE_MANIFEST_VALUE_BYTES: usize = 64 * 1024;
@@ -24,17 +24,19 @@ pub(super) struct ProfilePublicationAuthorization {
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct NativeManifestStore {
+pub(crate) struct NativeManifestStore {
     version: u32,
-    records: BTreeMap<String, Vec<u8>>,
+    pub(crate) generation: u64,
+    pub(crate) records: BTreeMap<String, Vec<u8>>,
     #[serde(skip)]
     dirty: bool,
 }
 
 impl NativeManifestStore {
-    fn initialized(root: &Path, master_key: &[u8; 32]) -> Self {
+    pub(crate) fn initialized(root: &Path, master_key: &[u8; 32]) -> Self {
         Self {
             version: NATIVE_MANIFEST_VERSION,
+            generation: 0,
             records: BTreeMap::from([
                 (MASTER_KEY_RECORD.to_owned(), master_key.to_vec()),
                 (
@@ -46,7 +48,7 @@ impl NativeManifestStore {
         }
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self> {
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() > MAXIMUM_NATIVE_MANIFEST_BYTES {
             return Err(Error::InvalidConfig("native client manifest is too large"));
         }
@@ -63,7 +65,7 @@ impl NativeManifestStore {
         Ok(manifest)
     }
 
-    fn encode(&self) -> Result<Zeroizing<Vec<u8>>> {
+    pub(crate) fn encode(&self) -> Result<Zeroizing<Vec<u8>>> {
         if self.records.len() > MAXIMUM_NATIVE_MANIFEST_RECORDS
             || self.records.iter().any(|(key, value)| {
                 !valid_manifest_key(key) || value.len() > MAXIMUM_NATIVE_MANIFEST_VALUE_BYTES
@@ -208,6 +210,7 @@ pub enum ResetArtifactKind {
     ExternalRollbackCheckpoint,
     ExternalDatabaseClaim,
     ExternalPublicationAuthorization,
+    ExternalImportReadiness,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -233,15 +236,36 @@ impl ResetStatePreview {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct ClientStateFile {
-    version: u32,
-    state_id: String,
-    credential_backend: CredentialBackend,
+pub(crate) struct ClientStateFile {
+    pub(crate) version: u32,
+    pub(crate) state_id: String,
+    pub(crate) credential_backend: CredentialBackend,
+}
+
+/// Passive state-envelope inspection: no directory creation, chmod or native access.
+pub(crate) fn inspect_state_file(root: &Path) -> Result<Option<ClientStateFile>> {
+    let Some(bytes) = read_private_file_optional(&root.join(STATE_CONFIG_FILE), MAX_CONFIG_BYTES)?
+    else {
+        return Ok(None);
+    };
+    let state: ClientStateFile = toml::from_slice(&bytes)?;
+    if state.version != STATE_CONFIG_VERSION {
+        return Err(Error::InvalidConfig(
+            if state.version == 2 && state.credential_backend == CredentialBackend::Native {
+                "native client state uses unsupported per-record credential storage"
+            } else {
+                "unsupported client state version"
+            },
+        ));
+    }
+    validate_name(&state.state_id)?;
+    Ok(Some(state))
 }
 
 /// Resolves the vault wrapping key and security checkpoint independently from
 /// profiles and databases. One versioned native manifest remains outside the state root.
 pub struct ClientCredentials {
+    pub(super) lease: ClientStateLease,
     pub(super) root: PathBuf,
     pub(super) state_id: String,
     pub(super) backend: CredentialBackend,
@@ -252,12 +276,14 @@ impl ClientCredentials {
     /// first-run state as corruption. Existing state is still fully parsed
     /// and opened by `open` before the agent enters ready mode.
     pub fn is_initialized(root: impl AsRef<Path>) -> Result<bool> {
-        let root = prepare_private_directory(root.as_ref())?;
+        let lease = ClientStateLease::acquire(root.as_ref())?;
+        let root = lease.root().to_owned();
         Ok(read_private_file_optional(&root.join(STATE_CONFIG_FILE), MAX_CONFIG_BYTES)?.is_some())
     }
 
     pub fn initialize(root: impl AsRef<Path>, backend: CredentialBackend) -> Result<Self> {
-        let root = prepare_private_directory(root.as_ref())?;
+        let lease = ClientStateLease::acquire(root.as_ref())?;
+        let root = lease.root().to_owned();
         let config_path = root.join(STATE_CONFIG_FILE);
         if config_path.exists() {
             return Err(Error::InvalidConfig("client state is already initialized"));
@@ -272,7 +298,15 @@ impl ClientCredentials {
                 getrandom::fill(&mut *master).map_err(|_| Error::Randomness)?;
                 let manifest = NativeManifestStore::initialized(&root, &master);
                 let bytes = manifest.encode()?;
+                let _manifest_lock = runtime::NativeManifestLock::acquire(&state_id)?;
                 let mut native = foks_keystore::NativeCredentialStore::open(&state_id)?;
+                match native.get(NATIVE_MANIFEST_RECORD) {
+                    Err(foks_keystore::Error::Missing) => {}
+                    Ok(_) => {
+                        return Err(Error::InvalidConfig("new native namespace already exists"))
+                    }
+                    Err(e) => return Err(e.into()),
+                }
                 native.put(NATIVE_MANIFEST_RECORD, &bytes)?;
             }
             CredentialBackend::PrivateFile => {
@@ -298,7 +332,11 @@ impl ClientCredentials {
             }
             return Err(error);
         }
+        // Initialization acquired the path before a namespace existed. Retain a
+        // namespace-use lease as soon as its state envelope has been published.
+        let lease = ClientStateLease::acquire(&root)?;
         Ok(Self {
+            lease,
             root,
             state_id,
             backend,
@@ -306,7 +344,8 @@ impl ClientCredentials {
     }
 
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
-        let root = prepare_private_directory(root.as_ref())?;
+        let lease = ClientStateLease::acquire(root.as_ref())?;
+        let root = lease.root().to_owned();
         let bytes = read_private_file_optional(&root.join(STATE_CONFIG_FILE), MAX_CONFIG_BYTES)?
             .ok_or(Error::InvalidConfig("client state is not initialized"))?;
         let state: ClientStateFile = toml::from_slice(&bytes)?;
@@ -321,6 +360,7 @@ impl ClientCredentials {
         }
         validate_name(&state.state_id)?;
         let credentials = Self {
+            lease,
             root,
             state_id: state.state_id,
             backend: state.credential_backend,
@@ -354,6 +394,16 @@ impl ClientCredentials {
         manifest: &mut NativeManifestStore,
     ) -> Result<()> {
         if manifest.dirty {
+            // Native services lack CAS. The stable namespace manifest lock is held
+            // by the caller; reject replacement of a generation we did not read.
+            let current = NativeManifestStore::decode(&native.get(NATIVE_MANIFEST_RECORD)?)?;
+            if current.generation != manifest.generation {
+                return Err(Error::StatePathChanged);
+            }
+            manifest.generation = manifest
+                .generation
+                .checked_add(1)
+                .ok_or(Error::InvalidConfig("native manifest generation exhausted"))?;
             let bytes = manifest.encode()?;
             native.put(NATIVE_MANIFEST_RECORD, &bytes)?;
             manifest.dirty = false;
@@ -361,12 +411,15 @@ impl ClientCredentials {
         Ok(())
     }
 
-    fn with_native_manifest<T>(
+    pub(crate) fn with_native_manifest<T>(
         &self,
         operation: impl FnOnce(&mut NativeManifestStore) -> Result<T>,
     ) -> Result<T> {
-        let lock = runtime::NativeManifestLock::acquire(&self.root)?;
+        self.lease.validate()?;
+        let lock = runtime::NativeManifestLock::acquire(&self.state_id)?;
         let (mut native, mut manifest) = self.open_native_manifest()?;
+        crate::portability::relocation::require_ready(&manifest)?;
+        self.verify_root_binding_with_store(&mut manifest)?;
         let result = operation(&mut manifest);
         let persist = Self::persist_native_manifest(&mut native, &mut manifest);
         let release = lock.release();
@@ -379,10 +432,13 @@ impl ClientCredentials {
         &self,
         operation: impl FnOnce(&mut NativeManifestStore) -> Result<T>,
     ) -> Result<Option<T>> {
-        let Some(lock) = runtime::NativeManifestLock::try_acquire(&self.root)? else {
+        self.lease.validate()?;
+        let Some(lock) = runtime::NativeManifestLock::try_acquire(&self.state_id)? else {
             return Ok(None);
         };
         let (mut native, mut manifest) = self.open_native_manifest()?;
+        crate::portability::relocation::require_ready(&manifest)?;
+        self.verify_root_binding_with_store(&mut manifest)?;
         let result = operation(&mut manifest);
         let persist = Self::persist_native_manifest(&mut native, &mut manifest);
         let release = lock.release();
@@ -392,6 +448,7 @@ impl ClientCredentials {
     }
 
     pub fn master_key(&self) -> Result<Zeroizing<[u8; 32]>> {
+        self.lease.validate()?;
         match self.backend {
             CredentialBackend::Native => self.with_native_manifest(|manifest| {
                 let bytes = manifest.get(MASTER_KEY_RECORD)?;
@@ -501,16 +558,60 @@ impl ClientCredentials {
     where
         E: From<Error>,
     {
+        self.with_session_policy(session, false, operation)
+    }
+
+    // Only the portability module exposes narrow proof and reauthentication APIs.
+    pub fn requires_import_verification(&self, session: &ProfileSession) -> Result<bool> {
+        self.ensure_session_root(session)?;
+        let native = self.backend == CredentialBackend::Native
+            && self.with_native_manifest(|m| {
+                Ok(m.records
+                    .contains_key(&crate::portability::readiness::key(&session.profile.name)?))
+            })?;
+        Ok(native
+            || foks_client_db::HardStateStore::open(&session.paths.hard_database)?
+                .requires_import_verification()?)
+    }
+
+    pub(crate) fn with_import_session<T>(
+        &self,
+        session: &ProfileSession,
+        operation: impl FnOnce(&CheckedProfileSession<'_>) -> Result<T>,
+    ) -> Result<T> {
+        self.with_session_policy(session, true, operation)
+    }
+
+    fn with_session_policy<T, E>(
+        &self,
+        session: &ProfileSession,
+        import_proof: bool,
+        operation: impl FnOnce(&CheckedProfileSession<'_>) -> std::result::Result<T, E>,
+    ) -> std::result::Result<T, E>
+    where
+        E: From<Error>,
+    {
         self.ensure_session_root(session).map_err(E::from)?;
         let key = held_profile_key(&session.paths.directory);
         if HeldCheckedProfile::is_held(&key) {
             // Already checked and locked further up this thread's stack.
-            let checked = CheckedProfileSession { session };
+            let checked = if import_proof {
+                crate::portability::readiness::validate_for_proof(self, session)
+                    .map_err(E::from)?;
+                CheckedProfileSession { session }
+            } else {
+                checked_profile_for_use(self, session).map_err(E::from)?
+            };
             return operation(&checked);
         }
         let lock = runtime::ProfileLock::operation(session.paths()).map_err(E::from)?;
         let database_lock = self.lock_and_verify_checkpoint(session).map_err(E::from)?;
-        let checked = CheckedProfileSession { session };
+        let checked = if import_proof {
+            crate::portability::readiness::validate_for_proof(self, session).map_err(E::from)?;
+            CheckedProfileSession { session }
+        } else {
+            checked_profile_for_use(self, session).map_err(E::from)?
+        };
         let held = HeldCheckedProfile::enter(key);
         let result = operation(&checked);
         drop(held);
@@ -570,8 +671,8 @@ impl ClientCredentials {
             .lock_and_verify_checkpoints(first, second)
             .map_err(E::from)?;
 
-        let left_checked = CheckedProfileSession { session: left };
-        let right_checked = CheckedProfileSession { session: right };
+        let left_checked = checked_profile_for_use(self, left).map_err(E::from)?;
+        let right_checked = checked_profile_for_use(self, right).map_err(E::from)?;
         let left_held = HeldCheckedProfile::enter(left_key);
         let right_held = HeldCheckedProfile::enter(right_key);
         let result = operation(&left_checked, &right_checked);
@@ -607,7 +708,7 @@ impl ClientCredentials {
         self.ensure_session_root(session).map_err(E::from)?;
         let key = held_profile_key(&session.paths.directory);
         if HeldCheckedProfile::is_held(&key) {
-            let checked = CheckedProfileSession { session };
+            let checked = checked_profile_for_use(self, session).map_err(E::from)?;
             return operation(&checked).map(Some);
         }
         let Some(lock) = runtime::ProfileLock::try_operation(session.paths()).map_err(E::from)?
@@ -621,7 +722,7 @@ impl ClientCredentials {
             Some(lock) => lock,
             None => return Ok(None),
         };
-        let checked = CheckedProfileSession { session };
+        let checked = checked_profile_for_use(self, session).map_err(E::from)?;
         let held = HeldCheckedProfile::enter(key);
         let result = operation(&checked);
         drop(held);
@@ -1006,7 +1107,7 @@ impl ClientCredentials {
         self.advance_checkpoint(session)
     }
 
-    fn advance_checkpoint(&self, session: &ProfileSession) -> Result<()> {
+    pub(crate) fn advance_checkpoint(&self, session: &ProfileSession) -> Result<()> {
         if self.backend != CredentialBackend::Native {
             return Ok(());
         }
@@ -1100,6 +1201,8 @@ impl ClientCredentials {
     }
 
     fn ensure_session_root(&self, session: &ProfileSession) -> Result<()> {
+        self.lease.validate()?;
+        session.lease.validate()?;
         let expected = self
             .root
             .join("profiles")
@@ -1349,6 +1452,19 @@ fn hash_external_reset_state(
             artifacts,
         );
     }
+    let readiness_key = crate::portability::readiness::key(profile)?;
+    let readiness = match store.get(&readiness_key) {
+        Ok(value) => Some(value),
+        Err(foks_keystore::Error::Missing) => None,
+        Err(e) => return Err(e.into()),
+    };
+    hash_external_reset_record(
+        ResetArtifactKind::ExternalImportReadiness,
+        &readiness_key,
+        readiness.as_ref().map(|v| v.as_slice()),
+        digest,
+        artifacts,
+    );
     let authorization_key = profile_publication_authorization_key(profile)?;
     let authorization = match store.get(&authorization_key) {
         Ok(value) => Some(value),
@@ -1580,6 +1696,24 @@ pub(super) fn cancel_profile_publication_with_store(
     Ok(())
 }
 
+fn checked_profile_for_use<'a>(
+    credentials: &ClientCredentials,
+    session: &'a ProfileSession,
+) -> Result<CheckedProfileSession<'a>> {
+    let key = crate::portability::readiness::key(&session.profile.name)?;
+    if credentials.backend == CredentialBackend::Native
+        && credentials.with_native_manifest(|m| Ok(m.records.contains_key(&key)))?
+    {
+        return Err(Error::ImportVerificationRequired);
+    }
+    if foks_client_db::HardStateStore::open(&session.paths.hard_database)?
+        .requires_import_verification()?
+    {
+        return Err(Error::ImportVerificationRequired);
+    }
+    Ok(CheckedProfileSession { session })
+}
+
 pub(super) trait CheckpointStore {
     fn put(&mut self, key: &str, value: &[u8]) -> foks_keystore::Result<()>;
     fn get(&mut self, key: &str) -> foks_keystore::Result<Zeroizing<Vec<u8>>>;
@@ -1641,6 +1775,7 @@ fn remove_external_reset_records(
     for database_id in database_ids {
         remove_database_claim_if_owned(store, *database_id, profile)?;
     }
+    store.remove(&crate::portability::readiness::key(profile)?)?;
     store.remove(&rollback_record_key(profile)?)?;
     store.remove(&profile_publication_authorization_key(profile)?)?;
     Ok(())
@@ -1817,11 +1952,12 @@ mod manifest_tests {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().canonicalize().unwrap();
         let credentials = ClientCredentials {
+            lease: ClientStateLease::acquire(root.clone()).unwrap(),
             root: root.clone(),
             state_id: "unused-test-state".to_owned(),
             backend: CredentialBackend::Native,
         };
-        let lock = runtime::NativeManifestLock::acquire(&root).unwrap();
+        let lock = runtime::NativeManifestLock::acquire(&credentials.state_id).unwrap();
         assert!(credentials
             .try_with_native_manifest(|_| Ok(()))
             .unwrap()
@@ -1954,5 +2090,34 @@ impl RollbackCheckpoint {
         } else {
             CheckpointReconciliation::Current
         })
+    }
+}
+
+impl ClientStateMaintenanceGuard {
+    /// A guarded native transaction. An error discards the in-memory replacement;
+    /// durable phases each use a separate successful transaction.
+    pub(crate) fn publish_new_native_manifest(&self, manifest: &NativeManifestStore) -> Result<()> {
+        let id = self.namespace_id()?;
+        let _lock = runtime::NativeManifestLock::acquire(id)?;
+        let mut native = foks_keystore::NativeCredentialStore::open(id)?;
+        match native.get(NATIVE_MANIFEST_RECORD) {
+            Err(foks_keystore::Error::Missing) => {}
+            Ok(_) => return Err(Error::StateRecoveryRequired),
+            Err(e) => return Err(e.into()),
+        }
+        native.put(NATIVE_MANIFEST_RECORD, &manifest.encode()?)?;
+        Ok(())
+    }
+    pub(crate) fn with_native_manifest<T>(
+        &self,
+        operation: impl FnOnce(&mut NativeManifestStore) -> Result<T>,
+    ) -> Result<T> {
+        let id = self.namespace_id()?;
+        let _lock = runtime::NativeManifestLock::acquire(id)?;
+        let mut native = foks_keystore::NativeCredentialStore::open(id)?;
+        let mut manifest = NativeManifestStore::decode(&native.get(NATIVE_MANIFEST_RECORD)?)?;
+        let result = operation(&mut manifest)?;
+        ClientCredentials::persist_native_manifest(&mut native, &mut manifest)?;
+        Ok(result)
     }
 }

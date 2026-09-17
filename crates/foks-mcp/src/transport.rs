@@ -25,6 +25,9 @@ pub struct BoundedTransport<R, W> {
     reader: FramedRead<R, JsonRpcMessageCodec<RxJsonRpcMessage<RoleServer>>>,
     writer: Arc<Mutex<FramedWrite<W, JsonRpcMessageCodec<TxJsonRpcMessage<RoleServer>>>>>,
     pending: Arc<Mutex<HashMap<RequestId, PendingRequest>>>,
+    // The SDK cancels receive futures while polling other service events.
+    // Keep a decoded frame until its admission awaits have completed.
+    received: Option<RxJsonRpcMessage<RoleServer>>,
     stopped: bool,
     lifetime: tokio_util::sync::CancellationToken,
 }
@@ -46,6 +49,7 @@ impl<R: AsyncRead, W: AsyncWrite> BoundedTransport<R, W> {
                 JsonRpcMessageCodec::new(),
             ))),
             pending: Arc::default(),
+            received: None,
             stopped: false,
             lifetime: tokio_util::sync::CancellationToken::new(),
         }
@@ -114,12 +118,15 @@ where
         if self.stopped {
             return None;
         }
-        let Some(Ok(message)) = self.reader.next().await else {
-            self.stopped = true;
-            self.lifetime.cancel();
-            return None;
-        };
-        if let JsonRpcMessage::Request(request) = &message {
+        if self.received.is_none() {
+            let Some(Ok(message)) = self.reader.next().await else {
+                self.stopped = true;
+                self.lifetime.cancel();
+                return None;
+            };
+            self.received = Some(message);
+        }
+        if let Some(JsonRpcMessage::Request(request)) = &self.received {
             if serde_json::to_vec(&request.id).ok()?.len() > 256 {
                 self.stopped = true;
                 self.lifetime.cancel();
@@ -149,7 +156,7 @@ where
                 }
             }
         }
-        Some(message)
+        self.received.take()
     }
 
     async fn close(&mut self) -> io::Result<()> {
@@ -240,10 +247,8 @@ mod tests {
                 .is_some()
         );
         input.write_all(request).await.unwrap();
-        let receive = transport.receive();
-        tokio::pin!(receive);
         assert!(
-            tokio::time::timeout(Duration::from_millis(10), &mut receive)
+            tokio::time::timeout(Duration::from_millis(10), transport.receive())
                 .await
                 .is_err()
         );
@@ -251,7 +256,44 @@ mod tests {
             .store(true, std::sync::atomic::Ordering::Release);
         gate.waker.wake();
         send.await.unwrap().unwrap();
-        assert!(receive.await.is_some());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), transport.receive())
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_admission_retains_the_decoded_request() {
+        let (mut input, reader) = tokio::io::duplex(1024);
+        let mut transport = BoundedTransport::new(reader, tokio::io::sink());
+        let pending = transport.pending.clone();
+        let lock = pending.lock().await;
+        input
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"}\n")
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), transport.receive())
+                .await
+                .is_err()
+        );
+        assert!(transport.received.is_some());
+        drop(lock);
+        let message = tokio::time::timeout(Duration::from_millis(100), transport.receive())
+            .await
+            .unwrap()
+            .unwrap();
+        let JsonRpcMessage::Request(request) = message else {
+            panic!("expected retained request")
+        };
+        assert_eq!(request.id, RequestId::Number(7));
+        assert!(transport.received.is_none());
+        assert!(matches!(
+            pending.lock().await.get(&request.id),
+            Some(PendingRequest::Running)
+        ));
     }
 
     #[tokio::test]

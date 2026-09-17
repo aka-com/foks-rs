@@ -4,7 +4,7 @@ use foks_server_testkit::{InProcessServer, TestAccountSpec, TestClient, TestEnvi
 use reqwest::{blocking::Client, StatusCode};
 use std::{
     io::{Read, Write},
-    net::{SocketAddr, TcpListener, TcpStream},
+    net::{SocketAddr, TcpStream},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -20,8 +20,8 @@ struct Proxy {
     thread: Option<std::thread::JoinHandle<()>>,
 }
 impl Proxy {
-    fn new(backend: SocketAddr) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    fn new(environment: &TestEnvironment, backend: SocketAddr) -> Self {
+        let listener = environment.reserve_loopback_listener().unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
         let origin = format!("https://admin.test:{}", address.port());
@@ -181,9 +181,9 @@ impl Fixture {
                 )
                 .unwrap();
         }
-        let reservation = TcpListener::bind("127.0.0.1:0").unwrap();
+        let reservation = environment.reserve_loopback_listener().unwrap();
         let backend = reservation.local_addr().unwrap();
-        let proxy = Proxy::new(backend);
+        let proxy = Proxy::new(&environment, backend);
         drop(reservation);
         let config = foks_server::web_admin::WebAdminConfig {
             origin: proxy.origin.clone(),

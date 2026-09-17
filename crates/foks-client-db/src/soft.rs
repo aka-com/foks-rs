@@ -119,6 +119,20 @@ pub struct SoftStateStore {
 }
 
 impl SoftStateStore {
+    /// Validates an exclusively reserved existing snapshot without rebuilding caches.
+    pub fn inspect_existing(path: &Path) -> Result<Self> {
+        let connection = crate::inspection::open_existing(path, APPLICATION_ID, VERSION, |c| {
+            c.execute_batch(KV_SCHEMA)?;
+            c.execute_batch(KNOWN_STORES_SCHEMA)?;
+            c.execute_batch(CHAT_SCHEMA)?;
+            Ok(())
+        })?;
+        Ok(Self {
+            connection,
+            owned_stages: std::collections::BTreeSet::new(),
+        })
+    }
+
     pub fn open(path: &Path) -> Result<Self> {
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);

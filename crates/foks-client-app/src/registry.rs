@@ -103,6 +103,7 @@ impl ProtocolPolicy {
 pub enum TrustRoot {
     WebPki,
     CertificateDer { path: PathBuf },
+    CertificateArtifact { sha256: String },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -146,6 +147,9 @@ impl Profile {
                 }
                 _ => {}
             }
+        }
+        if let TrustRoot::CertificateArtifact { sha256 } = &self.trust {
+            crate::portability::trust::validate_digest(sha256)?;
         }
         if let TrustRoot::CertificateDer { path } = &self.trust {
             if path.as_os_str().is_empty() {
@@ -334,6 +338,7 @@ struct RegistryFile {
 }
 
 pub struct ProfileRegistry {
+    lease: ClientStateLease,
     root: PathBuf,
     profiles: BTreeMap<String, Profile>,
 }
@@ -366,11 +371,16 @@ impl ProfilePublicationAuthorizer for ClientCredentials {
 
 impl ProfileRegistry {
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
-        let root = prepare_private_directory(root.as_ref())?;
+        let lease = ClientStateLease::acquire(root.as_ref())?;
+        let root = lease.root().to_owned();
         let _lock = RegistryMutationLock::acquire(&root)?;
         let profiles = load_registry(&root)?;
         recover_profile_publications(&root, &profiles)?;
-        Ok(Self { root, profiles })
+        Ok(Self {
+            root,
+            profiles,
+            lease,
+        })
     }
 
     pub fn profiles(&self) -> impl ExactSizeIterator<Item = &Profile> {
@@ -383,6 +393,7 @@ impl ProfileRegistry {
 
     pub fn add(&mut self, profile: Profile) -> Result<()> {
         profile.validate()?;
+        self.lease.validate()?;
         let _lock = RegistryMutationLock::acquire(&self.root)?;
         let current = load_registry(&self.root)?;
         if current.contains_key(&profile.name) {
@@ -427,6 +438,7 @@ impl ProfileRegistry {
         if timeout.is_zero() {
             return Err(Error::InvalidConfig("zero profile operation timeout"));
         }
+        self.lease.validate()?;
         let _lock = RegistryMutationLock::acquire(&self.root)?;
         let current = load_registry(&self.root)?;
         recover_profile_publications(&self.root, &current)?;
@@ -487,10 +499,11 @@ impl ProfileRegistry {
         let registry_was_committed = std::cell::Cell::new(false);
         let publication = (|| {
             let paths = ProfilePaths::for_directory(staging_directory.clone());
-            let mut client = client_for_trust(&profile.trust)?;
+            let mut client = client_for_trust(&profile.trust, &self.root)?;
             client.set_timeout(timeout);
             let client = client.with_cancellation_token(cancellation);
             let session = ProfileSession {
+                lease: self.lease.clone(),
                 profile: profile.clone(),
                 paths,
                 client,
@@ -594,6 +607,7 @@ impl ProfileRegistry {
 
     pub fn replace(&mut self, profile: Profile) -> Result<()> {
         profile.validate()?;
+        self.lease.validate()?;
         let _lock = RegistryMutationLock::acquire(&self.root)?;
         let current = load_registry(&self.root)?;
         if !current.contains_key(&profile.name) {
@@ -630,6 +644,7 @@ impl ProfileRegistry {
 
     pub fn remove(&mut self, name: &str) -> Result<bool> {
         validate_name(name)?;
+        self.lease.validate()?;
         let _lock = RegistryMutationLock::acquire(&self.root)?;
         if profile_publication_marker_exists(&self.root, name)? {
             return Err(Error::InvalidConfig(
@@ -646,6 +661,7 @@ impl ProfileRegistry {
     }
 
     pub fn paths(&self, name: &str) -> Result<ProfilePaths> {
+        self.lease.validate()?;
         validate_name(name)?;
         let directory = self.root.join("profiles").join(name);
         Ok(ProfilePaths::for_directory(directory))
@@ -658,16 +674,20 @@ impl ProfileRegistry {
     }
 
     fn save(&self, profiles: &BTreeMap<String, Profile>) -> Result<()> {
-        let bytes = toml::to_string_pretty(&RegistryFile {
-            version: CONFIG_VERSION,
-            profiles: profiles.clone(),
-        })?;
-        atomic_private_write(&self.root.join("profiles.toml"), bytes.as_bytes())
+        save_registry(&self.root, profiles)
     }
 }
 
+pub(crate) fn save_registry(root: &Path, profiles: &BTreeMap<String, Profile>) -> Result<()> {
+    let bytes = toml::to_string_pretty(&RegistryFile {
+        version: CONFIG_VERSION,
+        profiles: profiles.clone(),
+    })?;
+    atomic_private_write(&root.join("profiles.toml"), bytes.as_bytes())
+}
+
 impl ProfilePaths {
-    fn for_directory(directory: PathBuf) -> Self {
+    pub(crate) fn for_directory(directory: PathBuf) -> Self {
         Self {
             hard_database: directory.join("hard.sqlite3"),
             soft_database: directory.join("soft.sqlite3"),
@@ -975,7 +995,7 @@ impl Drop for RegistryMutationLock {
     }
 }
 
-fn load_registry(root: &Path) -> Result<BTreeMap<String, Profile>> {
+pub(crate) fn load_registry(root: &Path) -> Result<BTreeMap<String, Profile>> {
     let path = root.join("profiles.toml");
     let Some(bytes) = read_private_file_optional(&path, MAX_CONFIG_BYTES)? else {
         return Ok(BTreeMap::new());
@@ -1097,6 +1117,7 @@ impl From<foks_client_db::Acceptance> for ProbeAcceptance {
 }
 
 pub struct ProfileSession {
+    pub(super) lease: ClientStateLease,
     pub(super) profile: Profile,
     pub(super) paths: ProfilePaths,
     pub(super) client: FoksClient,
@@ -1107,8 +1128,9 @@ impl ProfileSession {
     pub fn open(registry: &ProfileRegistry, name: &str) -> Result<Self> {
         let profile = registry.profile(name)?.clone();
         let paths = registry.prepare_profile_directory(name)?;
-        let client = client_for_trust(&profile.trust)?;
+        let client = client_for_trust(&profile.trust, &registry.root)?;
         Ok(Self {
+            lease: registry.lease.clone(),
             profile,
             paths,
             client,
@@ -1151,10 +1173,13 @@ impl ProfileSession {
     pub(crate) fn related_profile(&self, registry: &ProfileRegistry, name: &str) -> Result<Self> {
         let profile = registry.profile(name)?.clone();
         let paths = registry.prepare_profile_directory(name)?;
+        let client = client_for_trust(&profile.trust, &registry.root)?
+            .with_operation_controls_from(&self.client);
         Ok(Self {
+            lease: registry.lease.clone(),
             profile,
             paths,
-            client: self.client.clone(),
+            client,
             adapter_clock: std::sync::Arc::clone(&self.adapter_clock),
         })
     }
@@ -1216,6 +1241,7 @@ impl ProfileSession {
     /// pinned hard state. Once any hard-state artifact exists, callers must
     /// use a checked session so rollback verification cannot be bypassed.
     pub fn server_status_without_pinned_host(&self) -> Result<ServerStatusSnapshot> {
+        self.lease.validate()?;
         self.profile.require(Capability::Probe)?;
         if super::checkpoint::hard_state_artifacts_exist(&self.paths.hard_database)? {
             return Err(Error::InvalidConfig(
@@ -1241,8 +1267,15 @@ impl Deref for CheckedProfileSession<'_> {
 }
 
 fn rollback_checkpoint(session: &ProfileSession) -> Result<RollbackCheckpoint> {
-    let target = ProbeTarget::parse(&session.profile.probe)?;
     let store = HardStateStore::open(&session.paths.hard_database)?;
+    checkpoint_for_store(&session.profile, &store)
+}
+
+pub(crate) fn checkpoint_for_store(
+    profile: &Profile,
+    store: &HardStateStore,
+) -> Result<RollbackCheckpoint> {
+    let target = ProbeTarget::parse(&profile.probe)?;
     let metadata = store.metadata()?;
     let host = store
         .host_for_lookup(target.hostname())?
@@ -1261,7 +1294,7 @@ fn rollback_checkpoint(session: &ProfileSession) -> Result<RollbackCheckpoint> {
                 .collect(),
         });
     Ok(RollbackCheckpoint {
-        profile: session.profile.name.clone(),
+        profile: profile.name.clone(),
         database_id: metadata.database_id,
         hard_state_revision: metadata.revision,
         write_token: metadata.write_token,
@@ -1652,6 +1685,7 @@ mod tests {
             .is_err());
         let session = ProfileSession::open(&registry, "local").unwrap();
         let credentials = ClientCredentials {
+            lease: ClientStateLease::acquire(state.canonicalize().unwrap()).unwrap(),
             root: state.canonicalize().unwrap(),
             state_id: "native-memory-test".to_owned(),
             backend: CredentialBackend::Native,

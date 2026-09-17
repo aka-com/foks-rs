@@ -17,11 +17,11 @@ impl Drop for Agent {
         let _ = self.0.wait();
     }
 }
+mod support;
 fn cli(state: &Path, action: &str, account: &str, handle: &str) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_foks-rs"))
-        .arg("--state-dir")
-        .arg(state)
-        .args([
+    support::cli(
+        state,
+        &[
             "team",
             "invite",
             action,
@@ -30,10 +30,10 @@ fn cli(state: &Path, action: &str, account: &str, handle: &str) -> std::process:
             "--account",
             account,
             handle,
-        ])
-        .output()
-        .unwrap()
+        ],
+    )
 }
+
 #[test]
 fn cli_and_resident_agent_publish_and_recover_original_invitation() {
     let env = TestEnvironment::new().unwrap();

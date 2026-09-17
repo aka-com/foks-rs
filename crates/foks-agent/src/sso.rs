@@ -15,6 +15,37 @@ pub(super) fn handle(
     let session = ProfileSession::open_with_control(registry, profile, timeout, cancellation)?;
     let credentials = ClientCredentials::open(state_dir)?;
     let http = foks_oidc::ProviderHttp::new(foks_oidc::NetworkPolicy::default())?;
+    if credentials.requires_import_verification(&session)? {
+        use foks_client_app::portability::{
+            reauthenticate_imported_account, ImportReauthenticationAction as Action,
+        };
+        let (action, pin) = match action {
+            SsoAction::Begin {
+                purpose: foks_proto::SsoPurpose::Reauthenticate,
+                pin,
+            } => (Action::Begin, pin),
+            SsoAction::Status { operation_id } => (Action::Status(operation(&operation_id)?), None),
+            SsoAction::Poll { operation_id } => (Action::Poll(operation(&operation_id)?), None),
+            SsoAction::Cancel { operation_id } => (Action::Cancel(operation(&operation_id)?), None),
+            SsoAction::FinishLogin { operation_id, pin } => {
+                (Action::Finish(operation(&operation_id)?), pin)
+            }
+            _ => return Err(Box::new(foks_client_app::Error::ImportVerificationRequired)),
+        };
+        let pin = pin.as_ref().map(|p| Pin::new(p.expose())).transpose()?;
+        let provider = HardwareYubiProvider::new();
+        let hardware = pin
+            .as_ref()
+            .map(|pin| (pin, &provider as &dyn foks_yubi::YubiProvider));
+        return Ok(serde_json::to_value(reauthenticate_imported_account(
+            &credentials,
+            &session,
+            alias,
+            action,
+            hardware,
+            &http,
+        )?)?);
+    }
     checked_session(&credentials, &session, |session| {
         let master = credentials.master_key()?;
         let mut store = EncryptedFileSecretStore::open(

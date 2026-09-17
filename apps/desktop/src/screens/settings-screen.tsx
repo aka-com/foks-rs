@@ -1931,6 +1931,73 @@ function AboutSection({
         onError={onError}
         onMessage={onMessage}
       />
+      <SectionLabel>Local state</SectionLabel>
+      <Inset className="settings-inset">
+        <InsetRow
+          label="Transfer FOKS state"
+          action={
+            <>
+              <Button
+                size="sm"
+                onClick={() => {
+                  void bridge.maintainClientState('export').catch(onError);
+                }}
+              >
+                Export…
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  void bridge.maintainClientState('import').catch(onError);
+                }}
+              >
+                Import…
+              </Button>
+            </>
+          }
+        >
+          <small>
+            Encrypted backups copy device credentials. Use a new device for
+            independent revocation.
+          </small>
+        </InsetRow>
+        <InsetRow
+          label="Verify imported accounts"
+          action={
+            <Button
+              size="sm"
+              onClick={() => {
+                void bridge.maintainClientState('verify').catch(onError);
+              }}
+            >
+              Verify online
+            </Button>
+          }
+        >
+          <small>
+            Check current account and device authority before enabling imported
+            state.
+          </small>
+        </InsetRow>
+        <InsetRow
+          label="Move FOKS data"
+          action={
+            <Button
+              size="sm"
+              onClick={() => {
+                void bridge.relocateClientState().catch(onError);
+              }}
+            >
+              Choose folder…
+            </Button>
+          }
+        >
+          <small>
+            Move every profile and its credentials to another folder on this
+            disk. FOKS verifies the move and restarts.
+          </small>
+        </InsetRow>
+      </Inset>
       <SectionLabel>About</SectionLabel>
       <Inset className="settings-inset">
         <InsetRow label="Version">

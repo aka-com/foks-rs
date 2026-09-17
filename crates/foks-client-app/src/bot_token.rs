@@ -431,3 +431,30 @@ impl CheckedProfileSession<'_> {
 
 #[cfg(test)]
 mod tests;
+
+/// Owning validator for native portability; no provider or host traffic.
+pub(crate) fn validate_inventory_record(
+    vault: &mut AccountVault<'_>,
+    suffix: &str,
+    hard: &HardStateStore,
+    host: &[u8],
+) -> Result<bool> {
+    let raw = vault.store.get(&format!("bot-enrollment.{suffix}"))?;
+    let candidate: PendingBot = serde_json::from_slice(&raw)?;
+    if hex(&candidate.id) != suffix || candidate.host != host {
+        return Err(Error::InvalidAccount("bot enrollment inventory binding"));
+    }
+    let pending = PendingBot::load(
+        vault,
+        candidate.id,
+        &candidate.owner,
+        &EntityId::from_bytes(host.to_vec())?,
+    )?;
+    let op = hard.mutation(&pending.id)?;
+    if let Some(op) = &op {
+        if op.kind != MutationKind::BotEnrollment || op.host_id != pending.host {
+            return Err(Error::InvalidAccount("bot enrollment journal binding"));
+        }
+    }
+    Ok(pending.cancelled || op.is_some_and(|op| op.state.is_terminal()))
+}

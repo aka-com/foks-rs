@@ -26,7 +26,6 @@ const DEFAULT_USER_REFRESH_INTERVAL_MICROS: u64 = 15 * 60 * 1_000_000;
 const DEFAULT_TEAM_REFRESH_INTERVAL_MICROS: u64 = 17 * 60 * 1_000_000;
 const OPERATION_LOCK_FILE: &str = ".profile-operation.lock";
 const SCHEDULER_LOCK_FILE: &str = ".scheduler-run.lock";
-const NATIVE_MANIFEST_LOCK_FILE: &str = ".native-manifest.lock";
 const DATABASE_LOCK_DIRECTORY: &str = ".database-operation-locks";
 
 pub(crate) struct ProfileLock {
@@ -80,14 +79,14 @@ impl ProfileLock {
 }
 
 impl NativeManifestLock {
-    pub(crate) fn acquire(root: &std::path::Path) -> Result<Self> {
-        let file = open_root_lock(root, NATIVE_MANIFEST_LOCK_FILE)?;
+    pub(crate) fn acquire(state_id: &str) -> Result<Self> {
+        let file = crate::portability::manifest_lock_file(state_id)?;
         file.lock_exclusive()?;
         Ok(Self { file })
     }
 
-    pub(crate) fn try_acquire(root: &std::path::Path) -> Result<Option<Self>> {
-        let file = open_root_lock(root, NATIVE_MANIFEST_LOCK_FILE)?;
+    pub(crate) fn try_acquire(state_id: &str) -> Result<Option<Self>> {
+        let file = crate::portability::manifest_lock_file(state_id)?;
         match file.try_lock_exclusive() {
             Ok(()) => Ok(Some(Self { file })),
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
@@ -135,17 +134,6 @@ fn open_lock(paths: &ProfilePaths, name: &str) -> Result<File> {
         options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
     options.open(paths.directory.join(name)).map_err(Into::into)
-}
-
-fn open_root_lock(root: &std::path::Path, name: &str) -> Result<File> {
-    let mut options = OpenOptions::new();
-    options.read(true).write(true).create(true).truncate(false);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-    }
-    options.open(root.join(name)).map_err(Into::into)
 }
 
 fn open_database_lock(root: &std::path::Path, database_id: &[u8; 16]) -> Result<File> {
@@ -4051,17 +4039,18 @@ mod tests {
     }
 
     #[test]
-    fn native_manifest_lock_serializes_root_wide_updates() {
-        let temporary = tempfile::tempdir().unwrap();
-        let root = temporary.path();
-        let first = NativeManifestLock::acquire(root).unwrap();
-        assert!(NativeManifestLock::try_acquire(root).unwrap().is_none());
+    fn native_manifest_lock_serializes_namespace_updates() {
+        let id = crate::hex(&crate::random_array::<16>().unwrap());
+        let first = NativeManifestLock::acquire(&id).unwrap();
+        assert!(NativeManifestLock::try_acquire(&id).unwrap().is_none());
         first.release().unwrap();
-        let second = NativeManifestLock::try_acquire(root).unwrap().unwrap();
+        let second = NativeManifestLock::try_acquire(&id).unwrap().unwrap();
         second.release().unwrap();
         #[cfg(unix)]
         assert_eq!(
-            std::fs::metadata(root.join(NATIVE_MANIFEST_LOCK_FILE))
+            crate::portability::manifest_lock_file(&id)
+                .unwrap()
+                .metadata()
                 .unwrap()
                 .permissions()
                 .mode()
@@ -4072,25 +4061,20 @@ mod tests {
 
     #[test]
     fn native_manifest_locks_contend_across_processes() {
-        const ROOT_ENV: &str = "FOKS_NATIVE_MANIFEST_LOCK_TEST_ROOT";
-        const CHILD_ENV: &str = "FOKS_NATIVE_MANIFEST_LOCK_TEST_CHILD";
-
-        if std::env::var_os(CHILD_ENV).is_some() {
-            let root = std::path::PathBuf::from(std::env::var_os(ROOT_ENV).unwrap());
-            assert!(NativeManifestLock::try_acquire(&root).unwrap().is_none());
+        const ID_ENV: &str = "FOKS_NATIVE_MANIFEST_LOCK_TEST_ID";
+        if let Ok(id) = std::env::var(ID_ENV) {
+            assert!(NativeManifestLock::try_acquire(&id).unwrap().is_none());
             return;
         }
-
-        let temporary = tempfile::tempdir().unwrap();
-        let lock = NativeManifestLock::acquire(temporary.path()).unwrap();
+        let id = crate::hex(&crate::random_array::<16>().unwrap());
+        let lock = NativeManifestLock::acquire(&id).unwrap();
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
                 "runtime::tests::native_manifest_locks_contend_across_processes",
                 "--nocapture",
             ])
-            .env(ROOT_ENV, temporary.path())
-            .env(CHILD_ENV, "1")
+            .env(ID_ENV, &id)
             .status()
             .unwrap();
         assert!(status.success());

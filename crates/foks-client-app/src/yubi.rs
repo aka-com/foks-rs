@@ -2457,6 +2457,14 @@ impl CheckedProfileSession<'_> {
     }
 }
 
+impl AccountVault<'_> {
+    pub(crate) fn yubi_record_exportable(&mut self, alias: &str) -> Result<bool> {
+        let stored = self.stored_yubi(alias)?;
+        Ok(stored.pending_management_key.is_none()
+            && (stored.management_key.is_none() || stored.management_enrolled))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

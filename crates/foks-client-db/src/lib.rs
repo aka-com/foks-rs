@@ -14,6 +14,9 @@ mod soft_schema;
 
 pub use repositories::protected::{ProtectedOwnerCursor, ProtectedRecordOwner};
 
+pub use repositories::import_readiness::{
+    ImportAccount, ImportAccountKind, ImportReadiness, VerifiedImportAccount,
+};
 pub use repositories::sso::{SsoFlow, SsoFlowState};
 
 pub use repositories::chat::{
@@ -557,6 +560,10 @@ pub struct FederationSagaOperation {
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("import readiness failed: {0}")]
+    ImportReadiness(&'static str),
+    #[error("state snapshot inspection failed: {0}")]
+    SnapshotInspection(&'static str),
     #[error("submission handle is expired; a new explicit write requires a new handle")]
     AdapterExpired,
     #[error("adapter clock is untrusted; use local clock re-anchoring before new writes")]
@@ -3846,3 +3853,5 @@ mod tests {
         );
     }
 }
+
+mod inspection;

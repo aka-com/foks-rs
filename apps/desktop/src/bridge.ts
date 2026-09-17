@@ -578,6 +578,10 @@ export function decodeCommandAck(value: unknown): CommandAck {
   return { ok: true };
 }
 export interface Bridge {
+  relocateClientState(): Promise<CommandAck>;
+  maintainClientState(
+    action: 'export' | 'import' | 'verify',
+  ): Promise<CommandAck>;
   configureWebAdmin(
     profile: string,
     accountAlias: string,
@@ -2105,6 +2109,10 @@ export const tauriBridge: Bridge = {
   rerunGroupAdmission: (storeId, operationId) =>
     checked('rerun_group_admission', { storeId, operationId }, decodeMutation),
   chatLocal: (action) => checked('chat_local', { action }, decodeLocalSession),
+  relocateClientState: () =>
+    checked('relocate_client_state', {}, decodeCommandAck),
+  maintainClientState: (action) =>
+    checked('maintain_client_state', { action }, decodeCommandAck),
   configureWebAdmin: (profile, accountAlias, destination) =>
     checked(
       'configure_web_admin',

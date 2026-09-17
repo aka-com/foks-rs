@@ -45,6 +45,8 @@ fn run_backend(socket: &Path, arguments: &[OsString]) -> Output {
     let mut child = Command::new(backend())
         .arg("--agent-socket")
         .arg(socket)
+        .arg("--request-timeout-seconds")
+        .arg(BACKEND_DEADLINE.as_secs().to_string())
         .args(arguments)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

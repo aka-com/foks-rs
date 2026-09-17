@@ -5,6 +5,7 @@ mod invitations;
 mod mcp;
 mod retention;
 mod sso;
+mod state;
 mod web_admin;
 
 use std::fs::{File, OpenOptions};
@@ -38,6 +39,8 @@ struct Arguments {
 
 #[derive(clap::Subcommand)]
 enum Command {
+    #[command(subcommand)]
+    State(state::StateCommand),
     #[command(subcommand)]
     Mcp(mcp::McpCommand),
     #[command(subcommand)]
@@ -629,6 +632,7 @@ fn main() {
 
 fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     match arguments.command {
+        Command::State(command) => state::run(&arguments.state_dir, command),
         Command::Mcp(command) => mcp::run(&arguments.state_dir, command),
         Command::Retention(command) => retention::run(&arguments.state_dir, command),
         Command::Sso(command) => sso::run(&arguments.state_dir, command),

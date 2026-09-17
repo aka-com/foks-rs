@@ -562,6 +562,13 @@ pub(crate) fn realtime_text() {
             sequences: vec![2, 900],
         },
     });
+    // Reader-side setup and refresh may outlive the server's idle timeout.
+    // Fetch history over a fresh authenticated transport.
+    writer = fixture
+        .client
+        .foks()
+        .realtime_connection(fixture.host(), &owner.credential)
+        .unwrap();
     let Response::Thread(page) = writer.call(&history).unwrap() else {
         panic!()
     };
@@ -1097,6 +1104,8 @@ fn client_chat_recovers_original_operations_after_lost_responses() {
         .unwrap();
     let mut protected =
         EncryptedFileMutationStore::open(dir.path(), zeroize::Zeroizing::new([9; 32])).unwrap();
+    // A reopened client must not inherit the old process's idle connection.
+    rpc.conn = chat.connection().unwrap();
     let first = chat
         .reconcile_operation(&mut rpc, &mut protected, &pending.id)
         .unwrap();
@@ -1129,6 +1138,7 @@ fn client_chat_recovers_original_operations_after_lost_responses() {
         .foks()
         .chat_session(&fresh_host.pinned, &owner.credential, &created.team)
         .unwrap();
+    rpc.conn = fresh.connection().unwrap();
     rpc.hide_exact = true;
     assert_eq!(
         fresh

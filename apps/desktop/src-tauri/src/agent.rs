@@ -4,7 +4,8 @@ use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use foks_agent_client::AgentClient;
@@ -122,6 +123,7 @@ impl AgentError {
             ErrorCode::WebAdminWrongAccount => ("web-admin-wrong-account", false),
             ErrorCode::WebAdminDestinationRejected => ("web-admin-destination-rejected", false),
             ErrorCode::WebAdminUnavailable => ("web-admin-unavailable", true),
+            ErrorCode::ImportVerificationRequired => ("import-verification-required", false),
             ErrorCode::BotToken => ("bot-token", false),
             ErrorCode::BotTokenLocked => ("bot-token-locked", true),
             ErrorCode::ChatInvalidInput => ("chat-invalid-input", false),
@@ -197,10 +199,25 @@ fn error_details(fields: ErrorFields) -> Option<AgentErrorDetails> {
 
 struct ObservedTransport {
     client: AgentClient,
+    maintenance: RwLock<()>,
+    retired: AtomicBool,
     connection_failure: Arc<Mutex<Option<String>>>,
 }
 
 impl ObservedTransport {
+    #[allow(clippy::result_large_err)] // Uses the existing transport trait error without allocating on success.
+    fn reserve_use(&self) -> Result<std::sync::RwLockReadGuard<'_, ()>, DesktopAgentError> {
+        let guard = self.maintenance.try_read().map_err(|_| {
+            DesktopAgentError::Transport("State maintenance is in progress.".into())
+        })?;
+        if self.retired.load(Ordering::Acquire) {
+            return Err(DesktopAgentError::Transport(
+                "State moved; restart the application.".into(),
+            ));
+        }
+        Ok(guard)
+    }
+
     fn record(&self, result: &Result<Value, DesktopAgentError>) {
         if let Err(DesktopAgentError::Transport(message)) = result {
             *self
@@ -217,6 +234,7 @@ impl AgentTransport for ObservedTransport {
         operation: Operation,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Value, DesktopAgentError> {
+        let _use = self.reserve_use()?;
         let result = match self
             .client
             .call_cancellable(operation, cancelled)
@@ -230,6 +248,7 @@ impl AgentTransport for ObservedTransport {
     }
 
     fn call(&self, operation: Operation) -> Result<Value, DesktopAgentError> {
+        let _use = self.reserve_use()?;
         let result = match self.client.call(operation).map_err(client_to_desktop) {
             Ok(response) => response_result(response.result),
             Err(error) => Err(error),
@@ -243,6 +262,7 @@ impl AgentTransport for ObservedTransport {
         header: foks_agent_proto::KvUploadHeader,
         reader: &mut dyn std::io::Read,
     ) -> Result<Value, DesktopAgentError> {
+        let _use = self.reserve_use()?;
         let result = match self
             .client
             .put_kv_stream(header, reader)
@@ -302,6 +322,8 @@ impl AgentHandle {
         Self {
             transport: Arc::new(ObservedTransport {
                 client,
+                maintenance: RwLock::new(()),
+                retired: AtomicBool::new(false),
                 connection_failure: Arc::clone(&connection_failure),
             }),
             socket,
@@ -327,6 +349,14 @@ impl AgentHandle {
     }
 
     pub fn call_blocking(&self, operation: Operation) -> Result<Response, AgentError> {
+        let _use = self
+            .transport
+            .reserve_use()
+            .map_err(AgentError::from_desktop)?;
+        self.call_unreserved(operation)
+    }
+
+    fn call_unreserved(&self, operation: Operation) -> Result<Response, AgentError> {
         match self.transport.client.call(operation) {
             Ok(response) => Ok(response),
             Err(error) => {
@@ -340,8 +370,12 @@ impl AgentHandle {
     }
 
     pub fn ensure_started_blocking(&self) -> Result<Response, AgentError> {
+        let _use = self
+            .transport
+            .reserve_use()
+            .map_err(AgentError::from_desktop)?;
         let mut incompatible = false;
-        match self.call_blocking(Operation::AgentStatus) {
+        match self.call_unreserved(Operation::AgentStatus) {
             Ok(response) => {
                 self.clear_connection_failure();
                 return Ok(response);
@@ -350,14 +384,16 @@ impl AgentHandle {
             Err(_) => {}
         }
         let Some(binary) = managed_agent_binary(&self.socket) else {
-            return self.call_blocking(Operation::AgentStatus);
+            return self.call_unreserved(Operation::AgentStatus);
         };
         let state_dir = self.socket.parent().ok_or_else(|| {
             AgentError::unknown("Configured agent socket path has no parent directory.")
         })?;
+        let _root_lease = foks_client_app::ClientStateLease::acquire(state_dir)
+            .map_err(|error| AgentError::new("agent-state", error.to_string(), false))?;
         prepare_state_directory(state_dir)?;
         let spawn_lock = acquire_spawn_lock(&self.socket)?;
-        match self.call_blocking(Operation::AgentStatus) {
+        match self.call_unreserved(Operation::AgentStatus) {
             Ok(response) => {
                 drop(spawn_lock);
                 self.clear_connection_failure();
@@ -371,7 +407,7 @@ impl AgentHandle {
         #[cfg(unix)]
         if incompatible {
             stop_incompatible_agent(&self.socket)?;
-            if let Ok(response) = self.call_blocking(Operation::AgentStatus) {
+            if let Ok(response) = self.call_unreserved(Operation::AgentStatus) {
                 drop(spawn_lock);
                 self.clear_connection_failure();
                 return Ok(response);
@@ -383,7 +419,7 @@ impl AgentHandle {
         let mut last_error = None;
         for _ in 0..50 {
             std::thread::sleep(Duration::from_millis(100));
-            match self.call_blocking(Operation::AgentStatus) {
+            match self.call_unreserved(Operation::AgentStatus) {
                 Ok(response) => {
                     drop(spawn_lock);
                     self.clear_connection_failure();
@@ -400,6 +436,57 @@ impl AgentHandle {
                 true,
             )
         }))
+    }
+
+    /// Excludes all desktop calls and launch attempts through stopped-state work.
+    pub fn relocate_managed_state(&self, destination: &Path) -> Result<(), AgentError> {
+        self.with_managed_state(true, |source| {
+            foks_client_app::portability::relocate_state(source, destination)?;
+            Ok(())
+        })
+    }
+
+    pub fn with_managed_state<T>(
+        &self,
+        retire: bool,
+        operation: impl FnOnce(&Path) -> foks_client_app::Result<T>,
+    ) -> Result<T, AgentError> {
+        if socket_from_arguments(std::env::args_os()).is_some()
+            || std::env::var_os(SOCKET_ENV).is_some()
+            || default_socket().as_deref() != Some(self.socket())
+        {
+            return Err(AgentError::new(
+                "external-agent",
+                "Use the CLI to move state managed by an external agent launcher.",
+                false,
+            ));
+        }
+        let _maintenance = self.transport.maintenance.try_write().map_err(|_| {
+            AgentError::new(
+                "state-busy",
+                "Finish active requests before moving state.",
+                true,
+            )
+        })?;
+        if self.transport.retired.load(Ordering::Acquire) {
+            return Err(AgentError::new(
+                "state-moved",
+                "Restart the application to use moved state.",
+                false,
+            ));
+        }
+        let source = self
+            .socket
+            .parent()
+            .ok_or_else(|| AgentError::unknown("Agent state path has no parent."))?;
+        #[cfg(unix)]
+        stop_incompatible_agent(&self.socket)?;
+        let result=operation(source)
+            .map_err(|e| AgentError::new("state-maintenance", format!("{e}. If interrupted, use foks-rs --state-dir PATH state recover before restarting."), false))?;
+        if retire {
+            self.transport.retired.store(true, Ordering::Release);
+        }
+        Ok(result)
     }
 
     pub fn take_connection_failure(&self) -> Option<String> {
@@ -602,6 +689,8 @@ pub(crate) fn prepare_managed_crash_directory(directory: &Path) -> Result<(), Ag
             false,
         )
     })?;
+    let _root_lease = foks_client_app::ClientStateLease::acquire(state)
+        .map_err(|error| AgentError::new("crash-state", error.to_string(), false))?;
     prepare_state_directory(state)?;
     prepare_state_directory(directory).map_err(|error| AgentError {
         code: "crash-state".to_owned(),
@@ -998,16 +1087,7 @@ where
 }
 
 fn default_state_directory() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    #[cfg(target_os = "macos")]
-    return Some(home.join("Library/Application Support/foks-rs"));
-    #[cfg(not(target_os = "macos"))]
-    return Some(
-        std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".local/share"))
-            .join("foks-rs"),
-    );
+    foks_client_app::portability::selected_desktop_state_root().ok()
 }
 
 pub fn default_socket() -> Option<PathBuf> {
@@ -1018,6 +1098,24 @@ pub fn default_socket() -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    #[test]
+    fn maintenance_excludes_retained_transports_and_retired_startup() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("absent-state");
+        let handle = AgentHandle::new(root.join(DEFAULT_SOCKET_NAME));
+        let transport = handle.transport();
+        {
+            let _maintenance = handle.transport.maintenance.write().unwrap();
+            assert!(handle.call_blocking(Operation::AgentStatus).is_err());
+            assert!(transport.call(Operation::AgentStatus).is_err());
+            assert!(handle.ensure_started_blocking().is_err());
+        }
+        handle.transport.retired.store(true, Ordering::Release);
+        assert!(transport.call(Operation::AgentStatus).is_err());
+        assert!(handle.ensure_started_blocking().is_err());
+        assert!(!root.exists());
+    }
 
     #[test]
     fn managed_endpoint_uses_rust_specific_names() {

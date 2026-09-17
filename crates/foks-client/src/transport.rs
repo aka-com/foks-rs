@@ -406,6 +406,16 @@ impl FoksClient {
         }
     }
 
+    /// Shares cancellation and operation limits while retaining this client's trust
+    /// roots and isolated connection pool. Used for cross-profile federation.
+    pub fn with_operation_controls_from(mut self, source: &Self) -> Self {
+        self.timeout = source.timeout;
+        self.io_poll_interval = source.io_poll_interval;
+        self.cancellation = source.cancellation.clone();
+        self.maximum_frame_length = source.maximum_frame_length;
+        self
+    }
+
     pub fn set_timeout(&mut self, timeout: Duration) {
         self.timeout = timeout;
     }
@@ -1014,6 +1024,25 @@ mod transport_tests {
             expired.remaining().unwrap_err().kind(),
             std::io::ErrorKind::TimedOut
         );
+    }
+
+    #[test]
+    fn cross_profile_controls_preserve_independent_roots_and_pool() {
+        let mut source = FoksClient::webpki();
+        source.set_timeout(Duration::from_secs(42));
+        source.set_maximum_frame_length(2048).unwrap();
+        let target = FoksClient::with_roots(rustls::RootCertStore::empty())
+            .with_operation_controls_from(&source);
+        assert!(target.roots.is_empty());
+        assert!(!source.roots.is_empty());
+        assert!(!Arc::ptr_eq(
+            &target.connection_pool,
+            &source.connection_pool
+        ));
+        assert_eq!(target.timeout, Duration::from_secs(42));
+        assert_eq!(target.maximum_frame_length, 2048);
+        source.cancellation.cancel();
+        assert!(target.cancellation.is_cancelled());
     }
 
     #[test]

@@ -1,7 +1,9 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 36;
+pub(crate) const VERSION: u32 = 37;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
+    "import_readiness",
+    "import_accounts",
     "hosts",
     "host_lookups",
     "host_services",
@@ -32,6 +34,20 @@ pub(crate) const REVISION_TABLES: &[&str] = &[
 ];
 
 pub(crate) const INITIAL: &str = r#"
+CREATE TABLE import_readiness (
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    archive_id BLOB NOT NULL CHECK(length(archive_id)=16),
+    attempt_nonce BLOB NOT NULL CHECK(length(attempt_nonce)=32),
+    required INTEGER NOT NULL CHECK(required IN (0,1))
+) STRICT;
+CREATE TABLE import_accounts (
+    alias TEXT PRIMARY KEY CHECK(length(alias) BETWEEN 1 AND 64 AND alias NOT GLOB '*[^a-zA-Z0-9_-]*'),
+    kind INTEGER NOT NULL CHECK(kind IN (0,1,2)),
+    verified_user_sequence INTEGER CHECK(verified_user_sequence>=0),
+    verified_merkle_epoch INTEGER CHECK(verified_merkle_epoch>=0),
+    CHECK((verified_user_sequence IS NULL)=(verified_merkle_epoch IS NULL))
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE invitation_delivery_steps (
     operation_id BLOB PRIMARY KEY REFERENCES mutation_operations(operation_id) ON DELETE CASCADE,
     phase INTEGER NOT NULL CHECK(phase BETWEEN 0 AND 3)

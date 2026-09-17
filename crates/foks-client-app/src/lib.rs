@@ -14,7 +14,9 @@ pub use adapter_clock::{
 };
 pub use foks_proto::SubmissionHandle;
 mod federation;
+pub mod portability;
 mod runtime;
+pub use portability::{ClientStateLease, ClientStateMaintenanceGuard};
 mod yubi;
 
 use std::collections::BTreeMap;
@@ -63,6 +65,16 @@ pub use foks_protocol_metadata::PINNED_PROTOCOL_METADATA_SHA256;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("imported profile requires online verification before ordinary use; run state verify-online")]
+    ImportVerificationRequired,
+    #[error("client state is busy; stop its agent and close active operations before maintenance")]
+    StateBusy,
+    #[error("client state path identity changed; reopen the verified state root")]
+    StatePathChanged,
+    #[error("client state maintenance is incomplete; run state recovery before opening or initializing it")]
+    StateRecoveryRequired,
+    #[error("state portability requires native credentials on Linux or macOS")]
+    PortabilityUnsupported,
     #[error(transparent)]
     WebAdmin(#[from] foks_client::WebAdminError),
     #[error("bot token is locked; load the original token into this agent session")]
@@ -326,21 +338,15 @@ fn random_array<const N: usize>() -> Result<[u8; N]> {
     Ok(bytes)
 }
 
-fn client_for_trust(trust: &TrustRoot) -> Result<FoksClient> {
-    match trust {
-        TrustRoot::WebPki => Ok(FoksClient::webpki()),
-        TrustRoot::CertificateDer { path } => {
-            let certificate = read_bounded_regular_file(path, MAX_CERTIFICATE_BYTES as u64)?;
-            if certificate.is_empty() || certificate.len() > MAX_CERTIFICATE_BYTES {
-                return Err(Error::TrustRoot);
-            }
-            let mut roots = rustls::RootCertStore::empty();
-            roots
-                .add(CertificateDer::from(certificate))
-                .map_err(|_| Error::TrustRoot)?;
-            Ok(FoksClient::with_roots(roots))
-        }
-    }
+fn client_for_trust(trust: &TrustRoot, root: &Path) -> Result<FoksClient> {
+    let Some(certificate) = portability::trust::read_certificate(root, trust)? else {
+        return Ok(FoksClient::webpki());
+    };
+    let mut roots = rustls::RootCertStore::empty();
+    roots
+        .add(CertificateDer::from(certificate))
+        .map_err(|_| Error::TrustRoot)?;
+    Ok(FoksClient::with_roots(roots))
 }
 
 fn prepare_private_directory(path: &Path) -> Result<PathBuf> {
@@ -497,13 +503,32 @@ fn read_bounded_regular_file(path: &Path, maximum: u64) -> Result<Vec<u8>> {
         options.custom_flags(libc::O_NOFOLLOW);
     }
     let file = options.open(path)?;
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.take(maximum + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > maximum {
-        return Err(Error::InvalidConfig(
-            "file size exceeds maximum allowed limit",
-        ));
+    let opened = file.metadata()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if metadata.nlink() != 1
+            || opened.nlink() != 1
+            || metadata.dev() != opened.dev()
+            || metadata.ino() != opened.ino()
+        {
+            return Err(Error::InvalidConfig(
+                "file identity or hard-link count changed",
+            ));
+        }
     }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    (&file)
+        .take(maximum.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > maximum
+        || bytes.len() as u64 != metadata.len()
+        || portability::files::changed(&metadata, &file.metadata()?)
+        || portability::files::changed(&metadata, &fs::symlink_metadata(path)?)
+    {
+        return Err(Error::InvalidConfig("file changed during bounded read"));
+    }
+
     Ok(bytes)
 }
 
@@ -720,6 +745,7 @@ mod tests {
             .unwrap();
         let session = ProfileSession::open(&registry, "local").unwrap();
         let credentials = ClientCredentials {
+            lease: ClientStateLease::acquire(root.canonicalize().unwrap()).unwrap(),
             root: root.canonicalize().unwrap(),
             state_id: "test-state".to_owned(),
             backend: CredentialBackend::Native,
@@ -779,6 +805,7 @@ mod tests {
         assert_eq!(first_checkpoint.write_token, second_checkpoint.write_token);
 
         let credentials = ClientCredentials {
+            lease: ClientStateLease::acquire(root.canonicalize().unwrap()).unwrap(),
             root: root.canonicalize().unwrap(),
             state_id: "test-state".to_owned(),
             backend: CredentialBackend::Native,
@@ -850,6 +877,7 @@ mod tests {
         .unwrap();
 
         let original_credentials = ClientCredentials {
+            lease: ClientStateLease::acquire(&original).unwrap(),
             root: original,
             state_id: "shared-state".to_owned(),
             backend: CredentialBackend::Native,
@@ -859,6 +887,7 @@ mod tests {
             .unwrap();
 
         let copied_credentials = ClientCredentials {
+            lease: ClientStateLease::acquire(&copied).unwrap(),
             root: copied,
             state_id: "shared-state".to_owned(),
             backend: CredentialBackend::Native,

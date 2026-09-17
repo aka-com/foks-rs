@@ -174,6 +174,7 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     {
         return Err("agent limits are outside supported bounds".into());
     }
+    let _root_lease = foks_client_app::ClientStateLease::acquire(&arguments.state_dir)?;
     drop(ProfileRegistry::open(&arguments.state_dir)?);
     let state_dir = arguments.state_dir.canonicalize()?;
     let initialized = ClientCredentials::is_initialized(&state_dir)?;
@@ -1153,6 +1154,7 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
                 };
                 return Response::error(id, code, error.to_string());
             }
+            foks_client_app::Error::ImportVerificationRequired => return Response::error(id, ErrorCode::ImportVerificationRequired, "Imported profile requires online verification. Use state verify-online or the native state verification control."),
             foks_client_app::Error::BotTokenLocked => {
                 return Response::error(
                     id,
@@ -2028,6 +2030,9 @@ fn wire_reset_artifact_kind(kind: foks_client_app::ResetArtifactKind) -> WireRes
         foks_client_app::ResetArtifactKind::ExternalDatabaseClaim => {
             WireResetArtifactKind::ExternalDatabaseClaim
         }
+        foks_client_app::ResetArtifactKind::ExternalImportReadiness => {
+            WireResetArtifactKind::ExternalImportReadiness
+        }
         foks_client_app::ResetArtifactKind::ExternalPublicationAuthorization => {
             WireResetArtifactKind::ExternalPublicationAuthorization
         }
@@ -2331,6 +2336,31 @@ fn dispatch_result(
         Operation::ListProfileOverview { profile } => {
             let session =
                 ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            let credentials = ClientCredentials::open(state_dir)?;
+            if credentials.requires_import_verification(&session)? {
+                let catalog =
+                    foks_client_app::portability::imported_local_catalog(&credentials, &session)?;
+                let accounts = catalog
+                    .accounts
+                    .into_iter()
+                    .map(|(alias, username)| AccountSummary {
+                        profile: profile.clone(),
+                        alias,
+                        username,
+                    })
+                    .collect::<Vec<_>>();
+                let blocked = || {
+                    wire_read_result(Err(Box::new(
+                        foks_client_app::Error::ImportVerificationRequired,
+                    )))
+                };
+                return Ok(serde_json::to_value(ProfileOverview {
+                    profile,
+                    accounts: wire_read_result(Ok(serde_json::to_value(accounts)?)),
+                    teams: blocked(),
+                    server_status: blocked(),
+                })?);
+            }
             with_vault(state_dir, &session, |session, vault| {
                 let accounts = (|| -> Result<_, Box<dyn std::error::Error>> {
                     let mut accounts = Vec::new();
@@ -2396,6 +2426,22 @@ fn dispatch_result(
         Operation::ListAccounts { profile } => {
             let session =
                 ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            let credentials = ClientCredentials::open(state_dir)?;
+            if credentials.requires_import_verification(&session)? {
+                let catalog =
+                    foks_client_app::portability::imported_local_catalog(&credentials, &session)?;
+                return Ok(serde_json::to_value(
+                    catalog
+                        .accounts
+                        .into_iter()
+                        .map(|(alias, username)| AccountSummary {
+                            profile: profile.clone(),
+                            alias,
+                            username,
+                        })
+                        .collect::<Vec<_>>(),
+                )?);
+            }
             with_vault(state_dir, &session, |session, vault| {
                 let mut accounts = Vec::new();
                 for alias in vault.aliases()? {
@@ -3008,6 +3054,13 @@ fn dispatch_result(
         Operation::ListYubiAccounts { profile } => {
             let session =
                 ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            let credentials = ClientCredentials::open(state_dir)?;
+            if credentials.requires_import_verification(&session)? {
+                return Ok(serde_json::to_value(
+                    foks_client_app::portability::imported_local_catalog(&credentials, &session)?
+                        .yubi,
+                )?);
+            }
             with_vault(state_dir, &session, |_session, vault| {
                 Ok(serde_json::to_value(vault.yubi_accounts()?)?)
             })

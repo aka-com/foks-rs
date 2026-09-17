@@ -39,6 +39,22 @@ impl HardStateStore {
         Ok(Self { connection })
     }
 
+    /// Checkpoints deliberate import-time writes while the caller owns exclusive
+    /// maintenance access. Existing-source inspection never invokes recovery.
+    pub fn checkpoint_for_snapshot(&mut self) -> Result<()> {
+        let (busy, log, checkpointed): (i64, i64, i64) =
+            self.connection
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })?;
+        if busy != 0 || log != 0 || checkpointed != 0 {
+            return Err(Error::SnapshotInspection(
+                "database checkpoint remains busy",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn metadata(&self) -> Result<HardStateMetadata> {
         self.connection
             .query_row(

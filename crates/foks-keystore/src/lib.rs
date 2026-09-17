@@ -7,6 +7,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod state_archive;
+
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read as _, Write as _};
@@ -163,7 +165,6 @@ mod native {
                 Error::Native(error.to_string())
             }
         })?;
-        let _ = update_label(&service, key);
         Ok(value)
     }
 
@@ -328,6 +329,29 @@ impl EncryptedFileSecretStore {
         })
     }
 
+    /// Opens a reserved existing record directory without creating or chmodding it.
+    pub fn inspect_existing(
+        directory: impl AsRef<Path>,
+        master_key: Zeroizing<[u8; 32]>,
+    ) -> Result<Self> {
+        let path = directory.as_ref();
+        let metadata = fs::symlink_metadata(path)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(Error::UnsafePath);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            if metadata.permissions().mode() & 0o077 != 0 {
+                return Err(Error::UnsafePath);
+            }
+        }
+        Ok(Self {
+            directory: path.canonicalize()?,
+            master_key,
+        })
+    }
+
     fn path(&self, key: &str) -> Result<PathBuf> {
         validate_key(key)?;
         Ok(self.directory.join(format!("{key}.fks")))
@@ -403,7 +427,7 @@ impl SecretStore for EncryptedFileSecretStore {
 
     fn get(&mut self, key: &str) -> Result<Zeroizing<Vec<u8>>> {
         let path = self.path(key)?;
-        let mut file = match open_private_read(&path) {
+        let file = match open_private_read(&path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Err(Error::Missing)
@@ -416,7 +440,10 @@ impl SecretStore for EncryptedFileSecretStore {
             return Err(Error::UnsafePath);
         }
         let mut encoded = Zeroizing::new(Vec::with_capacity(metadata.len() as usize));
-        file.read_to_end(&mut encoded)?;
+        file.take(maximum + 1).read_to_end(&mut encoded)?;
+        if encoded.len() as u64 > maximum {
+            return Err(Error::TooLarge);
+        }
         self.decode(key, &encoded)
     }
 

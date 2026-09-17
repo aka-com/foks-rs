@@ -184,6 +184,8 @@ pub fn run() {
             commands::bot::bot_account_request,
             commands::web_admin::configure_web_admin,
             commands::web_admin::open_web_admin,
+            commands::portability::relocate_client_state,
+            commands::portability::maintain_client_state,
             commands::sso::open_sso_browser,
             commands::application::agent_status,
             commands::application::retry_agent_connection,

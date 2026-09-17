@@ -32,6 +32,12 @@ impl TestEnvironment {
         Self::with_profile(TestProfile::Default)
     }
 
+    /// Reserve an ephemeral loopback socket for a fixture-owned auxiliary service.
+    /// Callers cannot select an external interface or a fixed/shared port.
+    pub fn reserve_loopback_listener(&self) -> std::io::Result<std::net::TcpListener> {
+        std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+    }
+
     pub fn with_profile(profile: TestProfile) -> foks_server::Result<Self> {
         Self::new_with_installation([0x51; 32], None, profile)
     }

@@ -4,6 +4,7 @@ pub(crate) mod adapter;
 pub(crate) mod chat;
 mod federation;
 mod host;
+pub(crate) mod import_readiness;
 mod jobs;
 mod journals;
 mod metadata;
@@ -37,6 +38,7 @@ mod tests {
             include_str!("jobs.rs"),
             include_str!("journals.rs"),
             include_str!("metadata.rs"),
+            include_str!("import_readiness.rs"),
             include_str!("team.rs"),
             include_str!("user.rs"),
             include_str!("sso.rs"),

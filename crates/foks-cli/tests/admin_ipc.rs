@@ -17,15 +17,9 @@ impl Drop for Agent {
         let _ = self.0.wait();
     }
 }
-fn cli(state: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_foks-rs"))
-        .arg("--json")
-        .arg("--state-dir")
-        .arg(state)
-        .args(args)
-        .output()
-        .unwrap()
-}
+mod support;
+use support::cli;
+
 fn success(output: std::process::Output) -> serde_json::Value {
     assert!(
         output.status.success(),
