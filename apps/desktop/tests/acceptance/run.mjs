@@ -35,13 +35,10 @@ const STATES = [
   'show',
   'resource',
   'file',
-  'link',
   'group',
   'new',
   'new-group',
-  'new-resource',
-  'new-file',
-  'new-link',
+  'new-document',
   'exists',
   'conflict',
   'grid',
@@ -89,11 +86,7 @@ const STATES = [
 ];
 
 // These extensions get app screenshots and an interaction walk.
-const GROUP_ITEM_STATES = [
-  'group-new-text',
-  'group-new-link',
-  'group-new-file',
-];
+const GROUP_ITEM_STATES = ['group-new-document'];
 
 const FIRST_RUN_STATES = [
   'boot',
@@ -197,16 +190,6 @@ async function visit(context, url, shot) {
         problems.push('the one-time backup phrase was not prepared'),
       );
   }
-  if (
-    new URL(url).protocol !== 'file:' &&
-    new URL(url).searchParams.get('state') === 'link'
-  ) {
-    await page
-      .getByRole('button', { name: 'Open target', exact: true })
-      .waitFor({ timeout: 5000 })
-      .catch(() => problems.push('the Link did not offer Open target'));
-  }
-
   const width = await page.evaluate(
     // Runs in the page, where `document` is the browser's, not node's.
     'document.documentElement.scrollWidth',
@@ -243,6 +226,13 @@ async function personaWalks(context, origin) {
     await page.goto(`${origin}/?state=team-chat&store=team%3Ahousehold`, {
       waitUntil: 'load',
     });
+    // Opening a team no longer opens its most-recent channel on its own; the
+    // reader picks one from the team's own row in the inbox column. Household
+    // has only its general channel, so its row opens straight into it.
+    await page
+      .getByRole('complementary', { name: 'Chat inbox' })
+      .getByRole('button', { name: /^Household/ })
+      .click();
     await page.getByText('Team chat is ready.', { exact: true }).waitFor();
     await page.getByRole('button', { name: 'New chat', exact: true }).click();
     await page.getByRole('radio', { name: /^Household/ }).click();
@@ -319,6 +309,9 @@ async function personaWalks(context, origin) {
       (await deployBot.textContent())?.includes('No read access'),
       'Sharing did not show that deploy-bot cannot read production-token',
     );
+    // The folder browser opens on production-token's selection, not its
+    // folder; staging-token is a sibling reached by entering /deploy.
+    await page.locator('.body .row').filter({ hasText: 'deploy' }).click();
     await page
       .locator('.body .row')
       .filter({ hasText: 'staging-token' })
@@ -348,7 +341,7 @@ async function writeWalk(context, origin) {
     if (message.type() === 'error') failures.push(`console: ${message.text()}`);
   });
   try {
-    await page.goto(`${origin}/?state=new-resource`, { waitUntil: 'load' });
+    await page.goto(`${origin}/?state=new-document`, { waitUntil: 'load' });
     await page
       .locator('input[aria-label="Name"]')
       .fill('PHASE3_ACCEPTANCE_KEY');
@@ -413,22 +406,22 @@ async function groupWalk(context, origin) {
     // separately classed table.
     const inactive = page.locator('.rt.bare .prow', { hasText: 'Inactive' });
     await inactive.getByRole('button', { name: 'Restore access' }).click();
-    await toast(page, 'Group access restored');
+    await toast(page, 'Team access restored');
     // Verify the table row displays active status.
     await page.locator('.rt.bare .prow', { hasText: 'Active' }).waitFor();
     if (await inactive.count())
-      failures.push('the restored group is still Inactive');
+      failures.push('the restored team is still Inactive');
 
     await page.goto(`${origin}/?state=group`, { waitUntil: 'load' });
     await page
-      .getByRole('button', { name: 'Group settings', exact: true })
+      .getByRole('button', { name: 'Team settings', exact: true })
       .click();
     await page.locator('.ghero', { hasText: 'Household' }).waitFor();
     // The header chip is the server and the member count; the bare role
     // this account holds reads on its own row under Members instead.
     const subtitle = (await page.locator('.ghero .sub').innerText()).trim();
     if (subtitle !== 'Personal server · 2 members')
-      failures.push(`the group header subtitle read "${subtitle}"`);
+      failures.push(`the team header subtitle read "${subtitle}"`);
     await page
       .locator('.rt.bare .prow', { hasText: 'you' })
       .filter({ hasText: 'Owner' })
@@ -472,7 +465,7 @@ async function groupItemWalk(context, origin) {
     if (message.type() === 'error') failures.push(`console: ${message.text()}`);
   });
   try {
-    await page.goto(`${origin}/?state=group-new-text&view=list`, {
+    await page.goto(`${origin}/?state=group-new-document&view=list`, {
       waitUntil: 'load',
     });
     // Select Admin role from the radiogroup.
@@ -530,23 +523,18 @@ async function groupItemWalk(context, origin) {
     await toast(page, 'Deleted phase7_browser_key');
     await created.waitFor({ state: 'detached' });
 
-    await page.goto(`${origin}/?state=group-new-link&view=list`, {
+    // A Document is either typed or brought in from disk; the File side of
+    // that switch replaces the old dedicated Link and File item kinds.
+    await page.goto(`${origin}/?state=group-new-document&view=list`, {
       waitUntil: 'load',
     });
     await page
-      .getByRole('textbox', { name: 'Target path', exact: true })
-      .fill('/deploy/staging-token');
+      .getByRole('textbox', { name: 'Name', exact: true })
+      .fill('emergency.pdf');
     await page
-      .getByRole('button', { name: 'Create item', exact: true })
+      .getByRole('group', { name: 'Document content' })
+      .getByRole('button', { name: 'File', exact: true })
       .click();
-    await page
-      .locator('.body .row')
-      .filter({ hasText: 'latest-key' })
-      .waitFor();
-
-    await page.goto(`${origin}/?state=group-new-file&view=list`, {
-      waitUntil: 'load',
-    });
     await page
       .getByRole('button', { name: 'Choose file and create', exact: true })
       .click();
@@ -591,7 +579,7 @@ async function folderWalk(context, origin) {
       .locator('.toolbar')
       .getByRole('button', { name: 'New', exact: true })
       .click();
-    await page.getByRole('menuitem', { name: 'Note' }).click();
+    await page.getByRole('menuitem', { name: 'Document' }).click();
     await page.getByRole('textbox', { name: 'Name' }).fill('FOLDER_TEST');
     await page.getByText('Advanced', { exact: true }).click();
     const path = await page.getByRole('textbox', { name: 'Path' }).inputValue();
@@ -600,8 +588,10 @@ async function folderWalk(context, origin) {
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
 
     await page.locator('.search input').fill('staging-token');
-    if (await page.locator('.tpane').count())
-      failures.push('folder tree remained visible during search');
+    // The tree is permanent navigation now; search flattens the list beside
+    // it rather than hiding it.
+    if (!(await page.locator('.tpane').count()))
+      failures.push('the folder tree was hidden during search');
     const result = page
       .locator('.body .row')
       .filter({ hasText: 'staging-token' });
@@ -616,7 +606,7 @@ async function folderWalk(context, origin) {
       .locator('.toolbar')
       .getByRole('button', { name: 'New', exact: true })
       .click();
-    await page.getByRole('menuitem', { name: 'Note' }).click();
+    await page.getByRole('menuitem', { name: 'Document' }).click();
     await page
       .getByRole('textbox', { name: 'Name' })
       .fill('SEARCH_FOLDER_TEST');
@@ -652,7 +642,7 @@ async function firstRunWalk(context, origin) {
     await page.evaluate("window.localStorage.removeItem('foks.first-run.v2')");
     await page.reload({ waitUntil: 'load' });
     // Select joining path and proceed.
-    await page.getByRole('radio', { name: /Join an existing group/ }).click();
+    await page.getByRole('radio', { name: /Join an existing team/ }).click();
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
     await reloadAt('Select a server address');
     await page
@@ -703,8 +693,11 @@ async function firstRunWalk(context, origin) {
     await page.locator('.notice', { hasText: 'Joined Engineering' }).waitFor();
     // The mock bridge starts with fixture inventory on reload; the checkpoint
     // survives, but the group created during this run does not. The app must
-    // retain the receipt and report that missing vault rather than invent it.
-    await reloadAt('Engineering: vault unavailable');
+    // retain the receipt and report that missing vault rather than invent it:
+    // reconciliation drops back to the waiting pane, named for the team it
+    // still remembers rather than a generic message.
+    await reloadAt('Team vault unavailable');
+    await page.locator('.main h1', { hasText: 'Engineering' }).waitFor();
 
     const checkpoint = await page.evaluate(
       "window.localStorage.getItem('foks.first-run.v2') ?? ''",

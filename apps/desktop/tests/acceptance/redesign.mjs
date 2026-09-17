@@ -36,7 +36,11 @@ try {
           if (node.closest('[role="menu"]')) return 'ArrowDown';
           const tabs = node.closest('[role="tablist"]');
           if (tabs && tabs.contains(document.activeElement))
-            return 'ArrowRight';
+            // A vertical strip (Settings' own sections) answers Up/Down;
+            // every other tablist here is still horizontal.
+            return tabs.getAttribute('aria-orientation') === 'vertical'
+              ? 'ArrowDown'
+              : 'ArrowRight';
           return 'Tab';
         });
         await page.keyboard.press(key);
@@ -53,6 +57,11 @@ try {
       page
         .locator('.rail-tabs')
         .getByRole('button', { name: new RegExp(`^${name}(?:\\s|$)`) });
+    // Settings' own sub-navigation: a vertical tablist of section pages.
+    const settingsSection = (name) =>
+      page
+        .getByRole('tablist', { name: 'Settings sections' })
+        .getByRole('tab', { name: new RegExp(`^${name}(?:\\s|$)`) });
     const shot = async (name) => {
       assert.ok(
         await page.evaluate(
@@ -80,6 +89,9 @@ try {
       await shot('devices');
 
       await activate(tab('Settings'));
+      // Settings is a section list now; Notifications holds the alert
+      // controls rather than the tab's own landing page (Servers).
+      await activate(settingsSection('Notifications'));
       const enable = page.getByRole('checkbox', {
         name: 'Enable desktop alerts on this device',
       });
@@ -97,14 +109,11 @@ try {
       );
       await page.locator('.ghero', { hasText: 'Household' }).waitFor();
       assert.match(await page.locator('.rail .who').innerText(), /satoshi/);
-      await activate(
-        page.getByRole('button', {
-          name: 'Invitations and requests',
-          exact: true,
-        }),
-      );
+      // Invitations and requests is the team page's own Requests tab now,
+      // not a toggle button.
+      await activate(page.getByRole('tab', { name: /^Requests/ }));
       const invitations = page.getByRole('region', {
-        name: 'Group invitations and requests',
+        name: 'Team invitations and requests',
       });
       await activate(
         invitations.getByRole('button', {
@@ -146,12 +155,6 @@ try {
       );
       assert.equal(await invitations.locator('article').count(), 0);
       await shot('invitations');
-      await activate(
-        page.getByRole('button', {
-          name: 'Invitations and requests',
-          exact: true,
-        }),
-      );
 
       await activate(page.getByRole('tab', { name: /^Channels/ }));
       await activate(
@@ -209,9 +212,9 @@ try {
       await activate(
         page.getByRole('button', { name: 'Team files', exact: true }),
       );
-      await page
-        .getByRole('heading', { name: 'Household', exact: true })
-        .waitFor();
+      // Files is a folder browser now; its header is a breadcrumb, not a
+      // heading.
+      await page.locator('.crumbs .cur', { hasText: 'Household' }).waitFor();
       assert.equal(
         new URL(page.url()).searchParams.get('store'),
         'team:household',
@@ -228,13 +231,17 @@ try {
         'acct:personal',
       );
       await activate(tab('Files'));
-      await page
-        .getByRole('heading', { name: 'Household', exact: true })
-        .waitFor();
+      // Files is a folder browser now; its header is a breadcrumb, not a
+      // heading, and the tab resumes Household rather than opening a root.
+      await page.locator('.crumbs .cur', { hasText: 'Household' }).waitFor();
+      // There is no dedicated "home" control left to leave a pinned team;
+      // picking a different vault from the permanent tree un-pins it back to
+      // the broad tree instead, and every vault stays reachable from there.
       await activate(
-        page.getByRole('button', { name: 'Files home', exact: true }),
+        page.locator('.tpane').getByRole('button', { name: /^Personal/ }),
       );
-      await page.getByRole('heading', { name: 'Files', exact: true }).waitFor();
+      await page.locator('.crumbs .cur', { hasText: 'Personal' }).waitFor();
+      assert.equal(new URL(page.url()).searchParams.get('state'), 'all');
       await shot('roots');
       assert.deepEqual(errors, []);
       console.log(
