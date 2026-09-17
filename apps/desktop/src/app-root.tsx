@@ -43,7 +43,7 @@ import {
   useLocationState,
 } from './location';
 import { INITIAL_SCENE } from './location';
-import type { Scene } from './location';
+import type { Location, Scene } from './location';
 import {
   applyLease,
   isLogin,
@@ -65,11 +65,13 @@ import {
   storedSideCollapsedPref,
   storedSidePinnedPref,
 } from './sidebar-prefs';
-import { AlertsScreen } from './screens/alerts-screen';
+import { PeopleScreen } from './screens/people-screen';
 import { DetailsPanel } from './screens/details-panel';
 import { ItemsScreen } from './screens/items-screen';
 import type { DropUpload } from './screens/items-screen';
-import { ChatScreen } from './screens/chat-screen';
+import { ChatTab } from './screens/chat-tab';
+import { FilesScreen } from './screens/files-screen';
+import { TeamsScreen } from './screens/teams-screen';
 import { GroupSettingsScreen } from './screens/groups-screen';
 import {
   FirstRunChecklistStatus,
@@ -464,10 +466,7 @@ export function App({
       >
         <div className="app-lock-card">
           <h1 id="app-lock-title">Unlock FOKS</h1>
-          <p>
-            Authenticate with {mechanism} to allow FOKS to connect to servers
-            and read vault data.
-          </p>
+          <p>Authenticate with {mechanism} to unlock FOKS.</p>
           {lockError ? (
             <p className="app-lock-error" role="alert">
               {lockError}
@@ -1189,6 +1188,20 @@ function VaultShell({
         storeOf(shown, state.selection.store)?.server ?? '',
       ) ?? 0)
     : 0;
+  // People, Teams, Devices and Settings are the same body under four titles.
+  const settingsProps = {
+    snapshot: shown,
+    bridge,
+    scene: namedState,
+    onNavigate: (location: Location) => locations.navigate(location),
+    onRefresh: refresh,
+    onRefreshSnapshot: refreshSnapshot,
+    onError: commandError,
+    onMutationError: mutationError,
+    onLock,
+    agentLifecycle,
+    onRetryAgent: () => recoverAgentReadiness(true),
+  };
   const screen = listsItems(here) ? (
     <ItemsScreen
       snapshot={shown}
@@ -1222,15 +1235,21 @@ function VaultShell({
       dropEnabled={workflow === null}
       accessNow={accessNow}
     />
-  ) : here.kind === 'team-chat' ? (
-    <ChatScreen
-      key={`chat:${here.ref}:${concealSignal}`}
+  ) : here.kind === 'team-chat' || here.kind === 'chat' ? (
+    <ChatTab
+      key={
+        here.kind === 'team-chat'
+          ? `chat:${here.ref}:${concealSignal}`
+          : `chat:none:${concealSignal}`
+      }
       snapshot={shown}
       bridge={bridge}
       location={here}
       accessNow={accessNow}
       accessGeneration={
-        accessGenerations.get(storeOf(shown, here.ref)?.server ?? '') ?? 0
+        here.kind === 'team-chat'
+          ? (accessGenerations.get(storeOf(shown, here.ref)?.server ?? '') ?? 0)
+          : 0
       }
       onNavigate={(location) => locations.navigate(location)}
     />
@@ -1245,27 +1264,36 @@ function VaultShell({
       onError={commandError}
       onMutationError={mutationError}
     />
-  ) : here.kind === 'alerts' ? (
-    <AlertsScreen
+  ) : here.kind === 'files' ? (
+    <FilesScreen
       snapshot={shown}
-      onRefreshSnapshot={refreshSnapshot}
-      onError={commandError}
+      onNavigate={(location) => locations.navigate(location)}
+    />
+  ) : here.kind === 'people' ? (
+    <PeopleScreen
+      key={`people:${concealSignal}`}
+      {...settingsProps}
+      location={here}
+    />
+  ) : here.kind === 'teams' ? (
+    <TeamsScreen
+      key={`teams:${concealSignal}`}
+      {...settingsProps}
+      location={here}
+    />
+  ) : here.kind === 'devices' ? (
+    <SettingsScreen
+      key={`devices:${concealSignal}`}
+      {...settingsProps}
+      variant="devices"
+      location={here}
     />
   ) : here.kind === 'settings' ? (
     <SettingsScreen
       key={`settings:${concealSignal}`}
-      snapshot={shown}
-      bridge={bridge}
+      {...settingsProps}
+      variant="settings"
       location={here}
-      scene={namedState}
-      onNavigate={(location) => locations.navigate(location)}
-      onRefresh={refresh}
-      onRefreshSnapshot={refreshSnapshot}
-      onError={commandError}
-      onMutationError={mutationError}
-      onLock={onLock}
-      agentLifecycle={agentLifecycle}
-      onRetryAgent={() => recoverAgentReadiness(true)}
     />
   ) : (
     <PlaceholderScreen location={here} />
@@ -1304,7 +1332,9 @@ function VaultShell({
           <i data-tauri-drag-region="" />
           {/* Local agent connection and readiness status */}
           Agent{' '}
-          {shown.agent.state === 'bootstrap'
+          {shown.agent.state === 'bootstrap' ||
+          agentLifecycle.state === 'bootstrap' ||
+          agentLifecycle.state === 'initializing'
             ? 'starting'
             : agentLifecycle.state === 'ready'
               ? 'ready'
@@ -1364,9 +1394,20 @@ function VaultShell({
             <Sidebar
               snapshot={shown}
               location={here}
-              alerts={notesNow(shown).length}
+              attention={notesNow(shown).length}
               onNavigate={(location) => {
                 locations.navigate(location);
+              }}
+              onLock={() => {
+                void onLock().then(
+                  (locked) => {
+                    if (!locked)
+                      toasts.show(
+                        'Application lock is not available on this system.',
+                      );
+                  },
+                  (error: unknown) => commandError(error),
+                );
               }}
               status={
                 pendingFirstRun ? (

@@ -1995,7 +1995,7 @@ export function GroupSettingsScreen({
         <PageHeader title="Group unavailable" subtitle="" />
         <div className="body">
           <Notice title="This group is no longer available">
-            Refresh the catalog or choose another group from the sidebar.
+            Refresh the catalog or choose another group from Teams.
           </Notice>
         </div>
       </>
@@ -2024,9 +2024,9 @@ export function GroupSettingsScreen({
         <button
           type="button"
           className="back"
-          title={`Back to ${store.name}`}
-          aria-label={`Back to ${store.name}`}
-          onClick={() => onNavigate({ kind: 'store', ref: store.id })}
+          title="Back to Teams"
+          aria-label="Back to Teams"
+          onClick={() => onNavigate({ kind: 'teams' })}
         >
           <Icon name="chev" />
         </button>

@@ -44,7 +44,7 @@ test('the shared tokens come from the kit and are not re-declared here', async (
 
   const kitTokens = rootTokens(kit);
   const shellTokens = rootTokens(shell);
-  assert.equal(kitTokens.size, 37, 'expected exactly 37 shared kit tokens');
+  assert.equal(kitTokens.size, 41, 'expected exactly 41 shared kit tokens');
 
   for (const name of shellTokens.keys()) {
     assert.equal(

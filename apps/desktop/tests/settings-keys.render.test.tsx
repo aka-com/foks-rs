@@ -28,7 +28,12 @@ test.before(async () => {
 test.afterEach(() => ui.cleanup());
 test.after(async () => vite.close());
 
-async function renderKeys(snapshot: AgentSnapshot, store?: StoreRef) {
+async function renderKeys(
+  snapshot: AgentSnapshot,
+  store?: StoreRef,
+  scene = 'settings',
+  section: 'keys' | 'macs' = 'keys',
+) {
   const { SettingsScreen } = (await vite.ssrLoadModule(
     '/src/screens/settings-screen.tsx',
   )) as typeof import('../src/screens/settings-screen');
@@ -38,30 +43,40 @@ async function renderKeys(snapshot: AgentSnapshot, store?: StoreRef) {
   const { ToastController, ToastProvider } = (await vite.ssrLoadModule(
     '/kit/toasts.tsx',
   )) as typeof import('../kit/toasts');
+  const { OverlayProvider } = (await vite.ssrLoadModule(
+    '/kit/overlay-primitives.tsx',
+  )) as typeof import('../kit/overlay-primitives');
+  const portalRoot = document.getElementById('overlays');
+  assert.ok(portalRoot);
   const rendered = ui.render(
-    createElement(ToastProvider, {
-      controller: new ToastController(),
-      children: createElement(SettingsScreen, {
-        snapshot,
-        bridge: mockBridge(snapshot),
-        location: {
-          kind: 'settings',
-          section: 'keys',
-          ...(store ? { store } : {}),
-        },
-        scene: 'settings',
-        onNavigate: () => {},
-        onRefresh: async () => {},
-        onRefreshSnapshot: async () => snapshot,
-        onError: (error: unknown) => {
-          throw error;
-        },
-        onMutationError: async (error: unknown) => {
-          throw error;
-        },
-        onLock: async () => true,
-        agentLifecycle: { state: 'ready' },
-        onRetryAgent: async () => {},
+    createElement(OverlayProvider, {
+      backgroundRef: { current: null },
+      portalRoot,
+      children: createElement(ToastProvider, {
+        controller: new ToastController(),
+        children: createElement(SettingsScreen, {
+          snapshot,
+          bridge: mockBridge(snapshot),
+          variant: 'devices',
+          location: {
+            kind: 'devices',
+            section,
+            ...(store ? { store } : {}),
+          },
+          scene,
+          onNavigate: () => {},
+          onRefresh: async () => {},
+          onRefreshSnapshot: async () => snapshot,
+          onError: (error: unknown) => {
+            throw error;
+          },
+          onMutationError: async (error: unknown) => {
+            throw error;
+          },
+          onLock: async () => true,
+          agentLifecycle: { state: 'ready' },
+          onRetryAgent: async () => {},
+        }),
       }),
     }),
   );
@@ -139,4 +154,35 @@ test('security-key settings retain recovery guidance for a stopped account', asy
     ),
   );
   assert.equal(rendered.queryByText('No account configured'), null);
+});
+
+test('the sheet scenes still open on Devices, where those panes live now', async () => {
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const rendered = await renderKeys(FIXTURE, 'acct:personal', 'settings-enrol');
+  const dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
+  assert.equal(
+    ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
+    'Create a YubiKey account',
+  );
+});
+
+test('the backup-phrase scene opens its sheet on the recovery pane', async () => {
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  // `?state=settings-phrase` and `?state=settings&section=phrase` both land on
+  // Devices' recovery pane, and the scene still opens the one-time sheet.
+  const rendered = await renderKeys(
+    FIXTURE,
+    'acct:personal',
+    'settings-phrase',
+    'macs',
+  );
+  const dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
+  assert.equal(
+    ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
+    'Save backup phrase',
+  );
 });

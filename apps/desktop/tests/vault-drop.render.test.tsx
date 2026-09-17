@@ -97,10 +97,12 @@ async function mount(
 }
 
 test('a drag over a vault names the destination, and the drop uploads there', async () => {
-  const { rendered, driver } = await mount({
-    kind: 'store',
-    ref: 'acct:personal',
-  });
+  // The flat list, so the uploaded item is visible without opening its folder.
+  const { rendered, driver } = await mount(
+    { kind: 'store', ref: 'acct:personal' },
+    {},
+    { view: 'list' },
+  );
   await ui.waitFor(() => assert.ok(rendered.getAllByText('Personal').length));
 
   await driver.hover(true);
@@ -267,6 +269,8 @@ test('replacing a file in the details panel takes the drop from the vault', asyn
         return { applied: true };
       },
     },
+    // The flat list, so the file is one click away from the details panel.
+    { view: 'list' },
   );
   const file = snapshot.items.find(
     (item) => item.store === 'acct:personal' && item.path === '/ssh/id_ed25519',

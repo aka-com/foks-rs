@@ -31,13 +31,11 @@ import {
   SheetDialog,
 } from '../components';
 import type { CardOption } from '../components';
-import type { Location, SettingsSection } from '../location';
+import type { DevicesSection, Location, SettingsSection } from '../location';
 import {
   canCreateInStore,
   serverAvailability,
-  serverOf,
   storeDescription,
-  storeDescriptionState,
   storeAvailability,
 } from '../model';
 import type {
@@ -59,10 +57,27 @@ import type { DiscoveryContext } from './groups-screen';
 import { GoProfileConnectSheet } from './go-profile-connect';
 import { ServersSection } from './servers-screen';
 
-interface Props {
+/**
+ * Which tab this screen is the body of. Each variant names its own title, the
+ * panes its sub-nav offers, and the location kind its navigation writes.
+ */
+export type SettingsVariant = 'settings' | 'devices' | 'people' | 'teams';
+
+/** A pane of the settings body. Several are tabs of their own now. */
+type Pane = 'account' | 'servers' | 'macs' | 'keys' | 'groups' | 'about';
+
+export type SettingsLocation = Extract<
+  Location,
+  { kind: 'settings' | 'devices' | 'people' | 'teams' }
+>;
+
+export interface SettingsScreenProps {
   snapshot: AgentSnapshot;
   bridge: Bridge;
-  location: Extract<Location, { kind: 'settings' }>;
+  variant?: SettingsVariant;
+  location: SettingsLocation;
+  /** Drawn at the top of the body, above the sub-nav and the pane. */
+  before?: ReactNode;
   scene: string;
   onNavigate: (location: Location) => void;
   onRefresh: (message: string) => Promise<void>;
@@ -92,7 +107,7 @@ type Sheet =
   | AccountSheet
   | null;
 const SECTIONS: readonly {
-  id: SettingsSection;
+  id: Pane;
   label: string;
   icon: 'file' | 'key' | 'vault' | 'server' | 'people' | 'info';
 }[] = [
@@ -103,6 +118,35 @@ const SECTIONS: readonly {
   { id: 'groups', label: 'Groups', icon: 'people' },
   { id: 'about', label: 'About', icon: 'info' },
 ];
+
+/** The title, the strapline and the panes each tab's body offers. */
+const VARIANTS: Readonly<
+  Record<
+    SettingsVariant,
+    { title: string; subtitle: string; panes: readonly Pane[] }
+  >
+> = {
+  settings: {
+    title: 'Settings',
+    subtitle: 'Servers, the local agent, and this application',
+    panes: ['servers', 'about'],
+  },
+  devices: {
+    title: 'Devices',
+    subtitle: 'Recovery devices and security keys on this Mac',
+    panes: ['macs', 'keys'],
+  },
+  people: {
+    title: 'People',
+    subtitle: 'Your accounts on this Mac, and anything that needs attention',
+    panes: ['account'],
+  },
+  teams: {
+    title: 'Teams',
+    subtitle: 'Groups and shares on this Mac',
+    panes: ['groups'],
+  },
+};
 
 function isCatalogRequired(error: unknown): boolean {
   return normalizeCommandError(error).code === 'catalog-required';
@@ -126,32 +170,25 @@ function accountSubtitle(snapshot: AgentSnapshot, store: AccountStore): string {
   return `${username ?? store.account} on ${server?.name ?? store.server}`;
 }
 
+/**
+ * The Teams tab's pane: creating a group and finding the ones a server already
+ * lists. A group that needs attention is not repeated here — the Teams rows
+ * above carry its state as a chip on the row itself.
+ */
 function GroupsSection({
   snapshot,
   discovering,
   onDiscover,
   onCreate,
-  onOpen,
 }: {
   snapshot: AgentSnapshot;
   discovering: StoreRef | null;
   onDiscover: (context: DiscoveryContext) => Promise<void>;
   onCreate: () => void;
-  onOpen: (store: TeamStore) => void;
 }): ReactNode {
   const accounts = accountStores(snapshot);
   const canCreate = accounts.some((store) =>
     canCreateInStore(snapshot, store.id),
-  );
-  const groups = snapshot.stores.filter(
-    (store): store is TeamStore => store.kind === 'team',
-  );
-  const attention = groups.filter(
-    (store) =>
-      storeDescriptionState(snapshot, store) !== 'normal' ||
-      snapshot.groupDetailFailures.some(
-        (failure) => failure.store === store.id,
-      ),
   );
   return (
     <>
@@ -218,7 +255,7 @@ function GroupsSection({
               >
                 <small>
                   {account
-                    ? `Groups the server lists for ${account.username} appear in the sidebar.`
+                    ? `Groups the server lists for ${account.username} appear on Teams.`
                     : 'This account is not signed in on this Mac.'}
                 </small>
               </InsetRow>
@@ -228,41 +265,6 @@ function GroupsSection({
           <InsetRow label="None">No accounts configured on this Mac.</InsetRow>
         )}
       </Inset>
-      {attention.length ? (
-        <>
-          <SectionLabel>Needs attention</SectionLabel>
-          <Inset className="settings-inset middle">
-            {attention.map((store) => {
-              const state = storeDescriptionState(snapshot, store);
-              const server = serverOf(snapshot, store.id);
-              const caption = storeDescription(snapshot, store);
-              return (
-                <InsetRow
-                  key={store.id}
-                  valueClass="group-attention"
-                  action={
-                    <Button size="sm" onClick={() => onOpen(store)}>
-                      Open
-                    </Button>
-                  }
-                >
-                  <span className="who2">
-                    <span className="t">
-                      <b>{store.name}</b>
-                      <small>
-                        {caption} · {server?.name ?? store.server}
-                      </small>
-                    </span>
-                  </span>
-                  <Chip tone="warn">
-                    {state === 'setup-incomplete' ? 'Inactive' : 'Unavailable'}
-                  </Chip>
-                </InsetRow>
-              );
-            })}
-          </Inset>
-        </>
-      ) : null}
     </>
   );
 }
@@ -270,7 +272,9 @@ function GroupsSection({
 export function SettingsScreen({
   snapshot,
   bridge,
+  variant = 'settings',
   location,
+  before,
   scene,
   onNavigate,
   onRefresh,
@@ -280,11 +284,16 @@ export function SettingsScreen({
   onLock,
   agentLifecycle,
   onRetryAgent,
-}: Props): ReactNode {
-  // Capture initial fixture scene once; the shell canonicalizes the route to 'settings' on mount.
+}: SettingsScreenProps): ReactNode {
+  // Capture initial fixture scene once; the shell canonicalizes the route on mount.
   const [enteredScene] = useState(scene);
-  const section =
-    location.section === 'phrase' ? 'macs' : (location.section ?? 'account');
+  const panes = VARIANTS[variant].panes;
+  const requestedPane =
+    location.kind === 'settings' || location.kind === 'devices'
+      ? location.section
+      : undefined;
+  const section: Pane =
+    requestedPane && panes.includes(requestedPane) ? requestedPane : panes[0];
   const stores = accountStores(snapshot);
   // Select account by exact StoreRef to avoid ambiguous profile-local aliases.
   const requested = location.store;
@@ -394,22 +403,13 @@ export function SettingsScreen({
     };
   }, []);
 
-  // Canonicalize default settings route to the first account's exact StoreRef.
+  // Canonicalize the default route to the first account's exact StoreRef. Teams
+  // is addressable without an account — its list is the whole Mac's — so an
+  // address that names none is left alone and the first account is implied.
   useEffect(() => {
-    if (location.store || !selected) return;
-    onNavigate({
-      kind: 'settings',
-      ...(location.section ? { section: location.section } : {}),
-      store: selected.id,
-      ...(location.profile ? { profile: location.profile } : {}),
-    });
-  }, [
-    location.profile,
-    location.section,
-    location.store,
-    onNavigate,
-    selected,
-  ]);
+    if (location.kind === 'teams' || location.store || !selected) return;
+    onNavigate({ ...location, store: selected.id });
+  }, [location, onNavigate, selected]);
 
   // Reset active sheets and account-specific state when switching accounts.
   const selectedId = selected?.id;
@@ -589,13 +589,31 @@ export function SettingsScreen({
     };
   }, [bridge, onError]);
 
-  // Retain selected account when navigating between settings sections.
-  const go = (next: SettingsSection, store = selected?.id): void =>
+  // Move within this tab, retaining the selected account. A pane belongs to
+  // exactly one tab, so the variant decides the location kind.
+  const go = (next: Pane, store = selected?.id): void => {
+    if (variant === 'teams') {
+      onNavigate({ kind: 'teams', ...(store ? { store } : {}) });
+      return;
+    }
+    if (variant === 'people') {
+      onNavigate({ kind: 'people', ...(store ? { store } : {}) });
+      return;
+    }
+    if (variant === 'devices') {
+      onNavigate({
+        kind: 'devices',
+        section: next as DevicesSection,
+        ...(store ? { store } : {}),
+      });
+      return;
+    }
     onNavigate({
       kind: 'settings',
-      section: next,
+      section: next as SettingsSection,
       ...(store ? { store } : {}),
     });
+  };
   const applied = async (message: string): Promise<void> => {
     setSheet(null);
     await onRefresh(message);
@@ -617,28 +635,34 @@ export function SettingsScreen({
   const keysLoading = Boolean(
     selected && !unavailable && !selectedStopped && !keysLoaded,
   );
-  const createContext = stores[0];
+  // Create and discovery act as the account the address names, else the first.
+  const createContext = selected ?? stores[0];
   return (
     <>
       <PageHeader
-        title="Settings"
-        subtitle="Manage accounts, servers, security keys, and local devices"
+        title={VARIANTS[variant].title}
+        subtitle={VARIANTS[variant].subtitle}
       />
       <div className="body">
-        <div className="settings-cols">
-          <nav className="settings-sections" aria-label="Settings sections">
-            {SECTIONS.map((item) => (
-              <button
-                type="button"
-                key={item.id}
-                className={item.id === section ? 'nav on' : 'nav'}
-                onClick={() => go(item.id)}
-              >
-                <Icon name={item.icon} />
-                <span className="t">{item.label}</span>
-              </button>
-            ))}
-          </nav>
+        {before}
+        <div className={panes.length > 1 ? 'settings-cols' : ''}>
+          {panes.length > 1 ? (
+            <nav className="settings-sections" aria-label="Settings sections">
+              {SECTIONS.filter((item) => panes.includes(item.id)).map(
+                (item) => (
+                  <button
+                    type="button"
+                    key={item.id}
+                    className={item.id === section ? 'nav on' : 'nav'}
+                    onClick={() => go(item.id)}
+                  >
+                    <Icon name={item.icon} />
+                    <span className="t">{item.label}</span>
+                  </button>
+                ),
+              )}
+            </nav>
+          ) : null}
           <div className="settings-main">
             {unavailable ? (
               <UnavailableAccount
@@ -658,13 +682,7 @@ export function SettingsScreen({
                 stopped={selectedStopped}
                 loading={macsLoading}
                 onConnectGoProfile={() => setSheet('go-profile')}
-                onSwitch={(store) =>
-                  onNavigate({
-                    kind: 'settings',
-                    section: 'macs',
-                    store: store.id,
-                  })
-                }
+                onSwitch={(store) => go('macs', store.id)}
                 onSheet={setSheet}
                 onPair={(mode) => {
                   setPairMode(mode);
@@ -714,7 +732,9 @@ export function SettingsScreen({
               <ServersSection
                 snapshot={snapshot}
                 bridge={bridge}
-                profile={location.profile}
+                profile={
+                  location.kind === 'settings' ? location.profile : undefined
+                }
                 scene={enteredScene}
                 onNavigate={onNavigate}
                 onRefresh={onRefresh}
@@ -728,7 +748,6 @@ export function SettingsScreen({
                 discovering={discovering}
                 onDiscover={discover}
                 onCreate={() => setGroupCreate(true)}
-                onOpen={(store) => onNavigate({ kind: 'store', ref: store.id })}
               />
             ) : null}
             {section === 'about' ? (
@@ -1700,7 +1719,7 @@ function AgentSection({
           <span className={ready ? 'agent' : 'agent warn'}>
             <i />
             {snapshot.agent.state === 'bootstrap'
-              ? `Bootstrap · ${snapshot.agent.step}`
+              ? 'Starting the FOKS agent'
               : agentLifecycleLabel(agentLifecycle)}
           </span>
           <small>

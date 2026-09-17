@@ -43,9 +43,14 @@ test.after(async () => {
   dom.window.close();
 });
 
-/** Boots the shell at `location`, with the stored preference already cleared. */
+/**
+ * Boots the shell at `location`, with the stored preference already cleared.
+ * `view` pins the item view where a test needs to click an item rather than a
+ * folder; item pages open in the folder browser by default.
+ */
 async function shell(
   location?: { kind: 'first-run'; step: 'who' } | { kind: 'all' },
+  view?: 'list' | 'grid' | 'folders',
 ) {
   const { App } = (await vite.ssrLoadModule(
     '/src/app-root.tsx',
@@ -63,6 +68,7 @@ async function shell(
   const locations = new LocationStore({
     ...INITIAL_STATE,
     location: location ?? { kind: 'all' },
+    ...(view ? { view } : {}),
   });
   const rendered = ui.render(
     createElement(App, {
@@ -140,7 +146,7 @@ test('a row activated with the mouse drops focus, and with the keyboard keeps it
   await shell();
   const row = [
     ...document.querySelectorAll<HTMLButtonElement>('.side .nav'),
-  ].find((candidate) => candidate.textContent?.startsWith('Alerts'));
+  ].find((candidate) => candidate.textContent?.startsWith('People'));
   assert.ok(row);
   row.focus();
   ui.fireEvent.click(row, { detail: 1 });
@@ -151,7 +157,7 @@ test('a row activated with the mouse drops focus, and with the keyboard keeps it
 });
 
 test('opening details collapses the rail and closing it restores the chosen width', async () => {
-  await shell();
+  await shell({ kind: 'all' }, 'list');
   const stored = window.localStorage.getItem('sideCollapsed');
 
   const row = document.querySelector<HTMLElement>('.body .row');
@@ -177,7 +183,7 @@ test('opening details collapses the rail and closing it restores the chosen widt
 });
 
 test('an expand made while details are open sticks', async () => {
-  await shell();
+  await shell({ kind: 'all' }, 'list');
   const row = document.querySelector<HTMLElement>('.body .row');
   assert.ok(row);
   ui.fireEvent.click(row);
@@ -203,14 +209,13 @@ test('first run draws no collapse toggle and never narrows the shell', async () 
   assert.equal(document.querySelector('.app.side-narrow'), null);
 });
 
-test('a chat row draws a glyph, so it survives the collapsed rail', async () => {
+test('every tab draws a glyph, so all six survive the collapsed rail', async () => {
   await shell();
-  const chat = [...document.querySelectorAll('.side .nav')].find(
-    (row) => row.textContent?.includes('chat'),
+  const tabs = [...document.querySelectorAll('.side.rail .rail-tabs .nav')];
+  assert.deepEqual(
+    tabs.map((tab) => tab.querySelector('.t')?.textContent),
+    ['People', 'Chat', 'Files', 'Teams', 'Devices', 'Settings'],
   );
-  assert.ok(chat, 'a group has a chat row');
-  assert.equal(chat.classList.contains('indented'), false);
-  assert.equal(chat.querySelector('small'), null);
-  assert.equal(chat.getAttribute('title'), null);
-  assert.ok(chat.querySelector('.ic'), 'the chat row has its own glyph');
+  for (const tab of tabs)
+    assert.ok(tab.querySelector('.ic'), `${tab.textContent} has a glyph`);
 });

@@ -500,28 +500,31 @@ export function FirstRunChecklistStatus({
 }): ReactNode {
   const completed = completedFirstRunSteps(checkpoint);
   const total = firstRunStepCount(checkpoint);
+  // Setup that has nothing left to do draws no heading: a "Status" label with
+  // no row under it is the whole slot at the foot of the rail.
+  if (completed >= total) return null;
+  const name = checkpoint.account ? 'Setup checklist' : 'Continue setup';
   return (
     <>
       <SectionLabel as="side">Status</SectionLabel>
-      {completed < total ? (
-        <NavRow
-          active={active}
-          glyph={<Icon name="flag" />}
-          name={checkpoint.account ? 'Setup checklist' : 'Continue setup'}
-          tail={
-            <span className="badge">
-              {completed} of {total}
-            </span>
-          }
-          onSelect={() =>
-            onNavigate({
-              kind: 'first-run',
-              step: checkpoint.state,
-              path: checkpoint.path,
-            })
-          }
-        />
-      ) : null}
+      <NavRow
+        active={active}
+        glyph={<Icon name="flag" />}
+        name={name}
+        title={name}
+        tail={
+          <span className="badge">
+            {completed} of {total}
+          </span>
+        }
+        onSelect={() =>
+          onNavigate({
+            kind: 'first-run',
+            step: checkpoint.state,
+            path: checkpoint.path,
+          })
+        }
+      />
     </>
   );
 }
@@ -561,7 +564,7 @@ function FirstRunAppSidebar({
     <Sidebar
       snapshot={snapshot}
       location={location}
-      alerts={checkpoint.path === 'invited' && !checkpoint.added ? 1 : 0}
+      attention={checkpoint.path === 'invited' && !checkpoint.added ? 1 : 0}
       onNavigate={onNavigate}
       status={status}
       onReenter={onReenter}

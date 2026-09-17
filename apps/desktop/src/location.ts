@@ -11,9 +11,11 @@ import type { LeaseState, StoreRef } from './model/types';
 
 /* ------------------------------------------------------------- location -- */
 
-/** Which settings pane is open. */
-export type SettingsSection =
-  'macs' | 'phrase' | 'keys' | 'account' | 'servers' | 'groups' | 'about';
+/** Which pane of the Settings tab is open. */
+export type SettingsSection = 'servers' | 'about';
+
+/** Which pane of the Devices tab is open. */
+export type DevicesSection = 'macs' | 'keys';
 
 export type GroupSettingsTab = 'people' | 'settings';
 
@@ -21,12 +23,27 @@ export type GroupSettingsTab = 'people' | 'settings';
 export type FirstRunStep = string;
 export type FirstRunPath = 'invited' | 'own';
 
+/** The rail tab a location belongs to. First run belongs to none. */
+export type RailTab =
+  'people' | 'chat' | 'files' | 'teams' | 'devices' | 'settings';
+
 export type Location =
   | { kind: 'all' }
   | { kind: 'store'; ref: StoreRef }
   | { kind: 'team-chat'; ref: StoreRef; channel?: string }
   | { kind: 'group-settings'; ref: StoreRef; tab?: GroupSettingsTab }
-  | { kind: 'alerts' }
+  /** People: the attention list, then the accounts on this Mac. */
+  | { kind: 'people'; store?: StoreRef }
+  /** Chat with no team chosen. The tab picks the first team that has chat. */
+  | { kind: 'chat' }
+  /** The Files roots page: All items, then vaults, groups and shares. */
+  | { kind: 'files' }
+  /**
+   * The Teams list, then the group settings the Groups pane carries. `store`
+   * names the account the create and discovery rows act as.
+   */
+  | { kind: 'teams'; store?: StoreRef }
+  | { kind: 'devices'; section?: DevicesSection; store?: StoreRef }
   /**
    * `profile` names the server the Servers section is open on; it means
    * nothing on any other section and is dropped when moving between them.
@@ -38,6 +55,30 @@ export type Location =
       profile?: string;
     }
   | { kind: 'first-run'; step: FirstRunStep; path?: FirstRunPath };
+
+/** The rail tab that owns a location, or `null` for first run. */
+export function railTabOf(location: Location): RailTab | null {
+  switch (location.kind) {
+    case 'people':
+      return 'people';
+    case 'chat':
+    case 'team-chat':
+      return 'chat';
+    case 'files':
+    case 'all':
+    case 'store':
+      return 'files';
+    case 'teams':
+    case 'group-settings':
+      return 'teams';
+    case 'devices':
+      return 'devices';
+    case 'settings':
+      return 'settings';
+    case 'first-run':
+      return null;
+  }
+}
 
 /** The item the details panel is showing, or nothing. */
 export type Selection = { store: StoreRef; path: string } | null;
@@ -71,7 +112,9 @@ export const INITIAL_STATE: LocationState = {
   location: { kind: 'all' },
   selection: null,
   query: '',
-  view: 'list',
+  // Item pages open in the folder browser; the toolbar's list/grid/folders
+  // toggle still chooses, and the choice survives the next navigation.
+  view: 'folders',
   details: false,
   kind: 'All',
   sort: 'name',
@@ -100,6 +143,10 @@ export function sameLocation(a: Location, b: Location): boolean {
     return a.ref === b.ref && a.channel === b.channel;
   if (a.kind === 'group-settings' && b.kind === 'group-settings')
     return a.ref === b.ref && a.tab === b.tab;
+  if (a.kind === 'people' && b.kind === 'people') return a.store === b.store;
+  if (a.kind === 'teams' && b.kind === 'teams') return a.store === b.store;
+  if (a.kind === 'devices' && b.kind === 'devices')
+    return a.section === b.section && a.store === b.store;
   if (a.kind === 'settings' && b.kind === 'settings')
     return (
       a.section === b.section && a.store === b.store && a.profile === b.profile
@@ -220,10 +267,13 @@ const STATE_ALIASES: Readonly<Record<string, Location>> = {
   household: { kind: 'store', ref: 'team:household' },
   group: { kind: 'store', ref: 'team:household' },
   homelab: { kind: 'store', ref: 'team:homelab' },
-  alerts: { kind: 'alerts' },
-  join: { kind: 'settings', section: 'groups' },
-  groups: { kind: 'settings', section: 'groups' },
-  people: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
+  // The Alerts page is the top of People now.
+  alerts: { kind: 'people' },
+  join: { kind: 'teams' },
+  groups: { kind: 'teams' },
+  // `people` is the People tab, decoded above; the mock's People *tab of a
+  // group* is `group-people`, alongside `party` and `federation`.
+  'group-people': { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
   party: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
   federation: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
   items: { kind: 'store', ref: 'team:eng' },
@@ -234,7 +284,7 @@ const STATE_ALIASES: Readonly<Record<string, Location>> = {
   demote: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
   remove: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
   admit: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
-  create: { kind: 'settings', section: 'groups' },
+  create: { kind: 'teams' },
   // Servers used to be its own page; it is a Settings section now, and every
   // former name for that page maps to this section.
   servers: { kind: 'settings', section: 'servers' },
@@ -263,16 +313,18 @@ const STATE_ALIASES: Readonly<Record<string, Location>> = {
     profile: 'partner',
   },
   'servers-check': { kind: 'settings', section: 'servers', profile: 'partner' },
-  'settings-macs': { kind: 'settings', section: 'macs' },
+  // Recovery devices and security keys are the Devices tab; the accounts pane
+  // is the foot of People.
+  'settings-macs': { kind: 'devices', section: 'macs' },
   'settings-macs-work': {
-    kind: 'settings',
+    kind: 'devices',
     section: 'macs',
     store: 'acct:work',
   },
-  'settings-phrase': { kind: 'settings', section: 'phrase' },
-  'settings-keys': { kind: 'settings', section: 'keys' },
-  'settings-enrol': { kind: 'settings', section: 'keys' },
-  'settings-account': { kind: 'settings', section: 'account' },
+  'settings-phrase': { kind: 'devices', section: 'macs' },
+  'settings-keys': { kind: 'devices', section: 'keys' },
+  'settings-enrol': { kind: 'devices', section: 'keys' },
+  'settings-account': { kind: 'people' },
   'settings-agent': { kind: 'settings', section: 'about' },
   'settings-about': { kind: 'settings', section: 'about' },
 };
@@ -321,6 +373,25 @@ export function encodeLocation(location: Location): {
           tab: location.tab ?? null,
         },
       };
+    case 'people':
+      return {
+        state: 'people',
+        params: { ...CLEARED_PARAMS, store: location.store ?? null },
+      };
+    case 'teams':
+      return {
+        state: 'teams',
+        params: { ...CLEARED_PARAMS, store: location.store ?? null },
+      };
+    case 'devices':
+      return {
+        state: 'devices',
+        params: {
+          ...CLEARED_PARAMS,
+          store: location.store ?? null,
+          section: location.section ?? null,
+        },
+      };
     case 'settings':
       // The exact account this Settings page acts on, not its alias: two
       // profiles may both hold an account called `personal`.
@@ -348,15 +419,28 @@ export function encodeLocation(location: Location): {
   }
 }
 
-const SETTINGS_SECTIONS: readonly SettingsSection[] = [
-  'macs',
-  'phrase',
-  'keys',
-  'account',
-  'servers',
-  'groups',
-  'about',
-];
+const SETTINGS_SECTIONS: readonly SettingsSection[] = ['servers', 'about'];
+const DEVICES_SECTIONS: readonly DevicesSection[] = ['macs', 'keys'];
+
+/**
+ * The tab a `section=` value written before the rail belongs to now. Recovery
+ * devices, the backup phrase and security keys are Devices; Groups is Teams;
+ * Accounts is People.
+ */
+const RETIRED_SETTINGS_SECTIONS: Readonly<
+  Record<
+    string,
+    | { kind: 'devices'; section: DevicesSection }
+    | { kind: 'teams' }
+    | { kind: 'people' }
+  >
+> = {
+  macs: { kind: 'devices', section: 'macs' },
+  phrase: { kind: 'devices', section: 'macs' },
+  keys: { kind: 'devices', section: 'keys' },
+  groups: { kind: 'teams' },
+  account: { kind: 'people' },
+};
 
 const FIRST_RUN_STATE_NAMES = [
   'boot',
@@ -414,12 +498,42 @@ export function decodeLocation(search: string): Location | null {
         }
       : null;
   }
+  if (state === 'people') {
+    const store = params.get('store') ?? undefined;
+    return { kind: 'people', ...(store ? { store } : {}) };
+  }
+  if (state === 'chat') return { kind: 'chat' };
+  if (state === 'files') return { kind: 'files' };
+  if (state === 'teams') {
+    const store = params.get('store') ?? undefined;
+    return { kind: 'teams', ...(store ? { store } : {}) };
+  }
+  if (state === 'devices') {
+    const section = params.get('section');
+    const store = params.get('store') ?? undefined;
+    const resolved =
+      section && (DEVICES_SECTIONS as readonly string[]).includes(section)
+        ? (section as DevicesSection)
+        : section === 'phrase'
+          ? 'macs'
+          : undefined;
+    return {
+      kind: 'devices',
+      ...(resolved ? { section: resolved } : {}),
+      ...(store ? { store } : {}),
+    };
+  }
   if (state === 'settings') {
     const section = params.get('section');
     // `account=` was the alias-keyed predecessor of `store=`. It is not read:
     // an alias is ambiguous across profiles, and this project ships nothing to
     // be compatible with.
     const store = params.get('store') ?? undefined;
+    // Sections that moved to a tab of their own keep working as deep links.
+    const moved = section ? RETIRED_SETTINGS_SECTIONS[section] : undefined;
+    // Every tab a section moved to acts on one account, so the account the
+    // address named comes with it.
+    if (moved) return { ...moved, ...(store ? { store } : {}) };
     // `agent` used to be its own pane; that content now lives on About.
     const resolved = section === 'agent' ? 'about' : section;
     // `profile` is only the Servers section's; anywhere else it is stale.
@@ -491,6 +605,14 @@ export function decodeLocation(search: string): Location | null {
       ...(store ? { store } : {}),
       ...(profile ? { profile } : {}),
     };
+  }
+  if (
+    alias?.kind === 'devices' ||
+    alias?.kind === 'people' ||
+    alias?.kind === 'teams'
+  ) {
+    const store = params.get('store') ?? alias.store;
+    return { ...alias, ...(store ? { store } : {}) };
   }
   return alias ?? null;
 }
@@ -584,7 +706,7 @@ const SCENE_ALIASES: Readonly<Record<string, Partial<Scene>>> = {
   lease: { location: { kind: 'store', ref: 'acct:work' }, lease: 'lapsed' },
   // The group whose summary reports inactive.
   inactive: { location: { kind: 'store', ref: 'team:homelab' } },
-  // Alerts with the lapsed-lease fixture that populates it.
+  // People's attention list, with the lapsed-lease fixture that populates it.
   alerts: { lease: 'lapsed' },
 };
 
@@ -618,7 +740,7 @@ function decodeSelection(value: string | null): Selection {
 export const INITIAL_SCENE: Scene = {
   location: { kind: 'all' },
   selection: null,
-  view: 'list',
+  view: 'folders',
   kind: 'All',
   sort: 'name',
   folder: '',

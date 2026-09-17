@@ -92,8 +92,8 @@ export function RenamePanel({
       }
     >
       <p>
-        Changes the username on the server. The local alias shown in the sidebar
-        does not change.
+        Changes the username on the server. The local alias shown in the account
+        menu does not change.
       </p>
       <Inset className="form">
         <InsetRow label="Username">

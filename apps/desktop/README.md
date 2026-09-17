@@ -24,15 +24,15 @@ inline `small-file` encoding, a value that fails the explicit text read is
 presented with Download and native Replace actions without changing the wire
 or database format.
 
-Group settings is opened from each group’s vault page and loads the agent's roster
+Group settings is opened from the Teams list and loads the agent's roster
 and federation facts, computes every people, group and readable-item count, and
-exposes the operations the command layer can perform. Group creation, discovery,
-attention states and account-specific invite messages live under Settings ›
-Groups. Member changes are restricted to unique, locally manageable usernames.
+exposes the operations the command layer can perform. Group creation, discovery
+and account-specific invite messages live under Teams, below the list; a group
+that needs attention says so on its own row, not a second time under it. Member changes are restricted to unique, locally manageable usernames.
 An inactive or ambiguous federation admission has no extra payload. Active ad-hoc
 groups retain read-only roster facts but suppress member and federation actions.
 Native clipboard hygiene uses `copy_text`. First run is a location
-inside the same main window, with its sidebar replaced by the setup-step list.
+inside the same main window, with the rail replaced by the setup-step list.
 Its versioned local checkpoint contains only nonsecret progress and display facts;
 invite, passphrase, recovery phrase and prepared backup phrase values are held
 only in their live form or one-time sheet and are never encoded. Reopening
@@ -200,17 +200,17 @@ authenticated in the catalog.
 | Path                       | What it is                                                                                                                                                                                                                                                                                                                                                                  |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/main.tsx`             | Entry point. One window; mounts `src/app-root.tsx`.                                                                                                                                                                                                                                                                                                                         |
-| `src/app-root.tsx`         | App shell: window, sidebar, screen, details panel, deep links.                                                                                                                                                                                                                                                                                                              |
+| `src/app-root.tsx`         | App shell: window, rail, screen, details panel, deep links.                                                                                                                                                                                                                                                                                                              |
 | `src/components/`          | Components: Button, Chip, Tag, Badge, KindIcon, Inset, SectionLabel, Notice, Band, SegmentedControl, SplitButton, MenuButton, SearchField.                                                                                                                                                                                                                   |
-| `src/shell/`               | Window chrome: `sidebar.tsx`, `page-header.tsx`, `toolbar.tsx`.                                                                                                                                                                                                                                                                                                             |
-| `src/screens/`             | Screens: `items-screen.tsx` (list, cards, notices, empties), `groups-screen.tsx`, `store-access.tsx` (the shared unavailable-store takeover and All items summaries), `first-run-screen.tsx`, `servers-screen.tsx`, `settings-screen.tsx`, `details-panel.tsx`, `write-workflows.tsx`, `edit-value.ts`, `alerts-screen.tsx`, `scope.ts` (what is listed, in what order).     |
+| `src/shell/`               | Window chrome: `sidebar.tsx` (the rail), `page-header.tsx`, `toolbar.tsx`.                                                                                                                                                                                                                                                                                                             |
+| `src/screens/`             | Screens: `items-screen.tsx` (list, cards, notices, empties), `groups-screen.tsx`, `store-access.tsx` (the shared unavailable-store takeover and All items summaries), `first-run-screen.tsx`, `servers-screen.tsx`, `settings-screen.tsx`, `details-panel.tsx`, `write-workflows.tsx`, `edit-value.ts`, `people-screen.tsx` (the attention list and the accounts pane), `files-screen.tsx` (the roots page), `teams-screen.tsx`, `chat-tab.tsx` (the team strip over `chat-screen.tsx`), `scope.ts` (what is listed, in what order).     |
 | `src/bridge.ts`            | The typed `Bridge` interface and the Tauri implementation.                                                                                                                                                                                                                                                                                                                  |
 | `src/mock-bridge.ts`       | The same interface, using the fixture.                                                                                                                                                                                                                                                                                                                                      |
 | `src/fixture.ts`           | The stable desktop fixture, as typed data.                                                                                                                                                                                                                                                                                                                                  |
 | `src/model/`               | The pure model — roles, kinds, readers, format, lease. TypeScript only.                                                                                                                                                                                                                                                                                                     |
 | `src/location.ts`          | `Location`, `Selection`, `transition`, the `?state=` codec, the store.                                                                                                                                                                                                                                                                                                      |
 | `src/first-run-state.ts`   | Pure versioned resumable setup state and its explicit nonsecret checkpoint codec.                                                                                                                                                                                                                                                                                            |
-| `src/sidebar-prefs.ts`     | The sidebar's stored width: the `sideCollapsed` and `sidePinned` `localStorage` keys.                                                                                                                                                                                                                                                                                           |
+| `src/sidebar-prefs.ts`     | The rail's stored width: the `sideCollapsed` and `sidePinned` `localStorage` keys.                                                                                                                                                                                                                                                                                           |
 | `src/icons.ts`             | The mock's 46 icons as structured data.                                                                                                                                                                                                                                                                                                                                     |
 | `src/components/icon.tsx`  | `<Icon name size />`.                                                                                                                                                                                                                                                                                                                                                       |
 | `src/styles/shell.css`     | `wave6/shell.css` copied in full, minus the shared tokens.                                                                                                                                                                                                                                                                                                                  |
@@ -218,17 +218,56 @@ authenticated in the catalog.
 | `tests/`                   | `node:test` via `tsx`: goldens, source invariants, render tests.                                                                                                                                                                                                                                                                                                            |
 | `tests/acceptance/run.mjs` | Layer 3: Chromium over the built UI, one load per deep link.                                                                                                                                                                                                                                                                                                                |
 
-The left rail collapses to a 56px icon-only strip. Collapsing is CSS alone —
+### The rail
+
+`nav.side.rail` is a fixed six-tab rail, 200px wide and blue
+(`--rail`, `--rail-ink`, `--rail-line`, `--rail-active` in
+`apps/desktop/kit/tokens.css`). It does not enumerate stores. Its tabs are
+People, Chat, Files, Teams, Devices and Settings; `railTabOf(location)` in
+`src/location.ts` decides which one a location belongs to, so All items and a
+store page mark Files, a group's settings page marks Teams, and a team chat
+marks Chat. Chat carries one badge summing the unread across every team whose
+chat this Mac can read; People carries a dot while anything needs attention.
+Control-Tab walks the six tabs.
+
+Above the tabs, the account header names the active account — the one the
+location's `store` parameter names, else the first account store — and opens a
+menu of the accounts on this Mac grouped by server, "Add an account or
+server…" (the first-run flow) and "Lock" (the command Settings › About also
+offers). An account whose access has stopped carries a chip naming the state.
+
+Below the tabs, the foot holds the Collapse/Expand row and nothing else. The
+rail collapses to a 56px icon-only strip. Collapsing is CSS alone —
 `nav.side` gains `is-narrow`, and every row stays in the document — so the
-collapsed rail keeps its glyphs, its issue dots and its counts, the latter
-drawn as a dot on the glyph's corner. A collapsed rail expands over the main
+collapsed rail keeps its glyphs, its dots and its counts, the latter
+drawn on the glyph's corner. A collapsed rail expands over the main
 column on hover, and on keyboard focus whether or not the width was pinned;
 the grid track stays at the collapsed width, so the page underneath does not
-shift. The footer's Collapse/Expand row writes `sideCollapsed` and
+shift. The Collapse/Expand row writes `sideCollapsed` and
 `sidePinned` to `localStorage` through `src/sidebar-prefs.ts`. Opening the
 details panel collapses the rail and closing it restores the rail, on
 transitions only and without touching the stored preference. First run
-replaces the sidebar with its own, which has no toggle.
+replaces the rail with its own step list, which is `nav.side` without `rail`
+and has no toggle; the blue styling is scoped to `.side.rail` for that reason.
+
+### What each tab is
+
+People is the list of what needs attention — the page that used to be called
+Alerts — over the accounts pane. Chat is a strip of team chips over the
+conversation; the tab with no team chosen opens the first team that has chat,
+and says so when no group has one. Files is a roots page listing All items and
+then the vaults, groups and shares, each row opening its item page; an item
+page returns here through the header's back chevron. Teams lists the groups
+and shares over the pane that creates and finds them, and a row opens that
+group's settings, which return here. Creating and discovering act as one
+account — the one `?state=teams&store=<StoreRef>` names, else this Mac's
+first — so the account menu keeps the page when it switches. Devices is the recovery-devices and
+security-keys panes. Settings is Servers and About. A store's abnormal state
+is a chip at the end of its row on Files, Teams and in the account menu,
+rather than a caption under its name.
+
+Item pages open in the folder browser. The toolbar's list / grid / folders
+toggle still chooses, and the choice survives the next navigation.
 
 ### `apps/desktop/kit`
 
@@ -250,7 +289,8 @@ changes directly in this stylesheet.
 Layout is a separate concern from color, and its custom properties are
 declared on `.app` rather than on `:root`: `--side-track`, `--side-w-open`
 (224px), `--side-w`, `--side-pad`, `--side-head-pad`, `--side-open-content`
-and `--details-w` (300px). The sidebar animates its own width instead of the
+and `--details-w` (300px; `--side-w-open` is 200px where the rail is drawn).
+The rail animates its own width instead of the
 grid track, which avoids interpolating `grid-template-columns`, and
 `.app.side-narrow` is what sets the collapsed width (`3.5rem`).
 
@@ -335,19 +375,20 @@ kept so deep links defined in the design specification resolve to this location.
 | `folders`                                                                   | All items                                   | `view=folders`; store roots and folders are derived from catalog paths                                        |
 | `lease`                                                                     | Work (Acme)                                 | `lease=lapsed` — the whole snapshot, not a place                                                              |
 | `inactive`                                                                  | Homelab                                     | group reports inactive; Resume creation uses its resumable operation                                          |
-| `alerts`                                                                    | Alerts                                      | `lease=lapsed`, so the pane has its critical entry                                                            |
+| `alerts`                                                                    | People, on its attention list                | `lease=lapsed`, so the list has its critical entry                                                            |
 | `agent-lost`                                                                | Full window stop                            | Retry reconnects and refreshes without replay                                                                 |
-| `groups`                                                                    | Settings › Groups                           | create, discovery, attention and invite sections                                                              |
-| `people` · `party` · `federation`                                           | Engineering Group settings                  | People tab, with federation below the roster, or party panel                                                  |
+| `groups`                                                                    | Teams                                       | the list, then the create, discovery and invite sections; `store=` names the account they act as              |
+| `people`                                                                    | People                                      | the attention list over the accounts pane; `store=` names the account                                         |
+| `group-people` · `party` · `federation`                                     | Engineering Group settings                  | People tab, with federation below the roster, or party panel                                                  |
 | `danger`                                                                    | Engineering Group settings                  | Settings tab                                                                                                  |
 | `store` · `items`                                                           | Engineering                                 | group vault                                                                                                   |
 | `invite` · `add` · `demote` · `remove` · `admit`                            | Engineering Group settings                  | the named Group sheet                                                                                         |
-| `create`                                                                    | Settings › Groups                           | named/ad-hoc Create group sheet, defaulting to Work (Acme)                                                    |
+| `create`                                                                    | Teams                                       | named/ad-hoc Create group sheet, defaulting to Work (Acme)                                                    |
 | `groups-lease` · `groups-inactive`                                          | Engineering Group settings or Homelab vault | distinct lease/inactive takeovers                                                                             |
 | `manage`                                                                    | Household Group settings                    | People tab, without a Manage overlay                                                                          |
 | `party-remove`                                                              | Engineering Group settings                  | the non-local removal refusal                                                                                 |
-| `join`                                                                      | Settings › Groups                           | account-specific discovery and invite choices                                                                 |
-| `join-invite`                                                               | Settings › Groups                           | invite sheet opened on the exact `acct:work` fixture store                                                    |
+| `join`                                                                      | Teams                                       | account-specific discovery and invite choices                                                                 |
+| `join-invite`                                                               | Teams                                       | invite sheet opened on the exact `acct:work` fixture store                                                    |
 | `boot` · `who` · `address` · `no-address` · `checked` · `compare` · `error` | First run, steps 0–2                        | `path=invited` or `path=own` selects the setup route                                                          |
 | `account` · `existing` · `protect` · `phrase`                               | First run, steps 3–4                        | account creation/recovery and the one-time backup sheet                                                       |
 | `waiting` · `added`                                                         | First run, steps 5–6                        | invited group discovery and completion                                                                        |
@@ -355,8 +396,9 @@ kept so deep links defined in the design specification resolve to this location.
 | `first-run&step=<step>&path=<path>`                                         | the resumable first-run location codec      | used after the first in-app transition and across reload                                                      |
 | `servers-list` · `servers-server` · `servers-lapsed` · `servers-rollback`   | Servers & devices                           | list/detail/stopped states from `04-servers.html`                                                             |
 | `servers-reset` · `servers-add` · `servers-unprobed` · `servers-check`      | Servers & devices                           | typed reset, add/check and explicit result states                                                             |
-| `settings-macs` · `settings-macs-work` · `settings-phrase`                  | Settings                                    | devices, pairing, recovery and one-time backup reveal; `settings-macs-work` names the exact `acct:work` store |
-| `settings-keys` · `settings-enrol` · `settings-account`                     | Settings                                    | YubiKey lifecycle and passphrase/account status                                                               |
+| `settings-macs` · `settings-macs-work` · `settings-phrase`                  | Devices                                     | devices, pairing, recovery and one-time backup reveal; `settings-macs-work` names the exact `acct:work` store |
+| `settings-keys` · `settings-enrol`                                          | Devices                                     | YubiKey lifecycle                                                                                             |
+| `settings-account`                                                          | People                                      | passphrase and account status                                                                                 |
 | `settings-agent` · `settings-about`                                         | Settings                                    | local agent status, inspect, version; `settings-agent` is an alias of About                                   |
 
 `decodeLocation` returns `null` for display mode, item selection, or lease

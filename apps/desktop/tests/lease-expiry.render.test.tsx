@@ -112,10 +112,15 @@ test('an expiring open vault conceals details while a healthy neighbor stays usa
     assert.equal(rendered.queryByText('foks_team_token_7f31ac09'), null);
     assert.ok(rendered.getAllByText('Check-in expired').length > 0);
   });
-  const personal = (
-    rendered.getAllByRole('button') as HTMLButtonElement[]
-  ).find((button) => button.textContent?.includes('Personal'));
-  assert.ok(personal);
+  // The rail does not list stores; the healthy neighbour is a row on Files.
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Files' }));
+  const personal = await ui.waitFor(() => {
+    const row = (rendered.getAllByRole('button') as HTMLButtonElement[]).find(
+      (button) => button.textContent?.includes('Personal'),
+    );
+    assert.ok(row);
+    return row;
+  });
   assert.equal(personal.disabled, false);
 });
 

@@ -56,10 +56,10 @@ export function agentLifecycleLabel(lifecycle: AgentLifecycle): string {
       return 'Ready';
     case 'checking':
       return 'Checking';
+    // Expose internal bootstrap and initialization steps as one startup state.
     case 'bootstrap':
-      return `Bootstrap · ${lifecycle.step}`;
     case 'initializing':
-      return `Initializing · ${lifecycle.step}`;
+      return 'Starting the FOKS agent';
     case 'maintenance':
       return `${lifecycle.kind} · ${lifecycle.phase}`;
     case 'restart-required':

@@ -6,7 +6,7 @@
  */
 
 import type { ReactNode } from 'react';
-import { SearchField } from '../components';
+import { Icon, SearchField } from '../components';
 import { storeHeadingDescription, storeOf } from '../model';
 import type { AgentSnapshot } from '../model';
 import type { Location } from '../location';
@@ -47,6 +47,8 @@ export function searchPlaceholder(title: string): string {
 export interface PageHeaderProps extends HeaderParts {
   /** A page-level action aligned at the far right of the header. */
   action?: ReactNode;
+  /** A chevron before the title, returning to the page this one came from. */
+  back?: { label: string; onBack: () => void };
   /** Omitted on a pane that has nothing to search. */
   query?: string;
   onQuery?: (query: string) => void;
@@ -57,12 +59,24 @@ export function PageHeader({
   subtitle,
   tail,
   action,
+  back,
   query,
   onQuery,
 }: PageHeaderProps): ReactNode {
   return (
     <div className="path">
       <div className="loc">
+        {back ? (
+          <button
+            type="button"
+            className="page-back"
+            title={back.label}
+            aria-label={back.label}
+            onClick={back.onBack}
+          >
+            <Icon name="back" />
+          </button>
+        ) : null}
         <div className="loc-copy">
           <h1>{title}</h1>
           {subtitle ? <small>{subtitle}</small> : null}

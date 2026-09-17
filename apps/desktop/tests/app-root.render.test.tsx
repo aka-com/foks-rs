@@ -54,40 +54,132 @@ test('renders shell frame with application brand name', () => {
   assert.equal(document.querySelector('.side .appname'), null);
 });
 
-test('the sidebar lists configured vaults and groups', () => {
-  const labels = [...document.querySelectorAll('.side .nav .t')].map((node) =>
-    node.textContent?.trim(),
+test('the rail draws the six tabs, the unread badge and the attention dot', () => {
+  const tabs = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      '.side.rail .rail-tabs .nav',
+    ),
+  ];
+  assert.deepEqual(
+    tabs.map((tab) => tab.querySelector('.t')?.textContent),
+    ['People', 'Chat', 'Files', 'Teams', 'Devices', 'Settings'],
   );
-  assert.ok(labels.some((text) => text?.startsWith('All items')));
-  assert.ok(labels.some((text) => text?.startsWith('Personal')));
-  assert.ok(labels.some((text) => text?.startsWith('Work (Acme)')));
-  // A store in its normal state carries its description on the row's title;
-  // the caption is reserved for the states that need the reader's attention.
-  const titles = [
-    ...document.querySelectorAll<HTMLButtonElement>('.side .nav'),
-  ].map((row) => row.title);
-  assert.ok(
-    titles.some((title) => title.includes('5 people · 1 group')),
-    `Engineering's roster summary is the row's title: ${titles.join(' | ')}`,
-  );
+  // The fixture's two open notifications light the People dot.
+  assert.ok(tabs[0].querySelector('.dot'), 'People carries the attention dot');
+  // Files is the tab that owns All items, the shell's starting location.
+  assert.equal(tabs[2].getAttribute('aria-current'), 'page');
+  assert.equal(tabs[0].getAttribute('aria-current'), null);
 });
 
-test('chat navigation follows the server capability grant', () => {
-  const rows = [...document.querySelectorAll<HTMLButtonElement>('.side .nav')];
-  const engineering = rows.find((row) =>
-    row.textContent?.includes('Engineering chat'),
+test('the account header names the active account and opens its menu', async () => {
+  const header = document.querySelector<HTMLButtonElement>('.side.rail .who');
+  assert.ok(header, 'the rail draws the account header');
+  assert.equal(header.querySelector('.t b')?.textContent, 'satoshi');
+  assert.equal(header.getAttribute('aria-expanded'), 'false');
+
+  testingLibrary.fireEvent.click(header);
+  const menu = await testingLibrary.waitFor(() => {
+    const node = document.querySelector('[role="menu"]');
+    assert.ok(node, 'the account menu opens');
+    return node;
+  });
+  assert.equal(header.getAttribute('aria-expanded'), 'true');
+  const labels = [...menu.querySelectorAll('button')].map((button) =>
+    button.textContent?.trim(),
   );
-  const household = rows.find((row) =>
-    row.textContent?.includes('Household chat'),
+  assert.ok(labels.some((text) => text?.includes('satoshi')));
+  assert.ok(labels.some((text) => text === 'Add an account or server…'));
+  assert.ok(labels.some((text) => text === 'Lock'));
+});
+
+test('a tab navigates, and Control-Tab walks the six of them', async () => {
+  const tab = (name: string): HTMLButtonElement => {
+    const found = [
+      ...document.querySelectorAll<HTMLButtonElement>('.side.rail .nav'),
+    ].find((row) => row.querySelector('.t')?.textContent === name);
+    assert.ok(found, `the rail has a ${name} tab`);
+    return found;
+  };
+  testingLibrary.fireEvent.click(tab('Teams'));
+  await testingLibrary.waitFor(() => {
+    assert.equal(document.querySelector('.loc h1')?.textContent, 'Teams');
+  });
+  assert.equal(tab('Teams').getAttribute('aria-current'), 'page');
+
+  // Control-Tab moves to the next tab in rail order; Shift walks back.
+  testingLibrary.fireEvent.keyDown(document, { key: 'Tab', ctrlKey: true });
+  await testingLibrary.waitFor(() => {
+    assert.equal(tab('Devices').getAttribute('aria-current'), 'page');
+  });
+  testingLibrary.fireEvent.keyDown(document, {
+    key: 'Tab',
+    ctrlKey: true,
+    shiftKey: true,
+  });
+  await testingLibrary.waitFor(() => {
+    assert.equal(tab('Teams').getAttribute('aria-current'), 'page');
+  });
+
+  testingLibrary.fireEvent.click(tab('Files'));
+  await testingLibrary.waitFor(() => {
+    assert.equal(document.querySelector('.loc h1')?.textContent, 'Files');
+  });
+});
+
+test('the Files roots page lists the stores the rail used to enumerate', async () => {
+  await testingLibrary.waitFor(() => {
+    assert.equal(document.querySelector('.loc h1')?.textContent, 'Files');
+  });
+  const rows = [
+    ...document.querySelectorAll<HTMLButtonElement>('.nav-rows .row'),
+  ];
+  const names = rows.map((row) => row.querySelector('.tt')?.textContent);
+  assert.ok(names.includes('All items'));
+  assert.ok(names.includes('Personal'));
+  assert.ok(names.includes('Work (Acme)'));
+  assert.ok(names.includes('Engineering'));
+
+  const engineering = rows.find(
+    (row) => row.querySelector('.tt')?.textContent === 'Engineering',
   );
+  assert.ok(engineering);
+  testingLibrary.fireEvent.click(engineering);
+  await testingLibrary.waitFor(() => {
+    assert.equal(document.querySelector('.loc h1')?.textContent, 'Engineering');
+  });
+  // The items page returns to the roots page it was opened from.
+  const back = document.querySelector<HTMLButtonElement>('.path .page-back');
+  assert.ok(back, 'the items header carries a back chevron');
+  assert.equal(back.getAttribute('aria-label'), 'Back to Files');
+  testingLibrary.fireEvent.click(back);
+  await testingLibrary.waitFor(() => {
+    assert.equal(document.querySelector('.loc h1')?.textContent, 'Files');
+  });
+});
+
+test('the chat tab opens the first team with chat and dims the rest', async () => {
+  const tab = [
+    ...document.querySelectorAll<HTMLButtonElement>('.side.rail .nav'),
+  ].find((row) => row.querySelector('.t')?.textContent === 'Chat');
+  assert.ok(tab);
+  testingLibrary.fireEvent.click(tab);
+  const strip = await testingLibrary.waitFor(() => {
+    const node = document.querySelector('.team-strip');
+    assert.ok(node, 'the chat tab draws its team strip');
+    return node;
+  });
+  const chips = [...strip.querySelectorAll<HTMLButtonElement>('.chipbtn')];
+  const engineering = chips.find(
+    (chip) => chip.getAttribute('aria-label') === 'Engineering chat',
+  );
+  const household = chips.find(
+    (chip) => chip.getAttribute('aria-label') === 'Household chat',
+  );
+  // Chat follows the server capability grant, as the rail's chat rows did.
   assert.equal(engineering?.disabled, true);
-  assert.equal(engineering?.title, '');
   assert.equal(household?.disabled, false);
-});
-
-test('displays active warning badge count in navigation', () => {
-  // Active warnings in default state reflect non-critical server alerts.
-  assert.equal(document.querySelector('.side .badge')?.textContent, '2');
+  // `chat` with no team resolves to the first team that has one.
+  assert.ok(household?.classList.contains('on'));
 });
 
 test('renders navigation icons as SVG elements', () => {
@@ -100,29 +192,31 @@ test('renders navigation icons as SVG elements', () => {
   assert.ok(icon.children.length > 0, 'icon contains SVG child elements');
 });
 
-test('defaults to All Items view on initial load', () => {
-  // Without query state, initial navigation defaults to All Items.
-  assert.equal(document.querySelector('.loc h1')?.textContent, 'All items');
+test('opens on All items, in the folder browser', async () => {
+  // This runs after the walk above, so return to the starting location.
+  const files = [
+    ...document.querySelectorAll<HTMLButtonElement>('.side.rail .nav'),
+  ].find((row) => row.querySelector('.t')?.textContent === 'Files');
+  assert.ok(files);
+  testingLibrary.fireEvent.click(files);
+  await testingLibrary.waitFor(() => {
+    assert.ok(document.querySelector('.nav-rows .row'));
+  });
+  const all = [
+    ...document.querySelectorAll<HTMLButtonElement>('.nav-rows .row'),
+  ].find((row) => row.querySelector('.tt')?.textContent === 'All items');
+  assert.ok(all);
+  testingLibrary.fireEvent.click(all);
+  await testingLibrary.waitFor(() => {
+    assert.equal(document.querySelector('.loc h1')?.textContent, 'All items');
+  });
+  assert.ok(
+    document.querySelector('.folder-layout'),
+    'item pages open in the folder browser',
+  );
   const rows = document.querySelectorAll('.body .row');
   assert.ok(rows.length > 0, 'items list is rendered in main body');
   assert.equal(document.querySelector('[data-shell-placeholder]'), null);
-});
-
-test('clicking a group navigates the shell to it', async () => {
-  const rows = [...document.querySelectorAll<HTMLButtonElement>('.side .nav')];
-  // Locate group navigation item by name.
-  const engineering = rows.find((row) =>
-    row.querySelector('.t')?.textContent?.startsWith('Engineering'),
-  );
-  assert.ok(engineering, 'the Engineering row is in the sidebar');
-  const icon = engineering.querySelector('.ic');
-  assert.ok(icon, 'group icon is present');
-
-  testingLibrary.fireEvent.click(engineering);
-  await testingLibrary.waitFor(() => {
-    assert.equal(document.querySelector('.loc h1')?.textContent, 'Engineering');
-  });
-  assert.equal(engineering.className.includes('on'), true);
 });
 
 test.after(() => {

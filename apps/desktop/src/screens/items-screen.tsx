@@ -724,6 +724,12 @@ export function ItemsScreen({
   const head = (
     <PageHeader
       {...header}
+      back={{
+        label: 'Back to Files',
+        onBack: () => {
+          locations.navigate({ kind: 'files' });
+        },
+      }}
       query={state.query}
       onQuery={(query) => {
         locations.search(query);

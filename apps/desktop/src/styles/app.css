@@ -347,20 +347,6 @@ body {
   text-overflow: ellipsis;
 }
 
-.settings-inset .fr .v.group-attention {
-  flex-direction: row;
-  align-items: center;
-  gap: 10px;
-}
-
-.group-attention .who2 {
-  flex: 1;
-}
-
-.settings-inset .fr .v.group-attention .chip {
-  align-self: center;
-}
-
 .rolecell {
   display: flex;
   flex-direction: column;

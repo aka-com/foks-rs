@@ -8,7 +8,7 @@ import test from 'node:test';
 import { createElement } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 
-import type { Location, SettingsSection } from '../src/location';
+import type { Location } from '../src/location';
 import type { AgentSnapshot } from '../src/model';
 import { installDom } from './lib/dom-harness';
 
@@ -34,8 +34,11 @@ test.before(async () => {
 test.afterEach(() => ui.cleanup());
 test.after(async () => vite.close());
 
+/** The pane under test, and the tab whose body now carries it. */
+type Pane = 'account' | 'macs' | 'keys' | 'servers' | 'groups' | 'about';
+
 async function renderSettings(
-  section: SettingsSection,
+  pane: Pane,
   onNavigate: (location: Location) => void = () => {},
 ) {
   const { SettingsScreen } = (await vite.ssrLoadModule(
@@ -54,6 +57,30 @@ async function renderSettings(
     '/src/fixture.ts',
   )) as typeof import('../src/fixture');
   const snapshot: AgentSnapshot = FIXTURE;
+  const variant =
+    pane === 'account'
+      ? ('people' as const)
+      : pane === 'groups'
+        ? ('teams' as const)
+        : pane === 'macs' || pane === 'keys'
+          ? ('devices' as const)
+          : ('settings' as const);
+  const location: Location =
+    variant === 'people'
+      ? { kind: 'people', store: 'acct:personal' }
+      : variant === 'teams'
+        ? { kind: 'teams' }
+        : variant === 'devices'
+          ? {
+              kind: 'devices',
+              section: pane as 'macs' | 'keys',
+              store: 'acct:personal',
+            }
+          : {
+              kind: 'settings',
+              section: pane as 'servers' | 'about',
+              store: 'acct:personal',
+            };
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   const rendered = ui.render(
@@ -65,7 +92,8 @@ async function renderSettings(
         children: createElement(SettingsScreen, {
           snapshot,
           bridge: mockBridge(snapshot),
-          location: { kind: 'settings', section, store: 'acct:personal' },
+          variant,
+          location,
           scene: 'settings',
           onNavigate,
           onRefresh: async () => {},
@@ -149,7 +177,7 @@ test('the recovery-devices picker lists every account and switching navigates', 
     ui.fireEvent.click(items[1]);
   });
   assert.deepEqual(chosen.at(-1), {
-    kind: 'settings',
+    kind: 'devices',
     section: 'macs',
     store: 'acct:work',
   });

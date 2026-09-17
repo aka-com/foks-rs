@@ -52,6 +52,7 @@ const STATES = [
   'groups',
   'join',
   'people',
+  'group-people',
   'party',
   'federation',
   'items',

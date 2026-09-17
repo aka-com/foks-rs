@@ -1,0 +1,139 @@
+/**
+ * The Files tab's roots page: All items, then the vaults, groups and shares on
+ * this Mac.
+ *
+ * The rows carry the data the rail used to carry — the store mark and its hue,
+ * the description as a caption when it is not the normal state, and the issue
+ * dot and dimming that go with it.
+ */
+
+import type { ReactNode } from 'react';
+import { Chip, Icon, SectionLabel } from '../components';
+import {
+  storeDescription,
+  storeDescriptionState,
+  storeHues,
+  storeNavigationOrder,
+} from '../model';
+import type { AgentSnapshot, Store } from '../model';
+import type { Location } from '../location';
+import { PageHeader } from '../shell/page-header';
+
+export interface FilesScreenProps {
+  snapshot: AgentSnapshot;
+  onNavigate: (location: Location) => void;
+}
+
+/** One root row: mark, name, one line of description, and the issue dot. */
+function StoreRow({
+  snapshot,
+  store,
+  hue,
+  onOpen,
+}: {
+  snapshot: AgentSnapshot;
+  store: Store;
+  hue?: string;
+  onOpen: () => void;
+}): ReactNode {
+  const description = storeDescription(snapshot, store);
+  // An abnormal state is a chip at the end of the row, never a caption: the
+  // caption says what the store is, the chip says what is wrong with it.
+  const state = storeDescriptionState(snapshot, store);
+  const kindWord =
+    store.kind === 'account'
+      ? 'Vault'
+      : store.team_kind === 'adhoc'
+        ? 'Share'
+        : 'Group';
+  const caption =
+    state === 'normal' && description
+      ? `${kindWord} · ${description}`
+      : kindWord;
+  return (
+    <button
+      type="button"
+      className={state === 'normal' ? 'row' : 'row off'}
+      title={description || undefined}
+      onClick={onOpen}
+    >
+      <span className="kic" style={{ background: hue, color: '#fff' }}>
+        <Icon name={store.kind === 'account' ? 'vault' : 'people'} />
+      </span>
+      <span className="name">
+        <span className="tt">
+          <span>{store.name}</span>
+        </span>
+        <small>{caption}</small>
+      </span>
+      <span className="tail">
+        {state === 'normal' ? null : <Chip tone="warn">{description}</Chip>}
+      </span>
+    </button>
+  );
+}
+
+export function FilesScreen({
+  snapshot,
+  onNavigate,
+}: FilesScreenProps): ReactNode {
+  const stores = storeNavigationOrder(snapshot);
+  const hues = storeHues(stores);
+  const vaults = stores.filter((store) => store.kind === 'account');
+  const groups = stores.filter(
+    (store) => store.kind === 'team' && store.team_kind === 'named',
+  );
+  const shares = stores.filter(
+    (store) => store.kind === 'team' && store.team_kind === 'adhoc',
+  );
+  const rows = (list: readonly Store[]): ReactNode =>
+    list.map((store) => (
+      <StoreRow
+        key={store.id}
+        snapshot={snapshot}
+        store={store}
+        hue={hues.get(store.id)}
+        onOpen={() => onNavigate({ kind: 'store', ref: store.id })}
+      />
+    ));
+  return (
+    <>
+      <PageHeader
+        title="Files"
+        subtitle="Vaults, groups and shares on this Mac"
+      />
+      <div className="body nav-rows">
+        <div className="list-window">
+          <div className="virtual-rows">
+            <button
+              type="button"
+              className="row"
+              onClick={() => onNavigate({ kind: 'all' })}
+            >
+              <span className="kic Store">
+                <Icon name="grid" />
+              </span>
+              <span className="name">
+                <span className="tt">
+                  <span>All items</span>
+                </span>
+                <small>Every store on this Mac</small>
+              </span>
+              <span className="tail" />
+            </button>
+            <SectionLabel>Vaults</SectionLabel>
+            {vaults.length ? rows(vaults) : <p className="fn">No vaults yet</p>}
+            <SectionLabel>Groups</SectionLabel>
+            {groups.length ? rows(groups) : <p className="fn">No groups yet</p>}
+            {shares.length ? (
+              <>
+                <SectionLabel>Shares</SectionLabel>
+                {rows(shares)}
+              </>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}

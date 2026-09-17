@@ -31,7 +31,9 @@ async function setup(
   showChat = true,
   navigate = false,
 ) {
-  const { Sidebar } = await vite.ssrLoadModule('/src/shell/sidebar.tsx');
+  const { ChatTeamStrip } = await vite.ssrLoadModule(
+    '/src/screens/chat-tab.tsx',
+  );
   const { ChatInboxProvider } = await vite.ssrLoadModule(
     '/src/chat/inbox-provider.tsx',
   );
@@ -88,16 +90,15 @@ async function setup(
                   if (navigate) setLocation(next);
                 },
               })
-            : createElement(Sidebar, {
+            : // The rail no longer lists chats; the Chat tab's team strip does,
+              // and it carries the unread counts the inbox publishes.
+              createElement(ChatTeamStrip, {
                 snapshot: enabledSnapshot,
-                location: { kind: 'all' },
-                alerts: 0,
-                onNavigate: (next: Location) => {
+                onSelect: (ref: string) => {
+                  const next: Location = { kind: 'team-chat', ref };
                   onNavigate(next);
-                  if (next.kind === 'team-chat') {
-                    setLocation(next);
-                    setVisible(true);
-                  }
+                  setLocation(next);
+                  setVisible(true);
                 },
               }),
         }),
