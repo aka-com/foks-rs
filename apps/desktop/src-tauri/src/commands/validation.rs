@@ -253,6 +253,62 @@ pub(super) fn pairing_phrase(value: String) -> Result<SecretString, AgentError> 
     Ok(SecretString::new(value.as_str()))
 }
 
+/// A username the server will accept, checked here so a space or capital is
+/// refused with a sentence instead of a normalization error from the client.
+pub(super) fn valid_username(value: &str) -> Result<String, AgentError> {
+    let value = bounded_field(value, 256, "Enter a username.")?;
+    if foks_verify::normalize_username(value.as_bytes()).is_none() {
+        return Err(invalid_request(
+            "Usernames use 3 to 25 letters, numbers, and single underscores.",
+        ));
+    }
+    Ok(value)
+}
+
+/// A device name the server will accept, by the same rules the client applies.
+pub(super) fn valid_device_name(value: &str) -> Result<String, AgentError> {
+    let value = bounded_field(value, 256, "Enter a device name.")?;
+    if foks_verify::normalize_device_name(value.as_bytes()).is_none() {
+        return Err(invalid_request(
+            "Device names use 2 to 200 letters, numbers, spaces, and . _ + ' -, and start with a letter or number.",
+        ));
+    }
+    Ok(value)
+}
+
+/// A paper key phrase, parsed before it leaves the app so a typo is named by
+/// position rather than reported as a failed recovery.
+pub(super) fn backup_phrase(value: String) -> Result<SecretString, AgentError> {
+    let value = Zeroizing::new(value);
+    if value.is_empty()
+        || value.len() > MAXIMUM_RECOVERY_PHRASE_BYTES
+        || value.contains(['\0', '\r', '\n'])
+    {
+        return Err(invalid_request(
+            "Recovery phrase must be a single line of at most 4,096 bytes.",
+        ));
+    }
+    if let Err(error) = foks_crypto::BackupKey::from_phrase(&value) {
+        use foks_crypto::BackupPhraseError as E;
+        return Err(invalid_request(match error {
+            E::TokenCount { found } => format!(
+                "A paper key has {} words and numbers; this one has {found}.",
+                foks_crypto::BACKUP_PHRASE_TOKENS
+            ),
+            E::Word { index } => format!(
+                "Word {} of the paper key is not a recognized word. Check its spelling.",
+                index + 1
+            ),
+            E::Number { index } | E::NumberRange { index } => format!(
+                "Number {} of the paper key should be a whole number from 0 to 8191.",
+                index + 1
+            ),
+            _ => "That paper key is not valid.".to_owned(),
+        }));
+    }
+    Ok(SecretString::new(value.as_str()))
+}
+
 pub(super) fn exact_profile_confirmation(
     profile: &str,
     confirmation: &str,

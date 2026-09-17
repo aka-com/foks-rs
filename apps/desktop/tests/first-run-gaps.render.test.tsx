@@ -223,7 +223,7 @@ test('a username with no usable characters blocks account creation', async () =>
   });
   assert.ok(
     rendered.view.getByText(
-      'Username must contain at least one letter or number.',
+      'Account alias must contain at least one letter or number.',
     ),
   );
   const create = rendered.view.getByRole('button', {

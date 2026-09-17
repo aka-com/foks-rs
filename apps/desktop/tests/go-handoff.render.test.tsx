@@ -555,7 +555,7 @@ test('native-shaped account creation is not rewound by the pre-mutation inventor
     '/src/mock-bridge.ts',
   )) as typeof import('../src/mock-bridge.ts');
   const base = mockBridge(FIXTURE);
-  const profile = 'setup-foks-app-4430';
+  const profile = 'foks-app';
   const hostId = `02${'7'.repeat(64)}`;
   let checks = 0;
   let signups = 0;
@@ -892,7 +892,10 @@ test('resumed sign-in step rediscovers the CLI profile for the verified server',
   window.localStorage.setItem(
     FIRST_RUN_CHECKPOINT_KEY,
     encodeFirstRunCheckpoint(
-      transitionFirstRun(checked, { type: 'select-account-method', method: 'recover' }),
+      transitionFirstRun(checked, {
+        type: 'select-account-method',
+        method: 'recover',
+      }),
     ),
   );
   const snapshot = {
@@ -944,7 +947,7 @@ test('resumed sign-in step rediscovers the CLI profile for the verified server',
   rendered.getByText('Use the CLI to approve this as a new device');
   assert.equal(scans, 1);
   assert.equal(
-    (rendered.getByLabelText('Copied account alias') as HTMLInputElement).value,
+    (rendered.getByLabelText('Account alias') as HTMLInputElement).value,
     'cli-owner',
     'the CLI username is suggested as the local alias, as the chooser does',
   );

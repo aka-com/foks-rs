@@ -1417,10 +1417,13 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
             }
         }
 
+        if let Some(response) = client_error_response(id, candidate, error) {
+            return response;
+        }
         if let Some(foks_rpc::Error::RemoteStatus { code, .. }) =
             candidate.downcast_ref::<foks_rpc::Error>()
         {
-            if let Some(response) = remote_status_response(id, *code, candidate.to_string()) {
+            if let Some(response) = remote_status_response(id, *code, error.to_string()) {
                 return response;
             }
         }
@@ -1453,13 +1456,141 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
         }
         source = candidate.source();
     }
-    Response::error(
-        id,
+    // Nothing above named this failure. The innermost error is the one that
+    // says what went wrong; the crate chain wrapping it is kept in `reason`
+    // for logs and support rather than shown as the message.
+    Response::error_with_fields(
+        Some(id),
         ErrorCode::OperationFailed,
-        bounded_error(error.to_string()),
+        bounded_error(sentence(leaf_message(error))),
+        ErrorFields {
+            reason: Some(bounded_error(error.to_string())),
+            ..ErrorFields::default()
+        },
     )
 }
 
+/// The message of the innermost error in a chain.
+fn leaf_message(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut leaf = error;
+    while let Some(next) = leaf.source() {
+        leaf = next;
+    }
+    leaf.to_string()
+}
+
+/// Capitalizes the first letter so that the error fragment is formatted as a complete sentence.
+fn sentence(message: String) -> String {
+    let mut chars = message.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => message,
+    }
+}
+
+/// A sentence for the client-side failures a person can cause, with the crate
+/// chain in `reason`. Anything not listed falls through to the status table
+/// and the leaf-message fallback.
+fn client_error_response(
+    id: u64,
+    candidate: &(dyn std::error::Error + 'static),
+    chain: &(dyn std::error::Error + 'static),
+) -> Option<Response> {
+    use foks_client::Error as C;
+    let (code, message): (ErrorCode, String) = if let Some(error) =
+        candidate.downcast_ref::<foks_client::Error>()
+    {
+        match error {
+                C::NoAddress(host) => (
+                    ErrorCode::OperationFailed,
+                    format!("The server address {host} could not be resolved. Check the name."),
+                ),
+                C::Connect(_) => (
+                    ErrorCode::OperationFailed,
+                    "Could not reach the server. Check the address and port, and that the server is running.".to_owned(),
+                ),
+                C::Tls(_) | C::ServerName | C::HostTlsRoots => (
+                    ErrorCode::OperationFailed,
+                    "The server's TLS certificate could not be verified.".to_owned(),
+                ),
+                C::Kex(_) => (
+                    ErrorCode::OperationFailed,
+                    "Pairing did not finish. Start pairing again on both devices.".to_owned(),
+                ),
+                C::KexPhrase(_) => (
+                    ErrorCode::InvalidRequest,
+                    "Enter a valid device-pairing phrase.".to_owned(),
+                ),
+                C::Backup(reason) => (ErrorCode::InvalidRequest, backup_phrase_sentence(reason)),
+                C::AccountRequest(reason) if *reason == "username is not valid after normalization" => (
+                    ErrorCode::InvalidRequest,
+                    "Usernames use 3 to 25 letters, numbers, and single underscores.".to_owned(),
+                ),
+                C::AccountRequest(reason) if *reason == "device name is not valid after normalization" => (
+                    ErrorCode::InvalidRequest,
+                    "Device names use 2 to 200 letters, numbers, spaces, and . _ + ' -, and start with a letter or number.".to_owned(),
+                ),
+                C::TeamRequest(reason) if *reason == "team name is not valid under FOKS v0.1.9 normalization" => (
+                    ErrorCode::InvalidRequest,
+                    "Group names use 3 to 25 letters, numbers, spaces, dots, dashes, or underscores.".to_owned(),
+                ),
+                C::TeamRequest(reason) if *reason == "target user is already a team member" => (
+                    ErrorCode::Conflict,
+                    "That user is already a member of this group.".to_owned(),
+                ),
+                C::KvRequest(reason) if *reason == "upload exceeds FOKS file size limit" => (
+                    ErrorCode::InvalidRequest,
+                    "That file is too large to upload.".to_owned(),
+                ),
+                _ => return None,
+            }
+    } else if let Some(error) = candidate.downcast_ref::<foks_client_app::Error>() {
+        match error {
+                foks_client_app::Error::InvalidAccount(reason)
+                    if reason.starts_with("group names use") =>
+                {
+                    (
+                        ErrorCode::InvalidRequest,
+                        "Group names use 3 to 25 letters, numbers, spaces, dots, dashes, or underscores.".to_owned(),
+                    )
+                }
+                _ => return None,
+            }
+    } else {
+        return None;
+    };
+    Some(Response::error_with_fields(
+        Some(id),
+        code,
+        message,
+        ErrorFields {
+            reason: Some(bounded_error(chain.to_string())),
+            ..ErrorFields::default()
+        },
+    ))
+}
+
+fn backup_phrase_sentence(error: &foks_crypto::BackupPhraseError) -> String {
+    use foks_crypto::BackupPhraseError as E;
+    match error {
+        E::TokenCount { found } => format!(
+            "A paper key has {} words and numbers; this one has {found}.",
+            foks_crypto::BACKUP_PHRASE_TOKENS
+        ),
+        E::Word { index } => format!(
+            "Word {} of the paper key is not a recognized word. Check its spelling.",
+            index + 1
+        ),
+        E::Number { index } | E::NumberRange { index } => format!(
+            "Number {} of the paper key should be a whole number from 0 to 8191.",
+            index + 1
+        ),
+        _ => "That paper key is not valid.".to_owned(),
+    }
+}
+
+/// Formatted error descriptions and numeric codes for user-actionable FOKS
+/// status codes. The server's raw error message is preserved in `reason`.
 fn remote_status_response(id: u64, status: u64, reason: String) -> Option<Response> {
     let (code, message) = match status {
         foks_rpc::STATUS_RATE_LIMIT_ERROR => (
@@ -1469,6 +1600,94 @@ fn remote_status_response(id: u64, status: u64, reason: String) -> Option<Respon
         foks_rpc::STATUS_OVER_QUOTA_ERROR => (
             ErrorCode::QuotaExceeded,
             "The FOKS server reached a configured capacity limit. Review its capacity or remove unused data before retrying.",
+        ),
+        foks_rpc::STATUS_USERNAME_IN_USE_ERROR => (
+            ErrorCode::Conflict,
+            "That name is already taken on this server. Choose another.",
+        ),
+        foks_rpc::STATUS_DUPLICATE_ERROR => (
+            ErrorCode::Conflict,
+            "The server already has this record.",
+        ),
+        foks_rpc::STATUS_DEVICE_ALREADY_PROVISIONED_ERROR => (
+            ErrorCode::Conflict,
+            "This device is already set up on the account.",
+        ),
+        foks_rpc::STATUS_TEAM_INVITE_ALREADY_ACCEPTED_ERROR => (
+            ErrorCode::Conflict,
+            "This invitation was already accepted.",
+        ),
+        foks_rpc::STATUS_TEAM_ADHOC_DUPLICATE_ERROR => (
+            ErrorCode::Conflict,
+            "An identical share already exists.",
+        ),
+        foks_rpc::STATUS_BAD_ARGS_ERROR => (
+            ErrorCode::InvalidRequest,
+            "The server rejected the request as malformed.",
+        ),
+        foks_rpc::STATUS_BAD_INVITE_CODE_ERROR => (
+            ErrorCode::InvalidRequest,
+            "That invitation code is not valid.",
+        ),
+        foks_rpc::STATUS_BAD_PASSPHRASE_ERROR => (
+            ErrorCode::InvalidRequest,
+            "That passphrase is not correct.",
+        ),
+        foks_rpc::STATUS_KEX_BAD_SECRET => (
+            ErrorCode::InvalidRequest,
+            "The pairing phrase did not match. Check it and try again.",
+        ),
+        foks_rpc::STATUS_PASSPHRASE_NOT_FOUND_ERROR => (
+            ErrorCode::OperationFailed,
+            "No passphrase is set for this account.",
+        ),
+        foks_rpc::STATUS_USER_NOT_FOUND_ERROR => (
+            ErrorCode::OperationFailed,
+            "No user by that name exists on this server.",
+        ),
+        foks_rpc::STATUS_WRONG_USER_ERROR => (
+            ErrorCode::OperationFailed,
+            "These credentials belong to a different user.",
+        ),
+        foks_rpc::STATUS_KEY_NOT_FOUND_ERROR => (
+            ErrorCode::OperationFailed,
+            "The server does not recognize this key.",
+        ),
+        foks_rpc::STATUS_PERMISSION_ERROR => (
+            ErrorCode::OperationFailed,
+            "The server refused permission for this action.",
+        ),
+        foks_rpc::STATUS_EXPIRED_ERROR => (
+            ErrorCode::OperationFailed,
+            "This request expired. Start it again.",
+        ),
+        foks_rpc::STATUS_TIMEOUT_ERROR => (
+            ErrorCode::OperationFailed,
+            "The server timed out. Try again.",
+        ),
+        foks_rpc::STATUS_NOT_IMPLEMENTED => (
+            ErrorCode::OperationFailed,
+            "The server does not support this operation.",
+        ),
+        foks_rpc::STATUS_GENERIC_NOT_FOUND_ERROR => (
+            ErrorCode::OperationFailed,
+            "The server has no such record.",
+        ),
+        foks_rpc::STATUS_TEAM_NOT_FOUND_ERROR => (
+            ErrorCode::OperationFailed,
+            "The server has no such team.",
+        ),
+        foks_rpc::STATUS_KV_PERM_ERROR => (
+            ErrorCode::OperationFailed,
+            "You do not have permission for this item.",
+        ),
+        foks_rpc::STATUS_KV_NOENT_ERROR => (
+            ErrorCode::OperationFailed,
+            "This item no longer exists on the server.",
+        ),
+        foks_rpc::STATUS_KV_LOCK_TIMEOUT_ERROR | foks_rpc::STATUS_KV_LOCK_ALREADY_HELD_ERROR => (
+            ErrorCode::Busy,
+            "Another change to this item is in progress. Try again.",
         ),
         _ => return None,
     };
@@ -4839,7 +5058,7 @@ mod tests {
             panic!("schema failure returned success");
         };
         assert_eq!(code, ErrorCode::OperationFailed);
-        assert!(message.contains("unsupported soft-state cache schema version"));
+        assert!(message.contains("soft-state cache schema version"));
         assert!(message.contains("/private/foks/profiles/local/soft.sqlite3"));
         assert!(message.contains("cache must be recreated"));
     }

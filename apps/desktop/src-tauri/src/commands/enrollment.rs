@@ -13,14 +13,14 @@ use crate::commands::servers::{
     check_existing_or_add_profile, require_transport_profile, valid_probe_target, CheckedProfileDto,
 };
 use crate::commands::types::MutationDto;
+use crate::commands::validation::{backup_phrase, valid_device_name, valid_username};
 use crate::commands::validation::{
-    bounded_field, bounded_local_name, bounded_secret, confirmed_passphrase, deserialize_secret,
-    invalid_request, invalid_response, optional_bounded_field, optional_confirmed_passphrase,
-    pairing_phrase, positive_recovery_serial, require_main_window, require_response_row_cap,
-    serialize_secret, valid_device_member_id_hex, valid_go_candidate_id, valid_local_name,
-    valid_response_text, valid_typed_entity_id_hex, BACKUP_ID_PREFIX, DEVICE_ID_PREFIX,
-    HOST_ID_PREFIX, MAXIMUM_FIRST_RUN_ROWS, MAXIMUM_INVITE_BYTES, MAXIMUM_RECOVERY_PHRASE_BYTES,
-    USER_ID_PREFIX,
+    bounded_field, bounded_local_name, confirmed_passphrase, deserialize_secret, invalid_request,
+    invalid_response, optional_bounded_field, optional_confirmed_passphrase, pairing_phrase,
+    positive_recovery_serial, require_main_window, require_response_row_cap, serialize_secret,
+    valid_device_member_id_hex, valid_go_candidate_id, valid_local_name, valid_response_text,
+    valid_typed_entity_id_hex, BACKUP_ID_PREFIX, DEVICE_ID_PREFIX, HOST_ID_PREFIX,
+    MAXIMUM_FIRST_RUN_ROWS, MAXIMUM_INVITE_BYTES, MAXIMUM_RECOVERY_PHRASE_BYTES, USER_ID_PREFIX,
 };
 use foks_agent_proto::{
     CredentialBackend, Operation, PendingOperationKind, PendingOperationSummary, SecretString,
@@ -603,8 +603,8 @@ pub async fn create_first_run_account(
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Enter a valid local account alias.")?;
-    let username = bounded_field(&username, 256, "Enter a username.")?;
-    let device_name = bounded_field(&device_name, 256, "Enter a device name.")?;
+    let username = valid_username(&username)?;
+    let device_name = valid_device_name(&device_name)?;
     let email = optional_bounded_field(&email, 320, "Enter a valid email address.")?;
     let invite = Zeroizing::new(invite);
     let invite = Zeroizing::new(optional_bounded_field(
@@ -698,12 +698,8 @@ pub async fn recover_owner_account(
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let target_alias = bounded_local_name(&target_alias, "Enter a valid local account alias.")?;
     let expected_alias = target_alias.clone();
-    let device_name = bounded_field(&device_name, 256, "Enter a device name.")?;
-    let phrase = bounded_secret(
-        phrase,
-        MAXIMUM_RECOVERY_PHRASE_BYTES,
-        "Recovery phrase must be a single line of at most 4,096 bytes.",
-    )?;
+    let device_name = valid_device_name(&device_name)?;
+    let phrase = backup_phrase(phrase)?;
     let serial = positive_recovery_serial()?;
     let operation = Operation::RecoverOwnerAccount {
         profile: profile.clone(),
@@ -734,12 +730,8 @@ pub async fn resume_owner_recovery(
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let target_alias = bounded_local_name(&target_alias, "Choose a valid pending recovery alias.")?;
     let expected_alias = target_alias.clone();
-    let device_name = bounded_field(&device_name, 256, "Enter a device name.")?;
-    let phrase = bounded_secret(
-        phrase,
-        MAXIMUM_RECOVERY_PHRASE_BYTES,
-        "Recovery phrase must be a single line of at most 4,096 bytes.",
-    )?;
+    let device_name = valid_device_name(&device_name)?;
+    let phrase = backup_phrase(phrase)?;
     let operation = Operation::ResumeOwnerRecovery {
         profile: profile.clone(),
         target_alias: target_alias.clone(),
@@ -867,7 +859,7 @@ pub async fn accept_device_pairing(
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let target_alias = bounded_local_name(&target_alias, "Enter a valid local account alias.")?;
     let expected = target_alias.clone();
-    let device_name = bounded_field(&device_name, 256, "Enter a device name.")?;
+    let device_name = valid_device_name(&device_name)?;
     let phrase = pairing_phrase(phrase)?;
     let serial = positive_recovery_serial()?;
     let operation = Operation::AcceptDevicePairing {
@@ -906,7 +898,7 @@ pub async fn accept_go_profile_pairing(
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let target_alias = bounded_local_name(&target_alias, "Enter a valid local account alias.")?;
     let expected = target_alias.clone();
-    let device_name = bounded_field(&device_name, 256, "Enter a device name.")?;
+    let device_name = valid_device_name(&device_name)?;
     let phrase = pairing_phrase(phrase)?;
     let serial = positive_recovery_serial()?;
     let operation = Operation::AcceptGoProfilePairing {

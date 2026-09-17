@@ -1,4 +1,3 @@
-import { AccountFields } from './first-run-account-step';
 import { LocalCompleteStep } from './first-run-complete-step';
 import { ServerVerificationStep } from './first-run-server-step';
 import { RecoveryStep } from './first-run-recovery-step';
@@ -13,6 +12,7 @@ import {
 export { FirstRunChecklistStatus } from './first-run-view';
 import { useFirstRunController } from '../use-first-run-controller';
 import {
+  clearRetainedSetups,
   retainSetup,
   retainedSetups,
   sameSetupTarget,
@@ -33,7 +33,7 @@ import {
 } from '../first-run-operations';
 import type { ProvisioningIntent } from '../first-run-state';
 import { sharedSetupRead, useSlowSetup } from '../first-run-loading';
-import { useNavigationGuard } from '../navigation-guard';
+import { NavigationPrompt, useNavigationGuard } from '../navigation-guard';
 import type { NavigationGuard } from '../location';
 import {
   useCallback,
@@ -111,6 +111,26 @@ const PERSONAL_FIXED =
 
 const MISSING_SERVER_EXPLANATION =
   'The account you were creating could not be found on the server. This may happen because of a restart, server reset, or other error.';
+
+/**
+ * The profile identifier a server address suggests: the host as letters,
+ * digits, and dashes, keeping a port only when it is not the default. So
+ * "foks.app:4430" is `foks-app` and "localhost:5000" is `localhost-5000`.
+ */
+export function profileNameFor(address: string): string {
+  const host = address
+    .trim()
+    .toLowerCase()
+    .replace(/^[a-z]+:\/\//, '')
+    .replace(/\/.*$/, '')
+    .replace(/:4430$/, '');
+  return (
+    host
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 52) || 'server'
+  );
+}
 
 function MissingServerWarning({ action }: { action: ReactNode }): ReactNode {
   return (
@@ -456,9 +476,6 @@ function FirstRunSession({
   const [goChooserDismissed, setGoChooserDismissed] = useState(false);
   const [goScanError, setGoScanError] = useState<string | null>(null);
   const [goScanAttempt, setGoScanAttempt] = useState(0);
-  const [recoveryAlias, setRecoveryAlias] = useState(
-    () => checkpoint.account?.alias ?? facts?.accountAlias ?? '',
-  );
   const [backupPhrase, setBackupPhrase] = useState<string | null>(null);
   const [phraseWritten, setPhraseWritten] = useState(false);
   // Pending path selection before confirmation.
@@ -622,7 +639,6 @@ function FirstRunSession({
     facts?.accountAlias ??
     accountAliasFor(username);
   const usernameAliasInvalid = username.trim().length > 0 && !accountAlias;
-  const recoveryTargetAlias = recoveryAlias.trim() || accountAlias;
   const goCandidates = useMemo(
     () =>
       goDiscovery?.candidates.filter(
@@ -643,7 +659,7 @@ function FirstRunSession({
     const byAlias = onHost.filter(
       (candidate) =>
         candidate.username !== undefined &&
-        accountAliasFor(candidate.username) === recoveryTargetAlias,
+        accountAliasFor(candidate.username) === accountAlias,
     );
     const match =
       byAlias.length === 1
@@ -653,18 +669,12 @@ function FirstRunSession({
           : undefined;
     if (!match) return;
     setGoCandidate(match);
-    // Mirror the chooser: suggest the CLI username as the local alias.
+    // Mirror the chooser: suggest the CLI username as the account alias.
     if (match.username)
-      setRecoveryAlias(
+      setUsername(
         (current) => current || accountAliasFor(match.username ?? ''),
       );
-  }, [
-    accountStep,
-    goCandidate,
-    goCandidates,
-    profileHostId,
-    recoveryTargetAlias,
-  ]);
+  }, [accountStep, goCandidate, goCandidates, profileHostId, accountAlias]);
   const admin = facts?.admin ?? 'group administrator';
   const adminShort = facts?.admin
     ? facts.admin.split('.')[0]
@@ -1479,7 +1489,11 @@ function FirstRunSession({
     identityGeneration.current++;
     onReplaceSession(next);
   };
-  const restartSetup = (): void => {
+  /**
+   * Setup is re-entered from the app sidebar with an account already set up,
+   * so the attempt in hand is retained rather than discarded.
+   */
+  const reenterSetup = (): void => {
     if (!recoveryActions.canRestart) return;
     try {
       retainSetup(checkpointRef.current);
@@ -1488,13 +1502,18 @@ function FirstRunSession({
       setRestartError(normalizeCommandError(error).message);
     }
   };
-  let savedAttempts: ReturnType<typeof retainedSetups> = [];
-  let savedAttemptsError: string | null = null;
-  try {
-    savedAttempts = retainedSetups();
-  } catch {
-    savedAttemptsError = 'Saved setup attempts could not be read.';
-  }
+  const [confirmingRestart, setConfirmingRestart] = useState(false);
+  /** Discards this device’s setup, retained attempts included. */
+  const startSetupOver = (): void => {
+    setConfirmingRestart(false);
+    if (!recoveryActions.canRestart) return;
+    try {
+      clearRetainedSetups();
+      replaceSession(initialFirstRun(checkpoint.path));
+    } catch (error) {
+      setRestartError(normalizeCommandError(error).message);
+    }
+  };
 
   /**
    * Setup is left through the sidebar, which clears what was typed on the way
@@ -1574,7 +1593,7 @@ function FirstRunSession({
           if (recoveries.length === 1) {
             const resumableAlias = recoveries[0]?.alias;
             if (resumableAlias) {
-              setRecoveryAlias((current) => current || resumableAlias);
+              setUsername((current) => current || resumableAlias);
             }
           }
         }
@@ -1681,12 +1700,7 @@ function FirstRunSession({
     setMessage(null);
     setServerCheckFailure(null);
     try {
-      const profileName =
-        facts?.profile ??
-        `setup-${address
-          .toLowerCase()
-          .replace(/[^a-z0-9_-]+/g, '-')
-          .slice(0, 52)}`;
+      const profileName = facts?.profile ?? profileNameFor(address);
       const report = goCandidate
         ? await bridge.checkAndAddGoProfile(
             goCandidate.candidateId,
@@ -1700,6 +1714,15 @@ function FirstRunSession({
         throw new Error(
           'The server response does not match the selected profile.',
         );
+      // A profile made here is labelled with the server's own name, so the rail
+      // reads "foks.app" rather than the identifier derived from the address.
+      if (!facts?.profile && report.canonicalName) {
+        try {
+          await bridge.setServerLabel(profileName, report.canonicalName);
+        } catch {
+          // The label is cosmetic; failing to set it does not fail the check.
+        }
+      }
       send({
         type: 'profile-checked',
         address: address.trim(),
@@ -1756,20 +1779,20 @@ function FirstRunSession({
 
   const copyGoCandidate = async (): Promise<void> => {
     if (!agentReady) return;
-    if (!profile || !goCandidate?.copyable || !recoveryTargetAlias) return;
+    if (!profile || !goCandidate?.copyable || !accountAlias) return;
     setBusy(true);
     setConnectionErrors((old) => ({ ...old, copy: null }));
     try {
       await runAccountOperation(
         'copy',
-        recoveryTargetAlias,
+        accountAlias,
         async () => {
           const copied = await bridge.copyGoProfileDevice(
             goCandidate.candidateId,
             profile.profile,
-            recoveryTargetAlias,
+            accountAlias,
           );
-          if (copied.alias !== recoveryTargetAlias)
+          if (copied.alias !== accountAlias)
             throw new Error(
               'The imported profile belongs to a different account.',
             );
@@ -1791,7 +1814,7 @@ function FirstRunSession({
       !profile ||
       !recoveryPhrase.trim() ||
       !deviceName.trim() ||
-      !recoveryTargetAlias
+      !accountAlias
     )
       return;
     setBusy(true);
@@ -1799,25 +1822,25 @@ function FirstRunSession({
     try {
       await runAccountOperation(
         'recovery',
-        recoveryTargetAlias,
+        accountAlias,
         async () => {
           const resumable = pending.find(
             (row) =>
               row.kind === 'account-recovery' &&
-              row.alias === recoveryTargetAlias &&
+              row.alias === accountAlias &&
               !row.target,
           );
           if (resumable)
             await bridge.resumeOwnerRecovery(
               profile.profile,
-              recoveryTargetAlias,
+              accountAlias,
               recoveryPhrase,
               deviceName.trim(),
             );
           else
             await bridge.recoverOwnerAccount(
               profile.profile,
-              recoveryTargetAlias,
+              accountAlias,
               recoveryPhrase,
               deviceName.trim(),
             );
@@ -1827,7 +1850,7 @@ function FirstRunSession({
           resume: pending.some(
             (row) =>
               row.kind === 'account-recovery' &&
-              row.alias === recoveryTargetAlias &&
+              row.alias === accountAlias &&
               !row.target,
           ),
           phrase: recoveryPhrase,
@@ -1848,7 +1871,7 @@ function FirstRunSession({
     if (
       !profile ||
       !goCandidate?.pairable ||
-      !recoveryTargetAlias ||
+      !accountAlias ||
       !deviceName.trim()
     )
       return;
@@ -1860,22 +1883,22 @@ function FirstRunSession({
     try {
       await runAccountOperation(
         'pairing',
-        recoveryTargetAlias,
+        accountAlias,
         async () => {
           const provision = resume
             ? await bridge.resumeGoProfilePairing(
                 goCandidate.candidateId,
                 profile.profile,
-                recoveryTargetAlias,
+                accountAlias,
               )
             : await bridge.acceptGoProfilePairing(
                 goCandidate.candidateId,
                 profile.profile,
-                recoveryTargetAlias,
+                accountAlias,
                 deviceName.trim(),
                 phrase,
               );
-          if (provision.alias !== recoveryTargetAlias) {
+          if (provision.alias !== accountAlias) {
             throw new Error(
               'The paired device credentials belong to a different account.',
             );
@@ -2189,21 +2212,49 @@ function FirstRunSession({
     <Button
       variant="primary"
       disabled={
-        busy ||
-        !recoveryTargetAlias ||
-        !recoveryPhrase.trim() ||
-        !deviceName.trim()
+        busy || !accountAlias || !recoveryPhrase.trim() || !deviceName.trim()
       }
       onClick={() => void recover()}
     >
       {pending.some(
-        (row) =>
-          row.kind === 'account-recovery' && row.alias === recoveryTargetAlias,
+        (row) => row.kind === 'account-recovery' && row.alias === accountAlias,
       )
         ? 'Resume recovery'
         : 'Recover'}
     </Button>
   );
+  /* The account alias and this device’s name identify the same account
+     whichever way it is reached, so both account pages draw them once, above
+     the ways in. */
+  const identityFields = (
+    <>
+      <SectionLabel>Account and device</SectionLabel>
+      <Inset className="account-form">
+        <InsetRow label="Account alias">
+          <input
+            aria-label="Account alias"
+            value={checkpoint.account?.username ?? username}
+            placeholder="yourname"
+            disabled={Boolean(checkpoint.account)}
+            onChange={(event) => editUsername(event.target.value)}
+          />
+        </InsetRow>
+        <InsetRow label="This device’s name">
+          <input
+            value={checkpoint.account?.deviceName ?? deviceName}
+            placeholder="Your device"
+            disabled={Boolean(checkpoint.account)}
+            onChange={(event) => setDeviceName(event.target.value)}
+          />
+        </InsetRow>
+      </Inset>
+    </>
+  );
+  const aliasInvalidNotice = usernameAliasInvalid ? (
+    <p className="crit">
+      Account alias must contain at least one letter or number.
+    </p>
+  ) : null;
   // The ways into an existing account. Recovery's primary button is
   // `recoverButton`, drawn in the page foot; the CLI cards keep their own.
   const existingCards = (
@@ -2215,27 +2266,12 @@ function FirstRunSession({
           this device.
         </p>
         <Inset className="recovery-fields">
-          {bridge.native ? (
-            <InsetRow label="Account alias">
-              <input
-                value={recoveryAlias}
-                onChange={(event) => setRecoveryAlias(event.target.value)}
-              />
-            </InsetRow>
-          ) : null}
           <InsetRow label="Phrase">
             <input
               type="password"
               aria-label="Backup phrase"
               value={recoveryPhrase}
               onChange={(event) => setRecoveryPhrase(event.target.value)}
-            />
-          </InsetRow>
-          <InsetRow label="This device’s name">
-            <input
-              value={deviceName}
-              placeholder="Your device"
-              onChange={(event) => setDeviceName(event.target.value)}
             />
           </InsetRow>
         </Inset>
@@ -2253,19 +2289,10 @@ function FirstRunSession({
             Keychain prompt. Revoking the device in either client will disable
             both.
           </p>
-          <Inset className="recovery-fields">
-            <InsetRow label="Account alias">
-              <input
-                aria-label="Copied account alias"
-                value={recoveryAlias}
-                onChange={(event) => setRecoveryAlias(event.target.value)}
-              />
-            </InsetRow>
-          </Inset>
           <Button
             variant="primary"
             className="copy-device"
-            disabled={busy || !recoveryTargetAlias}
+            disabled={busy || !accountAlias}
             onClick={() => void copyGoCandidate()}
           >
             Import credentials
@@ -2300,7 +2327,7 @@ function FirstRunSession({
               type="button"
               className="lnk"
               aria-label="Resume pairing"
-              disabled={busy || !recoveryTargetAlias || !deviceName.trim()}
+              disabled={busy || !accountAlias || !deviceName.trim()}
               onClick={() => void acceptPairing(true)}
             >
               resume pairing
@@ -2308,21 +2335,6 @@ function FirstRunSession({
             a past account.
           </p>
           <Inset className="recovery-fields">
-            <InsetRow label="Account alias">
-              <input
-                aria-label="Pairing account alias"
-                value={recoveryAlias}
-                onChange={(event) => setRecoveryAlias(event.target.value)}
-              />
-            </InsetRow>
-            <InsetRow label="This device’s name">
-              <input
-                aria-label="Pairing device name"
-                value={deviceName}
-                placeholder="Your device"
-                onChange={(event) => setDeviceName(event.target.value)}
-              />
-            </InsetRow>
             <InsetRow label="Pairing phrase">
               <input
                 type="password"
@@ -2338,7 +2350,7 @@ function FirstRunSession({
               variant="primary"
               disabled={
                 busy ||
-                !recoveryTargetAlias ||
+                !accountAlias ||
                 !deviceName.trim() ||
                 !pairingPhrase.trim()
               }
@@ -2459,15 +2471,14 @@ function FirstRunSession({
         {abortable && operationProblem !== 'profile-missing' ? (
           <div className="alt-path">
             <div className="t">
-              <b>Abort account setup</b>
+              <b>Start over</b>
               <span>
-                This does not delete an account the server may have already
-                created. It only clears the attempt from this Mac; existing
-                accounts stay under Settings → Accounts.
+                Starting over won’t delete any account already created on the
+                server. You can find existing accounts in Settings → Accounts.
               </span>
             </div>
             <Button variant="danger" onClick={discardProvisioning}>
-              Abort account setup
+              Start over
             </Button>
           </div>
         ) : null}
@@ -2653,7 +2664,7 @@ function FirstRunSession({
             onClick={() => {
               if (!goCandidate) return;
               setAddress(goCandidate.serverHint ?? '');
-              setRecoveryAlias(
+              setUsername(
                 goCandidate.username
                   ?.toLowerCase()
                   .replace(/[^a-z0-9_-]+/g, '-') ?? 'personal',
@@ -2938,9 +2949,8 @@ function FirstRunSession({
         {duplicateAlias && !busy && !identityLoading ? (
           <div className="band info" role="status">
             <span className="t">
-              <b>{duplicateAlias.alias}</b> is already set up on this Mac for{' '}
-              {profile?.canonicalName ?? 'this server'}. Use that account, or
-              choose a different username.
+              “{duplicateAlias.alias}” is already set up on this device for this
+              server. Use that account, or choose a different username.
             </span>
             <span className="a">
               <Button
@@ -2972,16 +2982,6 @@ function FirstRunSession({
     // its own panel carries the primary action.
     const ssoAvailable = Boolean(profile) && !checkpoint.account;
     const ssoSelected = !signingIn && ssoAvailable && showSso;
-    // Both ways of creating an account need the same two fields.
-    const accountFields = (
-      <AccountFields
-        username={checkpoint.account?.username ?? username}
-        deviceName={checkpoint.account?.deviceName ?? deviceName}
-        disabled={Boolean(checkpoint.account)}
-        onUsername={editUsername}
-        onDeviceName={setDeviceName}
-      />
-    );
     content = (
       <Pane
         title="Your account"
@@ -3052,6 +3052,9 @@ function FirstRunSession({
             'Your account keys are generated on this device; only the public keys are sent to the server.'
           )}
         </p>
+        {identityFields}
+        {aliasInvalidNotice}
+        <SectionLabel>Setup method</SectionLabel>
         <Inset>
           <RadioGroup label="Account setup">
             <div className="choice">
@@ -3066,7 +3069,6 @@ function FirstRunSession({
               />
               {!signingIn && !ssoSelected ? (
                 <div className="choice-body">
-                  {accountFields}
                   <Toggle
                     label="Email or invite code"
                     defaultOpen={Boolean(email || invite)}
@@ -3106,7 +3108,6 @@ function FirstRunSession({
                 />
                 {ssoSelected ? (
                   <div className="choice-body">
-                    {accountFields}
                     <Toggle label="Invite code" defaultOpen={Boolean(invite)}>
                       <Inset className="account-form">
                         <InsetRow label="Invite code">
@@ -3195,11 +3196,6 @@ function FirstRunSession({
         </Inset>
         {signingIn ? null : (
           <>
-            {usernameAliasInvalid ? (
-              <p className="crit">
-                Username must contain at least one letter or number.
-              </p>
-            ) : null}
             {message ? <p className="crit">{message}</p> : null}
             {duplicateAlias && !busy && !identityLoading ? (
               <div className="band info" role="status">
@@ -3219,67 +3215,6 @@ function FirstRunSession({
             ) : null}
           </>
         )}
-        {profile && !checkpoint.account && showSso && (
-          <SsoPanel
-            key={`${profile.profile}/${accountAlias}`}
-            bridge={bridge}
-            profile={profile.profile}
-            account={accountAlias}
-            login={false}
-            deviceName={deviceName}
-            invite={invite}
-            disabled={busy}
-            initialOperationId={
-              checkpoint.sso?.alias === accountAlias
-                ? checkpoint.sso.operationId
-                : undefined
-            }
-            initialHardware={checkpoint.sso?.hardware}
-            executeSignup={executeSsoSignup}
-            onProgress={(progress, hardware) => {
-              if (
-                progress.operationId &&
-                !checkpointRef.current.provisioning &&
-                !checkpointRef.current.provisionedAccount
-              )
-                commit({
-                  ...checkpointRef.current,
-                  sso: {
-                    operationId: progress.operationId,
-                    alias: accountAlias,
-                    hardware,
-                  },
-                });
-            }}
-            onComplete={() => {
-              setInvite('');
-              accountProvisioned(accountAlias);
-            }}
-          />
-        )}
-        {usernameAliasInvalid ? (
-          <p className="crit">
-            Username must contain at least one letter or number.
-          </p>
-        ) : null}
-        {message ? <p className="crit">{message}</p> : null}
-        {duplicateAlias && !busy && !identityLoading ? (
-          <div className="band info" role="status">
-            <span className="t">
-              <b>{duplicateAlias.alias}</b> is already set up on this Mac for{' '}
-              {profile?.canonicalName ?? 'this server'}. Use that account, or
-              choose a different username.
-            </span>
-            <span className="a">
-              <Button
-                variant="primary"
-                onClick={() => void adoptDuplicateAccount()}
-              >
-                Use existing account
-              </Button>
-            </span>
-          </div>
-        ) : null}
       </Pane>
     );
   }
@@ -3319,6 +3254,8 @@ function FirstRunSession({
           with your backup phrase
           {goCandidate ? ' or connect using the official FOKS CLI' : ''}.
         </p>
+        {identityFields}
+        {aliasInvalidNotice}
         {existingCards}
       </Pane>
     );
@@ -3797,7 +3734,7 @@ function FirstRunSession({
           groupName={checkpoint.group?.name ?? group}
           location={location}
           onNavigate={onNavigate}
-          onReenter={restartSetup}
+          onReenter={reenterSetup}
         />
       ) : (
         <SetupSidebar
@@ -3824,7 +3761,7 @@ function FirstRunSession({
           }
           recoverEnabled={Boolean(managedReport)}
           cancelDisabled={leaveDisabled}
-          onRestart={restartSetup}
+          onRestart={() => setConfirmingRestart(true)}
           restartDisabled={!recoveryActions.canRestart}
           restartReason={recoveryActions.restartReason}
           onCancel={() => {
@@ -3842,36 +3779,6 @@ function FirstRunSession({
           <p role="alert" className="crit">
             {restartError}
           </p>
-        ) : null}
-        {(state === 'who' || state === 'local') &&
-        (savedAttempts.length > 0 || savedAttemptsError) ? (
-          <section className="bandstrip" aria-label="Saved setup attempts">
-            <p>
-              Your existing accounts and server settings are kept. You can
-              continue an earlier setup below.
-            </p>
-            {savedAttemptsError ? (
-              <p role="alert">{savedAttemptsError}</p>
-            ) : null}
-            {savedAttempts.map((entry) => (
-              <Button
-                key={entry.id}
-                onClick={() => {
-                  try {
-                    replaceSession(entry.checkpoint);
-                  } catch (error) {
-                    setRestartError(normalizeCommandError(error).message);
-                  }
-                }}
-              >
-                Continue saved setup for{' '}
-                {entry.checkpoint.provisioning?.alias ??
-                  entry.checkpoint.provisionedAccount?.alias ??
-                  entry.checkpoint.sso?.alias}{' '}
-                on {entry.checkpoint.profile?.canonicalName}
-              </Button>
-            ))}
-          </section>
         ) : null}
         {slow || phraseOperation ? (
           <div className="bandstrip">
@@ -3910,6 +3817,18 @@ function FirstRunSession({
       </main>
       {state === 'added' ? (
         <AddedDetails snapshot={snapshot} storeId={addedStore} />
+      ) : null}
+      {confirmingRestart ? (
+        <NavigationPrompt
+          verdict={{
+            verdict: 'prompt',
+            title: 'Start setup over?',
+            body: 'The setup in progress on this device is discarded. Accounts already created on the server are kept.',
+            confirm: 'Start over',
+          }}
+          onConfirm={startSetupOver}
+          onCancel={() => setConfirmingRestart(false)}
+        />
       ) : null}
     </>
   );

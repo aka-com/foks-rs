@@ -755,7 +755,7 @@ for (const method of ['copy', 'pair', 'resume-pair'] as const) {
         rendered.view.getByRole('button', { name: 'Import credentials' }),
       );
     else {
-      ui.fireEvent.change(rendered.view.getByLabelText('Pairing device name'), {
+      ui.fireEvent.change(rendered.view.getByLabelText('This device’s name'), {
         target: { value: 'Mac' },
       });
       if (method === 'pair')
