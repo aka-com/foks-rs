@@ -117,18 +117,62 @@ export interface FederationEntry {
 
 /* -------------------------------------------------- servers and leases -- */
 
-/** The compatibility lease's state for one server. */
-export type LeaseState = 'fresh' | 'lapsed' | 'unavailable';
+/** Fixture URL control; production access derives from signed lease facts. */
+export type LeaseState = 'fresh' | 'lapsed';
 
-export interface Lease {
-  state: LeaseState;
-  expires_in: string | null;
+/** A structured scoped failure retained as data instead of collapsed prose. */
+export interface ServerFailure {
+  code: string;
+  message: string;
+  retryable: boolean;
+  ambiguous: boolean;
+  fatal: boolean;
+  details?: {
+    kind?: string;
+    operation?: string;
+    capability?: string;
+    profile?: string;
+    stateDir?: string;
+    reason?: string;
+    foundSchema?: number;
+    supportedSchema?: number;
+  };
 }
 
-export type ServerState =
-  'ok' | 'lease-lapsed' | 'lease-unavailable' | 'never-probed' | 'blocked';
+export type ServerTrust =
+  | { status: 'verified' }
+  | { status: 'unprobed' }
+  | { status: 'blocked'; error: ServerFailure };
 
-/** The last `ProbeReport` for a server, plus its lease. */
+export type CompatibilityLease =
+  | { status: 'not-required' }
+  | { status: 'required'; expiresAt: number }
+  | { status: 'required-unavailable' }
+  | { status: 'requirement-unknown'; error: ServerFailure };
+
+export type PassiveServerStatus =
+  | { status: 'available'; source: 'signed-server-status' }
+  | {
+      status: 'failed';
+      source: 'describe-server-status';
+      error: ServerFailure;
+    };
+
+/** Passive signed status is not evidence of a live connection. */
+export type ConnectivityObservation =
+  | { status: 'unknown' }
+  | { status: 'connected' }
+  | { status: 'failed'; error: ServerFailure };
+
+export interface ServerCapabilities {
+  chat: boolean;
+}
+
+export type ServerRestriction =
+  | { kind: 'schema-incompatible'; error: ServerFailure }
+  | { kind: 'import-verification-required'; error: ServerFailure };
+
+/** Independent facts about one configured server. */
 export interface Server {
   id: string;
   name: string;
@@ -136,10 +180,13 @@ export interface Server {
   host_id: string | null;
   chain: number | null;
   epoch: number | null;
-  lease: Lease | null;
   accounts: string[];
-  state: ServerState;
-  chat_available: boolean;
+  trust: ServerTrust;
+  compatibility: CompatibilityLease;
+  passiveStatus: PassiveServerStatus;
+  connectivity: ConnectivityObservation;
+  capabilities: ServerCapabilities;
+  restrictions: readonly ServerRestriction[];
 }
 
 export interface Account {
@@ -179,9 +226,9 @@ export interface Notification {
   action: string;
 }
 
-export interface AgentStatus {
-  phase: string;
-}
+export type AgentStatus =
+  | { readonly state: 'ready' }
+  | { readonly state: 'bootstrap'; readonly step: string };
 
 /* ---------------------------------------------------------------- world -- */
 
@@ -204,8 +251,20 @@ export interface World {
   servers: readonly Server[];
   accounts: readonly Account[];
   stores: readonly Store[];
-  unavailableStores: readonly StoreRef[];
-  accountInventoryComplete: boolean;
+  storeInventory: readonly {
+    store: StoreRef;
+    status: 'available' | 'unavailable';
+    error?: ServerFailure;
+    restrictions: readonly ServerRestriction[];
+  }[];
+  profileInventory: readonly {
+    profile: string;
+    accounts: 'complete' | 'unavailable';
+    teams: 'complete' | 'unavailable';
+  }[];
+  /** Profiles named by the authoritative catalog inventory response. */
+  catalogProfiles: readonly string[];
+  profileInventoryStatus: 'complete' | 'unavailable';
   items: readonly Item[];
   parties: readonly Party[];
   federation: readonly FederationEntry[];
@@ -214,8 +273,8 @@ export interface World {
   yubiAccounts: readonly YubiAccount[];
   cardsConnected: readonly Card[];
   notifications: readonly Notification[];
-  /** The lease world the shell is currently showing. */
-  leaseState: LeaseState;
+  /** Signed expirations already observed locally, keyed to their exact fact. */
+  observedExpiredLeases: readonly { profile: string; expiresAt: number }[];
   /** Illustrative plaintext, keyed `<store>|<path>` — a fixture extension. */
   plaintext: Readonly<Record<string, string>>;
 }

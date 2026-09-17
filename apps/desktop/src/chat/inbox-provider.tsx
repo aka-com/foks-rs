@@ -11,19 +11,25 @@ import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
 import type { World } from '../model';
 import { ChatInboxService } from './inbox-service';
+import type { ChatClock } from './inbox-service';
 const Context = createContext<ChatInboxService | null>(null);
 export function ChatInboxProvider({
   bridge,
   world,
   children,
   onNavigate,
+  clock,
 }: {
   bridge: Bridge;
   world: World;
   children: ReactNode;
   onNavigate?: (location: Location) => void;
+  clock?: ChatClock;
 }) {
-  const service = useMemo(() => new ChatInboxService(bridge), [bridge]);
+  const service = useMemo(
+    () => new ChatInboxService(bridge, clock),
+    [bridge, clock],
+  );
   useEffect(() => service.updateStores(world), [service, world]);
   useEffect(() => {
     service.start();

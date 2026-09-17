@@ -1,7 +1,7 @@
 //! Explicit native-state maintenance. Filesystem discovery never grants authority.
 mod lease;
 pub(crate) use lease::manifest_lock_file;
-pub use lease::{ClientStateLease, ClientStateMaintenanceGuard};
+pub use lease::{ClientStateLease, ClientStateMaintenanceGuard, ClientStatePathLease};
 pub(crate) mod files;
 mod inventory;
 pub(crate) mod trust;
@@ -40,5 +40,8 @@ pub use verification::{
 mod secret_file;
 pub use secret_file::{read_private_secret_file, read_transfer_key};
 mod status;
-pub use status::{maintenance_status, recover_state, MaintenanceStatus};
+pub use status::{
+    maintenance_readiness, maintenance_status, recover_state, MaintenanceReadiness,
+    MaintenanceStatus,
+};
 pub use verification::{imported_local_catalog, ImportedLocalCatalog};

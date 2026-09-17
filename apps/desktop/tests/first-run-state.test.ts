@@ -6,6 +6,7 @@ import {
   decodeFirstRunCheckpoint,
   encodeFirstRunCheckpoint,
   initialFirstRun,
+  reconcileFirstRunCheckpoint,
   transitionFirstRun,
 } from '../src/first-run-state';
 
@@ -34,7 +35,6 @@ function parsedCheckpoint(value: string): Record<string, unknown> {
 
 test('re-entering first-run resets server and account state', () => {
   let state = initialFirstRun('invited', 'boot');
-  state = transitionFirstRun(state, { type: 'initialize' });
   state = transitionFirstRun(state, { type: 'choose', path: 'invited' });
   state = transitionFirstRun(state, {
     type: 'profile-checked',
@@ -54,18 +54,21 @@ test('re-entering first-run resets server and account state', () => {
   assert.equal(state.profile, undefined);
   assert.equal(state.account, undefined);
   assert.equal(state.passphraseSet, false);
-  assert.equal(completedFirstRunSteps(state), 1);
+  assert.equal(completedFirstRunSteps(state), 0);
 });
 
-test('initialization transitions to local state when managedLocal is true', () => {
-  const state = transitionFirstRun(initialFirstRun('invited', 'boot'), {
-    type: 'initialize',
-    managedLocal: true,
-  });
-  assert.equal(state.state, 'local');
-  assert.equal(state.path, 'own');
-  assert.equal(state.managedLocal, true);
-  assert.equal(state.initialized, true);
+test('bootstrap is not persisted as onboarding progress', () => {
+  const encoded = encodeFirstRunCheckpoint(initialFirstRun('invited', 'boot'));
+  assert.equal(parsedCheckpoint(encoded).version, 2);
+  assert.equal(parsedCheckpoint(encoded).state, 'who');
+  assert.equal('initialized' in parsedCheckpoint(encoded), false);
+  assert.equal(decodeFirstRunCheckpoint(encoded)?.state, 'who');
+  assert.equal(
+    decodeFirstRunCheckpoint(
+      JSON.stringify({ ...parsedCheckpoint(encoded), initialized: true }),
+    ),
+    null,
+  );
 });
 
 test('managed local setup completes through backup to local-done', () => {
@@ -156,19 +159,17 @@ test('checkpoint encoding excludes sensitive draft fields', () => {
 test('skipped steps are excluded from completed step count', () => {
   const base = {
     ...initialFirstRun('own', 'checklist-own'),
-    initialized: true,
     profile: checked,
     serverAddress: 'foks.example',
     account: { alias: 'personal', username: 'rae', deviceName: 'Rae Mac' },
     protectSkipped: true,
   };
-  assert.equal(completedFirstRunSteps(base), 3);
+  assert.equal(completedFirstRunSteps(base), 2);
 });
 
 test('skipping protection step does not clear an already completed passphrase', () => {
   const protectedState = {
     ...initialFirstRun('own', 'protect'),
-    initialized: true,
     profile: checked,
     serverAddress: 'foks.example',
     account: { alias: 'personal', username: 'rae', deviceName: 'Rae Mac' },
@@ -177,11 +178,23 @@ test('skipping protection step does not clear an already completed passphrase', 
   const after = transitionFirstRun(protectedState, { type: 'skip-protect' });
   assert.equal(after.passphraseSet, true);
   assert.equal(after.protectSkipped, false);
-  assert.equal(completedFirstRunSteps(after), 4);
+  assert.equal(completedFirstRunSteps(after), 3);
 });
 
 test('checkpoint decoding rejects invalid versions and malformed profile fields', () => {
   assert.equal(decodeFirstRunCheckpoint('{"version":2}'), null);
+  assert.equal(
+    decodeFirstRunCheckpoint(
+      JSON.stringify({
+        ...parsedCheckpoint(
+          encodeFirstRunCheckpoint(initialFirstRun('own', 'who')),
+        ),
+        version: 1,
+        initialized: true,
+      }),
+    ),
+    null,
+  );
   const encoded = encodeFirstRunCheckpoint({
     ...initialFirstRun('own', 'checked'),
     profile: checked,
@@ -374,7 +387,6 @@ test('setting a passphrase after skipping produces a valid decodable checkpoint'
   // so the checkpoint passes decoder validation.
   const atProtect = (): ReturnType<typeof initialFirstRun> => {
     let state = initialFirstRun('own', 'boot');
-    state = transitionFirstRun(state, { type: 'initialize' });
     state = transitionFirstRun(state, { type: 'choose', path: 'own' });
     state = transitionFirstRun(state, {
       type: 'profile-checked',
@@ -428,4 +440,64 @@ test('editing a checked server clears verification and downstream setup state', 
   assert.equal(restored.state, 'address');
   assert.equal(restored.profile, undefined);
   assert.equal(restored.serverAddress, 'different.example');
+});
+
+test('incomplete authoritative inventory preserves onboarding progress', () => {
+  const saved = {
+    ...initialFirstRun('invited', 'added'),
+    profile: checked,
+    serverAddress: 'foks.example',
+    account: { alias: 'personal', username: 'old-name', deviceName: 'Mac' },
+    passphraseSet: true,
+    group: namedGroup,
+    added: true,
+  };
+  assert.equal(
+    reconcileFirstRunCheckpoint(saved, {
+      profile: 'unknown',
+      account: 'unknown',
+      group: 'unknown',
+    }),
+    saved,
+  );
+});
+
+test('confirmed missing prerequisites rewind to the earliest valid resume point', () => {
+  const saved = {
+    ...initialFirstRun('invited', 'added'),
+    profile: checked,
+    serverAddress: 'foks.example',
+    account: { alias: 'personal', username: 'rae', deviceName: 'Mac' },
+    passphraseSet: true,
+    group: namedGroup,
+    added: true,
+  };
+  const profileMissing = reconcileFirstRunCheckpoint(saved, {
+    profile: 'missing',
+    account: 'unknown',
+    group: 'unknown',
+  });
+  assert.equal(profileMissing.state, 'address');
+  assert.equal(profileMissing.serverAddress, 'foks.example');
+  assert.equal(profileMissing.profile, undefined);
+
+  const accountMissing = reconcileFirstRunCheckpoint(saved, {
+    profile: 'present',
+    account: 'missing',
+    group: 'unknown',
+  });
+  assert.equal(accountMissing.state, 'account');
+  assert.equal(accountMissing.profile, checked);
+  assert.equal(accountMissing.account, undefined);
+  assert.equal(accountMissing.passphraseSet, false);
+
+  const groupMissing = reconcileFirstRunCheckpoint(saved, {
+    profile: 'present',
+    account: 'present',
+    group: 'missing',
+  });
+  assert.equal(groupMissing.state, 'waiting');
+  assert.equal(groupMissing.account, saved.account);
+  assert.equal(groupMissing.group, undefined);
+  assert.equal(groupMissing.added, false);
 });

@@ -24,6 +24,7 @@ import {
   kindLabel,
   kindOf,
   canCreateInStore,
+  canChangeItem,
   defaultCreateStore,
   leaseLapsed,
   nameOf,
@@ -34,7 +35,9 @@ import {
   serverLeaseUnavailable,
   storeDescription,
   storeNavigationOrder,
+  storeAvailability,
   storeOf,
+  storeReadable,
 } from '../model';
 import type {
   Item,
@@ -181,6 +184,7 @@ interface NewSheetProps {
   onApplied: (message: string) => Promise<void>;
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
+  accessNow: () => number;
 }
 
 /**
@@ -201,11 +205,11 @@ function storeOption(world: World, store: Store): CardOption {
 function writeBlockReason(world: World, store: Store): string | null {
   if (canCreateInStore(world, store.id)) return null;
   if (leaseLapsed(world, store.id))
-    return 'Server connection expired. Check your network connection and server status before retrying.';
+    return 'The signed server check-in expired. Check in again before retrying.';
   if (serverBlocked(world, store.id))
     return 'Server access is blocked. Cannot create items in this vault.';
   if (serverLeaseUnavailable(world, store.id))
-    return 'Server connection status unknown. Cannot create items in this vault.';
+    return 'No usable signed server check-in is available. Cannot create items in this vault.';
   if (store.kind === 'team' && !store.active)
     return 'Group setup is incomplete. Complete setup before adding items.';
   if (store.kind === 'team')
@@ -383,6 +387,7 @@ function NewSheet({
   onApplied,
   onError,
   onMutationError,
+  accessNow,
 }: NewSheetProps): ReactNode {
   // If the specified store is not available locally, fall back to the default vault.
   const [storeId, setStoreId] = useState(() =>
@@ -478,7 +483,15 @@ function NewSheet({
 
   const pathName = path.split('/').at(-1) ?? '';
   const submit = async (): Promise<void> => {
-    if (!store || !canWrite || saving || !path.startsWith('/') || !pathName)
+    if (
+      !store ||
+      !canWrite ||
+      !storeAvailability(world, store, { nowSeconds: accessNow() }).available ||
+      !canCreateInStore(world, store.id) ||
+      saving ||
+      !path.startsWith('/') ||
+      !pathName
+    )
       return;
     setSaving(true);
     try {
@@ -787,9 +800,11 @@ export function WriteOverlay({
   onApplied,
   onError,
   onMutationError,
+  onRetryAgent,
   onRefreshConflict,
   onDiscardConflict,
   onOpenExisting,
+  accessNow = () => Date.now() / 1000,
 }: {
   world: World;
   bridge: Bridge;
@@ -798,11 +813,13 @@ export function WriteOverlay({
   onApplied: (message: string) => Promise<void>;
   onError: (error: unknown, item?: Item) => void;
   onMutationError: MutationFailureHandler;
+  onRetryAgent: () => Promise<void>;
   onRefreshConflict: (item: Item, draft: string) => Promise<void>;
   onDiscardConflict: () => void;
   onOpenExisting: (
     workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'exists' }>,
   ) => Promise<void>;
+  accessNow?: () => number;
 }): ReactNode {
   if (!workflow) return null;
   if (workflow.kind === 'agent-lost')
@@ -824,8 +841,7 @@ export function WriteOverlay({
               onClick={() => {
                 void (async () => {
                   try {
-                    await bridge.retryAgentConnection();
-                    await onApplied('Reconnected to the local agent');
+                    await onRetryAgent();
                     setWorkflow(null);
                   } catch (error) {
                     onError(error);
@@ -854,6 +870,7 @@ export function WriteOverlay({
           onApplied={onApplied}
           onError={(error) => onError(error)}
           onMutationError={onMutationError}
+          accessNow={accessNow}
         />
       </DismissibleDialog>
     );
@@ -885,6 +902,8 @@ export function WriteOverlay({
     );
   return (
     <DeleteSheet
+      world={world}
+      accessNow={accessNow}
       workflow={workflow}
       bridge={bridge}
       setWorkflow={setWorkflow}
@@ -1000,12 +1019,16 @@ function ConflictSheet({
  * Confirmation dialog for deleting an item.
  */
 function DeleteSheet({
+  world,
+  accessNow,
   workflow,
   bridge,
   setWorkflow,
   onApplied,
   onMutationError,
 }: {
+  world: World;
+  accessNow: () => number;
   workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'delete' }>;
   bridge: Bridge;
   setWorkflow: (workflow: WriteWorkflow) => void;
@@ -1033,7 +1056,17 @@ function DeleteSheet({
             danger
             disabled={deleting}
             onClick={() => {
-              if (deleting) return;
+              const store = storeOf(world, workflow.item.store);
+              if (
+                deleting ||
+                !store ||
+                !storeAvailability(world, store, {
+                  nowSeconds: accessNow(),
+                }).available ||
+                !storeReadable(world, workflow.item.store) ||
+                !canChangeItem(world, workflow.item)
+              )
+                return;
               setDeleting(true);
               void (async () => {
                 try {

@@ -721,8 +721,16 @@ mod tests {
             crate::ProfileRegistry::open(&source),
             Err(Error::StateRecoveryRequired)
         ));
+        assert_eq!(
+            super::super::maintenance_readiness(&source).unwrap(),
+            super::super::MaintenanceReadiness::RecoveryRequired
+        );
         fs::remove_dir(&destination).unwrap();
         recover_relocation(&destination).unwrap();
+        assert_eq!(
+            super::super::maintenance_readiness(&destination).unwrap(),
+            super::super::MaintenanceReadiness::Openable
+        );
         assert!(!source.exists());
         assert_eq!(
             crate::ClientCredentials::open(&destination)

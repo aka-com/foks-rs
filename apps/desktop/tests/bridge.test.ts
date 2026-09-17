@@ -28,6 +28,8 @@ import {
   decodeAppInfo,
   decodeGoProfileDiscovery,
   decodeAppLockState,
+  decodeAgentStatus,
+  decodeMaintenanceSnapshot,
   decodeReadItem,
   decodeServers,
   decodeParties,
@@ -37,6 +39,7 @@ import {
   loadWorld,
   enqueueProfileWork,
   normalizeCommandError,
+  onAgentReadinessRequired,
   shouldReportPassiveServerStatusError,
   roleDto,
   selectBridge,
@@ -46,7 +49,9 @@ import type { Bridge, CatalogDto } from '../src/bridge';
 import {
   canCreateInStore,
   signedLeaseState,
+  serverAvailability,
   storeReadable,
+  type Server,
   type World,
 } from '../src/model';
 import { FIXTURE } from '../src/fixture';
@@ -101,6 +106,45 @@ const checkedHost = {
   chain: 1,
   epoch: 1,
 };
+
+function listedServer(
+  id: string,
+  state: 'ok' | 'lease-lapsed' | 'lease-unavailable' | 'never-probed' | 'blocked' = 'never-probed',
+  accounts: string[] = [],
+): Server {
+  const error = {
+    code: 'server-verification-failed',
+    message: 'verification failed',
+    retryable: false,
+    ambiguous: false,
+    fatal: false,
+  };
+  return {
+    id,
+    name: id,
+    label: null,
+    host_id: null,
+    chain: null,
+    epoch: null,
+    accounts,
+    trust:
+      state === 'blocked'
+        ? { status: 'blocked', error }
+        : state === 'never-probed'
+          ? { status: 'unprobed' }
+          : { status: 'verified' },
+    compatibility:
+      state === 'lease-lapsed'
+        ? { status: 'required', expiresAt: 0 }
+        : state === 'lease-unavailable'
+          ? { status: 'required-unavailable' }
+          : { status: 'not-required' },
+    passiveStatus: { status: 'available', source: 'signed-server-status' },
+    connectivity: { status: 'unknown' },
+    capabilities: { chat: false },
+    restrictions: [],
+  };
+}
 
 test('decodeCatalog parses catalog payload and preserves store IDs', () => {
   const decoded = decodeCatalog(catalog);
@@ -856,7 +900,18 @@ test('normalizeCommandError preserves typed error fields and defaults malformed 
   assert.equal(normalizeCommandError('oops').fatal, true);
 });
 
-test('passive server status suppresses system store version failures', () => {
+test('passive server status uses structured schema codes, not wording', () => {
+  assert.equal(
+    shouldReportPassiveServerStatusError({
+      code: 'unsupported-schema',
+      message: 'wording may change without changing classification',
+      retryable: false,
+      ambiguous: false,
+      fatal: true,
+      details: { foundSchema: 23, supportedSchema: 27 },
+    }),
+    false,
+  );
   assert.equal(
     shouldReportPassiveServerStatusError({
       code: 'operation-failed',
@@ -866,8 +921,119 @@ test('passive server status suppresses system store version failures', () => {
       ambiguous: false,
       fatal: true,
     }),
-    false,
+    true,
   );
+});
+
+test('agent status decoding preserves bootstrap as a non-ready variant', () => {
+  assert.deepEqual(decodeAgentStatus({ state: 'ready' }), { state: 'ready' });
+  assert.deepEqual(
+    decodeAgentStatus({ state: 'bootstrap', step: 'initialize-state' }),
+    { state: 'bootstrap', step: 'initialize-state' },
+  );
+});
+
+test('loadWorld never requests the catalog while the agent requires bootstrap', async () => {
+  let catalogRequests = 0;
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    agentStatus: async () => ({
+      state: 'bootstrap',
+      step: 'initialize-state',
+    }),
+    listCatalog: async () => {
+      catalogRequests++;
+      return catalog;
+    },
+  };
+  await assert.rejects(loadWorld(bridge), (error: unknown) => {
+    assert.equal(normalizeCommandError(error).code, 'bootstrap-required');
+    return true;
+  });
+  assert.equal(catalogRequests, 0);
+});
+
+test('loadWorld propagates catalog-wide readiness failures to the lifecycle owner', async () => {
+  const readiness: string[] = [];
+  const unlisten = onAgentReadinessRequired((error) => {
+    readiness.push(error.code);
+  });
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    listCatalog: async () => ({
+      ...catalog,
+      failures: [
+        {
+          scope: 'profile',
+          profile: 'foks.example.net',
+          source: 'catalog',
+          error: {
+            code: 'bootstrap-required',
+            message: 'Agent state changed while loading the catalog.',
+            retryable: false,
+            ambiguous: false,
+            fatal: false,
+          },
+        },
+      ],
+    }),
+  };
+  try {
+    await assert.rejects(loadWorld(bridge), (error: unknown) => {
+      assert.equal(normalizeCommandError(error).code, 'bootstrap-required');
+      return true;
+    });
+    assert.deepEqual(readiness, ['bootstrap-required']);
+  } finally {
+    unlisten();
+  }
+});
+
+test('loadWorld reports native agent loss once without mislabeling it as lease failure', async () => {
+  const previousWindow = globalThis.window;
+  Object.defineProperty(globalThis, 'window', {
+    value: {
+      __TAURI_INTERNALS__: {
+        invoke: async () => {
+          throw {
+            code: 'agent-lost',
+            message: 'Agent connection closed.',
+            retryable: true,
+            ambiguous: false,
+            fatal: false,
+          };
+        },
+      },
+    },
+    configurable: true,
+  });
+  const readiness: string[] = [];
+  const unlisten = onAgentReadinessRequired((error) => {
+    readiness.push(error.code);
+  });
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    native: true,
+    listCatalog: async () => catalog,
+    listServers: async () => [listedServer('foks.example.net', 'ok')],
+    describeServerStatus: (profile) => tauriBridge.describeServerStatus(profile),
+  };
+  try {
+    await assert.rejects(loadWorld(bridge), (error: unknown) => {
+      assert.equal(normalizeCommandError(error).code, 'agent-lost');
+      return true;
+    });
+    assert.deepEqual(readiness, ['agent-lost']);
+  } finally {
+    unlisten();
+    if (previousWindow === undefined)
+      delete (globalThis as { window?: Window }).window;
+    else
+      Object.defineProperty(globalThis, 'window', {
+        value: previousWindow,
+        configurable: true,
+      });
+  }
 });
 
 test('selectBridge returns native tauriBridge when window.__TAURI_INTERNALS__ is present', async () => {
@@ -924,7 +1090,6 @@ test('discoverUnboundTeams discovers teams only for accounts with no binding', a
   };
   const world: World = {
     ...FIXTURE,
-    accountInventoryComplete: true,
     accounts: [
       {
         store: 'acct:personal',
@@ -967,7 +1132,6 @@ test('discoverUnboundTeams discovers teams only for accounts with no binding', a
 test('startup discovery requests a catalog reload even for empty or failed discovery', async () => {
   const world: World = {
     ...FIXTURE,
-    accountInventoryComplete: true,
     stores: FIXTURE.stores.filter((store) => store.kind !== 'team'),
     accounts: FIXTURE.accounts.slice(0, 1),
   };
@@ -1014,25 +1178,14 @@ test('loadWorld makes a single catalog call and does not leak fixture data in na
   const bridge: Bridge = {
     ...mockBridge(FIXTURE),
     native: true,
-    agentStatus: async () => ({ phase: 'Ready' }),
+    agentStatus: async () => ({ state: 'ready' }),
     listCatalog: async () => {
       calls += 1;
       return catalog;
     },
     listStores: async () => ({ ...catalog, items: [] }),
     listServers: async () => [
-      {
-        id: 'foks.example.net',
-        name: 'foks.example.net',
-        label: null,
-        host_id: null,
-        chain: null,
-        epoch: null,
-        lease: null,
-        accounts: ['rae'],
-        state: 'never-probed',
-        chat_available: false,
-      },
+      listedServer('foks.example.net', 'never-probed', ['rae']),
     ],
     describeServerStatus: async () => ({
       profile: 'foks.example.net',
@@ -1108,21 +1261,10 @@ test('loadWorld keeps known stores visible while revoking access to unavailable 
   const bridge: Bridge = {
     ...mockBridge(FIXTURE),
     native: true,
-    agentStatus: async () => ({ phase: 'Ready' }),
+    agentStatus: async () => ({ state: 'ready' }),
     listCatalog: async () => response,
     listServers: async () => [
-      {
-        id: 'foks.example.net',
-        name: 'foks.example.net',
-        label: null,
-        host_id: null,
-        chain: null,
-        epoch: null,
-        lease: null,
-        accounts: ['rae'],
-        state: 'never-probed',
-        chat_available: false,
-      },
+      listedServer('foks.example.net', 'never-probed', ['rae']),
     ],
     describeServerStatus: async () => ({
       profile: 'foks.example.net',
@@ -1141,8 +1283,14 @@ test('loadWorld keeps known stores visible while revoking access to unavailable 
     world.stores.map((store) => store.id),
     [known.id],
   );
-  assert.deepEqual(world.unavailableStores, [known.id]);
-  assert.equal(world.accountInventoryComplete, false);
+  assert.deepEqual(world.storeInventory, [
+    {
+      store: known.id,
+      status: 'unavailable',
+      restrictions: [],
+    },
+  ]);
+  assert.equal(world.profileInventory[0]?.accounts, 'unavailable');
   assert.equal(storeReadable(world, known.id), false);
   assert.equal(canCreateInStore(world, known.id), false);
 });
@@ -1153,24 +1301,13 @@ test('creates a notification when a server cannot be described instead of omitti
   const bridge: Bridge = {
     ...mockBridge(FIXTURE),
     native: true,
-    agentStatus: async () => ({ phase: 'Ready' }),
+    agentStatus: async () => ({ state: 'ready' }),
     listCatalog: async () => {
       return catalog;
     },
     listStores: async () => ({ ...catalog, items: [] }),
     listServers: async () => [
-      {
-        id: 'foks.example.net',
-        name: 'foks.example.net',
-        label: null,
-        host_id: null,
-        chain: null,
-        epoch: null,
-        lease: null,
-        accounts: ['rae'],
-        state: 'never-probed',
-        chat_available: false,
-      },
+      listedServer('foks.example.net', 'never-probed', ['rae']),
     ],
     // Verify that an unprobed server with null host raises a never-probed notification.
     describeServerStatus: async () => ({
@@ -1200,7 +1337,7 @@ test('creates a notification when a server cannot be described instead of omitti
   };
   const world = await loadWorld(bridge, FIXTURE);
   const note = world.notifications.find((entry) =>
-    entry.id.startsWith('never-probed-'),
+    entry.id.startsWith('verification-required-'),
   );
   assert.ok(
     note,
@@ -1243,23 +1380,10 @@ test('loadWorld does not fetch team rosters for blocked profiles', async () => {
   const bridge: Bridge = {
     ...mockBridge(FIXTURE),
     native: true,
-    agentStatus: async () => ({ phase: 'Ready' }),
+    agentStatus: async () => ({ state: 'ready' }),
     listCatalog: async () => blocked,
     listStores: async () => ({ ...blocked, items: [] }),
-    listServers: async () => [
-      {
-        id: 'foks.example.net',
-        name: 'foks.example.net',
-        label: null,
-        host_id: null,
-        chain: null,
-        epoch: null,
-        lease: null,
-        accounts: [],
-        state: 'blocked',
-        chat_available: false,
-      },
-    ],
+    listServers: async () => [listedServer('foks.example.net', 'blocked')],
     listAccounts: async () => [],
     listParties: async () => {
       rosterCalls += 1;
@@ -1323,22 +1447,11 @@ test('loadWorld does not fetch members for an inactive team', async () => {
   const bridge: Bridge = {
     ...mockBridge(FIXTURE),
     native: true,
-    agentStatus: async () => ({ phase: 'Ready' }),
+    agentStatus: async () => ({ state: 'ready' }),
     listCatalog: async () => pending,
     listStores: async () => ({ ...pending, items: [] }),
     listServers: async () => [
-      {
-        id: 'foks.example.net',
-        name: 'foks.example.net',
-        label: null,
-        host_id: null,
-        chain: null,
-        epoch: null,
-        lease: null,
-        accounts: ['rae'],
-        state: 'never-probed',
-        chat_available: false,
-      },
+      listedServer('foks.example.net', 'never-probed', ['rae']),
     ],
     describeServerStatus: async () => ({
       profile: 'foks.example.net',
@@ -1426,16 +1539,8 @@ test('loadWorld evaluates store access based on server lease validity and protoc
     listCatalog: async () => response,
     listServers: async () =>
       profiles.map((profile) => ({
-        id: profile,
+        ...listedServer(profile, 'never-probed', [profile]),
         name: `${profile}.example`,
-        label: null,
-        host_id: null,
-        chain: null,
-        epoch: null,
-        lease: null,
-        accounts: [profile],
-        state: 'never-probed' as const,
-        chat_available: false,
       })),
     describeServerStatus: async (profile) => {
       if (profile === 'failed')
@@ -1477,26 +1582,32 @@ test('loadWorld evaluates store access based on server lease validity and protoc
     'local aliases remain visible while unverified server contents are hidden',
   );
   assert.equal(
-    world.servers.find((server) => server.id === 'fresh')?.state,
-    'ok',
+    serverAvailability(
+      world,
+      world.servers.find((server) => server.id === 'fresh')!,
+      { nowSeconds: 100 },
+    ).available,
+    true,
+  );
+  const expired = serverAvailability(
+    world,
+    world.servers.find((server) => server.id === 'expired')!,
+    { nowSeconds: 100 },
+  );
+  assert.equal(expired.available ? 'available' : expired.reason, 'check-in-expired');
+  assert.equal(
+    world.servers.find((server) => server.id === 'missing')?.compatibility.status,
+    'required-unavailable',
   );
   assert.equal(
-    world.servers.find((server) => server.id === 'expired')?.state,
-    'lease-lapsed',
+    world.servers.find((server) => server.id === 'v019')?.compatibility.status,
+    'not-required',
   );
   assert.equal(
-    world.servers.find((server) => server.id === 'missing')?.state,
-    'lease-unavailable',
+    world.servers.find((server) => server.id === 'failed')?.passiveStatus.status,
+    'failed',
   );
-  assert.equal(
-    world.servers.find((server) => server.id === 'v019')?.state,
-    'ok',
-  );
-  assert.equal(
-    world.servers.find((server) => server.id === 'failed')?.state,
-    'lease-unavailable',
-  );
-  assert.equal(world.leaseState, 'lapsed');
+  assert.deepEqual(world.observedExpiredLeases, []);
   assert.match(
     world.notifications.find((note) => note.id === 'status-unavailable-failed')
       ?.detail ?? '',
@@ -2267,4 +2378,53 @@ test('native loadWorld serializes group detail requests per profile', async () =
   assert.ok((peak.get('acme') ?? 0) <= 1);
   assert.equal(peak.get('personal'), 1);
   assert.equal(legacyCalls, 0);
+});
+
+test('maintenance snapshots decode typed operation and restoration outcomes', () => {
+  const snapshot = decodeMaintenanceSnapshot({
+    state: 'complete',
+    generation: 12,
+    revision: 31,
+    kind: 'export',
+    operation: {
+      status: 'completed',
+    },
+    disposition: {
+      status: 'restoration-failed',
+      root: '/tmp/current',
+      error: {
+        code: 'agent-start-failed',
+        message: 'restart failed',
+        retryable: true,
+        ambiguous: false,
+        fatal: false,
+      },
+    },
+  });
+  assert.equal(snapshot.state, 'complete');
+  if (snapshot.state !== 'complete') return;
+  assert.deepEqual(snapshot.operation, { status: 'completed' });
+  assert.equal(snapshot.disposition.status, 'restoration-failed');
+});
+
+test('maintenance snapshot decoder rejects impossible loose values', () => {
+  assert.throws(() =>
+    decodeMaintenanceSnapshot({
+      state: 'active',
+      generation: 1,
+      revision: 1,
+      kind: 'export',
+      phase: 'complete',
+    }),
+  );
+  assert.throws(() =>
+    decodeMaintenanceSnapshot({
+      state: 'complete',
+      generation: 1,
+      revision: 1,
+      kind: 'import',
+      operation: { status: 'failed', error: 'message only' },
+      disposition: { status: 'continue-current-root' },
+    }),
+  );
 });

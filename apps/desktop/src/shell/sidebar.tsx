@@ -11,6 +11,8 @@ import { Fragment, useEffect, type ReactNode } from 'react';
 import { Badge, Icon, SectionLabel, Stack } from '../components';
 import {
   partiesOf,
+  serverChatAvailable,
+  storeReadable,
   storeDescription,
   storeDescriptionState,
   storeNavigationOrder,
@@ -24,8 +26,11 @@ function chatAvailable(world: World, store: Store): boolean {
     store.kind === 'team' &&
     store.team_kind === 'named' &&
     store.active !== false &&
-    world.servers.find((server) => server.id === store.server)
-      ?.chat_available === true
+    storeReadable(world, store.id) &&
+    world.servers.some(
+      (server) =>
+        server.id === store.server && serverChatAvailable(world, server),
+    )
   );
 }
 

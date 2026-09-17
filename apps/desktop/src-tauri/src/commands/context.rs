@@ -30,7 +30,7 @@ pub struct AppState {
     pub(super) catalog_generation: AtomicU64,
     pub(super) catalog: Mutex<Option<CatalogSnapshot>>,
     mutation_in_flight: Arc<AtomicBool>,
-    pub(super) mutation_requires_refresh: AtomicBool,
+    pub(super) mutation_requires_refresh: Arc<AtomicBool>,
     pending_drop_paths: Mutex<HashMap<String, PathBuf>>,
     pub(super) accounts: Mutex<HashMap<String, AccountDto>>,
     pub(super) devices: Mutex<HashMap<String, Vec<DeviceDto>>>,
@@ -48,7 +48,7 @@ impl AppState {
             catalog_generation: AtomicU64::new(0),
             catalog: Mutex::new(None),
             mutation_in_flight: Arc::new(AtomicBool::new(false)),
-            mutation_requires_refresh: AtomicBool::new(false),
+            mutation_requires_refresh: Arc::new(AtomicBool::new(false)),
             pending_drop_paths: Mutex::new(HashMap::new()),
             accounts: Mutex::new(HashMap::new()),
             devices: Mutex::new(HashMap::new()),
@@ -870,6 +870,22 @@ impl AppState {
                 AgentError::new(
                     "mutation-in-flight",
             "Another change is currently in progress. Wait for it to complete before trying again.",
+                    false,
+                )
+            })?;
+        Ok(MutationGuard(Arc::clone(&self.mutation_in_flight)))
+    }
+
+    /// Serializes credential initialization with other mutations while permitting
+    /// bootstrap repair after an uncertain response. Initialization does not clear
+    /// `mutation_requires_refresh`; a successful catalog reconciliation clears it.
+    pub fn begin_initialization(&self) -> Result<MutationGuard, AgentError> {
+        self.mutation_in_flight
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| {
+                AgentError::new(
+                    "mutation-in-flight",
+                    "Another change is currently in progress. Wait for it to complete before trying again.",
                     false,
                 )
             })?;

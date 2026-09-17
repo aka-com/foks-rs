@@ -50,6 +50,7 @@ export function chatClient(bridge: Bridge, profile: string, storeId: string) {
   const request = async <A extends ChatAction>(
     action: A,
     background?: BackgroundHistoryWork,
+    authorize?: (phase: 'before' | 'after') => void,
   ): Promise<ReplyFor<A>> => {
     if (background && action.action !== 'notification-history')
       throw integrity(
@@ -57,8 +58,10 @@ export function chatClient(bridge: Bridge, profile: string, storeId: string) {
       );
     const work = async () => {
       if (closed) throw cancelled();
+      authorize?.('before');
       const reply = await bridge.chat(storeId, action, view);
       if (closed) throw cancelled();
+      authorize?.('after');
       if (scope && !sameScope(scope, reply.scope)) throw integrity();
       if (reply.result.kind !== kinds[action.action])
         throw integrity('Unexpected chat response.');

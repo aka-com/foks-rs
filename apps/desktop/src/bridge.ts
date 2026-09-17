@@ -35,6 +35,7 @@ import { itemKey, parseRole } from './model';
 import type {
   AgentStatus,
   Account,
+  AvailabilityReason,
   GroupDetailFailure,
   Item,
   NodeKind,
@@ -43,11 +44,15 @@ import type {
   Notification,
   RoleWire,
   Server,
+  ServerRestriction,
   Store,
   StoreRef,
   World,
 } from './model';
-import { serverLeaseState } from './model';
+import {
+  profileInventoryComplete,
+  serverFactAvailability,
+} from './model';
 
 declare global {
   interface Window {
@@ -67,8 +72,71 @@ export interface CommandError {
     operation?: string;
     capability?: string;
     profile?: string;
+    stateDir?: string;
     reason?: string;
+    foundSchema?: number;
+    supportedSchema?: number;
   };
+}
+
+export type MaintenanceKind = 'export' | 'import' | 'verify' | 'relocate';
+export type MaintenancePhase =
+  | 'selecting'
+  | 'confirming'
+  | 'quiescing'
+  | 'running'
+  | 'restoring';
+export type MaintenanceOperationOutcome =
+  | { status: 'cancelled' }
+  | { status: 'completed' }
+  | { status: 'failed'; error: CommandError };
+export type MaintenanceDisposition =
+  | { status: 'continue-current-root' }
+  | { status: 'restart-selected-root'; root: string }
+  | { status: 'recovery-required'; root: string }
+  | { status: 'restoration-failed'; root: string; error: CommandError };
+export type MaintenanceSnapshot =
+  | { state: 'idle'; generation: number; revision: number }
+  | {
+      state: 'active';
+      generation: number;
+      revision: number;
+      kind: MaintenanceKind;
+      phase: MaintenancePhase;
+    }
+  | {
+      state: 'complete';
+      generation: number;
+      revision: number;
+      kind: MaintenanceKind;
+      operation: MaintenanceOperationOutcome;
+      disposition: MaintenanceDisposition;
+    };
+
+type AgentReadinessListener = (error: CommandError) => void;
+const readinessListeners = new Set<AgentReadinessListener>();
+const reportedReadinessErrors = new WeakSet<object>();
+
+export function onAgentReadinessRequired(
+  listener: AgentReadinessListener,
+): () => void {
+  readinessListeners.add(listener);
+  return () => readinessListeners.delete(listener);
+}
+
+export function isAgentReadinessError(error: CommandError): boolean {
+  return (
+    error.code === 'bootstrap-required' ||
+    error.code === 'agent-lost' ||
+    error.code === 'version-mismatch'
+  );
+}
+
+function reportReadinessError(error: CommandError): void {
+  if (!isAgentReadinessError(error)) return;
+  if (reportedReadinessErrors.has(error)) return;
+  reportedReadinessErrors.add(error);
+  for (const listener of readinessListeners) listener(error);
 }
 
 export type GroupDetailResult<T> =
@@ -579,10 +647,11 @@ export function decodeCommandAck(value: unknown): CommandAck {
   return { ok: true };
 }
 export interface Bridge {
-  relocateClientState(): Promise<CommandAck>;
+  relocateClientState(): Promise<MaintenanceSnapshot>;
   maintainClientState(
     action: 'export' | 'import' | 'verify',
-  ): Promise<CommandAck>;
+  ): Promise<MaintenanceSnapshot>;
+  clientStateMaintenanceStatus(): Promise<MaintenanceSnapshot>;
   configureWebAdmin(
     profile: string,
     accountAlias: string,
@@ -818,6 +887,9 @@ export interface Bridge {
     listener: (kind: 'activate' | 'error') => void,
   ): Promise<Unlisten>;
   onOpenSettings(listener: () => void): Promise<Unlisten>;
+  onMaintenanceStatus(
+    listener: (snapshot: MaintenanceSnapshot) => void,
+  ): Promise<Unlisten>;
 }
 
 const pendingServerStatuses = new WeakMap<
@@ -993,10 +1065,22 @@ function optionalString(value: unknown, at: string): string | undefined {
   return value === undefined ? undefined : string(value, at);
 }
 
+function optionalInteger(value: unknown, at: string): number | undefined {
+  return value === undefined ? undefined : integer(value, at);
+}
+
 function decodeServer(value: unknown, at: string): Server {
   const item = record(value, at);
   const state = string(item.state, `${at}.state`);
-  if (!['ok', 'lease-lapsed', 'never-probed', 'blocked'].includes(state)) {
+  if (
+    ![
+      'ok',
+      'lease-lapsed',
+      'lease-unavailable',
+      'never-probed',
+      'blocked',
+    ].includes(state)
+  ) {
     throw new Error(`${at}.state is not a server state`);
   }
   if (item.lease !== null)
@@ -1008,10 +1092,37 @@ function decodeServer(value: unknown, at: string): Server {
     host_id: nullableString(item.host_id, `${at}.host_id`),
     chain: nullableInteger(item.chain, `${at}.chain`),
     epoch: nullableInteger(item.epoch, `${at}.epoch`),
-    lease: null,
     accounts: array(item.accounts, `${at}.accounts`, string),
-    state: state as Server['state'],
-    chat_available: bool(item.chat_available, `${at}.chat_available`),
+    trust:
+      state === 'blocked'
+        ? {
+            status: 'blocked',
+            error: {
+              code: 'server-verification-failed',
+              message: 'Server verification failed.',
+              retryable: false,
+              ambiguous: false,
+              fatal: false,
+            },
+          }
+        : state === 'never-probed'
+          ? { status: 'unprobed' }
+          : { status: 'verified' },
+    compatibility:
+      state === 'lease-lapsed'
+        ? { status: 'required', expiresAt: 0 }
+        : state === 'lease-unavailable'
+          ? { status: 'required-unavailable' }
+          : { status: 'not-required' },
+    passiveStatus: {
+      status: 'available',
+      source: 'signed-server-status',
+    },
+    connectivity: { status: 'unknown' },
+    capabilities: {
+      chat: bool(item.chat_available, `${at}.chat_available`),
+    },
+    restrictions: [],
   };
 }
 
@@ -1100,7 +1211,13 @@ function decodeErrorDetails(
     operation: optionalString(item.operation, `${at}.operation`),
     capability: optionalString(item.capability, `${at}.capability`),
     profile: optionalString(item.profile, `${at}.profile`),
+    stateDir: optionalString(item.stateDir, `${at}.stateDir`),
     reason: optionalString(item.reason, `${at}.reason`),
+    foundSchema: optionalInteger(item.foundSchema, `${at}.foundSchema`),
+    supportedSchema: optionalInteger(
+      item.supportedSchema,
+      `${at}.supportedSchema`,
+    ),
   };
 }
 
@@ -1114,6 +1231,90 @@ function decodeCommandError(value: unknown, at: string): CommandError {
     ambiguous: bool(item.ambiguous, `${at}.ambiguous`),
     fatal: bool(item.fatal, `${at}.fatal`),
     ...(details ? { details } : {}),
+  };
+}
+
+export function decodeMaintenanceSnapshot(value: unknown): MaintenanceSnapshot {
+  const at = 'maintenance snapshot';
+  const item = record(value, at);
+  const state = string(item.state, `${at}.state`);
+  const generation = integer(item.generation, `${at}.generation`);
+  const revision = integer(item.revision, `${at}.revision`);
+  if (generation < 0) throw new Error(`${at}.generation must be nonnegative`);
+  if (revision < 0) throw new Error(`${at}.revision must be nonnegative`);
+  if (state === 'idle') return { state, generation, revision };
+  const kind = string(item.kind, `${at}.kind`);
+  if (!['export', 'import', 'verify', 'relocate'].includes(kind))
+    throw new Error(`${at}.kind is invalid`);
+  const typedKind = kind as MaintenanceKind;
+  if (state === 'active') {
+    const phase = string(item.phase, `${at}.phase`);
+    if (
+      !['selecting', 'confirming', 'quiescing', 'running', 'restoring'].includes(
+        phase,
+      )
+    )
+      throw new Error(`${at}.phase is invalid`);
+    return {
+      state,
+      generation,
+      revision,
+      kind: typedKind,
+      phase: phase as MaintenancePhase,
+    };
+  }
+  if (state !== 'complete') throw new Error(`${at}.state is invalid`);
+  const operationItem = record(item.operation, `${at}.operation`);
+  const operationStatus = string(
+    operationItem.status,
+    `${at}.operation.status`,
+  );
+  let operation: MaintenanceOperationOutcome;
+  if (operationStatus === 'cancelled' || operationStatus === 'completed') {
+    operation = { status: operationStatus };
+  } else if (operationStatus === 'failed') {
+    operation = {
+      status: 'failed',
+      error: decodeCommandError(operationItem.error, `${at}.operation.error`),
+    };
+  } else {
+    throw new Error(`${at}.operation.status is invalid`);
+  }
+  const dispositionItem = record(item.disposition, `${at}.disposition`);
+  const dispositionStatus = string(
+    dispositionItem.status,
+    `${at}.disposition.status`,
+  );
+  let disposition: MaintenanceDisposition;
+  if (dispositionStatus === 'continue-current-root') {
+    disposition = { status: dispositionStatus };
+  } else if (
+    dispositionStatus === 'restart-selected-root' ||
+    dispositionStatus === 'recovery-required'
+  ) {
+    disposition = {
+      status: dispositionStatus,
+      root: string(dispositionItem.root, `${at}.disposition.root`),
+    };
+  } else if (dispositionStatus === 'restoration-failed') {
+    disposition = {
+      status: dispositionStatus,
+      root: string(dispositionItem.root, `${at}.disposition.root`),
+      error: decodeCommandError(
+        dispositionItem.error,
+        `${at}.disposition.error`,
+      ),
+    };
+  } else {
+    throw new Error(`${at}.disposition.status is invalid`);
+  }
+  return {
+    state,
+    generation,
+    revision,
+    kind: typedKind,
+    operation,
+    disposition,
   };
 }
 
@@ -1829,6 +2030,12 @@ function decodeWindowState(value: unknown): WindowStateEvent {
 }
 
 export function normalizeCommandError(value: unknown): CommandError {
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    reportedReadinessErrors.has(value)
+  )
+    return value as CommandError;
   try {
     return decodeCommandError(value, 'command error');
   } catch {
@@ -1845,55 +2052,67 @@ export function normalizeCommandError(value: unknown): CommandError {
   }
 }
 
-function isHardStateSchemaFailure(message: string): boolean {
-  return /system store is out of date \(v\d+\), could not auto-update to current version \(v\d+\)/.test(
-    message,
-  );
+function isHardStateSchemaFailure(error: CommandError): boolean {
+  return error.code === 'unsupported-schema';
 }
 
-function resetInstruction(profile: string): string {
-  return `Go to Settings → Servers → ${profile} → Reset, and clear your data to proceed.`;
+function restrictionFromError(error: CommandError): ServerRestriction | undefined {
+  if (error.code === 'unsupported-schema')
+    return { kind: 'schema-incompatible', error };
+  if (error.code === 'import-verification-required')
+    return { kind: 'import-verification-required', error };
+  return undefined;
+}
+
+function schemaInstruction(profile: string): string {
+  return `Inspect Settings → Servers → ${profile} and use a client that supports this schema. FOKS will not reset the data automatically.`;
 }
 
 export function shouldReportPassiveServerStatusError(error: unknown): boolean {
-  return !isHardStateSchemaFailure(normalizeCommandError(error).message);
+  return !isHardStateSchemaFailure(normalizeCommandError(error));
 }
 
 function notificationsOf(
   catalog: CatalogDto,
   servers: readonly Server[],
+  nowSeconds: number,
 ): Notification[] {
   // Generate a notification for any server state that hides stores,
   // including unverified servers.
   const stopped: Partial<
-    Record<Server['state'], { detail: string; action: string }>
+    Record<AvailabilityReason, { detail: string; action: string }>
   > = {
-    'lease-lapsed': {
-      detail: `The server session has expired. Vaults are unavailable until reconnected.`,
-      action: 'Reconnect',
+    'check-in-expired': {
+      detail: `The signed server check-in has expired. Vaults are unavailable until a newer check-in is verified.`,
+      action: 'Check in',
     },
-    'lease-unavailable': {
-      detail: `Unable to verify connection with this server. Vaults are unavailable until verified.`,
+    'check-in-unavailable': {
+      detail: `No usable signed check-in is available. Vaults are unavailable until one is verified.`,
       action: 'Inspect',
     },
-    blocked: {
+    'server-status-unavailable': {
+      detail: `Server status is unavailable. Vaults remain unavailable until signed status can be read.`,
+      action: 'Inspect',
+    },
+    'verification-failed': {
       detail: `Server verification failed because its history does not match the pinned record. View server details to review the error.`,
       action: 'Inspect',
     },
-    'never-probed': {
+    'verification-required': {
       detail: `This server has not been verified yet. Check the server to establish a connection and view its contents.`,
       action: 'Verify',
     },
   };
   const notes: Notification[] = servers.flatMap((server) => {
-    const reason = stopped[server.state];
-    return reason
+    const availability = serverFactAvailability(server, [], { nowSeconds });
+    const copy = availability.available ? undefined : stopped[availability.reason];
+    return copy
       ? [
           {
-            id: `${server.state}-${server.id}`,
+            id: `${availability.available ? 'available' : availability.reason}-${server.id}`,
             severity: 'crit' as const,
             title: `${server.name} is locked`,
-            ...reason,
+            ...copy,
           },
         ]
       : [];
@@ -1906,8 +2125,8 @@ function notificationsOf(
         failure.scope === 'store'
           ? `Could not load vault on ${failure.profile}`
           : `Could not load ${failure.source} on ${failure.profile}`,
-      detail: isHardStateSchemaFailure(failure.error.message)
-        ? `${failure.error.message} ${resetInstruction(failure.profile)}`
+      detail: isHardStateSchemaFailure(failure.error)
+        ? `${failure.error.message} ${schemaInstruction(failure.profile)}`
         : failure.error.message,
       action: failure.error.retryable ? 'Retry' : 'Inspect',
     });
@@ -1920,15 +2139,24 @@ async function checked<T>(
   args: Record<string, unknown> | undefined,
   decode: (value: unknown) => T,
 ): Promise<T> {
-  return decode(await invoke<unknown>(command, args));
+  try {
+    return decode(await invoke<unknown>(command, args));
+  } catch (error) {
+    const typed = normalizeCommandError(error);
+    reportReadinessError(typed);
+    throw typed;
+  }
 }
 
-function decodeAgentStatus(value: unknown): AgentStatus {
+export function decodeAgentStatus(value: unknown): AgentStatus {
   const item = record(value, 'agent_status response');
   const state = string(item.state, 'agent_status.state');
-  if (state === 'ready') return { phase: 'Ready' };
+  if (state === 'ready') return { state: 'ready' };
   if (state === 'bootstrap') {
-    return { phase: `Bootstrap · ${string(item.step, 'agent_status.step')}` };
+    return {
+      state: 'bootstrap',
+      step: string(item.step, 'agent_status.step'),
+    };
   }
   throw new Error('agent_status.state is not ready or bootstrap');
 }
@@ -2091,9 +2319,15 @@ export const tauriBridge: Bridge = {
     checked('rerun_group_admission', { storeId, operationId }, decodeMutation),
   chatLocal: (action) => checked('chat_local', { action }, decodeLocalSession),
   relocateClientState: () =>
-    checked('relocate_client_state', {}, decodeCommandAck),
+    checked('relocate_client_state', {}, decodeMaintenanceSnapshot),
   maintainClientState: (action) =>
-    checked('maintain_client_state', { action }, decodeCommandAck),
+    checked('maintain_client_state', { action }, decodeMaintenanceSnapshot),
+  clientStateMaintenanceStatus: () =>
+    checked(
+      'client_state_maintenance_status',
+      undefined,
+      decodeMaintenanceSnapshot,
+    ),
   configureWebAdmin: (profile, accountAlias, destination) =>
     checked(
       'configure_web_admin',
@@ -2358,6 +2592,10 @@ export const tauriBridge: Bridge = {
     }
   },
   onOpenSettings: async (listener) => listen('foks://open-settings', listener),
+  onMaintenanceStatus: async (listener) =>
+    listen<unknown>('foks://maintenance-status', (event) => {
+      listener(decodeMaintenanceSnapshot(event.payload));
+    }),
 };
 
 export function isNativeHost(): boolean {
@@ -2430,7 +2668,7 @@ export async function discoverUnboundTeams(
   bridge: Bridge,
   world: World,
 ): Promise<boolean> {
-  if (!world.accountInventoryComplete) return false;
+  if (!profileInventoryComplete(world, 'accounts')) return false;
   const bound = new Set<string>();
   for (const store of world.stores) {
     if (store.kind === 'team')
@@ -2457,10 +2695,30 @@ export async function loadWorld(
   base = bridge.fixtureWorld,
   nowSeconds: number = Math.floor(Date.now() / 1000),
 ): Promise<World> {
-  const [agent, response] = await Promise.all([
-    bridge.agentStatus(),
-    bridge.listCatalog(),
-  ]);
+  const agent = await bridge.agentStatus();
+  if (agent.state !== 'ready') {
+    const error: CommandError = {
+      code: 'bootstrap-required',
+      message:
+        'The local agent must finish initialization before loading vaults.',
+      retryable: false,
+      ambiguous: false,
+      fatal: false,
+      details: { reason: agent.step },
+    };
+    reportReadinessError(error);
+    throw error;
+  }
+  const response = await bridge.listCatalog();
+  const globalFailure = response.failures.find((failure) =>
+    ['bootstrap-required', 'agent-lost', 'version-mismatch'].includes(
+      failure.error.code,
+    ),
+  );
+  if (globalFailure) {
+    reportReadinessError(globalFailure.error);
+    throw globalFailure.error;
+  }
   const liveStores = response.stores as Store[];
   const storesById = new Map<StoreRef, Store>();
   for (const store of response.knownStores as Store[])
@@ -2468,9 +2726,28 @@ export async function loadWorld(
   for (const store of liveStores) storesById.set(store.id, store);
   const stores = [...storesById.values()];
   const liveStoreIds = new Set(liveStores.map((store) => store.id));
-  const unavailableStores = stores
-    .filter((store) => !liveStoreIds.has(store.id))
-    .map((store) => store.id);
+  const storeInventory = stores.map((store) => {
+    const failures = response.failures.filter(
+      (entry) => entry.scope === 'store' && entry.store === store.id,
+    );
+    const restrictions = failures.flatMap((failure) => {
+      const restriction = restrictionFromError(failure.error);
+      return restriction ? [restriction] : [];
+    });
+    const failure = failures[0];
+    return liveStoreIds.has(store.id)
+      ? {
+          store: store.id,
+          status: 'available' as const,
+          restrictions,
+        }
+      : {
+          store: store.id,
+          status: 'unavailable' as const,
+          restrictions,
+          ...(failure ? { error: failure.error } : {}),
+        };
+  });
   const inventoryProfiles = new Set(
     response.inventory.map((state) => state.profile),
   );
@@ -2484,11 +2761,14 @@ export async function loadWorld(
       'list_catalog returned duplicate or unknown inventory profiles.',
     );
   }
-  const accountInventoryComplete = response.profiles.every((profile) =>
-    response.inventory.some(
-      (state) => state.profile === profile && state.accountsComplete,
-    ),
-  );
+  const profileInventory = response.profiles.map((profile) => {
+    const inventory = response.inventory.find((entry) => entry.profile === profile);
+    return {
+      profile,
+      accounts: inventory?.accountsComplete ? ('complete' as const) : ('unavailable' as const),
+      teams: inventory?.teamsComplete ? ('complete' as const) : ('unavailable' as const),
+    };
+  });
   // When a server profile is blocked, skip roster queries for that server.
   const blockedProfiles = new Set(response.blockedProfiles);
   const listedServers = await bridge.listServers();
@@ -2497,7 +2777,8 @@ export async function loadWorld(
         listedServers
           .filter(
             (server) =>
-              server.state !== 'blocked' && !blockedProfiles.has(server.id),
+              server.trust.status !== 'blocked' &&
+              !blockedProfiles.has(server.id),
           )
           .map(async (server) => {
             try {
@@ -2509,12 +2790,18 @@ export async function loadWorld(
               }
               return { profile: server.id, status };
             } catch (error) {
+              const typed = normalizeCommandError(error);
+              if (
+                typed.code === 'bootstrap-required' ||
+                typed.code === 'agent-lost' ||
+                typed.code === 'version-mismatch'
+              ) {
+                reportReadinessError(typed);
+                throw typed;
+              }
               return {
                 profile: server.id,
-                error:
-                  error instanceof Error
-                    ? error.message
-                    : 'Server status was unavailable.',
+                error: typed,
               };
             }
           }),
@@ -2532,49 +2819,91 @@ export async function loadWorld(
   );
   const incompatibleSchemaProfiles = new Set(
     response.failures
-      .filter((failure) => isHardStateSchemaFailure(failure.error.message))
+      .filter((failure) => isHardStateSchemaFailure(failure.error))
       .map((failure) => failure.profile),
   );
   const servers = listedServers.map((server) => {
     if (!bridge.native) return server;
-    if (server.state === 'blocked' || blockedProfiles.has(server.id))
-      return { ...server, state: 'blocked' as const, chat_available: false };
+    const previous = base?.servers.find((entry) => entry.id === server.id);
+    const scopedFailures = response.failures.filter(
+      (failure) =>
+        failure.scope === 'profile' && failure.profile === server.id,
+    );
+    const restrictions: ServerRestriction[] = scopedFailures.flatMap(
+      (failure) => {
+        const restriction = restrictionFromError(failure.error);
+        return restriction ? [restriction] : [];
+      },
+    );
     const status = statuses.get(server.id);
-    if (!status || statusFailures.has(server.id))
+    const statusError = statusFailures.get(server.id);
+    const statusRestriction = statusError && restrictionFromError(statusError);
+    const allRestrictions = statusRestriction
+      ? [...restrictions, statusRestriction]
+      : restrictions;
+    if (server.trust.status === 'blocked' || blockedProfiles.has(server.id)) {
+      const trustFailure = scopedFailures.find(
+        (failure) =>
+          failure.error.code !== 'unsupported-schema' &&
+          failure.error.code !== 'import-verification-required',
+      )?.error;
       return {
         ...server,
-        state: 'lease-unavailable' as const,
-        chat_available: false,
+        trust: trustFailure
+          ? { status: 'blocked' as const, error: trustFailure }
+          : server.trust,
+        restrictions: allRestrictions,
+        capabilities: { chat: false },
       };
-    if (!status.host)
+    }
+    if (!status || statusError)
       return {
         ...server,
-        state: 'never-probed' as const,
-        chat_available: false,
-      };
-    const lease = serverLeaseState(status, nowSeconds);
-    if (lease === 'lapsed')
-      return {
-        ...server,
-        state: 'lease-lapsed' as const,
-        chat_available: false,
-      };
-    if (lease === 'fresh')
-      return {
-        ...server,
-        state: 'ok' as const,
-        chat_available: status.chatAvailable,
+        passiveStatus: {
+          status: 'failed' as const,
+          source: 'describe-server-status' as const,
+          error:
+            statusError ??
+            normalizeCommandError(new Error('Server status was not returned.')),
+        },
+        compatibility:
+          previous?.compatibility.status === 'required' ||
+          previous?.compatibility.status === 'not-required'
+            ? previous.compatibility
+            : {
+                status: 'requirement-unknown' as const,
+                error:
+                  statusError ??
+                  normalizeCommandError(
+                    new Error('Lease requirement is unknown.'),
+                  ),
+              },
+        capabilities: previous?.capabilities ?? { chat: false },
+        restrictions: allRestrictions,
       };
     return {
       ...server,
-      state: 'lease-unavailable' as const,
-      chat_available: false,
+      trust: status.host ? { status: 'verified' as const } : { status: 'unprobed' as const },
+      compatibility: status.leaseRequired
+        ? status.leaseExpiresAt === null
+          ? { status: 'required-unavailable' as const }
+          : { status: 'required' as const, expiresAt: status.leaseExpiresAt }
+        : { status: 'not-required' as const },
+      passiveStatus: {
+        status: 'available' as const,
+        source: 'signed-server-status' as const,
+      },
+      capabilities: { chat: status.chatAvailable },
+      restrictions: allRestrictions,
     };
   });
   const rawAccounts = await bridge.listAccounts();
   const unavailableServers = new Set(
     servers
-      .filter((server) => server.state !== 'ok')
+      .filter(
+        (server) =>
+          !serverFactAvailability(server, [], { nowSeconds }).available,
+      )
       .map((server) => server.id),
   );
   // Inactive teams cannot query members or federation until setup is complete;
@@ -2755,8 +3084,10 @@ export async function loadWorld(
       servers,
       accounts,
       stores,
-      unavailableStores,
-      accountInventoryComplete,
+      storeInventory,
+      profileInventory,
+      catalogProfiles: response.profiles,
+      profileInventoryStatus: 'complete',
       items,
       parties,
       federation,
@@ -2768,8 +3099,10 @@ export async function loadWorld(
     servers,
     accounts,
     stores,
-    unavailableStores,
-    accountInventoryComplete,
+    storeInventory,
+    profileInventory,
+    catalogProfiles: response.profiles,
+    profileInventoryStatus: 'complete',
     items,
     parties,
     federation,
@@ -2778,19 +3111,19 @@ export async function loadWorld(
     yubiAccounts: [],
     cardsConnected: [],
     notifications: [
-      ...notificationsOf(response, servers).filter(
+      ...notificationsOf(response, servers, nowSeconds).filter(
         (note) =>
           ![...statusFailures.keys()].some(
-            (profile) => note.id === `lease-unavailable-${profile}`,
+            (profile) => note.id === `server-status-unavailable-${profile}`,
           ),
       ),
-      ...[...statusFailures].map(([profile, message]) => ({
+      ...[...statusFailures].map(([profile, error]) => ({
         id: `status-unavailable-${profile}`,
         severity: 'crit' as const,
         title: `Status for ${profile} is unavailable`,
-        detail: `${message} Server contents are unavailable until the connection status is verified.${
+        detail: `${error.message} Server contents are unavailable until the connection status is verified.${
           incompatibleSchemaProfiles.has(profile)
-            ? ` ${resetInstruction(profile)}`
+            ? ` ${schemaInstruction(profile)}`
             : ''
         }`,
         action: 'Inspect',
@@ -2806,11 +3139,7 @@ export async function loadWorld(
         action: failure.retryable ? 'Refresh' : 'Inspect',
       })),
     ],
-    leaseState: servers.some((server) => server.state === 'lease-lapsed')
-      ? 'lapsed'
-      : servers.some((server) => server.state === 'lease-unavailable')
-        ? 'unavailable'
-        : 'fresh',
+    observedExpiredLeases: [],
     plaintext: {},
   };
 }

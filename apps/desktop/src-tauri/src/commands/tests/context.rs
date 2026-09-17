@@ -36,6 +36,13 @@ fn ambiguous_mutations_require_a_fresh_catalog_before_another_write() {
     let error = state.begin_mutation().unwrap_err();
     assert_eq!(error.code, "ambiguous");
     assert!(error.ambiguous);
+    let initialization = state.begin_initialization().unwrap();
+    assert_eq!(
+        state.begin_initialization().unwrap_err().code,
+        "mutation-in-flight"
+    );
+    drop(initialization);
+    assert!(state.mutation_requires_refresh.load(Ordering::Acquire));
     state.accept_catalog(0, CatalogSnapshot::default());
     assert!(state.begin_mutation().is_ok());
 }

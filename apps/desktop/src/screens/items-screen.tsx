@@ -27,6 +27,7 @@ import {
   serverOf,
   storeDescriptionState,
   storeDisplayOrder,
+  storeAvailability,
   storeOf,
   storeReadable,
 } from '../model';
@@ -619,6 +620,7 @@ export interface ItemsScreenProps {
   onDelete: (item: Item) => void;
   onSettings: (storeId: string) => void;
   onCommandError: (error: unknown, item?: Item) => void;
+  accessNow?: () => number;
 }
 
 export function ItemsScreen({
@@ -632,6 +634,7 @@ export function ItemsScreen({
   onDelete,
   onSettings,
   onCommandError,
+  accessNow = () => Date.now() / 1000,
 }: ItemsScreenProps): ReactNode {
   const toasts = useToast();
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -750,7 +753,19 @@ export function ItemsScreen({
       onCommandError(error);
     else toasts.show(normalizeCommandError(error).message);
   };
+  const currentStoreAvailable = (storeId: string): boolean => {
+    const candidate = storeOf(world, storeId);
+    return Boolean(
+      candidate &&
+        storeAvailability(world, candidate, {
+          nowSeconds: accessNow(),
+        }).available,
+    );
+  };
+  const accessAvailable = (item: Item): boolean =>
+    currentStoreAvailable(item.store);
   const copyValue = (item: Item): void => {
+    if (!accessAvailable(item)) return;
     void bridge
       .copyItemValue(requestOf(item))
       .then(
@@ -762,6 +777,7 @@ export function ItemsScreen({
       );
   };
   const download = (item: Item): void => {
+    if (!accessAvailable(item)) return;
     locations.select({ store: item.store, path: item.path });
     void bridge
       .downloadFile(requestOf(item))
@@ -776,9 +792,11 @@ export function ItemsScreen({
       );
   };
   const openLink = (item: Item): void => {
+    if (!accessAvailable(item)) return;
     void bridge
       .readItem(requestOf(item))
       .then((response) => {
+        if (!accessAvailable(item)) return;
         if (
           response.store !== item.store ||
           response.path !== item.path ||
@@ -798,6 +816,7 @@ export function ItemsScreen({
       .catch(report);
   };
   const reveal = (item: Item): void => {
+    if (!accessAvailable(item)) return;
     locations.select({ store: item.store, path: item.path });
     // Pass revealed item to details panel for display.
     onReveal(item);
@@ -819,6 +838,7 @@ export function ItemsScreen({
     onDownload: () => download(item),
     onOpen: () => openLink(item),
     onDelete: () => {
+      if (!accessAvailable(item)) return;
       locations.select({ store: item.store, path: item.path });
       // Confirm deletion for the selected item version.
       onDelete(item);
@@ -831,7 +851,10 @@ export function ItemsScreen({
     <>
       {head}
       <Toolbar
-        onNew={(itemKind) => onNew(itemKind, createStore, createFolder)}
+        onNew={(itemKind) => {
+          if (createStore && currentStoreAvailable(createStore))
+            onNew(itemKind, createStore, createFolder);
+        }}
         kind={state.kind}
         onKind={(kind) => {
           locations.setKind(kind);
@@ -906,9 +929,10 @@ export function ItemsScreen({
                 <h2>No items yet</h2>
                 <p>Save logins, secure notes, and credentials in this vault.</p>
                 <NewItemButton
-                  onNew={(itemKind) =>
-                    onNew(itemKind, createStore, createFolder)
-                  }
+                  onNew={(itemKind) => {
+                    if (createStore && currentStoreAvailable(createStore))
+                      onNew(itemKind, createStore, createFolder);
+                  }}
                 />
               </div>
             )

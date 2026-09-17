@@ -31,18 +31,20 @@ impl DirectoryIdentity {
     }
 }
 
-struct LeaseInner {
+struct PathLeaseInner {
     root: PathBuf,
     identity: DirectoryIdentity,
     _path: File,
-    _namespace: Option<File>,
 }
 
-/// Shared lifetime reservation, acquired before ordinary state side effects.
-/// Cloning preserves the same reservation; maintenance fails busy until all users drop it.
+/// Shared reservation for filesystem-only infrastructure below a client-state root.
+///
+/// This deliberately does not inspect the client-state envelope or reserve its
+/// native credential namespace. Callers must not use it for credential-backed
+/// state operations.
 #[derive(Clone)]
-pub struct ClientStateLease(Arc<LeaseInner>);
-impl ClientStateLease {
+pub struct ClientStatePathLease(Arc<PathLeaseInner>);
+impl ClientStatePathLease {
     pub fn acquire(root: impl AsRef<Path>) -> Result<Self> {
         let root = canonical_reservation(root.as_ref())?;
         let base = lock_directory()?;
@@ -62,22 +64,10 @@ impl ClientStateLease {
             return Err(Error::StatePathChanged);
         }
         let identity = DirectoryIdentity::read(&root)?;
-        // Read configuration only after path exclusion. No native get or registry
-        // recovery may precede this namespace-use reservation.
-        let namespace = match crate::checkpoint::inspect_state_file(&root)? {
-            Some(state) if state.credential_backend == crate::CredentialBackend::Native => {
-                let file = namespace_lock_file(&base, &state.state_id, "use")?;
-                try_lock(&file, false)?;
-                super::relocation::require_namespace_ready(&state.state_id, &root)?;
-                Some(file)
-            }
-            _ => None,
-        };
-        Ok(Self(Arc::new(LeaseInner {
+        Ok(Self(Arc::new(PathLeaseInner {
             root,
             identity,
             _path: path,
-            _namespace: namespace,
         })))
     }
     pub fn root(&self) -> &Path {
@@ -91,6 +81,43 @@ impl ClientStateLease {
             return Err(Error::StatePathChanged);
         }
         require_no_locator(&lock_directory()?, self.root())
+    }
+}
+
+struct LeaseInner {
+    path: ClientStatePathLease,
+    _namespace: Option<File>,
+}
+
+/// Shared lifetime reservation, acquired before ordinary state side effects.
+/// Cloning preserves the same reservation; maintenance fails busy until all users drop it.
+#[derive(Clone)]
+pub struct ClientStateLease(Arc<LeaseInner>);
+impl ClientStateLease {
+    pub fn acquire(root: impl AsRef<Path>) -> Result<Self> {
+        let path = ClientStatePathLease::acquire(root)?;
+        let base = lock_directory()?;
+        // Read configuration only after path exclusion. No native get or registry
+        // recovery may precede this namespace-use reservation.
+        let namespace = match crate::checkpoint::inspect_state_file(path.root())? {
+            Some(state) if state.credential_backend == crate::CredentialBackend::Native => {
+                let file = namespace_lock_file(&base, &state.state_id, "use")?;
+                try_lock(&file, false)?;
+                super::relocation::require_namespace_ready(&state.state_id, path.root())?;
+                Some(file)
+            }
+            _ => None,
+        };
+        Ok(Self(Arc::new(LeaseInner {
+            path,
+            _namespace: namespace,
+        })))
+    }
+    pub fn root(&self) -> &Path {
+        self.0.path.root()
+    }
+    pub fn validate(&self) -> Result<()> {
+        self.0.path.validate()
     }
 }
 
@@ -355,6 +382,26 @@ fn require_no_locator(base: &Path, root: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_only_lease_ignores_credential_schema_and_excludes_maintenance() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = crate::prepare_private_directory(&temporary.path().join("state")).unwrap();
+        crate::create_private_config(
+            &root.join(crate::STATE_CONFIG_FILE),
+            b"version = 2\nstate_id = \"legacy\"\ncredential_backend = \"native\"\n",
+        )
+        .unwrap();
+
+        let lease = ClientStatePathLease::acquire(&root).unwrap();
+        assert_eq!(lease.root(), root);
+        assert!(matches!(
+            ClientStateMaintenanceGuard::acquire(std::slice::from_ref(&root)),
+            Err(Error::StateBusy)
+        ));
+        drop(lease);
+        assert!(ClientStateMaintenanceGuard::acquire(std::slice::from_ref(&root)).is_ok());
+    }
 
     #[test]
     fn retained_registry_credentials_and_session_exclude_maintenance() {

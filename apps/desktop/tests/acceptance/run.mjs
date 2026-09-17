@@ -638,7 +638,7 @@ async function firstRunWalk(context, origin) {
   };
   try {
     await page.goto(`${origin}/?state=who&path=invited`, { waitUntil: 'load' });
-    await page.evaluate("window.localStorage.removeItem('foks.first-run.v1')");
+    await page.evaluate("window.localStorage.removeItem('foks.first-run.v2')");
     await page.reload({ waitUntil: 'load' });
     // Select joining path and proceed.
     await page.getByRole('radio', { name: /Join an existing group/ }).click();
@@ -693,7 +693,7 @@ async function firstRunWalk(context, origin) {
     await reloadAt('Joined Engineering');
 
     const checkpoint = await page.evaluate(
-      "window.localStorage.getItem('foks.first-run.v1') ?? ''",
+      "window.localStorage.getItem('foks.first-run.v2') ?? ''",
     );
     if (
       /orbit|"invite"|"passphrase"|"recoveryPhrase"|"backupPhrase"/.test(

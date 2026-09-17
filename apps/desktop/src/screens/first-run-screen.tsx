@@ -1,4 +1,5 @@
 import { SsoPanel } from '../components/sso-panel';
+import { resolveProvisionedIdentity } from '../first-run-identity';
 import {
   useCallback,
   useEffect,
@@ -25,6 +26,7 @@ import {
 import type { FilterKind } from '../components';
 import type {
   Bridge,
+  CommandError,
   CheckedProfileResponse,
   GoProfileCandidate,
   GoProfileDiscovery,
@@ -33,6 +35,7 @@ import type {
 } from '../bridge';
 import {
   enqueueProfileWork,
+  isAgentReadinessError,
   normalizeCommandError,
   sharedServerStatus,
 } from '../bridge';
@@ -44,6 +47,7 @@ import {
   encodeFirstRunCheckpoint,
   initialFirstRun,
   isFirstRunState,
+  reconcileFirstRunCheckpoint,
   transitionFirstRun,
 } from '../first-run-state';
 import type {
@@ -51,10 +55,25 @@ import type {
   FirstRunPath,
   FirstRunStateName,
 } from '../first-run-state';
+import {
+  classifyFirstRunFailure,
+  presentFirstRunFailure,
+  reconcileFirstRunFailure,
+  type FirstRunFailure,
+  type FirstRunOperation,
+} from '../first-run-failure';
 import type { FoksIconName } from '../icons';
 import type { Location } from '../location';
 import { NavRow, Sidebar } from '../shell/sidebar';
-import { formatRole, kindOf, parseRole, plural, storeReadable } from '../model';
+import {
+  formatRole,
+  kindOf,
+  parseRole,
+  plural,
+  profileInventoryComplete,
+  serverAvailability,
+  storeReadable,
+} from '../model';
 import type { RoleWire, World } from '../model';
 import { PageHeader } from '../shell/page-header';
 import { GoProfileChooser } from './go-profile-chooser';
@@ -70,7 +89,12 @@ const stepOf = (state: FirstRunStateName): number => {
   if (state === 'who') return 0;
   if (['address', 'no-address', 'checked', 'compare', 'error'].includes(state))
     return 1;
-  if (state === 'account' || state === 'existing') return 2;
+  if (
+    state === 'account' ||
+    state === 'existing' ||
+    state === 'identity-pending'
+  )
+    return 2;
   if (state === 'protect' || state === 'phrase') return 3;
   if (state === 'waiting') return 4;
   return 5;
@@ -78,7 +102,12 @@ const stepOf = (state: FirstRunStateName): number => {
 
 const localStepOf = (state: FirstRunStateName): number => {
   if (state === 'local') return 0;
-  if (state === 'account' || state === 'existing') return 1;
+  if (
+    state === 'account' ||
+    state === 'existing' ||
+    state === 'identity-pending'
+  )
+    return 1;
   if (state === 'protect' || state === 'phrase') return 2;
   return 3;
 };
@@ -100,8 +129,7 @@ function fixtureSeed(
 ): FirstRunCheckpoint {
   const facts = bridge.firstRunFixture?.[path];
   let next = initialFirstRun(path, state);
-  if (state === 'boot') return { ...next, initialized: false };
-  next = { ...next, initialized: true };
+  if (state === 'boot') return next;
   if (state === 'error' && facts) next = { ...next, serverAddress: facts.typo };
   if (
     (stepOf(state) >= 2 || state === 'checked' || state === 'compare') &&
@@ -119,6 +147,14 @@ function fixtureSeed(
       },
     };
   }
+  if (state === 'identity-pending' && facts)
+    next = {
+      ...next,
+      provisionedAccount: {
+        alias: facts.accountAlias,
+        deviceName: facts.deviceName,
+      },
+    };
   if (stepOf(state) >= 4 && state !== 'phrase')
     next = { ...next, passphraseSet: true, backupCommitted: true };
   if (state === 'added')
@@ -154,8 +190,56 @@ function fixtureSeed(
   return next;
 }
 
+function authoritativeSetupFacts(
+  world: World,
+  checkpoint: FirstRunCheckpoint,
+): Parameters<typeof reconcileFirstRunCheckpoint>[1] {
+  const server = checkpoint.profile
+    ? world.servers.find(
+        (candidate) => candidate.id === checkpoint.profile?.profile,
+      )
+    : undefined;
+  const profile = checkpoint.profile
+    ? !profileInventoryComplete(world, 'profiles')
+      ? 'unknown'
+      : !server
+        ? 'missing'
+        : server.host_id === null
+          ? 'unknown'
+          : server.host_id === checkpoint.profile.hostId
+            ? 'present'
+            : 'missing'
+    : 'unknown';
+  const account = checkpoint.account
+    ? profileInventoryComplete(world, 'accounts')
+      ? world.accounts.some(
+          (candidate) =>
+            candidate.server === checkpoint.profile?.profile &&
+            candidate.alias === checkpoint.account?.alias,
+        )
+        ? 'present'
+        : 'missing'
+      : 'unknown'
+    : 'unknown';
+  const group = checkpoint.group
+    ? profileInventoryComplete(world, 'teams')
+      ? world.stores.some(
+          (candidate) =>
+            candidate.kind === 'team' &&
+            candidate.server === checkpoint.profile?.profile &&
+            candidate.alias === checkpoint.group?.alias &&
+            candidate.team_id_hex === checkpoint.group.teamIdHex,
+        )
+        ? 'present'
+        : 'missing'
+      : 'unknown'
+    : 'unknown';
+  return { profile, account, group };
+}
+
 function initialCheckpoint(
   bridge: Bridge,
+  world: World,
   location: Extract<Location, { kind: 'first-run' }>,
   automaticEntry: boolean,
 ): FirstRunCheckpoint {
@@ -175,7 +259,19 @@ function initialCheckpoint(
   const namedReviewState = isFirstRunState(queryState);
   if (bridge.firstRunFixture && namedReviewState)
     return fixtureSeed(bridge, path, location.step as FirstRunStateName);
-  if (automaticEntry && saved) return saved;
+  const reconcile = (checkpoint: FirstRunCheckpoint): FirstRunCheckpoint =>
+    resolveProvisionedIdentity(
+      world,
+      reconcileFirstRunCheckpoint(
+        checkpoint,
+        authoritativeSetupFacts(world, checkpoint),
+      ),
+    );
+  // URL/navigation state must never offer an acknowledged mutation again.
+  if (saved?.provisionedAccount) return reconcile(saved);
+  if (location.step === 'identity-pending')
+    return saved ? reconcile(saved) : initialFirstRun(path, 'who');
+  if (automaticEntry && saved) return reconcile(saved);
   // Phrase state is not persisted across reloads; resume at 'protect'.
   const state =
     location.step === 'phrase'
@@ -188,16 +284,9 @@ function initialCheckpoint(
     (location.path !== undefined && location.path !== saved.path) ||
     (state === 'who' && saved.state !== 'who')
   ) {
-    const base = initialFirstRun(path, state);
-    if (
-      (automaticEntry && !saved && bridge.native) ||
-      location.step === 'boot'
-    ) {
-      return { ...base, initialized: false };
-    }
-    return base;
+    return initialFirstRun(path, state);
   }
-  return { ...saved, path: location.path ?? saved.path, state };
+  return reconcile({ ...saved, path: location.path ?? saved.path, state });
 }
 
 function SetupSidebar({
@@ -611,47 +700,6 @@ function JoiningChoice({
   );
 }
 
-/** Step summaries displayed for each setup path. */
-const NEXT_STEPS: Readonly<Record<FirstRunPath, readonly ReactNode[]>> = {
-  invited: [
-    <>
-      Enter the <b>server address</b> and verify the connection.
-    </>,
-    <>
-      Choose a <b>username</b> and save your recovery phrase.
-    </>,
-    <>
-      <b>Wait for approval.</b> An administrator will confirm your group access.
-    </>,
-  ],
-  own: [
-    <>
-      Enter your <b>server address</b> and verify the connection.
-    </>,
-    <>
-      Choose a <b>username</b> and save your recovery phrase.
-    </>,
-    <>
-      Start using your <b>Personal vault</b>.
-    </>,
-  ],
-};
-
-function WhatHappensNext({ path }: { path: FirstRunPath }): ReactNode {
-  return (
-    <section className="next" aria-live="polite">
-      <h3>What happens next</h3>
-      <ol>
-        {NEXT_STEPS[path].map((step, index) => (
-          <li key={index}>
-            <span>{step}</span>
-          </li>
-        ))}
-      </ol>
-    </section>
-  );
-}
-
 export interface FirstRunExperienceProps {
   world: World;
   bridge: Bridge;
@@ -659,6 +707,9 @@ export interface FirstRunExperienceProps {
   onNavigate: (location: Location) => void;
   onRefreshWorld: () => Promise<World>;
   concealSignal: number;
+  agentReady: boolean;
+  onRetryAgent?: () => Promise<void>;
+  onAgentReadinessFailure?: (error: CommandError) => void;
   automaticEntry?: boolean;
   managedProfile?: string;
 }
@@ -670,13 +721,17 @@ export function FirstRunExperience({
   onNavigate,
   onRefreshWorld,
   concealSignal,
+  agentReady,
+  onRetryAgent,
+  onAgentReadinessFailure,
   automaticEntry = false,
   managedProfile,
 }: FirstRunExperienceProps): ReactNode {
   const toasts = useToast();
   const [checkpoint, setCheckpoint] = useState(() =>
-    initialCheckpoint(bridge, location, automaticEntry),
+    initialCheckpoint(bridge, world, location, automaticEntry),
   );
+  const checkpointRef = useRef(checkpoint);
   const [existingBack, setExistingBack] = useState<FirstRunStateName>(() =>
     checkpoint.returning
       ? checkpoint.managedLocal
@@ -721,7 +776,19 @@ export function FirstRunExperience({
   const [pendingPath, setPendingPath] = useState<FirstRunPath | null>(null);
   const [pending, setPending] = useState<PendingOperation[]>([]);
   const pendingRef = useRef<PendingOperation[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [mutationBusy, setBusy] = useState(false);
+  const [phraseOperation, setPhraseOperation] = useState<symbol | null>(null);
+  const phraseOwner = useRef<symbol | null>(null);
+  const busy = mutationBusy || phraseOperation !== null;
+  const [identityLoading, setIdentityLoading] = useState(false);
+  const [identityError, setIdentityError] = useState<string | null>(null);
+  const identityGeneration = useRef(0);
+  const [personalRefreshing, setPersonalRefreshing] = useState(false);
+  const [personalRefreshError, setPersonalRefreshError] = useState<
+    string | null
+  >(null);
+  const [agentRetrying, setAgentRetrying] = useState(false);
+  const [agentRetryError, setAgentRetryError] = useState<string | null>(null);
   const [accountBack, setAccountBack] = useState<FirstRunStateName | null>(
     null,
   );
@@ -735,6 +802,8 @@ export function FirstRunExperience({
     end: number | null;
   } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [serverCheckFailure, setServerCheckFailure] =
+    useState<FirstRunFailure | null>(null);
   const [managedStatus, setManagedStatus] =
     useState<ServerStatusSnapshot | null>(null);
   const [managedStatusError, setManagedStatusError] = useState<string | null>(
@@ -742,8 +811,6 @@ export function FirstRunExperience({
   );
   const [managedStatusAttempt, setManagedStatusAttempt] = useState(0);
   const automaticEntryPending = useRef(automaticEntry);
-  const initializationPromise = useRef<Promise<void> | null>(null);
-  const [initializationAttempt, setInitializationAttempt] = useState(0);
   const backupPreparation = useRef<{
     key: string;
     promise: Promise<{ backupAlias: string; phrase: string }>;
@@ -777,7 +844,12 @@ export function FirstRunExperience({
   }, [bridge, checkpoint.account?.deviceName, facts?.deviceName]);
 
   useEffect(() => {
-    if (checkpoint.state !== 'who' || !bridge.native || goChooserDismissed)
+    if (
+      !agentReady ||
+      checkpoint.state !== 'who' ||
+      !bridge.native ||
+      goChooserDismissed
+    )
       return;
     let alive = true;
     setGoScanError(null);
@@ -787,14 +859,29 @@ export function FirstRunExperience({
         if (alive) setGoDiscovery(discovery);
       })
       .catch((error) => {
-        if (alive) setGoScanError(normalizeCommandError(error).message);
+        if (!alive) return;
+        const typed = normalizeCommandError(error);
+        if (isAgentReadinessError(typed) && onAgentReadinessFailure) {
+          onAgentReadinessFailure(typed);
+          return;
+        }
+        setGoScanError(typed.message);
       });
     return () => {
       alive = false;
     };
-  }, [bridge, checkpoint.state, goChooserDismissed]);
+  }, [
+    agentReady,
+    bridge,
+    checkpoint.state,
+    goChooserDismissed,
+    onAgentReadinessFailure,
+  ]);
 
   const state = checkpoint.state;
+  const serverCheckPresentation = serverCheckFailure
+    ? presentFirstRunFailure(serverCheckFailure)
+    : null;
   const profile = checkpoint.profile;
   const accountAlias =
     checkpoint.account?.alias ??
@@ -834,18 +921,23 @@ export function FirstRunExperience({
       : [];
   const accountStore =
     accountStores.length === 1 ? accountStores[0]?.store : undefined;
+  const personalAvailable = Boolean(
+    accountStore && storeReadable(world, accountStore),
+  );
   const accountItemCount = accountStore
     ? world.items.filter((item) => item.store === accountStore).length
     : 0;
 
   useEffect(() => {
-    if (state !== 'local' || !managedProfile) return;
+    if (!agentReady || state !== 'local' || !managedProfile) return;
     setManagedStatus(null);
     let alive = true;
     setManagedStatusError(null);
     if (
       !world.servers.some(
-        (server) => server.id === managedProfile && server.state === 'ok',
+        (server) =>
+          server.id === managedProfile &&
+          serverAvailability(world, server).available,
       )
     ) {
       setManagedStatusError(
@@ -874,10 +966,11 @@ export function FirstRunExperience({
     return () => {
       alive = false;
     };
-  }, [bridge, managedProfile, managedStatusAttempt, state, world.servers]);
+  }, [bridge, managedProfile, managedStatusAttempt, state, agentReady, world]);
 
   const commit = useCallback(
     (next: FirstRunCheckpoint): void => {
+      checkpointRef.current = next;
       setCheckpoint(next);
       try {
         window.localStorage.setItem(
@@ -891,14 +984,26 @@ export function FirstRunExperience({
     },
     [onNavigate],
   );
+  const lastReconciledWorld = useRef(world);
+  useEffect(() => {
+    if (!agentReady || bridge.firstRunFixture) return;
+    if (lastReconciledWorld.current === world) return;
+    lastReconciledWorld.current = world;
+    const reconciled = resolveProvisionedIdentity(
+      world,
+      reconcileFirstRunCheckpoint(
+        checkpoint,
+        authoritativeSetupFacts(world, checkpoint),
+      ),
+    );
+    if (reconciled !== checkpoint) commit(reconciled);
+  }, [agentReady, bridge.firstRunFixture, checkpoint, commit, world]);
   const send = useCallback(
     (event: Parameters<typeof transitionFirstRun>[1]): void => {
-      commit(transitionFirstRun(checkpoint, event));
+      commit(transitionFirstRun(checkpointRef.current, event));
     },
-    [checkpoint, commit],
+    [commit],
   );
-  const sendRef = useRef(send);
-  sendRef.current = send;
   const go = useCallback(
     (next: FirstRunStateName): void => {
       setMessage(null);
@@ -931,71 +1036,102 @@ export function FirstRunExperience({
     [go],
   );
   const fail = useCallback(
-    (error: unknown, report: (message: string) => void = setMessage): void => {
-      const typed = normalizeCommandError(error);
+    (
+      operation: FirstRunOperation,
+      error: unknown,
+      report: (message: string) => void = setMessage,
+    ): void => {
+      const failure = classifyFirstRunFailure(operation, error);
+      if (operation === 'server-check') setServerCheckFailure(failure);
       // The command layer sets its write gate when a first-run mutation
       // returns an ambiguous or response-binding result, and only a fresh
       // catalog load releases it. Without this refresh the user is stuck on
       // "Refresh the vault..." until the app restarts, so reconcile here and
       // re-read pending operations so a committed-but-unacknowledged signup
       // can still be resumed.
-      const latched =
-        typed.code === 'ambiguous' || typed.code === 'response-binding';
-      if (!latched) {
-        report(typed.message);
+      if (failure.recovery !== 'pending') {
+        report(failure.error.message);
         return;
       }
-      report('Checking the vault after an uncertain result…');
-      // Even initialization and the first server check can set the gate,
-      // before a profile has been selected. Only the pending read needs one.
-      void onRefreshWorld()
-        .then(async () => {
-          if (profile) {
-            const rows = await enqueueProfileWork(bridge, profile.profile, () =>
-              bridge.listPendingOperations(profile.profile),
-            );
-            pendingRef.current = rows;
-            setPending(rows);
-          }
-          report(
-            'FOKS refreshed the vault after an uncertain result. Review the current state and try again.',
+      report(presentFirstRunFailure(failure).detail);
+      // A first server check can set the gate before a profile has been
+      // selected. Only the pending-operation read needs a profile.
+      void reconcileFirstRunFailure(failure, async () => {
+        await onRefreshWorld();
+        if (profile) {
+          const rows = await enqueueProfileWork(bridge, profile.profile, () =>
+            bridge.listPendingOperations(profile.profile),
           );
-        })
-        .catch((refreshError: unknown) => {
-          report(
-            `FOKS could not finish checking the vault. ${normalizeCommandError(refreshError).message}`,
+          pendingRef.current = rows;
+          setPending(rows);
+        }
+      }).then((reconciled) => {
+        if (operation === 'server-check')
+          setServerCheckFailure((current) =>
+            current === failure ? reconciled : current,
           );
-        });
+        report(presentFirstRunFailure(reconciled).detail);
+      });
     },
     [bridge, onRefreshWorld, profile],
   );
 
-  const refreshAccountIdentity = async (alias: string) => {
-    if (!profile)
-      throw new Error(
-        'A server profile must be selected before loading an account.',
-      );
-    for (let attempt = 0; attempt < 5; attempt++) {
+  useEffect(() => {
+    if (!agentReady) setIdentityLoading(false);
+    const generation = identityGeneration;
+    return () => {
+      generation.current++;
+    };
+  }, [agentReady]);
+
+  const refreshAccountIdentity = async (
+    saved = checkpointRef.current,
+  ): Promise<void> => {
+    if (!saved.provisionedAccount || !agentReady) return;
+    const generation = ++identityGeneration.current;
+    setIdentityLoading(true);
+    setIdentityError(null);
+    try {
       const refreshed = await onRefreshWorld();
-      const matches = refreshed.accounts.filter(
-        (candidate) =>
-          candidate.server === profile.profile && candidate.alias === alias,
-      );
-      if (matches.length === 1) {
-        return matches[0];
-      }
-      if (attempt < 4) {
-        await new Promise((resolve) =>
-          setTimeout(resolve, 200 * (attempt + 1)),
+      if (
+        generation !== identityGeneration.current ||
+        checkpointRef.current !== saved
+      )
+        return;
+      const resolved = resolveProvisionedIdentity(refreshed, saved);
+      if (resolved !== saved) commit(resolved);
+      else
+        setIdentityError(
+          'The account details are not available yet. Retry loading them; account setup will not be repeated.',
         );
-      }
+    } catch (error) {
+      if (
+        generation !== identityGeneration.current ||
+        checkpointRef.current !== saved
+      )
+        return;
+      const typed = normalizeCommandError(error);
+      setIdentityError(typed.message);
+      if (isAgentReadinessError(typed)) onAgentReadinessFailure?.(typed);
+    } finally {
+      if (generation === identityGeneration.current) setIdentityLoading(false);
     }
-    throw new Error(
-      'Account setup completed, but the account details could not be loaded. Restart FOKS to continue.',
-    );
+  };
+
+  const accountProvisioned = (alias: string): void => {
+    const saved = transitionFirstRun(checkpointRef.current, {
+      type: 'account-provisioned',
+      alias,
+      deviceName: deviceName.trim(),
+    });
+    // Persist the acknowledgement before any fallible inventory read.
+    commit(saved);
+    void refreshAccountIdentity(saved);
   };
 
   const clearSecrets = useCallback((): void => {
+    phraseOwner.current = null;
+    setPhraseOperation(null);
     setInvite('');
     setPassphrase('');
     setConfirmation('');
@@ -1005,6 +1141,12 @@ export function FirstRunExperience({
     setBackupPhrase(null);
     setPhraseWritten(false);
   }, []);
+
+  useLayoutEffect(() => {
+    if (agentReady) return;
+    clearSecrets();
+    if (state === 'phrase') go('protect');
+  }, [agentReady, clearSecrets, go, state]);
 
   const lastConcealSignal = useRef(concealSignal);
   useLayoutEffect(() => {
@@ -1026,7 +1168,7 @@ export function FirstRunExperience({
   }, [clearSecrets, go, state]);
 
   useEffect(() => {
-    if (!profile) {
+    if (!agentReady || !profile) {
       if (pendingRef.current.length > 0) {
         pendingRef.current = [];
         setPending([]);
@@ -1065,62 +1207,26 @@ export function FirstRunExperience({
         }
       },
       (error) => {
-        if (alive) fail(error);
+        if (alive) fail('pending-read', error);
       },
     );
     return () => {
       alive = false;
     };
-  }, [bridge, checkpoint.returning, fail, profile]);
+  }, [agentReady, bridge, checkpoint.returning, fail, profile]);
 
   useEffect(() => {
-    if (checkpoint.initialized || !bridge.native) return;
-    let alive = true;
-    const attempt =
-      initializationPromise.current ??
-      (initializationPromise.current = bridge
-        .initializeClientState()
-        .then(() => undefined));
-    void attempt.then(
-      () => {
-        void onRefreshWorld().then(
-          (refreshed) => {
-            const localReady = Boolean(
-              managedProfile &&
-              refreshed.servers.some(
-                (server) =>
-                  server.id === managedProfile && server.state === 'ok',
-              ),
-            );
-            if (alive)
-              sendRef.current({ type: 'initialize', managedLocal: localReady });
-          },
-          (error) => {
-            if (alive) fail(error);
-          },
-        );
-      },
-      (error) => {
-        initializationPromise.current = null;
-        if (alive) fail(error);
-      },
-    );
-    return () => {
-      alive = false;
-    };
-  }, [
-    bridge,
-    checkpoint.initialized,
-    fail,
-    initializationAttempt,
-    managedProfile,
-    onRefreshWorld,
-  ]);
-
-  useEffect(() => {
-    if (state !== 'phrase' || backupPhrase || !profile || !accountAlias) return;
-    let alive = true;
-    setBusy(true);
+    if (
+      !agentReady ||
+      state !== 'phrase' ||
+      backupPhrase ||
+      !profile ||
+      !accountAlias
+    )
+      return;
+    const owner = Symbol('phrase preparation');
+    phraseOwner.current = owner;
+    setPhraseOperation(owner);
     const key = `${profile.profile}\u0000${accountAlias}`;
     const attempt =
       backupPreparation.current?.key === key
@@ -1129,23 +1235,33 @@ export function FirstRunExperience({
     backupPreparation.current = { key, promise: attempt };
     void attempt.then(
       (result) => {
-        if (alive) {
+        if (phraseOwner.current === owner) {
           setBackupPhrase(result.phrase);
-          setBusy(false);
+          setPhraseOperation(null);
         }
       },
       (error) => {
-        if (!alive) return;
+        if (phraseOwner.current !== owner) return;
         backupPreparation.current = null;
-        setBusy(false);
+        setPhraseOperation(null);
         go('protect');
-        fail(error);
+        fail('backup-prepare', error);
       },
     );
     return () => {
-      alive = false;
+      if (phraseOwner.current === owner) phraseOwner.current = null;
+      setPhraseOperation((current) => (current === owner ? null : current));
     };
-  }, [accountAlias, backupPhrase, bridge, fail, go, profile, state]);
+  }, [
+    accountAlias,
+    agentReady,
+    backupPhrase,
+    bridge,
+    fail,
+    go,
+    profile,
+    state,
+  ]);
 
   useLayoutEffect(() => {
     const selection = addressSelection.current;
@@ -1169,10 +1285,12 @@ export function FirstRunExperience({
     setAddress(value);
     setAddressInvalid(false);
     setMessage(null);
+    setServerCheckFailure(null);
     send({ type: 'server-edited', address: value });
   };
 
   const checkServer = async (): Promise<void> => {
+    if (!agentReady) return;
     if (!address.trim()) {
       setAddressInvalid(true);
       if (state === 'error') send({ type: 'go', state: 'address' });
@@ -1182,6 +1300,7 @@ export function FirstRunExperience({
     setAddressInvalid(false);
     setBusy(true);
     setMessage(null);
+    setServerCheckFailure(null);
     try {
       const profileName =
         facts?.profile ??
@@ -1209,7 +1328,7 @@ export function FirstRunExperience({
       });
     } catch (error) {
       if (revision !== addressRevision.current) return;
-      fail(error);
+      fail('server-check', error);
       send({ type: 'go', state: 'error' });
     } finally {
       setBusy(false);
@@ -1217,6 +1336,7 @@ export function FirstRunExperience({
   };
 
   const createAccount = async (): Promise<void> => {
+    if (!agentReady) return;
     if (!profile || !username.trim() || !deviceName.trim() || !accountAlias)
       return;
     setBusy(true);
@@ -1240,21 +1360,16 @@ export function FirstRunExperience({
           invite,
         });
       setInvite('');
-      const identity = await refreshAccountIdentity(accountAlias);
-      send({
-        type: 'account-complete',
-        alias: accountAlias,
-        username: identity.username,
-        deviceName: deviceName.trim(),
-      });
+      accountProvisioned(accountAlias);
     } catch (error) {
-      fail(error);
+      fail('account-signup', error);
     } finally {
       setBusy(false);
     }
   };
 
   const copyGoCandidate = async (): Promise<void> => {
+    if (!agentReady) return;
     if (!profile || !goCandidate?.copyable || !recoveryTargetAlias) return;
     setBusy(true);
     setConnectionErrors((old) => ({ ...old, copy: null }));
@@ -1266,15 +1381,9 @@ export function FirstRunExperience({
       );
       if (copied.alias !== recoveryTargetAlias)
         throw new Error('The imported profile belongs to a different account.');
-      const identity = await refreshAccountIdentity(recoveryTargetAlias);
-      send({
-        type: 'account-complete',
-        alias: recoveryTargetAlias,
-        username: identity.username,
-        deviceName: deviceName.trim(),
-      });
+      accountProvisioned(recoveryTargetAlias);
     } catch (error) {
-      fail(error, (message) =>
+      fail('account-copy', error, (message) =>
         setConnectionErrors((old) => ({ ...old, copy: message })),
       );
     } finally {
@@ -1283,6 +1392,7 @@ export function FirstRunExperience({
   };
 
   const recover = async (): Promise<void> => {
+    if (!agentReady) return;
     if (
       !profile ||
       !recoveryPhrase.trim() ||
@@ -1314,15 +1424,9 @@ export function FirstRunExperience({
           deviceName.trim(),
         );
       setRecoveryPhrase('');
-      const identity = await refreshAccountIdentity(recoveryTargetAlias);
-      send({
-        type: 'account-complete',
-        alias: recoveryTargetAlias,
-        username: identity.username,
-        deviceName: deviceName.trim(),
-      });
+      accountProvisioned(recoveryTargetAlias);
     } catch (error) {
-      fail(error, (message) =>
+      fail('account-recovery', error, (message) =>
         setConnectionErrors((old) => ({ ...old, recover: message })),
       );
     } finally {
@@ -1331,6 +1435,7 @@ export function FirstRunExperience({
   };
 
   const acceptPairing = async (resume: boolean): Promise<void> => {
+    if (!agentReady) return;
     if (
       !profile ||
       !goCandidate?.pairable ||
@@ -1362,15 +1467,9 @@ export function FirstRunExperience({
           'The paired device credentials belong to a different account.',
         );
       }
-      const identity = await refreshAccountIdentity(recoveryTargetAlias);
-      send({
-        type: 'account-complete',
-        alias: recoveryTargetAlias,
-        username: identity.username,
-        deviceName: deviceName.trim(),
-      });
+      accountProvisioned(recoveryTargetAlias);
     } catch (error) {
-      fail(error, (message) =>
+      fail('account-pairing', error, (message) =>
         setConnectionErrors((old) => ({ ...old, pair: message })),
       );
     } finally {
@@ -1379,6 +1478,7 @@ export function FirstRunExperience({
   };
 
   const continueProtection = async (): Promise<void> => {
+    if (!agentReady) return;
     if (!profile || !checkpoint.account) return;
     setBusy(true);
     setMessage(null);
@@ -1402,13 +1502,14 @@ export function FirstRunExperience({
         }),
       );
     } catch (error) {
-      fail(error);
+      fail('passphrase', error);
     } finally {
       setBusy(false);
     }
   };
 
   const finishLocalProtection = async (skip = false): Promise<void> => {
+    if (!agentReady) return;
     if (!profile || !checkpoint.account) return;
     if (skip) {
       clearSecrets();
@@ -1441,7 +1542,7 @@ export function FirstRunExperience({
       clearSecrets();
       commit(transitionFirstRun(next, { type: 'finish-local', skipped }));
     } catch (error) {
-      fail(error);
+      fail('passphrase', error);
     } finally {
       setBusy(false);
     }
@@ -1453,6 +1554,7 @@ export function FirstRunExperience({
   };
 
   const commitBackup = async (): Promise<void> => {
+    if (!agentReady) return;
     if (!profile || !backupPhrase || !phraseWritten) return;
     if (checkpoint.backupCommitted) {
       setPhraseWritten(false);
@@ -1470,13 +1572,14 @@ export function FirstRunExperience({
       setPhraseWritten(false);
       send({ type: 'backup-committed' });
     } catch (error) {
-      fail(error);
+      fail('backup-commit', error);
     } finally {
       setBusy(false);
     }
   };
 
   const discover = async (): Promise<void> => {
+    if (!agentReady) return;
     if (!profile || !checkpoint.account) return;
     const accountAlias = checkpoint.account.alias;
     setBusy(true);
@@ -1533,7 +1636,7 @@ export function FirstRunExperience({
         },
       });
     } catch (error) {
-      fail(error);
+      fail('group-discovery', error);
     } finally {
       setBusy(false);
     }
@@ -1554,7 +1657,7 @@ export function FirstRunExperience({
   }, [managedProfile, managedStatus]);
 
   const selectManagedProfile = (returning = false): void => {
-    if (!managedReport || !managedStatus) return;
+    if (!agentReady || !managedReport || !managedStatus) return;
     if (returning) setExistingBack('local');
     send({
       type: 'managed-profile-selected',
@@ -1565,7 +1668,31 @@ export function FirstRunExperience({
   };
 
   let content: ReactNode;
-  if (state === 'local')
+  if (state === 'identity-pending')
+    content = (
+      <Pane title="Load account details" header={false}>
+        <h1>Your account is connected</h1>
+        <p className="lead">
+          Account setup completed. FOKS still needs to load the account details
+          before continuing. Your progress is saved; setup will not be repeated.
+        </p>
+        {identityError ? (
+          <p className="crit" role="alert">
+            {identityError}
+          </p>
+        ) : null}
+        <Button
+          variant="primary"
+          disabled={identityLoading || !agentReady}
+          onClick={() => void refreshAccountIdentity()}
+        >
+          {identityLoading
+            ? 'Loading account details…'
+            : 'Retry loading account'}
+        </Button>
+      </Pane>
+    );
+  else if (state === 'local')
     content = (
       <Pane
         title="Set up FOKS"
@@ -1643,6 +1770,7 @@ export function FirstRunExperience({
     );
   else if (
     state === 'who' &&
+    agentReady &&
     bridge.native &&
     !goChooserDismissed &&
     !goDiscovery &&
@@ -1720,7 +1848,6 @@ export function FirstRunExperience({
               size="sm"
               onClick={() => {
                 setMessage(null);
-                setInitializationAttempt((attempt) => attempt + 1);
               }}
             >
               Try again
@@ -1728,17 +1855,16 @@ export function FirstRunExperience({
           </div>
         ) : null}
         <JoiningChoice value={pendingPath} onChange={setPendingPath} />
-        {pendingPath ? <WhatHappensNext path={pendingPath} /> : null}
         <div className="actions">
           <Button
             variant="primary"
-            disabled={!pendingPath || !checkpoint.initialized || busy}
+            disabled={!pendingPath || !agentReady || busy}
             onClick={() => {
-              if (pendingPath && checkpoint.initialized)
+              if (pendingPath && agentReady)
                 send({ type: 'choose', path: pendingPath });
             }}
           >
-            {!checkpoint.initialized ? 'Initializing...' : 'Continue'}
+            {!agentReady ? 'Preparing service…' : 'Continue'}
           </Button>
           {goChooserDismissed && goCandidates.length > 0 ? (
             <Button onClick={() => setGoChooserDismissed(false)}>Back</Button>
@@ -1816,13 +1942,16 @@ export function FirstRunExperience({
         {state === 'error' && !addressInvalid ? (
           <div className="crit">
             <b>
-              {message ??
+              {serverCheckPresentation?.title ??
+                message ??
                 (address
                   ? `Could not connect to ${address}`
                   : 'No server address provided')}
             </b>
-            FOKS could not connect to this address. Check the address and your
-            network connection, then try again. No changes were saved.
+            <p>
+              {serverCheckPresentation?.detail ??
+                'Review the reported error and server address before retrying.'}
+            </p>
           </div>
         ) : null}
         {checkpoint.path === 'invited' && state === 'no-address' ? (
@@ -2120,15 +2249,9 @@ export function FirstRunExperience({
             deviceName={deviceName}
             invite={invite}
             disabled={busy}
-            onComplete={async () => {
+            onComplete={() => {
               setInvite('');
-              const identity = await refreshAccountIdentity(accountAlias);
-              send({
-                type: 'account-complete',
-                alias: accountAlias,
-                username: identity.username,
-                deviceName: deviceName.trim(),
-              });
+              accountProvisioned(accountAlias);
             }}
           />
         )}
@@ -2445,16 +2568,39 @@ export function FirstRunExperience({
         header={false}
         foot={
           <Foot>
-            <Button
-              variant="primary"
-              disabled={!accountStore}
-              onClick={() => {
-                if (accountStore)
-                  onNavigate({ kind: 'store', ref: accountStore });
-              }}
-            >
-              Open Personal
-            </Button>
+            {!personalAvailable ? (
+              <Button
+                variant="primary"
+                disabled={personalRefreshing}
+                onClick={() => {
+                  setPersonalRefreshing(true);
+                  setPersonalRefreshError(null);
+                  void onRefreshWorld()
+                    .catch((error) => {
+                      const typed = normalizeCommandError(error);
+                      setPersonalRefreshError(typed.message);
+                      if (isAgentReadinessError(typed))
+                        onAgentReadinessFailure?.(typed);
+                    })
+                    .finally(() => setPersonalRefreshing(false));
+                }}
+              >
+                {personalRefreshing
+                  ? 'Loading Personal…'
+                  : 'Retry loading Personal'}
+              </Button>
+            ) : (
+              <Button
+                variant="primary"
+                disabled={!accountStore}
+                onClick={() => {
+                  if (accountStore)
+                    onNavigate({ kind: 'store', ref: accountStore });
+                }}
+              >
+                Open Personal
+              </Button>
+            )}
           </Foot>
         }
       >
@@ -2462,10 +2608,21 @@ export function FirstRunExperience({
           <span className="local-success-mark" aria-hidden="true">
             ✓
           </span>
-          <h1>Your Personal vault is ready</h1>
+          <h1>
+            {personalAvailable
+              ? 'Your Personal vault is ready'
+              : 'Setup is complete'}
+          </h1>
           <p className="lead">
-            Your account is connected to the local server on this Mac.
+            {personalAvailable
+              ? 'Your account is connected to the local server on this Mac.'
+              : 'FOKS could not load your Personal vault. Your setup progress is saved. Retry loading the vault to continue.'}
           </p>
+          {personalRefreshError ? (
+            <p className="crit" role="alert">
+              {personalRefreshError}
+            </p>
+          ) : null}
           <div className="local-vault-preview">
             <div className="local-vault-head">
               <Icon name="vault" />
@@ -2473,7 +2630,7 @@ export function FirstRunExperience({
               <code>{profile?.canonicalName}</code>
             </div>
             <div className="local-vault-empty">
-              {!accountStore
+              {!personalAvailable
                 ? 'Personal vault unavailable'
                 : accountItemCount === 0
                   ? 'No items yet'
@@ -2505,8 +2662,8 @@ export function FirstRunExperience({
         <h1>Save recovery phrase</h1>
         <p className="lead">
           Only this Mac can recover {checkpoint.account?.username}. Add at least
-          one recovery method now.
-          You can manage recovery methods later in Settings.
+          one recovery method now. You can manage recovery methods later in
+          Settings.
         </p>
         <div className="two">
           <div className="pcard">
@@ -2753,12 +2910,6 @@ export function FirstRunExperience({
         </p>
         <Inset className="checklist">
           <InsetRow label="✓">
-            <b>Prepare this Mac</b>
-            <span className="hint">
-              Device prepared and local storage encrypted.
-            </span>
-          </InsetRow>
-          <InsetRow label="✓">
             <b>{checkpoint.path === 'invited' ? 'Their server' : 'A server'}</b>
             <span className="hint">
               <code>{profile?.canonicalName}</code> · host ID{' '}
@@ -2912,6 +3063,39 @@ export function FirstRunExperience({
     world.accounts.length > 0 ||
     goCandidates.length > 0 ||
     world.stores.some((store) => store.kind === 'account');
+  const readinessBlocker =
+    !agentReady && onRetryAgent ? (
+      <Pane title="Service setup" header={false}>
+        <h1>Finish preparing this device</h1>
+        <p className="lead">
+          FOKS needs to finish preparing and checking local setup before account
+          setup can continue. Your progress is still saved.
+        </p>
+        {agentRetryError ? (
+          <div className="crit" role="alert">
+            <b>Setup could not be completed</b>
+            {agentRetryError}
+          </div>
+        ) : null}
+        <div className="actions">
+          <Button
+            variant="primary"
+            disabled={agentRetrying}
+            onClick={() => {
+              setAgentRetrying(true);
+              setAgentRetryError(null);
+              void onRetryAgent()
+                .catch((error) => {
+                  setAgentRetryError(normalizeCommandError(error).message);
+                })
+                .finally(() => setAgentRetrying(false));
+            }}
+          >
+            {agentRetrying ? 'Preparing service…' : 'Retry setup'}
+          </Button>
+        </div>
+      </Pane>
+    ) : null;
   return (
     <>
       {appMode ? (
@@ -2928,12 +3112,18 @@ export function FirstRunExperience({
           checkpoint={checkpoint}
           pendingPath={pendingPath}
           onAnotherServer={
-            !busy && checkpoint.managedLocal && !checkpoint.account
+            !busy &&
+            checkpoint.managedLocal &&
+            !checkpoint.account &&
+            !checkpoint.provisionedAccount
               ? () => send({ type: 'choose', path: 'own' })
               : undefined
           }
           onRecoverAccount={
-            !busy && checkpoint.managedLocal && !checkpoint.account
+            !busy &&
+            checkpoint.managedLocal &&
+            !checkpoint.account &&
+            !checkpoint.provisionedAccount
               ? () => selectManagedProfile(true)
               : undefined
           }
@@ -2945,8 +3135,12 @@ export function FirstRunExperience({
           }
         />
       )}
-      <main className="main first-run-main" inert={busy} aria-busy={busy}>
-        {content}
+      <main
+        className="main first-run-main"
+        inert={agentReady && busy}
+        aria-busy={agentReady && busy}
+      >
+        {readinessBlocker ?? content}
       </main>
       {state === 'added' ? (
         <AddedDetails world={world} storeId={addedStore} />

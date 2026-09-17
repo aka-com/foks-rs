@@ -53,7 +53,9 @@ async function setup(
       (s) => s.kind !== 'team' || s.id === 'team:eng',
     ),
     servers: FIXTURE.servers.map((s) =>
-      s.id === 'acme' ? { ...s, chat_available: true } : s,
+      s.id === 'acme'
+        ? { ...s, capabilities: { ...s.capabilities, chat: true } }
+        : s,
     ),
   };
   const baseBridge = mockBridge(enabledWorld);

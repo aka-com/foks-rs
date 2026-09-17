@@ -12,7 +12,7 @@ export interface BackgroundHistoryWork {
   generation: number;
   signal: AbortSignal;
   current(): boolean;
-  cancel(): void;
+  cancel(this: void): void;
   // Native cancellation currently has no agent-lock-release acknowledgement.
   preemptible: false;
 }
@@ -21,7 +21,7 @@ type Work = {
   background?: BackgroundHistoryWork;
   promise: Promise<unknown>;
   run(): Promise<void>;
-  cancel(): void;
+  cancel(this: void): void;
 };
 type Queue = {
   active?: Work;
@@ -62,7 +62,7 @@ export function scheduleProfileWork<T>(
   if (background && (background.signal.aborted || !background.current()))
     return Promise.reject(cancellation());
   let profiles = owners.get(owner);
-  if (!profiles) owners.set(owner, (profiles = new Map()));
+  if (!profiles) owners.set(owner, (profiles = new Map<string, Queue>()));
   let queue = profiles.get(profile);
   if (!queue)
     profiles.set(

@@ -8,15 +8,23 @@ import { ChatInboxProvider } from './chat/inbox-provider';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { OverlayProvider } from '/kit/overlay-primitives';
+import { Dialog, OverlayProvider } from '/kit/overlay-primitives';
 import { ToastController, ToastProvider } from '/kit/toasts';
 import {
   discoverUnboundTeams,
+  isAgentReadinessError,
   loadWorld,
   normalizeCommandError,
+  onAgentReadinessRequired,
   selectBridge,
 } from './bridge';
-import type { AppLockState, Bridge } from './bridge';
+import type { AppLockState, Bridge, CommandError } from './bridge';
+import {
+  agentLifecycleLabel,
+  AgentLifecycleController,
+  maintenanceOutcomeMessage,
+  type AgentLifecycle,
+} from './agent-lifecycle';
 import { Button } from './components';
 import {
   FIRST_RUN_CHECKPOINT_KEY,
@@ -41,6 +49,8 @@ import {
   kindOf,
   nameOf,
   notesNow,
+  profileInventoryComplete,
+  serverAvailability,
   storeOf,
   storeReadable,
 } from './model';
@@ -66,6 +76,11 @@ import {
   WriteOverlay,
 } from './screens/write-workflows';
 import type { WriteWorkflow } from './screens/write-workflows';
+import {
+  LeaseExpiryCoordinator,
+  systemLeaseExpiryClock,
+} from './scheduling/lease-expiry';
+import type { LeaseExpiryClock } from './scheduling/lease-expiry';
 
 /** The app's name, as the title bar and the first-run sidebar write it. */
 export const APP_NAME = 'FOKS';
@@ -98,9 +113,11 @@ export interface AppProps {
   bridge?: Bridge;
   /** Injected by the render tests so navigation is observable. */
   store?: LocationStore;
+  /** Controlled wall clock for expiry lifecycle tests. */
+  leaseClock?: LeaseExpiryClock;
 }
 
-export function App({ world, bridge, store }: AppProps): ReactNode {
+export function App({ world, bridge, store, leaseClock }: AppProps): ReactNode {
   const [activeBridge, setActiveBridge] = useState<Bridge | null>(
     () => bridge ?? null,
   );
@@ -114,11 +131,19 @@ export function App({ world, bridge, store }: AppProps): ReactNode {
   const [lockError, setLockError] = useState<string | null>(null);
   const [unlocking, setUnlocking] = useState(false);
   const [bootEpoch, setBootEpoch] = useState(0);
+  const [agentLifecycle, setAgentLifecycle] = useState<AgentLifecycle>({
+    state: 'checking',
+  });
+  const [agentController, setAgentController] =
+    useState<AgentLifecycleController | null>(null);
 
   useEffect(() => {
     if (world) {
       setLoaded(world);
       if (bridge) {
+        const controller = new AgentLifecycleController(bridge, world.agent);
+        setAgentController(controller);
+        setAgentLifecycle(controller.snapshot());
         setActiveBridge(bridge);
         setLoadError(null);
         return;
@@ -129,9 +154,38 @@ export function App({ world, bridge, store }: AppProps): ReactNode {
       return;
     }
     let alive = true;
+    let bootInvalidated = false;
+    let restartScheduled = false;
+    let stopLifecycle: (() => void) | undefined;
+    let stopMaintenance: (() => void) | undefined;
+    const restartFromMaintenanceSnapshot = (): void => {
+      bootInvalidated = true;
+      if (restartScheduled) return;
+      restartScheduled = true;
+      setBootEpoch((value) => value + 1);
+    };
     void (async () => {
       try {
         const selected = bridge ?? (await selectBridge());
+        const controller = new AgentLifecycleController(selected);
+        stopLifecycle = controller.subscribe((state) => {
+          if (alive) setAgentLifecycle(state);
+        });
+        if (alive) setAgentController(controller);
+        stopMaintenance = await selected.onMaintenanceStatus((snapshot) => {
+          if (!alive) return;
+          const accepted = controller.applyMaintenance(snapshot);
+          // Until VaultShell owns ingestion, any native maintenance
+          // transition invalidates this boot attempt. Restart from the
+          // replayable snapshot so an in-flight pre-maintenance catalog can
+          // never be published and consumed events are not lost at handoff.
+          if (accepted && snapshot.state !== 'idle')
+            restartFromMaintenanceSnapshot();
+        });
+        if (!alive || bootInvalidated) return;
+        const maintenance = await selected.clientStateMaintenanceStatus();
+        if (!alive) return;
+        controller.applyMaintenance(maintenance);
         const nextLockState = await selected.appLockState();
         if (!alive) return;
         setActiveBridge(selected);
@@ -143,65 +197,98 @@ export function App({ world, bridge, store }: AppProps): ReactNode {
           return;
         }
         setLockState(null);
+        const maintenanceLifecycle = controller.snapshot();
+        if (maintenanceLifecycle.state === 'maintenance') {
+          setLoaded(null);
+          setLoadError(null);
+          return;
+        }
+        if (
+          maintenanceLifecycle.state === 'restart-required' ||
+          maintenanceLifecycle.state === 'recovery-required' ||
+          maintenanceLifecycle.state === 'restoration-failed'
+        ) {
+          setLoaded(null);
+          setLoadError(null);
+          return;
+        }
         const requested = initialScene().location.kind === 'first-run';
         const [status, appInfo] = await Promise.all([
-          selected.agentStatus(),
+          controller.establish(),
           selected.appInfo(),
         ]);
-        if (alive) setManagedProfile(appInfo.managedProfile ?? null);
+        if (!alive || bootInvalidated) return;
+        setManagedProfile(appInfo.managedProfile ?? null);
         let next: World;
-        if (status.phase !== 'Ready') {
-          next = emptyWorld(status);
-          if (alive) setFirstRunStart('who');
-        } else {
-          try {
-            next = await loadWorld(selected);
-          } catch (error) {
-            if (!requested) throw error;
-            next = emptyWorld(status);
-          }
-          // On an ordinary launch, look for teams that were granted to an
-          // account after its first-run setup. An explicit first-run location
-          // keeps its own discovery step, so leave it untouched.
-          if (!requested && next.accountInventoryComplete) {
-            try {
-              if (await discoverUnboundTeams(selected, next))
-                next = await loadWorld(selected);
-            } catch {
-              // Team discovery is best-effort and must not block launch.
-            }
-          }
+        try {
+          next = await loadWorld(selected);
+        } catch (error) {
+          const typed = normalizeCommandError(error);
           if (
-            !requested &&
-            next.accountInventoryComplete &&
-            !next.stores.some((entry) => entry.kind === 'account')
-          ) {
-            const localProfile =
-              appInfo.managedProfile &&
-              next.servers.some(
-                (server) =>
-                  server.id === appInfo.managedProfile && server.state === 'ok',
-              )
-                ? appInfo.managedProfile
-                : null;
-            if (alive) {
-              setManagedProfile(localProfile);
-              setFirstRunStart(localProfile ? 'local' : 'who');
+            !requested ||
+            typed.code === 'bootstrap-required' ||
+            typed.code === 'agent-lost' ||
+            typed.code === 'version-mismatch' ||
+            typed.fatal
+          )
+            throw error;
+          next = emptyWorld(status);
+        }
+        if (!alive || bootInvalidated) return;
+        // On an ordinary launch, look for teams that were granted to an
+        // account after its first-run setup. An explicit first-run location
+        // keeps its own discovery step, so leave it untouched.
+        if (!requested && profileInventoryComplete(next, 'accounts')) {
+          try {
+            if (await discoverUnboundTeams(selected, next)) {
+              if (!alive || bootInvalidated) return;
+              next = await loadWorld(selected);
             }
-          } else if (alive) {
-            setManagedProfile(appInfo.managedProfile ?? null);
+          } catch {
+            // Team discovery is best-effort and must not block launch.
           }
         }
+        if (!alive || bootInvalidated) return;
+        if (
+          !requested &&
+          profileInventoryComplete(next, 'accounts') &&
+          !next.stores.some((entry) => entry.kind === 'account')
+        ) {
+          const localProfile =
+            appInfo.managedProfile &&
+            next.servers.some(
+              (server) =>
+                server.id === appInfo.managedProfile &&
+                serverAvailability(next, server).available,
+            )
+              ? appInfo.managedProfile
+              : null;
+          if (alive) {
+            setManagedProfile(localProfile);
+            setFirstRunStart(localProfile ? 'local' : 'who');
+          }
+        } else if (alive) {
+          setManagedProfile(appInfo.managedProfile ?? null);
+        }
         if (!alive) return;
+        // Transfer maintenance ingestion to VaultShell. Its listener is
+        // installed before querying the replayable native snapshot, so events
+        // in this handoff window are recovered without two listeners racing
+        // the same controller revision.
+        stopMaintenance?.();
+        stopMaintenance = undefined;
         setLoaded(next);
         setLoadError(null);
       } catch (error) {
         if (!alive) return;
+        setAgentLifecycle({ state: 'failure', error });
         setLoadError(normalizeCommandError(error).message);
       }
     })();
     return () => {
       alive = false;
+      stopLifecycle?.();
+      stopMaintenance?.();
     };
   }, [bootEpoch, bridge, world]);
 
@@ -297,8 +384,63 @@ export function App({ world, bridge, store }: AppProps): ReactNode {
       </div>
     );
   }
-  if (!loaded || !activeBridge) {
-    return <div className="app-loading">Connecting to the local agent…</div>;
+  if (!loaded || !activeBridge || !agentController) {
+    if (
+      agentLifecycle.state === 'recovery-required' ||
+      agentLifecycle.state === 'restart-required' ||
+      agentLifecycle.state === 'restoration-failed'
+    ) {
+      const recovery = agentLifecycle.state === 'recovery-required';
+      const restoration = agentLifecycle.state === 'restoration-failed';
+      return (
+        <div className="app-lock" role="alertdialog">
+          <div className="app-lock-card">
+            <h1>{agentLifecycleLabel(agentLifecycle)}</h1>
+            <p>{maintenanceOutcomeMessage(agentLifecycle.operation)}</p>
+            <p>
+              {recovery
+                ? `Client state at ${agentLifecycle.root} needs explicit recovery. Run the supported “state status” and “state recover” CLI commands before reopening FOKS.`
+                : restoration
+                  ? agentLifecycle.error.message
+                  : `FOKS must restart before it can open ${agentLifecycle.root}.`}
+            </p>
+            {restoration ? (
+              <Button
+                variant="primary"
+                onClick={() => {
+                  void agentController
+                    ?.establish(true)
+                    .then(() => setBootEpoch((value) => value + 1))
+                    .catch((error) => {
+                      // A successful native restoration publishes a newer
+                      // maintenance snapshot while retryAgentConnection is
+                      // still awaited. That transition intentionally makes
+                      // this older establish attempt stale; the startup
+                      // listener above owns the boot continuation.
+                      const current = agentController.snapshot();
+                      if (
+                        current.state === 'checking' ||
+                        current.state === 'ready'
+                      )
+                        return;
+                      setLoadError(normalizeCommandError(error).message);
+                    });
+                }}
+              >
+                Retry service restart
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="app-loading">
+        {agentLifecycle.state === 'checking'
+          ? 'Connecting to the local agent…'
+          : `${agentLifecycleLabel(agentLifecycle)}…`}
+      </div>
+    );
   }
   return (
     <VaultShell
@@ -308,6 +450,8 @@ export function App({ world, bridge, store }: AppProps): ReactNode {
       firstRunStart={firstRunStart}
       managedProfile={managedProfile}
       onLock={lockNow}
+      agentController={agentController}
+      leaseClock={leaseClock}
     />
   );
 }
@@ -319,6 +463,8 @@ interface VaultShellProps {
   firstRunStart?: 'who' | 'local' | null;
   managedProfile?: string | null;
   onLock: () => Promise<boolean>;
+  agentController: AgentLifecycleController;
+  leaseClock?: LeaseExpiryClock;
 }
 
 function VaultShell({
@@ -328,6 +474,8 @@ function VaultShell({
   firstRunStart = null,
   managedProfile = null,
   onLock,
+  agentController,
+  leaseClock = systemLeaseExpiryClock,
 }: VaultShellProps): ReactNode {
   const [{ scene, automaticFirstRun }] = useState(() => {
     const decoded = initialScene();
@@ -359,6 +507,15 @@ function VaultShell({
   );
   const state = useLocationState(locations);
   const [latest, setLatest] = useState(world);
+  const latestRef = useRef(latest);
+  latestRef.current = latest;
+  const [observedExpiredLeases, setObservedExpiredLeases] = useState(
+    world.observedExpiredLeases,
+  );
+  const [agentLifecycle, setAgentLifecycle] = useState<AgentLifecycle>(() =>
+    agentController.snapshot(),
+  );
+  const [agentCatalogReady, setAgentCatalogReady] = useState(true);
   const [refreshingWorld, setRefreshingWorld] = useState(false);
   const [workflow, setWorkflow] = useState<WriteWorkflow>(() =>
     initialWriteWorkflow(
@@ -368,6 +525,10 @@ function VaultShell({
   );
   const [toasts] = useState(() => new ToastController());
   const [concealSignal, setConcealSignal] = useState(0);
+  const [accessGenerations, setAccessGenerations] = useState<
+    ReadonlyMap<string, number>
+  >(() => new Map());
+  const accessSession = useRef<object>({}).current;
   const [windowChromeHidden, setWindowChromeHidden] = useState(false);
   const [resumeDraft, setResumeDraft] = useState<{
     store: string;
@@ -380,23 +541,38 @@ function VaultShell({
       ? `${initialSelection.store}|${initialSelection.path}`
       : null,
   );
+  // Captured once because the canonical URL rewrite removes fixture-only intent.
+  const [namedState] = useState(() =>
+    typeof window === 'undefined'
+      ? ''
+      : (new URLSearchParams(window.location.search).get('state') ?? ''),
+  );
 
   // Apply URL query lease overrides to the active world snapshot.
   const shown = useMemo(() => {
+    const reconciled = { ...latest, observedExpiredLeases };
     const leased =
-      scene.lease === 'lapsed' ? applyLease(latest, 'lapsed') : latest;
+      scene.lease === 'lapsed' ? applyLease(reconciled, 'lapsed') : reconciled;
+    const demonstrated = demoAvailabilityFacts(leased, namedState);
     if (
       bridge.firstRunFixture &&
       state.location.kind === 'first-run' &&
       state.location.step === 'boot'
     ) {
       return {
-        ...leased,
-        agent: { phase: 'Bootstrap' as const, step: 'create-state' },
+        ...demonstrated,
+        agent: { state: 'bootstrap' as const, step: 'create-state' },
       };
     }
-    return leased;
-  }, [bridge.firstRunFixture, latest, scene.lease, state.location]);
+    return demonstrated;
+  }, [
+    bridge.firstRunFixture,
+    latest,
+    namedState,
+    observedExpiredLeases,
+    scene.lease,
+    state.location,
+  ]);
 
   useEffect(() => setLatest(world), [world]);
 
@@ -457,9 +633,12 @@ function VaultShell({
       if (force) refreshWorldInFlight.current = null;
       if (!refreshWorldInFlight.current) {
         const generation = ++refreshWorldGeneration.current;
-        const pending = loadWorld(bridge)
+        const pending = loadWorld(bridge, latestRef.current)
           .then((next) => {
-            if (generation === refreshWorldGeneration.current) setLatest(next);
+            if (generation === refreshWorldGeneration.current) {
+              setLatest(next);
+              setAgentCatalogReady(true);
+            }
             return next;
           })
           .finally(() => {
@@ -481,6 +660,34 @@ function VaultShell({
     [refreshWorld, toasts],
   );
 
+  const refreshWorldRef = useRef(refreshWorld);
+  const commandErrorRef = useRef<(error: unknown) => void>(() => undefined);
+  const foregroundRefreshAllowed = useRef(false);
+  refreshWorldRef.current = refreshWorld;
+  foregroundRefreshAllowed.current =
+    latest.agent.state === 'ready' &&
+    agentController.snapshot().state === 'ready' &&
+    agentCatalogReady;
+
+  const recoverAgentReadiness = useCallback(
+    async (reconnect: boolean): Promise<void> => {
+      try {
+        await agentController.establish(reconnect);
+      } catch (error) {
+        // Native restoration success publishes its maintenance transition
+        // before retryAgentConnection resolves. That newer transition makes
+        // this establish attempt stale; its event handler owns the follow-up
+        // establish and catalog refresh. Real retry failures publish failure.
+        if (reconnect && agentController.snapshot().state !== 'failure') return;
+        throw error;
+      }
+      // Readiness and catalog availability are separate. A catalog failure
+      // leaves the connected agent ready and is reported by the caller.
+      await refreshWorld(true);
+    },
+    [agentController, refreshWorld],
+  );
+
   const commandError = useCallback(
     (error: unknown, item?: Item, draft = ''): void => {
       const typed = normalizeCommandError(error);
@@ -499,6 +706,56 @@ function VaultShell({
     },
     [toasts],
   );
+  commandErrorRef.current = commandError;
+
+  const expiryCoordinator = useRef<LeaseExpiryCoordinator | null>(null);
+  useEffect(() => {
+    const coordinator = new LeaseExpiryCoordinator(
+      leaseClock,
+      ({ observed, newlyExpired }) => {
+        setObservedExpiredLeases([...observed]);
+        if (!newlyExpired.length) return;
+        setAccessGenerations((current) => {
+          const next = new Map(current);
+          for (const entry of newlyExpired)
+            next.set(entry.profile, (next.get(entry.profile) ?? 0) + 1);
+          return next;
+        });
+        if (foregroundRefreshAllowed.current)
+          void refreshWorldRef.current(true).catch((error: unknown) =>
+            commandErrorRef.current(error),
+          );
+      },
+    );
+    expiryCoordinator.current = coordinator;
+    const reconcileForeground = (): void => {
+      coordinator.foreground();
+      if (foregroundRefreshAllowed.current)
+        void refreshWorldRef.current().catch((error: unknown) =>
+          commandErrorRef.current(error),
+        );
+    };
+    const reconcileVisible = (): void => {
+      if (!document.hidden) reconcileForeground();
+    };
+    window.addEventListener('focus', reconcileForeground);
+    window.addEventListener('pageshow', reconcileForeground);
+    document.addEventListener('visibilitychange', reconcileVisible);
+    return () => {
+      expiryCoordinator.current = null;
+      coordinator.dispose();
+      window.removeEventListener('focus', reconcileForeground);
+      window.removeEventListener('pageshow', reconcileForeground);
+      document.removeEventListener('visibilitychange', reconcileVisible);
+    };
+  }, [leaseClock]);
+
+  useEffect(() => {
+    expiryCoordinator.current?.update(
+      latest.servers,
+      latest.observedExpiredLeases,
+    );
+  }, [latest.observedExpiredLeases, latest.servers]);
 
   const mutationError = useCallback<MutationFailureHandler>(
     async (error, options = {}) => {
@@ -529,6 +786,94 @@ function VaultShell({
   };
 
   useEffect(() => {
+    return agentController.subscribe(setAgentLifecycle);
+  }, [agentController]);
+
+  useEffect(() => {
+    if (!bridge.native) return;
+    let alive = true;
+    let stop: (() => void) | undefined;
+    const apply = (snapshot: Awaited<ReturnType<Bridge['clientStateMaintenanceStatus']>>): void => {
+      if (!alive) return;
+      if (!agentController.applyMaintenance(snapshot)) return;
+      if (snapshot.state === 'idle') return;
+      foregroundRefreshAllowed.current = false;
+      refreshWorldGeneration.current++;
+      refreshWorldInFlight.current = null;
+      setAgentCatalogReady(false);
+      setConcealSignal((value) => value + 1);
+      if (snapshot.state !== 'complete') return;
+      if (snapshot.operation.status === 'failed')
+        commandError(snapshot.operation.error);
+      else if (snapshot.operation.status === 'completed')
+        toasts.show(maintenanceOutcomeMessage(snapshot.operation));
+      if (snapshot.disposition.status === 'restoration-failed')
+        commandError(snapshot.disposition.error);
+      if (snapshot.disposition.status === 'continue-current-root')
+        void agentController
+          .establish(false)
+          .then(() => refreshWorld(true))
+          .catch(commandError);
+    };
+    void bridge
+      .onMaintenanceStatus(apply)
+      .then(async (unlisten) => {
+        if (!alive) {
+          unlisten();
+          return;
+        }
+        stop = unlisten;
+        apply(await bridge.clientStateMaintenanceStatus());
+      })
+      .catch(commandError);
+    return () => {
+      alive = false;
+      stop?.();
+    };
+  }, [agentController, bridge, commandError, refreshWorld, toasts]);
+
+  const handledReadinessErrors = useRef(new WeakSet<CommandError>());
+  const handleAgentReadinessFailure = useCallback(
+    (error: CommandError) => {
+      if (
+        !isAgentReadinessError(error) ||
+        handledReadinessErrors.current.has(error)
+      )
+        return;
+      // checked() reports before rejecting with this same normalized object.
+      // A component forwarding that rejection must not invalidate recovery twice.
+      handledReadinessErrors.current.add(error);
+      foregroundRefreshAllowed.current = false;
+      refreshWorldGeneration.current++;
+      refreshWorldInFlight.current = null;
+      setAgentCatalogReady(false);
+      if (error.code === 'agent-lost') {
+        agentController.disconnect(error.message);
+        setConcealSignal((value) => value + 1);
+        setWorkflow({ kind: 'agent-lost', message: error.message });
+        return;
+      }
+      if (error.code === 'version-mismatch') {
+        agentController.fail(error);
+        commandError(error);
+        return;
+      }
+      const step = error.details?.reason ?? 'initialize-state';
+      agentController.requireBootstrap(step);
+      // Onboarding owns an explicit Retry setup action. Keep automatic
+      // recovery for commands issued elsewhere in the shell.
+      if (state.location.kind !== 'first-run')
+        void recoverAgentReadiness(false).catch(commandError);
+    },
+    [agentController, commandError, recoverAgentReadiness, state.location.kind],
+  );
+
+  useEffect(
+    () => onAgentReadinessRequired(handleAgentReadinessFailure),
+    [handleAgentReadinessFailure],
+  );
+
+  useEffect(() => {
     let alive = true;
     let pending = false;
     const check = async (): Promise<void> => {
@@ -537,6 +882,11 @@ function VaultShell({
       try {
         const message = await bridge.takeAgentConnectionLoss();
         if (alive && message) {
+          foregroundRefreshAllowed.current = false;
+          refreshWorldGeneration.current++;
+          refreshWorldInFlight.current = null;
+          setAgentCatalogReady(false);
+          agentController.disconnect(message);
           setConcealSignal((value) => value + 1);
           setWorkflow({ kind: 'agent-lost', message });
         }
@@ -553,7 +903,7 @@ function VaultShell({
       alive = false;
       window.clearInterval(timer);
     };
-  }, [bridge, commandError]);
+  }, [agentController, bridge, commandError]);
 
   const appRef = useRef<HTMLDivElement>(null);
   const portalRoot = useMemo(
@@ -562,6 +912,17 @@ function VaultShell({
         ? null
         : (document.getElementById('overlays') ?? document.body),
     [],
+  );
+  const accessNow = useCallback(() => leaseClock.now(), [leaseClock]);
+  const chatClock = useMemo(
+    () => ({
+      now: () => leaseClock.now() * 1_000,
+      later: (callback: () => void, delayMs: number) =>
+        leaseClock.later(callback, delayMs),
+      cancel: (timer: unknown) => leaseClock.cancel(timer),
+      random: Math.random,
+    }),
+    [leaseClock],
   );
 
   // Persist the current scene in the URL so a reload restores it. Only values
@@ -595,19 +956,16 @@ function VaultShell({
 
   const here = state.location;
   const pendingFirstRun = incompleteFirstRunCheckpoint();
-  // Captured once, the way SettingsScreen captures its
-  // scene: the effect below rewrites the address bar to the canonical scene
-  // on the first commit, so fixture-only sheet intent must retain its name.
-  const [namedState] = useState(() =>
-    typeof window === 'undefined'
-      ? ''
-      : (new URLSearchParams(window.location.search).get('state') ?? ''),
-  );
   const detailsShown =
     state.details &&
     listsItems(here) &&
     !(here.kind === 'store' && !storeReadable(shown, here.ref)) &&
     !(state.selection && !storeReadable(shown, state.selection.store));
+  const selectedAccessGeneration = state.selection
+    ? accessGenerations.get(
+        storeOf(shown, state.selection.store)?.server ?? '',
+      ) ?? 0
+    : 0;
   const screen = listsItems(here) ? (
     <ItemsScreen
       world={shown}
@@ -635,6 +993,7 @@ function VaultShell({
         })
       }
       onCommandError={commandError}
+      accessNow={accessNow}
     />
   ) : here.kind === 'team-chat' ? (
     <ChatScreen
@@ -642,6 +1001,10 @@ function VaultShell({
       world={shown}
       bridge={bridge}
       location={here}
+      accessNow={accessNow}
+      accessGeneration={
+        accessGenerations.get(storeOf(shown, here.ref)?.server ?? '') ?? 0
+      }
       onNavigate={(location) => locations.navigate(location)}
     />
   ) : here.kind === 'group-settings' ? (
@@ -674,6 +1037,8 @@ function VaultShell({
       onError={commandError}
       onMutationError={mutationError}
       onLock={onLock}
+      agentLifecycle={agentLifecycle}
+      onRetryAgent={() => recoverAgentReadiness(true)}
     />
   ) : (
     <PlaceholderScreen location={here} />
@@ -702,12 +1067,21 @@ function VaultShell({
         </span>
         <span className="spacer" data-tauri-drag-region="" />
         <span
-          className={shown.agent.phase === 'Bootstrap' ? 'agent warn' : 'agent'}
+          className={
+            shown.agent.state === 'ready' && agentLifecycle.state === 'ready'
+              ? 'agent'
+              : 'agent warn'
+          }
           data-tauri-drag-region=""
         >
           <i data-tauri-drag-region="" />
           {/* Local agent connection and readiness status */}
-          Agent {shown.agent.phase === 'Bootstrap' ? 'starting' : 'ready'}
+          Agent{' '}
+          {shown.agent.state === 'bootstrap'
+            ? 'starting'
+            : agentLifecycle.state === 'ready'
+              ? 'ready'
+              : agentLifecycleLabel(agentLifecycle).toLowerCase()}
         </span>
         <Button
           variant="quiet"
@@ -741,6 +1115,13 @@ function VaultShell({
             onNavigate={(location) => locations.navigate(location)}
             onRefreshWorld={refreshWorld}
             concealSignal={concealSignal}
+            agentReady={
+              shown.agent.state === 'ready' &&
+              agentLifecycle.state === 'ready' &&
+              agentCatalogReady
+            }
+            onRetryAgent={() => recoverAgentReadiness(false)}
+            onAgentReadinessFailure={handleAgentReadinessFailure}
             automaticEntry={automaticFirstRun}
             managedProfile={managedProfile ?? undefined}
           />
@@ -786,18 +1167,61 @@ function VaultShell({
             onCommandError={commandError}
             onMutationError={mutationError}
             concealSignal={concealSignal}
+            accessGeneration={selectedAccessGeneration}
+            accessNow={accessNow}
+            accessSession={accessSession}
             resumeDraft={resumeDraft}
           />
         ) : null}
       </div>
+      {agentLifecycle.state === 'maintenance' ||
+      agentLifecycle.state === 'restart-required' ||
+      agentLifecycle.state === 'recovery-required' ||
+      agentLifecycle.state === 'restoration-failed' ? (
+        <Dialog
+          className="stopwrap"
+          role="alertdialog"
+          aria-label={agentLifecycleLabel(agentLifecycle)}
+        >
+          <div className="notice stop">
+            <h2>{agentLifecycleLabel(agentLifecycle)}</h2>
+            {agentLifecycle.state !== 'maintenance' ? (
+              <p>{maintenanceOutcomeMessage(agentLifecycle.operation)}</p>
+            ) : null}
+            <p>
+              {agentLifecycle.state === 'maintenance'
+                ? 'FOKS has paused local-agent access while protected state maintenance finishes.'
+                : agentLifecycle.state === 'recovery-required'
+                  ? `Client state at ${agentLifecycle.root} needs explicit recovery. Run the supported “state status” and “state recover” CLI commands before reopening FOKS.`
+                  : agentLifecycle.state === 'restart-required'
+                    ? `FOKS must restart before it can open ${agentLifecycle.root}.`
+                    : agentLifecycle.error.message}
+            </p>
+            {agentLifecycle.state === 'restoration-failed' ? (
+              <div className="acts2">
+                <Button
+                  variant="primary"
+                  onClick={() => {
+                    void recoverAgentReadiness(true).catch(commandError);
+                  }}
+                >
+                  Retry service restart
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        </Dialog>
+      ) : null}
       <WriteOverlay
         world={shown}
+        accessNow={accessNow}
         bridge={bridge}
         workflow={workflow}
         setWorkflow={setWorkflow}
         onApplied={refresh}
         onError={commandError}
         onMutationError={mutationError}
+        onRetryAgent={() => recoverAgentReadiness(true)}
         onRefreshConflict={async (item, draft) => {
           await refreshWorld();
           setResumeDraft({
@@ -838,6 +1262,7 @@ function VaultShell({
         bridge={bridge}
         world={shown}
         onNavigate={navigateFromNotification}
+        clock={chatClock}
       >
         {shell}
       </ChatInboxProvider>
@@ -857,8 +1282,10 @@ function emptyWorld(agent: World['agent']): World {
     servers: [],
     accounts: [],
     stores: [],
-    unavailableStores: [],
-    accountInventoryComplete: false,
+    storeInventory: [],
+    profileInventory: [],
+    catalogProfiles: [],
+    profileInventoryStatus: 'unavailable',
     items: [],
     parties: [],
     federation: [],
@@ -867,9 +1294,54 @@ function emptyWorld(agent: World['agent']): World {
     yubiAccounts: [],
     cardsConnected: [],
     notifications: [],
-    leaseState: 'fresh',
+    observedExpiredLeases: [],
     plaintext: {},
   };
+}
+
+/** Applies review-scene failures once at the fixture/model boundary. */
+function demoAvailabilityFacts(world: World, state: string): World {
+  if (
+    state === 'servers-list' ||
+    state === 'servers-add' ||
+    state === 'servers-lapsed'
+  )
+    return applyLease(world, 'lapsed');
+  if (state === 'servers-rollback') {
+    const error = {
+      code: 'host-verification-failed',
+      message: 'The fixture host identity moved backwards.',
+      fatal: false,
+      retryable: false,
+      ambiguous: false,
+    };
+    return {
+      ...world,
+      servers: world.servers.map((server) =>
+        server.id === 'personal'
+          ? { ...server, trust: { status: 'blocked' as const, error } }
+          : server,
+      ),
+    };
+  }
+  if (state === 'settings-account') {
+    const error = {
+      code: 'catalog-unavailable',
+      message: 'The fixture vault inventory is unavailable.',
+      fatal: false,
+      retryable: true,
+      ambiguous: false,
+    };
+    return {
+      ...world,
+      storeInventory: world.storeInventory.map((entry) =>
+        entry.store === 'acct:work'
+          ? { ...entry, status: 'unavailable' as const, error }
+          : entry,
+      ),
+    };
+  }
+  return world;
 }
 
 function demoSelection(

@@ -9,8 +9,6 @@ import { useToast } from '/kit/toasts';
 import {
   enqueueProfileWork,
   normalizeCommandError,
-  sharedServerStatus,
-  shouldReportPassiveServerStatusError,
 } from '../bridge';
 import type {
   AccountDevice,
@@ -18,7 +16,6 @@ import type {
   BackupEnrollment,
   Bridge,
   PairingOffer,
-  ServerStatusSnapshot,
   YubiCommand,
   YubiEnrollment,
 } from '../bridge';
@@ -40,14 +37,16 @@ import type { Location, SettingsSection } from '../location';
 import {
   canCreateInStore,
   partiesOf,
-  serverLeaseState,
+  serverAvailability,
   serverOf,
   storeDescription,
   storeDescriptionState,
+  storeAvailability,
 } from '../model';
 import type { AccountStore, StoreRef, TeamStore, World } from '../model';
 import { PageHeader } from '../shell/page-header';
 import type { MutationFailureHandler } from '../mutation-recovery';
+import { agentLifecycleLabel, type AgentLifecycle } from '../agent-lifecycle';
 import {
   checkLabel,
   discoveryContext,
@@ -69,6 +68,8 @@ interface Props {
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
   onLock: () => Promise<boolean>;
+  agentLifecycle: AgentLifecycle;
+  onRetryAgent: () => Promise<void>;
 }
 
 type Sheet =
@@ -235,7 +236,7 @@ function GroupsSection({
                     </span>
                   </span>
                   <Chip tone="warn">
-                    {state === 'inactive' ? 'Inactive' : 'Unavailable'}
+                    {state === 'setup-incomplete' ? 'Inactive' : 'Unavailable'}
                   </Chip>
                 </InsetRow>
               );
@@ -288,6 +289,8 @@ export function SettingsScreen({
   onError,
   onMutationError,
   onLock,
+  agentLifecycle,
+  onRetryAgent,
 }: Props): ReactNode {
   // Capture initial fixture scene once; the shell canonicalizes the route to 'settings' on mount.
   const [enteredScene] = useState(scene);
@@ -324,10 +327,6 @@ export function SettingsScreen({
     null,
   );
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
-  const [statuses, setStatuses] = useState<Map<string, ServerStatusSnapshot>>(
-    new Map(),
-  );
-  const [loadedProfiles, setLoadedProfiles] = useState<Set<string>>(new Set());
   const [accountDeviceNames, setAccountDeviceNames] = useState<
     Map<string, string>
   >(new Map());
@@ -450,79 +449,15 @@ export function SettingsScreen({
     recoveredAccounts.current = new Set();
   }, [selectedId]);
 
-  useEffect(() => {
-    let alive = true;
-    const profiles = [
-      ...new Set(accountStores(world).map((store) => store.server)),
-    ];
-    void (async () => {
-      const next = new Map<string, ServerStatusSnapshot>();
-      const loaded = new Set<string>();
-      for (const candidate of profiles) {
-        const server = world.servers.find((item) => item.id === candidate);
-        if (server?.state === 'blocked') {
-          loaded.add(candidate);
-          continue;
-        }
-        try {
-          const status = await sharedServerStatus(bridge, candidate);
-          if (status.profile !== candidate)
-            throw new Error(
-              'describe_server_status returned a different profile.',
-            );
-          next.set(candidate, status);
-          loaded.add(candidate);
-        } catch (error) {
-          // Mark as loaded so UI status gates resolve even if the server probe fails.
-          loaded.add(candidate);
-          if (alive && shouldReportPassiveServerStatusError(error))
-            onError(error);
-        }
-      }
-      if (alive) {
-        setStatuses(next);
-        setLoadedProfiles(loaded);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [bridge, onError, world]);
-
   const accessStopped = (candidate: string): boolean => {
     const server = world.servers.find((item) => item.id === candidate);
-    if (
-      !bridge.native &&
-      bridge.fixtureWorld &&
-      enteredScene.startsWith('settings-') &&
-      enteredScene !== 'settings-account'
-    ) {
-      return server?.state === 'blocked';
-    }
-    if (
-      server?.state === 'blocked' ||
-      server?.state === 'lease-lapsed' ||
-      server?.state === 'never-probed'
-    )
-      return true;
-    if (!loadedProfiles.has(candidate)) return false;
-    const status = statuses.get(candidate);
-    return !status?.host || serverLeaseState(status) !== 'fresh';
+    return !server || !serverAvailability(world, server).available;
   };
   const selectedStopped = selected
-    ? world.unavailableStores.includes(selected.id) ||
-      accessStopped(selected.server)
+    ? !storeAvailability(world, selected).available || accessStopped(selected.server)
     : true;
-  const selectedStatusLoaded = selected
-    ? loadedProfiles.has(selected.server)
-    : false;
-  const statusPending = Boolean(
-    selected && !unavailable && !selectedStatusLoaded,
-  );
-
   useEffect(() => {
     let alive = true;
-    if (!selectedStatusLoaded) return;
     if (!selected || selectedStopped) {
       setDevices([]);
       setBackups([]);
@@ -582,13 +517,11 @@ export function SettingsScreen({
     onError,
     recoverCatalog,
     selected,
-    selectedStatusLoaded,
     selectedStopped,
   ]);
 
   useEffect(() => {
     let alive = true;
-    if (!selectedStatusLoaded) return;
     if (!profile || selectedStopped) {
       setCards([]);
       setYubi([]);
@@ -613,7 +546,7 @@ export function SettingsScreen({
     return () => {
       alive = false;
     };
-  }, [bridge, onError, profile, selectedStatusLoaded, selectedStopped]);
+  }, [bridge, onError, profile, selectedStopped]);
 
   useEffect(() => {
     let alive = true;
@@ -625,26 +558,7 @@ export function SettingsScreen({
       try {
         const next = new Map<string, string>();
         for (const store of accountStores(world)) {
-          const server = world.servers.find(
-            (entry) => entry.id === store.server,
-          );
-          const status = statuses.get(store.server);
-          const fixtureStopped = Boolean(
-            bridge.fixtureWorld &&
-            enteredScene === 'settings-account' &&
-            store.id === 'acct:work',
-          );
-          const pending = !loadedProfiles.has(store.server);
-          const stopped =
-            world.unavailableStores.includes(store.id) ||
-            fixtureStopped ||
-            server?.state === 'blocked' ||
-            server?.state === 'lease-lapsed' ||
-            server?.state === 'never-probed' ||
-            pending ||
-            !status?.host ||
-            serverLeaseState(status) !== 'fresh';
-          if (stopped) continue;
+          if (!storeAvailability(world, store).available) continue;
           const loadCurrent = (): Promise<AccountDevice | undefined> =>
             enqueueProfileWork(bridge, store.server, () =>
               bridge.listAccountDevices(store.id),
@@ -681,18 +595,15 @@ export function SettingsScreen({
     };
   }, [
     bridge,
-    enteredScene,
-    loadedProfiles,
     onError,
     recoverCatalog,
     section,
-    statuses,
     world,
   ]);
 
   useEffect(() => {
-    if (selectedStatusLoaded && selectedStopped) setSheet(null);
-  }, [selectedStatusLoaded, selectedStopped]);
+    if (selectedStopped) setSheet(null);
+  }, [selectedStopped]);
 
   useEffect(() => {
     let alive = true;
@@ -729,13 +640,13 @@ export function SettingsScreen({
     selected &&
     !unavailable &&
     !selectedStopped &&
-    (statusPending || !macsLoaded),
+    !macsLoaded,
   );
   const keysLoading = Boolean(
     selected &&
     !unavailable &&
     !selectedStopped &&
-    (statusPending || !keysLoaded),
+    !keysLoaded,
   );
   const createContext = stores[0];
   const invitedStore = stores.find((store) => store.id === inviteStore);
@@ -827,8 +738,6 @@ export function SettingsScreen({
               <>
                 <AccountSection
                   world={world}
-                  statuses={statuses}
-                  loadedProfiles={loadedProfiles}
                   deviceNames={accountDeviceNames}
                   onConnectGoProfile={() => setSheet('go-profile')}
                   onPassphrase={(store, mode) => {
@@ -836,9 +745,6 @@ export function SettingsScreen({
                     setPassphraseMode(mode);
                     setSheet('passphrase');
                   }}
-                  fixtureLapsed={Boolean(
-                    bridge.fixtureWorld && enteredScene === 'settings-account',
-                  )}
                 />
                 {accountStores(world).map((store) => (
                   <AdminPanel
@@ -916,10 +822,11 @@ export function SettingsScreen({
                 world={world}
                 bridge={bridge}
                 appInfo={appInfo}
-                onRefresh={onRefresh}
                 onError={onError}
                 onMessage={(text: string) => toasts.show(text)}
                 onLock={onLock}
+                agentLifecycle={agentLifecycle}
+                onRetryAgent={onRetryAgent}
               />
             ) : null}
           </div>
@@ -1310,8 +1217,8 @@ function MacsSection({
       </Inset>
       {stopped ? (
         <Band severity="crit" label="Account access is stopped">
-          Cannot connect to the server. Account management and security keys are
-          unavailable until reconnected.
+          Restore access in Server settings before managing this account or its
+          security keys.
         </Band>
       ) : null}
       <SectionLabel>Your Macs</SectionLabel>
@@ -1550,8 +1457,8 @@ function KeysSection({
       </Inset>
       {stopped ? (
         <Band severity="crit" label="Security-key access is stopped">
-          Cannot reach the server. These settings are unavailable until the
-          server is reconnected.
+          Restore account access in Server settings before changing these
+          settings.
         </Band>
       ) : null}
       <SectionLabel>Add</SectionLabel>
@@ -1645,23 +1552,17 @@ function KeysSection({
 
 function AccountSection({
   world,
-  statuses,
-  loadedProfiles,
   deviceNames,
   onConnectGoProfile,
   onPassphrase,
-  fixtureLapsed,
 }: {
   world: World;
-  statuses: Map<string, ServerStatusSnapshot>;
-  loadedProfiles: Set<string>;
   deviceNames: Map<string, string>;
   onConnectGoProfile: () => void;
   onPassphrase: (
     store: AccountStore,
     mode: 'set' | 'change' | 'verify',
   ) => void;
-  fixtureLapsed: boolean;
 }): ReactNode {
   const stores = accountStores(world);
   if (!stores.length) {
@@ -1697,32 +1598,14 @@ function AccountSection({
         const account = world.accounts.find(
           (entry) => entry.store === store.id,
         );
-        const status = statuses.get(store.server);
-        const lease = serverLeaseState(status);
-        const pending = !loadedProfiles.has(store.server);
-        const lapsed =
-          server?.state === 'lease-lapsed' ||
-          lease === 'lapsed' ||
-          (fixtureLapsed && store.id === 'acct:work');
-        const inventoryUnavailable = world.unavailableStores.includes(store.id);
-        const stopped =
-          inventoryUnavailable ||
-          lapsed ||
-          server?.state === 'blocked' ||
-          server?.state === 'never-probed' ||
-          (!pending && (!status?.host || lease !== 'fresh'));
-        const inert = stopped || pending;
-        const statusLabel = pending
-          ? 'Checking status…'
-          : inventoryUnavailable
-            ? 'Connection error'
-            : lapsed
-              ? 'Session expired'
-              : stopped
-                ? 'Status unknown'
-                : status?.leaseRequired === false
-                  ? 'Check-in not required'
-                  : 'Connected';
+        const availability = storeAvailability(world, store);
+        const stopped = !availability.available;
+        const inert = stopped;
+        const statusLabel = availability.available
+          ? server?.compatibility.status === 'not-required'
+            ? 'Check-in not required'
+            : 'Available'
+          : storeDescription(world, store);
         return (
           <div key={store.id}>
             <SectionLabel>
@@ -1739,11 +1622,9 @@ function AccountSection({
                 <small>A local name on this Mac; not sent to the server.</small>
               </InsetRow>
               <InsetRow label="Device">
-                {pending
-                  ? 'Loading…'
-                  : stopped
-                    ? 'Not listed while access is stopped'
-                    : (deviceNames.get(store.id) ?? 'Current device unknown')}
+                {stopped
+                  ? 'Not listed while access is stopped'
+                  : (deviceNames.get(store.id) ?? 'Current device unknown')}
                 <small>
                   This account’s current authenticated device. All devices are
                   under Recovery devices.
@@ -1776,9 +1657,7 @@ function AccountSection({
                 <small>
                   {stopped
                     ? 'Reconnect to the server to manage your passphrase.'
-                    : pending
-                      ? 'Checking server connection…'
-                      : 'Verify tests whether your passphrase matches the server.'}
+                    : 'Verify tests whether your passphrase matches the server.'}
                 </small>
               </InsetRow>
             </Inset>
@@ -1793,18 +1672,21 @@ function AgentSection({
   world,
   bridge,
   appInfo,
-  onRefresh,
   onError,
   onMessage,
+  agentLifecycle,
+  onRetryAgent,
 }: {
   world: World;
   bridge: Bridge;
   appInfo: AppInfo | null;
-  onRefresh: (message: string) => Promise<void>;
   onError: (error: unknown) => void;
   onMessage: (message: string) => void;
+  agentLifecycle: AgentLifecycle;
+  onRetryAgent: () => Promise<void>;
 }): ReactNode {
-  const ready = world.agent.phase === 'Ready';
+  const ready =
+    world.agent.state === 'ready' && agentLifecycle.state === 'ready';
   return (
     <>
       <SectionLabel>Agent</SectionLabel>
@@ -1812,7 +1694,9 @@ function AgentSection({
         <InsetRow label="Status">
           <span className={ready ? 'agent' : 'agent warn'}>
             <i />
-            {world.agent.phase}
+            {world.agent.state === 'bootstrap'
+              ? `Bootstrap · ${world.agent.step}`
+              : agentLifecycleLabel(agentLifecycle)}
           </span>
           <small>
             The local background agent must be connected to use FOKS.
@@ -1847,16 +1731,8 @@ function AgentSection({
               <Button
                 variant="primary"
                 onClick={() =>
-                  void bridge
-                    .retryAgentConnection()
-                    .then(async (status) => {
-                      const msg =
-                        status.phase === 'Ready'
-                          ? 'Connected to local agent.'
-                          : `Agent connection status: ${status.phase}`;
-                      await onRefresh(msg);
-                      onMessage(msg);
-                    })
+                  void onRetryAgent()
+                    .then(() => onMessage('Connected to local agent.'))
                     .catch(onError)
                 }
               >
@@ -1867,7 +1743,7 @@ function AgentSection({
         >
           {ready
             ? 'Connected.'
-            : 'Reconnect to the local agent. Incomplete operations will need to be restarted.'}
+            : 'Reconnect to the local agent. Interrupted changes will be reconciled and will not be repeated automatically.'}
         </InsetRow>
       </Inset>
     </>
@@ -1878,19 +1754,22 @@ function AboutSection({
   world,
   bridge,
   appInfo,
-  onRefresh,
   onError,
   onMessage,
   onLock,
+  agentLifecycle,
+  onRetryAgent,
 }: {
   world: World;
   bridge: Bridge;
   appInfo: AppInfo | null;
-  onRefresh: (message: string) => Promise<void>;
   onError: (error: unknown) => void;
   onMessage: (message: string) => void;
   onLock: () => Promise<boolean>;
+  agentLifecycle: AgentLifecycle;
+  onRetryAgent: () => Promise<void>;
 }): ReactNode {
+  const maintenanceUnavailable = agentLifecycle.state !== 'ready';
   return (
     <>
       <SectionLabel>Application</SectionLabel>
@@ -1927,9 +1806,10 @@ function AboutSection({
         world={world}
         bridge={bridge}
         appInfo={appInfo}
-        onRefresh={onRefresh}
         onError={onError}
         onMessage={onMessage}
+        agentLifecycle={agentLifecycle}
+        onRetryAgent={onRetryAgent}
       />
       <SectionLabel>Local state</SectionLabel>
       <Inset className="settings-inset">
@@ -1939,6 +1819,7 @@ function AboutSection({
             <>
               <Button
                 size="sm"
+                disabled={maintenanceUnavailable}
                 onClick={() => {
                   void bridge.maintainClientState('export').catch(onError);
                 }}
@@ -1947,6 +1828,7 @@ function AboutSection({
               </Button>
               <Button
                 size="sm"
+                disabled={maintenanceUnavailable}
                 onClick={() => {
                   void bridge.maintainClientState('import').catch(onError);
                 }}
@@ -1966,6 +1848,7 @@ function AboutSection({
           action={
             <Button
               size="sm"
+              disabled={maintenanceUnavailable}
               onClick={() => {
                 void bridge.maintainClientState('verify').catch(onError);
               }}
@@ -1984,6 +1867,7 @@ function AboutSection({
           action={
             <Button
               size="sm"
+              disabled={maintenanceUnavailable}
               onClick={() => {
                 void bridge.relocateClientState().catch(onError);
               }}

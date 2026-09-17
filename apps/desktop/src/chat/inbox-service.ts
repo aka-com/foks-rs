@@ -1,8 +1,9 @@
 import type { Bridge } from '../bridge';
 import { normalizeCommandError } from '../bridge';
 import type { ChatReply, ChatResult, ChatScope } from '../chat-contract';
+import { serverChatAvailable, storeReadable } from '../model';
 import type { TeamStore, World } from '../model';
-import { chatClient, integrity } from './client';
+import { cancelled as cancelledAccess, chatClient, integrity } from './client';
 import {
   accountKey,
   teamIdentity,
@@ -46,6 +47,8 @@ interface Team {
   due: number;
   retry: number;
   busy: boolean;
+  /** Authenticated compatibility deadline, in the clock's millisecond unit. */
+  accessExpiresAt?: number;
 }
 interface Account {
   key: string;
@@ -132,7 +135,11 @@ export class ChatInboxService {
         s.kind === 'team' &&
         s.team_kind === 'named' &&
         s.active !== false &&
-        world.servers.some((p) => p.id === s.server && p.chat_available),
+        storeReadable(world, s.id) &&
+        world.servers.some(
+          (server) =>
+            server.id === s.server && serverChatAvailable(world, server),
+        ),
     );
     const wanted = new Map(eligible.map((s) => [s.id, s]));
     for (const account of [...this.accounts.values()]) {
@@ -165,6 +172,7 @@ export class ChatInboxService {
         this.accounts.set(key, account);
       }
       if (!account.teams.has(store.id)) {
+        const server = world.servers.find((entry) => entry.id === store.server);
         account.teams.set(store.id, {
           store,
           blocked: new Set(),
@@ -172,8 +180,22 @@ export class ChatInboxService {
           due: 0,
           retry: 250,
           busy: false,
+          accessExpiresAt:
+            server?.compatibility.status === 'required'
+              ? server.compatibility.expiresAt * 1000
+              : undefined,
         });
         this.publish(store.id, initial());
+      } else {
+        const team = account.teams.get(store.id);
+        const server = world.servers.find((entry) => entry.id === store.server);
+        if (team) {
+          team.store = store;
+          team.accessExpiresAt =
+            server?.compatibility.status === 'required'
+              ? server.compatibility.expiresAt * 1000
+              : undefined;
+        }
       }
     }
     for (const listener of this.listeners) listener();
@@ -243,7 +265,14 @@ export class ChatInboxService {
       epoch === this.epoch &&
       this.accounts.get(account.key) === account &&
       account.teams.get(team.store.id) === team &&
-      !account.blocked
+      !account.blocked &&
+      this.accessValid(team)
+    );
+  }
+  private accessValid(team: Team): boolean {
+    return (
+      team.accessExpiresAt === undefined ||
+      this.clock.now() < team.accessExpiresAt
     );
   }
   private delay(retry: number) {
@@ -263,11 +292,20 @@ export class ChatInboxService {
     for (const account of [...this.accounts.values()]) {
       if (account.blocked) continue;
       const teams = [...account.teams.values()];
-      const team = teams.find((t) => !t.busy && t.due <= now);
+      const team = teams.find(
+        (candidate) =>
+          this.accessValid(candidate) &&
+          !candidate.busy &&
+          candidate.due <= now,
+      );
       if (team && !this.profiles.has(team.store.server))
         void this.sync(account, team);
       const canonical = teams
-        .filter((t) => this.snapshot.get(t.store.id)?.state !== 'unavailable')
+        .filter(
+          (candidate) =>
+            this.accessValid(candidate) &&
+            this.snapshot.get(candidate.store.id)?.state !== 'unavailable',
+        )
         .sort((a, b) => a.store.id.localeCompare(b.store.id))[0];
       if (
         canonical &&
@@ -293,9 +331,12 @@ export class ChatInboxService {
     const client = chatClient(this.bridge, team.store.server, team.store.id);
     this.jobs.set(client, account);
     try {
+      if (!this.valid(account, team, epoch)) return;
       const reply = await client.request({
         action: 'sync-inbox',
         blocked_channels: [...team.blocked],
+      }, undefined, () => {
+        if (!this.valid(account, team, epoch)) throw cancelledAccess();
       });
       if (!this.valid(account, team, epoch)) return;
       this.accept(account, team, reply);
@@ -385,10 +426,13 @@ export class ChatInboxService {
     account.pollClient = client;
     account.pollTeam = team.store.id;
     try {
+      if (!this.valid(account, team, epoch)) return;
       const reply = await client.request({
         action: 'poll-inbox',
         since,
         timeout_milliseconds: 25_000,
+      }, undefined, () => {
+        if (!this.valid(account, team, epoch)) throw cancelledAccess();
       });
       if (!this.valid(account, team, epoch)) return;
       this.accept(account, team, reply);

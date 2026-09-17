@@ -7,6 +7,13 @@ pub enum MaintenanceStatus {
     Import(StateImportStatus),
     Relocation(RelocationStatus),
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MaintenanceReadiness {
+    Openable,
+    RecoveryRequired,
+}
 fn is_import(root: &Path) -> Result<bool> {
     let root = lease::canonical_reservation(root)?;
     let mut guard = ClientStateMaintenanceGuard::acquire(std::slice::from_ref(&root))?;
@@ -41,6 +48,23 @@ pub fn maintenance_status(root: impl AsRef<Path>) -> Result<Option<MaintenanceSt
         }
     }
     Ok(relocation_status(root)?.map(MaintenanceStatus::Relocation))
+}
+
+/// Reduces durable import and relocation facts to the one decision needed by
+/// a process coordinator. This intentionally does not expose or parse phase
+/// prose, and a contradictory recovery record fails closed.
+pub fn maintenance_readiness(root: impl AsRef<Path>) -> Result<MaintenanceReadiness> {
+    match maintenance_status(root) {
+        Ok(Some(MaintenanceStatus::Import(status))) if status.recovery_required => {
+            Ok(MaintenanceReadiness::RecoveryRequired)
+        }
+        Ok(Some(MaintenanceStatus::Relocation(status))) if status.recovery_required => {
+            Ok(MaintenanceReadiness::RecoveryRequired)
+        }
+        Ok(_) => Ok(MaintenanceReadiness::Openable),
+        Err(Error::StateRecoveryRequired) => Ok(MaintenanceReadiness::RecoveryRequired),
+        Err(error) => Err(error),
+    }
 }
 pub fn recover_state(root: impl AsRef<Path>) -> Result<serde_json::Value> {
     match maintenance_status(root.as_ref())? {

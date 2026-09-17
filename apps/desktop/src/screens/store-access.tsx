@@ -18,10 +18,10 @@ interface StoreAccessCopy {
   action: 'open-server' | 'review-server' | 'finish-setup';
 }
 
-function unavailableSubject(store: Store): string {
+function resourceSubject(store: Store): string {
   return store.kind === 'team'
-    ? `Items and members in ${store.name} are unavailable`
-    : `Items in ${store.name} are unavailable`;
+    ? `items and members in ${store.name}`
+    : `items in ${store.name}`;
 }
 
 function accessCopy(
@@ -29,39 +29,64 @@ function accessCopy(
   store: Store,
   serverName: string,
 ): StoreAccessCopy {
-  const subject = unavailableSubject(store);
+  const resource = resourceSubject(store);
+  const subject = `${resource[0].toUpperCase()}${resource.slice(1)} are unavailable`;
   switch (state) {
-    case 'blocked':
+    case 'verification-failed':
       return {
         title: 'Server access blocked',
         detail: `A security verification failed for ${serverName}. ${subject}.`,
         action: 'review-server',
       };
-    case 'lease-unavailable':
+    case 'server-status-unavailable':
       return {
         title: 'Server status unavailable',
         detail: `Cannot verify server status for ${serverName}. ${subject}.`,
         action: 'review-server',
       };
-    case 'never-probed':
+    case 'verification-required':
       return {
         title: 'Server not verified',
-        detail: `${serverName} has not been verified yet. Check the server in Server settings to access ${subject.toLowerCase()}.`,
+        detail: `${serverName} has not been verified yet. Check the server in Server settings to access ${resource}.`,
         action: 'review-server',
       };
-    case 'catalog-unavailable':
+    case 'vault-unavailable':
       return {
-        title: 'Store connection failed',
-        detail: `The server connection for ${store.name} could not be established. ${subject}.`,
+        title: 'Vault unavailable',
+        detail: `The contents of ${store.name} could not be loaded. ${subject}.`,
         action: 'review-server',
       };
-    case 'lease-lapsed':
+    case 'check-in-expired':
       return {
-        title: 'Connection expired',
-        detail: `Could not reach ${serverName} recently. Reconnect to restore access to ${subject.toLowerCase()}.`,
+        title: 'Check-in expired',
+        detail: `The session for ${serverName} has expired. Check in again to restore access to ${resource}.`,
         action: 'open-server',
       };
-    case 'inactive':
+    case 'check-in-unavailable':
+      return {
+        title: 'Check-in unavailable',
+        detail: `No active session is available for ${serverName}. ${subject}.`,
+        action: 'open-server',
+      };
+    case 'schema-incompatible':
+      return {
+        title: 'Vault schema incompatible',
+        detail: `${subject}. This data is incompatible with your current version of FOKS. Please update FOKS or contact your administrator.`,
+        action: 'review-server',
+      };
+    case 'import-verification-required':
+      return {
+        title: 'Verification required',
+        detail: `${subject} until the imported profile is verified online.`,
+        action: 'review-server',
+      };
+    case 'agent-unavailable':
+      return {
+        title: 'Local service unavailable',
+        detail: subject,
+        action: 'review-server',
+      };
+    case 'setup-incomplete':
       return {
         title: 'Group setup incomplete',
         detail: 'Items and members are unavailable until setup is finished.',
@@ -113,7 +138,7 @@ export function StoreAccessTakeover({
           lead={lead}
           action={
             <>
-              {state === 'inactive' ? null : action}
+              {state === 'setup-incomplete' ? null : action}
               {headerAction}
             </>
           }
@@ -121,7 +146,7 @@ export function StoreAccessTakeover({
       )}
       <div className="body">
         <Notice
-          severity={state === 'inactive' ? 'warn' : 'crit'}
+          severity={state === 'setup-incomplete' ? 'warn' : 'crit'}
           title={copy.title}
           actions={action}
         >
@@ -148,7 +173,7 @@ export function storeAccessBands(world: World): StoreAccessBand[] {
   const buckets = new Map<string, { state: AccessProblem; stores: Store[] }>();
   for (const store of world.stores) {
     const state = storeDescriptionState(world, store);
-    if (state === 'normal' || state === 'inactive') continue;
+    if (state === 'normal' || state === 'setup-incomplete') continue;
     const key = `${state}:${store.server}`;
     const bucket = buckets.get(key) ?? { state, stores: [] };
     bucket.stores.push(store);
@@ -160,15 +185,23 @@ export function storeAccessBands(world: World): StoreAccessBand[] {
     const verb = stores.length === 1 ? 'is' : 'are';
     const serverName = serverOf(world, stores[0].id)?.name ?? stores[0].server;
     const text =
-      state === 'blocked'
+      state === 'verification-failed'
         ? `${names} ${verb} unavailable because security verification failed for ${serverName}.`
-        : state === 'lease-unavailable'
+        : state === 'server-status-unavailable'
           ? `${names} ${verb} unavailable because server status could not be verified for ${serverName}.`
-          : state === 'lease-lapsed'
-            ? `${names} ${verb} unavailable because the connection to ${serverName} expired.`
-            : state === 'catalog-unavailable'
+          : state === 'check-in-expired'
+            ? `${names} ${verb} unavailable because the signed check-in for ${serverName} expired.`
+            : state === 'vault-unavailable'
               ? `${names} ${verb} unavailable because the latest item list could not be loaded.`
-              : `${names} ${verb} unavailable because ${serverName} has not been checked.`;
+              : state === 'check-in-unavailable'
+                ? `${names} ${verb} unavailable because no signed check-in is available.`
+                : state === 'schema-incompatible'
+                  ? `${names} ${verb} unavailable because its schema is incompatible.`
+                  : state === 'import-verification-required'
+                    ? `${names} ${verb} unavailable until import verification completes.`
+                    : state === 'agent-unavailable'
+                      ? `${names} ${verb} unavailable while the local service is stopped.`
+                      : `${names} ${verb} unavailable because ${serverName} has not been checked.`;
     return { key, text };
   });
 }

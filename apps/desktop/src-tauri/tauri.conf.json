@@ -35,6 +35,7 @@
   "bundle": {
     "active": true,
     "targets": ["app"],
+    "externalBin": ["binaries/foks-agent"],
     "category": "Utility",
     "shortDescription": "Desktop client for FOKS federated identity and secure vaults.",
     "longDescription": "Manage FOKS servers, accounts, groups, devices, and encrypted vault items securely from your desktop.",

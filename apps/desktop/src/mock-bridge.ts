@@ -275,22 +275,35 @@ export function mockBridge(world: World = FIXTURE): Bridge {
     const saved = decodeFirstRunCheckpoint(
       window.localStorage.getItem(FIRST_RUN_CHECKPOINT_KEY),
     );
-    if (!saved?.profile || !saved.account) return;
-    const id = `acct:${saved.account.alias}`;
+    if (!saved?.profile) return;
+    // The preview simulates persisted native state after a successful mutation.
+    // Keep its host binding and profile IDs consistent with the real DTOs.
+    const server = servers.find((entry) => entry.id === saved.profile?.profile);
+    if (server) server.host_id = saved.profile.hostId;
+    const account =
+      saved.account ??
+      (saved.provisionedAccount
+        ? {
+            alias: saved.provisionedAccount.alias,
+            username: firstRunFixture[saved.path].username,
+          }
+        : undefined);
+    if (!account) return;
+    const id = `acct:${account.alias}`;
     if (!stores.some((store) => store.id === id)) {
       stores.push({
         id,
         kind: 'account',
         name: 'Personal',
         server: saved.profile.profile,
-        account: saved.account.alias,
+        account: account.alias,
       });
     }
     if (!accounts.some((account) => account.store === id)) {
       accounts.push({
         store: id,
-        alias: saved.account.alias,
-        username: saved.account.username,
+        alias: account.alias,
+        username: account.username,
         server: saved.profile.profile,
       });
     }
@@ -334,10 +347,10 @@ export function mockBridge(world: World = FIXTURE): Bridge {
       );
   };
   const catalogResponse = (): CatalogDto => ({
-    profiles: [...new Set(servers.map((server) => server.name))],
+    profiles: [...new Set(servers.map((server) => server.id))],
     stores: stores.map((store) => ({ ...store })),
     knownStores: stores.map((store) => ({ ...store })),
-    inventory: [...new Set(servers.map((server) => server.name))].map(
+    inventory: [...new Set(servers.map((server) => server.id))].map(
       (profile) => ({
         profile,
         accountsComplete: true,
@@ -362,6 +375,11 @@ export function mockBridge(world: World = FIXTURE): Bridge {
     maintainClientState: async () => {
       throw new Error('State maintenance requires the native application.');
     },
+    clientStateMaintenanceStatus: async () => ({
+      state: 'idle',
+      generation: 0,
+      revision: 0,
+    }),
     relocateClientState: async () => {
       throw new Error('State maintenance requires the native application.');
     },
@@ -845,7 +863,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
     openSsoBrowser: async () => ({ ok: true }),
     openChatLink: async () => ({ ok: true }),
     copyText: async () => ({ ok: true }),
-    initializeClientState: async () => ({ phase: 'Ready' }),
+    initializeClientState: async () => ({ state: 'ready' }),
     discoverGoProfiles: async () => ({ installed: false, candidates: [] }),
     checkAndAddProfile: async (profileName, probe) => {
       const path =
@@ -994,7 +1012,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
               : serverHosts.has(server.id)
                 ? Math.floor(Date.now() / 1000) + 6 * 24 * 60 * 60
                 : null,
-        chatAvailable: server.chat_available,
+        chatAvailable: server.capabilities.chat,
       };
     },
     checkServer: async (profile) => {
@@ -1037,10 +1055,16 @@ export function mockBridge(world: World = FIXTURE): Bridge {
         host_id: null,
         chain: null,
         epoch: null,
-        lease: null,
         accounts: [],
-        state: 'never-probed',
-        chat_available: false,
+        trust: { status: 'unprobed' },
+        compatibility: { status: 'required-unavailable' },
+        passiveStatus: {
+          status: 'available',
+          source: 'signed-server-status',
+        },
+        connectivity: { status: 'unknown' },
+        capabilities: { chat: false },
+        restrictions: [],
       });
       return { profile: profileName, configuredProbe: probe };
     },
@@ -1267,5 +1291,6 @@ export function mockBridge(world: World = FIXTURE): Bridge {
     onWindowState: async () => () => {},
     onChatNotification: async () => () => {},
     onOpenSettings: async () => () => {},
+    onMaintenanceStatus: async () => () => {},
   };
 }

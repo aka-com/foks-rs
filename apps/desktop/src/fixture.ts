@@ -8,7 +8,7 @@ import type { World } from './model/types';
 
 /** Base fixture data prior to applying lease configuration. */
 const RAW: World = {
-  agent: { phase: 'Ready' },
+  agent: { state: 'ready' },
   servers: [
     {
       id: 'personal',
@@ -17,10 +17,13 @@ const RAW: World = {
       host_id: '9f31c2aa07',
       chain: 12,
       epoch: 4821,
-      lease: { state: 'fresh', expires_in: '6 d' },
       accounts: ['personal'],
-      state: 'ok',
-      chat_available: true,
+      trust: { status: 'verified' },
+      compatibility: { status: 'not-required' },
+      passiveStatus: { status: 'available', source: 'signed-server-status' },
+      connectivity: { status: 'unknown' },
+      capabilities: { chat: true },
+      restrictions: [],
     },
     {
       id: 'acme',
@@ -29,10 +32,13 @@ const RAW: World = {
       host_id: 'b04d17e390',
       chain: 33,
       epoch: 90417,
-      lease: { state: 'lapsed', expires_in: null },
       accounts: ['work'],
-      state: 'lease-lapsed',
-      chat_available: false,
+      trust: { status: 'verified' },
+      compatibility: { status: 'required', expiresAt: 0 },
+      passiveStatus: { status: 'available', source: 'signed-server-status' },
+      connectivity: { status: 'unknown' },
+      capabilities: { chat: false },
+      restrictions: [],
     },
     {
       id: 'partner',
@@ -41,10 +47,13 @@ const RAW: World = {
       host_id: null,
       chain: null,
       epoch: null,
-      lease: null,
       accounts: [],
-      state: 'never-probed',
-      chat_available: false,
+      trust: { status: 'unprobed' },
+      compatibility: { status: 'not-required' },
+      passiveStatus: { status: 'available', source: 'signed-server-status' },
+      connectivity: { status: 'unknown' },
+      capabilities: { chat: false },
+      restrictions: [],
     },
   ],
   // `store` is the exact identity and matches the `stores` entry below; the
@@ -58,8 +67,14 @@ const RAW: World = {
     },
     { store: 'acct:work', alias: 'work', username: 'rae.chen', server: 'acme' },
   ],
-  unavailableStores: [],
-  accountInventoryComplete: true,
+  storeInventory: [],
+  profileInventory: [
+    { profile: 'personal', accounts: 'complete', teams: 'complete' },
+    { profile: 'acme', accounts: 'complete', teams: 'complete' },
+    { profile: 'partner', accounts: 'complete', teams: 'complete' },
+  ],
+  catalogProfiles: ['personal', 'acme'],
+  profileInventoryStatus: 'complete',
   stores: [
     {
       id: 'acct:personal',
@@ -420,7 +435,7 @@ const RAW: World = {
       action: 'Restore access',
     },
   ],
-  leaseState: 'fresh',
+  observedExpiredLeases: [],
   /**
    * An illustrative extension: plaintext representing
    * what `ReadKv` returns after Show. The items themselves stay masked.
@@ -442,7 +457,17 @@ const RAW: World = {
  * The fixture the shell starts from: the fresh lease world, so Engineering
  * and Work list at all.
  */
-export const FIXTURE: World = applyLease(RAW, 'fresh');
+export const FIXTURE: World = applyLease(
+  {
+    ...RAW,
+    storeInventory: RAW.stores.map((store) => ({
+      store: store.id,
+      status: 'available' as const,
+      restrictions: [],
+    })),
+  },
+  'fresh',
+);
 
 /**
  * Sanctioned desktop wording. Reuse these when the situation matches.

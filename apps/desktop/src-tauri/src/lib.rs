@@ -186,6 +186,7 @@ pub fn run() {
             commands::web_admin::open_web_admin,
             commands::portability::relocate_client_state,
             commands::portability::maintain_client_state,
+            commands::portability::client_state_maintenance_status,
             commands::sso::open_sso_browser,
             commands::application::agent_status,
             commands::application::retry_agent_connection,
@@ -326,6 +327,11 @@ mod tests {
         );
         assert_eq!(windows[0]["dragDropEnabled"], true);
         assert_eq!(configuration["app"]["withGlobalTauri"], false);
+        assert_eq!(
+            configuration["bundle"]["externalBin"],
+            serde_json::json!(["binaries/foks-agent"]),
+            "every application bundle must include the managed agent"
+        );
     }
 
     /// The exact renderer capability, in the order the file lists it.

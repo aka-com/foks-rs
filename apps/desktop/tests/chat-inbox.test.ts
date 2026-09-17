@@ -6,6 +6,29 @@ import type { ChatClock } from '../src/chat/inbox-service';
 import type { Bridge } from '../src/bridge';
 import type { ChatAction, ChatReply } from '../src/chat-contract';
 import type { TeamStore, World } from '../src/model';
+import { FIXTURE } from '../src/fixture';
+
+function chatWorld(stores: TeamStore[]): World {
+  const template = FIXTURE.servers[0];
+  assert.ok(template);
+  return {
+    ...FIXTURE,
+    stores,
+    storeInventory: stores.map((store) => ({
+      store: store.id,
+      status: 'available',
+      restrictions: [],
+    })),
+    servers: [
+      {
+        ...template,
+        id: 'p',
+        capabilities: { chat: true },
+        compatibility: { status: 'not-required' },
+      },
+    ],
+  };
+}
 class Clock implements ChatClock {
   time = 0;
   id = 0;
@@ -45,10 +68,7 @@ function fixture(count = 2) {
     team_id_hex: String(i),
     active: true,
   }));
-  const world = {
-    stores,
-    servers: [{ id: 'p', chat_available: true }],
-  } as unknown as World;
+  const world = chatWorld(stores);
   const clock = new Clock();
   const waits = new Map<
     string,
@@ -236,10 +256,9 @@ test('finite admission serves excess accounts and releases more than the view li
   const served = new Set<string>();
   let registrations = 0;
   let peak = 0;
-  const world = {
-    servers: [{ id: 'p', chat_available: true }],
-    stores: Array.from({ length: 6 }, (_, i) => ({
+  const stores: TeamStore[] = Array.from({ length: 6 }, (_, i) => ({
       id: `t${i}`,
+      name: `Team ${i}`,
       kind: 'team',
       team_kind: 'named',
       active: true,
@@ -247,8 +266,8 @@ test('finite admission serves excess accounts and releases more than the view li
       account: `a${i}`,
       alias: `team${i}`,
       team_id_hex: `${i}`,
-    })),
-  } as unknown as World;
+    }));
+  const world = chatWorld(stores);
   const bridge = {
     chat: async (
       id: string,

@@ -5,8 +5,8 @@ use crate::commands::accounts::{account_sync_response, passphrase_response};
 use crate::commands::application::AgentStatusDto;
 use crate::commands::context::AppState;
 use crate::commands::execution::{
-    ambiguous_mutation_response, ambiguous_worker_failure, apply_operation_value,
-    apply_pending_operation_value, apply_profile_operation_value, MutationKind,
+    ambiguous_mutation_response, ambiguous_worker_failure, apply_pending_operation_value,
+    apply_profile_operation_value, MutationKind,
 };
 use crate::commands::groups::GoProfileCandidateResponse;
 use crate::commands::servers::{
@@ -25,8 +25,10 @@ use crate::commands::validation::{
 use foks_agent_proto::{
     CredentialBackend, Operation, PendingOperationKind, PendingOperationSummary, SecretString,
 };
+use foks_desktop::AgentTransport;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
+use std::sync::{atomic::AtomicBool, Arc};
 use tauri::State;
 use zeroize::Zeroizing;
 
@@ -380,35 +382,115 @@ pub async fn initialize_client_state(
 ) -> Result<AgentStatusDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
-    let _mutation = state.begin_mutation()?;
-    let value = apply_operation_value(
-        &state,
-        Operation::InitializeState {
+    let _mutation = state.begin_initialization()?;
+    state.invalidate_catalog();
+    let transport = state.agent.transport();
+    let uncertainty = Arc::clone(&state.mutation_requires_refresh);
+    let status = tauri::async_runtime::spawn_blocking(move || {
+        execute_initialization_recovery(uncertainty.as_ref(), transport.as_ref())
+    })
+    .await
+    .map_err(|error| {
+        ambiguous_worker_failure(
+            &state,
+            format!("The initialization worker stopped before reporting its outcome: {error}"),
+        )
+    })??;
+    Ok(status.into())
+}
+
+fn read_agent_status(
+    transport: &dyn AgentTransport,
+) -> Result<foks_agent_proto::AgentStatus, AgentError> {
+    let value = transport
+        .call(Operation::AgentStatus)
+        .map_err(AgentError::from_desktop)?;
+    serde_json::from_value(value)
+        .map_err(|error| AgentError::unknown(format!("invalid agent status: {error}")))
+}
+
+fn initialize_once(
+    uncertainty: &AtomicBool,
+    transport: &dyn AgentTransport,
+) -> Result<(), AgentError> {
+    let value = transport
+        .call(Operation::InitializeState {
             backend: CredentialBackend::Native,
-        },
-        MutationKind::Create,
-    )
-    .await?;
+        })
+        .map_err(|error| {
+            crate::commands::execution::map_mutation_error(error, MutationKind::Create)
+        })?;
     let response: InitializationResponse = serde_json::from_value(value).map_err(|error| {
-        ambiguous_mutation_response(&state, format!("invalid initialization response: {error}"))
+        ambiguous_initialization_response(
+            uncertainty,
+            format!("invalid initialization response: {error}"),
+        )
     })?;
     if response.backend != CredentialBackend::Native {
-        return Err(ambiguous_mutation_response(
-            &state,
+        return Err(ambiguous_initialization_response(
+            uncertainty,
             "The background service initialized an unexpected credential backend.",
         ));
     }
-    let value = success_value(state.agent.call(Operation::AgentStatus).await?)?;
-    let status: foks_agent_proto::AgentStatus = serde_json::from_value(value).map_err(|error| {
-        ambiguous_mutation_response(&state, format!("invalid initialized status: {error}"))
-    })?;
-    if status != foks_agent_proto::AgentStatus::Ready {
-        return Err(ambiguous_mutation_response(
-            &state,
-            "The background service did not become ready after initialization.",
-        ));
+    Ok(())
+}
+
+pub(super) fn execute_initialization_recovery(
+    uncertainty: &AtomicBool,
+    transport: &dyn AgentTransport,
+) -> Result<foks_agent_proto::AgentStatus, AgentError> {
+    let before = read_agent_status(transport)?;
+    if before == foks_agent_proto::AgentStatus::Ready {
+        return Ok(before);
     }
-    Ok(status.into())
+    let mut last_uncertain = None;
+    for _ in 0..2 {
+        match initialize_once(uncertainty, transport) {
+            Ok(()) => {}
+            Err(error) if error.code == "ambiguous" => {
+                uncertainty.store(true, Ordering::Release);
+                last_uncertain = Some(error);
+            }
+            Err(error) => {
+                uncertainty.store(true, Ordering::Release);
+                return Err(error);
+            }
+        }
+        match read_agent_status(transport) {
+            Ok(foks_agent_proto::AgentStatus::Ready) => {
+                return Ok(foks_agent_proto::AgentStatus::Ready)
+            }
+            Ok(foks_agent_proto::AgentStatus::Bootstrap { .. }) => {
+                if last_uncertain.is_none() {
+                    last_uncertain = Some(ambiguous_initialization_response(
+                        uncertainty,
+                        "The background service did not become ready after initialization.",
+                    ));
+                }
+            }
+            Err(error) => {
+                uncertainty.store(true, Ordering::Release);
+                return Err(error);
+            }
+        }
+    }
+    Err(last_uncertain.unwrap_or_else(|| {
+        ambiguous_initialization_response(
+            uncertainty,
+            "Client-state initialization could not be verified.",
+        )
+    }))
+}
+
+fn ambiguous_initialization_response(
+    uncertainty: &AtomicBool,
+    message: impl Into<String>,
+) -> AgentError {
+    uncertainty.store(true, Ordering::Release);
+    let mut error = AgentError::new("response-binding", message, false);
+    error.ambiguous = true;
+    error.fatal = true;
+    error
 }
 
 #[tauri::command]

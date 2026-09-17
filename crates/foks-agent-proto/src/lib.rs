@@ -55,7 +55,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
-                "version": 21,
+                "version": 22,
                 "id": 8,
                 "operation": { "operation": "discover-go-profiles" }
             })
@@ -74,7 +74,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
-                "version": 21,
+                "version": 22,
                 "id": 9,
                 "operation": {
                     "operation": "list-profile-overview",
@@ -202,7 +202,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
-                "version": 21,
+                "version": 22,
                 "id": 9,
                 "operation": {
                     "operation": "sync-team",
@@ -214,7 +214,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Response::error(9, ErrorCode::Busy, "locked")).unwrap(),
             serde_json::json!({
-                "version": 21,
+                "version": 22,
                 "id": 9,
                 "status": "error",
                 "code": "busy",
@@ -247,7 +247,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&admission).unwrap(),
             serde_json::json!({
-                "version": 21,
+                "version": 22,
                 "id": 13,
                 "operation": {
                     "operation": "admit-federated-team",
@@ -286,7 +286,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&expulsion).unwrap(),
             serde_json::json!({
-                "version": 21,
+                "version": 22,
                 "id": 15,
                 "operation": {
                     "operation": "expel-federated-team",
@@ -467,6 +467,8 @@ mod tests {
             ErrorFields {
                 profile: Some("personal".to_owned()),
                 reason: Some("y".repeat(5000)),
+                found_schema: Some(23),
+                supported_schema: Some(27),
                 ..ErrorFields::default()
             },
         );
@@ -479,6 +481,8 @@ mod tests {
         assert_eq!(message.len(), 4096);
         assert_eq!(fields.reason.unwrap().len(), 4096);
         assert_eq!(fields.profile.as_deref(), Some("personal"));
+        assert_eq!(fields.found_schema, Some(23));
+        assert_eq!(fields.supported_schema, Some(27));
     }
 
     #[test]
@@ -539,7 +543,7 @@ mod tests {
             ))
             .unwrap(),
             serde_json::json!({
-                "version": 21,
+                "version": 22,
                 "id": 25,
                 "operation": {
                     "operation": "demote-team-member",
@@ -562,7 +566,7 @@ mod tests {
             ))
             .unwrap(),
             serde_json::json!({
-                "version": 21,
+                "version": 22,
                 "id": 26,
                 "operation": {
                     "operation": "remove-team-member",

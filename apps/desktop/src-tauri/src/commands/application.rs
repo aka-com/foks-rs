@@ -5,7 +5,7 @@ use crate::commands::context::AppState;
 use crate::commands::validation::require_main_window;
 use serde::Serialize;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{Emitter as _, Manager as _, State};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,14 +68,23 @@ pub async fn retry_agent_connection(
     state: State<'_, AppState>,
 ) -> Result<AgentStatusDto, AgentError> {
     require_main_window(&webview)?;
+    let app = webview.app_handle().clone();
     let agent = Arc::clone(&state.agent);
-    let response = tauri::async_runtime::spawn_blocking(move || agent.ensure_started_blocking())
-        .await
-        .map_err(|error| {
-            AgentError::unknown(format!("Failed to restart background service: {error}"))
-        })??;
+    let restored = Arc::clone(&agent);
+    let response = tauri::async_runtime::spawn_blocking(move || {
+        let response = agent.retry_started_blocking()?;
+        let worker_state = app.state::<AppState>();
+        restored.record_restoration_success(&|snapshot| {
+            let _ = app.emit(crate::agent::MAINTENANCE_EVENT, snapshot);
+        });
+        worker_state.invalidate_catalog();
+        Ok::<_, AgentError>(response)
+    })
+    .await
+    .map_err(|error| {
+        AgentError::unknown(format!("Failed to restart background service: {error}"))
+    })??;
     let value = success_value(response)?;
-    state.invalidate_catalog();
     serde_json::from_value::<foks_agent_proto::AgentStatus>(value)
         .map(AgentStatusDto::from)
         .map_err(|error| {

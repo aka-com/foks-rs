@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, StrictMode } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
-import type { Bridge, GoProfileCandidate } from '../src/bridge';
+import type { Bridge, CommandError, GoProfileCandidate } from '../src/bridge';
 import { installDom } from './lib/dom-harness';
 
 installDom({
@@ -39,6 +39,231 @@ test.afterEach(() => {
 });
 test.after(async () => {
   await vite.close();
+});
+
+async function discoveryRecoveryHarness() {
+  const { App } = (await vite.ssrLoadModule(
+    '/src/app-root.tsx',
+  )) as typeof import('../src/app-root');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { LocationStore, INITIAL_STATE } = (await vite.ssrLoadModule(
+    '/src/location.ts',
+  )) as typeof import('../src/location');
+  const {
+    initialFirstRun,
+    encodeFirstRunCheckpoint,
+    FIRST_RUN_CHECKPOINT_KEY,
+  } = (await vite.ssrLoadModule(
+    '/src/first-run-state.ts',
+  )) as typeof import('../src/first-run-state');
+  const world = {
+    ...FIXTURE,
+    servers: [],
+    accounts: [],
+    stores: [],
+    storeInventory: [],
+    profileInventory: [],
+    catalogProfiles: [],
+    items: [],
+    parties: [],
+    federation: [],
+    groupDetailFailures: [],
+    notifications: [],
+    observedExpiredLeases: [],
+    plaintext: {},
+  };
+  const store = new LocationStore({
+    ...INITIAL_STATE,
+    location: { kind: 'first-run', path: 'own', step: 'who' },
+  });
+  const checkpoint = encodeFirstRunCheckpoint(initialFirstRun('own', 'who'));
+  window.localStorage.setItem(FIRST_RUN_CHECKPOINT_KEY, checkpoint);
+  const bridge = {
+    ...mockBridge(world),
+    native: true,
+    firstRunFixture: undefined,
+  };
+  return {
+    bridge,
+    store,
+    checkpoint: () => window.localStorage.getItem(FIRST_RUN_CHECKPOINT_KEY),
+    render: (overrides: Partial<Bridge>) =>
+      ui.render(
+        createElement(App, {
+          world,
+          store,
+          bridge: { ...bridge, ...overrides },
+        }),
+      ),
+  };
+}
+
+function discoveryFailure(code: string): CommandError {
+  return {
+    code,
+    message: `Discovery failed: ${code}`,
+    retryable: false,
+    ambiguous: false,
+    fatal: false,
+    details: { reason: 'initialize-state' },
+  };
+}
+
+for (const notifyGlobally of [false, true]) {
+  test(`bootstrap discovery failure recovers through shared setup (${notifyGlobally ? 'bridge and callback' : 'callback only'})`, async () => {
+    const harness = await discoveryRecoveryHarness();
+    const { tauriBridge, onAgentReadinessRequired } = (await vite.ssrLoadModule(
+      '/src/bridge.ts',
+    )) as typeof import('../src/bridge');
+    let discoveries = 0;
+    let initializations = 0;
+    let notifications = 0;
+    let ready = false;
+    let releaseCatalog: (() => void) | undefined;
+    const catalogGate = new Promise<void>((resolve) => {
+      releaseCatalog = resolve;
+    });
+    const failure = discoveryFailure('bootstrap-required');
+    const nativeWindow = window as unknown as { __TAURI_INTERNALS__?: unknown };
+    const previous = nativeWindow.__TAURI_INTERNALS__;
+    nativeWindow.__TAURI_INTERNALS__ = {
+      invoke: async () => {
+        throw failure;
+      },
+    };
+    const stop = onAgentReadinessRequired(() => {
+      notifications++;
+    });
+    try {
+      const rendered = harness.render({
+        discoverGoProfiles: async () => {
+          discoveries++;
+          if (!ready) {
+            if (notifyGlobally) return tauriBridge.discoverGoProfiles();
+            throw failure;
+          }
+          return { installed: true, candidates: [candidate] };
+        },
+        agentStatus: async () =>
+          ready
+            ? { state: 'ready' }
+            : { state: 'bootstrap', step: 'initialize-state' },
+        initializeClientState: async () => {
+          initializations++;
+          ready = true;
+          return { state: 'ready' };
+        },
+        listCatalog: async () => {
+          await catalogGate;
+          return harness.bridge.listCatalog();
+        },
+      });
+      await ui.waitFor(() =>
+        assert.ok(rendered.getByText('Finish preparing this Mac')),
+      );
+      const saved = harness.checkpoint();
+      assert.ok(saved);
+      assert.equal(initializations, 0, 'recovery waits for Retry setup');
+      assert.equal(
+        rendered.queryByText(/Could not check existing CLI profiles/),
+        null,
+      );
+      ui.fireEvent.click(rendered.getByRole('button', { name: 'Retry setup' }));
+      await ui.waitFor(() => assert.equal(initializations, 1));
+      assert.equal(
+        discoveries,
+        1,
+        'discovery waits for the refreshed catalog too',
+      );
+      assert.ok(rendered.getByText('Finish preparing this Mac'));
+      assert.equal(harness.checkpoint(), saved);
+      await ui.act(async () => {
+        releaseCatalog?.();
+      });
+      await ui.waitFor(() =>
+        assert.ok(rendered.getByText('Select an FOKS account')),
+      );
+      assert.equal(discoveries, 2);
+      assert.equal(initializations, 1);
+      assert.equal(notifications, notifyGlobally ? 1 : 0);
+      assert.equal(harness.checkpoint(), saved);
+      assert.equal(harness.store.getSnapshot().location.kind, 'first-run');
+      assert.equal(
+        rendered.queryByText(/Could not check existing CLI profiles/),
+        null,
+      );
+    } finally {
+      releaseCatalog?.();
+      stop();
+      if (previous === undefined) delete nativeWindow.__TAURI_INTERNALS__;
+      else nativeWindow.__TAURI_INTERNALS__ = previous;
+    }
+  });
+}
+
+for (const code of ['agent-lost', 'version-mismatch']) {
+  test(`${code} discovery failure reaches the lifecycle blocker`, async () => {
+    const harness = await discoveryRecoveryHarness();
+    const rendered = harness.render({
+      discoverGoProfiles: async () => {
+        throw discoveryFailure(code);
+      },
+    });
+    await ui.waitFor(() =>
+      assert.ok(rendered.getByText('Finish preparing this Mac')),
+    );
+    assert.equal(
+      rendered.queryByText(/Could not check existing CLI profiles/),
+      null,
+    );
+  });
+}
+
+for (const failure of [
+  discoveryFailure('scan-failed'),
+  new Error('Malformed discovery response'),
+]) {
+  test(`ordinary discovery error stays inline: ${failure.message}`, async () => {
+    const harness = await discoveryRecoveryHarness();
+    let initializations = 0;
+    const rendered = harness.render({
+      discoverGoProfiles: async () => {
+        throw failure;
+      },
+      initializeClientState: async () => {
+        initializations++;
+        return { state: 'ready' };
+      },
+    });
+    await ui.waitFor(() =>
+      assert.ok(rendered.getByText(/Could not check existing CLI profiles/)),
+    );
+    assert.equal(rendered.queryByRole('button', { name: 'Retry setup' }), null);
+    assert.equal(initializations, 0);
+  });
+}
+
+test('joining choices continue without a next-steps module', async () => {
+  const harness = await discoveryRecoveryHarness();
+  const view = harness.render({
+    discoverGoProfiles: async () => ({ installed: false, candidates: [] }),
+  });
+  await view.findByText('How are you joining?');
+  for (const name of [/Set up my own account/, /Join an existing group/]) {
+    ui.fireEvent.click(view.getByRole('radio', { name }));
+    assert.equal(view.queryByText(/What happens next/i), null);
+    assert.equal(
+      (view.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled,
+      false,
+    );
+  }
+  ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));
+  await view.findByLabelText('Server address');
 });
 
 test('discovers Go CLI profile in StrictMode and passes profile credentials to server check', async () => {
@@ -81,6 +306,7 @@ test('discovers Go CLI profile in StrictMode and passes profile credentials to s
           onNavigate: () => {},
           onRefreshWorld: async () => FIXTURE,
           concealSignal: 0,
+          agentReady: true,
         }),
       }),
     ),
@@ -191,78 +417,211 @@ test('disables account selection and dialog dismissal while server verification 
   assert.equal(rendered.queryByText('Pair this Mac'), null);
 });
 
-for (const refreshFails of [false, true]) {
-  test(`reconciles uncertain initialization before profile selection (refresh fails: ${refreshFails})`, async () => {
-    const { FirstRunExperience } = (await vite.ssrLoadModule(
-      '/src/screens/first-run-screen.tsx',
-    )) as typeof import('../src/screens/first-run-screen.tsx');
-    const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
-      '/kit/toasts.tsx',
-    )) as typeof import('../kit/toasts.tsx');
-    const { FIXTURE } = (await vite.ssrLoadModule(
-      '/src/fixture.ts',
-    )) as typeof import('../src/fixture.ts');
-    const { mockBridge } = (await vite.ssrLoadModule(
-      '/src/mock-bridge.ts',
-    )) as typeof import('../src/mock-bridge.ts');
-    let refreshes = 0;
-    let pendingReads = 0;
-    const bridge: Bridge = {
-      ...mockBridge(),
-      native: true,
-      firstRunFixture: undefined,
-      initializeClientState: async () => {
-        throw {
-          code: 'ambiguous',
-          message: 'Initialization timed out',
-          retryable: false,
-          ambiguous: true,
-          fatal: false,
-        };
-      },
-      discoverGoProfiles: async () => ({ installed: false, candidates: [] }),
-      listPendingOperations: async () => {
-        pendingReads++;
-        return [];
-      },
-    };
-    const rendered = ui.render(
-      createElement(ToastProvider, {
-        controller: new ToastController(),
-        children: createElement(FirstRunExperience, {
-          bridge,
-          world: FIXTURE,
-          location: { kind: 'first-run', path: 'own', step: 'who' },
-          onNavigate: () => {},
-          automaticEntry: true,
-          onRefreshWorld: async () => {
-            refreshes++;
-            if (refreshFails) throw new Error('Catalog unavailable');
-            return FIXTURE;
-          },
-          concealSignal: 0,
-        }),
+test('first-run waits for shared readiness and never initializes itself', async () => {
+  const { FirstRunExperience } = (await vite.ssrLoadModule(
+    '/src/screens/first-run-screen.tsx',
+  )) as typeof import('../src/screens/first-run-screen.tsx');
+  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
+    '/kit/toasts.tsx',
+  )) as typeof import('../kit/toasts.tsx');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture.ts');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge.ts');
+  let initializations = 0;
+  let discoveries = 0;
+  const bridge: Bridge = {
+    ...mockBridge(),
+    native: true,
+    firstRunFixture: undefined,
+    initializeClientState: async () => {
+      initializations++;
+      return { state: 'ready' };
+    },
+    discoverGoProfiles: async () => {
+      discoveries++;
+      return { installed: false, candidates: [] };
+    },
+  };
+  const rendered = ui.render(
+    createElement(ToastProvider, {
+      controller: new ToastController(),
+      children: createElement(FirstRunExperience, {
+        bridge,
+        world: FIXTURE,
+        location: { kind: 'first-run', path: 'own', step: 'who' },
+        onNavigate: () => {},
+        automaticEntry: true,
+        onRefreshWorld: async () => FIXTURE,
+        concealSignal: 0,
+        agentReady: false,
       }),
-    );
-    await ui.waitFor(() => assert.equal(refreshes, 1));
-    await ui.waitFor(() =>
-      assert.ok(
-        rendered.getByText(
-          refreshFails
-            ? /FOKS could not finish checking the vault/
-            : /FOKS refreshed the vault after an uncertain result/,
-        ),
-      ),
-    );
-    assert.equal(
-      pendingReads,
-      0,
-      'pending operations require a selected profile',
-    );
-    if (refreshFails)
-      assert.equal(rendered.queryByText(/FOKS refreshed the vault/), null);
+    }),
+  );
+  assert.ok(rendered.getByRole('button', { name: 'Preparing service…' }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(initializations, 0);
+  assert.equal(discoveries, 0);
+});
+
+test('first-run exposes shared agent recovery without discarding its current step', async () => {
+  const { FirstRunExperience } = (await vite.ssrLoadModule(
+    '/src/screens/first-run-screen.tsx',
+  )) as typeof import('../src/screens/first-run-screen.tsx');
+  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
+    '/kit/toasts.tsx',
+  )) as typeof import('../kit/toasts.tsx');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture.ts');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge.ts');
+  let retries = 0;
+  const rendered = ui.render(
+    createElement(ToastProvider, {
+      controller: new ToastController(),
+      children: createElement(FirstRunExperience, {
+        bridge: { ...mockBridge(), firstRunFixture: undefined },
+        world: FIXTURE,
+        location: { kind: 'first-run', path: 'own', step: 'address' },
+        onNavigate: () => {},
+        onRefreshWorld: async () => FIXTURE,
+        concealSignal: 0,
+        agentReady: false,
+        onRetryAgent: async () => {
+          retries++;
+        },
+      }),
+    }),
+  );
+  assert.ok(rendered.getByText('Finish preparing this Mac'));
+  assert.equal(rendered.queryByLabelText('Server address'), null);
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Retry setup' }));
+  await ui.waitFor(() => assert.equal(retries, 1));
+  const saved = JSON.parse(
+    window.localStorage.getItem('foks.first-run.v2') ?? '{}',
+  ) as { state?: string };
+  assert.equal(saved.state, undefined);
+});
+
+test('native-shaped account creation is not rewound by the pre-mutation inventory', async () => {
+  const { FirstRunExperience } = (await vite.ssrLoadModule(
+    '/src/screens/first-run-screen.tsx',
+  )) as typeof import('../src/screens/first-run-screen.tsx');
+  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
+    '/kit/toasts.tsx',
+  )) as typeof import('../kit/toasts.tsx');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture.ts');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge.ts');
+  const base = mockBridge(FIXTURE);
+  const profile = 'setup-foks-app-4430';
+  const hostId = `02${'7'.repeat(64)}`;
+  let checks = 0;
+  let signups = 0;
+  const bridge: Bridge = {
+    ...base,
+    native: true,
+    firstRunFixture: undefined,
+    discoverGoProfiles: async () => ({ installed: false, candidates: [] }),
+    checkAndAddProfile: async (profileName, probe) => {
+      checks++;
+      assert.equal(profileName, profile);
+      assert.equal(probe, 'foks.app:4430');
+      return {
+        profile: profileName,
+        hostId,
+        lookupName: 'foks.app',
+        canonicalName: 'foks.app',
+        acceptance: 'inserted',
+        chain: 1,
+        epoch: 1,
+      };
+    },
+    createFirstRunAccount: async (request) => {
+      signups++;
+      assert.equal(request.profile, profile);
+      assert.equal(request.alias, 'native-user');
+      return { applied: true };
+    },
+  };
+  const refreshed = {
+    ...FIXTURE,
+    servers: [
+      ...FIXTURE.servers,
+      {
+        id: profile,
+        name: 'foks.app',
+        label: null,
+        host_id: hostId,
+        chain: 1,
+        epoch: 1,
+        accounts: ['native-user'],
+        trust: { status: 'verified' as const },
+        compatibility: { status: 'not-required' as const },
+        passiveStatus: {
+          status: 'available' as const,
+          source: 'signed-server-status' as const,
+        },
+        connectivity: { status: 'unknown' as const },
+        capabilities: { chat: false },
+        restrictions: [],
+      },
+    ],
+    accounts: [
+      ...FIXTURE.accounts,
+      {
+        store: 'acct:native-user',
+        alias: 'native-user',
+        username: 'native-user',
+        server: profile,
+      },
+    ],
+    profileInventory: [
+      ...FIXTURE.profileInventory,
+      { profile, accounts: 'complete' as const, teams: 'complete' as const },
+    ],
+  };
+  const view = ui.render(
+    createElement(ToastProvider, {
+      controller: new ToastController(),
+      children: createElement(FirstRunExperience, {
+        bridge,
+        world: FIXTURE,
+        location: { kind: 'first-run', path: 'own', step: 'who' },
+        onNavigate: () => {},
+        onRefreshWorld: async () => refreshed,
+        concealSignal: 0,
+        agentReady: true,
+      }),
+    }),
+  );
+  await view.findByText('How are you joining?');
+  ui.fireEvent.click(view.getByRole('radio', { name: /Set up my own account/ }));
+  ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));
+  ui.fireEvent.click(
+    view.getByRole('button', { name: 'Use the official FOKS server' }),
+  );
+  ui.fireEvent.click(view.getByRole('button', { name: 'Use this server' }));
+  await view.findByRole('button', { name: 'Details' });
+  assert.equal(checks, 1);
+  ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));
+  ui.fireEvent.change(view.getByPlaceholderText('yourname'), {
+    target: { value: 'native-user' },
   });
-}
+  ui.fireEvent.change(view.getByPlaceholderText('Your Mac'), {
+    target: { value: 'Native Mac' },
+  });
+  ui.fireEvent.click(view.getByRole('button', { name: 'Create my account' }));
+  await view.findByText('Save recovery phrase');
+  assert.equal(signups, 1);
+});
 
 test('first-run account navigation, server edits, and connection errors stay scoped', async () => {
   const { FirstRunExperience } = (await vite.ssrLoadModule(
@@ -305,9 +664,7 @@ test('first-run account navigation, server edits, and connection errors stay sco
       throw failure('Copy failed');
     },
     resumeGoProfilePairing: async () => {
-      throw failure(
-        'Refresh the setup status before resuming this operation.',
-      );
+      throw failure('Refresh the setup status before resuming this operation.');
     },
     recoverOwnerAccount: async () => {
       throw failure('Recovery failed');
@@ -321,6 +678,7 @@ test('first-run account navigation, server edits, and connection errors stay sco
         world: FIXTURE,
         location: { kind: 'first-run', path: 'own', step: 'who' },
         concealSignal: 0,
+        agentReady: true,
         onNavigate: (location: unknown) => {
           navigations.push(location);
         },
@@ -428,6 +786,7 @@ test('personal recovery puts backup first and completes without creating a group
         onNavigate: () => {},
         onRefreshWorld: async () => FIXTURE,
         concealSignal: 0,
+        agentReady: true,
       }),
     }),
   );
@@ -444,7 +803,7 @@ test('personal recovery puts backup first and completes without creating a group
   assert.ok(view.queryByText('Create a group') === null);
   assert.equal(creations, 0);
   const checkpoint = JSON.parse(
-    window.localStorage.getItem('foks.first-run.v1') ?? '{}',
+    window.localStorage.getItem('foks.first-run.v2') ?? '{}',
   ) as { state?: string; group?: unknown };
   assert.equal(checkpoint.state, 'checklist-own');
   assert.equal(checkpoint.group, undefined);

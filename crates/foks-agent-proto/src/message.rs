@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 21;
+pub const PROTOCOL_VERSION: u32 = 22;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -1981,6 +1981,8 @@ pub enum ErrorCode {
     InvalidRequest,
     VersionMismatch,
     BootstrapRequired,
+    CatalogSnapshotChanged,
+    UnsupportedSchema,
     Conflict,
     Busy,
     DeadlineExceeded,
@@ -2003,6 +2005,10 @@ pub struct ErrorFields {
     pub state_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub found_schema: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supported_schema: Option<u32>,
 }
 
 impl ErrorFields {
@@ -2011,6 +2017,8 @@ impl ErrorFields {
             && self.profile.is_none()
             && self.state_dir.is_none()
             && self.reason.is_none()
+            && self.found_schema.is_none()
+            && self.supported_schema.is_none()
     }
 
     fn bounded(mut self) -> Self {

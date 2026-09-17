@@ -106,7 +106,7 @@ fn backup_prepare_failure_is_read_only_and_never_mutation_ambiguous() {
         },
     )
     .unwrap_err();
-    assert_eq!(error.code, "io");
+    assert_eq!(error.code, "agent-lost");
     assert!(!error.ambiguous);
     assert_eq!(transport.calls.lock().unwrap().len(), 2);
 }

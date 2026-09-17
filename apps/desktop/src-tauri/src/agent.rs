@@ -4,7 +4,7 @@ use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -19,6 +19,19 @@ pub const SOCKET_ENV: &str = "FOKS_AGENT_SOCKET";
 pub const SOCKET_ARG: &str = "--agent-socket";
 const AGENT_BINARY_ENV: &str = "FOKS_AGENT_BINARY";
 const DEFAULT_SOCKET_NAME: &str = "foks-rs.sock";
+
+/// Identifies the socket endpoint and process approved for replacement.
+/// Approval is invalid if either changes before termination.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentTakeover {
+    pub socket: PathBuf,
+    pub pid: u32,
+    pub executable: PathBuf,
+    device: u64,
+    inode: u64,
+}
+
+const MAX_STARTUP_TAKEOVERS: usize = 4;
 
 /// The socket selected for this process and any state that this desktop owns.
 ///
@@ -50,7 +63,13 @@ pub struct AgentErrorDetails {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_dir: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub found_schema: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supported_schema: Option<u32>,
 }
 
 impl AgentError {
@@ -83,7 +102,13 @@ impl AgentError {
                 false,
             ),
             Error::Io(error) => {
-                Self::new("io", format!("Failed to connect to agent: {error}"), true)
+                let mut mapped = Self::new(
+                    "agent-lost",
+                    format!("Failed to connect to agent: {error}"),
+                    true,
+                );
+                mapped.fatal = true;
+                mapped
             }
             Error::Protocol(foks_agent_proto::Error::Version) => Self::from_agent(
                 ErrorCode::VersionMismatch,
@@ -142,6 +167,8 @@ impl AgentError {
             ErrorCode::InvalidRequest => ("invalid-request", false),
             ErrorCode::VersionMismatch => ("version-mismatch", false),
             ErrorCode::BootstrapRequired => ("bootstrap-required", false),
+            ErrorCode::CatalogSnapshotChanged => ("catalog-snapshot-changed", true),
+            ErrorCode::UnsupportedSchema => ("unsupported-schema", false),
             ErrorCode::Conflict => ("conflict", false),
             ErrorCode::Busy => ("busy", true),
             ErrorCode::DeadlineExceeded => ("deadline-exceeded", true),
@@ -158,7 +185,10 @@ impl AgentError {
         mapped.ambiguous = code == ErrorCode::DeadlineExceeded;
         mapped.fatal = matches!(
             code,
-            ErrorCode::VersionMismatch | ErrorCode::ChatIntegrity | ErrorCode::ChatChannelIntegrity
+            ErrorCode::VersionMismatch
+                | ErrorCode::UnsupportedSchema
+                | ErrorCode::ChatIntegrity
+                | ErrorCode::ChatChannelIntegrity
         );
         mapped
     }
@@ -174,7 +204,33 @@ impl AgentError {
                 mapped.details = error_details(fields).map(Box::new);
                 mapped
             }
-            DesktopAgentError::Transport(message) => Self::new("io", message, true),
+            DesktopAgentError::Transport(message) => {
+                let mut mapped = Self::new("agent-lost", message, true);
+                mapped.fatal = true;
+                mapped
+            }
+            DesktopAgentError::Local(condition) => match condition {
+                foks_desktop::LocalAgentCondition::Maintenance => Self::new(
+                    "state-maintenance-active",
+                    "State maintenance is in progress.",
+                    true,
+                ),
+                foks_desktop::LocalAgentCondition::RestartRequired => Self::new(
+                    "state-restart-required",
+                    "Restart FOKS to use the selected state root.",
+                    false,
+                ),
+                foks_desktop::LocalAgentCondition::RecoveryRequired => Self::new(
+                    "state-recovery-required",
+                    "Recover client state before restarting the local agent.",
+                    false,
+                ),
+                foks_desktop::LocalAgentCondition::RestorationFailed => Self::new(
+                    "state-restoration-failed",
+                    "The local agent could not be restored after state maintenance.",
+                    true,
+                ),
+            },
             DesktopAgentError::Ambiguous(message) => {
                 let mut mapped = Self::new("ambiguous", message, false);
                 mapped.ambiguous = true;
@@ -191,16 +247,211 @@ fn error_details(fields: ErrorFields) -> Option<AgentErrorDetails> {
     let details = AgentErrorDetails {
         capability: fields.capability,
         profile: fields.profile,
+        state_dir: fields.state_dir,
         reason: fields.reason,
+        found_schema: fields.found_schema,
+        supported_schema: fields.supported_schema,
     };
-    (details.capability.is_some() || details.profile.is_some() || details.reason.is_some())
-        .then_some(details)
+    (details.capability.is_some()
+        || details.profile.is_some()
+        || details.state_dir.is_some()
+        || details.reason.is_some()
+        || details.found_schema.is_some()
+        || details.supported_schema.is_some())
+    .then_some(details)
+}
+
+pub const MAINTENANCE_EVENT: &str = "foks://maintenance-status";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MaintenanceKind {
+    Export,
+    Import,
+    Verify,
+    Relocate,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MaintenancePhase {
+    Selecting,
+    Confirming,
+    Quiescing,
+    Running,
+    Restoring,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub enum MaintenanceOperationOutcome {
+    Cancelled,
+    Completed,
+    Failed { error: AgentError },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub enum MaintenanceDisposition {
+    ContinueCurrentRoot,
+    RestartSelectedRoot { root: String },
+    RecoveryRequired { root: String },
+    RestorationFailed { root: String, error: AgentError },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum MaintenanceSnapshot {
+    Idle {
+        generation: u64,
+        revision: u64,
+    },
+    Active {
+        generation: u64,
+        revision: u64,
+        kind: MaintenanceKind,
+        phase: MaintenancePhase,
+    },
+    Complete {
+        generation: u64,
+        revision: u64,
+        kind: MaintenanceKind,
+        operation: MaintenanceOperationOutcome,
+        disposition: MaintenanceDisposition,
+    },
+}
+
+impl MaintenanceSnapshot {
+    fn generation(&self) -> u64 {
+        match self {
+            Self::Idle { generation, .. }
+            | Self::Active { generation, .. }
+            | Self::Complete { generation, .. } => *generation,
+        }
+    }
+
+    fn set_revision(&mut self, revision: u64) {
+        match self {
+            Self::Idle {
+                revision: value, ..
+            }
+            | Self::Active {
+                revision: value, ..
+            }
+            | Self::Complete {
+                revision: value, ..
+            } => *value = revision,
+        }
+    }
+
+    fn transition_rank(&self) -> u8 {
+        match self {
+            Self::Idle { .. } => 0,
+            Self::Active { phase, .. } => match phase {
+                MaintenancePhase::Selecting => 1,
+                MaintenancePhase::Confirming => 2,
+                MaintenancePhase::Quiescing => 3,
+                MaintenancePhase::Running => 4,
+                MaintenancePhase::Restoring => 5,
+            },
+            Self::Complete { .. } => 6,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TransportDisposition {
+    Current,
+    RestartRequired,
+    RecoveryRequired,
+    RestorationFailed,
+}
+
+trait MaintenanceProcess: Send + Sync {
+    fn preflight(&self, handle: &AgentHandle) -> Result<(), AgentError>;
+    fn stop(&self, handle: &AgentHandle) -> Result<(), AgentError>;
+    fn restore(&self, handle: &AgentHandle) -> Result<Response, AgentError>;
+}
+
+struct NativeMaintenanceProcess;
+
+impl MaintenanceProcess for NativeMaintenanceProcess {
+    fn preflight(&self, handle: &AgentHandle) -> Result<(), AgentError> {
+        handle.require_owned_managed_agent()
+    }
+
+    fn stop(&self, handle: &AgentHandle) -> Result<(), AgentError> {
+        handle.stop_owned_managed_agent()
+    }
+
+    fn restore(&self, handle: &AgentHandle) -> Result<Response, AgentError> {
+        handle.require_maintenance_stop_settled()?;
+        handle.ensure_started_already_reserved()
+    }
+}
+
+struct MaintenanceAdmission<'a>(&'a AtomicBool);
+
+impl Drop for MaintenanceAdmission<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+pub enum MaintenanceCompletion {
+    Cancelled,
+    Continue,
+    RestartSelected(PathBuf),
+    Failed {
+        error: AgentError,
+        affected_roots: Vec<PathBuf>,
+    },
+}
+
+pub struct MaintenanceWorker<'a> {
+    handle: &'a AgentHandle,
+    generation: u64,
+    kind: MaintenanceKind,
+    stop_attempted: bool,
+    notify: &'a dyn Fn(&MaintenanceSnapshot),
+}
+
+impl MaintenanceWorker<'_> {
+    pub fn source_root(&self) -> Result<PathBuf, AgentError> {
+        self.handle
+            .socket
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| AgentError::unknown("Agent state path has no parent."))
+    }
+
+    pub fn phase(&self, phase: MaintenancePhase) {
+        self.handle.publish_maintenance(
+            MaintenanceSnapshot::Active {
+                generation: self.generation,
+                revision: 0,
+                kind: self.kind,
+                phase,
+            },
+            self.notify,
+        );
+    }
+
+    pub fn stop_owned_agent(&mut self) -> Result<(), AgentError> {
+        self.phase(MaintenancePhase::Quiescing);
+        // Once SIGTERM may have been sent, restoration is mandatory even if
+        // confirmation of process exit times out.
+        self.stop_attempted = true;
+        self.handle.maintenance_process.stop(self.handle)?;
+        self.phase(MaintenancePhase::Running);
+        Ok(())
+    }
 }
 
 struct ObservedTransport {
     client: AgentClient,
     maintenance: RwLock<()>,
-    retired: AtomicBool,
+    disposition: Mutex<TransportDisposition>,
     connection_failure: Arc<Mutex<Option<String>>>,
 }
 
@@ -208,12 +459,29 @@ impl ObservedTransport {
     #[allow(clippy::result_large_err)] // Uses the existing transport trait error without allocating on success.
     fn reserve_use(&self) -> Result<std::sync::RwLockReadGuard<'_, ()>, DesktopAgentError> {
         let guard = self.maintenance.try_read().map_err(|_| {
-            DesktopAgentError::Transport("State maintenance is in progress.".into())
+            DesktopAgentError::Local(foks_desktop::LocalAgentCondition::Maintenance)
         })?;
-        if self.retired.load(Ordering::Acquire) {
-            return Err(DesktopAgentError::Transport(
-                "State moved; restart the application.".into(),
-            ));
+        match *self
+            .disposition
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            TransportDisposition::Current => {}
+            TransportDisposition::RestartRequired => {
+                return Err(DesktopAgentError::Local(
+                    foks_desktop::LocalAgentCondition::RestartRequired,
+                ));
+            }
+            TransportDisposition::RecoveryRequired => {
+                return Err(DesktopAgentError::Local(
+                    foks_desktop::LocalAgentCondition::RecoveryRequired,
+                ));
+            }
+            TransportDisposition::RestorationFailed => {
+                return Err(DesktopAgentError::Local(
+                    foks_desktop::LocalAgentCondition::RestorationFailed,
+                ));
+            }
         }
         Ok(guard)
     }
@@ -310,6 +578,15 @@ pub struct AgentHandle {
     transport: Arc<ObservedTransport>,
     socket: PathBuf,
     connection_failure: Arc<Mutex<Option<String>>>,
+    maintenance_generation: AtomicU64,
+    maintenance_revision: AtomicU64,
+    maintenance_in_flight: AtomicBool,
+    maintenance_snapshot: Mutex<MaintenanceSnapshot>,
+    pending_stop_pid: Mutex<Option<u32>>,
+    maintenance_process: Arc<dyn MaintenanceProcess>,
+    maintenance_readiness: Arc<dyn Fn(&Path, &[PathBuf]) -> SafeRootDisposition + Send + Sync>,
+    #[cfg(test)]
+    managed_endpoint_override: bool,
 }
 
 impl AgentHandle {
@@ -323,12 +600,37 @@ impl AgentHandle {
             transport: Arc::new(ObservedTransport {
                 client,
                 maintenance: RwLock::new(()),
-                retired: AtomicBool::new(false),
+                disposition: Mutex::new(TransportDisposition::Current),
                 connection_failure: Arc::clone(&connection_failure),
             }),
             socket,
             connection_failure,
+            maintenance_generation: AtomicU64::new(0),
+            maintenance_revision: AtomicU64::new(0),
+            maintenance_in_flight: AtomicBool::new(false),
+            maintenance_snapshot: Mutex::new(MaintenanceSnapshot::Idle {
+                generation: 0,
+                revision: 0,
+            }),
+            pending_stop_pid: Mutex::new(None),
+            maintenance_process: Arc::new(NativeMaintenanceProcess),
+            maintenance_readiness: Arc::new(safe_selected_root),
+            #[cfg(test)]
+            managed_endpoint_override: false,
         }
+    }
+
+    #[cfg(test)]
+    fn new_for_maintenance_test(
+        socket: PathBuf,
+        process: Arc<dyn MaintenanceProcess>,
+        readiness: impl Fn(&Path, &[PathBuf]) -> SafeRootDisposition + Send + Sync + 'static,
+    ) -> Self {
+        let mut handle = Self::new(socket);
+        handle.maintenance_process = process;
+        handle.maintenance_readiness = Arc::new(readiness);
+        handle.managed_endpoint_override = true;
+        handle
     }
 
     pub fn socket(&self) -> &Path {
@@ -369,66 +671,166 @@ impl AgentHandle {
         }
     }
 
+    #[cfg(test)]
     pub fn ensure_started_blocking(&self) -> Result<Response, AgentError> {
         let _use = self
             .transport
             .reserve_use()
             .map_err(AgentError::from_desktop)?;
-        let mut incompatible = false;
+        self.require_maintenance_stop_settled()?;
+        self.ensure_started_already_reserved()
+    }
+
+    pub fn ensure_started_with_confirmation(
+        &self,
+        confirm: &dyn Fn(&AgentTakeover) -> bool,
+    ) -> Result<Response, AgentError> {
+        let _use = self
+            .transport
+            .reserve_use()
+            .map_err(AgentError::from_desktop)?;
+        self.require_maintenance_stop_settled()?;
+        self.start_already_reserved(&|target| Ok(confirm(target)))
+    }
+
+    /// Retries agent restoration while excluding ordinary commands. A failed
+    /// maintenance restoration remains a typed local transport condition until
+    /// this method has verified an authoritative agent status response.
+    pub fn retry_started_blocking(&self) -> Result<Response, AgentError> {
+        let _reservation = self
+            .transport
+            .maintenance
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match *self
+            .transport
+            .disposition
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            TransportDisposition::Current | TransportDisposition::RestorationFailed => {}
+            TransportDisposition::RestartRequired => {
+                return Err(AgentError::from_desktop(DesktopAgentError::Local(
+                    foks_desktop::LocalAgentCondition::RestartRequired,
+                )));
+            }
+            TransportDisposition::RecoveryRequired => {
+                return Err(AgentError::from_desktop(DesktopAgentError::Local(
+                    foks_desktop::LocalAgentCondition::RecoveryRequired,
+                )));
+            }
+        }
+        let response = self.maintenance_process.restore(self)?;
+        *self
+            .transport
+            .disposition
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = TransportDisposition::Current;
+        Ok(response)
+    }
+
+    /// Starts and verifies the managed agent while the caller owns the
+    /// exclusive maintenance reservation. This must never acquire the shared
+    /// reservation again.
+    fn ensure_started_already_reserved(&self) -> Result<Response, AgentError> {
+        self.start_already_reserved(&|_| {
+            Err(AgentError::new(
+            "agent-takeover-required",
+            "Another FOKS version owns the agent socket. Relaunch FOKS to confirm replacing it.",
+            false,
+        ))
+        })
+    }
+
+    fn start_already_reserved(
+        &self,
+        confirm: &dyn Fn(&AgentTakeover) -> Result<bool, AgentError>,
+    ) -> Result<Response, AgentError> {
         match self.call_unreserved(Operation::AgentStatus) {
             Ok(response) => {
                 self.clear_connection_failure();
                 return Ok(response);
             }
-            Err(error) if error.code == "version-mismatch" => incompatible = true,
             Err(_) => {}
         }
         let Some(binary) = managed_agent_binary(&self.socket) else {
             return self.call_unreserved(Operation::AgentStatus);
         };
+        self.start_with_binary(&binary, confirm)
+    }
+
+    fn start_with_binary(
+        &self,
+        binary: &Path,
+        confirm: &dyn Fn(&AgentTakeover) -> Result<bool, AgentError>,
+    ) -> Result<Response, AgentError> {
+        // Fail before asking to stop a healthy process if we cannot replace it.
+        validate_agent_binary(binary)?;
         let state_dir = self.socket.parent().ok_or_else(|| {
             AgentError::unknown("Configured agent socket path has no parent directory.")
         })?;
         let _root_lease = foks_client_app::ClientStateLease::acquire(state_dir)
             .map_err(|error| AgentError::new("agent-state", error.to_string(), false))?;
         prepare_state_directory(state_dir)?;
-        let spawn_lock = acquire_spawn_lock(&self.socket)?;
-        match self.call_unreserved(Operation::AgentStatus) {
-            Ok(response) => {
-                drop(spawn_lock);
-                self.clear_connection_failure();
-                return Ok(response);
-            }
-            Err(error) if error.code == "version-mismatch" => incompatible = true,
-            Err(_) => {}
-        }
-        // A previous FOKS build's resident agent can still own this socket
-        // after a protocol bump; it must be stopped before this binary can bind.
-        #[cfg(unix)]
-        if incompatible {
-            stop_incompatible_agent(&self.socket)?;
-            if let Ok(response) = self.call_unreserved(Operation::AgentStatus) {
-                drop(spawn_lock);
-                self.clear_connection_failure();
-                return Ok(response);
-            }
-        }
-        #[cfg(not(unix))]
-        let _ = incompatible;
-        launch_agent(&binary, state_dir, &self.socket)?;
+        let _spawn_lock = acquire_spawn_lock(&self.socket)?;
         let mut last_error = None;
-        for _ in 0..50 {
-            std::thread::sleep(Duration::from_millis(100));
+        // The socket may be rebound after the previous process exits. Require new
+        // approval for each replacement process and limit retries for respawning services.
+        let mut approvals = 0;
+        for _ in 0..=MAX_STARTUP_TAKEOVERS {
             match self.call_unreserved(Operation::AgentStatus) {
                 Ok(response) => {
-                    drop(spawn_lock);
                     self.clear_connection_failure();
                     return Ok(response);
                 }
-                Err(error) => last_error = Some(error),
+                #[cfg(unix)]
+                Err(error) if error.code == "version-mismatch" => {
+                    if let Err(error) =
+                        stop_incompatible_agent(&self.socket, confirm, &mut approvals)
+                    {
+                        if error.code == "agent-takeover-changed" {
+                            last_error = Some(error);
+                            continue;
+                        }
+                        return Err(error);
+                    }
+                    // Recheck before spawning: a new listener may already own
+                    // the path, including a compatible agent we can simply use.
+                    match self.call_unreserved(Operation::AgentStatus) {
+                        Ok(response) => {
+                            self.clear_connection_failure();
+                            return Ok(response);
+                        }
+                        Err(error) if error.code == "version-mismatch" => {
+                            last_error = Some(error);
+                            continue;
+                        }
+                        Err(_) => {}
+                    }
+                }
+                Err(_) => {}
+            }
+            launch_agent(binary, state_dir, &self.socket)?;
+            let mut replaced = false;
+            for _ in 0..50 {
+                std::thread::sleep(Duration::from_millis(100));
+                match self.call_unreserved(Operation::AgentStatus) {
+                    Ok(response) => {
+                        self.clear_connection_failure();
+                        return Ok(response);
+                    }
+                    Err(error) if error.code == "version-mismatch" => {
+                        last_error = Some(error);
+                        replaced = true;
+                        break;
+                    }
+                    Err(error) => last_error = Some(error),
+                }
+            }
+            if !replaced {
+                break;
             }
         }
-        drop(spawn_lock);
         Err(last_error.unwrap_or_else(|| {
             AgentError::new(
                 "agent-start-failed",
@@ -438,19 +840,11 @@ impl AgentHandle {
         }))
     }
 
-    /// Excludes all desktop calls and launch attempts through stopped-state work.
-    pub fn relocate_managed_state(&self, destination: &Path) -> Result<(), AgentError> {
-        self.with_managed_state(true, |source| {
-            foks_client_app::portability::relocate_state(source, destination)?;
-            Ok(())
-        })
-    }
-
-    pub fn with_managed_state<T>(
-        &self,
-        retire: bool,
-        operation: impl FnOnce(&Path) -> foks_client_app::Result<T>,
-    ) -> Result<T, AgentError> {
+    fn require_managed_endpoint(&self) -> Result<(), AgentError> {
+        #[cfg(test)]
+        if self.managed_endpoint_override {
+            return Ok(());
+        }
         if socket_from_arguments(std::env::args_os()).is_some()
             || std::env::var_os(SOCKET_ENV).is_some()
             || default_socket().as_deref() != Some(self.socket())
@@ -461,32 +855,397 @@ impl AgentHandle {
                 false,
             ));
         }
-        let _maintenance = self.transport.maintenance.try_write().map_err(|_| {
-            AgentError::new(
-                "state-busy",
-                "Finish active requests before moving state.",
-                true,
+        Ok(())
+    }
+
+    pub fn maintenance_snapshot(&self) -> MaintenanceSnapshot {
+        self.maintenance_snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn publish_maintenance(
+        &self,
+        mut snapshot: MaintenanceSnapshot,
+        notify: &dyn Fn(&MaintenanceSnapshot),
+    ) {
+        let mut current = self
+            .maintenance_snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let restoration_retry = matches!(
+            (&*current, &snapshot),
+            (
+                MaintenanceSnapshot::Complete {
+                    disposition: MaintenanceDisposition::RestorationFailed { .. },
+                    ..
+                },
+                MaintenanceSnapshot::Complete {
+                    disposition: MaintenanceDisposition::ContinueCurrentRoot,
+                    ..
+                }
             )
-        })?;
-        if self.transport.retired.load(Ordering::Acquire) {
+        );
+        if snapshot.generation() < current.generation()
+            || (snapshot.generation() == current.generation()
+                && snapshot.transition_rank() <= current.transition_rank()
+                && !restoration_retry)
+        {
+            return;
+        }
+        let revision = self.maintenance_revision.fetch_add(1, Ordering::AcqRel) + 1;
+        snapshot.set_revision(revision);
+        *current = snapshot.clone();
+        drop(current);
+        notify(&snapshot);
+    }
+
+    pub fn record_restoration_success(&self, notify: &dyn Fn(&MaintenanceSnapshot)) {
+        let previous = self.maintenance_snapshot();
+        if let MaintenanceSnapshot::Complete {
+            generation,
+            kind,
+            operation,
+            disposition: MaintenanceDisposition::RestorationFailed { .. },
+            ..
+        } = previous
+        {
+            *self
+                .transport
+                .disposition
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = TransportDisposition::Current;
+            self.publish_maintenance(
+                MaintenanceSnapshot::Complete {
+                    generation,
+                    revision: 0,
+                    kind,
+                    operation,
+                    disposition: MaintenanceDisposition::ContinueCurrentRoot,
+                },
+                notify,
+            );
+        }
+    }
+
+    pub fn run_maintenance(
+        &self,
+        kind: MaintenanceKind,
+        notify: &dyn Fn(&MaintenanceSnapshot),
+        operation: impl FnOnce(&mut MaintenanceWorker<'_>) -> MaintenanceCompletion,
+    ) -> Result<MaintenanceSnapshot, AgentError> {
+        self.require_managed_endpoint()?;
+        self.maintenance_in_flight
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| {
+                AgentError::new(
+                    "state-busy",
+                    "State maintenance is already in progress.",
+                    true,
+                )
+            })?;
+        let _admission = MaintenanceAdmission(&self.maintenance_in_flight);
+        // Admission precedes endpoint preflight so a second command arriving
+        // after the first worker stopped the socket still receives the typed
+        // state-busy outcome, rather than a misleading agent-lost result.
+        self.maintenance_process.preflight(self)?;
+        let _reservation = {
+            let mut acquired = None;
+            for _ in 0..50 {
+                match self.transport.maintenance.try_write() {
+                    Ok(guard) => {
+                        acquired = Some(guard);
+                        break;
+                    }
+                    Err(std::sync::TryLockError::WouldBlock) => {
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    Err(std::sync::TryLockError::Poisoned(error)) => {
+                        acquired = Some(error.into_inner());
+                        break;
+                    }
+                }
+            }
+            acquired.ok_or_else(|| {
+                AgentError::new(
+                    "state-busy",
+                    "Active requests did not quiesce before the maintenance deadline.",
+                    true,
+                )
+            })?
+        };
+        match *self
+            .transport
+            .disposition
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            TransportDisposition::Current => {}
+            TransportDisposition::RestartRequired => {
+                return Err(AgentError::from_desktop(DesktopAgentError::Local(
+                    foks_desktop::LocalAgentCondition::RestartRequired,
+                )));
+            }
+            TransportDisposition::RecoveryRequired => {
+                return Err(AgentError::from_desktop(DesktopAgentError::Local(
+                    foks_desktop::LocalAgentCondition::RecoveryRequired,
+                )));
+            }
+            TransportDisposition::RestorationFailed => {
+                return Err(AgentError::from_desktop(DesktopAgentError::Local(
+                    foks_desktop::LocalAgentCondition::RestorationFailed,
+                )));
+            }
+        }
+        let generation = self.maintenance_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        self.publish_maintenance(
+            MaintenanceSnapshot::Active {
+                generation,
+                revision: 0,
+                kind,
+                phase: MaintenancePhase::Selecting,
+            },
+            notify,
+        );
+        let mut worker = MaintenanceWorker {
+            handle: self,
+            generation,
+            kind,
+            stop_attempted: false,
+            notify,
+        };
+        let completion =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(&mut worker)))
+                .unwrap_or_else(|_| MaintenanceCompletion::Failed {
+                    error: AgentError::new(
+                        "maintenance-worker-interrupted",
+                        "State maintenance worker stopped unexpectedly.",
+                        false,
+                    ),
+                    affected_roots: worker.source_root().into_iter().collect(),
+                });
+        let source = worker.source_root()?;
+        let stop_attempted = worker.stop_attempted;
+        let (operation_outcome, mut disposition) = match completion {
+            MaintenanceCompletion::Cancelled => (
+                MaintenanceOperationOutcome::Cancelled,
+                MaintenanceDisposition::ContinueCurrentRoot,
+            ),
+            MaintenanceCompletion::Continue => (
+                MaintenanceOperationOutcome::Completed,
+                MaintenanceDisposition::ContinueCurrentRoot,
+            ),
+            MaintenanceCompletion::RestartSelected(root) => {
+                let disposition = match (self.maintenance_readiness)(&source, &[root.clone()]) {
+                    SafeRootDisposition::Selected(selected) if selected == root => {
+                        MaintenanceDisposition::RestartSelectedRoot {
+                            root: selected.display().to_string(),
+                        }
+                    }
+                    SafeRootDisposition::Current => MaintenanceDisposition::RecoveryRequired {
+                        root: root.display().to_string(),
+                    },
+                    SafeRootDisposition::Recovery(root) => {
+                        MaintenanceDisposition::RecoveryRequired {
+                            root: root.display().to_string(),
+                        }
+                    }
+                    SafeRootDisposition::Selected(selected) => {
+                        MaintenanceDisposition::RecoveryRequired {
+                            root: selected.display().to_string(),
+                        }
+                    }
+                };
+                (MaintenanceOperationOutcome::Completed, disposition)
+            }
+            MaintenanceCompletion::Failed {
+                error,
+                affected_roots,
+            } => {
+                let disposition = match (self.maintenance_readiness)(&source, &affected_roots) {
+                    SafeRootDisposition::Current => MaintenanceDisposition::ContinueCurrentRoot,
+                    SafeRootDisposition::Selected(root) => {
+                        MaintenanceDisposition::RestartSelectedRoot {
+                            root: root.display().to_string(),
+                        }
+                    }
+                    SafeRootDisposition::Recovery(root) => {
+                        MaintenanceDisposition::RecoveryRequired {
+                            root: root.display().to_string(),
+                        }
+                    }
+                };
+                (MaintenanceOperationOutcome::Failed { error }, disposition)
+            }
+        };
+
+        if stop_attempted && matches!(disposition, MaintenanceDisposition::ContinueCurrentRoot) {
+            disposition = match (self.maintenance_readiness)(&source, &[]) {
+                SafeRootDisposition::Current => MaintenanceDisposition::ContinueCurrentRoot,
+                SafeRootDisposition::Selected(root) => {
+                    MaintenanceDisposition::RestartSelectedRoot {
+                        root: root.display().to_string(),
+                    }
+                }
+                SafeRootDisposition::Recovery(root) => MaintenanceDisposition::RecoveryRequired {
+                    root: root.display().to_string(),
+                },
+            };
+        }
+        if stop_attempted && matches!(disposition, MaintenanceDisposition::ContinueCurrentRoot) {
+            worker.phase(MaintenancePhase::Restoring);
+            if let Err(error) = self.maintenance_process.restore(self) {
+                disposition = MaintenanceDisposition::RestorationFailed {
+                    root: source.display().to_string(),
+                    error,
+                };
+            }
+        }
+        let transport_disposition = match disposition {
+            MaintenanceDisposition::ContinueCurrentRoot => TransportDisposition::Current,
+            MaintenanceDisposition::RestorationFailed { .. } => {
+                TransportDisposition::RestorationFailed
+            }
+            MaintenanceDisposition::RestartSelectedRoot { .. } => {
+                TransportDisposition::RestartRequired
+            }
+            MaintenanceDisposition::RecoveryRequired { .. } => {
+                TransportDisposition::RecoveryRequired
+            }
+        };
+        *self
+            .transport
+            .disposition
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = transport_disposition;
+        // Intentional stop/start failures are carried by the maintenance
+        // snapshot. They must not be reclassified as unrelated agent loss by
+        // the connection observer after the exclusive reservation is released.
+        self.clear_connection_failure();
+        let snapshot = MaintenanceSnapshot::Complete {
+            generation,
+            revision: 0,
+            kind,
+            operation: operation_outcome,
+            disposition,
+        };
+        self.publish_maintenance(snapshot, notify);
+        Ok(self.maintenance_snapshot())
+    }
+
+    fn stop_owned_managed_agent(&self) -> Result<(), AgentError> {
+        self.require_owned_managed_agent()?;
+        let pid = *MANAGED_AGENT_PID
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(pid) = pid else {
+            unreachable!("owned managed-agent preflight returned without a pid");
+        };
+        *self
+            .pending_stop_pid
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(pid);
+        #[cfg(unix)]
+        {
+            let signaled = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+            if signaled != 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+            {
+                return Err(AgentError::new(
+                    "agent-stop-failed",
+                    "Failed to stop the managed local agent.",
+                    true,
+                ));
+            }
+        }
+        for _ in 0..50 {
+            if MANAGED_AGENT_PID
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none()
+            {
+                self.clear_connection_failure();
+                *self
+                    .pending_stop_pid
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        Err(AgentError::new(
+            "agent-stop-failed",
+            "The managed local agent did not stop in time.",
+            true,
+        ))
+    }
+
+    fn require_owned_managed_agent(&self) -> Result<(), AgentError> {
+        let owned = *MANAGED_AGENT_PID
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(owned) = owned else {
             return Err(AgentError::new(
-                "state-moved",
-                "Restart the application to use moved state.",
+                "external-agent",
+                "State maintenance can only stop the agent launched by this application.",
                 false,
             ));
-        }
-        let source = self
-            .socket
-            .parent()
-            .ok_or_else(|| AgentError::unknown("Agent state path has no parent."))?;
+        };
         #[cfg(unix)]
-        stop_incompatible_agent(&self.socket)?;
-        let result=operation(source)
-            .map_err(|e| AgentError::new("state-maintenance", format!("{e}. If interrupted, use foks-rs --state-dir PATH state recover before restarting."), false))?;
-        if retire {
-            self.transport.retired.store(true, Ordering::Release);
+        {
+            let stream =
+                std::os::unix::net::UnixStream::connect(&self.socket).map_err(|error| {
+                    AgentError::new(
+                        "agent-lost",
+                        format!("Could not verify the managed agent endpoint: {error}"),
+                        true,
+                    )
+                })?;
+            let peer = unix_peer_pid(&stream).map_err(|error| {
+                AgentError::new(
+                    "external-agent",
+                    format!("Could not verify ownership of the local agent: {error}"),
+                    false,
+                )
+            })?;
+            if peer != owned {
+                return Err(AgentError::new(
+                    "external-agent",
+                    "The configured endpoint is not owned by the agent launched by this application.",
+                    false,
+                ));
+            }
         }
-        Ok(result)
+        Ok(())
+    }
+
+    fn require_maintenance_stop_settled(&self) -> Result<(), AgentError> {
+        let pending = *self
+            .pending_stop_pid
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(pid) = pending else {
+            return Ok(());
+        };
+        let live = *MANAGED_AGENT_PID
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        #[cfg(unix)]
+        let exited = process_has_exited(pid);
+        #[cfg(not(unix))]
+        let exited = live != Some(pid);
+        if live != Some(pid) || exited {
+            *self
+                .pending_stop_pid
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+            return Ok(());
+        }
+        Err(AgentError::new(
+            "agent-stop-pending",
+            "The previously managed local agent has not finished stopping.",
+            true,
+        ))
     }
 
     pub fn take_connection_failure(&self) -> Option<String> {
@@ -501,6 +1260,49 @@ impl AgentHandle {
             .connection_failure
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+}
+
+enum SafeRootDisposition {
+    Current,
+    Selected(PathBuf),
+    Recovery(PathBuf),
+}
+
+fn safe_selected_root(source: &Path, affected_roots: &[PathBuf]) -> SafeRootDisposition {
+    safe_selected_root_with(
+        source,
+        affected_roots,
+        foks_client_app::portability::selected_desktop_state_root(),
+    )
+}
+
+fn safe_selected_root_with(
+    source: &Path,
+    affected_roots: &[PathBuf],
+    selected: foks_client_app::Result<PathBuf>,
+) -> SafeRootDisposition {
+    let selected = match selected {
+        Ok(root) => root,
+        Err(_) => return SafeRootDisposition::Recovery(source.to_path_buf()),
+    };
+    let mut roots = vec![source.to_path_buf(), selected.clone()];
+    roots.extend_from_slice(affected_roots);
+    roots.sort();
+    roots.dedup();
+    for root in roots {
+        match foks_client_app::portability::maintenance_readiness(&root) {
+            Ok(foks_client_app::portability::MaintenanceReadiness::RecoveryRequired) => {
+                return SafeRootDisposition::Recovery(root);
+            }
+            Err(_) => return SafeRootDisposition::Recovery(root),
+            Ok(foks_client_app::portability::MaintenanceReadiness::Openable) => {}
+        }
+    }
+    if selected == source {
+        SafeRootDisposition::Current
+    } else {
+        SafeRootDisposition::Selected(selected)
     }
 }
 
@@ -689,7 +1491,11 @@ pub(crate) fn prepare_managed_crash_directory(directory: &Path) -> Result<(), Ag
             false,
         )
     })?;
-    let _root_lease = foks_client_app::ClientStateLease::acquire(state)
+    // Crash reporting is filesystem-only startup infrastructure. Reserve the
+    // path against relocation without parsing its credential envelope or
+    // accessing native credential storage before Tauri can display an agent
+    // startup error.
+    let _path_lease = foks_client_app::portability::ClientStatePathLease::acquire(state)
         .map_err(|error| AgentError::new("crash-state", error.to_string(), false))?;
     prepare_state_directory(state)?;
     prepare_state_directory(directory).map_err(|error| AgentError {
@@ -797,13 +1603,13 @@ pub fn terminate_managed_agent() {
 }
 
 #[cfg(unix)]
-fn stop_incompatible_agent(socket: &Path) -> Result<(), AgentError> {
+fn inspect_takeover_target(socket: &Path) -> Result<Option<AgentTakeover>, AgentError> {
     use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
     use std::os::unix::net::UnixStream;
 
     let metadata = match std::fs::symlink_metadata(socket) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(AgentError::new(
                 "version-mismatch",
@@ -830,7 +1636,7 @@ fn stop_incompatible_agent(socket: &Path) -> Result<(), AgentError> {
                 std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
             ) =>
         {
-            return Ok(());
+            return Ok(None);
         }
         Err(error) => {
             return Err(AgentError::new(
@@ -857,6 +1663,73 @@ fn stop_incompatible_agent(socket: &Path) -> Result<(), AgentError> {
         error.fatal = true;
         return Err(error);
     }
+    let executable = process_executable_path(pid).map_err(|error| {
+        AgentError::new(
+            "agent-takeover",
+            format!("Failed to inspect the agent executable: {error}"),
+            false,
+        )
+    })?;
+    // Connection and pathname inspection must describe the same socket.
+    let current = match std::fs::symlink_metadata(socket) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(AgentError::new("agent-takeover", error.to_string(), true)),
+    };
+    if current.dev() != metadata.dev() || current.ino() != metadata.ino() {
+        return Err(AgentError::new(
+            "agent-takeover-changed",
+            "The socket changed repeatedly while its owner was being identified. Startup could not safely take over.",
+            true,
+        ));
+    }
+    Ok(Some(AgentTakeover {
+        socket: socket.to_path_buf(),
+        pid,
+        executable,
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    }))
+}
+
+#[cfg(unix)]
+fn stop_incompatible_agent(
+    socket: &Path,
+    confirm: &dyn Fn(&AgentTakeover) -> Result<bool, AgentError>,
+    approvals: &mut usize,
+) -> Result<(), AgentError> {
+    let Some(target) = inspect_takeover_target(socket)? else {
+        return Ok(());
+    };
+    if *approvals >= MAX_STARTUP_TAKEOVERS {
+        return Err(AgentError::new(
+            "agent-takeover-limit",
+            "Startup stopped because another process repeatedly claimed the FOKS socket; no further process was terminated.",
+            false,
+        ));
+    }
+    *approvals += 1;
+    if !confirm(&target)? {
+        return Err(AgentError::new(
+            "agent-takeover-declined",
+            "Agent takeover was cancelled. The existing process was left running.",
+            false,
+        ));
+    }
+    // Reinspect the endpoint after confirmation because it may have changed while
+    // the dialog was open. Approval applies only to the endpoint originally shown.
+    if inspect_takeover_target(socket)?.as_ref() != Some(&target) {
+        // Let the caller check protocol compatibility before considering
+        // another takeover. A compatible successor needs no termination.
+        return Ok(());
+    }
+    terminate_takeover_target(&target)
+}
+
+#[cfg(unix)]
+fn terminate_takeover_target(target: &AgentTakeover) -> Result<(), AgentError> {
+    let pid = target.pid;
+    let socket = &target.socket;
     {
         let mut guard = MANAGED_AGENT_PID
             .lock()
@@ -1032,7 +1905,15 @@ fn is_replaceable_agent_process(pid: u32) -> bool {
 pub fn success_value(response: Response) -> Result<Value, AgentError> {
     match response.result {
         ResponseResult::Success { value } => Ok(value),
-        ResponseResult::Error { code, message, .. } => Err(AgentError::from_agent(code, message)),
+        ResponseResult::Error {
+            code,
+            message,
+            fields,
+        } => {
+            let mut error = AgentError::from_agent(code, message);
+            error.details = error_details(fields).map(Box::new);
+            Err(error)
+        }
     }
 }
 
@@ -1098,9 +1979,337 @@ pub fn default_socket() -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
+
+    struct FakeMaintenanceProcess {
+        stop_calls: AtomicUsize,
+        restore_calls: AtomicUsize,
+        stop_error: Option<AgentError>,
+        restore_error: Option<AgentError>,
+    }
+
+    impl FakeMaintenanceProcess {
+        fn healthy() -> Arc<Self> {
+            Arc::new(Self {
+                stop_calls: AtomicUsize::new(0),
+                restore_calls: AtomicUsize::new(0),
+                stop_error: None,
+                restore_error: None,
+            })
+        }
+    }
+
+    impl MaintenanceProcess for FakeMaintenanceProcess {
+        fn preflight(&self, _handle: &AgentHandle) -> Result<(), AgentError> {
+            Ok(())
+        }
+
+        fn stop(&self, _handle: &AgentHandle) -> Result<(), AgentError> {
+            self.stop_calls.fetch_add(1, Ordering::AcqRel);
+            self.stop_error.clone().map_or(Ok(()), Err)
+        }
+
+        fn restore(&self, _handle: &AgentHandle) -> Result<Response, AgentError> {
+            self.restore_calls.fetch_add(1, Ordering::AcqRel);
+            match &self.restore_error {
+                Some(error) => Err(error.clone()),
+                None => Ok(Response::success(
+                    0,
+                    serde_json::to_value(foks_agent_proto::AgentStatus::Ready).unwrap(),
+                )),
+            }
+        }
+    }
 
     #[test]
-    fn maintenance_excludes_retained_transports_and_retired_startup() {
+    fn maintenance_worker_owns_exclusion_and_restores_after_completion() {
+        let dir = tempfile::tempdir().unwrap();
+        let process = FakeMaintenanceProcess::healthy();
+        let handle = AgentHandle::new_for_maintenance_test(
+            dir.path().join(DEFAULT_SOCKET_NAME),
+            process.clone(),
+            |_, _| SafeRootDisposition::Current,
+        );
+        let observed = Mutex::new(Vec::new());
+        let snapshot = handle
+            .run_maintenance(
+                MaintenanceKind::Verify,
+                &|snapshot| observed.lock().unwrap().push(snapshot.clone()),
+                |worker| {
+                    let blocked = handle.transport().call(Operation::AgentStatus).unwrap_err();
+                    assert_eq!(
+                        blocked,
+                        DesktopAgentError::Local(foks_desktop::LocalAgentCondition::Maintenance)
+                    );
+                    worker.stop_owned_agent().unwrap();
+                    assert!(handle
+                        .run_maintenance(MaintenanceKind::Export, &|_| {}, |_| {
+                            MaintenanceCompletion::Continue
+                        })
+                        .is_err());
+                    MaintenanceCompletion::Continue
+                },
+            )
+            .unwrap();
+        assert_eq!(process.stop_calls.load(Ordering::Acquire), 1);
+        assert_eq!(process.restore_calls.load(Ordering::Acquire), 1);
+        assert!(matches!(
+            snapshot,
+            MaintenanceSnapshot::Complete {
+                operation: MaintenanceOperationOutcome::Completed,
+                disposition: MaintenanceDisposition::ContinueCurrentRoot,
+                ..
+            }
+        ));
+        let phases: Vec<_> = observed
+            .into_inner()
+            .unwrap()
+            .into_iter()
+            .map(|snapshot| match snapshot {
+                MaintenanceSnapshot::Active { phase, .. } => Some(phase),
+                MaintenanceSnapshot::Idle { .. } | MaintenanceSnapshot::Complete { .. } => None,
+            })
+            .collect();
+        assert_eq!(
+            phases,
+            vec![
+                Some(MaintenancePhase::Selecting),
+                Some(MaintenancePhase::Quiescing),
+                Some(MaintenancePhase::Running),
+                Some(MaintenancePhase::Restoring),
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn stop_uncertainty_still_runs_explicit_restoration_and_preserves_both_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let stop_error = AgentError::new("agent-stop-failed", "exit timed out", true);
+        let restore_error = AgentError::new("agent-start-failed", "spawn failed", true);
+        let process = Arc::new(FakeMaintenanceProcess {
+            stop_calls: AtomicUsize::new(0),
+            restore_calls: AtomicUsize::new(0),
+            stop_error: Some(stop_error.clone()),
+            restore_error: Some(restore_error.clone()),
+        });
+        let handle = AgentHandle::new_for_maintenance_test(
+            dir.path().join(DEFAULT_SOCKET_NAME),
+            process.clone(),
+            |_, _| SafeRootDisposition::Current,
+        );
+        let snapshot = handle
+            .run_maintenance(MaintenanceKind::Export, &|_| {}, |worker| {
+                let error = worker.stop_owned_agent().unwrap_err();
+                MaintenanceCompletion::Failed {
+                    error,
+                    affected_roots: Vec::new(),
+                }
+            })
+            .unwrap();
+        assert_eq!(process.restore_calls.load(Ordering::Acquire), 1);
+        assert!(matches!(
+            &snapshot,
+            MaintenanceSnapshot::Complete {
+                operation: MaintenanceOperationOutcome::Failed { error },
+                disposition: MaintenanceDisposition::RestorationFailed { error: restoration, .. },
+                ..
+            } if error == &stop_error && restoration == &restore_error
+        ));
+        assert_eq!(
+            handle.transport().call(Operation::AgentStatus).unwrap_err(),
+            DesktopAgentError::Local(foks_desktop::LocalAgentCondition::RestorationFailed)
+        );
+        let failed_revision = match &snapshot {
+            MaintenanceSnapshot::Complete { revision, .. } => *revision,
+            _ => unreachable!(),
+        };
+        handle.record_restoration_success(&|_| {});
+        assert!(matches!(
+            handle.maintenance_snapshot(),
+            MaintenanceSnapshot::Complete {
+                revision,
+                disposition: MaintenanceDisposition::ContinueCurrentRoot,
+                ..
+            } if revision > failed_revision
+        ));
+    }
+
+    #[test]
+    fn restoration_retry_keeps_typed_gate_until_fake_process_is_ready() {
+        let dir = tempfile::tempdir().unwrap();
+        let process = FakeMaintenanceProcess::healthy();
+        let handle = AgentHandle::new_for_maintenance_test(
+            dir.path().join(DEFAULT_SOCKET_NAME),
+            process.clone(),
+            |_, _| SafeRootDisposition::Current,
+        );
+        *handle.transport.disposition.lock().unwrap() = TransportDisposition::RestorationFailed;
+        assert_eq!(
+            handle.transport().call(Operation::AgentStatus).unwrap_err(),
+            DesktopAgentError::Local(foks_desktop::LocalAgentCondition::RestorationFailed)
+        );
+
+        let response = handle.retry_started_blocking().unwrap();
+        assert!(matches!(response.result, ResponseResult::Success { .. }));
+        assert_eq!(process.restore_calls.load(Ordering::Acquire), 1);
+        assert_eq!(
+            *handle.transport.disposition.lock().unwrap(),
+            TransportDisposition::Current
+        );
+    }
+
+    #[test]
+    fn cancellation_before_stop_does_not_touch_the_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let process = FakeMaintenanceProcess::healthy();
+        let handle = AgentHandle::new_for_maintenance_test(
+            dir.path().join(DEFAULT_SOCKET_NAME),
+            process.clone(),
+            |_, _| SafeRootDisposition::Current,
+        );
+        for kind in [
+            MaintenanceKind::Export,
+            MaintenanceKind::Import,
+            MaintenanceKind::Relocate,
+        ] {
+            let snapshot = handle
+                .run_maintenance(kind, &|_| {}, |_| MaintenanceCompletion::Cancelled)
+                .unwrap();
+            assert!(matches!(
+                snapshot,
+                MaintenanceSnapshot::Complete {
+                    operation: MaintenanceOperationOutcome::Cancelled,
+                    disposition: MaintenanceDisposition::ContinueCurrentRoot,
+                    ..
+                }
+            ));
+        }
+        assert_eq!(process.stop_calls.load(Ordering::Acquire), 0);
+        assert_eq!(process.restore_calls.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn worker_panic_after_stop_is_failed_operation_and_restores() {
+        let dir = tempfile::tempdir().unwrap();
+        let process = FakeMaintenanceProcess::healthy();
+        let handle = AgentHandle::new_for_maintenance_test(
+            dir.path().join(DEFAULT_SOCKET_NAME),
+            process.clone(),
+            |_, _| SafeRootDisposition::Current,
+        );
+        let snapshot = handle
+            .run_maintenance(MaintenanceKind::Verify, &|_| {}, |worker| {
+                worker.stop_owned_agent().unwrap();
+                panic!("simulated worker failure");
+            })
+            .unwrap();
+        assert_eq!(process.restore_calls.load(Ordering::Acquire), 1);
+        assert!(matches!(
+            snapshot,
+            MaintenanceSnapshot::Complete {
+                operation: MaintenanceOperationOutcome::Failed { ref error },
+                disposition: MaintenanceDisposition::ContinueCurrentRoot,
+                ..
+            } if error.code == "maintenance-worker-interrupted"
+        ));
+    }
+
+    #[test]
+    fn recovery_and_selected_root_dispositions_never_reopen_the_old_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let process = FakeMaintenanceProcess::healthy();
+        let recovery_root = dir.path().join("recover");
+        let recovery = recovery_root.clone();
+        let handle = AgentHandle::new_for_maintenance_test(
+            dir.path().join("current").join(DEFAULT_SOCKET_NAME),
+            process.clone(),
+            move |_, _| SafeRootDisposition::Recovery(recovery.clone()),
+        );
+        let snapshot = handle
+            .run_maintenance(MaintenanceKind::Import, &|_| {}, |worker| {
+                worker.stop_owned_agent().unwrap();
+                MaintenanceCompletion::Failed {
+                    error: AgentError::new("import-failed", "durable boundary", false),
+                    affected_roots: vec![recovery_root.clone()],
+                }
+            })
+            .unwrap();
+        assert_eq!(process.restore_calls.load(Ordering::Acquire), 0);
+        assert!(matches!(
+            snapshot,
+            MaintenanceSnapshot::Complete {
+                operation: MaintenanceOperationOutcome::Failed { .. },
+                disposition: MaintenanceDisposition::RecoveryRequired { .. },
+                ..
+            }
+        ));
+        assert_eq!(
+            handle.transport().call(Operation::AgentStatus).unwrap_err(),
+            DesktopAgentError::Local(foks_desktop::LocalAgentCondition::RecoveryRequired)
+        );
+
+        let selected = dir.path().join("selected");
+        let expected = selected.clone();
+        let process = FakeMaintenanceProcess::healthy();
+        let moved = AgentHandle::new_for_maintenance_test(
+            dir.path().join("old").join(DEFAULT_SOCKET_NAME),
+            process.clone(),
+            move |_, _| SafeRootDisposition::Selected(expected.clone()),
+        );
+        let snapshot = moved
+            .run_maintenance(MaintenanceKind::Relocate, &|_| {}, |worker| {
+                worker.stop_owned_agent().unwrap();
+                MaintenanceCompletion::RestartSelected(selected.clone())
+            })
+            .unwrap();
+        assert_eq!(process.restore_calls.load(Ordering::Acquire), 0);
+        assert!(matches!(
+            snapshot,
+            MaintenanceSnapshot::Complete {
+                disposition: MaintenanceDisposition::RestartSelectedRoot { .. },
+                ..
+            }
+        ));
+        assert_eq!(
+            moved.transport().call(Operation::AgentStatus).unwrap_err(),
+            DesktopAgentError::Local(foks_desktop::LocalAgentCondition::RestartRequired)
+        );
+
+        let selected = dir.path().join("import-selected-after-failure");
+        let expected = selected.clone();
+        let process = FakeMaintenanceProcess::healthy();
+        let imported = AgentHandle::new_for_maintenance_test(
+            dir.path().join("import-old").join(DEFAULT_SOCKET_NAME),
+            process.clone(),
+            move |_, _| SafeRootDisposition::Selected(expected.clone()),
+        );
+        let snapshot = imported
+            .run_maintenance(MaintenanceKind::Import, &|_| {}, |worker| {
+                worker.stop_owned_agent().unwrap();
+                MaintenanceCompletion::Failed {
+                    error: AgentError::new(
+                        "import-failed",
+                        "selection was durably published before cleanup failed",
+                        false,
+                    ),
+                    affected_roots: vec![selected.clone()],
+                }
+            })
+            .unwrap();
+        assert_eq!(process.restore_calls.load(Ordering::Acquire), 0);
+        assert!(matches!(
+            snapshot,
+            MaintenanceSnapshot::Complete {
+                operation: MaintenanceOperationOutcome::Failed { .. },
+                disposition: MaintenanceDisposition::RestartSelectedRoot { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn maintenance_excludes_retained_transports_and_restart_required_startup() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("absent-state");
         let handle = AgentHandle::new(root.join(DEFAULT_SOCKET_NAME));
@@ -1111,10 +2320,73 @@ mod tests {
             assert!(transport.call(Operation::AgentStatus).is_err());
             assert!(handle.ensure_started_blocking().is_err());
         }
-        handle.transport.retired.store(true, Ordering::Release);
+        *handle.transport.disposition.lock().unwrap() = TransportDisposition::RestartRequired;
         assert!(transport.call(Operation::AgentStatus).is_err());
         assert!(handle.ensure_started_blocking().is_err());
         assert!(!root.exists());
+    }
+
+    #[test]
+    fn external_agent_endpoint_rejects_maintenance_before_running_worker() {
+        let dir = tempfile::tempdir().unwrap();
+        let handle = AgentHandle::new(dir.path().join(DEFAULT_SOCKET_NAME));
+        let ran = AtomicBool::new(false);
+        let error = handle
+            .run_maintenance(MaintenanceKind::Export, &|_| {}, |_| {
+                ran.store(true, Ordering::Release);
+                MaintenanceCompletion::Continue
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "external-agent");
+        assert!(!ran.load(Ordering::Acquire));
+        assert!(matches!(
+            handle.maintenance_snapshot(),
+            MaintenanceSnapshot::Idle { .. }
+        ));
+    }
+
+    #[test]
+    fn stale_maintenance_events_cannot_replace_a_newer_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let handle = AgentHandle::new(dir.path().join(DEFAULT_SOCKET_NAME));
+        let observed = Mutex::new(Vec::new());
+        let notify = |snapshot: &MaintenanceSnapshot| {
+            observed.lock().unwrap().push(snapshot.generation());
+        };
+        handle.publish_maintenance(
+            MaintenanceSnapshot::Active {
+                generation: 7,
+                revision: 0,
+                kind: MaintenanceKind::Verify,
+                phase: MaintenancePhase::Running,
+            },
+            &notify,
+        );
+        handle.publish_maintenance(
+            MaintenanceSnapshot::Complete {
+                generation: 7,
+                revision: 0,
+                kind: MaintenanceKind::Export,
+                operation: MaintenanceOperationOutcome::Completed,
+                disposition: MaintenanceDisposition::ContinueCurrentRoot,
+            },
+            &notify,
+        );
+        handle.publish_maintenance(
+            MaintenanceSnapshot::Active {
+                generation: 7,
+                revision: 0,
+                kind: MaintenanceKind::Verify,
+                phase: MaintenancePhase::Restoring,
+            },
+            &notify,
+        );
+        assert_eq!(observed.into_inner().unwrap(), vec![7, 7]);
+        assert_eq!(handle.maintenance_snapshot().generation(), 7);
+        assert!(matches!(
+            handle.maintenance_snapshot(),
+            MaintenanceSnapshot::Complete { .. }
+        ));
     }
 
     #[test]
@@ -1232,6 +2504,22 @@ mod tests {
     }
 
     #[test]
+    fn managed_crash_storage_does_not_parse_client_state() {
+        let temporary = tempfile::tempdir().unwrap();
+        let state = temporary.path().join("state");
+        prepare_state_directory(&state).unwrap();
+        std::fs::write(
+            state.join("client-state.toml"),
+            b"version = 2\nstate_id = \"legacy\"\ncredential_backend = \"native\"\n",
+        )
+        .unwrap();
+
+        let crashes = state.join("crashes");
+        prepare_managed_crash_directory(&crashes).unwrap();
+        assert!(crashes.is_dir());
+    }
+
+    #[test]
     fn managed_launch_passes_state_socket_and_the_desktop_request_timeout() {
         let arguments = managed_agent_arguments(
             Path::new("/private/foks-state"),
@@ -1328,6 +2616,211 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn takeover_confirmation_revalidates_owners_and_continues_startup() {
+        use std::cell::RefCell;
+        use std::os::unix::process::ExitStatusExt as _;
+
+        struct Fixture {
+            root: tempfile::TempDir,
+            binary: PathBuf,
+            children: RefCell<Vec<std::process::Child>>,
+        }
+        impl Fixture {
+            fn spawn(&self, socket: &Path, version: u32) -> u32 {
+                let marker = self
+                    .root
+                    .path()
+                    .join(format!("ready-{}", self.children.borrow().len()));
+                let child = Command::new(&self.binary)
+                    .arg(socket)
+                    .arg(&marker)
+                    .arg(version.to_string())
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap();
+                let pid = child.id();
+                self.children.borrow_mut().push(child);
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                while !marker.exists() {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "dummy agent did not bind"
+                    );
+                    assert!(self
+                        .children
+                        .borrow_mut()
+                        .last_mut()
+                        .unwrap()
+                        .try_wait()
+                        .unwrap()
+                        .is_none());
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                pid
+            }
+        }
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                // Only clean up processes launched from this temporary test binary.
+                let pid = *MANAGED_AGENT_PID.lock().unwrap();
+                if let Some(pid) = pid
+                    .filter(|pid| process_executable_path(*pid).ok().as_ref() == Some(&self.binary))
+                {
+                    unsafe {
+                        libc::kill(pid as i32, libc::SIGTERM);
+                    }
+                    for _ in 0..100 {
+                        if process_has_exited(pid) {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
+                for child in self.children.get_mut() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
+        }
+        let root = tempfile::tempdir_in("/tmp").unwrap();
+        let binary = root.path().join("foks-agent");
+        let source = root.path().join("agent.c");
+        std::fs::write(&source, include_str!("../tests/fixtures/takeover-agent.c")).unwrap();
+        assert!(Command::new("cc")
+            .arg(format!(
+                "-DPROTOCOL_VERSION={}",
+                foks_agent_proto::PROTOCOL_VERSION
+            ))
+            .arg("-o")
+            .arg(&binary)
+            .arg(&source)
+            .status()
+            .unwrap()
+            .success());
+        let fixture = Fixture {
+            root,
+            binary: binary.canonicalize().unwrap(),
+            children: RefCell::new(Vec::new()),
+        };
+        let socket = fixture.root.path().join("agent.sock");
+        let handle = AgentHandle::new(socket.clone());
+        let old = fixture.spawn(&socket, 1);
+        assert_eq!(
+            handle
+                .call_blocking(Operation::AgentStatus)
+                .unwrap_err()
+                .code,
+            "version-mismatch"
+        );
+
+        let error = handle
+            .start_with_binary(&fixture.root.path().join("missing-agent"), &|_| {
+                panic!("must validate replacement before requesting termination")
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "agent-binary");
+        let error = handle
+            .start_with_binary(&fixture.binary, &|_| Ok(false))
+            .unwrap_err();
+        assert_eq!(error.code, "agent-takeover-declined");
+        assert_eq!(inspect_takeover_target(&socket).unwrap().unwrap().pid, old);
+
+        // Replacement while the confirmation is open requires a new approval.
+        let prompts = RefCell::new(Vec::new());
+        let error = handle
+            .start_with_binary(&fixture.binary, &|target| {
+                prompts.borrow_mut().push(target.pid);
+                if target.pid == old {
+                    fixture.spawn(&socket, 1); // deletes and rebinds the original path
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "agent-takeover-declined");
+        assert_eq!(prompts.borrow().len(), 2);
+        assert_ne!(prompts.borrow()[0], prompts.borrow()[1]);
+        assert!(fixture
+            .children
+            .borrow_mut()
+            .iter_mut()
+            .all(|child| child.try_wait().unwrap().is_none()));
+
+        // A new explicit approval actually stops that owner and launches our agent.
+        let response = handle
+            .start_with_binary(&fixture.binary, &|target| {
+                assert_eq!(target.pid, prompts.borrow()[1]);
+                Ok(true)
+            })
+            .unwrap();
+        assert_eq!(success_value(response).unwrap()["state"], "ready");
+        let status = fixture.children.borrow_mut()[1].wait().unwrap();
+        assert_eq!(status.signal(), Some(libc::SIGTERM));
+        assert!(handle.call_blocking(Operation::Ping).is_ok());
+
+        // An already-compatible successor is reused, never terminated or prompted.
+        let compatible_socket = fixture.root.path().join("compatible.sock");
+        fixture.spawn(&compatible_socket, 1);
+        let compatible = AgentHandle::new(compatible_socket.clone());
+        let calls = RefCell::new(0);
+        compatible
+            .start_with_binary(&fixture.binary, &|_| {
+                *calls.borrow_mut() += 1;
+                fixture.spawn(&compatible_socket, foks_agent_proto::PROTOCOL_VERSION);
+                Ok(true)
+            })
+            .unwrap();
+        assert_eq!(*calls.borrow(), 1);
+        assert!(fixture
+            .children
+            .borrow_mut()
+            .last_mut()
+            .unwrap()
+            .try_wait()
+            .unwrap()
+            .is_none());
+
+        // A respawning supervisor cannot trap startup in an unbounded kill loop.
+        let contested_socket = fixture.root.path().join("contested.sock");
+        fixture.spawn(&contested_socket, 1);
+        let contested = AgentHandle::new(contested_socket.clone());
+        let calls = RefCell::new(0);
+        let error = contested
+            .start_with_binary(&fixture.binary, &|_| {
+                *calls.borrow_mut() += 1;
+                fixture.spawn(&contested_socket, 1);
+                Ok(true)
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "agent-takeover-limit");
+        assert_eq!(*calls.borrow(), MAX_STARTUP_TAKEOVERS);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn takeover_refuses_unsafe_sockets_and_unrelated_processes() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = tempfile::tempdir_in("/tmp").unwrap();
+        let socket = root.path().join("agent.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert_eq!(
+            inspect_takeover_target(&socket).unwrap_err().code,
+            "unsafe-socket"
+        );
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            inspect_takeover_target(&socket).unwrap_err().code,
+            "version-mismatch"
+        );
+        assert!(socket.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn stop_incompatible_agent_terminates_a_named_listener() {
         use std::os::unix::process::ExitStatusExt as _;
         use std::process::{Command, Stdio};
@@ -1364,6 +2857,8 @@ int main(int argc, char **argv) {
     for (;;) {
         int client = accept(server, 0, 0);
         if (client >= 0) {
+            char byte;
+            read(client, &byte, 1);
             close(client);
         }
     }
@@ -1396,7 +2891,18 @@ int main(int argc, char **argv) {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        stop_incompatible_agent(&socket).unwrap();
+        let mut approvals = 0;
+        stop_incompatible_agent(
+            &socket,
+            &|target| {
+                assert_eq!(target.pid, child.id());
+                assert_eq!(target.executable, binary.canonicalize().unwrap());
+                Ok(true)
+            },
+            &mut approvals,
+        )
+        .unwrap();
+        assert_eq!(approvals, 1);
         let status = child.wait().unwrap();
         assert_eq!(status.signal(), Some(libc::SIGTERM));
     }

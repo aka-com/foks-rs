@@ -261,7 +261,7 @@ export function discoveryContext(
     (candidate) => candidate.id === store.server,
   );
   if (!server) return null;
-  return { account, store, server, available: server.state === 'ok' };
+  return { account, store, server, available: storeReadable(world, store.id) };
 }
 
 /** One accessible name per button, since several read "Check for groups". */
@@ -2002,7 +2002,7 @@ export function GroupSettingsScreen({
     );
   }
   const access = storeDescriptionState(world, store);
-  const unavailable = access !== 'normal' && access !== 'inactive';
+  const unavailable = access !== 'normal' && access !== 'setup-incomplete';
   const inactive = store.active === false;
   const callerParty = partiesOf(world, store.id).find(
     (candidate) => candidate.label === 'you',
@@ -2049,7 +2049,7 @@ export function GroupSettingsScreen({
                 })
               }
             >
-              {access === 'lease-lapsed' ? 'Open server' : 'Review server'}
+              {access === 'check-in-expired' ? 'Open server' : 'Review server'}
             </Button>
           ) : null}
           {inactive ? null : (

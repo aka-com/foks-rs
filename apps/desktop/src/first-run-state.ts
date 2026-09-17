@@ -11,6 +11,7 @@ export const FIRST_RUN_STATES = [
   'error',
   'account',
   'existing',
+  'identity-pending',
   'protect',
   'phrase',
   'waiting',
@@ -32,13 +33,17 @@ export interface FirstRunGroupIdentity {
 }
 
 export interface FirstRunCheckpoint {
-  readonly version: 1;
+  readonly version: 2;
   readonly path: FirstRunPath;
   readonly state: FirstRunStateName;
-  readonly initialized: boolean;
   readonly managedLocal: boolean;
   readonly profile?: CheckedProfileResponse;
   readonly serverAddress?: string;
+  /** Acknowledged provisioning; never replay it while identity is loading. */
+  readonly provisionedAccount?: {
+    readonly alias: string;
+    readonly deviceName: string;
+  };
   readonly account?: {
     readonly alias: string;
     readonly username: string;
@@ -53,7 +58,6 @@ export interface FirstRunCheckpoint {
 }
 
 export type FirstRunEvent =
-  | { type: 'initialize'; managedLocal?: boolean }
   | { type: 'choose'; path: FirstRunPath; returning?: boolean }
   | {
       type: 'managed-profile-selected';
@@ -67,6 +71,11 @@ export type FirstRunEvent =
       type: 'profile-checked';
       address: string;
       profile: CheckedProfileResponse;
+    }
+  | {
+      type: 'account-provisioned';
+      alias: string;
+      deviceName: string;
     }
   | {
       type: 'account-complete';
@@ -86,10 +95,9 @@ export function initialFirstRun(
   state: FirstRunStateName = 'who',
 ): FirstRunCheckpoint {
   return {
-    version: 1,
+    version: 2,
     path,
     state,
-    initialized: state !== 'boot',
     managedLocal: state === 'local' || state === 'local-done',
     passphraseSet: false,
     backupCommitted: false,
@@ -104,19 +112,13 @@ export function transitionFirstRun(
   state: FirstRunCheckpoint,
   event: FirstRunEvent,
 ): FirstRunCheckpoint {
+  if (
+    state.provisionedAccount &&
+    (event.type !== 'account-complete' ||
+      event.alias !== state.provisionedAccount.alias)
+  )
+    return state;
   switch (event.type) {
-    case 'initialize':
-      return {
-        ...state,
-        path: event.managedLocal ? 'own' : state.path,
-        initialized: true,
-        managedLocal: event.managedLocal ?? false,
-        state: event.managedLocal
-          ? 'local'
-          : state.state === 'boot'
-            ? 'who'
-            : state.state,
-      };
     case 'choose':
       return {
         ...initialFirstRun(event.path, 'address'),
@@ -135,7 +137,6 @@ export function transitionFirstRun(
     case 'server-edited':
       return {
         ...initialFirstRun(state.path, 'address'),
-        initialized: state.initialized,
         returning: state.returning,
         serverAddress: event.address,
       };
@@ -146,10 +147,20 @@ export function transitionFirstRun(
         serverAddress: event.address,
         profile: event.profile,
       };
+    case 'account-provisioned':
+      return {
+        ...state,
+        state: 'identity-pending',
+        provisionedAccount: {
+          alias: event.alias,
+          deviceName: event.deviceName,
+        },
+      };
     case 'account-complete':
       return {
         ...state,
         state: 'protect',
+        provisionedAccount: undefined,
         account: {
           alias: event.alias,
           username: event.username,
@@ -196,11 +207,11 @@ const ROOT_KEYS = new Set([
   'version',
   'path',
   'state',
-  'initialized',
   'managedLocal',
   'profile',
   'serverAddress',
   'account',
+  'provisionedAccount',
   'passphraseSet',
   'backupCommitted',
   'protectSkipped',
@@ -218,6 +229,7 @@ const PROFILE_KEYS = new Set([
   'epoch',
 ]);
 const ACCOUNT_KEYS = new Set(['alias', 'username', 'deviceName']);
+const PROVISIONED_ACCOUNT_KEYS = new Set(['alias', 'deviceName']);
 const GROUP_KEYS = new Set(['name', 'kind', 'alias', 'teamIdHex']);
 
 function exactKeys(
@@ -250,20 +262,22 @@ function localName(value: unknown): value is string {
 
 function safeResumeState(state: FirstRunStateName): FirstRunStateName {
   // A recovery phrase is ephemeral; resuming returns to 'protect' to require a new reveal.
-  return state === 'phrase' ? 'protect' : state;
+  if (state === 'phrase') return 'protect';
+  // Bootstrap is authoritative agent state, never persisted onboarding progress.
+  return state === 'boot' ? 'who' : state;
 }
 
 /** Serialize safe checkpoint fields to storage, excluding sensitive secrets. */
 export function encodeFirstRunCheckpoint(state: FirstRunCheckpoint): string {
   return JSON.stringify({
-    version: 1,
+    version: 2,
     path: state.path,
     state: safeResumeState(state.state),
-    initialized: state.initialized,
     managedLocal: state.managedLocal,
     profile: state.profile,
     serverAddress: state.serverAddress,
     account: state.account,
+    provisionedAccount: state.provisionedAccount,
     passphraseSet: state.passphraseSet,
     backupCommitted: state.backupCommitted,
     protectSkipped: state.protectSkipped,
@@ -282,9 +296,10 @@ export function decodeFirstRunCheckpoint(
     if (!record(parsed) || !exactKeys(parsed, ROOT_KEYS)) return null;
     const item = parsed;
     if (
-      item.version !== 1 ||
+      item.version !== 2 ||
       !isPath(item.path) ||
-      !isFirstRunState(item.state)
+      !isFirstRunState(item.state) ||
+      item.state === 'boot'
     )
       return null;
     const base = initialFirstRun(item.path, safeResumeState(item.state));
@@ -337,6 +352,21 @@ export function decodeFirstRunCheckpoint(
         deviceName: candidate.deviceName,
       };
     }
+    let provisionedAccount: FirstRunCheckpoint['provisionedAccount'];
+    if (item.provisionedAccount !== undefined) {
+      const candidate = item.provisionedAccount;
+      if (
+        !record(candidate) ||
+        !exactKeys(candidate, PROVISIONED_ACCOUNT_KEYS) ||
+        !localName(candidate.alias) ||
+        !boundedText(candidate.deviceName, 256)
+      )
+        return null;
+      provisionedAccount = {
+        alias: candidate.alias,
+        deviceName: candidate.deviceName,
+      };
+    }
     let group: FirstRunCheckpoint['group'];
     if (item.group !== undefined) {
       const candidate = item.group;
@@ -360,7 +390,6 @@ export function decodeFirstRunCheckpoint(
       };
     }
     const flags = [
-      item.initialized,
       item.managedLocal,
       item.passphraseSet,
       item.backupCommitted,
@@ -375,8 +404,10 @@ export function decodeFirstRunCheckpoint(
     )
       return null;
     const state = safeResumeState(item.state);
+    if (Boolean(provisionedAccount) !== (state === 'identity-pending'))
+      return null;
+    if (provisionedAccount && (!profile || account)) return null;
     const needsProfile = ![
-      'boot',
       'who',
       'local',
       'address',
@@ -391,7 +422,6 @@ export function decodeFirstRunCheckpoint(
       'checklist-invited',
       'checklist-own',
     ].includes(state);
-    if ((state === 'boot') === (item.initialized as boolean)) return null;
     if (profile && item.serverAddress === undefined) return null;
     if (needsProfile && (!profile || item.serverAddress === undefined))
       return null;
@@ -430,12 +460,12 @@ export function decodeFirstRunCheckpoint(
     if (item.path === 'own' && (group || item.added === true)) return null;
     return {
       ...base,
-      initialized: item.initialized as boolean,
       managedLocal: item.managedLocal as boolean,
       profile,
       serverAddress:
         typeof item.serverAddress === 'string' ? item.serverAddress : undefined,
       account,
+      provisionedAccount,
       passphraseSet: item.passphraseSet as boolean,
       backupCommitted: item.backupCommitted as boolean,
       protectSkipped: item.protectSkipped as boolean,
@@ -448,10 +478,62 @@ export function decodeFirstRunCheckpoint(
   }
 }
 
-export const FIRST_RUN_CHECKPOINT_KEY = 'foks.first-run.v1';
+export const FIRST_RUN_CHECKPOINT_KEY = 'foks.first-run.v2';
+
+export type SetupFact = 'present' | 'missing' | 'unknown';
+
+export interface FirstRunSetupFacts {
+  readonly profile: SetupFact;
+  readonly account: SetupFact;
+  readonly group: SetupFact;
+}
+
+/**
+ * Reconcile saved UI progress with authoritative inventory. Unknown facts are
+ * deliberately non-destructive: an incomplete catalog is not evidence that
+ * local setup data disappeared.
+ */
+export function reconcileFirstRunCheckpoint(
+  saved: FirstRunCheckpoint,
+  facts: FirstRunSetupFacts,
+): FirstRunCheckpoint {
+  // Missing or incomplete inventory cannot undo an acknowledged mutation.
+  // Identity resolution checks the saved host/profile binding separately.
+  if (saved.provisionedAccount) return saved;
+  if (saved.profile && facts.profile === 'missing') {
+    return {
+      ...initialFirstRun(saved.path, 'address'),
+      serverAddress: saved.serverAddress,
+      returning: saved.returning,
+    };
+  }
+  if (saved.account && facts.account === 'missing') {
+    return {
+      ...initialFirstRun(saved.path, 'account'),
+      managedLocal: saved.managedLocal,
+      profile: saved.profile,
+      serverAddress: saved.serverAddress,
+      returning: saved.returning,
+    };
+  }
+  if (
+    saved.path === 'invited' &&
+    saved.added &&
+    saved.group &&
+    facts.group === 'missing'
+  ) {
+    return {
+      ...saved,
+      state: 'waiting',
+      group: undefined,
+      added: false,
+    };
+  }
+  return saved;
+}
 
 export function completedFirstRunSteps(state: FirstRunCheckpoint): number {
-  let count = state.initialized ? 1 : 0;
+  let count = 0;
   if (state.profile) count += 1;
   if (state.account) count += 1;
   // Skipped recovery does not count toward completed steps.
@@ -462,5 +544,5 @@ export function completedFirstRunSteps(state: FirstRunCheckpoint): number {
 
 /** Personal setup ends after account recovery; invitees also join their group. */
 export function firstRunStepCount(state: FirstRunCheckpoint): number {
-  return state.path === 'invited' ? 5 : 4;
+  return state.path === 'invited' ? 4 : 3;
 }

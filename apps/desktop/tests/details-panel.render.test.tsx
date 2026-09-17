@@ -113,6 +113,107 @@ test('a pending link read cannot reveal into a different selection', async () =>
   assert.deepEqual(p.selected, []);
 });
 
+test('an access generation quarantines old read flights across expiry and renewal', async () => {
+  const pending: ((response: ReadItemResponse) => void)[] = [];
+  let reads = 0;
+  const p = await setup(() => {
+    reads++;
+    return new Promise<ReadItemResponse>((resolve) => {
+      pending.push(resolve);
+    });
+  });
+  const r = ui.render(p.draw());
+  await ui.waitFor(() => assert.equal(reads, 1));
+
+  const store = p.props.world.stores.find((entry) => entry.id === p.link.store);
+  assert.ok(store);
+  p.props.world = {
+    ...p.props.world,
+    servers: p.props.world.servers.map((server) =>
+      server.id === store.server
+        ? {
+            ...server,
+            compatibility: { status: 'required' as const, expiresAt: 1 },
+          }
+        : server,
+    ),
+    observedExpiredLeases: [{ profile: store.server, expiresAt: 1 }],
+  };
+  p.props.accessGeneration = 1;
+  r.rerender(p.draw());
+  await ui.act(async () => {
+    pending[0]?.({
+      store: p.link.store,
+      path: p.link.path,
+      version: p.link.version,
+      value: '/expired-flight',
+    });
+  });
+  assert.equal(r.queryByText('/expired-flight', { exact: false }), null);
+
+  p.props.world = {
+    ...p.props.world,
+    servers: p.props.world.servers.map((server) =>
+      server.id === store.server
+        ? {
+            ...server,
+            compatibility: {
+              status: 'required' as const,
+              expiresAt: Math.floor(Date.now() / 1000) + 3_600,
+            },
+          }
+        : server,
+    ),
+    observedExpiredLeases: [],
+  };
+  p.props.accessGeneration = 2;
+  r.rerender(p.draw());
+  await ui.waitFor(() => assert.equal(reads, 2));
+  await ui.act(async () => {
+    pending[1]?.({
+      store: p.link.store,
+      path: p.link.path,
+      version: p.link.version,
+      value: '/renewed-flight',
+    });
+  });
+  await ui.waitFor(() =>
+    assert.ok(r.getByText('/renewed-flight', { exact: false })),
+  );
+});
+
+test('a remounted unlocked session cannot join an older pending read', async () => {
+  const pending: ((response: ReadItemResponse) => void)[] = [];
+  let reads = 0;
+  const p = await setup(() => {
+    reads++;
+    return new Promise<ReadItemResponse>((resolve) => pending.push(resolve));
+  });
+  const first = ui.render(p.draw());
+  await ui.waitFor(() => assert.equal(reads, 1));
+  first.unmount();
+  const second = ui.render(p.draw());
+  await ui.waitFor(() => assert.equal(reads, 2));
+  await ui.act(async () => {
+    pending[0]?.({
+      store: p.link.store,
+      path: p.link.path,
+      version: p.link.version,
+      value: '/old-session',
+    });
+    pending[1]?.({
+      store: p.link.store,
+      path: p.link.path,
+      version: p.link.version,
+      value: '/new-session',
+    });
+  });
+  assert.equal(second.queryByText('/old-session', { exact: false }), null);
+  await ui.waitFor(() =>
+    assert.ok(second.getByText('/new-session', { exact: false })),
+  );
+});
+
 test('a mismatched link version is rejected and Open target retries the read', async () => {
   let reads = 0;
   const p = await setup(async (request) => {

@@ -27,12 +27,15 @@ import { recoverPending } from './recover-pending';
 import { coalesceStatus, RecoverySchedule } from './recovery-schedule';
 import type { ConversationEvent } from './conversation-events';
 import { useChatInbox } from './inbox-provider';
+import type { Availability } from '../model';
 
 /** Foreground operation owner. Account synchronization belongs to the shell. */
 export function useChatConversation(
   bridge: Bridge,
   profile: string,
   storeId: string,
+  access: () => Availability = () => ({ available: true }),
+  accessGeneration = 0,
 ) {
   const { service, snapshot } = useChatInbox();
   const inbox = snapshot.get(storeId);
@@ -45,6 +48,10 @@ export function useChatConversation(
   const [error, setError] = useState('');
   const [blocked, setBlocked] = useState('');
   const fatal = useRef('');
+  const accessRef = useRef(access);
+  const accessGenerationRef = useRef(accessGeneration);
+  accessRef.current = access;
+  accessGenerationRef.current = accessGeneration;
   const owner = useRef<ReturnType<typeof chatClient> | null>(null);
   const resolvedScope = useRef<ChatScope | null>(null);
   const historyClients = useRef(
@@ -66,6 +73,31 @@ export function useChatConversation(
   );
   const performRequest = useCallback(
     async (action: ChatAction): Promise<ChatReply> => {
+      const generation = accessGenerationRef.current;
+      const assertAccess = (phase: 'before' | 'after'): void => {
+        const availability = accessRef.current();
+        if (
+          generation !== accessGenerationRef.current ||
+          !availability.available
+        )
+          throw {
+            code: availability.available
+              ? 'access-changed'
+              : availability.reason,
+            message:
+              phase === 'after'
+                ? 'Access changed after the chat operation was sent. Reconcile its saved operation before continuing.'
+                : 'Access changed before the chat operation was sent.',
+            fatal: false,
+            ambiguous:
+              phase === 'after' &&
+              !['channels', 'history', 'pending', 'status'].includes(
+                action.action,
+              ),
+            retryable: phase === 'before',
+          };
+      };
+      assertAccess('before');
       const client = owner.current;
       const channel =
         'channel' in action
@@ -102,7 +134,9 @@ export function useChatConversation(
           transport = historyClient;
           historyClients.current.set(historyClient, action.channel);
         }
-        const reply = await transport.request(action);
+        assertAccess('before');
+        const reply = await transport.request(action, undefined, assertAccess);
+        assertAccess('after');
         if (owner.current !== client) throw cancelled();
         const trusted = service.getSnapshot().get(storeId)?.scope;
         if (

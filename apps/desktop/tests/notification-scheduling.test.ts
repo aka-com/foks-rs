@@ -111,7 +111,7 @@ function entry(ids = ['a', 'b'], selectedScope = scope): TeamInbox {
       blocked_channels: [],
       cursor: '1',
       head: '1',
-    } as TeamInbox['data'],
+    },
   };
 }
 function setup(initial = entry()) {
@@ -149,11 +149,8 @@ function setup(initial = entry()) {
   const bridge = {
     chat: async (id: string, action: ChatAction) => {
       assert.equal(action.action, 'notification-history');
-      calls.push((action as { channel: string }).channel);
-      return history(
-        id,
-        action as Extract<ChatAction, { action: 'notification-history' }>,
-      );
+      calls.push(action.channel);
+      return history(id, action);
     },
     cancelChat: async () => {},
     chatLocal: async (action: unknown) => {

@@ -19,6 +19,53 @@ import type {
 } from '../../apps/desktop/src/chat-contract';
 import type { NotificationMetric } from '../../apps/desktop/src/chat/notification-consumer';
 import type { World } from '../../apps/desktop/src/model';
+import { decodeChatScope } from '../../apps/desktop/src/chat-contract';
+import type { WorkTiming } from '../../apps/desktop/src/scheduling/profile-work';
+
+function record(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw Error('Invalid benchmark worker response');
+  return value as Record<string, unknown>;
+}
+
+interface WorkerReady {
+  channels: string[];
+  scope: ChatScope;
+  agentPid: number;
+}
+
+function recordResponse(value: unknown): { messageId: string } {
+  const response = record(value);
+  if (typeof response.messageId !== 'string' || response.messageId.length === 0)
+    throw Error('Invalid benchmark send response');
+  return { messageId: response.messageId };
+}
+
+function decodeReady(value: Record<string, unknown>): WorkerReady {
+  if (
+    !Array.isArray(value.channels) ||
+    !value.channels.every(
+      (channel): channel is string => typeof channel === 'string',
+    ) ||
+    typeof value.agentPid !== 'number' ||
+    !Number.isSafeInteger(value.agentPid) ||
+    value.agentPid <= 0
+  )
+    throw Error('Invalid benchmark readiness response');
+  const store = record(record(value.scope).store);
+  const storeId = JSON.stringify({
+    kind: 'team',
+    profile: store.profile,
+    accountAlias: store.account_alias,
+    teamAlias: store.team_alias,
+    teamId: store.team_id,
+  });
+  return {
+    channels: value.channels,
+    scope: decodeChatScope(value.scope, storeId),
+    agentPid: value.agentPid,
+  };
+}
 
 const args = process.argv.slice(2);
 const option = (name: string, fallback: string) => {
@@ -121,23 +168,15 @@ const worker = spawn(
   ],
   { stdio: ['pipe', 'pipe', 'inherit'] },
 );
-let readyResolve!: (value: {
-    channels: string[];
-    scope: ChatScope;
-    agentPid: number;
-  }) => void,
+let readyResolve!: (value: WorkerReady) => void,
   readyReject!: (error: Error) => void;
-const ready = new Promise<{
-  channels: string[];
-  scope: ChatScope;
-  agentPid: number;
-}>((r, j) => {
+const ready = new Promise<WorkerReady>((r, j) => {
   readyResolve = r;
   readyReject = j;
 });
 const requests = new Map<
   number,
-  { resolve(value: any): void; reject(error: unknown): void }
+  { resolve(value: unknown): void; reject(error: unknown): void }
 >();
 let requestId = 0,
   stopped = false;
@@ -148,9 +187,11 @@ worker.on('exit', (code) => {
   requests.clear();
 });
 createInterface({ input: worker.stdout }).on('line', (line) => {
-  const value = JSON.parse(line);
-  if (value.ready) readyResolve(value);
+  const value = record(JSON.parse(line));
+  if (value.ready === true) readyResolve(decodeReady(value));
   else {
+    if (typeof value.id !== 'number' || !Number.isSafeInteger(value.id))
+      throw Error('Invalid benchmark response ID');
     const request = requests.get(value.id);
     requests.delete(value.id);
     if (value.error) request?.reject(value.error);
@@ -158,7 +199,7 @@ createInterface({ input: worker.stdout }).on('line', (line) => {
   }
 });
 const rpc = (value: object) =>
-  new Promise<any>((resolve, reject) => {
+  new Promise<unknown>((resolve, reject) => {
     if (requests.size >= 24)
       return reject(Error('Benchmark admission overflow'));
     const id = ++requestId;
@@ -220,8 +261,12 @@ try {
         if (!seen.has(id)) seen.set(id, performance.now());
     }
   };
-  (globalThis as any).__foksBenchMetric = metric;
-  (globalThis as any).__foksBenchEnqueue = (action: ChatAction) => {
+  const instrumentation = globalThis as typeof globalThis & {
+    __foksBenchMetric?: (event: NotificationMetric) => void;
+    __foksBenchEnqueue?: (action: ChatAction) => void;
+  };
+  instrumentation.__foksBenchMetric = metric;
+  instrumentation.__foksBenchEnqueue = (action: ChatAction) => {
     if (action.action === 'history' && !queued.has(action))
       queued.set(action, {
         time: performance.now(),
@@ -279,10 +324,16 @@ try {
           if (faultCalls) healthyAfterFault++;
         }
         return result;
-      } catch (error: any) {
+      } catch (error: unknown) {
         if (record) {
           errors[kind] = (errors[kind] ?? 0) + 1;
-          if (error.code === 'profile-busy') busy[kind] = (busy[kind] ?? 0) + 1;
+          if (
+            error &&
+            typeof error === 'object' &&
+            'code' in error &&
+            error.code === 'profile-busy'
+          )
+            busy[kind] = (busy[kind] ?? 0) + 1;
         }
         throw error;
       } finally {
@@ -293,14 +344,14 @@ try {
     cancelChat: async (view: string) => {
       await rpc({ kind: 'cancel', view });
     },
-    chatLocal: async (action: any) => {
+    chatLocal: async (action: Parameters<Bridge['chatLocal']>[0]) => {
       if (action.action === 'display') {
         if (stopped) lateDisplays++;
         if (measured) sinkCalls++;
       }
     },
   } as unknown as Bridge;
-  const off = observeProfileWork(bridge, (event: any) => {
+  const off = observeProfileWork(bridge, (event: WorkTiming) => {
     if (measured) timings.push(event);
   });
   const service = new ChatInboxService(bridge);
@@ -400,6 +451,7 @@ try {
       await client.request(action);
       if (record) foreground.push(performance.now() - start);
     } catch {
+      // The bridge records failed RPCs; only successful reads contribute latency.
     } finally {
       client.dispose();
       pending--;
@@ -434,6 +486,7 @@ try {
           operation: done.result.operation.id,
         });
     } catch {
+      // The bridge records the error. Continue the measured workload without replay.
     } finally {
       client.dispose();
       pending--;
@@ -448,7 +501,8 @@ try {
             workload === 'backlog' ? 1 : index % (channelsCount - 1)
           ],
       });
-      if (record) confirmed.set(result.messageId, performance.now());
+      const response = recordResponse(result);
+      if (record) confirmed.set(response.messageId, performance.now());
     } catch {
       if (record) sendErrors++;
     }

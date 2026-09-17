@@ -32,6 +32,7 @@ import {
   peopleLabel,
   readersOf,
   serverOf,
+  storeAvailability,
   storeOf,
 } from '../model';
 import type { Item, Party, RoleWire, World } from '../model';
@@ -50,21 +51,34 @@ const FIELD_LABELS: Readonly<Record<string, string>> = {
 };
 
 const MASK = '••••••••••••';
+const systemAccessNow = (): number => Date.now() / 1000;
 
 /** Coalesces concurrent in-flight read requests for the same item. */
 const readFlights = new WeakMap<
   Bridge,
-  Map<string, Promise<ReadItemResponse>>
+  WeakMap<object, Map<string, Promise<ReadItemResponse>>>
 >();
 
 function readOnce(
   bridge: Bridge,
   request: ItemRequest,
+  accessGeneration: number,
+  accessSession: object,
 ): Promise<ReadItemResponse> {
-  const key = JSON.stringify([request.storeId, request.path, request.version]);
+  const key = JSON.stringify([
+    accessGeneration,
+    request.storeId,
+    request.path,
+    request.version,
+  ]);
+  const sessions =
+    readFlights.get(bridge) ??
+    new WeakMap<object, Map<string, Promise<ReadItemResponse>>>();
+  readFlights.set(bridge, sessions);
   const flights =
-    readFlights.get(bridge) ?? new Map<string, Promise<ReadItemResponse>>();
-  readFlights.set(bridge, flights);
+    sessions.get(accessSession) ??
+    new Map<string, Promise<ReadItemResponse>>();
+  sessions.set(accessSession, flights);
   const current = flights.get(key);
   if (current) return current;
   const pending = bridge.readItem(request).finally(() => flights.delete(key));
@@ -187,6 +201,12 @@ export interface DetailsPanelProps {
   onMutationError: MutationFailureHandler;
   /** Signal counter incremented to clear revealed secrets from view state. */
   concealSignal?: number;
+  /** Changes whenever access is revoked so old read flights cannot be reused. */
+  accessGeneration?: number;
+  /** Current wall-clock seconds used by access checks at dispatch/result time. */
+  accessNow?: () => number;
+  /** Unique unlocked-shell identity preventing reads from crossing lock cycles. */
+  accessSession?: object;
   resumeDraft?: {
     store: string;
     path: string;
@@ -209,6 +229,9 @@ export function DetailsPanel({
   onCommandError,
   onMutationError,
   concealSignal = 0,
+  accessGeneration = 0,
+  accessNow = systemAccessNow,
+  accessSession,
   resumeDraft = null,
 }: DetailsPanelProps): ReactNode {
   const item: Item | undefined = selection
@@ -241,6 +264,20 @@ export function DetailsPanel({
   // Current item key ref to avoid stale closures in asynchronous callbacks.
   const keyRef = useRef(key);
   keyRef.current = key;
+  const accessGenerationRef = useRef(accessGeneration);
+  accessGenerationRef.current = accessGeneration;
+  const localAccessSession = useRef<object>({});
+  const activeAccessSession = accessSession ?? localAccessSession.current;
+
+  const accessAvailable = useCallback((): boolean => {
+    const currentStore = item ? storeOf(world, item.store) : undefined;
+    return Boolean(
+      currentStore &&
+        storeAvailability(world, currentStore, {
+          nowSeconds: accessNow(),
+        }).available,
+    );
+  }, [accessNow, item, world]);
 
   const request = useMemo<ItemRequest | null>(
     () =>
@@ -254,16 +291,33 @@ export function DetailsPanel({
     if (!item || !request) return;
     const requestKey = key;
     const epoch = concealEpoch.current;
+    const generation = accessGeneration;
+    if (!accessAvailable()) return;
     setRead({ key: requestKey, state: 'loading' });
     try {
-      const response = await readOnce(bridge, request);
+      const response = await readOnce(
+        bridge,
+        request,
+        generation,
+        activeAccessSession,
+      );
       assertExactRead(request, response);
-      if (epoch !== concealEpoch.current || keyRef.current !== requestKey)
+      if (
+        epoch !== concealEpoch.current ||
+        keyRef.current !== requestKey ||
+        accessGenerationRef.current !== generation ||
+        !accessAvailable()
+      )
         return;
       setRead({ key: requestKey, state: 'shown', value: response.value });
       return response.value;
     } catch (error) {
-      if (epoch !== concealEpoch.current || keyRef.current !== requestKey)
+      if (
+        epoch !== concealEpoch.current ||
+        keyRef.current !== requestKey ||
+        accessGenerationRef.current !== generation ||
+        !accessAvailable()
+      )
         return;
       const typed = normalizeCommandError(error);
       if (typed.code === 'agent-lost') {
@@ -281,7 +335,16 @@ export function DetailsPanel({
         message: typed.message,
       });
     }
-  }, [bridge, item, key, onCommandError, request]);
+  }, [
+    accessAvailable,
+    accessGeneration,
+    activeAccessSession,
+    bridge,
+    item,
+    key,
+    onCommandError,
+    request,
+  ]);
 
   useEffect(() => {
     concealEpoch.current += 1;
@@ -325,7 +388,7 @@ export function DetailsPanel({
     setEditing(false);
     setEditPasswordShown(false);
     setReplacementPath(null);
-  }, [concealSignal]);
+  }, [accessGeneration, concealSignal]);
 
   // Link destinations are navigation metadata; load the exact selected version.
   useEffect(() => {
@@ -434,7 +497,7 @@ export function DetailsPanel({
   const readError = activeRead?.state === 'error' ? activeRead.message : null;
   const reading = activeRead?.state === 'loading';
   const copyValue = async (): Promise<void> => {
-    if (!request) return;
+    if (!request || !accessAvailable()) return;
     try {
       await bridge.copyItemValue(request);
       toasts.show(`${kind === 'Password' ? 'Password' : 'Value'} copied`);
@@ -447,7 +510,7 @@ export function DetailsPanel({
   };
 
   const beginEdit = async (): Promise<void> => {
-    if (!request) return;
+    if (!request || !accessAvailable()) return;
     if (fileMode) {
       setEditing(true);
       return;
@@ -455,11 +518,20 @@ export function DetailsPanel({
     // Ensure the response corresponds to the currently selected item before opening the editor.
     const requestKey = key;
     const epoch = concealEpoch.current;
+    const generation = accessGeneration;
     const current = (): boolean =>
-      epoch === concealEpoch.current && requestKey === keyRef.current;
+      epoch === concealEpoch.current &&
+      requestKey === keyRef.current &&
+      generation === accessGenerationRef.current &&
+      accessAvailable();
     setSaving(true);
     try {
-      const response = await readOnce(bridge, request);
+      const response = await readOnce(
+        bridge,
+        request,
+        generation,
+        activeAccessSession,
+      );
       assertExactRead(request, response);
       if (!current()) return;
       setEditValue(editableValue(item, response.value));
@@ -482,7 +554,7 @@ export function DetailsPanel({
   };
 
   const saveEdit = async (): Promise<void> => {
-    if (!request) return;
+    if (!request || !accessAvailable()) return;
     setSaving(true);
     try {
       if (fileMode) {
@@ -856,7 +928,9 @@ export function DetailsPanel({
                     ? 'Delete this item'
                     : `You need ${roleText(item.write)} permissions to delete this item.`
                 }
-                onClick={() => onDelete(item)}
+                onClick={() => {
+                  if (accessAvailable()) onDelete(item);
+                }}
               >
                 Delete
               </Button>

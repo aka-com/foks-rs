@@ -212,6 +212,19 @@ fn import_recovery_at_each_durable_boundary() {
         });
         assert!(result.is_err(), "{index}: {point}");
         let status = import_status(&dest).unwrap();
+        let expected_readiness = if status
+            .as_ref()
+            .is_some_and(|status| status.recovery_required)
+        {
+            super::super::MaintenanceReadiness::RecoveryRequired
+        } else {
+            super::super::MaintenanceReadiness::Openable
+        };
+        assert_eq!(
+            super::super::maintenance_readiness(&dest).unwrap(),
+            expected_readiness,
+            "{index}: {point}"
+        );
         if status
             .as_ref()
             .is_some_and(|s| s.recovery_required && !s.requires_archive)
@@ -223,6 +236,11 @@ fn import_recovery_at_each_durable_boundary() {
         }
         assert!(
             crate::ClientCredentials::open(&dest).is_ok(),
+            "{index}: {point}"
+        );
+        assert_eq!(
+            super::super::maintenance_readiness(&dest).unwrap(),
+            super::super::MaintenanceReadiness::Openable,
             "{index}: {point}"
         );
         cleanup(&dest);

@@ -3,8 +3,8 @@ use crate::commands::accounts::{
     backup_revocation_response, passphrase_response,
 };
 use crate::commands::enrollment::{
-    device_provision_response, go_profile_discovery_response, recovery_response,
-    validated_pending_dtos, PendingOperationResponse,
+    device_provision_response, execute_initialization_recovery, go_profile_discovery_response,
+    recovery_response, validated_pending_dtos, PendingOperationResponse,
 };
 use crate::commands::execution::execute_pending_operation;
 use crate::commands::groups::{DiscoveredGroupResponse, GroupDiscoveryDto, GroupDiscoveryResponse};
@@ -13,7 +13,11 @@ use crate::commands::servers::{
 };
 use crate::commands::tests::support::test_profile_value;
 use crate::commands::validation::{require_nested_response_row_cap, MAXIMUM_FIRST_RUN_ROWS};
-use foks_agent_proto::{Operation, PendingOperationKind, PendingOperationSummary};
+use foks_agent_proto::{
+    AgentStatus, CredentialBackend, Operation, PendingOperationKind, PendingOperationSummary,
+};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 #[test]
@@ -644,4 +648,157 @@ fn pairing_resume_rechecks_one_authenticated_pending_identity() {
             }
         ]
     );
+}
+
+struct InitializationTransport {
+    replies: Mutex<VecDeque<Result<serde_json::Value, foks_desktop::AgentError>>>,
+    calls: Mutex<Vec<Operation>>,
+}
+
+impl foks_desktop::AgentTransport for InitializationTransport {
+    fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        self.calls.lock().unwrap().push(operation);
+        self.replies
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("initialization test supplied every reply")
+    }
+}
+
+fn status(status: AgentStatus) -> Result<serde_json::Value, foks_desktop::AgentError> {
+    Ok(serde_json::to_value(status).unwrap())
+}
+
+fn initialized() -> Result<serde_json::Value, foks_desktop::AgentError> {
+    Ok(serde_json::json!({"backend":"native"}))
+}
+
+fn uncertain() -> Result<serde_json::Value, foks_desktop::AgentError> {
+    Err(foks_desktop::AgentError::Ambiguous("reply lost".to_owned()))
+}
+
+fn bootstrap() -> AgentStatus {
+    AgentStatus::Bootstrap {
+        step: "wording-does-not-control-recovery".to_owned(),
+    }
+}
+
+#[test]
+fn ambiguous_initialization_accepts_authoritative_ready_status() {
+    let transport = InitializationTransport {
+        replies: Mutex::new(VecDeque::from([
+            status(bootstrap()),
+            uncertain(),
+            status(AgentStatus::Ready),
+        ])),
+        calls: Mutex::new(Vec::new()),
+    };
+    let uncertainty = AtomicBool::new(false);
+    assert_eq!(
+        execute_initialization_recovery(&uncertainty, &transport).unwrap(),
+        AgentStatus::Ready
+    );
+    assert!(uncertainty.load(Ordering::Acquire));
+}
+
+#[test]
+fn ambiguous_initialization_retries_once_when_status_remains_bootstrap() {
+    let transport = InitializationTransport {
+        replies: Mutex::new(VecDeque::from([
+            status(bootstrap()),
+            uncertain(),
+            status(bootstrap()),
+            initialized(),
+            status(AgentStatus::Ready),
+        ])),
+        calls: Mutex::new(Vec::new()),
+    };
+    let uncertainty = AtomicBool::new(false);
+    assert_eq!(
+        execute_initialization_recovery(&uncertainty, &transport).unwrap(),
+        AgentStatus::Ready
+    );
+    assert_eq!(
+        transport
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|operation| matches!(
+                operation,
+                Operation::InitializeState {
+                    backend: CredentialBackend::Native
+                }
+            ))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn initialization_recovery_is_bounded_and_preserves_unrelated_uncertainty() {
+    let transport = InitializationTransport {
+        replies: Mutex::new(VecDeque::from([
+            status(bootstrap()),
+            uncertain(),
+            status(bootstrap()),
+            uncertain(),
+            status(bootstrap()),
+        ])),
+        calls: Mutex::new(Vec::new()),
+    };
+    let uncertainty = AtomicBool::new(true);
+    let error = execute_initialization_recovery(&uncertainty, &transport).unwrap_err();
+    assert!(error.ambiguous);
+    assert_eq!(transport.calls.lock().unwrap().len(), 5);
+    assert!(uncertainty.load(Ordering::Acquire));
+
+    let successful = InitializationTransport {
+        replies: Mutex::new(VecDeque::from([
+            status(bootstrap()),
+            initialized(),
+            status(AgentStatus::Ready),
+        ])),
+        calls: Mutex::new(Vec::new()),
+    };
+    assert_eq!(
+        execute_initialization_recovery(&uncertainty, &successful).unwrap(),
+        AgentStatus::Ready
+    );
+    assert!(uncertainty.load(Ordering::Acquire));
+}
+
+#[test]
+fn initialization_contract_mismatch_is_not_hidden_by_ready_status() {
+    let transport = InitializationTransport {
+        replies: Mutex::new(VecDeque::from([
+            status(bootstrap()),
+            Ok(serde_json::json!({"backend":"private-file"})),
+            status(AgentStatus::Ready),
+        ])),
+        calls: Mutex::new(Vec::new()),
+    };
+    let uncertainty = AtomicBool::new(false);
+    let error = execute_initialization_recovery(&uncertainty, &transport).unwrap_err();
+    assert_eq!(error.code, "response-binding");
+    assert_eq!(transport.calls.lock().unwrap().len(), 2);
+    assert!(uncertainty.load(Ordering::Acquire));
+}
+
+#[test]
+fn failed_post_initialization_status_preserves_uncertainty() {
+    let transport = InitializationTransport {
+        replies: Mutex::new(VecDeque::from([
+            status(bootstrap()),
+            initialized(),
+            Err(foks_desktop::AgentError::Transport(
+                "socket closed".to_owned(),
+            )),
+        ])),
+        calls: Mutex::new(Vec::new()),
+    };
+    let uncertainty = AtomicBool::new(false);
+    assert!(execute_initialization_recovery(&uncertainty, &transport).is_err());
+    assert!(uncertainty.load(Ordering::Acquire));
 }

@@ -203,7 +203,7 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     let _agent_lock = AgentLock::acquire(&state_dir)?;
     remove_stale_agent_socket(&socket)?;
     let listener = bind_private_agent_socket(&socket)?;
-    let _socket_guard = SocketGuard(socket.clone());
+    let _socket_guard = SocketGuard::new(socket.clone())?;
     let active = Arc::new(Semaphore::new(arguments.maximum_connections));
     let recovery = Arc::new(Semaphore::new(1));
     let blocking = Arc::new(Semaphore::new(arguments.blocking_workers));
@@ -1134,6 +1134,16 @@ fn dispatch_controlled(
 }
 
 fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -> Response {
+    if error
+        .downcast_ref::<CatalogSnapshotChangedError>()
+        .is_some()
+    {
+        return Response::error(
+            id,
+            ErrorCode::CatalogSnapshotChanged,
+            "The vault changed while it was being listed.",
+        );
+    }
     if let Some(error) = error.downcast_ref::<AgentRequestError>() {
         return Response::error(id, ErrorCode::InvalidRequest, error.to_string());
     }
@@ -1261,6 +1271,18 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
             }
         }
         if let Some(retention) = candidate.downcast_ref::<foks_client_db::Error>() {
+            if let foks_client_db::Error::UnsupportedSchema { found, supported } = retention {
+                return Response::error_with_fields(
+                    Some(id),
+                    ErrorCode::UnsupportedSchema,
+                    bounded_error(retention.to_string()),
+                    ErrorFields {
+                        found_schema: Some(*found),
+                        supported_schema: Some(*supported),
+                        ..ErrorFields::default()
+                    },
+                );
+            }
             let code = match retention {
                 foks_client_db::Error::AdapterRetentionFull => Some(ErrorCode::RetentionFull),
                 foks_client_db::Error::AdapterClockUntrusted => Some(ErrorCode::ClockUntrusted),
@@ -1399,6 +1421,17 @@ impl std::fmt::Display for AgentRequestError {
 }
 
 impl std::error::Error for AgentRequestError {}
+
+#[derive(Debug)]
+struct CatalogSnapshotChangedError;
+
+impl std::fmt::Display for CatalogSnapshotChangedError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("catalog changed while it was being listed")
+    }
+}
+
+impl std::error::Error for CatalogSnapshotChangedError {}
 
 #[derive(Debug)]
 struct ProfileBusyError;
@@ -1553,9 +1586,7 @@ fn paginate_catalog(
         if cursor.snapshot_version != report.snapshot_version
             || cursor.snapshot_digest != snapshot_digest
         {
-            return Err(Box::new(AgentRequestError(
-                "catalog cursor belongs to another store snapshot",
-            )));
+            return Err(Box::new(CatalogSnapshotChangedError));
         }
         cursor.offset
     } else {
@@ -4555,16 +4586,65 @@ fn remove_stale_agent_socket(path: &Path) -> std::io::Result<()> {
             "agent socket path is not a private socket owned by this user",
         ));
     }
+    // A socket belonging to another live agent is not stale, even when that
+    // agent predates our state-directory lock or bound after desktop takeover.
+    match std::os::unix::net::UnixStream::connect(path) {
+        Ok(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AddrInUse,
+                "another process owns the agent socket",
+            ))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {}
+        Err(error) => return Err(error),
+    }
+    let current = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if current.dev() != metadata.dev() || current.ino() != metadata.ino() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AddrInUse,
+            "the agent socket changed during stale-socket inspection",
+        ));
+    }
     std::fs::remove_file(path)
 }
 
 #[cfg(unix)]
-struct SocketGuard(PathBuf);
+struct SocketGuard {
+    path: PathBuf,
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(unix)]
+impl SocketGuard {
+    fn new(path: PathBuf) -> std::io::Result<Self> {
+        use std::os::unix::fs::MetadataExt as _;
+        let metadata = std::fs::symlink_metadata(&path)?;
+        Ok(Self {
+            path,
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    }
+}
 
 #[cfg(unix)]
 impl Drop for SocketGuard {
     fn drop(&mut self) {
-        if let Err(error) = std::fs::remove_file(&self.0) {
+        use std::os::unix::fs::MetadataExt as _;
+        let Ok(metadata) = std::fs::symlink_metadata(&self.path) else {
+            return;
+        };
+        // An exiting agent must never remove its successor's socket.
+        if metadata.dev() != self.device || metadata.ino() != self.inode {
+            return;
+        }
+        if let Err(error) = std::fs::remove_file(&self.path) {
             eprintln!("foks-agent could not remove socket: {error}");
         }
     }
@@ -4590,6 +4670,27 @@ mod tests {
         assert!(message.contains("unsupported soft-state cache schema version"));
         assert!(message.contains("/private/foks/profiles/local/soft.sqlite3"));
         assert!(message.contains("cache must be recreated"));
+    }
+
+    #[test]
+    fn hard_state_schema_mapping_is_structured_and_wording_independent() {
+        let error =
+            foks_client_app::Error::ClientDatabase(foks_client_db::Error::UnsupportedSchema {
+                found: 23,
+                supported: 27,
+            });
+        let response = dispatch_error_response(9, &error);
+        let foks_agent_proto::ResponseResult::Error {
+            code,
+            message: _,
+            fields,
+        } = response.result
+        else {
+            panic!("schema failure returned success");
+        };
+        assert_eq!(code, ErrorCode::UnsupportedSchema);
+        assert_eq!(fields.found_schema, Some(23));
+        assert_eq!(fields.supported_schema, Some(27));
     }
 
     #[test]
@@ -4678,6 +4779,41 @@ mod tests {
         assert!(path.exists());
         drop(listener);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn stale_socket_cleanup_preserves_live_listener_and_removes_dead_socket() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("agent.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            remove_stale_agent_socket(&path).unwrap_err().kind(),
+            std::io::ErrorKind::AddrInUse
+        );
+        assert!(path.exists());
+        drop(listener);
+        remove_stale_agent_socket(&path).unwrap();
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn socket_guard_preserves_replacement_listener() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("agent.sock");
+        let original = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let guard = SocketGuard::new(path.clone()).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let replacement = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        drop(guard);
+        assert!(path.exists());
+        assert!(std::os::unix::net::UnixStream::connect(&path).is_ok());
+        drop(original);
+        let guard = SocketGuard::new(path.clone()).unwrap();
+        drop(replacement);
+        drop(guard);
+        assert!(!path.exists());
     }
 
     #[test]

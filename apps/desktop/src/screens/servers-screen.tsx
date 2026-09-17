@@ -30,7 +30,7 @@ import {
   Toggle,
 } from '../components';
 import type { Location } from '../location';
-import { hue, initials, plural, serverLeaseState, shortId } from '../model';
+import { hue, initials, plural, serverAvailability, shortId } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import type { Server, TeamStore, World } from '../model';
 
@@ -102,7 +102,14 @@ function serverFor(
 
 /** UI state representing server health and connectivity. */
 type ServerUiState =
-  'checked' | 'unprobed' | 'lapsed' | 'unavailable' | 'blocked' | 'pending';
+  | 'checked'
+  | 'unprobed'
+  | 'lapsed'
+  | 'unavailable'
+  | 'blocked'
+  | 'schema'
+  | 'import-verification'
+  | 'pending';
 
 const STATE_LABEL: Readonly<Record<ServerUiState, string>> = {
   checked: 'Checked',
@@ -110,36 +117,38 @@ const STATE_LABEL: Readonly<Record<ServerUiState, string>> = {
   lapsed: 'Check-in expired',
   unavailable: 'Status unknown',
   blocked: 'Untrusted',
+  schema: 'Schema incompatible',
+  'import-verification': 'Verification required',
   pending: 'Checking status',
 };
 
 /** Returns true if the server state blocks read and write operations. */
 const isLocked = (state: ServerUiState): boolean =>
-  state === 'lapsed' || state === 'unavailable' || state === 'blocked';
+  state === 'lapsed' ||
+  state === 'unavailable' ||
+  state === 'blocked' ||
+  state === 'schema' ||
+  state === 'import-verification';
 
 const markTone = (state: ServerUiState): string =>
   state === 'checked' ? 'ok' : isLocked(state) ? 'bad' : '';
 
 function resolveServerUiState(
+  world: World,
   server: Server,
-  snapshot: ServerStatusSnapshot | undefined,
-  statusFailed: boolean,
-  fixtureLapsed: boolean,
-  rollback = false,
 ): ServerUiState {
-  if (rollback || server.state === 'blocked') return 'blocked';
-  const lease = serverLeaseState(snapshot);
-  if (fixtureLapsed || server.state === 'lease-lapsed' || lease === 'lapsed')
-    return 'lapsed';
-  if (statusFailed) return 'unavailable';
-  if (snapshot) {
-    if (snapshot.host && lease === 'fresh') return 'checked';
-    if (!snapshot.host) return 'unprobed';
-    if (lease === 'unavailable') return 'unavailable';
-  }
-  if (server.state === 'lease-unavailable') return 'unavailable';
-  if (server.state === 'never-probed') return 'unprobed';
-  return 'pending';
+  const availability = serverAvailability(world, server);
+  if (availability.available) return 'checked';
+  if (availability.reason === 'verification-required') return 'unprobed';
+  if (availability.reason === 'check-in-expired') return 'lapsed';
+  if (
+    availability.reason === 'verification-failed'
+  )
+    return 'blocked';
+  if (availability.reason === 'schema-incompatible') return 'schema';
+  if (availability.reason === 'import-verification-required')
+    return 'import-verification';
+  return 'unavailable';
 }
 
 function StatusChip({ state }: { state: ServerUiState }): ReactNode {
@@ -190,7 +199,6 @@ export function ServersSection({
   const [statuses, setStatuses] = useState<Map<string, ServerStatusSnapshot>>(
     new Map(),
   );
-  const [statusFailures, setStatusFailures] = useState<Set<string>>(new Set());
   const [checked, setChecked] = useState<Map<string, CheckedServer>>(new Map());
   const [sheet, setSheet] = useState<Sheet>(() =>
     enteredScene === 'servers-add'
@@ -207,12 +215,6 @@ export function ServersSection({
   const selected = serverFor(world, profile);
   const seededCheck = useRef(false);
   const rollback = enteredScene === 'servers-rollback';
-  const fixtureLapsed = Boolean(
-    bridge.fixtureWorld &&
-    (enteredScene === 'servers-list' ||
-      enteredScene === 'servers-add' ||
-      enteredScene === 'servers-lapsed'),
-  );
 
   // Reset preview tokens are invalidated when the window loses focus.
   useEffect(() => {
@@ -236,9 +238,14 @@ export function ServersSection({
     let alive = true;
     void (async () => {
       const rows = new Map<string, ServerStatusSnapshot>();
-      const failures = new Set<string>();
       for (const server of world.servers) {
-        if (server.state === 'blocked') continue;
+        if (
+          server.trust.status === 'blocked' ||
+          server.restrictions.some(
+            (restriction) => restriction.kind === 'schema-incompatible',
+          )
+        )
+          continue;
         try {
           const status = await sharedServerStatus(bridge, server.id);
           if (status.profile !== server.id)
@@ -247,14 +254,12 @@ export function ServersSection({
             );
           rows.set(server.id, status);
         } catch (error) {
-          failures.add(server.id);
           if (alive && shouldReportPassiveServerStatusError(error))
             onError(error);
         }
       }
       if (alive) {
         setStatuses(rows);
-        setStatusFailures(failures);
       }
     })();
     return () => {
@@ -286,11 +291,6 @@ export function ServersSection({
             'describe_server_status returned a different profile.',
           );
         setStatuses((current) => new Map(current).set(selected.id, passive));
-        setStatusFailures((current) => {
-          const next = new Set(current);
-          next.delete(selected.id);
-          return next;
-        });
       })
       .catch((error) => void onMutationError(error));
   }, [bridge, enteredScene, onMutationError, selected]);
@@ -323,7 +323,13 @@ export function ServersSection({
   const check = async (server: Server): Promise<void> => {
     // Prevent duplicate checks from rapid key events and ignore blocked servers.
     if (busy) return;
-    if (rollback || server.state === 'blocked') return;
+    if (
+      server.trust.status === 'blocked' ||
+      server.restrictions.some(
+        (restriction) => restriction.kind === 'schema-incompatible',
+      )
+    )
+      return;
     setBusy(true);
     try {
       const report = await enqueueProfileWork(bridge, server.id, () =>
@@ -344,16 +350,10 @@ export function ServersSection({
             'describe_server_status returned a different profile.',
           );
         setStatuses((current) => new Map(current).set(server.id, passive));
-        setStatusFailures((current) => {
-          const next = new Set(current);
-          next.delete(server.id);
-          return next;
-        });
         await onRefresh(
           `Checked ${report.canonicalName}; refreshed signed server status`,
         );
       } catch (error) {
-        setStatusFailures((current) => new Set(current).add(server.id));
         await onMutationError(error);
       }
     } catch (error) {
@@ -445,11 +445,9 @@ export function ServersSection({
           world={world}
           server={selected}
           status={statuses.get(selected.id)}
-          statusFailed={statusFailures.has(selected.id)}
           host={currentHost}
           checked={checked.get(selected.id)}
           rollback={rollback}
-          fixtureLapsed={fixtureLapsed && selected.id === 'acme'}
           busy={busy}
           onBack={() => onNavigate(servers())}
           onCheck={() => void check(selected)}
@@ -467,8 +465,6 @@ export function ServersSection({
         <ServerList
           world={world}
           statuses={statuses}
-          statusFailures={statusFailures}
-          fixtureLapsed={fixtureLapsed}
           busy={busy}
           onOpen={(next) => onNavigate(servers(next))}
           onCheck={(server) => void check(server)}
@@ -513,7 +509,7 @@ function StatusLine({
     return (
       <>
         <b>Not verified</b>
-        {sep}Verify connection before use
+        {sep}Verify this server before use
       </>
     );
   if (state === 'lapsed')
@@ -527,7 +523,21 @@ function StatusLine({
     return (
       <>
         <b>Check-in status unknown</b>
-        {sep}Locked until connection is verified
+        {sep}Locked until server status is verified
+      </>
+    );
+  if (state === 'schema')
+    return (
+      <>
+        <b>Schema incompatible</b>
+        {sep}Locked until a compatible client can inspect it
+      </>
+    );
+  if (state === 'import-verification')
+    return (
+      <>
+        <b>Verification required</b>
+        {sep}Check the imported profile online before use
       </>
     );
   return (
@@ -612,8 +622,6 @@ function ServerRow({
 function ServerList({
   world,
   statuses,
-  statusFailures,
-  fixtureLapsed,
   busy,
   onOpen,
   onCheck,
@@ -621,8 +629,6 @@ function ServerList({
 }: {
   world: World;
   statuses: Map<string, ServerStatusSnapshot>;
-  statusFailures: Set<string>;
-  fixtureLapsed: boolean;
   busy: boolean;
   onOpen: (profile: string) => void;
   onCheck: (server: Server) => void;
@@ -630,13 +636,12 @@ function ServerList({
 }): ReactNode {
   const rows = world.servers.map((server) => {
     const snapshot = statuses.get(server.id);
-    const state = resolveServerUiState(
-      server,
-      snapshot,
-      statusFailures.has(server.id),
-      fixtureLapsed && server.id === 'acme',
-    );
-    return { server, state, expiry: snapshot?.leaseExpiresAt ?? null };
+    const state = resolveServerUiState(world, server);
+    const expiry =
+      server.compatibility.status === 'required'
+        ? server.compatibility.expiresAt
+        : snapshot?.leaseExpiresAt ?? null;
+    return { server, state, expiry };
   });
   // Servers requiring user attention are displayed at the top of the list.
   const attention = rows.filter((row) => isLocked(row.state));
@@ -760,8 +765,8 @@ function StatusBand({
           </Button>
         }
       >
-        The server connection expired {expires(expiry)}. Check the server to
-        renew your check-in.
+        The signed check-in expired {expires(expiry)}. Check the server to renew
+        it.
       </Band>
     );
   if (state === 'unavailable')
@@ -781,8 +786,8 @@ function StatusBand({
           </Button>
         }
       >
-        Cannot verify the status of this server. This server is locked until
-        reconnected.
+        Cannot verify the status of this server. This server is locked until a
+        usable status is available.
       </Band>
     );
   if (state === 'blocked')
@@ -798,6 +803,33 @@ function StatusBand({
       >
         The server certificate or security history does not match the pinned
         identity on this Mac. Access has been blocked for your security.
+      </Band>
+    );
+  if (state === 'schema')
+    return (
+      <Band severity="crit" label="Server schema incompatible.">
+        This client cannot safely read the server’s saved schema. Review the
+        supported versions; FOKS will not reset this data automatically.
+      </Band>
+    );
+  if (state === 'import-verification')
+    return (
+      <Band
+        severity="crit"
+        label="Imported profile needs verification."
+        action={
+          <Button
+            size="sm"
+            variant="primary"
+            icon="again"
+            disabled={busy}
+            onClick={onCheck}
+          >
+            Check now
+          </Button>
+        }
+      >
+        Verify this imported profile online before accessing its vaults.
       </Band>
     );
   return null;
@@ -825,11 +857,9 @@ function ServerBody({
   world,
   server,
   status,
-  statusFailed,
   host,
   checked,
   rollback,
-  fixtureLapsed,
   busy,
   onBack,
   onCheck,
@@ -841,11 +871,9 @@ function ServerBody({
   world: World;
   server: Server;
   status?: ServerStatusSnapshot;
-  statusFailed: boolean;
   host: ServerStatusSnapshot['host'];
   checked?: CheckedServer;
   rollback: boolean;
-  fixtureLapsed: boolean;
   busy: boolean;
   onBack: () => void;
   onCheck: () => void;
@@ -854,16 +882,13 @@ function ServerBody({
   onCopy: (text: string) => void;
   onOpenGroup: (store: TeamStore) => void;
 }): ReactNode {
-  const state = resolveServerUiState(
-    server,
-    status,
-    statusFailed,
-    fixtureLapsed,
-    rollback,
-  );
+  const state = resolveServerUiState(world, server);
   const locked = isLocked(state);
   const blocked = state === 'blocked';
-  const expiry = status?.leaseExpiresAt ?? null;
+  const expiry =
+    server.compatibility.status === 'required'
+      ? server.compatibility.expiresAt
+      : status?.leaseExpiresAt ?? null;
   const account = world.accounts.find(
     (item) => item.server === server.id || item.server === server.name,
   );

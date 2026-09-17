@@ -3,7 +3,7 @@ import { NotificationSettings } from '../chat/notification-provider';
 import { ChatThread } from '../chat/chat-thread';
 import { PendingRow } from '../chat/pending-row';
 import { channelTitle } from '../chat/presentation';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   Band,
@@ -24,13 +24,21 @@ import type {
   ChatConversation,
   ChatReply,
 } from '../chat-contract';
-import { partiesOf, shortId, storeOf } from '../model';
+import {
+  partiesOf,
+  shortId,
+  storeAvailability,
+  storeDescription,
+  storeOf,
+} from '../model';
 import type { World } from '../model';
 import type { Location } from '../location';
 import { PageHeader } from '../shell/page-header';
 import { failure, preparationCanChange, submissionId } from '../chat/actions';
 import { useChatConversation } from '../chat/use-chat-conversation';
 import './chat.css';
+
+const systemAccessNow = () => Date.now() / 1000;
 
 function conversationMeta(
   channel: ChatChannel,
@@ -50,14 +58,25 @@ export function ChatScreen({
   bridge,
   location,
   onNavigate,
+  accessNow = systemAccessNow,
+  accessGeneration = 0,
 }: {
   world: World;
   bridge: Bridge;
   location: Extract<Location, { kind: 'team-chat' }>;
   onNavigate: (location: Location) => void;
+  accessNow?: () => number;
+  accessGeneration?: number;
 }): ReactNode {
   const store = storeOf(world, location.ref);
   const { snapshot } = useChatInbox();
+  const access = useCallback(
+    () =>
+      store
+        ? storeAvailability(world, store, { nowSeconds: accessNow() })
+        : ({ available: false, reason: 'vault-unavailable' } as const),
+    [accessNow, store, world],
+  );
   const {
     channels,
     conversations,
@@ -77,7 +96,13 @@ export function ChatScreen({
     acceptHistory,
     history,
     blockHistory,
-  } = useChatConversation(bridge, store?.server ?? '', location.ref);
+  } = useChatConversation(
+    bridge,
+    store?.server ?? '',
+    location.ref,
+    access,
+    accessGeneration,
+  );
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<string | null>(null);
   const currentChannels = new Map(
@@ -118,12 +143,52 @@ export function ChatScreen({
           ])
       : [],
   );
+  const accessAvailable = useCallback(
+    (): boolean => access().available,
+    [access],
+  );
+  const guardedRequest = useCallback(
+    (action: ChatAction): Promise<ChatReply> => request(action),
+    [request],
+  );
+  const guardedRefresh = useCallback(
+    (): Promise<void> =>
+      accessAvailable() ? refresh() : Promise.resolve(),
+    [accessAvailable, refresh],
+  );
+  const guardedRefreshPending = useCallback(
+    (): Promise<void> =>
+      accessAvailable() ? refreshPending() : Promise.resolve(),
+    [accessAvailable, refreshPending],
+  );
+  const guardedMarkRead = useCallback(
+    (channelId: string, sequence: string): Promise<void> =>
+      accessAvailable() ? markRead(channelId, sequence) : Promise.resolve(),
+    [accessAvailable, markRead],
+  );
   useEffect(() => {
     if (!created || !storeId) return;
     if (!channels.some((channel) => channel.id === created)) return;
     setCreated(null);
     onNavigate({ kind: 'team-chat', ref: storeId, channel: created });
   }, [channels, created, onNavigate, storeId]);
+  if (!accessAvailable() && store)
+    return (
+      <section className="chat-screen">
+        <PageHeader
+          title="Chat unavailable"
+          subtitle={storeDescription(world, store)}
+        />
+        <div className="chat-conversation">
+          <Notice severity="crit" title={storeDescription(world, store)}>
+            <p role="alert">
+              Access to this group is stopped. Check the server status before
+              reopening its conversations.
+            </p>
+          </Notice>
+        </div>
+      </section>
+    );
   if (blocked)
     return (
       <section className="chat-screen">
@@ -210,7 +275,7 @@ export function ChatScreen({
                   aria-label="Refresh conversations"
                   title="Refresh conversations"
                   disabled={loading}
-                  onClick={() => void refresh()}
+                  onClick={() => void guardedRefresh()}
                 />
                 <Button
                   variant="quiet"
@@ -337,8 +402,8 @@ export function ChatScreen({
                     key={op.id}
                     operation={op}
                     channelName={channelNames.get(op.channel)}
-                    request={request}
-                    onChange={() => void refresh()}
+                    request={guardedRequest}
+                    onChange={() => void guardedRefresh()}
                   />
                 ))}
             </section>
@@ -352,7 +417,7 @@ export function ChatScreen({
                 <Button
                   size="sm"
                   disabled={loading}
-                  onClick={() => void refresh()}
+                  onClick={() => void guardedRefresh()}
                 >
                   Retry
                 </Button>
@@ -387,11 +452,11 @@ export function ChatScreen({
                 channel={channel}
                 actor={actor}
                 senderNames={senderNames}
-                request={request}
-                refreshPending={refreshPending}
+                request={guardedRequest}
+                refreshPending={guardedRefreshPending}
                 revision={channelRevisions?.get(channel.id) ?? 0}
                 readThrough={activeConversation?.read_through ?? null}
-                markRead={markRead}
+                markRead={guardedMarkRead}
                 history={history}
                 acceptHistory={acceptHistory}
                 blockHistory={blockHistory}
@@ -414,7 +479,7 @@ export function ChatScreen({
               </span>
               <h2>Channel unavailable</h2>
               <p>This channel is unavailable. Refresh to check your access.</p>
-              <Button disabled={loading} onClick={() => void refresh()}>
+              <Button disabled={loading} onClick={() => void guardedRefresh()}>
                 Refresh
               </Button>
             </div>
@@ -440,11 +505,11 @@ export function ChatScreen({
       {creating && (
         <ChannelCreateSheet
           teamName={store.name}
-          request={request}
+          request={guardedRequest}
           onClose={() => setCreating(false)}
           onCreated={async (channelId) => {
             setCreated(channelId);
-            await refresh();
+            await guardedRefresh();
           }}
         />
       )}

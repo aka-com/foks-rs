@@ -113,3 +113,55 @@ test('poll bypasses queued work and only bounded notification history may reques
   await hold;
   client.dispose();
 });
+
+test('queued chat work rechecks access at actual RPC dispatch', async () => {
+  const { scheduleProfileWork } =
+    await import('../src/scheduling/profile-work');
+  let release!: () => void;
+  let calls = 0;
+  let allowed = true;
+  const bridge = {
+    chat: async () => {
+      calls++;
+      return reply;
+    },
+    cancelChat: async () => {},
+  } as unknown as Bridge;
+  const hold = scheduleProfileWork(
+    bridge,
+    'p',
+    () => new Promise<void>((resolve) => (release = resolve)),
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  const client = chatClient(bridge, 'p', 't');
+  const pending = client.request({ action: 'pending' }, undefined, () => {
+    if (!allowed) throw { code: 'check-in-expired' };
+  });
+  allowed = false;
+  release();
+  await hold;
+  await assert.rejects(pending, { code: 'check-in-expired' });
+  assert.equal(calls, 0);
+  client.dispose();
+});
+
+test('chat drops a reply when access changes while the RPC is in flight', async () => {
+  let finish!: (value: ChatReply) => void;
+  let allowed = true;
+  const bridge = {
+    chat: () =>
+      new Promise<ChatReply>((resolve) => {
+        finish = resolve;
+      }),
+    cancelChat: async () => {},
+  } as unknown as Bridge;
+  const client = chatClient(bridge, 'another-profile', 't');
+  const pending = client.request({ action: 'pending' }, undefined, () => {
+    if (!allowed) throw { code: 'vault-unavailable' };
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  allowed = false;
+  finish(reply);
+  await assert.rejects(pending, { code: 'vault-unavailable' });
+  client.dispose();
+});

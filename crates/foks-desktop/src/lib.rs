@@ -39,8 +39,17 @@ pub enum AgentError {
         fields: ErrorFields,
     },
     Transport(String),
+    Local(LocalAgentCondition),
     Ambiguous(String),
     Cancelled,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LocalAgentCondition {
+    Maintenance,
+    RestartRequired,
+    RecoveryRequired,
+    RestorationFailed,
 }
 
 impl AgentError {
@@ -86,6 +95,18 @@ impl AgentError {
             Self::Protocol { message, .. }
             | Self::Transport(message)
             | Self::Ambiguous(message) => message,
+            Self::Local(condition) => match condition {
+                LocalAgentCondition::Maintenance => "State maintenance is in progress.",
+                LocalAgentCondition::RestartRequired => {
+                    "The selected state root requires an application restart."
+                }
+                LocalAgentCondition::RecoveryRequired => {
+                    "Client state recovery is required before the agent can restart."
+                }
+                LocalAgentCondition::RestorationFailed => {
+                    "The local agent could not be restored after state maintenance."
+                }
+            },
             Self::Cancelled => "Request cancelled.",
         }
     }
@@ -105,6 +126,14 @@ impl std::fmt::Display for AgentError {
                 Ok(())
             }
             Self::Transport(message) => formatter.write_str(message),
+            Self::Local(condition) => formatter.write_str(match condition {
+                LocalAgentCondition::Maintenance => "state maintenance is in progress",
+                LocalAgentCondition::RestartRequired => "application restart is required",
+                LocalAgentCondition::RecoveryRequired => "client state recovery is required",
+                LocalAgentCondition::RestorationFailed => {
+                    "the local agent could not be restored after state maintenance"
+                }
+            }),
             Self::Ambiguous(message) => write!(
                 formatter,
                 "{message}\n\nThe upload commit may have completed. The store will be refreshed before another mutation."
@@ -1232,10 +1261,9 @@ fn catalog_cursor_snapshot_changed(error: &AgentError) -> bool {
     matches!(
         error,
         AgentError::Protocol {
-            code: ErrorCode::InvalidRequest,
-            message,
+            code: ErrorCode::CatalogSnapshotChanged,
             ..
-        } if message == "catalog cursor belongs to another store snapshot"
+        }
     )
 }
 
@@ -2700,8 +2728,8 @@ mod tests {
                 })
                 .unwrap()),
                 2 => Err(AgentError::Protocol {
-                    code: ErrorCode::InvalidRequest,
-                    message: "catalog cursor belongs to another store snapshot".to_owned(),
+                    code: ErrorCode::CatalogSnapshotChanged,
+                    message: "wording is deliberately irrelevant".to_owned(),
                     fields: ErrorFields::default(),
                 }),
                 3 => Ok(serde_json::to_value(KvPage {

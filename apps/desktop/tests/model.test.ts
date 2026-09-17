@@ -29,11 +29,13 @@ import {
   partyName,
   peopleGroups,
   prefixOf,
+  profileInventoryComplete,
   readersOf,
   roleRank,
   rtype,
   safestRemovalTarget,
   storeReadable,
+  storeAvailability,
   storeDisplayOrder,
   storeNavigationOrder,
 } from '../src/model';
@@ -335,10 +337,9 @@ test('a name always gets the same avatar colour', () => {
 /* ------------------------------------------------------------------ lease -- */
 
 test('fixture initializes with fresh lease state', () => {
-  assert.equal(FIXTURE.leaseState, 'fresh');
   const acme = FIXTURE.servers.find((server) => server.id === 'acme');
-  assert.deepEqual(acme?.lease, { state: 'fresh', expires_in: '12 d' });
-  assert.equal(acme?.state, 'ok');
+  assert.equal(acme?.compatibility.status, 'required');
+  assert.equal(acme?.trust.status, 'verified');
   assert.equal(leaseLapsed(FIXTURE, 'team:eng'), false);
 });
 
@@ -411,7 +412,6 @@ test('group item changes require one authenticated local party that admits the w
 test('lapsed lease disables reads and writes for affected server stores', () => {
   const lapsed = applyLease(FIXTURE, 'lapsed');
 
-  assert.equal(lapsed.leaseState, 'lapsed');
   assert.equal(leaseLapsed(lapsed, 'team:eng'), true);
   assert.equal(storeReadable(lapsed, 'team:eng'), false);
   assert.equal(storeReadable(lapsed, 'acct:work'), false);
@@ -424,7 +424,6 @@ test('lapsed lease disables reads and writes for affected server stores', () => 
   assert.equal(catalog(lapsed).length, 10);
 
   // applyLease does not mutate the input state.
-  assert.equal(FIXTURE.leaseState, 'fresh');
   assert.equal(storeReadable(FIXTURE, 'team:eng'), true);
 
   // Lease restoration round-trips correctly.
@@ -565,13 +564,73 @@ test('a never-probed server is a stopped store, not a normal one', () => {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
       server.id === store.server
-        ? { ...server, state: 'never-probed' as const, lease: null }
+        ? { ...server, trust: { status: 'unprobed' as const } }
         : server,
     ),
   };
   // Never-probed servers must be treated as inactive rather than normal.
-  assert.equal(storeDescriptionState(world, store), 'never-probed');
+  assert.equal(storeDescriptionState(world, store), 'verification-required');
   assert.equal(storeDescriptionState(FIXTURE, store), 'normal');
+});
+
+test('authoritative empty inventory is complete while an omitted configured profile is not', () => {
+  const empty: World = {
+    ...FIXTURE,
+    servers: [],
+    stores: [],
+    storeInventory: [],
+    profileInventory: [],
+    catalogProfiles: [],
+    profileInventoryStatus: 'complete',
+  };
+  assert.equal(profileInventoryComplete(empty, 'profiles'), true);
+  assert.equal(profileInventoryComplete(empty, 'accounts'), true);
+  assert.equal(profileInventoryComplete(empty, 'teams'), true);
+  const unknownEmpty = {
+    ...empty,
+    profileInventoryStatus: 'unavailable' as const,
+  };
+  assert.equal(profileInventoryComplete(unknownEmpty, 'accounts'), false);
+  assert.equal(profileInventoryComplete(unknownEmpty, 'teams'), false);
+
+  const missing = {
+    ...FIXTURE,
+    catalogProfiles: [...FIXTURE.catalogProfiles, 'omitted-profile'],
+  };
+  assert.equal(profileInventoryComplete(missing, 'accounts'), false);
+  assert.equal(profileInventoryComplete(missing, 'teams'), false);
+});
+
+test('store security restrictions outrank server lease and inventory failures', () => {
+  const store = FIXTURE.stores.find((entry) => entry.server === 'acme');
+  assert.ok(store);
+  const error = {
+    code: 'schema',
+    message: 'arbitrary',
+    fatal: false,
+    retryable: false,
+    ambiguous: false,
+  };
+  const world: World = {
+    ...applyLease(FIXTURE, 'lapsed', 'acme', 100),
+    storeInventory: FIXTURE.storeInventory.map((entry) =>
+      entry.store === store.id
+        ? {
+            ...entry,
+            status: 'unavailable' as const,
+            error,
+            restrictions: [{ kind: 'schema-incompatible' as const, error }],
+          }
+        : entry,
+    ),
+  };
+  assert.deepEqual(storeAvailability(world, store, { nowSeconds: 100 }), {
+    available: false,
+    reason: 'schema-incompatible',
+  });
+  const neighbor = FIXTURE.stores.find((entry) => entry.server === 'personal');
+  assert.ok(neighbor);
+  assert.equal(storeAvailability(world, neighbor).available, true);
 });
 
 test('every fixture admission names a profile, not an address', () => {
