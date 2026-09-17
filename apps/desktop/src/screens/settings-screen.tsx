@@ -686,7 +686,7 @@ function startedLabel(startedAt: number, now = Date.now()): string {
   const time = started.toLocaleTimeString(undefined, {
     hour: '2-digit',
     minute: '2-digit',
-    hour12: false,
+    hourCycle: 'h23',
   });
   const day = (date: Date): number =>
     new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();

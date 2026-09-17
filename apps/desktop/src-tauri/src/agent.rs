@@ -940,7 +940,7 @@ impl AgentHandle {
         {
             return Err(AgentError::new(
                 "external-agent",
-                "Use the CLI to move state managed by an external agent launcher.",
+                "This FOKS is using an agent socket set by its launcher. Use the CLI to manage or restart that agent.",
                 false,
             ));
         }
