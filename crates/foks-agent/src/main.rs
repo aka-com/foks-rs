@@ -621,29 +621,28 @@ async fn handle_connection(
             write_response(&mut stream, &response, timeout).await?;
             continue;
         }
-        let mutation_permit = if request.operation.is_mutation()
-            && !request.operation.is_device_pairing_wait()
-        {
-            match tokio::time::timeout(timeout, mutations.clone().acquire_owned()).await {
-                Ok(Ok(permit)) => Some(permit),
-                Ok(Err(_)) => return Err("agent mutation gate closed".into()),
-                Err(_) => {
-                    write_response(
-                        &mut stream,
-                        &Response::error(
-                            request.id,
-                            ErrorCode::Busy,
-                            "another mutation is still in progress",
-                        ),
-                        timeout,
-                    )
-                    .await?;
-                    continue;
+        let mutation_permit =
+            if request.operation.is_mutation() && !request.operation.is_device_pairing_wait() {
+                match tokio::time::timeout(timeout, mutations.clone().acquire_owned()).await {
+                    Ok(Ok(permit)) => Some(permit),
+                    Ok(Err(_)) => return Err("agent mutation gate closed".into()),
+                    Err(_) => {
+                        write_response(
+                            &mut stream,
+                            &Response::error(
+                                request.id,
+                                ErrorCode::Busy,
+                                "another mutation is still in progress",
+                            ),
+                            timeout,
+                        )
+                        .await?;
+                        continue;
+                    }
                 }
-            }
-        } else {
-            None
-        };
+            } else {
+                None
+            };
         let permit = match tokio::time::timeout(timeout, blocking.clone().acquire_owned()).await {
             Ok(Ok(permit)) => permit,
             Ok(Err(_)) => return Err("agent worker pool closed".into()),
@@ -2349,6 +2348,24 @@ fn dispatch_result(
                     &backup_alias,
                     Zeroizing::new(phrase.expose().to_owned()),
                     vault,
+                )?)?)
+            })
+        }
+        Operation::RevokeOwnerBackup {
+            profile,
+            account_alias,
+            backup_alias,
+            backup_id,
+        } => {
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
+                Ok(serde_json::to_value(session.revoke_owner_backup(
+                    &account_alias,
+                    &backup_alias,
+                    &backup_id,
+                    vault,
+                    master,
                 )?)?)
             })
         }
@@ -4673,9 +4690,30 @@ mod tests {
                 },
             ),
         );
+        let backup_id = match &committed.result {
+            foks_agent_proto::ResponseResult::Success { value } => {
+                value["backup_id_hex"].as_str().unwrap().to_owned()
+            }
+            _ => panic!("unexpected backup commit response: {committed:?}"),
+        };
+        let revoked = dispatch(
+            &state,
+            Request::new(
+                21,
+                Operation::RevokeOwnerBackup {
+                    profile: "local".to_owned(),
+                    account_alias: "personal".to_owned(),
+                    backup_alias: "paper".to_owned(),
+                    backup_id: backup_id.clone(),
+                },
+            ),
+        );
         assert!(matches!(
-            committed.result,
-            foks_agent_proto::ResponseResult::Success { .. }
+            revoked.result,
+            foks_agent_proto::ResponseResult::Success { value }
+                if value["backup_alias"] == "paper"
+                    && value["backup_id_hex"] == backup_id
+                    && value["removed_local_enrollment"] == true
         ));
         let listed = dispatch(
             &state,

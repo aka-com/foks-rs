@@ -365,6 +365,12 @@ export interface BackupEnrollment {
   backupId: string;
 }
 
+export interface BackupRevocation extends BackupEnrollment {
+  userChainSequence: number;
+  alreadyAbsent: boolean;
+  removedLocalEnrollment: true;
+}
+
 export interface PairingOffer {
   accountAlias: string;
   /** Ephemeral: never persist or copy automatically. */
@@ -643,6 +649,11 @@ export interface Bridge {
     alreadyAbsent: boolean;
   }>;
   listBackupEnrollments(accountStoreId: StoreRef): Promise<BackupEnrollment[]>;
+  revokeOwnerBackup(
+    accountStoreId: StoreRef,
+    backup: BackupEnrollment,
+    confirmation: string,
+  ): Promise<BackupRevocation>;
   startDevicePairing(accountStoreId: StoreRef): Promise<PairingOffer>;
   resumeDevicePairingOffer(accountStoreId: StoreRef): Promise<PairingOffer>;
   finishDevicePairing(accountStoreId: StoreRef): Promise<DeviceProvision>;
@@ -1472,6 +1483,26 @@ function decodeBackupEnrollment(value: unknown, at: string): BackupEnrollment {
 export const decodeBackupEnrollments = (value: unknown): BackupEnrollment[] =>
   array(value, 'list_backup_enrollments response', decodeBackupEnrollment);
 
+export function decodeBackupRevocation(value: unknown): BackupRevocation {
+  const item = record(value, 'revoke_owner_backup response');
+  if (item.removedLocalEnrollment !== true)
+    throw new Error('revoke_owner_backup.removedLocalEnrollment must be true');
+  return {
+    backupAlias: string(item.backupAlias, 'revoke_owner_backup.backupAlias'),
+    accountAlias: string(item.accountAlias, 'revoke_owner_backup.accountAlias'),
+    backupId: entityId(item.backupId, '10', 'revoke_owner_backup.backupId'),
+    userChainSequence: integer(
+      item.userChainSequence,
+      'revoke_owner_backup.userChainSequence',
+    ),
+    alreadyAbsent: bool(
+      item.alreadyAbsent,
+      'revoke_owner_backup.alreadyAbsent',
+    ),
+    removedLocalEnrollment: true,
+  };
+}
+
 export function decodePairingOffer(value: unknown): PairingOffer {
   const item = record(value, 'pairing offer response');
   return {
@@ -2019,6 +2050,28 @@ export const tauriBridge: Bridge = {
       'list_backup_enrollments',
       { accountStoreId },
       decodeBackupEnrollments,
+    ),
+  revokeOwnerBackup: (accountStoreId, backup, confirmation) =>
+    checked(
+      'revoke_owner_backup',
+      {
+        accountStoreId,
+        backupAlias: backup.backupAlias,
+        backupId: backup.backupId,
+        confirmation,
+      },
+      (value) => {
+        const revoked = decodeBackupRevocation(value);
+        if (
+          revoked.backupAlias !== backup.backupAlias ||
+          revoked.accountAlias !== backup.accountAlias ||
+          revoked.backupId !== backup.backupId
+        )
+          throw new Error(
+            'revoke_owner_backup returned a different backup enrollment.',
+          );
+        return revoked;
+      },
     ),
   startDevicePairing: (accountStoreId) =>
     checked('start_device_pairing', { accountStoreId }, decodePairingOffer),

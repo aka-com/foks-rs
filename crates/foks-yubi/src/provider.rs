@@ -75,8 +75,9 @@ impl Drop for Pin {
 
 impl Pin {
     pub fn new(value: impl Into<String>) -> crate::Result<Self> {
-        let value = value.into();
+        let mut value = value.into();
         if !(6..=8).contains(&value.len()) || !value.bytes().all(|byte| byte.is_ascii_graphic()) {
+            value.zeroize();
             return Err(crate::Error::Policy(
                 "PIN or PUK must contain six to eight printable ASCII characters",
             ));
@@ -116,6 +117,18 @@ impl PinRetryConfiguration {
             pin_attempts,
             puk_attempts,
         })
+    }
+
+    pub fn puk(&self) -> &Pin {
+        &self.puk
+    }
+
+    pub fn pin_attempts(&self) -> u8 {
+        self.pin_attempts
+    }
+
+    pub fn puk_attempts(&self) -> u8 {
+        self.puk_attempts
     }
 }
 
@@ -169,12 +182,52 @@ impl fmt::Debug for ManagementKey {
 pub trait YubiProvider: Send + Sync {
     fn cards(&self) -> Result<Vec<CardId>>;
 
-    /// Generates two distinct P-256 keys. When retry configuration is
-    /// requested, implementations must first prove that every PIV key slot is
-    /// empty, apply and restore the PIN/PUK retry policy, and only then
-    /// generate either key. The operation may partially change the card, so
-    /// callers must durably record the returned public locator before
-    /// beginning any server mutation.
+    /// Verifies the selected card, PIN, management key, and required empty
+    /// slots without changing the card. `all_slots_empty` is required before a
+    /// retry reset because that command can only be resumed safely before any
+    /// enrollment key exists.
+    fn prepare_preflight(
+        &self,
+        card: &CardId,
+        signing_slot: SlotId,
+        pq_slot: SlotId,
+        pin: &Pin,
+        all_slots_empty: bool,
+    ) -> Result<()>;
+
+    /// Applies PIV retry counts and leaves both credentials at their factory
+    /// defaults. This operation is deliberately safe to repeat after an
+    /// interrupted or ambiguously reported command.
+    fn prepare_reset_retries(
+        &self,
+        card: &CardId,
+        pin_attempts: u8,
+        puk_attempts: u8,
+    ) -> Result<()>;
+
+    fn prepare_restore_pin(&self, card: &CardId, pin: &Pin) -> Result<()>;
+
+    fn prepare_restore_puk(&self, card: &CardId, puk: &Pin) -> Result<()>;
+
+    /// Generates a P-256 key in an empty preparation slot, or returns the
+    /// public key already in that slot after a checkpointed generation was
+    /// interrupted.
+    fn prepare_key(
+        &self,
+        card: &CardId,
+        slot: SlotId,
+        pin_policy: PivPolicy,
+        touch_policy: PivPolicy,
+    ) -> Result<[u8; 33]>;
+
+    /// Revalidates both generated keys and returns the usable device.
+    fn finish_prepare(&self, locator: &YubiDeviceLocator, pin: &Pin) -> Result<PreparedYubiDevice>;
+
+    /// Convenience preparation for callers that do not own durable storage.
+    /// Product enrollment uses the individual methods above and checkpoints
+    /// before and after every card mutation. Callers that request retry
+    /// configuration must treat an error as potentially leaving both
+    /// credentials at their factory defaults.
     #[allow(clippy::too_many_arguments)]
     fn prepare(
         &self,
@@ -185,7 +238,31 @@ pub trait YubiProvider: Send + Sync {
         retry_configuration: Option<&PinRetryConfiguration>,
         pin_policy: PivPolicy,
         touch_policy: PivPolicy,
-    ) -> Result<PreparedYubiDevice>;
+    ) -> Result<PreparedYubiDevice> {
+        self.prepare_preflight(
+            card,
+            signing_slot,
+            pq_slot,
+            pin,
+            retry_configuration.is_some(),
+        )?;
+        if let Some(retry) = retry_configuration {
+            self.prepare_reset_retries(card, retry.pin_attempts, retry.puk_attempts)?;
+            self.prepare_restore_pin(card, pin)?;
+            self.prepare_restore_puk(card, &retry.puk)?;
+        }
+        let signing_public_key = self.prepare_key(card, signing_slot, pin_policy, touch_policy)?;
+        let pq_public_key = self.prepare_key(card, pq_slot, pin_policy, touch_policy)?;
+        let locator = YubiDeviceLocator {
+            card: card.clone(),
+            signing_slot,
+            pq_slot,
+            signing_public_key,
+            pq_public_key,
+            pq_key_id: foks_crypto::yubi_pq_key_id(&pq_public_key)?,
+        };
+        self.finish_prepare(&locator, pin)
+    }
 
     /// Opens an exact card/slot/public-key tuple and revalidates every field.
     fn open(

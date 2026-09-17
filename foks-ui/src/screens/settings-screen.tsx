@@ -69,6 +69,7 @@ type Sheet =
   | 'revoke'
   | 'passphrase'
   | 'remove-device'
+  | 'revoke-backup'
   | 'go-profile'
   | null;
 const SECTIONS: readonly {
@@ -271,6 +272,9 @@ export function SettingsScreen({
   );
   const [pairMode, setPairMode] = useState<'offer' | 'accept'>('offer');
   const [removeDevice, setRemoveDevice] = useState<AccountDevice | null>(null);
+  const [revokeBackup, setRevokeBackup] = useState<BackupEnrollment | null>(
+    null,
+  );
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [statuses, setStatuses] = useState<Map<string, ServerStatusSnapshot>>(
     new Map(),
@@ -319,6 +323,7 @@ export function SettingsScreen({
       setPendingYubi(null);
       setPassphraseStore(null);
       setRemoveDevice(null);
+      setRevokeBackup(null);
       setGroupCreate(false);
       setInviteStore(null);
     };
@@ -366,6 +371,7 @@ export function SettingsScreen({
     setPendingYubi(null);
     setPassphraseStore(null);
     setRemoveDevice(null);
+    setRevokeBackup(null);
     setDevices([]);
     setBackups([]);
     setYubi([]);
@@ -738,6 +744,10 @@ export function SettingsScreen({
                   setRemoveDevice(device);
                   setSheet('remove-device');
                 }}
+                onRevokeBackup={(backup) => {
+                  setRevokeBackup(backup);
+                  setSheet('revoke-backup');
+                }}
               />
             ) : null}
             {section === 'keys' && !unavailable ? (
@@ -937,9 +947,7 @@ export function SettingsScreen({
             setPassphraseStore(null);
             if (passphraseMode === 'verify') toasts.show(message);
             else
-              void onRefresh(message).catch((error) =>
-                onMutationError(error),
-              );
+              void onRefresh(message).catch((error) => onMutationError(error));
           }}
           onError={(error) => {
             if (passphraseMode === 'verify') onError(error);
@@ -960,6 +968,23 @@ export function SettingsScreen({
             const name = removeDevice.name ?? 'device';
             setRemoveDevice(null);
             await applied(`Removed ${name} from this account`);
+          }}
+          onError={(error) => void onMutationError(error)}
+        />
+      ) : null}
+      {sheet === 'revoke-backup' && selected && revokeBackup ? (
+        <RevokeBackupSheet
+          bridge={bridge}
+          store={selected}
+          backup={revokeBackup}
+          onClose={() => {
+            setSheet(null);
+            setRevokeBackup(null);
+          }}
+          onDone={async () => {
+            const alias = revokeBackup.backupAlias;
+            setRevokeBackup(null);
+            await applied(`Revoked backup phrase ${alias}`);
           }}
           onError={(error) => void onMutationError(error)}
         />
@@ -1115,8 +1140,8 @@ function UnavailableAccount({
       </p>
       {stores.length ? null : (
         <p>
-          This Mac has no active account. Add and verify a server, then
-          create or recover an account.
+          This Mac has no active account. Add and verify a server, then create
+          or recover an account.
         </p>
       )}
     </Notice>
@@ -1135,6 +1160,7 @@ function MacsSection({
   onSheet,
   onPair,
   onRemove,
+  onRevokeBackup,
 }: {
   stores: AccountStore[];
   selected?: AccountStore;
@@ -1147,6 +1173,7 @@ function MacsSection({
   onSheet: (sheet: Sheet) => void;
   onPair: (mode: 'offer' | 'accept') => void;
   onRemove: (device: AccountDevice) => void;
+  onRevokeBackup: (backup: BackupEnrollment) => void;
 }): ReactNode {
   if (!selected)
     return (
@@ -1275,7 +1302,7 @@ function MacsSection({
       <SectionLabel>Recovery</SectionLabel>
       <Inset className="settings-inset middle">
         <InsetRow
-          label="Backup phrase"
+          label="Backup phrases"
           action={
             <Button disabled={stopped} onClick={() => onSheet('phrase')}>
               {backups.length ? 'Enroll another…' : 'Enroll…'}
@@ -1285,9 +1312,27 @@ function MacsSection({
           {loading
             ? 'Loading…'
             : backups.length
-              ? `${backups.length} authenticated enrollment${backups.length === 1 ? '' : 's'} on this account`
-              : 'No backup phrase for this account.'}
+              ? `${backups.length} enrollment${backups.length === 1 ? '' : 's'} stored on this Mac`
+              : 'No locally recorded backup phrase for this account.'}
         </InsetRow>
+        {backups.map((backup) => (
+          <InsetRow
+            key={backup.backupId}
+            label={backup.backupAlias}
+            action={
+              <Button
+                size="sm"
+                variant="danger"
+                disabled={stopped}
+                onClick={() => onRevokeBackup(backup)}
+              >
+                Revoke…
+              </Button>
+            }
+          >
+            <small>{backup.backupId}</small>
+          </InsetRow>
+        ))}
         <InsetRow
           label="Recover here"
           action={
@@ -1299,6 +1344,11 @@ function MacsSection({
           Use a backup phrase to recover another account.
         </InsetRow>
       </Inset>
+      <p className="fn">
+        Only backup enrollments completed on this Mac are listed here.
+        Remote-only backup keys cannot currently be named or revoked from this
+        screen.
+      </p>
     </>
   );
 }
@@ -1606,8 +1656,7 @@ function AccountSection({
                   ? 'Loading…'
                   : stopped
                     ? 'Not listed while access is stopped'
-                    : (deviceNames.get(store.id) ??
-                      'Current device unknown')}
+                    : (deviceNames.get(store.id) ?? 'Current device unknown')}
                 <small>
                   This account’s current authenticated device. All devices are
                   under Recovery devices.
@@ -2709,11 +2758,17 @@ function RevokeSheet({
     <SheetFrame
       title={`Revoke ${alias}?`}
       subtitle="Disconnects this key and updates account security"
-      onClose={onClose}
+      onClose={() => {
+        if (busy) return;
+        onClose();
+      }}
       danger
+      dismissible={!busy}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button disabled={busy} onClick={onClose}>
+            Cancel
+          </Button>
           <Button
             variant="danger"
             disabled={confirmation !== alias || busy}
@@ -2728,7 +2783,16 @@ function RevokeSheet({
                     confirmation,
                   },
                 })
-                .then(onDone)
+                .then((result) => {
+                  if (
+                    result.alias !== alias ||
+                    result.removedLocalCredential !== true
+                  )
+                    throw new Error(
+                      'revoke_yubi_device returned a different enrollment.',
+                    );
+                  return onDone();
+                })
                 .catch(onError)
                 .finally(() => setBusy(false));
             }}
@@ -2749,6 +2813,82 @@ function RevokeSheet({
             value={confirmation}
             onChange={(event) => setConfirmation(event.target.value)}
             placeholder={`type ${alias}`}
+          />
+        </InsetRow>
+      </Inset>
+    </SheetFrame>
+  );
+}
+
+function RevokeBackupSheet({
+  bridge,
+  store,
+  backup,
+  onClose,
+  onDone,
+  onError,
+}: {
+  bridge: Bridge;
+  store: AccountStore;
+  backup: BackupEnrollment;
+  onClose: () => void;
+  onDone: () => Promise<void>;
+  onError: (error: unknown) => void;
+}): ReactNode {
+  const [confirmation, setConfirmation] = useState('');
+  const [busy, setBusy] = useState(false);
+  return (
+    <SheetFrame
+      title={`Revoke ${backup.backupAlias}?`}
+      subtitle={`${store.account} · ${backup.backupId}`}
+      onClose={() => {
+        if (busy) return;
+        onClose();
+      }}
+      danger
+      dismissible={!busy}
+      footer={
+        <>
+          <Button disabled={busy} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="danger"
+            disabled={confirmation !== backup.backupAlias || busy}
+            onClick={() => {
+              setBusy(true);
+              void bridge
+                .revokeOwnerBackup(store.id, backup, confirmation)
+                .then((revoked) => {
+                  if (
+                    revoked.backupAlias !== backup.backupAlias ||
+                    revoked.backupId !== backup.backupId
+                  )
+                    throw new Error(
+                      'revoke_owner_backup returned a different enrollment.',
+                    );
+                  return onDone();
+                })
+                .catch(onError)
+                .finally(() => setBusy(false));
+            }}
+          >
+            Revoke backup phrase
+          </Button>
+        </>
+      }
+    >
+      <p>
+        This phrase will immediately lose future recovery access. Revocation
+        also rotates every account key the backup could read. Enter the backup
+        alias to confirm.
+      </p>
+      <Inset>
+        <InsetRow label="Confirm">
+          <input
+            value={confirmation}
+            onChange={(event) => setConfirmation(event.target.value)}
+            placeholder={`type ${backup.backupAlias}`}
           />
         </InsetRow>
       </Inset>

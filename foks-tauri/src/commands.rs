@@ -1360,6 +1360,17 @@ struct BackupCommitResponse {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct BackupRevocationResponse {
+    backup_alias: String,
+    account_alias: String,
+    backup_id_hex: String,
+    user_chain_sequence: u64,
+    already_absent: bool,
+    removed_local_enrollment: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RecoveryResponse {
     alias: String,
     device_id_hex: String,
@@ -2080,6 +2091,34 @@ fn backup_commit_response(
     Ok(MutationDto { applied: true })
 }
 
+fn backup_revocation_response(
+    value: serde_json::Value,
+    expected_account: &str,
+    expected_backup: &str,
+    expected_id: &str,
+) -> Result<BackupRevocationDto, AgentError> {
+    let report: BackupRevocationResponse =
+        serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
+    if report.account_alias != expected_account
+        || report.backup_alias != expected_backup
+        || report.backup_id_hex != expected_id
+        || !valid_typed_entity_id_hex(&report.backup_id_hex, BACKUP_ID_PREFIX)
+        || !report.removed_local_enrollment
+    {
+        return Err(invalid_response(
+            "The agent did not confirm revocation of the selected backup enrollment.",
+        ));
+    }
+    Ok(BackupRevocationDto {
+        backup_alias: report.backup_alias,
+        account_alias: report.account_alias,
+        backup_id: report.backup_id_hex,
+        user_chain_sequence: report.user_chain_sequence,
+        already_absent: report.already_absent,
+        removed_local_enrollment: report.removed_local_enrollment,
+    })
+}
+
 fn recovery_response(
     value: serde_json::Value,
     expected_alias: &str,
@@ -2784,6 +2823,17 @@ pub struct BackupEnrollmentDto {
     pub backup_alias: String,
     pub account_alias: String,
     pub backup_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupRevocationDto {
+    pub backup_alias: String,
+    pub account_alias: String,
+    pub backup_id: String,
+    pub user_chain_sequence: u64,
+    pub already_absent: bool,
+    pub removed_local_enrollment: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -5276,6 +5326,47 @@ pub async fn list_backup_enrollments(
             "the backup enrollment load did not finish: {error}"
         ))
     })?
+}
+
+#[tauri::command]
+pub async fn revoke_owner_backup(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    account_store_id: String,
+    backup_alias: String,
+    backup_id: String,
+    confirmation: String,
+) -> Result<BackupRevocationDto, AgentError> {
+    require_main_window(&webview)?;
+    crate::applock::require_unlocked(&app)?;
+    let _mutation = state.begin_mutation()?;
+    let account = state.selected_account(&account_store_id)?;
+    let backup_alias = bounded_local_name(&backup_alias, "Choose a valid backup alias.")?;
+    if confirmation != backup_alias {
+        return Err(invalid_request("Type the exact backup alias to revoke it."));
+    }
+    if !valid_typed_entity_id_hex(&backup_id, BACKUP_ID_PREFIX) {
+        return Err(invalid_request("Choose a valid backup enrollment."));
+    }
+    let expected_account = account.account_alias.clone();
+    let expected_backup = backup_alias.clone();
+    let expected_id = backup_id.clone();
+    let profile = account.profile;
+    let value = apply_profile_operation_value(
+        &state,
+        profile.clone(),
+        Operation::RevokeOwnerBackup {
+            profile,
+            account_alias: account.account_alias,
+            backup_alias,
+            backup_id,
+        },
+        MutationKind::Guarded,
+    )
+    .await?;
+    backup_revocation_response(value, &expected_account, &expected_backup, &expected_id)
+        .map_err(|error| ambiguous_mutation_response(&state, error.message))
 }
 
 async fn yubi_enrollments_for_profile(
@@ -9595,6 +9686,56 @@ mod tests {
             .code,
             "invalid-response"
         );
+
+        let backup_id = "10".repeat(33);
+        assert!(backup_revocation_response(
+            serde_json::json!({
+                "backup_alias": "paper",
+                "account_alias": "personal",
+                "backup_id_hex": backup_id.clone(),
+                "user_chain_sequence": 2,
+                "already_absent": false,
+                "removed_local_enrollment": true
+            }),
+            "personal",
+            "paper",
+            &backup_id,
+        )
+        .is_ok());
+        for malformed in [
+            serde_json::json!({
+                "backup_alias": "other",
+                "account_alias": "personal",
+                "backup_id_hex": backup_id.clone(),
+                "user_chain_sequence": 2,
+                "already_absent": false,
+                "removed_local_enrollment": true
+            }),
+            serde_json::json!({
+                "backup_alias": "paper",
+                "account_alias": "personal",
+                "backup_id_hex": backup_id.clone(),
+                "user_chain_sequence": 2,
+                "already_absent": false,
+                "removed_local_enrollment": false
+            }),
+            serde_json::json!({
+                "backup_alias": "paper",
+                "account_alias": "personal",
+                "backup_id_hex": backup_id.clone(),
+                "user_chain_sequence": 2,
+                "already_absent": false,
+                "removed_local_enrollment": true,
+                "invented": true
+            }),
+        ] {
+            assert_eq!(
+                backup_revocation_response(malformed, "personal", "paper", &backup_id)
+                    .unwrap_err()
+                    .code,
+                "invalid-response"
+            );
+        }
 
         assert!(recovery_response(
             serde_json::json!({

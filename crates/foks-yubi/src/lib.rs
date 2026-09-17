@@ -17,7 +17,7 @@ mod hardware;
 
 pub use device::{ManagedYubiDevice, PinRetries, PreparedYubiDevice, YubiAdministrativeDevice};
 pub use error::{Error, Result};
-pub use mock::MockYubiProvider;
+pub use mock::{MockYubiFailpoint, MockYubiProvider};
 pub use provider::{
     CardId, ManagementKey, Pin, PinRetryConfiguration, PivPolicy, SlotId, YubiDeviceLocator,
     YubiProvider,

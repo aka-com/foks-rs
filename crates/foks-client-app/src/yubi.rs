@@ -7,8 +7,8 @@ use foks_client::{
 use foks_crypto::{derive_subkey_id, YubiDevice};
 use foks_proto::{EntityId, InviteCode, Role, SecretSeed, YubiCardId, YubiSlotAndPqKeyId};
 use foks_yubi::{
-    CardId, ManagementKey, Pin, PinRetries, PinRetryConfiguration, PivPolicy, SlotId,
-    YubiDeviceLocator, YubiProvider,
+    CardId, ManagementKey, Pin, PinRetries, PinRetryConfiguration, PivPolicy, PreparedYubiDevice,
+    SlotId, YubiDeviceLocator, YubiProvider,
 };
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize as _, Zeroizing};
@@ -57,6 +57,111 @@ impl Drop for PendingYubiPurpose {
         {
             invite.zeroize();
             passphrase.zeroize();
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+struct PendingYubiRetryConfiguration {
+    puk: Vec<u8>,
+    pin_attempts: u8,
+    puk_attempts: u8,
+}
+
+impl Drop for PendingYubiRetryConfiguration {
+    fn drop(&mut self) {
+        self.puk.zeroize();
+    }
+}
+
+impl PendingYubiRetryConfiguration {
+    fn new(configuration: PinRetryConfiguration) -> Self {
+        Self {
+            puk: configuration.puk().expose().as_bytes().to_vec(),
+            pin_attempts: configuration.pin_attempts(),
+            puk_attempts: configuration.puk_attempts(),
+        }
+    }
+
+    fn puk(&self) -> Result<Pin> {
+        let value = std::str::from_utf8(&self.puk)
+            .map_err(|_| Error::InvalidAccount("pending Yubi PUK is invalid"))?;
+        Ok(Pin::new(value.to_owned())?)
+    }
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum PendingYubiPreparationCheckpoint {
+    Planned,
+    RetryResetPending,
+    PinRestorePending,
+    PukRestorePending,
+    CredentialsReady,
+    SigningKeyPending,
+    SigningKeyReady {
+        #[serde(with = "array33")]
+        signing_public_key: [u8; 33],
+    },
+    PqKeyPending {
+        #[serde(with = "array33")]
+        signing_public_key: [u8; 33],
+    },
+    KeysReady {
+        #[serde(with = "array33")]
+        signing_public_key: [u8; 33],
+        #[serde(with = "array33")]
+        pq_public_key: [u8; 33],
+    },
+}
+
+mod array33 {
+    use serde::{de::Error as _, Deserialize as _, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &[u8; 33], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_bytes(value)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 33], D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Vec::<u8>::deserialize(deserializer)?;
+        value
+            .try_into()
+            .map_err(|value: Vec<u8>| D::Error::invalid_length(value.len(), &"33 bytes"))
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+struct PendingYubiPreparation {
+    card: CardId,
+    signing_slot: SlotId,
+    pq_slot: SlotId,
+    retry_configuration: Option<PendingYubiRetryConfiguration>,
+    pin_policy: PivPolicy,
+    touch_policy: PivPolicy,
+    checkpoint: PendingYubiPreparationCheckpoint,
+}
+
+impl PendingYubiPreparation {
+    fn new(
+        card: CardId,
+        signing_slot: SlotId,
+        pq_slot: SlotId,
+        retry_configuration: Option<PinRetryConfiguration>,
+    ) -> Self {
+        Self {
+            card,
+            signing_slot,
+            pq_slot,
+            retry_configuration: retry_configuration.map(PendingYubiRetryConfiguration::new),
+            pin_policy: PivPolicy::Once,
+            touch_policy: PivPolicy::Never,
+            checkpoint: PendingYubiPreparationCheckpoint::Planned,
         }
     }
 }
@@ -116,7 +221,8 @@ struct PendingYubiAccount {
     version: u32,
     alias: String,
     username: String,
-    locator: YubiDeviceLocator,
+    locator: Option<YubiDeviceLocator>,
+    preparation: Option<PendingYubiPreparation>,
     subkey_seed: [u8; 32],
     puk_seed: Option<[u8; 32]>,
     self_token: [u8; 17],
@@ -135,7 +241,7 @@ impl PendingYubiAccount {
     fn new_signup(
         alias: &str,
         username: &str,
-        locator: YubiDeviceLocator,
+        preparation: PendingYubiPreparation,
         device_name: String,
         email: String,
         invite: String,
@@ -155,7 +261,8 @@ impl PendingYubiAccount {
             version: YUBI_RECORD_VERSION,
             alias: alias.to_owned(),
             username: username.to_owned(),
-            locator,
+            locator: None,
+            preparation: Some(preparation),
             subkey_seed,
             puk_seed: Some(puk_seed),
             self_token,
@@ -171,7 +278,7 @@ impl PendingYubiAccount {
     fn new_provision(
         alias: &str,
         username: &str,
-        locator: YubiDeviceLocator,
+        preparation: PendingYubiPreparation,
         source_alias: String,
         device_name: String,
         serial: u64,
@@ -179,7 +286,7 @@ impl PendingYubiAccount {
         let mut pending = Self::new_signup(
             alias,
             username,
-            locator,
+            preparation,
             String::new(),
             String::new(),
             String::new(),
@@ -193,6 +300,12 @@ impl PendingYubiAccount {
             serial,
         };
         Ok(pending)
+    }
+
+    fn locator(&self) -> Result<&YubiDeviceLocator> {
+        self.locator.as_ref().ok_or(Error::InvalidAccount(
+            "pending Yubi hardware preparation is incomplete",
+        ))
     }
 
     fn signup_secrets(&self) -> Result<YubiAccountSecrets> {
@@ -394,6 +507,152 @@ impl AccountVault<'_> {
         Ok(pending)
     }
 
+    fn prepare_pending_yubi(
+        &mut self,
+        pending: &mut PendingYubiAccount,
+        pin: &Pin,
+        provider: &dyn YubiProvider,
+    ) -> Result<PreparedYubiDevice> {
+        loop {
+            let Some(preparation) = pending.preparation.as_ref() else {
+                let locator = pending.locator()?.clone();
+                let device = provider.open(&locator, Some(pin))?;
+                return Ok(PreparedYubiDevice {
+                    entity_id: device.entity_id().clone(),
+                    hepk: device.hepk().clone(),
+                    locator,
+                    device,
+                });
+            };
+            let card = preparation.card.clone();
+            let signing_slot = preparation.signing_slot;
+            let pq_slot = preparation.pq_slot;
+            let pin_policy = preparation.pin_policy;
+            let touch_policy = preparation.touch_policy;
+            match preparation.checkpoint {
+                PendingYubiPreparationCheckpoint::Planned => {
+                    let retry_requested = preparation.retry_configuration.is_some();
+                    provider.prepare_preflight(
+                        &card,
+                        signing_slot,
+                        pq_slot,
+                        pin,
+                        retry_requested,
+                    )?;
+                    pending
+                        .preparation
+                        .as_mut()
+                        .expect("preparation is present")
+                        .checkpoint = if retry_requested {
+                        PendingYubiPreparationCheckpoint::RetryResetPending
+                    } else {
+                        PendingYubiPreparationCheckpoint::CredentialsReady
+                    };
+                    self.put_pending_yubi(pending)?;
+                }
+                PendingYubiPreparationCheckpoint::RetryResetPending
+                | PendingYubiPreparationCheckpoint::PinRestorePending
+                | PendingYubiPreparationCheckpoint::PukRestorePending => {
+                    // Any credential command may have committed before its
+                    // result was lost. Reissue SET PIN RETRIES to establish a
+                    // known default baseline, then restore both intended
+                    // credentials. Never infer completion from a 3/3 retry
+                    // count or probe the intended and default PINs in turn.
+                    let retry =
+                        preparation
+                            .retry_configuration
+                            .as_ref()
+                            .ok_or(Error::InvalidAccount(
+                                "pending Yubi retry checkpoint has no policy",
+                            ))?;
+                    let pin_attempts = retry.pin_attempts;
+                    let puk_attempts = retry.puk_attempts;
+                    let puk = retry.puk()?;
+                    provider.prepare_reset_retries(&card, pin_attempts, puk_attempts)?;
+                    pending
+                        .preparation
+                        .as_mut()
+                        .expect("preparation is present")
+                        .checkpoint = PendingYubiPreparationCheckpoint::PinRestorePending;
+                    self.put_pending_yubi(pending)?;
+                    provider.prepare_restore_pin(&card, pin)?;
+                    pending
+                        .preparation
+                        .as_mut()
+                        .expect("preparation is present")
+                        .checkpoint = PendingYubiPreparationCheckpoint::PukRestorePending;
+                    self.put_pending_yubi(pending)?;
+                    provider.prepare_restore_puk(&card, &puk)?;
+                    pending
+                        .preparation
+                        .as_mut()
+                        .expect("preparation is present")
+                        .checkpoint = PendingYubiPreparationCheckpoint::CredentialsReady;
+                    self.put_pending_yubi(pending)?;
+                }
+                PendingYubiPreparationCheckpoint::CredentialsReady => {
+                    pending
+                        .preparation
+                        .as_mut()
+                        .expect("preparation is present")
+                        .checkpoint = PendingYubiPreparationCheckpoint::SigningKeyPending;
+                    self.put_pending_yubi(pending)?;
+                }
+                PendingYubiPreparationCheckpoint::SigningKeyPending => {
+                    let signing_public_key =
+                        provider.prepare_key(&card, signing_slot, pin_policy, touch_policy)?;
+                    pending
+                        .preparation
+                        .as_mut()
+                        .expect("preparation is present")
+                        .checkpoint =
+                        PendingYubiPreparationCheckpoint::SigningKeyReady { signing_public_key };
+                    self.put_pending_yubi(pending)?;
+                }
+                PendingYubiPreparationCheckpoint::SigningKeyReady { signing_public_key } => {
+                    pending
+                        .preparation
+                        .as_mut()
+                        .expect("preparation is present")
+                        .checkpoint =
+                        PendingYubiPreparationCheckpoint::PqKeyPending { signing_public_key };
+                    self.put_pending_yubi(pending)?;
+                }
+                PendingYubiPreparationCheckpoint::PqKeyPending { signing_public_key } => {
+                    let pq_public_key =
+                        provider.prepare_key(&card, pq_slot, pin_policy, touch_policy)?;
+                    pending
+                        .preparation
+                        .as_mut()
+                        .expect("preparation is present")
+                        .checkpoint = PendingYubiPreparationCheckpoint::KeysReady {
+                        signing_public_key,
+                        pq_public_key,
+                    };
+                    self.put_pending_yubi(pending)?;
+                }
+                PendingYubiPreparationCheckpoint::KeysReady {
+                    signing_public_key,
+                    pq_public_key,
+                } => {
+                    let locator = YubiDeviceLocator {
+                        card,
+                        signing_slot,
+                        pq_slot,
+                        signing_public_key,
+                        pq_public_key,
+                        pq_key_id: foks_crypto::yubi_pq_key_id(&pq_public_key)?,
+                    };
+                    let prepared = provider.finish_prepare(&locator, pin)?;
+                    pending.locator = Some(locator);
+                    pending.preparation = None;
+                    self.put_pending_yubi(pending)?;
+                    return Ok(prepared);
+                }
+            }
+        }
+    }
+
     fn stored_yubi(&mut self, alias: &str) -> Result<StoredYubiAccount> {
         validate_name(alias)?;
         let bytes = self.store.get(&yubi_account_key(alias)).map_err(|error| {
@@ -510,19 +769,16 @@ impl CheckedProfileSession<'_> {
         let invite_code = InviteCode::from_user_input(&input.invite, true)?;
         let host = self.pinned_host()?;
         self.client.check_invite_code(&host, &invite_code)?;
-        let prepared = provider.prepare(
-            &input.card,
+        let preparation = PendingYubiPreparation::new(
+            input.card,
             input.signing_slot,
             input.pq_slot,
-            &pin,
-            input.retry_configuration.as_ref(),
-            PivPolicy::Once,
-            PivPolicy::Never,
-        )?;
-        let pending = PendingYubiAccount::new_signup(
+            input.retry_configuration,
+        );
+        let mut pending = PendingYubiAccount::new_signup(
             &input.alias,
             &input.username,
-            prepared.locator.clone(),
+            preparation,
             input.device_name.clone(),
             input.email.clone(),
             input.invite.clone(),
@@ -532,6 +788,7 @@ impl CheckedProfileSession<'_> {
                 .map(|passphrase| passphrase.expose().to_vec()),
         )?;
         vault.put_pending_yubi(&pending)?;
+        let prepared = vault.prepare_pending_yubi(&mut pending, &pin, provider)?;
         let mut mutations = EncryptedFileMutationStore::open(
             &self.paths.protected_mutations,
             derive_mutation_key(master_key),
@@ -674,14 +931,16 @@ impl CheckedProfileSession<'_> {
                 management_enrolled: stored.management_enrolled,
             });
         }
-        let pending = vault.pending_yubi(alias)?;
+        let mut pending = vault.pending_yubi(alias)?;
         if let PendingYubiPurpose::Signup { passphrase, .. } = &pending.purpose {
             self.profile.require(Capability::Signup)?;
             if passphrase.is_some() {
                 self.profile.require(Capability::Passphrases)?;
             }
         }
-        let device = provider.open(&pending.locator, Some(&pin))?;
+        let prepared = vault.prepare_pending_yubi(&mut pending, &pin, provider)?;
+        let locator = pending.locator()?.clone();
+        let device = prepared.device;
         let host = self.pinned_host()?;
         let mut mutations = EncryptedFileMutationStore::open(
             &self.paths.protected_mutations,
@@ -740,8 +999,8 @@ impl CheckedProfileSession<'_> {
                                 email: email.clone(),
                                 passphrase: passphrase.as_ref().map(Passphrase::new).transpose()?,
                                 pq_hint: YubiSlotAndPqKeyId {
-                                    slot: u64::from(pending.locator.pq_slot.get()),
-                                    id: pending.locator.pq_key_id,
+                                    slot: u64::from(locator.pq_slot.get()),
+                                    id: locator.pq_key_id,
                                 },
                             },
                             pending.signup_secrets()?,
@@ -752,7 +1011,7 @@ impl CheckedProfileSession<'_> {
                     vault.commit_created_yubi(
                         alias,
                         &pending.username,
-                        &pending.locator,
+                        &locator,
                         &created.credential,
                         None,
                     )?;
@@ -811,8 +1070,8 @@ impl CheckedProfileSession<'_> {
                                     device_name: device_name.clone(),
                                     serial: *serial,
                                     pq_hint: YubiSlotAndPqKeyId {
-                                        slot: u64::from(pending.locator.pq_slot.get()),
-                                        id: pending.locator.pq_key_id,
+                                        slot: u64::from(locator.pq_slot.get()),
+                                        id: locator.pq_key_id,
                                     },
                                 },
                                 NewYubiDeviceSecrets::new(
@@ -825,7 +1084,7 @@ impl CheckedProfileSession<'_> {
                     vault.commit_created_yubi(
                         alias,
                         &pending.username,
-                        &pending.locator,
+                        &locator,
                         &provisioned.credential,
                         Some(source_alias.clone()),
                     )?;
@@ -893,24 +1152,22 @@ impl CheckedProfileSession<'_> {
                 "revoke the existing YubiKey before provisioning a replacement",
             ));
         }
-        let prepared = provider.prepare(
-            &input.card,
+        let preparation = PendingYubiPreparation::new(
+            input.card,
             input.signing_slot,
             input.pq_slot,
-            &pin,
-            input.retry_configuration.as_ref(),
-            PivPolicy::Once,
-            PivPolicy::Never,
-        )?;
-        let pending = PendingYubiAccount::new_provision(
+            input.retry_configuration,
+        );
+        let mut pending = PendingYubiAccount::new_provision(
             &input.target_alias,
             &source.username,
-            prepared.locator.clone(),
+            preparation,
             input.source_alias.clone(),
             input.device_name.clone(),
             input.serial,
         )?;
         vault.put_pending_yubi(&pending)?;
+        let prepared = vault.prepare_pending_yubi(&mut pending, &pin, provider)?;
         let mut mutations = EncryptedFileMutationStore::open(
             &self.paths.protected_mutations,
             derive_mutation_key(master_key),
@@ -1468,71 +1725,12 @@ impl CheckedProfileSession<'_> {
                 removed_local_credential: true,
             });
         };
-        if authenticated
-            .verified
-            .devices()
-            .iter()
-            .any(|device| device.id != target && device.id.entity_type() == foks_proto::ENTITY_YUBI)
-        {
-            return Err(Error::InvalidAccount(
-                "revoke this YubiKey before provisioning a replacement Yubi recipient",
-            ));
-        }
-        let mut rotations = Vec::new();
-        for public in authenticated
-            .verified
-            .shared_keys()
-            .iter()
-            .filter(|key| key.role <= target_role)
-        {
-            let previous = self
-                .client
-                .load_puks_for_role(
-                    &host,
-                    &software.credential,
-                    &authenticated.verified,
-                    public.role,
-                )?
-                .into_iter()
-                .find(|puk| puk.role == public.role && puk.generation == public.generation)
-                .ok_or(Error::InvalidAccount(
-                    "current PUK required for Yubi revocation is unavailable",
-                ))?;
-            rotations.push(foks_client::UserPukRotation {
-                role: public.role,
-                previous_generation: public.generation,
-                previous_seed: previous.seed,
-                new_seed: SecretSeed::new(random_array()?),
-            });
-        }
-        let no_passphrase = if rotations
-            .iter()
-            .any(|rotation| rotation.role == Role::OWNER)
-        {
-            self.profile.require(Capability::Passphrases)?;
-            match self.client.authenticated_passphrase_settings(
-                &host,
-                &software.credential,
-                &authenticated,
-            )? {
-                Some(_) => None,
-                None => {
-                    if !HardStateStore::open(&self.paths.hard_database)?
-                        .user_has_no_passphrase_attestation(
-                            host.host_id().as_bytes(),
-                            software.credential.uid.as_bytes(),
-                        )?
-                    {
-                        return Err(Error::InvalidAccount(
-                            "legacy unlinked passphrase state must be verified before owner rotation",
-                        ));
-                    }
-                    Some(foks_client::NoPassphraseConfigured)
-                }
-            }
-        } else {
-            None
-        };
+        let (rotations, no_passphrase) = self.software_revocation_material(
+            &host,
+            &software.credential,
+            &authenticated,
+            target_role,
+        )?;
         let mut mutations = EncryptedFileMutationStore::open(
             &self.paths.protected_mutations,
             derive_mutation_key(master_key),
@@ -1932,7 +2130,47 @@ fn validate_pending_yubi(pending: &PendingYubiAccount) -> Result<()> {
             }
         }
     }
-    validate_locator(&pending.locator)
+    match (&pending.locator, &pending.preparation) {
+        (Some(locator), None) => validate_locator(locator),
+        (None, Some(preparation)) => validate_pending_yubi_preparation(preparation),
+        _ => Err(Error::InvalidAccount(
+            "pending Yubi preparation state is inconsistent",
+        )),
+    }
+}
+
+fn validate_pending_yubi_preparation(preparation: &PendingYubiPreparation) -> Result<()> {
+    if preparation.card.serial == 0
+        || preparation.card.name.is_empty()
+        || preparation.card.name.len() > 255
+        || preparation.card.name.as_bytes().contains(&0)
+        || preparation.signing_slot == preparation.pq_slot
+    {
+        return Err(Error::InvalidAccount("pending Yubi preparation is invalid"));
+    }
+    if let Some(retry) = &preparation.retry_configuration {
+        if !(1..=15).contains(&retry.pin_attempts)
+            || !(1..=15).contains(&retry.puk_attempts)
+            || std::str::from_utf8(&retry.puk)
+                .ok()
+                .and_then(|puk| Pin::new(puk).ok())
+                .is_none()
+        {
+            return Err(Error::InvalidAccount(
+                "pending Yubi retry configuration is invalid",
+            ));
+        }
+    } else if matches!(
+        preparation.checkpoint,
+        PendingYubiPreparationCheckpoint::RetryResetPending
+            | PendingYubiPreparationCheckpoint::PinRestorePending
+            | PendingYubiPreparationCheckpoint::PukRestorePending
+    ) {
+        return Err(Error::InvalidAccount(
+            "pending Yubi retry checkpoint has no policy",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_stored_yubi(stored: &StoredYubiAccount, alias: &str) -> Result<()> {
@@ -2004,7 +2242,35 @@ fn validate_locator(locator: &YubiDeviceLocator) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use foks_keystore::{MemorySecretStore, SecretStore as _};
+    use foks_keystore::{EncryptedFileSecretStore, MemorySecretStore, SecretStore as _};
+    use foks_yubi::{MockYubiFailpoint, MockYubiProvider};
+
+    fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack
+            .windows(needle.len())
+            .any(|candidate| candidate == needle)
+    }
+
+    fn pending_preparation(
+        card: CardId,
+        signing_slot: SlotId,
+        pq_slot: SlotId,
+    ) -> PendingYubiAccount {
+        PendingYubiAccount::new_provision(
+            "hardware-pending",
+            "hardwareuser",
+            PendingYubiPreparation::new(
+                card,
+                signing_slot,
+                pq_slot,
+                Some(PinRetryConfiguration::new(Pin::new("puk-42").unwrap(), 3, 3).unwrap()),
+            ),
+            "personal".to_owned(),
+            "New security key".to_owned(),
+            7,
+        )
+        .unwrap()
+    }
 
     fn stored_management_state(
         current: [u8; 24],
@@ -2040,6 +2306,84 @@ mod tests {
             management_enrolled: enrolled,
             management_generation: generation,
             management_refresh_source: None,
+        }
+    }
+
+    #[test]
+    fn interrupted_hardware_mutations_resume_from_encrypted_checkpoints() {
+        let signing_slot = SlotId::new(0x82).unwrap();
+        let pq_slot = SlotId::new(0x83).unwrap();
+        let failpoints = [
+            (MockYubiFailpoint::RetryReset, 0),
+            (MockYubiFailpoint::PinRestore, 0),
+            (MockYubiFailpoint::PukRestore, 0),
+            (MockYubiFailpoint::KeyGeneration(signing_slot), 1),
+            (MockYubiFailpoint::KeyGeneration(pq_slot), 2),
+        ];
+
+        for (index, (failpoint, expected_keys)) in failpoints.into_iter().enumerate() {
+            let temporary = tempfile::tempdir().unwrap();
+            let master_key = [u8::try_from(index + 1).unwrap(); 32];
+            let provider = MockYubiProvider::with_card(
+                "checkpoint-card",
+                10_000 + u32::try_from(index).unwrap(),
+                &Pin::new("pin-42").unwrap(),
+            )
+            .unwrap();
+            let card = provider.cards().unwrap().remove(0);
+            let mut pending = pending_preparation(card.clone(), signing_slot, pq_slot);
+            let key = pending_yubi_key("hardware-pending");
+            let record_path = temporary.path().join(format!("{key}.fks"));
+
+            let mut store =
+                EncryptedFileSecretStore::open(temporary.path(), Zeroizing::new(master_key))
+                    .unwrap();
+            let mut vault = AccountVault::new(&mut store);
+            vault.put_pending_yubi(&pending).unwrap();
+            let encoded = std::fs::read(&record_path).unwrap();
+            assert!(!contains_bytes(&encoded, b"pin-42"));
+            assert!(!contains_bytes(&encoded, b"puk-42"));
+
+            provider.fail_after_next(&card, failpoint).unwrap();
+            assert!(
+                vault
+                    .prepare_pending_yubi(&mut pending, &Pin::new("pin-42").unwrap(), &provider)
+                    .is_err(),
+                "the post-mutation failpoint must interrupt preparation"
+            );
+            assert_eq!(provider.generated_key_count(&card).unwrap(), expected_keys);
+            drop(pending);
+            drop(vault);
+            drop(store);
+
+            let encoded = std::fs::read(&record_path).unwrap();
+            assert!(!contains_bytes(&encoded, b"pin-42"));
+            assert!(!contains_bytes(&encoded, b"puk-42"));
+
+            let mut store =
+                EncryptedFileSecretStore::open(temporary.path(), Zeroizing::new(master_key))
+                    .unwrap();
+            let mut vault = AccountVault::new(&mut store);
+            let mut pending = vault.pending_yubi("hardware-pending").unwrap();
+            let prepared = vault
+                .prepare_pending_yubi(&mut pending, &Pin::new("pin-42").unwrap(), &provider)
+                .unwrap();
+            assert_eq!(provider.generated_key_count(&card).unwrap(), 2);
+            assert_eq!(&prepared.locator, pending.locator().unwrap());
+            assert_eq!(prepared.device.pin_retries().unwrap().remaining, 3);
+            prepared
+                .device
+                .unblock_pin(&Pin::new("puk-42").unwrap(), &Pin::new("new-42").unwrap())
+                .expect("the intended PUK must be restored before key generation");
+            provider
+                .open(&prepared.locator, Some(&Pin::new("new-42").unwrap()))
+                .expect("the resumed card must use the restored credential");
+            drop(pending);
+            drop(vault);
+
+            let completed = store.get(&key).unwrap();
+            assert!(!contains_bytes(&completed, b"pin-42"));
+            assert!(!contains_bytes(&completed, b"puk-42"));
         }
     }
 
@@ -2095,7 +2439,12 @@ mod tests {
         let pending = PendingYubiAccount::new_provision(
             "hardware-pending",
             "hardwareuser",
-            stored.locator.clone(),
+            PendingYubiPreparation::new(
+                stored.locator.card.clone(),
+                stored.locator.signing_slot,
+                stored.locator.pq_slot,
+                None,
+            ),
             "personal".to_owned(),
             "New security key".to_owned(),
             7,

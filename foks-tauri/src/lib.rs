@@ -114,6 +114,7 @@ pub fn run() {
             commands::list_account_devices,
             commands::remove_account_device,
             commands::list_backup_enrollments,
+            commands::revoke_owner_backup,
             commands::list_yubi_cards,
             commands::list_yubi_accounts,
             commands::create_yubi_account,
