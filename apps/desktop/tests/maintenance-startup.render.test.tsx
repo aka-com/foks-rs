@@ -29,6 +29,153 @@ test.after(async () => {
   dom.window.close();
 });
 
+test('startup mounts local catalog shells before a blocked profile and hands off maintenance once', async () => {
+  const { App } = (await vite.ssrLoadModule(
+    '/src/app-root.tsx',
+  )) as typeof import('../src/app-root');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const base = mockBridge(FIXTURE);
+  const full = await base.listCatalog();
+  const local = {
+    ...full,
+    stores: [],
+    inventory: [],
+    items: [],
+    failures: [],
+    blockedProfiles: [],
+  };
+  let finish!: (value: typeof full) => void;
+  const pending = new Promise<typeof full>((resolve) => {
+    finish = resolve;
+  });
+  const listeners = new Set<(value: MaintenanceSnapshot) => void>();
+  let maintenance: MaintenanceSnapshot = {
+    state: 'idle',
+    generation: 0,
+    revision: 0,
+  };
+  const bridge: Bridge = {
+    ...base,
+    native: true,
+    listCatalog: async (onPartial) => {
+      onPartial?.(local);
+      return pending;
+    },
+    onMaintenanceStatus: async (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    clientStateMaintenanceStatus: async () => maintenance,
+  };
+  const rendered = ui.render(createElement(App, { bridge }));
+  try {
+    await ui.waitFor(() => {
+      assert.doesNotMatch(
+        document.body.textContent ?? '',
+        /Starting the FOKS agent/,
+      );
+      assert.ok(document.querySelector('.app'));
+    });
+    assert.doesNotMatch(document.body.textContent ?? '', /Welcome to FOKS/);
+    await ui.waitFor(() => assert.equal(listeners.size, 1));
+    await ui.act(async () => {
+      maintenance = {
+        state: 'active',
+        generation: 9,
+        revision: 1,
+        kind: 'verify',
+        phase: 'running',
+      };
+      for (const listener of listeners) listener(maintenance);
+      finish(full);
+    });
+    await ui.waitFor(() =>
+      assert.match(
+        document.body.textContent ?? '',
+        /paused while background maintenance/,
+      ),
+    );
+    assert.equal(listeners.size, 1);
+  } finally {
+    finish(full);
+    rendered.unmount();
+  }
+});
+
+test('healthy startup progress renders and an older boot cannot overwrite a shell refresh', async () => {
+  const { App } = (await vite.ssrLoadModule(
+    '/src/app-root.tsx',
+  )) as typeof import('../src/app-root');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const base = mockBridge(FIXTURE);
+  const full = await base.listCatalog();
+  const item = full.items[0];
+  const partial = {
+    ...full,
+    profiles: [...full.profiles, 'unfinished'],
+    items: [{ ...item, path: '/boot-partial-marker' }],
+    localMetadata: {
+      accounts: await base.listAccounts(),
+      profiles: await Promise.all(
+        full.profiles.map(async (profile) => ({
+          profile,
+          label: null,
+          configuredProbe: profile,
+          status: await base.describeServerStatus(profile),
+          error: null,
+        })),
+      ),
+    },
+  };
+  let finish!: (value: typeof full) => void;
+  const pending = new Promise<typeof full>((resolve) => {
+    finish = resolve;
+  });
+  let calls = 0;
+  const bridge: Bridge = {
+    ...base,
+    native: true,
+    listCatalog: async (onPartial) => {
+      if (++calls === 1) {
+        onPartial?.(partial);
+        return pending;
+      }
+      return { ...full, items: [{ ...item, path: '/new-catalog-marker' }] };
+    },
+  };
+  const rendered = ui.render(createElement(App, { bridge }));
+  try {
+    await ui.waitFor(() =>
+      assert.match(document.body.textContent ?? '', /boot-partial-marker/),
+    );
+    await ui.act(async () => {
+      window.dispatchEvent(new dom.window.Event('focus'));
+    });
+    await ui.waitFor(() =>
+      assert.match(document.body.textContent ?? '', /new-catalog-marker/),
+    );
+    await ui.act(async () => {
+      finish(full);
+      await Promise.resolve();
+    });
+    assert.match(document.body.textContent ?? '', /new-catalog-marker/);
+    assert.doesNotMatch(document.body.textContent ?? '', /boot-partial-marker/);
+  } finally {
+    finish(full);
+    rendered.unmount();
+  }
+});
+
 test('startup paused by maintenance resumes from the terminal native event', async () => {
   const { App } = (await vite.ssrLoadModule(
     '/src/app-root.tsx',

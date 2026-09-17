@@ -127,6 +127,36 @@ test('unmounted owners reject late callbacks and React effect replay can reactiv
   assert.equal(await coordinator.refresh(), 1);
 });
 
+test('progress publishes before completion and retired callbacks cannot publish', async () => {
+  const reads = [deferred<number>(), deferred<number>()];
+  const callbacks: ((value: number) => void)[] = [];
+  const published: number[] = [];
+  const coordinator = new CatalogCoordinator<number>(
+    (partial) => {
+      callbacks.push(partial);
+      return reads[callbacks.length - 1].promise;
+    },
+    (value) => published.push(value),
+  );
+  const pending = coordinator.refresh();
+  await Promise.resolve();
+  callbacks[0](1);
+  assert.deepEqual(published, [1]);
+  void coordinator.refresh(true);
+  callbacks[0](2);
+  reads[0].resolve(3);
+  await Promise.resolve();
+  await Promise.resolve();
+  callbacks[0](4);
+  callbacks[1](5);
+  assert.deepEqual(published, [1, 5]);
+  coordinator.deactivate();
+  callbacks[1](6);
+  reads[1].resolve(7);
+  await assert.rejects(pending, CatalogReadRetiredError);
+  assert.deepEqual(published, [1, 5]);
+});
+
 test('aggregate diagnostics contain no catalog data and cannot alter publication', async () => {
   const events: unknown[] = [];
   const coordinator = new CatalogCoordinator(

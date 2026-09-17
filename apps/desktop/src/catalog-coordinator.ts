@@ -50,7 +50,10 @@ export class CatalogCoordinator<T> {
   }
 
   constructor(
-    private readonly read: () => Promise<T>,
+    private readonly read: (
+      onPartial: (value: T) => void,
+      isCurrent: () => boolean,
+    ) => Promise<T>,
     private readonly publish: (value: T, forced: boolean) => void,
   ) {}
 
@@ -88,8 +91,13 @@ export class CatalogCoordinator<T> {
           this.dirty = false;
           const started = performance.now();
           let value: T;
+          let reading = true;
+          const isCurrent = (): boolean =>
+            reading && this.active && epoch === this.epoch && !this.dirty;
           try {
-            value = await this.read();
+            value = await this.read((partial) => {
+              if (isCurrent()) this.publish(partial, forced);
+            }, isCurrent);
           } catch (error) {
             if (this.dirty) {
               this.report('superseded', started);
@@ -102,6 +110,8 @@ export class CatalogCoordinator<T> {
             }
             this.report('failed', started);
             throw error;
+          } finally {
+            reading = false;
           }
           if (this.dirty) {
             this.report('superseded', started);

@@ -63,6 +63,142 @@ fn ambiguous_mutations_require_a_fresh_catalog_before_another_write() {
 }
 
 #[test]
+fn catalog_progress_has_distinct_generations_and_retires_on_root_and_profile_mutation() {
+    for profile_mutation in [false, true] {
+        let state = phase_four_state(vec![]);
+        let (load, _) = state.begin_catalog_load_checked().unwrap();
+        let mut published = Vec::new();
+        assert!(
+            state.publish_catalog(load, CatalogSnapshot::default(), |generation| published
+                .push(generation))
+        );
+        assert!(
+            state.publish_catalog(load, CatalogSnapshot::default(), |generation| published
+                .push(generation))
+        );
+        assert!(published[1] > published[0]);
+        assert!(state.catalog_at(Some(published[0])).is_err());
+        let target = if profile_mutation {
+            state.for_profile("work.example").unwrap()
+        } else {
+            state.clone()
+        };
+        let permit = target.begin_mutation().unwrap();
+        target.invalidate_catalog();
+        drop(permit);
+        assert!(
+            !state.publish_catalog(load, CatalogSnapshot::default(), |_| panic!(
+                "retired progress published"
+            ))
+        );
+    }
+}
+
+#[test]
+fn unrelated_progress_preserves_profile_generation_and_authorization_facts() {
+    let state = phase_four_state(vec![]);
+    let healthy = state.for_profile("healthy").unwrap();
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    let mut snapshot = CatalogSnapshot {
+        profiles: vec!["healthy".into(), "slow".into()],
+        ..Default::default()
+    };
+    snapshot
+        .inventory
+        .push(foks_desktop::CatalogInventoryState {
+            profile: "healthy".into(),
+            accounts_complete: true,
+            teams_complete: true,
+        });
+    assert!(state.publish_catalog(load, snapshot.clone(), |_| {}));
+    let healthy_generation = healthy.catalog_at(None).unwrap().0;
+    let account = AccountDto {
+        local_alias: None,
+        store: "healthy-store".into(),
+        profile: "healthy".into(),
+        alias: "alice".into(),
+        username: "alice".into(),
+    };
+    healthy
+        .retain_accounts(healthy_generation, &[account])
+        .unwrap();
+    snapshot
+        .inventory
+        .push(foks_desktop::CatalogInventoryState {
+            profile: "slow".into(),
+            accounts_complete: false,
+            teams_complete: false,
+        });
+    assert!(state.publish_catalog(load, snapshot, |_| {}));
+    assert_eq!(healthy.catalog_at(None).unwrap().0, healthy_generation);
+    assert!(state.accounts.lock().unwrap().contains_key("healthy-store"));
+}
+
+#[test]
+fn scoped_full_read_preserves_evidence_when_replacing_a_local_only_seed() {
+    let state = phase_four_state(vec![]);
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.publish_catalog(
+        load,
+        CatalogSnapshot {
+            profiles: vec!["healthy".into(), "slow".into()],
+            ..Default::default()
+        },
+        |_| {}
+    ));
+    let healthy = state.for_profile("healthy").unwrap();
+    let (load, _) = healthy.begin_catalog_load_checked().unwrap();
+    assert!(healthy.accept_catalog(load, complete_profile_catalog("healthy")));
+    assert_eq!(
+        state.catalog_at(None).unwrap().1.unwrap().full_item_reads,
+        Some(vec!["healthy".into()])
+    );
+}
+
+#[test]
+fn cancelled_catalog_progress_does_not_replace_the_accepted_snapshot() {
+    let state = phase_four_state(vec![]);
+    let before = state.catalog_at(None).unwrap();
+    let (load, token) = state.begin_catalog_load_checked().unwrap();
+    token.cancel();
+    assert!(
+        !state.publish_catalog(load, CatalogSnapshot::default(), |_| panic!(
+            "cancelled publication"
+        ))
+    );
+    assert_eq!(state.catalog_at(None).unwrap(), before);
+}
+
+#[test]
+fn partial_progress_only_reconciles_profiles_with_authoritative_item_reads() {
+    let state = phase_four_state(vec![]);
+    let healthy = state.for_profile("healthy").unwrap();
+    let slow = state.for_profile("slow").unwrap();
+    healthy
+        .mutation_requires_refresh
+        .store(true, Ordering::Release);
+    slow.mutation_requires_refresh
+        .store(true, Ordering::Release);
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    let mut partial = CatalogSnapshot {
+        profiles: vec!["healthy".into(), "slow".into()],
+        inventory: vec![foks_desktop::CatalogInventoryState {
+            profile: "healthy".into(),
+            accounts_complete: true,
+            teams_complete: true,
+        }],
+        full_item_reads: Some(vec![]),
+        ..CatalogSnapshot::default()
+    };
+    assert!(state.publish_catalog(load, partial.clone(), |_| {}));
+    assert!(healthy.mutation_requires_refresh.load(Ordering::Acquire));
+    partial.full_item_reads = Some(vec!["healthy".into()]);
+    assert!(state.publish_catalog(load, partial, |_| {}));
+    assert!(!healthy.mutation_requires_refresh.load(Ordering::Acquire));
+    assert!(slow.mutation_requires_refresh.load(Ordering::Acquire));
+}
+
+#[test]
 fn incomplete_catalog_does_not_release_an_ambiguous_mutation() {
     let state = phase_four_state(vec![]);
     state

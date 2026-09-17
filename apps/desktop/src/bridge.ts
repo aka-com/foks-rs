@@ -29,7 +29,7 @@ import {
 
 import { decodeChatReply } from './chat-contract';
 import type { ChatAction, ChatReply } from './chat-contract';
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { itemKey, parseRole, serverDisplayName } from './model';
 import type {
@@ -185,6 +185,16 @@ export interface CatalogDto {
   items: ItemDto[];
   failures: CatalogFailureDto[];
   blockedProfiles: string[];
+  localMetadata?: {
+    accounts: Account[];
+    profiles: {
+      profile: string;
+      label: string | null;
+      configuredProbe: string;
+      status: ServerStatusSnapshot | null;
+      error: CommandError | null;
+    }[];
+  };
   /**
    * Identifies the native snapshot this catalog came from. Later reads that
    * pass it back fail when a newer load or mutation replaced the snapshot.
@@ -788,7 +798,7 @@ export interface Bridge {
   agentStatus(): Promise<AgentStatus>;
   appInfo(): Promise<AppInfo>;
   /** Returns the full catalog including stores. Mutually exclusive with `listStores`. */
-  listCatalog(): Promise<CatalogDto>;
+  listCatalog(onPartial?: (catalog: CatalogDto) => void): Promise<CatalogDto>;
   /** Returns store metadata only. Mutually exclusive with `listCatalog`. */
   listStores(): Promise<CatalogDto>;
   /**
@@ -1530,7 +1540,47 @@ function decodeInventory(value: unknown, at: string): CatalogInventoryDto {
 
 export function decodeCatalog(value: unknown): CatalogDto {
   const item = record(value, 'list_catalog response');
+  const metadata =
+    item.localMetadata === undefined
+      ? undefined
+      : record(item.localMetadata, 'catalog metadata');
   return {
+    ...(metadata
+      ? {
+          localMetadata: {
+            accounts: decodeAccounts(metadata.accounts),
+            profiles: array(
+              metadata.profiles,
+              'catalog metadata profiles',
+              (value, at) => {
+                const profile = record(value, at);
+                const id = string(profile.profile, `${at}.profile`);
+                const status =
+                  profile.status === null
+                    ? null
+                    : decodeServerStatus(profile.status);
+                if (status && status.profile !== id)
+                  throw new Error(
+                    'Catalog status belongs to a different profile.',
+                  );
+                return {
+                  profile: id,
+                  label: nullableString(profile.label, `${at}.label`),
+                  configuredProbe: string(
+                    profile.configuredProbe,
+                    `${at}.configuredProbe`,
+                  ),
+                  status,
+                  error:
+                    profile.error === null
+                      ? null
+                      : decodeCommandError(profile.error, `${at}.error`),
+                };
+              },
+            ),
+          },
+        }
+      : {}),
     profiles: array(item.profiles, 'profiles', string),
     stores: array(item.stores, 'stores', decodeStore),
     knownStores: array(item.knownStores, 'knownStores', decodeStore),
@@ -2397,7 +2447,29 @@ export const tauriBridge: Bridge = {
   quitApp: () => invoke<void>('quit_app'),
   agentStatus: () => checked('agent_status', undefined, decodeAgentStatus),
   appInfo: () => checked('app_info', undefined, decodeAppInfo),
-  listCatalog: () => checked('list_catalog', undefined, decodeCatalog),
+  listCatalog: async (onPartial) => {
+    if (!onPartial) return checked('list_catalog', undefined, decodeCatalog);
+    const channel = new Channel<unknown>();
+    let failure: unknown;
+    channel.onmessage = (value) => {
+      try {
+        onPartial(decodeCatalog(value));
+      } catch (error) {
+        failure = error;
+      }
+    };
+    try {
+      const catalog = await checked(
+        'list_catalog_progressive',
+        { onPartial: channel },
+        decodeCatalog,
+      );
+      if (failure) throw failure;
+      return catalog;
+    } finally {
+      channel.onmessage = () => undefined;
+    }
+  },
   listStores: () => checked('list_stores', undefined, decodeCatalog),
   listServers: (generation) =>
     checked(
@@ -2926,11 +2998,12 @@ function recoverableGroupDetailFailure(
  *
  * Returns true when any discovery was attempted. The native command invalidates
  * the catalog even if no groups are found or the operation fails, so the
- * catalog must be reloaded before the shell renders in all of those cases.
+ * catalog must be reloaded after all of those cases.
  */
 export async function discoverUnboundTeams(
   bridge: Bridge,
   snapshot: AgentSnapshot,
+  isCurrent: () => boolean = () => true,
 ): Promise<boolean> {
   if (!profileInventoryComplete(snapshot, 'accounts')) return false;
   const bound = new Set<string>();
@@ -2940,12 +3013,14 @@ export async function discoverUnboundTeams(
   }
   let attempted = false;
   for (const account of snapshot.accounts) {
+    if (!isCurrent()) break;
     if (bound.has(`${account.server}\u0000${account.alias}`)) continue;
     attempted = true;
     try {
-      await enqueueProfileWork(bridge, account.server, () =>
-        bridge.discoverGroups(account.server, account.alias),
-      );
+      await enqueueProfileWork(bridge, account.server, async () => {
+        if (isCurrent())
+          await bridge.discoverGroups(account.server, account.alias);
+      });
     } catch {
       // Best effort: leave the account unbound until a later launch.
     }
@@ -2964,12 +3039,24 @@ export async function loadSnapshot(
   bridge: Bridge,
   base = bridge.fixtureSnapshot,
   nowSeconds: number = Math.floor(Date.now() / 1000),
+  onPartial?: (snapshot: AgentSnapshot) => void,
+  isCurrent: () => boolean = () => true,
 ): Promise<AgentSnapshot> {
   try {
-    return await loadSnapshotOnce(bridge, base, nowSeconds);
+    return await loadSnapshotOnce(
+      bridge,
+      base,
+      nowSeconds,
+      onPartial,
+      isCurrent,
+    );
   } catch (error) {
-    if (normalizeCommandError(error).code !== 'catalog-required') throw error;
-    return loadSnapshotOnce(bridge, base, nowSeconds);
+    if (
+      !isCurrent() ||
+      normalizeCommandError(error).code !== 'catalog-required'
+    )
+      throw error;
+    return loadSnapshotOnce(bridge, base, nowSeconds, onPartial, isCurrent);
   }
 }
 
@@ -2977,8 +3064,12 @@ async function loadSnapshotOnce(
   bridge: Bridge,
   base: AgentSnapshot | undefined,
   nowSeconds: number,
+  onPartial: ((snapshot: AgentSnapshot) => void) | undefined,
+  isCurrent: () => boolean,
 ): Promise<AgentSnapshot> {
+  if (!isCurrent()) throw new Error('Catalog load was retired.');
   const agent = await bridge.agentStatus();
+  if (!isCurrent()) throw new Error('Catalog load was retired.');
   if (agent.state !== 'ready') {
     const error: CommandError = {
       code: 'bootstrap-required',
@@ -2992,7 +3083,58 @@ async function loadSnapshotOnce(
     reportReadinessError(error);
     throw error;
   }
-  const response = await bridge.listCatalog();
+  let accepting = true;
+  let revision = 0;
+  let partialFailure: unknown;
+  try {
+    const response = await bridge.listCatalog(
+      onPartial
+        ? (partial) => {
+            if (!accepting || !isCurrent()) return;
+            const current = ++revision;
+            void projectCatalog(
+              bridge,
+              partial,
+              base,
+              nowSeconds,
+              agent,
+              true,
+            ).then(
+              (snapshot) => {
+                if (accepting && isCurrent() && current === revision)
+                  onPartial(snapshot);
+              },
+              (error: unknown) => {
+                partialFailure = error;
+              },
+            );
+          }
+        : undefined,
+    );
+    if (!isCurrent()) throw new Error('Catalog load was retired.');
+    const snapshot = await projectCatalog(
+      bridge,
+      response,
+      base,
+      nowSeconds,
+      agent,
+      false,
+    );
+    if (partialFailure) throw partialFailure;
+    return snapshot;
+  } finally {
+    accepting = false;
+  }
+}
+
+async function projectCatalog(
+  bridge: Bridge,
+  response: CatalogDto,
+  base: AgentSnapshot | undefined,
+  nowSeconds: number,
+  agent: AgentStatus,
+  partial: boolean,
+): Promise<AgentSnapshot> {
   const globalFailure = response.failures.find((failure) =>
     ['bootstrap-required', 'agent-lost', 'version-mismatch'].includes(
       failure.error.code,
@@ -3004,6 +3146,20 @@ async function loadSnapshotOnce(
   }
   const liveStores = response.stores as Store[];
   const storesById = new Map<StoreRef, Store>();
+  if (partial) {
+    for (const store of base?.stores ?? []) {
+      const inventory = response.inventory.find(
+        (entry) => entry.profile === store.server,
+      );
+      if (
+        response.profiles.includes(store.server) &&
+        !(store.kind === 'account'
+          ? inventory?.accountsComplete
+          : inventory?.teamsComplete)
+      )
+        storesById.set(store.id, store);
+    }
+  }
   for (const store of response.knownStores as Store[])
     storesById.set(store.id, store);
   for (const store of liveStores) storesById.set(store.id, store);
@@ -3060,42 +3216,91 @@ async function loadSnapshotOnce(
   });
   // When a server profile is blocked, skip roster queries for that server.
   const blockedProfiles = new Set(response.blockedProfiles);
-  const listedServers = await bridge.listServers(response.generation);
-  const statusResults = bridge.native
-    ? await Promise.all(
-        listedServers
-          .filter(
-            (server) =>
-              server.trust.status !== 'blocked' &&
-              !blockedProfiles.has(server.id),
-          )
-          .map(async (server) => {
-            try {
-              const status = await sharedServerStatus(bridge, server.id);
-              if (status.profile !== server.id) {
-                throw new Error(
-                  'describe_server_status returned a different profile.',
+  const loadingError = normalizeCommandError({
+    code: 'catalog-loading',
+    message: 'The profile catalog is still loading.',
+    retryable: false,
+    ambiguous: false,
+    fatal: false,
+  });
+  const listedServers: Server[] = partial
+    ? response.profiles.map((profile) => {
+        const metadata = response.localMetadata?.profiles.find(
+          (entry) => entry.profile === profile,
+        );
+        const previous = base?.servers.find((entry) => entry.id === profile);
+        return {
+          id: profile,
+          name: profile,
+          label: metadata?.label ?? previous?.label ?? null,
+          configuredProbe:
+            metadata?.configuredProbe ?? previous?.configuredProbe ?? profile,
+          host_id: null,
+          chain: null,
+          epoch: null,
+          accounts: liveStores
+            .filter(
+              (store) => store.server === profile && store.kind === 'account',
+            )
+            .map((store) => store.account),
+          trust: blockedProfiles.has(profile)
+            ? { status: 'blocked', error: loadingError }
+            : { status: 'unprobed' },
+          compatibility: { status: 'requirement-unknown', error: loadingError },
+          passiveStatus: {
+            status: 'failed',
+            source: 'describe-server-status',
+            error: loadingError,
+          },
+          connectivity: { status: 'unknown' },
+          capabilities: { chat: false },
+          restrictions: previous?.restrictions ?? [],
+        };
+      })
+    : await bridge.listServers(response.generation);
+  const statusResults =
+    bridge.native || partial
+      ? await Promise.all(
+          listedServers
+            .filter(
+              (server) =>
+                server.trust.status !== 'blocked' &&
+                !blockedProfiles.has(server.id),
+            )
+            .map(async (server) => {
+              try {
+                const cached = response.localMetadata?.profiles.find(
+                  (entry) => entry.profile === server.id,
                 );
+                if (partial && !cached?.status)
+                  throw cached?.error ?? loadingError;
+                const status = partial
+                  ? cached!.status!
+                  : await sharedServerStatus(bridge, server.id);
+                if (status.profile !== server.id) {
+                  throw new Error(
+                    'describe_server_status returned a different profile.',
+                  );
+                }
+                return { profile: server.id, status };
+              } catch (error) {
+                const typed = normalizeCommandError(error);
+                if (
+                  typed.code === 'bootstrap-required' ||
+                  typed.code === 'agent-lost' ||
+                  typed.code === 'version-mismatch'
+                ) {
+                  reportReadinessError(typed);
+                  throw typed;
+                }
+                return {
+                  profile: server.id,
+                  error: typed,
+                };
               }
-              return { profile: server.id, status };
-            } catch (error) {
-              const typed = normalizeCommandError(error);
-              if (
-                typed.code === 'bootstrap-required' ||
-                typed.code === 'agent-lost' ||
-                typed.code === 'version-mismatch'
-              ) {
-                reportReadinessError(typed);
-                throw typed;
-              }
-              return {
-                profile: server.id,
-                error: typed,
-              };
-            }
-          }),
-      )
-    : [];
+            }),
+        )
+      : [];
   const statuses = new Map(
     statusResults.flatMap((result) =>
       result.status ? [[result.profile, result.status] as const] : [],
@@ -3112,7 +3317,7 @@ async function loadSnapshotOnce(
       .map((failure) => failure.profile),
   );
   const servers = listedServers.map((server) => {
-    if (!bridge.native) return server;
+    if (!bridge.native && !partial) return server;
     const previous = base?.servers.find((entry) => entry.id === server.id);
     const scopedFailures = response.failures.filter(
       (failure) => failure.scope === 'profile' && failure.profile === server.id,
@@ -3190,7 +3395,9 @@ async function loadSnapshotOnce(
       restrictions: allRestrictions,
     };
   });
-  const rawAccounts = await bridge.listAccounts(response.generation);
+  const rawAccounts = partial
+    ? (response.localMetadata?.accounts ?? [])
+    : await bridge.listAccounts(response.generation);
   const unavailableServers = new Set(
     servers
       .filter(
@@ -3203,6 +3410,7 @@ async function loadSnapshotOnce(
   // skip those reads.
   const teams = liveStores.filter(
     (store) =>
+      !partial &&
       store.kind === 'team' &&
       store.active &&
       !blockedProfiles.has(store.server) &&

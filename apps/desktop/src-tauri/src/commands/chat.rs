@@ -50,6 +50,7 @@ pub async fn chat_request(
     if !action.validate() || !foks_agent_proto::chat::valid_chat_id(&view_id) {
         return Err(invalid_request("Invalid chat request."));
     }
+    let state = state.for_store(&store_id)?;
     let mutation = action.is_mutation();
     let generation = state.catalog_generation.load(Ordering::Acquire);
     let (CatalogStoreRef::Team(store), Some(true)) = state.selected_store(&store_id)? else {
@@ -95,7 +96,13 @@ pub async fn chat_request(
         error.fatal = true;
         return Err(error);
     }
-    super::chat_local::remember(webview.app_handle(), &store_id, &reply.scope, generation);
+    super::chat_local::remember(
+        webview.app_handle(),
+        &store_id,
+        &reply.scope,
+        generation,
+        unlocked,
+    );
     Ok(reply)
 }
 
@@ -187,6 +194,84 @@ mod tests {
         assert_eq!(error.code, "chat-channel-integrity");
         assert!(error.fatal);
         assert!(!error.retryable);
+    }
+
+    #[test]
+    fn unrelated_profile_updates_do_not_retire_chat_but_own_profile_and_root_changes_do() {
+        let state = AppState::new(Arc::new(crate::agent::AgentHandle::new(
+            "/tmp/unused-chat-agent.sock".into(),
+        )));
+        let store = serde_json::json!({"kind":"team", "profile":"chat", "accountAlias":"owner", "teamAlias":"team", "teamId":"team"}).to_string();
+        let chat = state.for_store(&store).unwrap();
+        let generation = chat.catalog_generation.load(Ordering::Acquire);
+        state.for_profile("other").unwrap().invalidate_catalog();
+        assert!(require_catalog_generation(
+            generation,
+            chat.catalog_generation.load(Ordering::Acquire),
+            true
+        )
+        .is_ok());
+        chat.invalidate_catalog();
+        assert!(
+            require_catalog_generation(
+                generation,
+                chat.catalog_generation.load(Ordering::Acquire),
+                true
+            )
+            .unwrap_err()
+            .ambiguous
+        );
+        let generation = chat.catalog_generation.load(Ordering::Acquire);
+        state.invalidate_catalog();
+        assert!(require_catalog_generation(
+            generation,
+            chat.catalog_generation.load(Ordering::Acquire),
+            false
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn progressive_sibling_catalog_keeps_the_chat_profile_generation() {
+        let state = AppState::new(Arc::new(crate::agent::AgentHandle::new(
+            "/tmp/unused-progress-agent.sock".into(),
+        )));
+        let chat = state.for_profile("chat").unwrap();
+        let (load, _) = state.begin_catalog_load_checked().unwrap();
+        let mut snapshot = foks_desktop::CatalogSnapshot {
+            profiles: vec!["chat".into(), "other".into()],
+            inventory: vec![foks_desktop::CatalogInventoryState {
+                profile: "chat".into(),
+                accounts_complete: true,
+                teams_complete: true,
+            }],
+            full_item_reads: Some(vec!["chat".into()]),
+            ..Default::default()
+        };
+        assert!(state.publish_catalog(load, snapshot.clone(), |_| {}));
+        let generation = chat.catalog_generation.load(Ordering::Acquire);
+        snapshot
+            .inventory
+            .push(foks_desktop::CatalogInventoryState {
+                profile: "other".into(),
+                accounts_complete: true,
+                teams_complete: true,
+            });
+        snapshot
+            .full_item_reads
+            .as_mut()
+            .unwrap()
+            .push("other".into());
+        assert!(state.publish_catalog(load, snapshot, |_| {}));
+        assert!(
+            require_catalog_generation(
+                generation,
+                chat.catalog_generation.load(Ordering::Acquire),
+                true
+            )
+            .is_ok(),
+            "an unrelated profile's progress must not turn chat delivery ambiguous"
+        );
     }
 
     #[test]

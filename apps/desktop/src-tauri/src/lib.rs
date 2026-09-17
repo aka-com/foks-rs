@@ -253,6 +253,7 @@ pub fn run() {
             window_state::set_traffic_lights_visible,
             commands::vault::list_stores,
             commands::vault::list_catalog,
+            commands::vault::list_catalog_progressive,
             commands::servers::list_servers,
             commands::accounts::list_accounts,
             commands::groups::list_group_details,

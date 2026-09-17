@@ -204,6 +204,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
         }],
         failures: vec![],
         blocked_profiles: vec![],
+        local_metadata: None,
         generation: 7,
     };
     assert_eq!(serde_json::to_value(catalog).unwrap(), fixture["catalog"]);

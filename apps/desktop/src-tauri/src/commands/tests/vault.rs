@@ -15,6 +15,63 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
+#[test]
+fn progressive_metadata_uses_only_completed_overviews_and_preserves_scoped_errors() {
+    use foks_agent_proto::{ProfileOverview, ResponseResult};
+    let profiles = ["healthy.example", "slow.example", "failed.example"].map(|name| {
+        serde_json::from_value(serde_json::json!({
+            "name": name, "probe": name,
+            "protocol": {"generation":"v019"}, "trust": {"kind":"web-pki"}
+        }))
+        .unwrap()
+    });
+    let success = |value| ResponseResult::Success { value };
+    let account = foks_agent_proto::AccountStoreRef {
+        profile: "healthy.example".into(),
+        account_alias: "alice".into(),
+    };
+    let snapshot = CatalogSnapshot {
+        profiles: profiles
+            .iter()
+            .map(|profile: &crate::commands::servers::ProfileSummary| profile.name.clone())
+            .collect(),
+        stores: vec![CatalogStoreSummary::Account { store: account }],
+        profile_overviews: vec![
+            ProfileOverview {
+                profile: "healthy.example".into(),
+                accounts: success(
+                    serde_json::json!([{"profile":"healthy.example", "alias":"alice", "username":"alice"}]),
+                ),
+                teams: success(serde_json::json!([])),
+                server_status: success(
+                    serde_json::json!({"profile":"healthy.example", "configured_probe":"healthy.example", "host":null,"lease_required":false,"lease_expires_at":null,"chat_available":false}),
+                ),
+            },
+            ProfileOverview {
+                profile: "failed.example".into(),
+                accounts: success(serde_json::json!([])),
+                teams: success(serde_json::json!([])),
+                server_status: ResponseResult::Error {
+                    code: foks_agent_proto::ErrorCode::ProfileBusy,
+                    message: "profile busy".into(),
+                    fields: Default::default(),
+                },
+            },
+        ],
+        ..Default::default()
+    };
+    let metadata = crate::commands::vault::catalog_local_metadata(&snapshot, &profiles).unwrap();
+    assert_eq!(metadata.accounts.len(), 1);
+    assert_eq!(metadata.accounts[0].profile, "healthy.example");
+    assert!(metadata.profiles[0].status.is_some());
+    assert!(metadata.profiles[1].status.is_none());
+    assert!(metadata.profiles[1].error.is_none());
+    assert_eq!(
+        metadata.profiles[2].error.as_ref().unwrap().code,
+        "profile-busy"
+    );
+}
+
 pub(super) const READ_VALUE: &[u8] = b"guest-password";
 
 pub(super) struct ReadTransport {

@@ -409,7 +409,44 @@ impl AppState {
             .catalog_coordination
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self.catalog_load_generation.load(Ordering::Acquire) != generation {
+        self.accept_catalog_locked(generation, generation, catalog, false)
+    }
+
+    pub(super) fn publish_catalog(
+        &self,
+        load_generation: u64,
+        catalog: CatalogSnapshot,
+        publish: impl FnOnce(u64),
+    ) -> bool {
+        let _coordination = self
+            .catalog_coordination
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self
+            .catalog_load
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(CatalogLoadToken::is_cancelled)
+        {
+            return false;
+        }
+        let generation = self.next_generation();
+        if !self.accept_catalog_locked(load_generation, generation, catalog, true) {
+            return false;
+        }
+        publish(generation);
+        true
+    }
+
+    fn accept_catalog_locked(
+        &self,
+        load_generation: u64,
+        generation: u64,
+        catalog: CatalogSnapshot,
+        preserve_unchanged: bool,
+    ) -> bool {
+        if self.catalog_load_generation.load(Ordering::Acquire) != load_generation {
             return false;
         }
         if let Some(profile) = self.mutation_profile() {
@@ -464,8 +501,11 @@ impl AppState {
             retained.stores.extend(catalog.stores);
             retained.known_stores.extend(catalog.known_stores);
             retained.items.extend(catalog.items);
-            if let Some(full_item_reads) = &mut retained.full_item_reads {
-                full_item_reads.extend(catalog.full_item_reads.into_iter().flatten());
+            if let Some(full_item_reads) = catalog.full_item_reads {
+                retained
+                    .full_item_reads
+                    .get_or_insert_with(Vec::new)
+                    .extend(full_item_reads);
             }
             retained.inventory.extend(catalog.inventory);
             retained.profile_overviews.extend(catalog.profile_overviews);
@@ -501,11 +541,37 @@ impl AppState {
                 .profiles
                 .iter()
                 .all(|profile| profile_catalog_complete(&catalog, profile));
+        let changed_profiles = preserve_unchanged.then(|| {
+            let previous = self
+                .catalog
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut profiles = catalog.profiles.clone();
+            if let Some(previous) = previous.as_ref() {
+                profiles.extend(previous.profiles.clone());
+                profiles.retain(|profile| !profile_catalog_matches(previous, &catalog, profile));
+            }
+            profiles.extend(scopes.keys().filter_map(|scope| match scope {
+                MutationScope::Profile(profile) if !catalog.profiles.contains(profile) => {
+                    Some(profile.clone())
+                }
+                _ => None,
+            }));
+            profiles.sort();
+            profiles.dedup();
+            profiles
+        });
         self.reconcile_local_accounts(&catalog);
         // Facts describe the previously accepted catalog. Retire them only
         // when its replacement is published, under the same coordination
         // lock used by retain_* so an old read cannot restore them afterward.
-        self.clear_group_facts();
+        if let Some(profiles) = &changed_profiles {
+            for profile in profiles {
+                self.clear_profile_facts(profile);
+            }
+        } else {
+            self.clear_group_facts();
+        }
         *self
             .catalog
             .lock()
@@ -513,7 +579,12 @@ impl AppState {
         // Some reads capture the generation before selecting their target.
         // Publish it last: an old generation with a new target is rejected by
         // retain_*, but a new generation must never identify the old catalog.
-        for state in scopes.values() {
+        for (scope, state) in scopes.iter() {
+            if let (MutationScope::Profile(profile), Some(changed)) = (scope, &changed_profiles) {
+                if !changed.contains(profile) {
+                    continue;
+                }
+            }
             state.generation.store(generation, Ordering::Release);
             state.load_generation.store(generation, Ordering::Release);
         }
@@ -1487,6 +1558,75 @@ fn failure_profile(failure: &foks_desktop::CatalogFailure) -> &str {
         foks_desktop::CatalogFailureScope::Profile { profile, .. } => profile,
         foks_desktop::CatalogFailureScope::Store(store) => store.profile(),
     }
+}
+
+fn profile_catalog_matches(left: &CatalogSnapshot, right: &CatalogSnapshot, profile: &str) -> bool {
+    let contains = |catalog: &CatalogSnapshot| {
+        catalog
+            .profiles
+            .iter()
+            .any(|candidate| candidate == profile)
+    };
+    contains(left) == contains(right)
+        && left
+            .stores
+            .iter()
+            .filter(|entry| entry.profile() == profile)
+            .eq(right
+                .stores
+                .iter()
+                .filter(|entry| entry.profile() == profile))
+        && left
+            .known_stores
+            .iter()
+            .filter(|entry| entry.profile() == profile)
+            .eq(right
+                .known_stores
+                .iter()
+                .filter(|entry| entry.profile() == profile))
+        && left
+            .items
+            .iter()
+            .filter(|entry| entry.store.profile() == profile)
+            .eq(right
+                .items
+                .iter()
+                .filter(|entry| entry.store.profile() == profile))
+        && left
+            .inventory
+            .iter()
+            .filter(|entry| entry.profile == profile)
+            .eq(right
+                .inventory
+                .iter()
+                .filter(|entry| entry.profile == profile))
+        && left
+            .profile_overviews
+            .iter()
+            .filter(|entry| entry.profile == profile)
+            .eq(right
+                .profile_overviews
+                .iter()
+                .filter(|entry| entry.profile == profile))
+        && left
+            .failures
+            .iter()
+            .filter(|entry| failure_profile(entry) == profile)
+            .eq(right
+                .failures
+                .iter()
+                .filter(|entry| failure_profile(entry) == profile))
+        && left.profile_blocked(profile) == right.profile_blocked(profile)
+        && left
+            .full_item_reads
+            .iter()
+            .flatten()
+            .any(|entry| entry == profile)
+            == right
+                .full_item_reads
+                .iter()
+                .flatten()
+                .any(|entry| entry == profile)
 }
 
 fn profile_catalog_complete(catalog: &CatalogSnapshot, profile: &str) -> bool {

@@ -23,7 +23,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
-use tauri::State;
+use tauri::{Manager as _, State};
 use tauri_plugin_dialog::DialogExt as _;
 use zeroize::Zeroizing;
 
@@ -98,9 +98,28 @@ pub struct CatalogDto {
     pub items: Vec<ItemDto>,
     pub failures: Vec<CatalogFailureDto>,
     pub blocked_profiles: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_metadata: Option<CatalogLocalMetadataDto>,
     /// Identifies the native snapshot this response came from. Later reads
     /// that pass it back fail when the snapshot has since been replaced.
     pub generation: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogLocalMetadataDto {
+    pub accounts: Vec<super::accounts::AccountDto>,
+    pub profiles: Vec<CatalogProfileDto>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogProfileDto {
+    pub profile: String,
+    pub label: Option<String>,
+    pub configured_probe: String,
+    pub status: Option<super::servers::ServerStatusSnapshotDto>,
+    pub error: Option<AgentError>,
 }
 
 impl CatalogDto {
@@ -152,6 +171,7 @@ impl CatalogDto {
                 })
                 .collect(),
             blocked_profiles: snapshot.blocked_profiles.clone(),
+            local_metadata: None,
             generation: 0,
         })
     }
@@ -778,7 +798,74 @@ async fn apply_file_upload(
     result.map(|()| MutationDto { applied: true })
 }
 
-async fn load_catalog(state: &AppState, include_items: bool) -> Result<CatalogDto, AgentError> {
+pub(super) fn catalog_local_metadata(
+    snapshot: &CatalogSnapshot,
+    profiles: &[super::servers::ProfileSummary],
+) -> Result<CatalogLocalMetadataDto, AgentError> {
+    struct CachedOnly;
+    impl foks_desktop::AgentTransport for CachedOnly {
+        fn call(&self, _: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
+            Err(foks_desktop::AgentError::Transport(
+                "Catalog metadata is not loaded.".into(),
+            ))
+        }
+    }
+    let accounts = super::accounts::load_accounts(&CachedOnly, snapshot)?;
+    let profiles = profiles
+        .iter()
+        .map(|profile| {
+            let result = snapshot
+                .profile_overviews
+                .iter()
+                .find(|overview| overview.profile == profile.name)
+                .map(|overview| match overview.server_status.clone() {
+                    foks_agent_proto::ResponseResult::Success { value } => {
+                        super::servers::server_status_response(
+                            value,
+                            &profile.name,
+                            &profile.probe,
+                            !matches!(
+                                profile.protocol,
+                                super::servers::ProfileProtocolSummary::V019
+                            ),
+                        )
+                    }
+                    foks_agent_proto::ResponseResult::Error {
+                        code,
+                        message,
+                        fields,
+                    } => Err(AgentError::from_desktop(
+                        foks_desktop::AgentError::Protocol {
+                            code,
+                            message,
+                            fields,
+                        },
+                    )),
+                });
+            let (status, error) = match result {
+                Some(Ok(status)) => (Some(status), None),
+                Some(Err(error)) => (None, Some(error)),
+                None => (None, None),
+            };
+            CatalogProfileDto {
+                profile: profile.name.clone(),
+                label: profile.label.clone(),
+                configured_probe: profile.probe.clone(),
+                status,
+                error,
+            }
+        })
+        .collect();
+    Ok(CatalogLocalMetadataDto { accounts, profiles })
+}
+
+async fn load_catalog(
+    state: &AppState,
+    app: &tauri::AppHandle,
+    include_items: bool,
+    on_partial: Option<tauri::ipc::Channel<CatalogDto>>,
+) -> Result<CatalogDto, AgentError> {
+    let access = crate::applock::unlocked_generation(app)?;
     // Store-only discovery does not replace the accepted full catalog or
     // cancel a concurrent catalog refresh.
     let (generation, token) = if include_items {
@@ -790,13 +877,69 @@ async fn load_catalog(state: &AppState, include_items: bool) -> Result<CatalogDt
         )
     };
     let transport = state.agent.transport();
+    let worker_state = state.clone();
+    let worker_app = app.clone();
     let snapshot = tauri::async_runtime::spawn_blocking(move || {
-        if include_items {
+        if let Some(channel) = on_partial {
+            let profiles: Vec<super::servers::ProfileSummary> = serde_json::from_value(
+                transport
+                    .call(Operation::ListProfiles)
+                    .map_err(AgentError::from_desktop)?,
+            )
+            .map_err(|error| super::validation::invalid_response(error.to_string()))?;
+            let failure = std::sync::Mutex::new(None);
+            let snapshot = foks_desktop::load_catalog_progressive_cancellable(
+                transport,
+                token.clone(),
+                |snapshot| {
+                    let result = (|| {
+                        crate::applock::require_unlocked_generation(&worker_app, access)?;
+                        let mut dto = CatalogDto::from_snapshot(snapshot)?;
+                        dto.local_metadata = Some(catalog_local_metadata(snapshot, &profiles)?);
+                        let mut sent = Ok(());
+                        if !worker_state.publish_catalog(
+                            generation,
+                            snapshot.clone(),
+                            |published| {
+                                dto.generation = published;
+                                sent = crate::applock::require_unlocked_generation(
+                                    &worker_app,
+                                    access,
+                                )
+                                .and_then(|()| {
+                                    channel
+                                        .send(dto)
+                                        .map_err(|error| AgentError::unknown(error.to_string()))
+                                });
+                            },
+                        ) {
+                            return Err(super::context::catalog_changed_during_read());
+                        }
+                        sent
+                    })();
+                    if let Err(error) = result {
+                        token.cancel();
+                        *failure
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error);
+                    }
+                },
+            )
+            .map_err(AgentError::from_desktop);
+            if let Some(error) = failure
+                .into_inner()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+            {
+                return Err(error);
+            }
+            snapshot
+        } else if include_items {
             foks_desktop::load_catalog_cancellable(transport, token)
+                .map_err(AgentError::from_desktop)
         } else {
             foks_desktop::load_stores_cancellable(transport, token)
+                .map_err(AgentError::from_desktop)
         }
-        .map_err(AgentError::from_desktop)
     })
     .await
     .map_err(|error| AgentError::unknown(format!("Failed to load vault catalog: {error}")))??;
@@ -805,9 +948,13 @@ async fn load_catalog(state: &AppState, include_items: bool) -> Result<CatalogDt
     // A load that lost its generation to a later load or mutation must not be
     // reported as the current snapshot: the reads that follow it would answer
     // from whichever snapshot replaced it.
-    if include_items && !state.accept_catalog(generation, snapshot) {
+    crate::applock::require_unlocked_generation(app, access)?;
+    if include_items
+        && !state.publish_catalog(generation, snapshot, |published| dto.generation = published)
+    {
         return Err(super::context::catalog_changed_during_read());
     }
+    crate::applock::require_unlocked_generation(app, access)?;
     Ok(dto)
 }
 
@@ -817,7 +964,7 @@ pub async fn list_stores(
     state: State<'_, AppState>,
 ) -> Result<CatalogDto, AgentError> {
     require_main_window(&webview)?;
-    load_catalog(&state, false).await
+    load_catalog(&state, webview.app_handle(), false, None).await
 }
 
 #[tauri::command]
@@ -826,7 +973,17 @@ pub async fn list_catalog(
     state: State<'_, AppState>,
 ) -> Result<CatalogDto, AgentError> {
     require_main_window(&webview)?;
-    load_catalog(&state, true).await
+    load_catalog(&state, webview.app_handle(), true, None).await
+}
+
+#[tauri::command]
+pub async fn list_catalog_progressive(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    on_partial: tauri::ipc::Channel<CatalogDto>,
+) -> Result<CatalogDto, AgentError> {
+    require_main_window(&webview)?;
+    load_catalog(&state, webview.app_handle(), true, Some(on_partial)).await
 }
 
 #[tauri::command]

@@ -495,6 +495,48 @@ mod tests {
     }
 
     #[test]
+    fn notification_scope_uses_its_profile_generation() {
+        let state = AppState::new(std::sync::Arc::new(crate::agent::AgentHandle::new(
+            "/tmp/unused-notification-agent.sock".into(),
+        )));
+        let scope = ChatScope {
+            host: "02".to_owned() + &"ab".repeat(32),
+            actor: "01".to_owned() + &"ab".repeat(32),
+            store: foks_agent_proto::TeamStoreRef {
+                profile: "chat".into(),
+                account_alias: "owner".into(),
+                team_alias: "team".into(),
+                team_id: "03".to_owned() + &"ab".repeat(32),
+            },
+        };
+        let id = super::super::vault::store_id(&foks_desktop::CatalogStoreRef::Team(
+            scope.store.clone(),
+        ));
+        *state.catalog.lock().unwrap() = Some(foks_desktop::CatalogSnapshot {
+            profiles: vec!["chat".into(), "other".into()],
+            stores: vec![foks_desktop::CatalogStoreSummary::Team {
+                store: scope.store.clone(),
+                kind: "named".into(),
+                name: Some("team".into()),
+                active: true,
+                creation_phase: None,
+            }],
+            ..Default::default()
+        });
+        let chat = state.for_profile("chat").unwrap();
+        let generation = chat
+            .catalog_generation
+            .load(std::sync::atomic::Ordering::Acquire);
+        let mut inner = Inner::default();
+        inner.scopes.insert(id.clone(), (scope.clone(), generation));
+        assert!(verify_scope(&state, &inner, &id, &scope).is_ok());
+        state.for_profile("other").unwrap().invalidate_catalog();
+        assert!(verify_scope(&state, &inner, &id, &scope).is_ok());
+        chat.invalidate_catalog();
+        assert!(verify_scope(&state, &inner, &id, &scope).is_err());
+    }
+
+    #[test]
     fn settings_are_bounded_private_and_survive_reopen() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("s");
@@ -516,10 +558,16 @@ mod tests {
     }
 }
 
-pub fn remember(app: &tauri::AppHandle, id: &str, scope: &ChatScope, generation: u64) {
-    let Ok(unlocked) = crate::applock::unlocked_generation(app) else {
+pub fn remember(
+    app: &tauri::AppHandle,
+    id: &str,
+    scope: &ChatScope,
+    generation: u64,
+    unlocked: u64,
+) {
+    if crate::applock::require_unlocked_generation(app, unlocked).is_err() {
         return;
-    };
+    }
     if let Some(local) = app.try_state::<LocalState>() {
         if let Ok(mut inner) = local.0.lock() {
             if inner.scopes.len() >= 4096 && !inner.scopes.contains_key(id) {
@@ -557,6 +605,7 @@ fn verify_scope(
     scope: &ChatScope,
 ) -> Result<(), AgentError> {
     let generation = state
+        .for_profile(&scope.store.profile)?
         .catalog_generation
         .load(std::sync::atomic::Ordering::Acquire);
     if inner.scopes.get(id) != Some(&(scope.clone(), generation)) {

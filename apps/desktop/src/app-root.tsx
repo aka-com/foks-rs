@@ -580,6 +580,17 @@ export function App({
   const [lockError, setLockError] = useState<string | null>(null);
   const [unlocking, setUnlocking] = useState(false);
   const [bootEpoch, setBootEpoch] = useState(0);
+  const bootGeneration = useRef(0);
+  const publishedBootGeneration = useRef(0);
+  const retireBoot = useCallback(() => {
+    bootGeneration.current++;
+  }, []);
+  const currentBootSnapshot = useCallback(
+    () =>
+      Boolean(agentSnapshot) ||
+      publishedBootGeneration.current === bootGeneration.current,
+    [agentSnapshot],
+  );
   const [agentLifecycle, setAgentLifecycle] = useState<AgentLifecycle>({
     state: 'checking',
   });
@@ -606,6 +617,8 @@ export function App({
       return;
     }
     let alive = true;
+    const generation = ++bootGeneration.current;
+    let handedOff = false;
     let bootInvalidated = false;
     let restartScheduled = false;
     let stopLifecycle: (() => void) | undefined;
@@ -671,12 +684,35 @@ export function App({
         ]);
         if (!alive || bootInvalidated) return;
         setManagedProfile(appInfo.managedProfile ?? null);
+        const current = (): boolean =>
+          alive && !bootInvalidated && generation === bootGeneration.current;
+        const publishPartial = (partial: AgentSnapshot): void => {
+          if (
+            !current() ||
+            controller.snapshot().state !== 'ready' ||
+            !partial.stores.length
+          )
+            return;
+          stopMaintenance?.();
+          stopMaintenance = undefined;
+          handedOff = true;
+          publishedBootGeneration.current = generation;
+          setLoaded(partial);
+          setLoadError(null);
+        };
         let next: AgentSnapshot;
         try {
-          next = await loadSnapshot(selected);
+          next = await loadSnapshot(
+            selected,
+            undefined,
+            undefined,
+            publishPartial,
+            current,
+          );
         } catch (error) {
           const typed = normalizeCommandError(error);
           if (
+            handedOff ||
             !requested ||
             typed.code === 'bootstrap-required' ||
             typed.code === 'agent-lost' ||
@@ -686,22 +722,30 @@ export function App({
             throw error;
           next = emptySnapshot(status);
         }
-        if (!alive || bootInvalidated) return;
+        if (!current()) return;
         // On an ordinary launch, look for teams that were granted to an
         // account after its first-run setup. An explicit first-run location
         // keeps its own discovery step, so leave it untouched.
         if (!requested && profileInventoryComplete(next, 'accounts')) {
           try {
-            if (await discoverUnboundTeams(selected, next)) {
-              if (!alive || bootInvalidated) return;
-              next = await loadSnapshot(selected);
+            if (handedOff) publishPartial(next);
+            if (await discoverUnboundTeams(selected, next, current)) {
+              if (!current()) return;
+              next = await loadSnapshot(
+                selected,
+                next,
+                undefined,
+                publishPartial,
+                current,
+              );
             }
           } catch {
             // Team discovery is best-effort and must not block launch.
           }
         }
-        if (!alive || bootInvalidated) return;
+        if (!current()) return;
         if (
+          !handedOff &&
           !requested &&
           profileInventoryComplete(next, 'accounts') &&
           !next.stores.some((entry) => entry.kind === 'account')
@@ -729,10 +773,14 @@ export function App({
         // the same controller revision.
         stopMaintenance?.();
         stopMaintenance = undefined;
+        publishedBootGeneration.current = generation;
         setLoaded(next);
         setLoadError(null);
       } catch (error) {
-        if (!alive) return;
+        if (!alive || bootInvalidated || generation !== bootGeneration.current)
+          return;
+        if (handedOff && !isAgentReadinessError(normalizeCommandError(error)))
+          return;
         setAgentLifecycle({ state: 'failure', error });
         setLoadError(normalizeCommandError(error).message);
       }
@@ -749,12 +797,13 @@ export function App({
   // false and nothing is torn down.
   const lockNow = useCallback(async (): Promise<boolean> => {
     if (!activeBridge) return false;
+    retireBoot();
     const next = await activeBridge.lockApp();
     if (!next.locked) return false;
     setLoaded(null);
     setLockState(next);
     return true;
-  }, [activeBridge]);
+  }, [activeBridge, retireBoot]);
 
   const block = shellBlock(agentLifecycle, {
     locked: Boolean(lockState && activeBridge),
@@ -879,6 +928,8 @@ export function App({
       firstRunStart={firstRunStart}
       managedProfile={managedProfile}
       onLock={lockNow}
+      retireBoot={retireBoot}
+      currentBootSnapshot={currentBootSnapshot}
       agentController={agentController}
       leaseClock={leaseClock}
     />
@@ -898,6 +949,8 @@ interface VaultShellProps {
   firstRunStart?: 'who' | 'local' | null;
   managedProfile?: string | null;
   onLock: () => Promise<boolean>;
+  retireBoot: () => void;
+  currentBootSnapshot: () => boolean;
   agentController: AgentLifecycleController;
   leaseClock?: LeaseExpiryClock;
 }
@@ -909,6 +962,8 @@ function VaultShell({
   firstRunStart = null,
   managedProfile = null,
   onLock,
+  retireBoot,
+  currentBootSnapshot,
   agentController,
   leaseClock = systemLeaseExpiryClock,
 }: VaultShellProps): ReactNode {
@@ -1092,7 +1147,9 @@ function VaultShell({
     () => locations.setAccountStores(shown.stores),
     [locations, shown.stores],
   );
-  useEffect(() => setLatest(agentSnapshot), [agentSnapshot]);
+  useEffect(() => {
+    if (currentBootSnapshot()) setLatest(agentSnapshot);
+  }, [agentSnapshot, currentBootSnapshot]);
 
   useEffect(() => {
     if (!bridge.native) return;
@@ -1143,8 +1200,15 @@ function VaultShell({
 
   const catalogCoordinator = useMemo(
     () =>
-      new CatalogCoordinator(
-        () => loadSnapshot(bridge, latestRef.current),
+      new CatalogCoordinator<AgentSnapshot>(
+        (onPartial, isCurrent) =>
+          loadSnapshot(
+            bridge,
+            latestRef.current,
+            undefined,
+            onPartial,
+            isCurrent,
+          ),
         (next, forced) => {
           latestRef.current = next;
           setLatest(next);
@@ -1162,9 +1226,11 @@ function VaultShell({
     return () => catalogCoordinator.deactivate();
   }, [catalogCoordinator]);
   const refreshSnapshot = useCallback(
-    (force = false): Promise<AgentSnapshot> =>
-      catalogCoordinator.refresh(force),
-    [catalogCoordinator],
+    (force = false): Promise<AgentSnapshot> => {
+      retireBoot();
+      return catalogCoordinator.refresh(force);
+    },
+    [catalogCoordinator, retireBoot],
   );
 
   const refresh = useCallback(
@@ -1199,11 +1265,12 @@ function VaultShell({
     (message: string): void => {
       if (!agentController.disconnect(message)) return;
       foregroundRefreshAllowed.current = false;
+      retireBoot();
       catalogCoordinator.reset();
       setAgentCatalogReady(false);
       setConcealSignal((value) => value + 1);
     },
-    [agentController, catalogCoordinator],
+    [agentController, catalogCoordinator, retireBoot],
   );
 
   const recoverAgentReadiness = useCallback(
@@ -1380,6 +1447,7 @@ function VaultShell({
       if (!agentController.applyMaintenance(snapshot)) return;
       if (snapshot.state === 'idle') return;
       foregroundRefreshAllowed.current = false;
+      retireBoot();
       catalogCoordinator.reset();
       setAgentCatalogReady(false);
       setConcealSignal((value) => value + 1);
@@ -1419,6 +1487,7 @@ function VaultShell({
     catalogCoordinator,
     commandError,
     refreshSnapshot,
+    retireBoot,
     toasts,
   ]);
 
@@ -1438,6 +1507,7 @@ function VaultShell({
         return;
       }
       foregroundRefreshAllowed.current = false;
+      retireBoot();
       catalogCoordinator.reset();
       setAgentCatalogReady(false);
       if (error.code === 'version-mismatch') {
@@ -1458,6 +1528,7 @@ function VaultShell({
       commandError,
       disconnectAgent,
       recoverAgentReadiness,
+      retireBoot,
       state.location.kind,
     ],
   );

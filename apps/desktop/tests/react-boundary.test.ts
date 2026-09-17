@@ -56,7 +56,10 @@ test('only the bridge imports the Tauri API', async () => {
     assert.doesNotMatch(source, /from '@tauri-apps\//, file.pathname);
   }
   const bridge = await readSource('../src/bridge.ts', import.meta.url);
-  assert.match(bridge, /import \{ invoke \} from '@tauri-apps\/api\/core';/);
+  assert.match(
+    bridge,
+    /import \{ Channel, invoke \} from '@tauri-apps\/api\/core';/,
+  );
 });
 
 test('the model is pure: no DOM, no bridge, no fixture', async () => {

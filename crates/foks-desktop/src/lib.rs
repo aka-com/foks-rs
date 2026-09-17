@@ -470,8 +470,12 @@ impl CatalogLoadToken {
         self.0.store(true, Ordering::Release);
     }
 
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+
     fn check(&self) -> Result<(), AgentError> {
-        if self.0.load(Ordering::Acquire) {
+        if self.is_cancelled() {
             Err(AgentError::Cancelled)
         } else {
             Ok(())
@@ -542,27 +546,109 @@ fn load_catalog_with_token(
         .into_iter()
         .map(|profile| profile.name)
         .collect::<Vec<_>>();
-    let loaded = run_bounded(profiles.clone(), |profile| {
-        load_profile_catalog(transport.as_ref(), profile, include_items, token.clone())
-    });
-    let mut snapshot = CatalogSnapshot {
-        profiles,
-        full_item_reads: include_items.then(Vec::new),
+    load_catalog_profiles(transport, profiles, include_items, token, &|_| {})
+}
+
+pub fn load_catalog_progressive_cancellable(
+    transport: Arc<dyn AgentTransport>,
+    token: CatalogLoadToken,
+    publish: impl Fn(&CatalogSnapshot) + Sync,
+) -> Result<CatalogSnapshot, AgentError> {
+    token.check()?;
+    let profiles: Vec<ProfileSummary> = decode_agent_value(
+        transport.call_cancellable(Operation::ListProfiles, &|| token.check().is_err())?,
+    )?;
+    load_catalog_profiles(
+        transport,
+        profiles.into_iter().map(|profile| profile.name).collect(),
+        true,
+        token,
+        &publish,
+    )
+}
+
+fn load_catalog_profiles(
+    transport: Arc<dyn AgentTransport>,
+    profiles: Vec<String>,
+    include_items: bool,
+    token: CatalogLoadToken,
+    publish: &(impl Fn(&CatalogSnapshot) + Sync),
+) -> Result<CatalogSnapshot, AgentError> {
+    let snapshot = Mutex::new(CatalogSnapshot {
+        profiles: profiles.clone(),
         ..CatalogSnapshot::default()
-    };
-    for loaded in loaded {
-        let loaded = loaded?;
-        snapshot.stores.extend(loaded.stores);
-        snapshot.known_stores.extend(loaded.known_stores);
-        snapshot.inventory.extend(loaded.inventory);
-        snapshot.profile_overviews.extend(loaded.profile_overviews);
-        snapshot.items.extend(loaded.items);
-        if let Some(full_item_reads) = &mut snapshot.full_item_reads {
-            full_item_reads.extend(loaded.full_item_reads.into_iter().flatten());
+    });
+    let update = |profile: &str, loaded: &CatalogSnapshot| {
+        let mut snapshot = snapshot.lock().expect("catalog progress poisoned");
+        if token.check().is_err() {
+            return;
         }
-        snapshot.failures.extend(loaded.failures);
-        snapshot.blocked_profiles.extend(loaded.blocked_profiles);
+        snapshot.stores.retain(|store| store.profile() != profile);
+        snapshot
+            .known_stores
+            .retain(|store| store.profile() != profile);
+        snapshot.inventory.retain(|entry| entry.profile != profile);
+        snapshot
+            .profile_overviews
+            .retain(|entry| entry.profile != profile);
+        snapshot
+            .items
+            .retain(|item| item.store.profile() != profile);
+        snapshot.failures.retain(|failure| match &failure.scope {
+            CatalogFailureScope::Profile {
+                profile: candidate, ..
+            } => candidate != profile,
+            CatalogFailureScope::Store(store) => store.profile() != profile,
+        });
+        snapshot
+            .blocked_profiles
+            .retain(|candidate| candidate != profile);
+        snapshot.stores.extend(loaded.stores.clone());
+        snapshot.known_stores.extend(loaded.known_stores.clone());
+        snapshot.inventory.extend(loaded.inventory.clone());
+        snapshot
+            .profile_overviews
+            .extend(loaded.profile_overviews.clone());
+        snapshot.items.extend(loaded.items.clone());
+        if include_items && !loaded.inventory.is_empty() {
+            snapshot.full_item_reads.get_or_insert_with(Vec::new);
+        }
+        if let Some(full_item_reads) = &mut snapshot.full_item_reads {
+            full_item_reads.retain(|candidate| candidate != profile);
+            full_item_reads.extend(loaded.full_item_reads.iter().flatten().cloned());
+        }
+        snapshot.failures.extend(loaded.failures.clone());
+        snapshot
+            .blocked_profiles
+            .extend(loaded.blocked_profiles.clone());
+        sort_catalog(&mut snapshot);
+        publish(&snapshot);
+    };
+    let loaded = run_bounded(profiles, |profile| {
+        token.check()?;
+        let loaded = load_profile_catalog_progress(
+            transport.as_ref(),
+            profile.clone(),
+            include_items,
+            token.clone(),
+            &|snapshot| update(&profile, snapshot),
+        )?;
+        token.check()?;
+        update(&profile, &loaded);
+        Ok::<_, AgentError>(())
+    });
+    for loaded in loaded {
+        loaded?;
     }
+    token.check()?;
+    let mut snapshot = snapshot.into_inner().expect("catalog progress poisoned");
+    if include_items {
+        snapshot.full_item_reads.get_or_insert_with(Vec::new);
+    }
+    Ok(snapshot)
+}
+
+fn sort_catalog(snapshot: &mut CatalogSnapshot) {
     snapshot.stores.sort_by(|left, right| {
         left.profile()
             .cmp(right.profile())
@@ -584,8 +670,6 @@ fn load_catalog_with_token(
     });
     snapshot.blocked_profiles.sort();
     snapshot.blocked_profiles.dedup();
-    token.check()?;
-    Ok(snapshot)
 }
 
 fn load_profile_catalog(
@@ -594,10 +678,24 @@ fn load_profile_catalog(
     include_items: bool,
     token: CatalogLoadToken,
 ) -> Result<CatalogSnapshot, AgentError> {
+    load_profile_catalog_progress(transport, profile, include_items, token, &|_| {})
+}
+
+fn load_profile_catalog_progress(
+    transport: &dyn AgentTransport,
+    profile: String,
+    include_items: bool,
+    token: CatalogLoadToken,
+    publish_local: &dyn Fn(&CatalogSnapshot),
+) -> Result<CatalogSnapshot, AgentError> {
+    token.check()?;
     let mut snapshot = CatalogSnapshot::default();
-    match transport.call(Operation::ListKnownStores {
-        profile: profile.clone(),
-    }) {
+    match transport.call_cancellable(
+        Operation::ListKnownStores {
+            profile: profile.clone(),
+        },
+        &|| token.check().is_err(),
+    ) {
         Ok(value) => match decode_agent_value::<Vec<KnownStoreSummary>>(value) {
             Ok(stores) => {
                 snapshot.known_stores = stores
@@ -624,9 +722,13 @@ fn load_profile_catalog(
     let mut accounts_complete = false;
     let mut teams_complete = false;
     token.check()?;
-    let overview = transport.call(Operation::ListProfileOverview {
-        profile: profile.clone(),
-    });
+    publish_local(&snapshot);
+    let overview = transport.call_cancellable(
+        Operation::ListProfileOverview {
+            profile: profile.clone(),
+        },
+        &|| token.check().is_err(),
+    );
     token.check()?;
     match overview {
         Ok(value) => match decode_agent_value::<ProfileOverview>(value) {
@@ -779,6 +881,14 @@ fn load_profile_catalog(
     snapshot
         .known_stores
         .sort_by(|left, right| left.label().cmp(right.label()));
+    if include_items {
+        publish_local(&CatalogSnapshot {
+            known_stores: snapshot.known_stores.clone(),
+            failures: snapshot.failures.clone(),
+            blocked_profiles: snapshot.blocked_profiles.clone(),
+            ..CatalogSnapshot::default()
+        });
+    }
     if !include_items || snapshot.blocked_profiles.contains(&profile) {
         return Ok(snapshot);
     }
@@ -1268,7 +1378,8 @@ fn load_store_pages_once(
                 limit: PAGE_LIMIT,
             },
         };
-        let page: KvPage = decode_agent_value(transport.call(operation)?)?;
+        let page: KvPage =
+            decode_agent_value(transport.call_cancellable(operation, &|| token.check().is_err())?)?;
         token.check()?;
         if snapshot_version
             .replace(page.snapshot_version)
@@ -2618,6 +2729,106 @@ mod tests {
                     },
                 }),
                 operation => panic!("unexpected catalog operation: {operation:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn progressive_catalog_publishes_local_and_healthy_before_slow_profile() {
+        struct ProgressiveTransport(
+            std::sync::mpsc::Sender<()>,
+            Mutex<std::sync::mpsc::Receiver<()>>,
+        );
+        impl AgentTransport for ProgressiveTransport {
+            fn call(&self, operation: Operation) -> Result<Value, AgentError> {
+                match operation {
+                    Operation::ListProfiles => {
+                        Ok(serde_json::json!([{"name":"slow"}, {"name":"healthy"}]))
+                    }
+                    Operation::ListKnownStores { .. } => Ok(serde_json::json!([])),
+                    Operation::ListProfileOverview { profile } => Ok(profile_overview(
+                        &profile,
+                        success(
+                            serde_json::json!([{"profile":profile,"alias":"personal","username":"alice"}]),
+                        ),
+                        success(serde_json::json!([])),
+                    )),
+                    Operation::ListKv { store, .. } => {
+                        if store.profile == "slow" {
+                            self.0.send(()).unwrap();
+                            self.1.lock().unwrap().recv().unwrap();
+                            return Err(AgentError::Transport("offline".into()));
+                        }
+                        Ok(
+                            serde_json::json!({"snapshot_version":1,"entries":[],"next_cursor":null}),
+                        )
+                    }
+                    other => panic!("unexpected operation: {other:?}"),
+                }
+            }
+        }
+        for cancel in [false, true] {
+            let (entered, blocked) = std::sync::mpsc::channel();
+            let (release, gate) = std::sync::mpsc::channel();
+            let (publish, progress) = std::sync::mpsc::channel();
+            let token = CatalogLoadToken::default();
+            let worker_token = token.clone();
+            let worker = std::thread::spawn(move || {
+                load_catalog_progressive_cancellable(
+                    Arc::new(ProgressiveTransport(entered, Mutex::new(gate))),
+                    worker_token,
+                    |snapshot| {
+                        publish.send(snapshot.clone()).unwrap();
+                    },
+                )
+            });
+            blocked
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap();
+            let mut healthy = None;
+            let mut local = false;
+            while let Ok(snapshot) = progress.recv_timeout(std::time::Duration::from_secs(2)) {
+                if snapshot.inventory.is_empty() && !snapshot.known_stores.is_empty() {
+                    local = true;
+                    assert_eq!(snapshot.full_item_reads, None);
+                    assert!(snapshot.stores.is_empty());
+                }
+                if snapshot
+                    .full_item_reads
+                    .as_ref()
+                    .is_some_and(|profiles| profiles.contains(&"healthy".into()))
+                {
+                    healthy = Some(snapshot);
+                    break;
+                }
+            }
+            if cancel {
+                token.cancel();
+            }
+            release.send(()).unwrap();
+            let result = worker.join().unwrap();
+            if cancel {
+                assert_eq!(result, Err(AgentError::Cancelled));
+            } else {
+                let result = result.unwrap();
+                assert_eq!(result.full_item_reads, Some(vec!["healthy".into()]));
+                assert_eq!(result.failures.len(), 1);
+                assert!(
+                    matches!(&result.failures[0].scope, CatalogFailureScope::Store(store) if store.profile() == "slow")
+                );
+            }
+            assert!(local);
+            let healthy = healthy.expect("healthy profile must publish while slow KV is blocked");
+            assert_eq!(healthy.profiles, ["slow", "healthy"]);
+            assert!(!healthy
+                .inventory
+                .iter()
+                .any(|entry| entry.profile == "slow"));
+            if cancel {
+                assert!(progress.try_iter().all(|snapshot| !snapshot
+                    .inventory
+                    .iter()
+                    .any(|entry| entry.profile == "slow")));
             }
         }
     }
