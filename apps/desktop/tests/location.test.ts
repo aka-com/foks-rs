@@ -734,10 +734,9 @@ test('encodeLocation names the state the address carries', () => {
 
 test('the mock s state names carry what is not a location', () => {
   // View mode, lease status, and selection are decoded at the scene layer rather than as standalone locations.
-  assert.deepEqual(decodeScene('?state=grid'), {
-    ...INITIAL_SCENE,
-    view: 'grid',
-  });
+  // `grid` was a view mode before the tree replaced the toggle; it now
+  // resolves to the one view left, so this scene is the initial one.
+  assert.deepEqual(decodeScene('?state=grid'), INITIAL_SCENE);
   assert.deepEqual(decodeScene('?state=lease'), {
     ...INITIAL_SCENE,
     location: { kind: 'store', ref: 'acct:work' },
@@ -762,14 +761,12 @@ test('the mock s state names carry what is not a location', () => {
 test('full scene state round-trips through URL serialization', () => {
   const scenes = [
     INITIAL_SCENE,
-    { ...INITIAL_SCENE, view: 'grid' as const },
     {
       ...INITIAL_SCENE,
       location: { kind: 'store' as const, ref: 'team:eng' },
       selection: { store: 'team:eng', path: '/deploy/production-token' },
       kind: 'Password' as const,
       sort: 'group' as const,
-      view: 'folders' as const,
       folder: '/deploy',
       closedFolders: ['team:eng|/deploy/archive'],
       lease: 'lapsed' as const,

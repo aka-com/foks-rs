@@ -1,8 +1,11 @@
 /**
- * Toolbar displayed above the item list.
+ * Toolbar displayed above the item list, inside the folder browser's list
+ * pane.
  *
- * Provides controls for filtering by kind, sorting items, and toggling between
- * list and grid views.
+ * Provides controls for filtering by kind, sorting items, and creating a new
+ * one. The tree is permanent navigation now, so there is no view-mode toggle
+ * here, and the inspector is a permanent column rather than one this toolbar
+ * opens and closes.
  */
 
 import type { ReactNode } from 'react';
@@ -15,7 +18,7 @@ import {
 } from '../components';
 import { KINDS, KIND_LIST, kindLabel } from '../model';
 import type { FoksIconName } from '../icons';
-import type { KindFilter, SortKey, ViewMode } from '../location';
+import type { KindFilter, SortKey } from '../location';
 
 const SORT_LABELS: Readonly<Record<SortKey, string>> = {
   name: 'By name',
@@ -35,10 +38,6 @@ export interface ToolbarProps {
   onKind: (kind: KindFilter) => void;
   sort: SortKey;
   onSort: (sort: SortKey) => void;
-  view: ViewMode;
-  onView: (view: ViewMode) => void;
-  details: boolean;
-  onDetails: (open: boolean) => void;
   onSettings?: () => void;
 }
 
@@ -84,10 +83,6 @@ export function Toolbar({
   onKind,
   sort,
   onSort,
-  view,
-  onView,
-  details,
-  onDetails,
   onSettings,
 }: ToolbarProps): ReactNode {
   return (
@@ -137,27 +132,6 @@ export function Toolbar({
       </MenuButton>
       <span className="spacer" />
       <NewItemButton onNew={onNew} />
-      <SegmentedControl<ViewMode>
-        label="View display mode"
-        variant="icon"
-        value={view}
-        onChange={onView}
-        items={[
-          { id: 'list', icon: 'list', title: 'List' },
-          { id: 'grid', icon: 'grid', title: 'Cards' },
-          { id: 'folders', icon: 'folder', title: 'Folders' },
-        ]}
-      />
-      <Button
-        variant="quiet"
-        icon="info"
-        on={details}
-        title="Details"
-        aria-label="Details"
-        onClick={() => {
-          onDetails(!details);
-        }}
-      />
       {onSettings ? (
         <Button
           variant="quiet"

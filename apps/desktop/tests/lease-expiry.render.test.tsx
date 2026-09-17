@@ -99,7 +99,7 @@ test('an expiring open vault conceals details while a healthy neighbor stays usa
       leaseClock: clock,
     }),
   );
-  await ui.waitFor(() => assert.ok(rendered.getByLabelText('Details')));
+  await ui.waitFor(() => assert.ok(document.querySelector('.details')));
   const show = rendered.queryByRole('button', { name: 'Show' });
   if (show) ui.fireEvent.click(show);
   await ui.waitFor(() =>
@@ -108,7 +108,7 @@ test('an expiring open vault conceals details while a healthy neighbor stays usa
 
   await ui.act(async () => clock.advance(expiresAt - start));
   await ui.waitFor(() => {
-    assert.equal(rendered.queryByLabelText('Details'), null);
+    assert.equal(document.querySelector('.details'), null);
     assert.equal(rendered.queryByText('foks_team_token_7f31ac09'), null);
     assert.ok(rendered.getAllByText('Check-in expired').length > 0);
   });
@@ -182,7 +182,7 @@ test('expiry on one profile preserves a healthy neighboring editor draft', async
     (rendered.getByLabelText('User name') as HTMLInputElement).value,
     'preserved-draft',
   );
-  assert.ok(rendered.getByLabelText('Details'));
+  assert.ok(document.querySelector('.details'));
 });
 
 test('foreground retries authenticated reconciliation after an expiry refresh fails', async () => {

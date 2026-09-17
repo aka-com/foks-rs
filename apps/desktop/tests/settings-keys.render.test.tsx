@@ -1,7 +1,8 @@
 /**
- * The Devices tab: Macs, paper keys and security keys on one page, the chooser
- * that adds one, the recovery operations behind the section's menu, and the
- * scenes that still open a sheet on arrival.
+ * The Devices tab: Macs, paper keys and security keys in one list on one
+ * page, the chooser that adds one, the recovery operations grouped on a
+ * security key's own page, and the scenes that still open a sheet on
+ * arrival.
  */
 
 import assert from 'node:assert/strict';
@@ -126,46 +127,72 @@ async function renderDevices(
   return Object.assign(rendered, { showAccount });
 }
 
-test('one page lists the Macs, the paper keys and the security keys', async () => {
+test('one page lists every device, paper key and security key together', async () => {
   const rendered = await renderDevices(await fixture(), {
     store: 'acct:personal',
   });
 
-  assert.ok(rendered.getByText('Computers and security keys'));
-  assert.ok(rendered.getByText('Paper keys'));
-  assert.ok(rendered.getByText('Security keys'));
-  assert.equal(
-    rendered.queryByText('Only paper keys stored on this device are listed.'),
-    null,
-  );
-  assert.equal(rendered.queryByText(/Enrollments are listed for/), null);
+  // One region, one heading — no more "Computers and security keys", "Paper
+  // keys" or "Security keys" sections.
+  assert.ok(rendered.getByRole('region', { name: 'Devices' }));
+  assert.equal(rendered.queryByText('Computers and security keys'), null);
+  assert.equal(rendered.queryByText('Paper keys'), null);
+  assert.equal(rendered.queryByText('Security keys'), null);
   assert.equal(
     rendered.queryByRole('group', { name: 'Accounts on this device' }),
     null,
   );
 
-  // This Mac says so and cannot remove itself; the other Mac can be removed,
-  // and the key on a card is neither — it is revoked under its enrollment.
-  assert.ok(rendered.getByText('This device'));
+  // This Mac says so, with the same "Current" chip every current row reads,
+  // and cannot remove itself; the other Mac can be removed, and the key on a
+  // card is neither — it is revoked under its enrollment.
+  assert.ok(rendered.getByText('Current'));
   assert.equal(rendered.getAllByRole('button', { name: 'Remove…' }).length, 1);
-  const macs = rendered.getByRole('region', {
-    name: 'Computers and security keys',
-  });
-  assert.ok(ui.within(macs).getByText('Pocket YubiKey'));
-  assert.ok(ui.within(macs).getByText('Key on a card'));
+  assert.ok(rendered.getByText('Pocket YubiKey'));
+  // Its caption names its hardware type, and its chip uses the user-facing
+  // security-key label.
+  assert.equal(rendered.getAllByText('Security key').length, 2);
+  assert.ok(rendered.getByText('Key on a card'));
   assert.equal(
-    ui.within(macs).queryByRole('button', { name: 'Open Pocket YubiKey' })
-      ?.tagName,
+    rendered.queryByRole('button', { name: 'Open Pocket YubiKey' })?.tagName,
     'BUTTON',
   );
   assert.ok(rendered.getByText('MacBook Pro'));
   assert.ok(rendered.getByText('Travel Mac'));
-  assert.ok(rendered.getAllByText('Owner').length);
+  // Every row's caption names its type, not its role — the role moved to the
+  // key's own page.
+  assert.equal(rendered.getAllByText('Computer').length, 2);
   assert.ok(rendered.getByText('paper-backup'));
+  assert.ok(rendered.getByText('Paper key'));
   assert.ok(rendered.getByText('primary key'));
-  assert.ok(rendered.getByText('YubiKey 20993145'));
+  // The list is sorted by type: computers (and any key on a card among
+  // them), then paper keys, then security key enrollments.
+  const names = rendered
+    .getAllByRole('button', { name: /^Open / })
+    .map((button) => button.getAttribute('aria-label'));
+  assert.deepEqual(names, [
+    'Open MacBook Pro',
+    'Open Travel Mac',
+    'Open Pocket YubiKey',
+    'Open paper-backup',
+    'Open primary key',
+  ]);
   // There is no sub-navigation left on this page.
   assert.equal(rendered.queryByText('Recovery devices'), null);
+  // Neither the section-level "Add a paper key…" button nor the "More…" menu
+  // survive: "Add a device" is the only add control left.
+  assert.equal(
+    rendered.queryByRole('button', { name: 'Add a paper key…' }),
+    null,
+  );
+  assert.equal(rendered.queryByRole('button', { name: 'More…' }), null);
+  assert.ok(rendered.getByRole('button', { name: 'Add a device' }));
+  // The recovery action is still reachable, as a quiet link below the list.
+  assert.ok(
+    rendered.getByRole('button', {
+      name: 'Recover an account with a paper key…',
+    }),
+  );
 });
 
 /** Open the chooser and continue on the card with this title. */
@@ -257,31 +284,56 @@ test('starting a pairing reveals the phrase with a way to copy it', async () => 
   );
 });
 
-test('the recovery operations stay reachable, each saying when it does not apply', async () => {
+test('the recovery operations moved to a security key’s own page, each saying when it does not apply', async () => {
   const rendered = await renderDevices(await fixture(), {
     store: 'acct:personal',
+    device: 'yubi:primary key',
   });
 
-  await ui.act(async () => {
-    ui.fireEvent.click(rendered.getByRole('button', { name: 'More…' }));
+  const cardOps = rendered.getByRole('region', { name: 'Card operations' });
+  // Every button the old "More…" menu and Connected row held, now grouped
+  // under one heading, in the order Connected, Sync, Passphrase, Recovery —
+  // the eleven moved operations — followed by the PIN row's unchanged link.
+  await ui.waitFor(() => {
+    assert.deepEqual(
+      ui
+        .within(cardOps)
+        .getAllByRole('button')
+        .map((button) => button.textContent),
+      [
+        'Provision…',
+        'PIN status',
+        'Sync…',
+        'Set…',
+        'Change…',
+        'Verify…',
+        'Restore management…',
+        'Restore signing key…',
+        'Resume enrollment…',
+        'Resume rotation…',
+        'Rotate…',
+        'Settings › Server',
+      ],
+    );
   });
-  const menu = await ui.waitFor(() =>
-    rendered.getByRole('menu', { name: 'Security key operations' }),
+  const resume = ui
+    .within(cardOps)
+    .getByRole('button', { name: 'Resume enrollment…' });
+  // The fixture's "primary key" enrollment is already complete, so there is
+  // nothing pending to resume.
+  assert.equal(resume.hasAttribute('disabled'), true);
+  assert.equal(
+    resume.getAttribute('title'),
+    'This enrollment is already complete.',
   );
-  const items = ui.within(menu).getAllByRole('menuitem');
-  assert.equal(items.length, 10);
-  const resume = items.find((item) =>
-    item.textContent?.startsWith('Resume enrollment'),
-  );
-  assert.ok(resume);
-  // The fixture holds one complete enrollment and no pending one.
-  assert.equal(resume.getAttribute('aria-disabled'), 'true');
-  assert.equal(resume.getAttribute('title'), 'No pending enrollment found');
-  const rotate = items.find((item) =>
-    item.textContent?.startsWith('Rotate the management key'),
-  );
-  assert.ok(rotate);
-  assert.equal(rotate.getAttribute('aria-disabled'), null);
+  const rotate = ui.within(cardOps).getByRole('button', { name: 'Rotate…' });
+  assert.equal(rotate.hasAttribute('disabled'), false);
+  // Its card is connected (the fixture's one connected card matches its
+  // serial), so PIN status is reachable too.
+  const pinStatus = ui
+    .within(cardOps)
+    .getByRole('button', { name: 'PIN status' });
+  assert.equal(pinStatus.hasAttribute('disabled'), false);
 });
 
 test('a stopped account lists nothing and says why every action is off', async () => {
@@ -300,12 +352,11 @@ test('a stopped account lists nothing and says why every action is off', async (
   });
   assert.equal(add.hasAttribute('disabled'), true);
   assert.match(add.getAttribute('title') ?? '', /Check-in expired/);
-  assert.equal(
-    rendered
-      .getByRole('button', { name: 'Add a paper key…' })
-      .hasAttribute('disabled'),
-    true,
-  );
+  const recover = rendered.getByRole('button', {
+    name: 'Recover an account with a paper key…',
+  });
+  assert.equal(recover.hasAttribute('disabled'), true);
+  assert.match(recover.getAttribute('title') ?? '', /Check-in expired/);
 });
 
 test('a Mac with no account says so instead of listing an empty page', async () => {
@@ -343,23 +394,22 @@ test('a Mac with no account says so instead of listing an empty page', async () 
   assert.deepEqual(chosen.at(-1), { kind: 'people' });
 });
 
-test('a Devices address written before the page was one lands on its section', async () => {
+test('a Devices address written before the page was one lands on the one list', async () => {
   const rendered = await renderDevices(await fixture(), {
     store: 'acct:personal',
     section: 'keys',
   });
 
-  // The section is a labelled region, named by the label the reader sees.
+  // `section=macs` and `section=keys` both named a pane the page no longer
+  // has; both now land on the one region the label reads.
   await ui.waitFor(() => {
     assert.equal(
       document.activeElement,
-      rendered.getByRole('region', { name: 'Security keys' }),
+      rendered.getByRole('region', { name: 'Devices' }),
     );
   });
-  // The Macs are still on the same page, not behind a pane.
-  assert.ok(
-    rendered.getByRole('region', { name: 'Computers and security keys' }),
-  );
+  // The Macs are on the same region, not behind a pane.
+  assert.ok(rendered.getByText('Travel Mac'));
 });
 
 test('the YubiKey scene still opens its sheet on Devices', async () => {
@@ -387,7 +437,7 @@ test('the YubiKey scene still opens its sheet on Devices', async () => {
   await ui.waitFor(() => {
     assert.equal(
       document.activeElement,
-      rendered.getByRole('region', { name: 'Security keys' }),
+      rendered.getByRole('region', { name: 'Devices' }),
     );
   });
 });
@@ -534,13 +584,12 @@ test('a revoke acts on the key whose row was pressed', async () => {
   };
   const rendered = await renderDevices(twoKeys, { store: 'acct:personal' });
 
-  const keys = rendered.getByRole('region', {
-    name: 'Security keys',
-  });
-  const revokes = ui.within(keys).getAllByRole('button', { name: 'Revoke…' });
-  assert.equal(revokes.length, 2);
+  // The list also carries the paper key's own Revoke…, so the row is found
+  // by name rather than by counting every Revoke… button on the page.
+  const row = rendered.getByText('travel key').closest('.fr');
+  assert.ok(row instanceof HTMLElement);
   await ui.act(async () => {
-    ui.fireEvent.click(revokes[1]);
+    ui.fireEvent.click(ui.within(row).getByRole('button', { name: 'Revoke…' }));
   });
   const dialog = await ui.waitFor(() => rendered.getByRole('alertdialog'));
   assert.equal(
@@ -555,24 +604,56 @@ test('an unfinished enrollment says so and cannot be revoked', async () => {
   // that account's server answered with — not the other account's.
   const rendered = await renderDevices(await fixture(), { store: 'acct:work' });
 
-  const keys = rendered.getByRole('region', {
-    name: 'Security keys',
-  });
-  assert.ok(ui.within(keys).getByText('work key'));
-  assert.equal(ui.within(keys).queryByText('primary key'), null);
-  assert.ok(ui.within(keys).getByText('Incomplete'));
-  const revoke = ui.within(keys).getByRole('button', { name: 'Revoke…' });
+  assert.ok(rendered.getByText('work key'));
+  assert.equal(rendered.queryByText('primary key'), null);
+  assert.ok(rendered.getByText('Incomplete'));
+  const row = rendered.getByText('work key').closest('.fr');
+  assert.ok(row instanceof HTMLElement);
+  const revoke = ui.within(row).getByRole('button', { name: 'Revoke…' });
   assert.equal(revoke.hasAttribute('disabled'), true);
   assert.equal(revoke.getAttribute('title'), 'This enrollment is not complete');
 
   // Switching back lists the other account's key and nothing of this one's.
   await rendered.showAccount('acct:personal');
-  const listed = rendered.getByRole('region', {
-    name: 'Security keys',
+  assert.ok(rendered.getByText('primary key'));
+  assert.equal(rendered.queryByText('work key'), null);
+  assert.ok(rendered.getByText('Enrolled'));
+});
+
+test('a pending enrollment whose card is absent offers only Resume enrollment', async () => {
+  // "work key" is incomplete, and the one card the fixture reports connected
+  // is matched to a different enrollment's serial — the card, from this
+  // page, is absent.
+  const rendered = await renderDevices(await fixture(), {
+    store: 'acct:work',
+    device: 'yubi:work key',
   });
-  assert.ok(ui.within(listed).getByText('primary key'));
-  assert.equal(ui.within(listed).queryByText('work key'), null);
-  assert.ok(ui.within(listed).getByText('Enrolled'));
+
+  const cardOps = rendered.getByRole('region', { name: 'Card operations' });
+  const pinStatus = ui
+    .within(cardOps)
+    .getByRole('button', { name: 'PIN status' });
+  await ui.waitFor(() => {
+    assert.equal(pinStatus.hasAttribute('disabled'), true);
+    assert.equal(
+      pinStatus.getAttribute('title'),
+      'This key’s card is not connected.',
+    );
+  });
+  const sync = ui.within(cardOps).getByRole('button', { name: 'Sync…' });
+  assert.equal(sync.hasAttribute('disabled'), true);
+  assert.equal(sync.getAttribute('title'), 'This enrollment is not complete.');
+  // Resuming is the one operation a pending enrollment can use.
+  const resume = ui
+    .within(cardOps)
+    .getByRole('button', { name: 'Resume enrollment…' });
+  assert.equal(resume.hasAttribute('disabled'), false);
+  // Provisioning does not act on this enrollment specifically, so it stays
+  // reachable regardless of this key's own state.
+  const provision = ui
+    .within(cardOps)
+    .getByRole('button', { name: 'Provision…' });
+  assert.equal(provision.hasAttribute('disabled'), false);
 });
 
 test('navigating to an unavailable account displays an error and lists available accounts', async () => {
@@ -637,11 +718,9 @@ test('a key on a card is revoked under its enrollment, not removed here', async 
     page.queryByRole('button', { name: 'Remove this device…' }),
     null,
   );
-  // The row is not a dead end: it leads to the section that revokes the key.
+  // The row is not a dead end: it leads back to the list that revokes the key.
   await ui.act(async () => {
-    ui.fireEvent.click(
-      page.getByRole('button', { name: 'Go to Security keys' }),
-    );
+    ui.fireEvent.click(page.getByRole('button', { name: 'Go to Devices' }));
   });
   assert.deepEqual(chosen.at(-1), {
     kind: 'devices',
@@ -906,9 +985,9 @@ test('switching accounts drops the last account’s lists and closes an open she
   assert.equal(rendered.queryByRole('dialog'), null);
   assert.equal(rendered.queryByText('Travel Mac'), null);
   assert.equal(rendered.queryByText('paper-backup'), null);
-  assert.ok(
-    rendered.getByText('No paper keys stored on this device for this account.'),
-  );
+  // The work account's own device and key are listed in their place; it
+  // holds no paper key, so none is silently carried over from personal.
+  assert.ok(await rendered.findByText('work key'));
 });
 
 test('a paper key hidden by blur can be recovered once', async () => {
@@ -930,10 +1009,13 @@ test('a paper key hidden by blur can be recovered once', async () => {
   assert.deepEqual(committed, []);
 });
 
-test('PIN status selects the enrollment on the requested card rather than list order', async () => {
+test('PIN status on a key’s own page acts on that key, not on card or list order', async () => {
   const calls: unknown[] = [];
   const rendered = await renderDevices(await fixture(), {
     store: 'acct:personal',
+    // "second" is neither the first card nor the first enrollment either
+    // list answers with; its own page must still act on it specifically.
+    device: 'yubi:second',
     decorate: (base) => ({
       ...base,
       listYubiCards: async () => [{ serial: 111 }, { serial: 222 }],
@@ -947,19 +1029,20 @@ test('PIN status selects the enrollment on the requested card rather than list o
       },
     }),
   });
-  const buttons = await rendered.findAllByRole('button', {
+  const pinStatus = await rendered.findByRole('button', {
     name: 'PIN status',
   });
-  ui.fireEvent.click(buttons[0]);
+  assert.equal(pinStatus.hasAttribute('disabled'), false);
+  ui.fireEvent.click(pinStatus);
   const dialog = rendered.getByRole('dialog');
-  assert.ok(ui.within(dialog).getAllByText('first').length);
+  assert.ok(ui.within(dialog).getAllByText('second').length);
   ui.fireEvent.click(
     ui.within(dialog).getByRole('button', { name: 'Continue' }),
   );
   await ui.waitFor(() => assert.equal(calls.length, 1));
   assert.deepEqual(calls[0], {
     command: 'yubi_pin_status',
-    args: { profile: 'personal', alias: 'first' },
+    args: { profile: 'personal', alias: 'second' },
   });
 });
 
@@ -1013,16 +1096,22 @@ test('Devices reads only the current account and follows sidebar account changes
       listYubiCards: async () => [],
     }),
   });
+  // One computer, no paper keys and no enrollments: the list holds exactly
+  // the one row, with no empty-category filler for the two lists that came
+  // back empty, and the recovery link stays reachable below it.
   assert.ok(await rendered.findByText('Personal Mac'));
   assert.equal(rendered.queryByText('Work Mac'), null);
   assert.equal(
     rendered.queryByRole('group', { name: 'Accounts on this device' }),
     null,
   );
-  assert.ok(rendered.getByText('No YubiKey enrolled.'));
-  assert.ok(rendered.getByText('No security key connected.'));
+  // Exactly one row: no empty-category filler for the paper keys and
+  // enrollments that came back empty.
+  assert.equal(rendered.getAllByRole('button', { name: /^Open / }).length, 1);
   assert.ok(
-    rendered.getByText('Use a paper key to recover an existing account.'),
+    rendered.getByRole('button', {
+      name: 'Recover an account with a paper key…',
+    }),
   );
   await rendered.showAccount('acct:work');
   assert.ok(await rendered.findByText('Work Mac'));

@@ -97,11 +97,11 @@ async function mount(
 }
 
 test('a drag over a vault names the destination, and the drop uploads there', async () => {
-  // The flat list, so the uploaded item is visible without opening its folder.
+  // The store's own root is the default folder, so the uploaded item lands
+  // where the browser is already looking.
   const { rendered, driver } = await mount(
     { kind: 'store', ref: 'acct:personal' },
     {},
-    { view: 'list' },
   );
   await ui.waitFor(() => assert.ok(rendered.getAllByText('Personal').length));
 
@@ -221,7 +221,7 @@ test('a drop while browsing a folder saves into the folder on screen', async () 
         return { applied: true };
       },
     },
-    { view: 'folders', folder: '/ssh' },
+    { folder: '/ssh' },
   );
   await ui.waitFor(() => assert.ok(rendered.getAllByText('Personal').length));
 
@@ -272,8 +272,9 @@ test('replacing a file in the details panel takes the drop from the vault', asyn
         return { applied: true };
       },
     },
-    // The flat list, so the file is one click away from the details panel.
-    { view: 'list' },
+    // Search flattens the browser, so the file is one click away from the
+    // details panel without opening its folder first.
+    { query: 'id_ed25519' },
   );
   const file = snapshot.items.find(
     (item) => item.store === 'acct:personal' && item.path === '/ssh/id_ed25519',

@@ -4,7 +4,7 @@ import { Fragment, useId } from 'react';
 import type { ReactNode, Ref } from 'react';
 import { Band, Button, Chip, Icon } from '../components';
 import type { ChatAction, ChatChannel, ChatReply } from '../chat-contract';
-import { shortId } from '../model';
+import { plural, shortId } from '../model';
 import { failure } from './actions';
 import { useChatComposer, TEXT_LIMIT_LABEL } from './use-chat-composer';
 import { useChatReadIntent } from './use-chat-read-intent';
@@ -20,6 +20,7 @@ import {
 export function ChatThread({
   channel,
   teamName,
+  memberCount,
   onFiles,
   onSearch,
   onInfo,
@@ -53,6 +54,12 @@ export function ChatThread({
   channel: ChatChannel;
   /** The team the conversation header names before the channel. */
   teamName?: string;
+  /**
+   * The channel's member count, from the roster the team page already loads.
+   * `undefined` while that roster has not arrived for the open team — the
+   * header omits the count rather than claiming zero.
+   */
+  memberCount?: number;
   /** Opens the team's files; the header's folder button. */
   onFiles?: () => void;
   /** Moves to the inbox column's search field; the header's search button. */
@@ -138,6 +145,14 @@ export function ChatThread({
           <p>
             {channel.description && <span>{channel.description}</span>}
             {channel.description ? ' · ' : ''}
+            {memberCount !== undefined && (
+              <>
+                <span className="chat-member-count">
+                  {plural(memberCount, 'member')}
+                </span>
+                {' · '}
+              </>
+            )}
             <span className="chat-access">{accessSummary(channel)}</span>
           </p>
         </div>

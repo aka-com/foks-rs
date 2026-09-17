@@ -3,11 +3,13 @@ import { useTabSheetState } from '../navigation-guard';
 /**
  * The Devices tab: one page per account, with no sub-navigation.
  *
- * Recovery devices and Security keys were two panes two levels down; they are
- * three sections of one page here. Every row carries only what the agent
- * returns — a name, a role, a key id, whether it is this Mac — and each kind's
- * destructive action carries the rest in its typed confirmation. The three
- * ways to add a key are one chooser.
+ * Recovery devices and Security keys were two panes two levels down, then
+ * three sections of one page; they are one list here, sorted by type. Every
+ * row carries only what the agent returns — a name, a type, a key id,
+ * whether it is this Mac — and each kind's destructive action carries the
+ * rest in its typed confirmation. The three ways to add a key are one
+ * chooser, and it is the only add control left on the page: a security key's
+ * card operations live on that key's own page instead of behind a menu here.
  *
  * FOKS calls a recovery phrase a backup phrase; this page calls the object a
  * paper key and keeps the enrollment name the agent stores.
@@ -37,8 +39,6 @@ import {
   Icon,
   Inset,
   InsetRow,
-  MenuButton,
-  MenuItem,
   Notice,
   SectionLabel,
 } from '../components';
@@ -70,17 +70,14 @@ import {
   RemoveDeviceSheet,
   RevokeBackupSheet,
   RevokeSheet,
-  YUBI_ACTION_LABELS,
   YubiActionSheet,
 } from './device-sheets';
 import type { SimpleYubiAction } from './device-sheets';
 import {
   deviceAt,
-  enrollmentForCard,
+  deviceEntries,
   enrollmentForDevice,
   deviceIsCard,
-  deviceName,
-  roleLabel,
 } from './device-model';
 import type { DeviceEntry } from './device-model';
 import { UnavailableAccount } from './people-screen';
@@ -102,20 +99,79 @@ type Sheet =
   | null;
 
 /**
- * The card operations that are recovery paths for a key already in trouble.
- * Each menu entry and the sheet it opens read the same label.
+ * The nine card operations that are recovery paths for a key already in
+ * trouble — what used to be the "More…" menu's `RECOVERY_ACTIONS`, one menu
+ * entry per action. Each is now a button on the key's own page instead, and
+ * the sheet it opens reads the same label either way.
  */
-const RECOVERY_ACTIONS: readonly SimpleYubiAction[] = [
-  'sync',
-  'set-passphrase',
-  'change-passphrase',
-  'verify-passphrase',
-  'recover-management',
-  'recover-subkey',
-  'resume-enrollment',
-  'resume-rotation',
-  'rotate',
+type RecoveryAction =
+  | 'sync'
+  | 'set-passphrase'
+  | 'change-passphrase'
+  | 'verify-passphrase'
+  | 'recover-management'
+  | 'recover-subkey'
+  | 'resume-enrollment'
+  | 'resume-rotation'
+  | 'rotate';
+
+/**
+ * The rows "Card operations" groups the nine `RecoveryAction`s into, on a
+ * security key's own page: Sync (1) + Passphrase (3) + Recovery (5) = 9,
+ * plus the Connected row's "Provision…" and "PIN status" — the eleven
+ * operations the old "More…" menu and Connected row together held.
+ */
+const CARD_OP_GROUPS: ReadonlyArray<{
+  label: string;
+  hint: string;
+  actions: readonly RecoveryAction[];
+}> = [
+  {
+    label: 'Sync',
+    hint: 'Refresh this account’s state on the card.',
+    actions: ['sync'],
+  },
+  {
+    label: 'Passphrase',
+    hint: 'Set, change or verify the key passphrase.',
+    actions: ['set-passphrase', 'change-passphrase', 'verify-passphrase'],
+  },
+  {
+    label: 'Recovery',
+    hint: 'Restore access if the card, its management key or its signing key is stuck.',
+    actions: [
+      'recover-management',
+      'recover-subkey',
+      'resume-enrollment',
+      'resume-rotation',
+      'rotate',
+    ],
+  },
 ];
+
+/** The short label a `CARD_OP_GROUPS` button reads; the row it sits under
+ * already carries the rest of the sentence. */
+const CARD_OP_LABELS: Readonly<Record<RecoveryAction, string>> = {
+  sync: 'Sync…',
+  'set-passphrase': 'Set…',
+  'change-passphrase': 'Change…',
+  'verify-passphrase': 'Verify…',
+  'recover-management': 'Restore management…',
+  'recover-subkey': 'Restore signing key…',
+  'resume-enrollment': 'Resume enrollment…',
+  'resume-rotation': 'Resume rotation…',
+  rotate: 'Rotate…',
+};
+
+/**
+ * The word a row's caption, and a key's own "Kind" fact, name its type with,
+ * on this page only. The shared model still calls a card enrollment an
+ * "Enrollment" object — People reads that literal value unchanged — but
+ * Devices calls the same object a security key everywhere else in its copy.
+ */
+function kindLabel(kind: DeviceEntry['kind']): string {
+  return kind === 'Enrollment' ? 'Security key' : kind;
+}
 
 export interface DevicesScreenProps {
   snapshot: AgentSnapshot;
@@ -286,11 +342,9 @@ export function DevicesScreen({
   ]);
 
   // A `section=` address — the Devices addresses written before the page was
-  // one — lands on the section it names.
-  const anchors = {
-    macs: useRef<HTMLDivElement>(null),
-    keys: useRef<HTMLDivElement>(null),
-  };
+  // one, when Macs and Security keys were two sections — lands on the one
+  // list both now name.
+  const listAnchor = useRef<HTMLDivElement>(null);
   const requestedSection = location.section;
   useEffect(() => {
     if (!requestedSection) return;
@@ -298,14 +352,11 @@ export function DevicesScreen({
     // preserve focus within the dialog rather than shifting focus to the
     // background section anchor until the dialog is closed.
     if (sheet) return;
-    const anchor = anchors[requestedSection].current;
+    const anchor = listAnchor.current;
     if (!anchor) return;
     if (typeof anchor.scrollIntoView === 'function')
       anchor.scrollIntoView({ block: 'start' });
     anchor.focus({ preventScroll: true });
-    // The anchors are stable refs; the address and the open sheet are what
-    // move the page.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestedSection, sheet]);
 
   // `onRefresh` reloads the catalog and says what happened; the page does not
@@ -367,34 +418,83 @@ export function DevicesScreen({
           // count per object, under the name that object carries everywhere.
           plural(yubi.length, 'enrollment'),
         ].join(' · ');
-  const completed = yubi.filter((entry) => entry.state === 'complete');
-  const complete = completed.length === 1 ? completed[0] : undefined;
-  const pending = yubi.find((entry) => entry.state === 'pending');
   const why = stopped.stopped ? stopped.reason : undefined;
-  const openYubi = (action: SimpleYubiAction, entry?: YubiEnrollment): void => {
-    setActingKey(entry ?? null);
+  // A key's own page always names the enrollment its Card operations act on;
+  // there is no page-wide "the one complete enrollment" left to fall back to.
+  const openYubi = (action: SimpleYubiAction, entry: YubiEnrollment): void => {
+    setActingKey(entry);
     setPendingYubi(action);
     setSheet('yubi');
   };
-  const yubiReason = (action: SimpleYubiAction): string | undefined => {
-    if (stopped.stopped) return stopped.reason;
-    if (loading) return 'Loading this account…';
-    if (action === 'resume-enrollment')
-      return pending ? undefined : 'No pending enrollment found';
-    // The card's PIN is read from the card in the port, not from an
-    // enrollment, so a connected card is most of what this one needs — but
-    // the command still names an enrollment, and this account may have none.
-    if (action === 'pin-status')
-      return cards.length
-        ? (complete ?? pending)
-          ? undefined
-          : 'No enrollment on the connected card'
-        : 'No security key connected';
-    return complete
-      ? undefined
-      : completed.length > 1
-        ? 'Choose a specific enrollment to continue.'
-        : 'No complete enrollment found';
+  // Every key on the account, sorted by type: computers, then paper keys,
+  // then security key enrollments — the one list the page now shows.
+  const entries = deviceEntries(lists);
+  /** The row's trailing chip or button, ahead of the "Open" button every row
+   * carries: which one depends on which of the three lists it came from. */
+  const deviceRowAction = (entry: DeviceEntry): ReactNode => {
+    const source = entry.source;
+    if (source.kind === 'device') {
+      const device = source.device;
+      if (device.current) return <Chip tone="you">Current</Chip>;
+      if (deviceIsCard(device)) return <Chip tone="ok">Security key</Chip>;
+      return (
+        <Button
+          size="sm"
+          variant="danger"
+          disabled={stopped.stopped}
+          title={why}
+          onClick={() => {
+            setRemoving(device);
+            setSheet('remove-device');
+          }}
+        >
+          Remove…
+        </Button>
+      );
+    }
+    if (source.kind === 'backup') {
+      const backup = source.backup;
+      return (
+        <Button
+          size="sm"
+          variant="danger"
+          disabled={stopped.stopped}
+          title={why}
+          onClick={() => {
+            setRevoking(backup);
+            setSheet('revoke-backup');
+          }}
+        >
+          Revoke…
+        </Button>
+      );
+    }
+    const enrollment = source.entry;
+    return (
+      <>
+        <Chip tone={enrollment.state === 'complete' ? 'ok' : 'warn'}>
+          {enrollment.state === 'complete' ? 'Enrolled' : 'Incomplete'}
+        </Chip>
+        <Button
+          size="sm"
+          variant="danger"
+          disabled={stopped.stopped || enrollment.state !== 'complete'}
+          title={
+            stopped.stopped
+              ? stopped.reason
+              : enrollment.state === 'complete'
+                ? undefined
+                : 'This enrollment is not complete'
+          }
+          onClick={() => {
+            setActingKey(enrollment);
+            setSheet('revoke');
+          }}
+        >
+          Revoke…
+        </Button>
+      </>
+    );
   };
   // The key a `device=` address names, once the four lists have answered.
   const detail = location.device
@@ -479,6 +579,7 @@ export function DevicesScreen({
           }
           loading={loading}
           stopped={stopped}
+          cards={cards}
           onBack={backToList}
           onNavigate={onNavigate}
           onCopy={(text) => copyText(text, 'Key id copied')}
@@ -494,6 +595,8 @@ export function DevicesScreen({
             setActingKey(entry);
             setSheet('revoke');
           }}
+          onProvision={() => setSheet('provision')}
+          onYubiAction={openYubi}
         />
       ) : (
         <>
@@ -540,72 +643,47 @@ export function DevicesScreen({
 
               <div
                 className="settings-section"
-                ref={anchors.macs}
+                ref={listAnchor}
                 tabIndex={-1}
                 role="region"
-                aria-labelledby="devices-macs-label"
+                aria-labelledby="devices-all-label"
               >
-                {/* The region holds this account's authenticated devices, and
-                    a device key on a card is one of them; naming it for the
-                    Macs alone would name half of what it encloses. */}
-                <SectionLabel id="devices-macs-label">
-                  Computers and security keys
-                </SectionLabel>
+                {/* Every key on the account is one list, sorted by type:
+                    computers (and any device key on a card among them), then
+                    paper keys, then security key enrollments — the order
+                    `deviceEntries` already reads the three lists in. */}
+                <SectionLabel id="devices-all-label">Devices</SectionLabel>
                 <Inset className="settings-inset middle wide">
                   {loading ? (
-                    <InsetRow label="Devices">Loading devices…</InsetRow>
-                  ) : devices.length ? (
-                    devices.map((device) => (
+                    <InsetRow label="Devices">
+                      Loading devices, paper keys and security keys…
+                    </InsetRow>
+                  ) : entries.length ? (
+                    entries.map((entry) => (
                       <InsetRow
-                        key={device.id}
+                        key={entry.address}
                         className="devrow"
                         action={
                           <>
-                            {device.current ? (
-                              <Chip tone="you">
-                                {deviceIsCard(device)
-                                  ? 'Current key on a card'
-                                  : 'This device'}
-                              </Chip>
-                            ) : !deviceIsCard(device) ? (
-                              <Button
-                                size="sm"
-                                variant="danger"
-                                disabled={stopped.stopped}
-                                title={why}
-                                onClick={() => {
-                                  setRemoving(device);
-                                  setSheet('remove-device');
-                                }}
-                              >
-                                Remove…
-                              </Button>
-                            ) : (
-                              <Chip>Key on a card</Chip>
-                            )}
+                            {deviceRowAction(entry)}
                             <OpenDevice
-                              name={deviceName(device)}
-                              onOpen={() => openDevice(device.id)}
+                              name={entry.name}
+                              onOpen={() => openDevice(entry.address)}
                             />
                           </>
                         }
                       >
                         <span className="ic" aria-hidden="true">
-                          <Icon
-                            name={deviceIsCard(device) ? 'key' : 'laptop'}
-                          />
+                          <Icon name={entry.icon} />
                         </span>
                         <span className="t">
-                          <b>{deviceName(device)}</b>
-                          <small>
-                            {deviceIsCard(device)
-                              ? 'Key on a card'
-                              : 'Computer'}{' '}
-                            · <span>{roleLabel(device.role)}</span>
-                          </small>
-                          <span className="kid" title={device.id}>
-                            {shortId(device.id, 10)}
-                          </span>
+                          <b>{entry.name}</b>
+                          <small>{kindLabel(entry.kind)}</small>
+                          {entry.source.kind !== 'yubi' && entry.keyId ? (
+                            <span className="kid" title={entry.keyId}>
+                              {shortId(entry.keyId, 10)}
+                            </span>
+                          ) : null}
                         </span>
                       </InsetRow>
                     ))
@@ -613,289 +691,38 @@ export function DevicesScreen({
                     <InsetRow label="Devices">
                       {stopped.stopped
                         ? 'Not listed while access is stopped'
-                        : 'No computers or security keys are authenticated on this account.'}
+                        : failed
+                          ? 'Devices and keys could not be read. Refresh to try again.'
+                          : 'No devices, paper keys or security keys on this account.'}
                     </InsetRow>
                   )}
                 </Inset>
               </div>
-              {/* Paper keys are their own section, so they are their own region:
-              a region named "Your Macs" that held them would name half of
-              what it encloses. */}
-              <div
-                className="settings-section"
-                role="region"
-                aria-labelledby="devices-paper-label"
-              >
-                <SectionLabel
-                  id="devices-paper-label"
-                  action={
-                    <Button
-                      size="sm"
-                      disabled={stopped.stopped}
-                      title={why}
-                      onClick={() => setSheet('phrase')}
-                    >
-                      Add a paper key…
-                    </Button>
-                  }
+              {/* The two actions that make an account rather than act on a
+                  device in the list above. */}
+              <p className="fn">
+                <Button
+                  variant="plain"
+                  size="sm"
+                  className="lnk"
+                  disabled={stopped.stopped}
+                  title={why}
+                  onClick={() => setSheet('recover')}
                 >
-                  Paper keys
-                </SectionLabel>
-                <Inset className="settings-inset middle wide">
-                  {loading ? (
-                    <InsetRow label="Saved">Loading paper keys…</InsetRow>
-                  ) : backups.length ? (
-                    backups.map((backup) => (
-                      <InsetRow
-                        key={backup.backupId}
-                        className="devrow"
-                        action={
-                          <>
-                            <Button
-                              size="sm"
-                              variant="danger"
-                              disabled={stopped.stopped}
-                              title={why}
-                              onClick={() => {
-                                setRevoking(backup);
-                                setSheet('revoke-backup');
-                              }}
-                            >
-                              Revoke…
-                            </Button>
-                            <OpenDevice
-                              name={backup.backupAlias}
-                              onOpen={() => openDevice(backup.backupId)}
-                            />
-                          </>
-                        }
-                      >
-                        <span className="ic" aria-hidden="true">
-                          <Icon name="file" />
-                        </span>
-                        <span className="t">
-                          <b>{backup.backupAlias}</b>
-                          <span className="kid" title={backup.backupId}>
-                            {shortId(backup.backupId, 10)}
-                          </span>
-                        </span>
-                      </InsetRow>
-                    ))
-                  ) : (
-                    <InsetRow label="Saved">
-                      {stopped.stopped
-                        ? 'Not listed while access is stopped'
-                        : 'No paper keys stored on this device for this account.'}
-                    </InsetRow>
-                  )}
-                  <InsetRow
-                    label="Recovery"
-                    action={
-                      <Button
-                        size="sm"
-                        disabled={stopped.stopped}
-                        title={why}
-                        onClick={() => setSheet('recover')}
-                      >
-                        Recover…
-                      </Button>
-                    }
-                  >
-                    Use a paper key to recover an existing account.
-                  </InsetRow>
-                </Inset>
-              </div>
-              <div
-                className="settings-section"
-                ref={anchors.keys}
-                tabIndex={-1}
-                role="region"
-                aria-labelledby="devices-keys-label"
-              >
-                <SectionLabel
-                  id="devices-keys-label"
-                  action={
-                    <MenuButton
-                      size="sm"
-                      label="More…"
-                      menuLabel="Security key operations"
-                      align="end"
-                    >
-                      {(close) => (
-                        <>
-                          <MenuItem
-                            icon="plus"
-                            reason={
-                              stopped.stopped ? stopped.reason : undefined
-                            }
-                            onClick={() => {
-                              close();
-                              setSheet('enrol');
-                            }}
-                          >
-                            Create an account on a YubiKey…
-                          </MenuItem>
-                          <div className="menu-separator" role="separator" />
-                          {RECOVERY_ACTIONS.map((action) => (
-                            <MenuItem
-                              key={action}
-                              reason={yubiReason(action)}
-                              onClick={() => {
-                                close();
-                                openYubi(action);
-                              }}
-                            >
-                              {YUBI_ACTION_LABELS[action]}…
-                            </MenuItem>
-                          ))}
-                        </>
-                      )}
-                    </MenuButton>
-                  }
+                  Recover an account with a paper key…
+                </Button>
+                {' · '}
+                <Button
+                  variant="plain"
+                  size="sm"
+                  className="lnk"
+                  disabled={stopped.stopped}
+                  title={why}
+                  onClick={() => setSheet('enrol')}
                 >
-                  Security keys
-                </SectionLabel>
-                <Inset className="settings-inset middle wide">
-                  {loading ? (
-                    <InsetRow label="Enrolled">Loading keys…</InsetRow>
-                  ) : yubi.length ? (
-                    yubi.map((entry) => (
-                      <InsetRow
-                        key={entry.alias}
-                        className="devrow"
-                        action={
-                          <>
-                            <Chip
-                              tone={entry.state === 'complete' ? 'ok' : 'warn'}
-                            >
-                              {entry.state === 'complete'
-                                ? 'Enrolled'
-                                : 'Incomplete'}
-                            </Chip>
-                            <Button
-                              size="sm"
-                              variant="danger"
-                              disabled={
-                                stopped.stopped || entry.state !== 'complete'
-                              }
-                              title={
-                                stopped.stopped
-                                  ? stopped.reason
-                                  : entry.state === 'complete'
-                                    ? undefined
-                                    : 'This enrollment is not complete'
-                              }
-                              onClick={() => {
-                                setActingKey(entry);
-                                setSheet('revoke');
-                              }}
-                            >
-                              Revoke…
-                            </Button>
-                            <OpenDevice
-                              name={entry.alias}
-                              onOpen={() => openDevice(`yubi:${entry.alias}`)}
-                            />
-                          </>
-                        }
-                      >
-                        <span className="ic" aria-hidden="true">
-                          <Icon name="key" />
-                        </span>
-                        <span className="t">
-                          <b>{entry.alias}</b>
-                          <small>
-                            {entry.cardSerial
-                              ? `Card serial ${entry.cardSerial}`
-                              : 'This enrollment cannot be matched to a card on this device.'}
-                          </small>
-                        </span>
-                      </InsetRow>
-                    ))
-                  ) : (
-                    <InsetRow label="Enrolled">
-                      {stopped.stopped
-                        ? 'Not listed while access is stopped'
-                        : 'No YubiKey enrolled.'}
-                    </InsetRow>
-                  )}
-                  {cards.length ? (
-                    cards.map((card) => (
-                      <InsetRow
-                        key={card.serial}
-                        label="Connected"
-                        action={
-                          <>
-                            <Button
-                              size="sm"
-                              disabled={stopped.stopped}
-                              title={why}
-                              onClick={() => setSheet('provision')}
-                            >
-                              Provision…
-                            </Button>
-                            <Button
-                              size="sm"
-                              disabled={
-                                stopped.stopped ||
-                                !enrollmentForCard(yubi, card.serial)
-                              }
-                              title={
-                                why ??
-                                (!enrollmentForCard(yubi, card.serial)
-                                  ? 'Choose an enrollment matched to this card.'
-                                  : undefined)
-                              }
-                              onClick={() =>
-                                openYubi(
-                                  'pin-status',
-                                  enrollmentForCard(yubi, card.serial),
-                                )
-                              }
-                            >
-                              PIN status
-                            </Button>
-                          </>
-                        }
-                      >
-                        <b>YubiKey {card.serial}</b>{' '}
-                        <Chip tone="ok">Connected</Chip>
-                        <small>
-                          Read from the card in the port, not from the account.
-                        </small>
-                      </InsetRow>
-                    ))
-                  ) : (
-                    <InsetRow label="Connected">
-                      {stopped.stopped
-                        ? 'Not read while access is stopped'
-                        : 'No security key connected.'}
-                    </InsetRow>
-                  )}
-                  <InsetRow
-                    label="PIN"
-                    action={
-                      <Button
-                        size="sm"
-                        onClick={() =>
-                          onNavigate({
-                            kind: 'settings',
-                            section: 'credentials',
-                            // The address the page carries, so a stale reference
-                            // travels and is reported there rather than dropped.
-                            store: location.store ?? selected.id,
-                          })
-                        }
-                      >
-                        Settings › Server
-                      </Button>
-                    }
-                  >
-                    Set in Settings › Server, along with the key’s other
-                    credentials.
-                  </InsetRow>
-                </Inset>
-              </div>
+                  Create an account on a YubiKey…
+                </Button>
+              </p>
             </div>
           </div>
         </>
@@ -1003,14 +830,9 @@ export function DevicesScreen({
           bridge={bridge}
           store={selected}
           action={pendingYubi}
-          // A row's action names its own enrollment; the section's menu acts
-          // on the one enrollment the operation applies to.
-          alias={
-            (
-              actingKey ??
-              (pendingYubi === 'resume-enrollment' ? pending : complete)
-            )?.alias ?? ''
-          }
+          // The row or Card operations button this was opened from names its
+          // own enrollment; `openYubi` never opens this sheet without one.
+          alias={actingKey?.alias ?? ''}
           onClose={() => {
             setSheet(null);
             setPendingYubi(null);
@@ -1023,11 +845,11 @@ export function DevicesScreen({
           onError={(error) => void onMutationError(error)}
         />
       ) : null}
-      {sheet === 'revoke' && selected && (actingKey ?? complete) ? (
+      {sheet === 'revoke' && selected && actingKey ? (
         <RevokeSheet
           bridge={bridge}
           store={selected}
-          alias={(actingKey ?? complete)?.alias ?? ''}
+          alias={actingKey.alias}
           onClose={() => {
             setSheet(null);
             setActingKey(null);
@@ -1107,12 +929,15 @@ function DeviceDetail({
   deviceEnrollment,
   loading,
   stopped,
+  cards,
   onBack,
   onNavigate,
   onCopy,
   onRemove,
   onRevokeBackup,
   onRevokeKey,
+  onProvision,
+  onYubiAction,
 }: {
   snapshot: AgentSnapshot;
   store: AccountStore;
@@ -1121,12 +946,16 @@ function DeviceDetail({
   deviceEnrollment?: YubiEnrollment;
   loading: boolean;
   stopped: { stopped: boolean; reason: string };
+  /** The cards in this Mac's ports right now. */
+  cards: { serial: number }[];
   onBack: () => void;
   onNavigate: (location: Location) => void;
   onCopy: (text: string) => void;
   onRemove: (device: AccountDevice) => void;
   onRevokeBackup: (backup: BackupEnrollment) => void;
   onRevokeKey: (entry: YubiEnrollment) => void;
+  onProvision: () => void;
+  onYubiAction: (action: SimpleYubiAction, entry: YubiEnrollment) => void;
 }): ReactNode {
   const why = stopped.stopped ? stopped.reason : undefined;
   if (!entry)
@@ -1184,8 +1013,8 @@ function DeviceDetail({
         // says so rather than naming an account the agent did not answer for.
         subtitle={
           entry.scope === 'profile'
-            ? `${entry.kind} · on ${serverName(snapshot, store)}`
-            : `${entry.kind} · ${accountSubtitle(snapshot, store)}`
+            ? `${kindLabel(entry.kind)} · on ${serverName(snapshot, store)}`
+            : `${kindLabel(entry.kind)} · ${accountSubtitle(snapshot, store)}`
         }
         action={
           entry.current ? (
@@ -1210,7 +1039,7 @@ function DeviceDetail({
           >
             <SectionLabel id="device-facts-label">This key</SectionLabel>
             <Inset className="settings-inset middle wide">
-              <InsetRow label="Kind">{entry.kind}</InsetRow>
+              <InsetRow label="Kind">{kindLabel(entry.kind)}</InsetRow>
               {entry.role ? (
                 <InsetRow label="Role on the account">{entry.role}</InsetRow>
               ) : null}
@@ -1254,36 +1083,16 @@ function DeviceDetail({
               ) : null}
             </Inset>
           </div>
-          {source.kind === 'yubi' ? (
-            <div
-              className="settings-section"
-              role="region"
-              aria-labelledby="device-card-label"
-            >
-              <SectionLabel id="device-card-label">Card</SectionLabel>
-              <Inset className="settings-inset middle wide">
-                <InsetRow
-                  label="PIN"
-                  action={
-                    <Button
-                      size="sm"
-                      onClick={() =>
-                        onNavigate({
-                          kind: 'settings',
-                          section: 'servers',
-                          profile: store.server,
-                        })
-                      }
-                    >
-                      Settings › Server
-                    </Button>
-                  }
-                >
-                  Set in Settings › Server, along with the key’s other
-                  credentials.
-                </InsetRow>
-              </Inset>
-            </div>
+          {enrollment ? (
+            <CardOperations
+              enrollment={enrollment}
+              cards={cards}
+              stopped={stopped}
+              store={store}
+              onNavigate={onNavigate}
+              onProvision={onProvision}
+              onYubiAction={onYubiAction}
+            />
           ) : null}
           <div
             className="settings-section"
@@ -1317,13 +1126,13 @@ function DeviceDetail({
                     >
                       {deviceEnrollment
                         ? `Open ${deviceEnrollment.alias}`
-                        : 'Go to Security keys'}
+                        : 'Go to Devices'}
                     </Button>
                   }
                 >
                   <small>
-                    A key on a card is revoked under Security keys, where its
-                    enrollment is listed.
+                    A key on a card is revoked under its enrollment, listed on
+                    Devices.
                   </small>
                 </InsetRow>
               ) : entry.current ? (
@@ -1415,5 +1224,138 @@ function DeviceDetail({
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * The maintenance operations a security key's card supports, grouped under
+ * one heading on the enrollment's own page: what used to be the "More…" menu
+ * on the list, plus "Provision…" and "PIN status", which used to be their own
+ * buttons on a connected card's row. Every button here acts on this page's
+ * own enrollment — there is no other one to guess at.
+ */
+function CardOperations({
+  enrollment,
+  cards,
+  stopped,
+  store,
+  onNavigate,
+  onProvision,
+  onYubiAction,
+}: {
+  enrollment: YubiEnrollment;
+  /** The cards in this Mac's ports right now. */
+  cards: { serial: number }[];
+  stopped: { stopped: boolean; reason: string };
+  store: AccountStore;
+  onNavigate: (location: Location) => void;
+  onProvision: () => void;
+  onYubiAction: (action: SimpleYubiAction, entry: YubiEnrollment) => void;
+}): ReactNode {
+  const why = stopped.stopped ? stopped.reason : undefined;
+  const cardConnected =
+    enrollment.cardSerial != null &&
+    cards.some((card) => card.serial === enrollment.cardSerial);
+  const pinReason = stopped.stopped
+    ? stopped.reason
+    : cards.length === 0
+      ? 'No security key connected.'
+      : !cardConnected
+        ? 'This key’s card is not connected.'
+        : undefined;
+  // Every recovery action but "Resume enrollment" acts on a card whose
+  // account already exists; that one acts on a card whose account does not,
+  // so the two conditions are exact opposites rather than shades of one.
+  const opReason = stopped.stopped
+    ? stopped.reason
+    : enrollment.state === 'complete'
+      ? undefined
+      : 'This enrollment is not complete.';
+  const resumeReason = stopped.stopped
+    ? stopped.reason
+    : enrollment.state === 'pending'
+      ? undefined
+      : 'This enrollment is already complete.';
+  return (
+    <div
+      className="settings-section"
+      role="region"
+      aria-labelledby="device-card-label"
+    >
+      <SectionLabel id="device-card-label">Card operations</SectionLabel>
+      <Inset className="settings-inset middle wide">
+        <InsetRow
+          label="Connected"
+          action={
+            <>
+              <Button
+                size="sm"
+                disabled={stopped.stopped}
+                title={why}
+                onClick={onProvision}
+              >
+                Provision…
+              </Button>
+              <Button
+                size="sm"
+                disabled={pinReason !== undefined}
+                title={pinReason}
+                onClick={() => onYubiAction('pin-status', enrollment)}
+              >
+                PIN status
+              </Button>
+            </>
+          }
+        >
+          Read from the card in the port, not from the account.
+        </InsetRow>
+        {CARD_OP_GROUPS.map((group) => (
+          <InsetRow
+            key={group.label}
+            label={group.label}
+            action={
+              <>
+                {group.actions.map((action) => {
+                  const reason =
+                    action === 'resume-enrollment' ? resumeReason : opReason;
+                  return (
+                    <Button
+                      key={action}
+                      size="sm"
+                      disabled={reason !== undefined}
+                      title={reason}
+                      onClick={() => onYubiAction(action, enrollment)}
+                    >
+                      {CARD_OP_LABELS[action]}
+                    </Button>
+                  );
+                })}
+              </>
+            }
+          >
+            {group.hint}
+          </InsetRow>
+        ))}
+        <InsetRow
+          label="PIN"
+          action={
+            <Button
+              size="sm"
+              onClick={() =>
+                onNavigate({
+                  kind: 'settings',
+                  section: 'servers',
+                  profile: store.server,
+                })
+              }
+            >
+              Settings › Server
+            </Button>
+          }
+        >
+          Set in Settings › Server, along with the key’s other credentials.
+        </InsetRow>
+      </Inset>
+    </div>
   );
 }

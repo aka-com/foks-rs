@@ -1,10 +1,12 @@
 /**
- * The Files roots page and the Teams list.
+ * The Teams list.
  *
- * Both draw the store rows the rail used to draw, and both say a store's
- * abnormal state the same way: a chip at the end of the row and a dimmed row,
- * never a caption under the name. The rows are also the only way into an item
- * page and a group's settings now, so where they navigate is pinned here.
+ * It draws the store rows the rail used to draw, and says a store's abnormal
+ * state the same way: a chip at the end of the row and a dimmed row, never a
+ * caption under the name. The rows are also the only way into a group's
+ * settings now, so where they navigate is pinned here. The Files tab's own
+ * rows are covered in `items-screen`'s own tests: it opens on the folder
+ * browser directly, with no roots page of its own any more.
  */
 
 import assert from 'node:assert/strict';
@@ -63,17 +65,6 @@ async function fixture(): Promise<AgentSnapshot> {
     '/src/fixture.ts',
   )) as typeof import('../src/fixture');
   return FIXTURE;
-}
-
-async function files(
-  onNavigate: (location: Location) => void = () => {},
-  supplied?: AgentSnapshot,
-) {
-  const { FilesScreen } = (await vite.ssrLoadModule(
-    '/src/screens/files-screen.tsx',
-  )) as typeof import('../src/screens/files-screen');
-  const snapshot = supplied ?? (await fixture());
-  return ui.render(createElement(FilesScreen, { snapshot, onNavigate }));
 }
 
 /** The page as one address and one snapshot draw it. */
@@ -141,54 +132,6 @@ async function teams(
   });
   return rendered;
 }
-
-test('a Files row in an abnormal state carries a chip and is dimmed', async () => {
-  await files();
-  // Homelab's group reports setup incomplete in the fixture.
-  const homelab = row('Homelab');
-  assert.ok(homelab.className.split(' ').includes('off'));
-  assert.equal(
-    homelab.querySelector('.tail .chip')?.textContent,
-    'Setup incomplete',
-  );
-  // The state is the chip, so the caption says only what the store is.
-  assert.equal(
-    homelab.querySelector('.name small')?.textContent,
-    'Ad-hoc share · Personal server',
-  );
-
-  const personal = row('Personal');
-  assert.equal(personal.className, 'row');
-  assert.equal(personal.querySelector('.tail .chip'), null);
-  assert.equal(
-    personal.querySelector('.name small')?.textContent,
-    'Vault · satoshi on Personal server',
-  );
-});
-
-test('a Files row draws the group its own mark, and a vault its glyph', async () => {
-  await files();
-  // One group, one mark: the same initial over the same colour that the Teams
-  // row and the group's own page draw.
-  const mark = row('Engineering').querySelector('.kico.group');
-  assert.ok(mark);
-  assert.equal(mark.textContent, 'E');
-  // The initial stands for the name beside it, so it is not read out twice.
-  assert.equal(mark.getAttribute('aria-hidden'), 'true');
-  // A vault is not a group: it keeps the vault glyph over its own hue.
-  const vault = row('Personal');
-  assert.equal(vault.querySelector('.kico'), null);
-  assert.ok(vault.querySelector('.kic'));
-});
-
-test('the Files rows open All items and the store they name', async () => {
-  const journal: Location[] = [];
-  await files((location) => journal.push(location));
-  ui.fireEvent.click(row('All items'));
-  assert.deepEqual(journal.at(-1), { kind: 'all' });
-  ui.fireEvent.click(row('Engineering'));
-  assert.deepEqual(journal.at(-1), { kind: 'store', ref: 'team:eng' });
-});
 
 test('a Teams row in an abnormal state carries the same chip, and opens team settings', async () => {
   const journal: Location[] = [];
@@ -478,32 +421,6 @@ test('creating and joining act as the account the address names', async () => {
   assert.ok(joining.getByRole('heading', { name: 'Join a team' }));
   // The Teams page already names the account, so the sheet does not.
   assert.equal(document.querySelector('.sheet .hd small'), null);
-});
-
-test('same-named Files roots retain distinct server identities even with duplicate labels', async () => {
-  const snapshot = await fixture();
-  const destinations: Location[] = [];
-  await files((location) => destinations.push(location), {
-    ...snapshot,
-    servers: snapshot.servers.map((server) => ({ ...server, label: 'Work' })),
-    stores: snapshot.stores.map((store) =>
-      store.kind === 'team' ? { ...store, name: 'Engineering' } : store,
-    ),
-  });
-  const rows = [
-    ...document.querySelectorAll<HTMLButtonElement>('.nav-rows .row'),
-  ].filter((row) => row.querySelector('.tt')?.textContent === 'Engineering');
-  assert.ok(rows.some((row) => row.textContent?.includes('foks.example.net')));
-  assert.ok(
-    rows.some((row) => row.textContent?.includes('foks.acme-corp.com')),
-  );
-  for (const row of rows) ui.fireEvent.click(row);
-  assert.equal(
-    new Set(
-      destinations.map((location) => location.kind === 'store' && location.ref),
-    ).size,
-    rows.length,
-  );
 });
 
 test('a created group closes its sheet when only the post-write refresh fails', async () => {

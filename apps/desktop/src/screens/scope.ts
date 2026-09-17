@@ -118,9 +118,96 @@ export function folderAt(root: FolderNode, path: string): FolderNode | null {
   return node;
 }
 
-/** Checks whether the given location displays catalog items. */
+/**
+ * Checks whether the given location displays catalog items. `files` is the
+ * Files tab's own root; it draws the same folder browser as `all` does, since
+ * there is no separate landing page for it to fall through to any more.
+ */
 export function listsItems(location: Location): boolean {
-  return location.kind === 'all' || location.kind === 'store';
+  return (
+    location.kind === 'all' ||
+    location.kind === 'store' ||
+    location.kind === 'files'
+  );
+}
+
+/**
+ * Sentinel store identifier representing all items across all stores. It is not
+ * a valid store ID and cannot collide with one.
+ */
+export const ALL_ITEMS = '*';
+
+/**
+ * The folder value the tree and the list read and write: `''` in a `store`
+ * location (nothing narrower than the store's own root selected), `path`
+ * otherwise, `''` again once the path itself is the root.
+ */
+export function folderKey(
+  storePage: boolean,
+  store: string,
+  path: string,
+): string {
+  if (storePage) return path === '/' ? '' : path;
+  return `${store}|${path}`;
+}
+
+/**
+ * Parses the tree/list's selected-folder value into a store id and path:
+ * `store|/path` outside a `store` location, `/path` (or `''`, meaning root)
+ * inside one, and the `ALL_ITEMS` sentinel for the "All items" leaf.
+ */
+export function folderSelection(
+  location: Location,
+  value: string,
+): { store: string | null; path: string } {
+  if (location.kind === 'store') {
+    return { store: location.ref, path: value || '/' };
+  }
+  if (value === ALL_ITEMS) return { store: ALL_ITEMS, path: '/' };
+  if (!value) return { store: null, path: '/' };
+  const cut = value.indexOf('|');
+  return cut > 0
+    ? { store: value.slice(0, cut), path: value.slice(cut + 1) || '/' }
+    : { store: null, path: '/' };
+}
+
+/**
+ * The Files tab's crumb trail beyond "Files" — the store, then each folder
+ * down to the one the tree has selected — and the folder value one step
+ * back from it. Reads the exact selection `ItemsScreen` reads, so the
+ * topbar's crumb and the rail's Back chevron never disagree with the page's
+ * own breadcrumb; a stale deep link to a folder that no longer exists falls
+ * back to the store's root the same way `ItemsScreen` does, rather than
+ * naming a folder that is not there.
+ */
+export function filesFolderCrumb(
+  snapshot: AgentSnapshot | undefined,
+  location: Location,
+  folder: string,
+): { labels: readonly string[]; back: string | null } {
+  if (!listsItems(location)) return { labels: [], back: null };
+  const selected = folderSelection(location, folder);
+  if (selected.store === ALL_ITEMS) return { labels: ['All items'], back: '' };
+  if (!selected.store || !snapshot) return { labels: [], back: null };
+  const store = storeOf(snapshot, selected.store);
+  if (!store) return { labels: [], back: null };
+  const storePage = location.kind === 'store';
+  const root = folderTree(
+    catalog(snapshot).filter((item) => item.store === store.id),
+  );
+  const node = folderAt(root, selected.path) ?? root;
+  const parts = node.path === '/' ? [] : node.path.split('/').filter(Boolean);
+  const back =
+    parts.length > 0
+      ? folderKey(
+          storePage,
+          store.id,
+          parts.length > 1 ? `/${parts.slice(0, -1).join('/')}` : '/',
+        )
+      : storePage
+        ? null
+        : '';
+  return { labels: [store.name, ...parts], back };
 }
 
 /**

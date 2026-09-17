@@ -138,49 +138,70 @@ test('a tab navigates, and Control-Tab walks the six of them', async () => {
 
   testingLibrary.fireEvent.click(tab('Files'));
   await testingLibrary.waitFor(() => {
-    assert.equal(document.querySelector('.loc h1')?.textContent, 'All items');
+    assert.equal(
+      document.querySelector('.loc .crumbs .cur')?.textContent,
+      'Files',
+    );
   });
   testingLibrary.fireEvent.click(
     testingLibrary.screen.getByRole('button', { name: 'Back' }),
   );
 });
 
-test('the Files roots page lists the stores the rail used to enumerate', async () => {
+test('the Files tree lists the stores the roots page used to enumerate', async () => {
   await testingLibrary.waitFor(() => {
-    assert.equal(document.querySelector('.loc h1')?.textContent, 'Files');
+    assert.equal(
+      document.querySelector('.loc .crumbs .cur')?.textContent,
+      'Files',
+    );
   });
   const rows = [
-    ...document.querySelectorAll<HTMLButtonElement>('.nav-rows .row'),
+    ...document.querySelectorAll<HTMLButtonElement>('.tpane .fselect'),
   ];
-  const names = rows.map((row) => row.querySelector('.tt')?.textContent);
+  const names = rows.map((row) => row.querySelector('.nm')?.textContent);
   assert.ok(names.includes('All items'));
   assert.ok(names.includes('Personal'));
   assert.ok(names.includes('Work (Acme)'));
   assert.ok(names.includes('Engineering'));
 
   const engineering = rows.find(
-    (row) => row.querySelector('.tt')?.textContent === 'Engineering',
+    (row) => row.querySelector('.nm')?.textContent === 'Engineering',
   );
   assert.ok(engineering);
   testingLibrary.fireEvent.click(engineering);
   await testingLibrary.waitFor(() => {
-    assert.equal(document.querySelector('.loc h1')?.textContent, 'Engineering');
+    assert.equal(
+      document.querySelector('.loc .crumbs .cur')?.textContent,
+      'Engineering',
+    );
   });
-  // The topbar names where the reader is, and the rail chevron returns to the tab's
-  // root page.
+  // Browsing a store through the tree is client-side selection, not a
+  // location change, but the topbar reads that same selection: its own crumb
+  // names the store too, and the rail's back chevron — which now steps back
+  // through the tree's own selection before it ever moves to a different
+  // location — goes live, since there is somewhere narrower to return from.
   assert.equal(
-    document.querySelector('.topbar .crumbs')?.textContent,
-    'Files›Engineering',
+    document
+      .querySelector('.topbar .crumbs')
+      ?.textContent?.includes('Engineering'),
+    true,
   );
   const back = document.querySelector<HTMLButtonElement>(
     '.side.rail .rail-back',
   );
-  assert.ok(back, 'the expanded rail carries the back chevron');
+  assert.ok(back);
   assert.equal(back.disabled, false);
   testingLibrary.fireEvent.click(back);
+  // One step back deselects the store rather than leaving the Files tab: the
+  // tree itself is still the root there is nowhere further back from.
   await testingLibrary.waitFor(() => {
-    assert.equal(document.querySelector('.loc h1')?.textContent, 'Files');
+    assert.equal(
+      document.querySelector('.loc .crumbs .cur')?.textContent,
+      'Files',
+    );
   });
+  assert.equal(document.querySelector('.topbar .crumbs')?.textContent, 'Files');
+  assert.equal(back.disabled, true);
 });
 
 test('the chat tab opens a conversation and lists every team at once', async () => {
@@ -244,15 +265,18 @@ test('opens on All items, in the folder browser', async () => {
   assert.ok(files);
   testingLibrary.fireEvent.click(files);
   await testingLibrary.waitFor(() => {
-    assert.ok(document.querySelector('.nav-rows .row'));
+    assert.ok(document.querySelector('.tpane'));
   });
   const all = [
-    ...document.querySelectorAll<HTMLButtonElement>('.nav-rows .row'),
-  ].find((row) => row.querySelector('.tt')?.textContent === 'All items');
+    ...document.querySelectorAll<HTMLButtonElement>('.tpane .fselect'),
+  ].find((row) => row.querySelector('.nm')?.textContent === 'All items');
   assert.ok(all);
   testingLibrary.fireEvent.click(all);
   await testingLibrary.waitFor(() => {
-    assert.equal(document.querySelector('.loc h1')?.textContent, 'All items');
+    assert.equal(
+      document.querySelector('.loc .crumbs .cur')?.textContent,
+      'All items',
+    );
   });
   assert.ok(
     document.querySelector('.folder-layout'),
@@ -303,7 +327,7 @@ test('Accounts, Devices and Settings draw no StoreRef', async () => {
 
   for (const [name, settled] of [
     ['Accounts', 'Actions on this account'],
-    ['Devices', 'Computers and security keys'],
+    ['Devices', 'paper-backup'],
     ['Settings', 'Danger zone'],
   ] as const) {
     testingLibrary.fireEvent.click(tab(name));

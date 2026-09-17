@@ -94,7 +94,6 @@ import { DetailsPanel } from './screens/details-panel';
 import { ItemsScreen } from './screens/items-screen';
 import type { DropUpload } from './screens/items-screen';
 import { ChatTab } from './screens/chat-tab';
-import { FilesScreen } from './screens/files-screen';
 import { TeamsScreen } from './screens/teams-screen';
 import { GroupSettingsScreen } from './screens/groups-screen';
 import {
@@ -1552,11 +1551,6 @@ function VaultShell({
       onError={commandError}
       onMutationError={mutationError}
     />
-  ) : here.kind === 'files' ? (
-    <FilesScreen
-      snapshot={shown}
-      onNavigate={(location) => locations.navigate(location)}
-    />
   ) : here.kind === 'people' ? (
     // People owns its own sheets and shares no state with Settings, so it is
     // given exactly the props it declares.
@@ -1660,12 +1654,14 @@ function VaultShell({
             <Sidebar
               snapshot={shown}
               location={here}
+              folder={state.folder}
               account={locations.getAccount()}
               attention={notesNow(shown).length}
               onTabNavigate={(tab) => locations.navigateTab(tab)}
               onNavigate={(location) => {
                 locations.navigate(location);
               }}
+              onSetFolder={(folder) => locations.setFolder(folder)}
               onLock={lockFromMenu}
               status={
                 pendingFirstRun ? (
@@ -1685,7 +1681,9 @@ function VaultShell({
                 deviceLabel={deviceLabel}
                 snapshot={shown}
                 location={here}
+                folder={state.folder}
                 onNavigate={(location) => locations.navigate(location)}
+                onSetFolder={(folder) => locations.setFolder(folder)}
                 onSearch={() => setSearchOpen(true)}
                 collapsed={sideCollapsed}
                 refreshing={refreshingSnapshot}

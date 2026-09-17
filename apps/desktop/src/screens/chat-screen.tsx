@@ -13,6 +13,7 @@ import type { Bridge } from '../bridge';
 import type { ChatAction, ChatReply } from '../chat-contract';
 import {
   chatAvailable,
+  partiesOf,
   serverName,
   storeAvailability,
   storeDescription,
@@ -125,6 +126,14 @@ export function ChatScreen({
   }, [channelIds, drafts, loading]);
   const storeId = store?.id ?? '';
   const senderNames = partyNames(agentSnapshot, storeId);
+  // The roster the team page already loads, read here rather than fetched
+  // again. A team whose roster has not arrived yet has no parties on this
+  // store id, which is indistinguishable from an empty team — but a real team
+  // always has at least its own member, so an empty result means "not loaded"
+  // and the header omits the count instead of showing zero.
+  const memberCount = storeId
+    ? partiesOf(agentSnapshot, storeId).length || undefined
+    : undefined;
   const accessAvailable = useCallback(
     (): boolean => access().available,
     [access],
@@ -295,6 +304,7 @@ export function ChatScreen({
             key={`${channel.id}:${channel.readable}`}
             channel={channel}
             teamName={team.name}
+            memberCount={memberCount}
             onFiles={() => onNavigate({ kind: 'store', ref: team.id })}
             onSearch={onSearch}
             onInfo={onToggleInfo}

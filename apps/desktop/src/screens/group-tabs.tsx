@@ -304,9 +304,9 @@ export function FilesTab({
           <span className="t">
             <b>{store.name}’s items live in Files</b>
             <small>
-              {items ? plural(items, 'item') : 'No items yet'} — passwords,
-              resources, files and links shared with this team. Roles here
-              decide who can read each one.
+              {items ? plural(items, 'item') : 'No items yet'} — the passwords
+              and documents shared with this team. Permissions set here control
+              who can access each item.
             </small>
           </span>
         </InsetRow>

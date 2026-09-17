@@ -36,6 +36,7 @@ import {
   railTabOf,
 } from '../location';
 import type { Location, RailTab } from '../location';
+import { filesFolderCrumb } from '../screens/scope';
 
 interface RailTabSpec {
   id: RailTab;
@@ -211,10 +212,16 @@ export interface SidebarProps {
   /** Absent while the agent is starting: the rail draws its frame regardless. */
   snapshot?: AgentSnapshot;
   location: Location;
+  /** The Files tree's selected folder (`LocationState.folder`). */
+  folder?: string;
   account?: StoreRef;
   /** How many things need attention. Draws the dot on the account avatar. */
   attention?: number;
   onNavigate: (location: Location) => void;
+  /** Steps the Files tree's selection back one folder. Omitted where the
+   *  tree's selection is not reachable, in which case Back only ever
+   *  navigates a location. */
+  onSetFolder?: (folder: string) => void;
   onTabNavigate?: (tab: RailTab) => void;
   /**
    * Rows between the tabs and the foot. First run puts its progress there;
@@ -525,9 +532,11 @@ function railChatUnread(
 export function Sidebar({
   snapshot,
   location,
+  folder = '',
   account,
   attention = 0,
   onNavigate,
+  onSetFolder,
   onTabNavigate,
   status,
   onReenter,
@@ -566,6 +575,20 @@ export function Sidebar({
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [blocked, location, onNavigate, onTabNavigate]);
 
+  // One step back can be a narrower folder within the same page — the Files
+  // tree's own selection, which `parentLocation` does not see — before it is
+  // a different location. Matches the topbar's identical chevron, drawn
+  // there instead once the rail collapses too narrow to carry its own.
+  const folderBack = blocked
+    ? null
+    : filesFolderCrumb(snapshot, location, folder).back;
+  const parent = blocked ? null : parentLocation(location);
+  const canGoBack = folderBack !== null || Boolean(parent);
+  const goBack = (): void => {
+    if (folderBack !== null) onSetFolder?.(folderBack);
+    else if (parent) onNavigate(parent);
+  };
+
   return (
     <nav
       className={['side', 'rail', collapsed ? 'is-narrow' : '']
@@ -580,11 +603,8 @@ export function Sidebar({
             className="rail-back"
             aria-label="Back"
             title="Back"
-            disabled={blocked || !parentLocation(location)}
-            onClick={() => {
-              const parent = parentLocation(location);
-              if (parent) onNavigate(parent);
-            }}
+            disabled={!canGoBack}
+            onClick={goBack}
           >
             <Icon name="back" />
           </button>

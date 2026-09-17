@@ -209,8 +209,12 @@ export function rememberedChatRef(): StoreRef | undefined {
 /** The item the details panel is showing, or nothing. */
 export type Selection = { store: StoreRef; path: string } | null;
 
-/** Layout mode for displaying vault items. */
-export type ViewMode = 'list' | 'grid' | 'folders';
+/**
+ * Layout mode for displaying vault items. The folder tree is permanent
+ * navigation now, not a mode, so `list` is the only rendering left; the type
+ * stays so a saved `view=` link still decodes to something.
+ */
+export type ViewMode = 'list';
 
 /** Kind filter selection, where 'All' disables kind filtering. */
 export type KindFilter = 'All' | 'Password' | 'Document';
@@ -240,9 +244,7 @@ export const INITIAL_STATE: LocationState = {
   location: { kind: 'all' },
   selection: null,
   query: '',
-  // Item pages open in the folder browser; the toolbar's list/grid/folders
-  // toggle still chooses, and the choice survives the next navigation.
-  view: 'folders',
+  view: 'list',
   details: false,
   kind: 'All',
   sort: 'name',
@@ -918,9 +920,10 @@ const SCENE_ALIASES: Readonly<Record<string, Partial<Scene>>> = {
   },
   'groups-inactive': { location: { kind: 'store', ref: 'team:homelab' } },
   'group-new-document': { location: { kind: 'store', ref: 'team:eng' } },
-  // `grid` is `all` seen as cards.
-  grid: { view: 'grid' },
-  folders: { view: 'folders' },
+  // `grid` and `folders` were view modes before the tree replaced the
+  // toggle; both now just mean the one view that is left.
+  grid: { view: 'list' },
+  folders: { view: 'list' },
   // Lapsed-lease fixture, with the lapsed store selected.
   lease: { location: { kind: 'store', ref: 'acct:work' }, lease: 'lapsed' },
   // The group whose summary reports inactive.
@@ -929,7 +932,12 @@ const SCENE_ALIASES: Readonly<Record<string, Partial<Scene>>> = {
   alerts: { lease: 'lapsed' },
 };
 
-const VIEWS: readonly ViewMode[] = ['list', 'grid', 'folders'];
+const VIEWS: readonly ViewMode[] = ['list'];
+/** View values older URLs carried, before the tree replaced the view toggle. */
+const LEGACY_VIEWS: Readonly<Record<string, ViewMode>> = {
+  grid: 'list',
+  folders: 'list',
+};
 const KIND_FILTERS: readonly KindFilter[] = ['All', 'Password', 'Document'];
 /** Kind values older URLs carried, before Notes, Files and Links became Documents. */
 const LEGACY_KINDS: Readonly<Record<string, KindFilter>> = {
@@ -959,7 +967,7 @@ function decodeSelection(value: string | null): Selection {
 export const INITIAL_SCENE: Scene = {
   location: { kind: 'all' },
   selection: null,
-  view: 'folders',
+  view: 'list',
   kind: 'All',
   sort: 'name',
   folder: '',
@@ -982,7 +990,11 @@ export function decodeScene(search: string): Scene {
   return {
     location,
     selection: decodeSelection(params.get('sel')) ?? alias.selection ?? null,
-    view: oneOf(VIEWS, params.get('view')) ?? alias.view ?? INITIAL_SCENE.view,
+    view:
+      oneOf(VIEWS, params.get('view')) ??
+      LEGACY_VIEWS[params.get('view') ?? ''] ??
+      alias.view ??
+      INITIAL_SCENE.view,
     kind:
       oneOf(KIND_FILTERS, params.get('kind')) ??
       LEGACY_KINDS[params.get('kind') ?? ''] ??

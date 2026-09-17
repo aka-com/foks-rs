@@ -178,6 +178,33 @@
   background: var(--btn-hover);
   color: var(--ink);
 }
+/* Collapses and expands a multi-channel team's channel list. */
+.chat-twist {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--muted);
+  border-radius: 4px;
+  cursor: pointer;
+  transform: rotate(-90deg);
+  transition: transform 0.12s ease;
+}
+.chat-twist.open {
+  transform: none;
+}
+.chat-twist:hover {
+  background: var(--btn-hover);
+  color: var(--ink);
+}
+.chat-twist:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: -2px;
+}
 .chat-nochat-label {
   border-top: 1px solid var(--line-soft);
   padding-top: 10px;

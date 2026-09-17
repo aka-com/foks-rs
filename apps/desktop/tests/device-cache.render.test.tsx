@@ -87,7 +87,28 @@ test('Accounts and Devices share metadata across navigation; Refresh reloads it 
     '.topbar button[aria-label="Refresh"]',
   );
   assert.ok(refresh);
-  connected = [{ serial: 87654321 }];
+  // "primary key" is the fixture's one complete enrollment on this account,
+  // matched to card serial 20993145; its own page is where card presence is
+  // now observable, in whether PIN status can run.
+  const openPrimary = await ui.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open primary key"]',
+    );
+    assert.ok(button);
+    return button;
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(openPrimary);
+  });
+  const pinStatus = await ui.waitFor(() => {
+    const button = [
+      ...document.querySelectorAll<HTMLButtonElement>('button'),
+    ].find((node) => node.textContent === 'PIN status');
+    assert.ok(button);
+    return button;
+  });
+  assert.equal(pinStatus.hasAttribute('disabled'), true);
+  connected = [{ serial: 20993145 }];
   await ui.act(async () => {
     ui.fireEvent.click(refresh);
   });
@@ -96,7 +117,7 @@ test('Accounts and Devices share metadata across navigation; Refresh reloads it 
   assert.equal(calls.enrollments, 2);
   await ui.waitFor(() => {
     assert.equal(calls.cards, 3);
-    assert.ok(document.body.textContent?.includes('87654321'));
+    assert.equal(pinStatus.hasAttribute('disabled'), false);
   });
   connected = [];
   await ui.act(async () => {
@@ -104,9 +125,7 @@ test('Accounts and Devices share metadata across navigation; Refresh reloads it 
   });
   await ui.waitFor(() => {
     assert.equal(calls.cards, 4);
-    assert.ok(
-      document.body.textContent?.includes('No security key connected.'),
-    );
+    assert.equal(pinStatus.hasAttribute('disabled'), true);
+    assert.equal(pinStatus.getAttribute('title'), 'No security key connected.');
   });
-  assert.equal(document.body.textContent?.includes('87654321'), false);
 });

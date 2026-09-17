@@ -46,12 +46,12 @@ test.after(async () => {
 
 /**
  * Boots the shell at `location`, with the stored preference already cleared.
- * `view` pins the item view where a test needs to click an item rather than a
- * folder; item pages open in the folder browser by default.
+ * `folder` opens the flat "All items" view when a test needs a
+ * clickable row rather than the plain store picker.
  */
 async function shell(
   location?: { kind: 'first-run'; step: 'who' } | { kind: 'all' },
-  view?: 'list' | 'grid' | 'folders',
+  folder?: string,
 ) {
   const { App } = (await vite.ssrLoadModule(
     '/src/app-root.tsx',
@@ -69,7 +69,7 @@ async function shell(
   const locations = new LocationStore({
     ...INITIAL_STATE,
     location: location ?? { kind: 'all' },
-    ...(view ? { view } : {}),
+    ...(folder ? { folder } : {}),
   });
   const rendered = ui.render(
     createElement(App, {
@@ -141,7 +141,7 @@ test('a collapsed rail stays collapsed under the pointer and the keyboard', asyn
 });
 
 test('opening details collapses the rail and closing it restores the chosen width', async () => {
-  await shell({ kind: 'all' }, 'list');
+  await shell({ kind: 'all' }, '*');
   const stored = window.localStorage.getItem('sideCollapsed');
 
   const row = document.querySelector<HTMLElement>('.body .row');
@@ -167,7 +167,7 @@ test('opening details collapses the rail and closing it restores the chosen widt
 });
 
 test('an expand made while details are open sticks', async () => {
-  await shell({ kind: 'all' }, 'list');
+  await shell({ kind: 'all' }, '*');
   const row = document.querySelector<HTMLElement>('.body .row');
   assert.ok(row);
   ui.fireEvent.click(row);

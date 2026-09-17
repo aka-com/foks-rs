@@ -310,37 +310,15 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .ghead .t small{display:block;font-size:12.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ghead .btn{height:30px;font-size:13px}
 
-/* Tile grid */
+/* Grouped list sections */
 .gsec{font-size:12px;font-weight:600;color:var(--faint);letter-spacing:.03em;text-transform:uppercase;padding:14px 4px 8px;display:flex;align-items:baseline;gap:8px}
 .gsec .n{text-transform:none;letter-spacing:0;font-weight:500}
-.gsec.first{padding-top:8px}
-.gsec .btn.cap{text-transform:none;letter-spacing:0;font-weight:500;margin-left:2px}
-.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px}
-/* ---------- the card box ----------
-   Four containers draw the same box and differ only in what they do with it:
-   a tile is a grid cell, an inset holds labelled rows, a preview sits in the
-   details panel and a status list stacks facts. The box is stated once. */
-.tile,.inset,.prev{border:1px solid var(--line);border-radius:var(--radius-lg);overflow:hidden}
-.tile,.inset,.prev{background:var(--main-surface)}
+/* Inset card */
+.inset,.prev{border:1px solid var(--line);border-radius:var(--radius-lg);overflow:hidden}
+.inset,.prev{background:var(--main-surface)}
 .inset.off,.prev.off{opacity:.5;pointer-events:none;user-select:none}
-.tile{cursor:default}
-.tile:hover{background:var(--surface)}.tile.sel{border-color:var(--accent-border);background:var(--accent-wash)}
-.tile .glyph{position:relative;height:88px;display:grid;place-items:center;background:var(--surface)}
-.tile.sel .glyph{background:transparent}
-.tile .qa{position:absolute;right:6px;bottom:6px;display:flex;gap:4px;opacity:0;transition:opacity .12s}
-.tile:hover .qa,.tile.sel .qa{opacity:1}
-.tile:hover .qa .acts,.tile.sel .qa .acts{opacity:1}
-.qa button{width:26px;height:26px;border-radius:var(--radius-sm);background:#fff;border:1px solid var(--line);box-shadow:var(--shadow-xs);display:grid;place-items:center;color:var(--ink-3);font-size:14px}
-.qa button:hover{background:var(--btn-hover);color:var(--ink)}
-.qa button[disabled]{opacity:.4;cursor:default}
-.tile .cap{display:block;padding:9px 12px 10px;min-width:0}
-.tile .nm,.tile .sub{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.tile .nm{font-weight:500}.tile .sub{font-size:12px;color:var(--muted);margin-top:2px;line-height:18px}
 .kico{width:26px;height:26px;border-radius:var(--radius-sm);display:grid;place-items:center;color:#fff;font-weight:700;font-size:13px;flex:none}
 .kico .ic{font-size:15px;color:#fff;width:auto}
-.tile .glyph .kico.big,.tile .glyph .kic.big{width:40px;height:40px;border-radius:10px;font-size:19px;transition:transform .14s ease}
-.tile .glyph .kico.big .ic,.tile .glyph .kic.big .ic{font-size:22px}
-.tile:hover .glyph .kico.big,.tile.sel .glyph .kico.big,.tile:hover .glyph .kic.big,.tile.sel .glyph .kic.big{transform:translateY(-16px)}
 .kico.big{width:48px;height:48px;border-radius:var(--radius-lg);font-size:23px}.kico.big .ic{font-size:26px}
 .kico.md{width:30px;height:30px;border-radius:8px;font-size:15px}.kico.md .ic{font-size:17px}
 .kico.Password{background:var(--c-password)}.kico.Document{background:var(--c-file)}

@@ -396,7 +396,7 @@ test('a conceal does not reopen the sheet a scene opened with the page', async (
     assert.doesNotMatch(document.body.textContent ?? '', /Save paper key/);
   });
   // The page itself is back, so the phrase is gone rather than the whole tab.
-  assert.match(document.body.textContent ?? '', /Paper keys/);
+  assert.match(document.body.textContent ?? '', /paper-backup/);
   rendered.unmount();
 });
 

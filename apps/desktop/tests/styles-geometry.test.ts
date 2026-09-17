@@ -182,7 +182,10 @@ test('shell stylesheet contains required grid and flexbox layout rules', async (
   assert.match(shell, /\.loc\{[^}]*flex:1 1 auto/);
   assert.match(shell, /\.loc-copy\{[^}]*white-space:nowrap/);
   assert.match(shell, /\.header-action \.btn\.cap\{height:28px;font-size:13px/);
-  assert.match(shell, /\.loc h1\{display:inline;font-size:20px;font-weight:700/);
+  assert.match(
+    shell,
+    /\.loc h1\{display:inline;font-size:20px;font-weight:700/,
+  );
   assert.match(shell, /\.loc small\{display:inline;/);
   // Ensure CSS row height matches the virtual list row estimate.
   assert.match(shell, /\.row\{height:50px;/);
@@ -207,7 +210,6 @@ test('shell stylesheet contains required grid and flexbox layout rules', async (
     shell,
     /\.meta code\{[^}]*overflow-wrap:anywhere[^}]*word-break:normal/,
   );
-  assert.match(shell, /\.tile \.qa\{[^}]*right:6px;bottom:6px;/);
   assert.match(
     shell,
     /\.folder-split\{[^}]*grid-template-columns:236px minmax\(0,1fr\)/,
@@ -300,7 +302,10 @@ test('the rail reserves the strip macOS draws its window controls on', async () 
   // There is no title bar: the rail's own drag strip is where the controls go.
   const shell = await readSource(SHELL, import.meta.url);
   assert.doesNotMatch(shell, /\.titlebar/);
-  assert.match(app, /#root > \.native-window \.traffic\s*\{[^}]*min-height: 38px;/);
+  assert.match(
+    app,
+    /#root > \.native-window \.traffic\s*\{[^}]*min-height: 38px;/,
+  );
   assert.match(
     app,
     /#root > \.native-window\.window-chrome-hidden \.traffic\s*\{[^}]*min-height: 32px;/,
