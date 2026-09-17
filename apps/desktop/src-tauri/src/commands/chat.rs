@@ -6,11 +6,36 @@ use super::{
 use crate::agent::AgentError;
 use foks_agent_proto::chat::{ChatAction, ChatReply, CHAT_OPEN_VIEWS};
 use foks_desktop::CatalogStoreRef;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Weak,
+    },
 };
 use tauri::{Manager as _, State};
+
+type ChatViews = HashMap<String, Weak<AtomicBool>>;
+
+fn open_chat_view(views: &mut ChatViews, view_id: &str) -> Option<Arc<AtomicBool>> {
+    views.retain(|_, token| token.strong_count() > 0);
+    if let Some(token) = views.get(view_id).and_then(Weak::upgrade) {
+        return Some(token);
+    }
+    views.remove(view_id);
+    if views.len() >= CHAT_OPEN_VIEWS {
+        return None;
+    }
+    let token = Arc::new(AtomicBool::new(false));
+    views.insert(view_id.to_owned(), Arc::downgrade(&token));
+    Some(token)
+}
+
+fn cancel_chat_view(views: &mut ChatViews, view_id: &str) {
+    if let Some(token) = views.remove(view_id).and_then(|token| token.upgrade()) {
+        token.store(true, Ordering::Release);
+    }
+}
 
 #[tauri::command]
 pub async fn chat_request(
@@ -32,19 +57,14 @@ pub async fn chat_request(
     };
     let expected = store.clone();
     let transport = state.agent.transport();
-    let token = {
-        let mut views = state
+    let token = open_chat_view(
+        &mut state
             .chat_views
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if views.len() >= CHAT_OPEN_VIEWS && !views.contains_key(&view_id) {
-            return Err(invalid_request("Too many open chat views."));
-        }
-        views
-            .entry(view_id)
-            .or_insert_with(|| Arc::new(AtomicBool::new(false)))
-            .clone()
-    };
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        &view_id,
+    )
+    .ok_or_else(|| invalid_request("Too many open chat views."))?;
     let app = webview.app_handle().clone();
     let reply = tauri::async_runtime::spawn_blocking(move || {
         foks_desktop::chat_request_cancellable(transport.as_ref(), store, action, &|| {
@@ -87,14 +107,13 @@ pub fn cancel_chat_requests(
     view_id: String,
 ) -> Result<(), AgentError> {
     require_main_window(&webview)?;
-    if let Some(token) = state
-        .chat_views
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .remove(&view_id)
-    {
-        token.store(true, Ordering::Release);
-    }
+    cancel_chat_view(
+        &mut state
+            .chat_views
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        &view_id,
+    );
     Ok(())
 }
 
@@ -119,6 +138,46 @@ fn require_catalog_generation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn view_id(index: usize) -> String {
+        format!("{:032x}", index + 1)
+    }
+
+    #[test]
+    fn completed_views_do_not_exhaust_open_view_capacity() {
+        let mut views = ChatViews::new();
+        for index in 0..CHAT_OPEN_VIEWS * 2 {
+            drop(open_chat_view(&mut views, &view_id(index)).unwrap());
+        }
+        assert!(open_chat_view(&mut views, &view_id(CHAT_OPEN_VIEWS * 2)).is_some());
+    }
+
+    #[test]
+    fn live_views_exhaust_capacity_until_one_finishes() {
+        let mut views = ChatViews::new();
+        let mut live = (0..CHAT_OPEN_VIEWS)
+            .map(|index| open_chat_view(&mut views, &view_id(index)).unwrap())
+            .collect::<Vec<_>>();
+        let next = view_id(CHAT_OPEN_VIEWS);
+        assert!(open_chat_view(&mut views, &next).is_none());
+        live.pop();
+        assert!(open_chat_view(&mut views, &next).is_some());
+    }
+
+    #[test]
+    fn one_view_shares_and_cancels_its_live_requests() {
+        let mut views = ChatViews::new();
+        let id = view_id(0);
+        let first = open_chat_view(&mut views, &id).unwrap();
+        let second = open_chat_view(&mut views, &id).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(views.len(), 1);
+        cancel_chat_view(&mut views, &id);
+        assert!(first.load(Ordering::Acquire));
+        assert!(second.load(Ordering::Acquire));
+        assert!(views.is_empty());
+    }
+
     #[test]
     fn channel_integrity_is_a_distinct_fatal_local_outcome() {
         let error = AgentError::from_agent(

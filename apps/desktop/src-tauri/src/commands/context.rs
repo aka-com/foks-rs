@@ -18,13 +18,13 @@ use foks_desktop::{
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 pub const MAIN: &str = "main";
 
 pub struct AppState {
     pub agent: Arc<AgentHandle>,
-    pub(super) chat_views: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    pub(super) chat_views: Mutex<HashMap<String, Weak<AtomicBool>>>,
     catalog_load: Mutex<Option<CatalogLoadToken>>,
     catalog_coordination: Mutex<()>,
     pub(super) catalog_generation: AtomicU64,
