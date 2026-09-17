@@ -231,7 +231,7 @@ impl CheckedProfileSession<'_> {
             &context.host,
             &context.account.credential,
             username,
-            false,
+            true,
         )?;
         if uid == context.account.credential.uid
             || context
@@ -441,7 +441,9 @@ impl CheckedProfileSession<'_> {
             &self.paths.protected_mutations,
             derive_mutation_key(master_key),
         )?;
-        let result = if context.team.verified.chain_seqno() >= pending.expected_seqno {
+        let reserved_sequence_is_observable =
+            context.team.verified.chain_seqno() >= pending.expected_seqno;
+        let result = if reserved_sequence_is_observable {
             self.client.finish_recorded_team_member_change(
                 &context.host,
                 &context.account.credential,
@@ -451,7 +453,7 @@ impl CheckedProfileSession<'_> {
                 pending.removal_key_commitment,
                 &rotations,
                 &mut mutations,
-            )?
+            )
         } else {
             let target_id = EntityId::from_bytes(pending.target_id.clone())?;
             let (target_member, target_user, remaining) = local_edit_parties(&context, &target_id)?;
@@ -500,7 +502,7 @@ impl CheckedProfileSession<'_> {
                     &pending.operation_id,
                     &request,
                     &mut mutations,
-                )?
+                )
             } else {
                 self.client.change_team_member_and_rotate_ptks(
                     &context.host,
@@ -508,8 +510,29 @@ impl CheckedProfileSession<'_> {
                     &context.team_id,
                     &request,
                     &mut mutations,
-                )?
+                )
             }
+        };
+        let result = match result {
+            Ok(result) => result,
+            Err(error @ foks_client::Error::OperationBinding(_))
+                if reserved_sequence_is_observable =>
+            {
+                // Another administrator won the reserved sequence. Make both
+                // durable layers terminal before surfacing the conflict so a
+                // single lost race cannot block all future member management.
+                self.client.supersede_recorded_team_member_change(
+                    &context.host,
+                    &context.account.credential,
+                    &context.team_id,
+                    pending.expected_seqno,
+                    &pending.operation_id,
+                    &mut mutations,
+                )?;
+                vault.remove_team_member_edit(team_alias)?;
+                return Err(error.into());
+            }
+            Err(error) => return Err(error.into()),
         };
         finish_stored_team_member_edit(vault, &pending)?;
         Ok(team_member_report(
@@ -548,7 +571,7 @@ impl CheckedProfileSession<'_> {
             &context.host,
             &context.account.credential,
             username,
-            false,
+            true,
         )?;
         let (target_member, target_user, remaining) = local_edit_parties(&context, &target_id)?;
         let destination_role = destination.map_or(Role::NONE, TeamMemberRole::role);

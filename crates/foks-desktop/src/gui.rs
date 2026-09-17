@@ -76,8 +76,16 @@ mod supported {
 
     impl FoksDesktop {
         fn new(socket: PathBuf, cx: &mut Context<Self>) -> Self {
+            // Longer than the agent's own dispatch deadline (15 s by
+            // default), so slow operations surface the daemon's structured
+            // deadline error instead of an ambiguous client-side read
+            // timeout.
+            let mut client = AgentClient::new(socket);
+            client
+                .set_timeout(std::time::Duration::from_secs(60))
+                .expect("60 seconds is within the supported agent timeout bounds");
             let mut desktop = Self {
-                model: DesktopModel::new(Arc::new(AgentClient::new(socket))),
+                model: DesktopModel::new(Arc::new(client)),
                 loading: false,
                 request_generation: 0,
                 account_alias: cx.new(|cx| TextField::new("Local alias", false, 64, cx)),
@@ -111,7 +119,7 @@ mod supported {
                     .new(|cx| TextField::new("Software recovery alias", false, 64, cx)),
                 yubi_revoke_confirmation: cx
                     .new(|cx| TextField::new("Type Yubi alias to revoke", false, 64, cx)),
-                yubi_device_serial: cx.new(|cx| TextField::new("2", false, 20, cx)),
+                yubi_device_serial: cx.new(|cx| TextField::new("e.g. 2", false, 20, cx)),
                 yubi_new_pin: cx.new(|cx| TextField::new("New PIN", true, 8, cx)),
                 yubi_puk: cx.new(|cx| TextField::new("Current PUK", true, 8, cx)),
                 yubi_new_puk: cx.new(|cx| TextField::new("New PUK", true, 8, cx)),
@@ -135,6 +143,9 @@ mod supported {
         }
 
         fn refresh(&mut self, cx: &mut Context<Self>) {
+            if self.loading {
+                return;
+            }
             let operation = match self.model.operation() {
                 Ok(operation) => operation,
                 Err(error) => {
@@ -203,71 +214,54 @@ mod supported {
         }
 
         fn context_selectors(&self, cx: &Context<Self>) -> gpui::AnyElement {
+            type ChipSelect = fn(&mut FoksDesktop, String, &mut Context<FoksDesktop>);
             let mut row = div().flex().gap_2().flex_wrap();
-            if self.model.screen() == Screen::Profiles {
-                if let Some(profiles) = self.model.value().and_then(|value| value.as_array()) {
-                    for profile in profiles {
-                        if let Some(name) = profile.get("name").and_then(|name| name.as_str()) {
-                            let name = name.to_owned();
-                            let selected = self.model.selected_profile() == Some(name.as_str());
-                            row = row.child(
-                                div()
-                                    .id(SharedString::from(format!("profile-{name}")))
-                                    .px_3()
-                                    .py_1()
-                                    .rounded_full()
-                                    .cursor_pointer()
-                                    .bg(if selected {
-                                        rgb(0x2764d8)
-                                    } else {
-                                        rgb(0xe8edf5)
-                                    })
-                                    .text_color(if selected {
-                                        rgb(0xffffff)
-                                    } else {
-                                        rgb(0x172235)
-                                    })
-                                    .child(name.clone())
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.model.select_profile(name.clone());
-                                        cx.notify();
-                                    })),
-                            );
-                        }
-                    }
-                }
-            } else if self.model.screen() == Screen::Accounts {
-                if let Some(accounts) = self.model.value().and_then(|value| value.as_array()) {
-                    for account in accounts {
-                        if let Some(alias) = account.as_str() {
-                            let alias = alias.to_owned();
-                            let selected = self.model.selected_account() == Some(alias.as_str());
-                            row = row.child(
-                                div()
-                                    .id(SharedString::from(format!("account-{alias}")))
-                                    .px_3()
-                                    .py_1()
-                                    .rounded_full()
-                                    .cursor_pointer()
-                                    .bg(if selected {
-                                        rgb(0x2764d8)
-                                    } else {
-                                        rgb(0xe8edf5)
-                                    })
-                                    .text_color(if selected {
-                                        rgb(0xffffff)
-                                    } else {
-                                        rgb(0x172235)
-                                    })
-                                    .child(alias.clone())
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.model.select_account(alias.clone());
-                                        cx.notify();
-                                    })),
-                            );
-                        }
-                    }
-                }
+            let (prefix, names, choose): (_, Vec<String>, ChipSelect) = match self.model.screen() {
+                Screen::Profiles => (
+                    "profile",
+                    self.model.profiles().to_vec(),
+                    |this, name, cx| {
+                        this.model.select_profile(name);
+                        cx.notify();
+                    },
+                ),
+                Screen::Accounts => (
+                    "account",
+                    self.model.accounts().to_vec(),
+                    |this, alias, cx| {
+                        this.model.select_account(alias);
+                        cx.notify();
+                    },
+                ),
+                _ => return row.into_any_element(),
+            };
+            for name in names {
+                let selected = match self.model.screen() {
+                    Screen::Profiles => self.model.selected_profile() == Some(name.as_str()),
+                    _ => self.model.selected_account() == Some(name.as_str()),
+                };
+                row = row.child(
+                    div()
+                        .id(SharedString::from(format!("{prefix}-{name}")))
+                        .px_3()
+                        .py_1()
+                        .rounded_full()
+                        .cursor_pointer()
+                        .bg(if selected {
+                            rgb(0x2764d8)
+                        } else {
+                            rgb(0xe8edf5)
+                        })
+                        .text_color(if selected {
+                            rgb(0xffffff)
+                        } else {
+                            rgb(0x172235)
+                        })
+                        .child(name.clone())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            choose(this, name.clone(), cx);
+                        })),
+                );
             }
             row.into_any_element()
         }
@@ -339,6 +333,15 @@ mod supported {
                 .into_any_element()
         }
 
+        /// Zeroizes and empties secret fields. Called only once an operation
+        /// has been successfully built, so validation errors never destroy
+        /// what the user typed.
+        fn clear_secret_fields(fields: &[&Entity<TextField>], cx: &mut Context<Self>) {
+            for field in fields {
+                field.update(cx, |field, cx| field.clear(cx));
+            }
+        }
+
         fn submit_account(&mut self, cx: &mut Context<Self>) {
             if self.loading {
                 return;
@@ -347,23 +350,18 @@ mod supported {
             let username = self.account_username.read(cx).value().to_owned();
             let device = self.account_device.read(cx).value().to_owned();
             let email = self.account_email.read(cx).value().to_owned();
-            let invite = self
-                .account_invite
-                .update(cx, |input, cx| input.take_secret(cx));
-            let passphrase = self
-                .account_passphrase
-                .update(cx, |input, cx| input.take_secret(cx));
-            let confirmation = self
-                .account_passphrase_confirmation
-                .update(cx, |input, cx| input.take_secret(cx));
+            let invite = SecretString::new(self.account_invite.read(cx).value());
+            let passphrase = SecretString::new(self.account_passphrase.read(cx).value());
+            let confirmation =
+                SecretString::new(self.account_passphrase_confirmation.read(cx).value());
             let operation = match self.model.create_account_operation(
                 &alias,
                 &username,
                 &device,
                 &email,
-                SecretString::new(invite),
-                Some(SecretString::new(passphrase)),
-                Some(SecretString::new(confirmation)),
+                invite,
+                Some(passphrase),
+                Some(confirmation),
             ) {
                 Ok(operation) => operation,
                 Err(error) => {
@@ -372,6 +370,14 @@ mod supported {
                     return;
                 }
             };
+            Self::clear_secret_fields(
+                &[
+                    &self.account_invite,
+                    &self.account_passphrase,
+                    &self.account_passphrase_confirmation,
+                ],
+                cx,
+            );
             let transport = self.model.transport();
             self.request_generation = self.request_generation.wrapping_add(1);
             let generation = self.request_generation;
@@ -388,13 +394,12 @@ mod supported {
                     }
                     this.loading = false;
                     if result.is_ok() {
-                        this.model.select_account(alias.clone());
+                        this.model.record_account(alias.clone());
                         for input in [
                             &this.account_alias,
                             &this.account_username,
                             &this.account_device,
                             &this.account_email,
-                            &this.account_invite,
                         ] {
                             input.update(cx, |input, cx| input.clear(cx));
                         }
@@ -467,15 +472,9 @@ mod supported {
             if self.loading {
                 return;
             }
-            let passphrase = SecretString::new(
-                self.security_passphrase
-                    .update(cx, |input, cx| input.take_secret(cx)),
-            );
-            let confirmation = SecretString::new(
-                self.security_passphrase_confirmation
-                    .update(cx, |input, cx| input.take_secret(cx)),
-            );
-            let confirmation = (action != PassphraseAction::Verify).then_some(confirmation);
+            let passphrase = SecretString::new(self.security_passphrase.read(cx).value());
+            let confirmation = (action != PassphraseAction::Verify)
+                .then(|| SecretString::new(self.security_passphrase_confirmation.read(cx).value()));
             let operation = match self
                 .model
                 .passphrase_operation(action, passphrase, confirmation)
@@ -487,6 +486,13 @@ mod supported {
                     return;
                 }
             };
+            Self::clear_secret_fields(
+                &[
+                    &self.security_passphrase,
+                    &self.security_passphrase_confirmation,
+                ],
+                cx,
+            );
             let transport = self.model.transport();
             self.request_generation = self.request_generation.wrapping_add(1);
             let generation = self.request_generation;
@@ -753,30 +759,28 @@ mod supported {
                 .into_any_element()
         }
 
-        fn take_yubi_retry_configuration(
-            &mut self,
-            cx: &mut Context<Self>,
+        fn read_yubi_retry_configuration(
+            &self,
+            cx: &Context<Self>,
         ) -> Result<Option<YubiRetryConfiguration>, &'static str> {
-            let puk = self
-                .yubi_retry_puk
-                .update(cx, |input, cx| input.take_secret(cx));
-            if puk.is_empty() {
+            let puk = SecretString::new(self.yubi_retry_puk.read(cx).value());
+            if puk.expose().is_empty() {
                 return Ok(None);
             }
-            let pin_attempts = self
-                .yubi_pin_attempts
-                .read(cx)
-                .value()
-                .parse::<u8>()
-                .map_err(|_| "enter numeric PIN retries")?;
-            let puk_attempts = self
-                .yubi_puk_attempts
-                .read(cx)
-                .value()
-                .parse::<u8>()
-                .map_err(|_| "enter numeric PUK retries")?;
+            // Empty retry counts fall back to the advertised default so the
+            // placeholder text and the submitted value cannot disagree.
+            let pin_attempts = parse_or_default(
+                self.yubi_pin_attempts.read(cx).value(),
+                3,
+                "enter numeric PIN retries",
+            )?;
+            let puk_attempts = parse_or_default(
+                self.yubi_puk_attempts.read(cx).value(),
+                3,
+                "enter numeric PUK retries",
+            )?;
             Ok(Some(YubiRetryConfiguration {
-                puk: SecretString::new(puk),
+                puk,
                 pin_attempts,
                 puk_attempts,
             }))
@@ -811,17 +815,7 @@ mod supported {
                     return;
                 }
             };
-            let passphrase = self
-                .yubi_passphrase
-                .update(cx, |input, cx| input.take_secret(cx));
-            let confirmation = self
-                .yubi_passphrase_confirmation
-                .update(cx, |input, cx| input.take_secret(cx));
-            let pin = self.yubi_pin.update(cx, |input, cx| input.take_secret(cx));
-            let invite = self
-                .yubi_invite
-                .update(cx, |input, cx| input.take_secret(cx));
-            let retry_configuration = match self.take_yubi_retry_configuration(cx) {
+            let retry_configuration = match self.read_yubi_retry_configuration(cx) {
                 Ok(retry) => retry,
                 Err(error) => {
                     self.model.accept(Err(error.to_owned()));
@@ -829,22 +823,39 @@ mod supported {
                     return;
                 }
             };
+            let invite = SecretString::new(self.yubi_invite.read(cx).value());
+            let passphrase = SecretString::new(self.yubi_passphrase.read(cx).value());
+            let confirmation =
+                SecretString::new(self.yubi_passphrase_confirmation.read(cx).value());
+            let pin = SecretString::new(self.yubi_pin.read(cx).value());
             let operation = self.model.create_yubi_account_operation(
                 self.yubi_alias.read(cx).value(),
                 self.yubi_username.read(cx).value(),
                 self.yubi_device.read(cx).value(),
                 self.yubi_email.read(cx).value(),
-                SecretString::new(invite),
-                Some(SecretString::new(passphrase)),
-                Some(SecretString::new(confirmation)),
+                invite,
+                Some(passphrase),
+                Some(confirmation),
                 card_serial,
                 signing_slot,
                 pq_slot,
-                SecretString::new(pin),
+                pin,
                 retry_configuration,
             );
             match operation {
-                Ok(operation) => self.start_operation(operation, cx),
+                Ok(operation) => {
+                    Self::clear_secret_fields(
+                        &[
+                            &self.yubi_invite,
+                            &self.yubi_passphrase,
+                            &self.yubi_passphrase_confirmation,
+                            &self.yubi_pin,
+                            &self.yubi_retry_puk,
+                        ],
+                        cx,
+                    );
+                    self.start_operation(operation, cx)
+                }
                 Err(error) => {
                     self.model.accept(Err(error.to_owned()));
                     cx.notify();
@@ -880,8 +891,7 @@ mod supported {
                     return;
                 }
             };
-            let pin = self.yubi_pin.update(cx, |input, cx| input.take_secret(cx));
-            let retry_configuration = match self.take_yubi_retry_configuration(cx) {
+            let retry_configuration = match self.read_yubi_retry_configuration(cx) {
                 Ok(retry) => retry,
                 Err(error) => {
                     self.model.accept(Err(error.to_owned()));
@@ -889,6 +899,7 @@ mod supported {
                     return;
                 }
             };
+            let pin = SecretString::new(self.yubi_pin.read(cx).value());
             let operation = self.model.provision_yubi_operation(
                 self.yubi_software_alias.read(cx).value(),
                 self.yubi_alias.read(cx).value(),
@@ -897,11 +908,14 @@ mod supported {
                 card_serial,
                 signing_slot,
                 pq_slot,
-                SecretString::new(pin),
+                pin,
                 retry_configuration,
             );
             match operation {
-                Ok(operation) => self.start_operation(operation, cx),
+                Ok(operation) => {
+                    Self::clear_secret_fields(&[&self.yubi_pin, &self.yubi_retry_puk], cx);
+                    self.start_operation(operation, cx)
+                }
                 Err(error) => {
                     self.model.accept(Err(error.to_owned()));
                     cx.notify();
@@ -913,17 +927,18 @@ mod supported {
             if self.loading {
                 return;
             }
-            let old_pin = self.yubi_pin.update(cx, |input, cx| input.take_secret(cx));
-            let new_pin = self
-                .yubi_new_pin
-                .update(cx, |input, cx| input.take_secret(cx));
+            let old_pin = SecretString::new(self.yubi_pin.read(cx).value());
+            let new_pin = SecretString::new(self.yubi_new_pin.read(cx).value());
             let operation = self.model.change_yubi_pin_operation(
                 self.yubi_alias.read(cx).value(),
-                SecretString::new(old_pin),
-                SecretString::new(new_pin),
+                old_pin,
+                new_pin,
             );
             match operation {
-                Ok(operation) => self.start_operation(operation, cx),
+                Ok(operation) => {
+                    Self::clear_secret_fields(&[&self.yubi_pin, &self.yubi_new_pin], cx);
+                    self.start_operation(operation, cx)
+                }
                 Err(error) => {
                     self.model.accept(Err(error.to_owned()));
                     cx.notify();
@@ -935,17 +950,18 @@ mod supported {
             if self.loading {
                 return;
             }
-            let old_puk = self.yubi_puk.update(cx, |input, cx| input.take_secret(cx));
-            let new_puk = self
-                .yubi_new_puk
-                .update(cx, |input, cx| input.take_secret(cx));
+            let old_puk = SecretString::new(self.yubi_puk.read(cx).value());
+            let new_puk = SecretString::new(self.yubi_new_puk.read(cx).value());
             let operation = self.model.change_yubi_puk_operation(
                 self.yubi_alias.read(cx).value(),
-                SecretString::new(old_puk),
-                SecretString::new(new_puk),
+                old_puk,
+                new_puk,
             );
             match operation {
-                Ok(operation) => self.start_operation(operation, cx),
+                Ok(operation) => {
+                    Self::clear_secret_fields(&[&self.yubi_puk, &self.yubi_new_puk], cx);
+                    self.start_operation(operation, cx)
+                }
                 Err(error) => {
                     self.model.accept(Err(error.to_owned()));
                     cx.notify();
@@ -957,17 +973,18 @@ mod supported {
             if self.loading {
                 return;
             }
-            let puk = self.yubi_puk.update(cx, |input, cx| input.take_secret(cx));
-            let new_pin = self
-                .yubi_new_pin
-                .update(cx, |input, cx| input.take_secret(cx));
+            let puk = SecretString::new(self.yubi_puk.read(cx).value());
+            let new_pin = SecretString::new(self.yubi_new_pin.read(cx).value());
             let operation = self.model.unblock_yubi_pin_operation(
                 self.yubi_alias.read(cx).value(),
-                SecretString::new(puk),
-                SecretString::new(new_pin),
+                puk,
+                new_pin,
             );
             match operation {
-                Ok(operation) => self.start_operation(operation, cx),
+                Ok(operation) => {
+                    Self::clear_secret_fields(&[&self.yubi_puk, &self.yubi_new_pin], cx);
+                    self.start_operation(operation, cx)
+                }
                 Err(error) => {
                     self.model.accept(Err(error.to_owned()));
                     cx.notify();
@@ -979,7 +996,7 @@ mod supported {
             if self.loading {
                 return;
             }
-            let pin = if matches!(
+            let needs_pin = matches!(
                 action,
                 YubiAction::ResumeAccount
                     | YubiAction::Sync
@@ -987,12 +1004,8 @@ mod supported {
                     | YubiAction::RotateManagementKey
                     | YubiAction::ResumeManagementKey
                     | YubiAction::RecoverSubkey
-            ) {
-                let pin = self.yubi_pin.update(cx, |input, cx| input.take_secret(cx));
-                Some(SecretString::new(pin))
-            } else {
-                None
-            };
+            );
+            let pin = needs_pin.then(|| SecretString::new(self.yubi_pin.read(cx).value()));
             let alias = self.yubi_alias.read(cx).value().to_owned();
             if action == YubiAction::Revoke
                 && self.yubi_revoke_confirmation.read(cx).value() != alias
@@ -1010,7 +1023,12 @@ mod supported {
                 Some(self.yubi_software_alias.read(cx).value()),
             );
             match operation {
-                Ok(operation) => self.start_operation(operation, cx),
+                Ok(operation) => {
+                    if needs_pin {
+                        Self::clear_secret_fields(&[&self.yubi_pin], cx);
+                    }
+                    self.start_operation(operation, cx)
+                }
                 Err(error) => {
                     self.model.accept(Err(error.to_owned()));
                     cx.notify();
@@ -1162,11 +1180,14 @@ mod supported {
         }
 
         fn team_member_visibility(&mut self, cx: &mut Context<Self>) -> Option<i16> {
-            match self.member_visibility.read(cx).value().parse::<i16>() {
+            match parse_or_default(
+                self.member_visibility.read(cx).value(),
+                0i16,
+                "enter a signed 16-bit member visibility",
+            ) {
                 Ok(visibility) => Some(visibility),
-                Err(_) => {
-                    self.model
-                        .accept(Err("enter a signed 16-bit member visibility".to_owned()));
+                Err(error) => {
+                    self.model.accept(Err(error.to_owned()));
                     cx.notify();
                     None
                 }
@@ -1250,11 +1271,14 @@ mod supported {
             if self.loading {
                 return;
             }
-            let visibility = match self.federation_visibility.read(cx).value().parse::<i16>() {
+            let visibility = match parse_or_default(
+                self.federation_visibility.read(cx).value(),
+                0i16,
+                "enter a signed 16-bit member visibility",
+            ) {
                 Ok(visibility) => visibility,
-                Err(_) => {
-                    self.model
-                        .accept(Err("enter a signed 16-bit member visibility".to_owned()));
+                Err(error) => {
+                    self.model.accept(Err(error.to_owned()));
                     cx.notify();
                     return;
                 }
@@ -1362,8 +1386,10 @@ mod supported {
                 .child(content);
             let body = if self.model.screen() == Screen::Accounts {
                 div()
+                    .id("accounts-body")
                     .flex_1()
                     .min_h_0()
+                    .overflow_y_scroll()
                     .flex()
                     .flex_col()
                     .gap_4()
@@ -1469,6 +1495,18 @@ mod supported {
                         .child(body),
                 )
         }
+    }
+
+    fn parse_or_default<T: std::str::FromStr>(
+        value: &str,
+        default: T,
+        error: &'static str,
+    ) -> Result<T, &'static str> {
+        let value = value.trim();
+        if value.is_empty() {
+            return Ok(default);
+        }
+        value.parse::<T>().map_err(|_| error)
     }
 
     fn parse_slot(value: &str) -> Result<u8, &'static str> {

@@ -318,7 +318,10 @@ pub fn finish_software_kex_provision_link(
 
 fn require_kex_device_binding(link: &UserLink, device: &DevicePublicMaterial) -> Result<()> {
     let change = link.decode_group_change()?;
-    if !change.shared_keys.is_empty() || change.changes.len() != 1 {
+    // A Go provisioner introduces a fresh role PUK in this same link when the
+    // target role has no key yet. The authoritative server validates that key
+    // transition; the provisionee only needs to bind its one device change.
+    if change.changes.len() != 1 {
         return Err(Error::Verification);
     }
     let member = &change.changes[0];

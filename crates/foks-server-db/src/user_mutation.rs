@@ -65,6 +65,10 @@ pub struct UserMutation<'a> {
     pub seed_chain: &'a [SeedChainMutation<'a>],
     pub passphrase: Option<crate::PassphraseMutation<'a>>,
     pub user_settings: Option<crate::GenericLinkMutation<'a>>,
+    /// Merkle epoch cited by the signed user-chain link. This can trail the
+    /// authoritative head, but it must not trail side-chain work signed by a
+    /// credential whose signing interval this mutation ends.
+    pub cited_root_epoch: u64,
     pub expected_root_epoch: u64,
     pub expected_root_hash: &'a [u8; 32],
     pub merkle_commit: &'a foks_merkle_store::Commit,
@@ -139,6 +143,7 @@ impl Database {
         if !signer_active {
             return Err(Error::Invalid("inactive user mutation signer"));
         }
+        assert_no_racing_revoked_credential(&transaction, mutation)?;
         enforce_credential_capacity(&transaction, &self.config, mutation)?;
 
         transaction.execute(
@@ -368,6 +373,8 @@ fn validate(database: &Database, mutation: &UserMutation<'_>) -> Result<()> {
         || mutation.back_pointers.len() > database.config.maximum_back_pointers
         || mutation.response.len() > database.config.maximum_receipt_bytes
         || mutation.receipt_expires_at <= mutation.now
+        || mutation.cited_root_epoch == 0
+        || mutation.cited_root_epoch > mutation.expected_root_epoch
     {
         return Err(Error::Invalid("user mutation"));
     }
@@ -430,6 +437,35 @@ fn validate(database: &Database, mutation: &UserMutation<'_>) -> Result<()> {
         let node = foks_merkle_store::Node::decode(encoded)?;
         if foks_merkle_store::hash_node(&node)? != *hash {
             return Err(Error::Invalid("Merkle node hash"));
+        }
+    }
+    Ok(())
+}
+
+fn assert_no_racing_revoked_credential(
+    transaction: &rusqlite::Transaction<'_>,
+    mutation: &UserMutation<'_>,
+) -> Result<()> {
+    let Some(revoked) = mutation.revoked_device_id else {
+        return Ok(());
+    };
+    let mut statement = transaction.prepare(
+        "SELECT exact_link FROM generic_chain_links
+         WHERE entity_id = ?1 AND root_epoch > ?2",
+    )?;
+    let mut rows = statement.query(params![
+        mutation.uid,
+        sql_integer(mutation.cited_root_epoch)?
+    ])?;
+    while let Some(row) = rows.next()? {
+        let exact: Vec<u8> = row.get(0)?;
+        let link = foks_proto::UserLink::decode(&exact)
+            .map_err(|_| Error::Invalid("stored generic user link"))?;
+        let decoded = link
+            .decode_generic()
+            .map_err(|_| Error::Invalid("stored generic user link"))?;
+        if decoded.signer.as_bytes() == revoked {
+            return Err(Error::StaleRoot);
         }
     }
     Ok(())

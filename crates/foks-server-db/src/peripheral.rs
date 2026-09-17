@@ -6,6 +6,8 @@ pub const MAXIMUM_LOG_SEND_FILE_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAXIMUM_LOG_SEND_FILES: u64 = 16;
 pub const MAXIMUM_LOG_SEND_BLOCKS: u64 = 16;
 pub const MAXIMUM_LOG_SEND_BLOCK_BYTES: usize = 4 * 1024 * 1024;
+pub const MAXIMUM_ACTIVE_LOG_SEND_SESSIONS: u64 = 128;
+pub const MAXIMUM_ACTIVE_LOG_SEND_BYTES: u64 = 512 * 1024 * 1024;
 const LOG_SEND_SESSION_LIFETIME_MICROS: u64 = 24 * 60 * 60 * 1_000_000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -46,6 +48,19 @@ impl Database {
     pub fn begin_log_send(&mut self, id: &[u8; 17], uid: Option<&[u8]>, now: u64) -> Result<()> {
         if id[0] != 48 || uid.is_some_and(|uid| uid.len() != 33) {
             return Err(Error::Invalid("log-send identity"));
+        }
+        let oldest_active = integer(now.saturating_sub(LOG_SEND_SESSION_LIFETIME_MICROS))?;
+        self.connection.execute(
+            "DELETE FROM log_sends WHERE created_at < ?1",
+            [oldest_active],
+        )?;
+        let active: i64 = self.connection.query_row(
+            "SELECT count(*) FROM log_sends WHERE created_at >= ?1",
+            [oldest_active],
+            |row| row.get(0),
+        )?;
+        if crate::error::unsigned(active)? >= MAXIMUM_ACTIVE_LOG_SEND_SESSIONS {
+            return Err(Error::Capacity("active log-send sessions"));
         }
         self.connection
             .execute(
@@ -139,18 +154,45 @@ impl Database {
                 |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
             )
             .optional()?;
-        let Some((content_length, block_count)) = metadata else {
+        let Some((_content_length, block_count)) = metadata else {
             return Err(Error::NotFound("active log-send file"));
         };
-        let content_length = crate::error::unsigned(content_length)?;
         let block_count = crate::error::unsigned(block_count)?;
-        let expected_length =
-            expected_block_length(content_length, block_count, mutation.block_number);
         if mutation.block_number >= block_count
-            || (block_count == 0) != (content_length == 0)
-            || expected_length != Some(mutation.block.len())
+            || mutation.block.is_empty()
+            || (mutation.block_number + 1 < block_count
+                && mutation.block.len() != MAXIMUM_LOG_SEND_BLOCK_BYTES)
         {
             return Err(Error::Invalid("log-send block position"));
+        }
+        let (file_bytes, active_bytes): (i64, i64) = self.connection.query_row(
+            "SELECT
+                 COALESCE((SELECT sum(length(block)) FROM log_send_blocks
+                           WHERE log_send_id = ?1 AND file_id = ?2), 0),
+                 COALESCE((SELECT sum(length(b.block))
+                           FROM log_send_blocks b
+                           JOIN log_sends s ON s.log_send_id = b.log_send_id
+                           WHERE s.created_at >= ?3), 0)",
+            params![
+                mutation.log_send_id,
+                integer(mutation.file_id)?,
+                integer(
+                    mutation
+                        .now
+                        .saturating_sub(LOG_SEND_SESSION_LIFETIME_MICROS)
+                )?,
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let block_bytes = u64::try_from(mutation.block.len()).map_err(|_| Error::IntegerRange)?;
+        if crate::error::unsigned(file_bytes)?
+            .checked_add(block_bytes)
+            .is_none_or(|bytes| bytes > MAXIMUM_LOG_SEND_FILE_BYTES)
+            || crate::error::unsigned(active_bytes)?
+                .checked_add(block_bytes)
+                .is_none_or(|bytes| bytes > MAXIMUM_ACTIVE_LOG_SEND_BYTES)
+        {
+            return Err(Error::Capacity("log-send bytes"));
         }
         self.connection
             .execute(
@@ -175,32 +217,11 @@ fn validate_file(mutation: &LogSendFileMutation<'_>) -> Result<()> {
         || mutation.filename.is_empty()
         || mutation.filename.len() > 255
         || mutation.filename.contains(['/', '\\', '\0'])
-        || mutation.content_length > MAXIMUM_LOG_SEND_FILE_BYTES
         || mutation.block_count > MAXIMUM_LOG_SEND_BLOCKS
-        || (mutation.block_count == 0) != (mutation.content_length == 0)
-        || mutation.block_count
-            != mutation
-                .content_length
-                .div_ceil(MAXIMUM_LOG_SEND_BLOCK_BYTES as u64)
     {
         return Err(Error::Invalid("log-send file metadata"));
     }
     Ok(())
-}
-
-fn expected_block_length(
-    content_length: u64,
-    block_count: u64,
-    block_number: u64,
-) -> Option<usize> {
-    if block_number >= block_count {
-        return None;
-    }
-    if block_number + 1 < block_count {
-        return Some(MAXIMUM_LOG_SEND_BLOCK_BYTES);
-    }
-    let preceding = block_number.checked_mul(MAXIMUM_LOG_SEND_BLOCK_BYTES as u64)?;
-    usize::try_from(content_length.checked_sub(preceding)?).ok()
 }
 
 fn valid_email(email: &str) -> bool {

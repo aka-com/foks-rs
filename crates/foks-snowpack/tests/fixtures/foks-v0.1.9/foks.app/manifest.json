@@ -1,5 +1,5 @@
 {
-  "format": "foks-v0.1.9-probe-fixtures-v1",
+  "format": "foks-v0.1.9-probe-fixtures-v2",
   "foks_version": "v0.1.9",
   "captured_at": "2026-08-23T17:49:04Z",
   "probe_address": "foks.app:4430",
@@ -10,8 +10,6 @@
   "merkle_root_node": "a19f5831becd39dc9426086d794d09dc473e63ef82fb2c80962ef8e7ba9f58f1",
   "merkle_root_hash": "020cb90618f61aaff8ab9aaad97edf05692d100d96a9674e41e43361a520f667",
   "merkle_hostchain_tail": "HqTzJpOqYNRiSV8p3wIRc6EwFN4jux554EofZUoa9ZE",
-  "canonical_verified": true,
-  "signatures_verified": true,
   "files": [
     {
       "file": "host-id.snowp",

@@ -149,6 +149,7 @@ fn namespace_shape_limits_match_client_traversal_limits() {
         .put_kv_dirents(
             &UID,
             Some(&initial),
+            foks_proto::Role::OWNER,
             &[KvDirentMutation {
                 parent: &root,
                 id: &[0x61; 16],
@@ -166,6 +167,7 @@ fn namespace_shape_limits_match_client_traversal_limits() {
         test.database.put_kv_dirents(
             &UID,
             Some(&current),
+            foks_proto::Role::OWNER,
             &[KvDirentMutation {
                 parent: &root,
                 id: &[0x62; 16],
@@ -200,6 +202,7 @@ fn oversized_dirents_and_unsafe_capacity_configuration_are_rejected() {
         test.database.put_kv_dirents(
             &UID,
             Some(&precondition),
+            foks_proto::Role::OWNER,
             &[KvDirentMutation {
                 parent: &root,
                 id: &[0x61; 16],

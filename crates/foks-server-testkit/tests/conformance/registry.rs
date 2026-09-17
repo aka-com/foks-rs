@@ -244,8 +244,8 @@ const COVERAGE: &[Coverage] = &[
 fn every_registered_route_has_an_executable_client_server_scenario() {
     let mut covered = BTreeMap::<(&str, &str), BTreeSet<&str>>::new();
     for scenario in COVERAGE {
-        let _callable = scenario.run;
         assert!(!scenario.name.is_empty());
+        (scenario.run)();
         for route in scenario.routes {
             covered.entry(*route).or_default().insert(scenario.name);
         }

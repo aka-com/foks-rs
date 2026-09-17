@@ -78,6 +78,8 @@ jobs:
         run: cargo fetch --locked
       - name: Check generated protocol metadata
         run: tools/foks-server/generate-protocol.sh --check --offline
+      - name: Test offline Go descriptor and fixture guards
+        run: go test -C tools/foks-v019-oracle ./...
       - name: Test the complete isolated FOKS graph
         run: tools/foks-server/check.sh
       - name: Verify the Rust client against Go v0.1.9

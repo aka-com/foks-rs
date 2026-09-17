@@ -103,6 +103,22 @@ impl Database {
                 ],
             )?;
         }
+        let nil_leaf = foks_merkle_store::Node::Leaf {
+            key: [0; 32],
+            value: [0; 32],
+        };
+        if foks_merkle_store::hash_node(&nil_leaf)? != bootstrap.root_node {
+            return Err(Error::Invalid("host bootstrap Merkle root node"));
+        }
+        transaction.execute(
+            "INSERT INTO merkle_nodes(node_hash, exact_node) VALUES (?1, ?2)",
+            params![bootstrap.root_node, nil_leaf.encoded()?],
+        )?;
+        transaction.execute(
+            "INSERT INTO merkle_leaves(leaf_key, leaf_value, epoch)
+             VALUES (zeroblob(32), zeroblob(32), ?1)",
+            [sql_integer(bootstrap.root_epoch)?],
+        )?;
         transaction.execute(
             "INSERT INTO merkle_roots
              (epoch, root_hash, root_node, exact_root, exact_signed_root, created_at)
@@ -155,10 +171,15 @@ impl crate::ReadDatabase {
 
 fn validate(bootstrap: &HostBootstrap, maximum_blob_bytes: usize) -> Result<()> {
     let mut service_types = std::collections::BTreeSet::new();
+    let nil_leaf = foks_merkle_store::Node::Leaf {
+        key: [0; 32],
+        value: [0; 32],
+    };
+    let nil_leaf_hash = foks_merkle_store::hash_node(&nil_leaf)?;
     if bootstrap.host_id.len() != 33
         || bootstrap.canonical_name.is_empty()
         || bootstrap.canonical_name.len() > 255
-        || bootstrap.root_node != [0; 32]
+        || bootstrap.root_node != nil_leaf_hash
         || bootstrap.root_epoch != 1
         || bootstrap.host_key_generation == [0; 16]
         || bootstrap.capability_key_generation == [0; 16]

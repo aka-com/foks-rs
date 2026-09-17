@@ -120,6 +120,13 @@ pub fn bootstrap(
     };
 
     let empty_back_pointers = encode(&Value::Null)?;
+    // go-foks seeds the tree with a zero-key/zero-value leaf. Besides matching
+    // the upstream root shape, this makes absence proofs available at epoch 1.
+    let nil_leaf = foks_merkle_store::Node::Leaf {
+        key: [0; 32],
+        value: [0; 32],
+    };
+    let nil_leaf_hash = foks_merkle_store::hash_node(&nil_leaf)?;
     let merkle_root = MerkleRoot {
         epoch: 1,
         time: input.now_microseconds / 1_000,
@@ -127,7 +134,7 @@ pub fn bootstrap(
             MERKLE_BACK_POINTERS_TYPE_ID,
             &empty_back_pointers,
         )?,
-        root_node: [0; 32],
+        root_node: nil_leaf_hash,
         hostchain: HostchainTail {
             seqno: 1,
             hash: hostchain_hash,
@@ -181,7 +188,7 @@ pub fn bootstrap(
         exact_hostchain_link: exact_hostchain,
         services,
         root_hash,
-        root_node: [0; 32],
+        root_node: nil_leaf_hash,
         root_epoch: 1,
         exact_root,
         exact_signed_root,

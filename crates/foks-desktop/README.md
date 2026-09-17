@@ -7,8 +7,16 @@ multi-use signup invites and an optional confirmed passphrase. The scriptable
 backend accepts invites only through a private `--invite-file`, never process
 arguments. The account
 security form exposes passphrase set, change, and public-challenge verify; all
-secret fields are masked, non-copying, bounded to 1,024 bytes, zeroized when
-replaced or dropped, and consumed before an agent request.
+secret fields are masked, non-copying, and refuse system input-service text
+queries (IME reconversion, dictation, press-and-hold). Secret input is bounded
+(1,024 bytes for passphrases); an edit that would exceed a field's bound is
+rejected whole and marked with a warning border rather than silently
+truncated, and pasted trailing newlines are stripped rather than substituted.
+Fields are zeroized when replaced or dropped, cleared only once a request is
+dispatched, and preserved across validation errors. The agent client waits
+longer than the daemon's dispatch deadline so slow operations surface the
+daemon's structured deadline verdict, which the UI annotates with resume
+guidance.
 The same crate retains `foks-desktop-backend` as a scriptable JSON shell, while
 `DesktopModel` keeps screen-to-operation logic independently unit testable.
 

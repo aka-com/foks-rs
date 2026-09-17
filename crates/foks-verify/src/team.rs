@@ -473,7 +473,9 @@ fn verify_team_chain_at_root(
     }
     let root_bytes = chain.merkle.encoded_root()?;
     let root_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &root_bytes)?;
-    if chain.merkle.root() != expected_root
+    if chain.merkle.root().epoch < expected_root.epoch
+        || (chain.merkle.root().epoch == expected_root.epoch
+            && chain.merkle.root() != expected_root)
         || authenticated_roots.get(&chain.merkle.root().epoch) != Some(&root_hash)
     {
         return Err(Error::UntrustedUserRoot);
@@ -489,6 +491,11 @@ fn verify_team_chain_at_root(
         .checked_add(chain.links.len())
         .filter(|end| *end <= chain.merkle.paths().len())
         .ok_or(Error::TeamChainContinuity)?;
+    let chain_paths = chain
+        .merkle
+        .paths()
+        .get(path_offset..path_end)
+        .ok_or(Error::TeamChainContinuity)?;
     let mut members = BTreeMap::<Vec<u8>, VerifiedTeamMemberState>::new();
     let mut shared_keys = BTreeMap::<Role, VerifiedSharedKey>::new();
     let mut previous_hash = None;
@@ -498,7 +505,7 @@ fn verify_team_chain_at_root(
         .links
         .iter()
         .zip(&chain.locations)
-        .zip(&chain.merkle.paths()[path_offset..path_end])
+        .zip(chain_paths)
         .enumerate()
     {
         let sequence = u64::try_from(index)
@@ -623,7 +630,9 @@ fn verify_team_chain_increment_at_root(
     }
     let root_bytes = chain.merkle.encoded_root()?;
     let root_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &root_bytes)?;
-    if chain.merkle.root() != expected_root
+    if chain.merkle.root().epoch < expected_root.epoch
+        || (chain.merkle.root().epoch == expected_root.epoch
+            && chain.merkle.root() != expected_root)
         || authenticated_roots.get(&chain.merkle.root().epoch) != Some(&root_hash)
     {
         return Err(Error::UntrustedUserRoot);
@@ -632,6 +641,14 @@ fn verify_team_chain_increment_at_root(
         verify_incremental_team_disclosures(&chain, prior, expected_team, expected_host)?;
     let path_offset =
         usize::try_from(chain.num_team_name_links).map_err(|_| Error::TeamChainContinuity)?;
+    let path_end = path_offset
+        .checked_add(chain.links.len())
+        .ok_or(Error::TeamChainContinuity)?;
+    let chain_paths = chain
+        .merkle
+        .paths()
+        .get(path_offset..path_end)
+        .ok_or(Error::TeamChainContinuity)?;
     let mut members = prior
         .members
         .iter()
@@ -663,7 +680,7 @@ fn verify_team_chain_increment_at_root(
         .links
         .iter()
         .zip(chain.locations.windows(2))
-        .zip(&chain.merkle.paths()[path_offset..path_offset + chain.links.len()])
+        .zip(chain_paths)
         .enumerate()
     {
         let sequence = start_sequence
@@ -1153,7 +1170,12 @@ fn verify_team_disclosures(
     }
     let path_count =
         usize::try_from(chain.num_team_name_links).map_err(|_| Error::TeamDisclosure)?;
-    for (index, path) in chain.merkle.paths()[..path_count].iter().enumerate() {
+    let name_paths = chain
+        .merkle
+        .paths()
+        .get(..path_count)
+        .ok_or(Error::TeamDisclosure)?;
+    for (index, path) in name_paths.iter().enumerate() {
         let sequence = u64::try_from(index)
             .ok()
             .and_then(|index| index.checked_add(1))
@@ -1282,7 +1304,12 @@ fn verify_incremental_team_disclosures(
     if path_count != expected_count || path_count == 0 {
         return Err(Error::TeamDisclosure);
     }
-    for (index, path) in chain.merkle.paths()[..path_count].iter().enumerate() {
+    let name_paths = chain
+        .merkle
+        .paths()
+        .get(..path_count)
+        .ok_or(Error::TeamDisclosure)?;
+    for (index, path) in name_paths.iter().enumerate() {
         let sequence = name_start
             .checked_add(u64::try_from(index).map_err(|_| Error::TeamDisclosure)?)
             .ok_or(Error::TeamDisclosure)?;
@@ -1316,7 +1343,8 @@ fn verify_adhoc_team_name_paths(chain: &TeamChain, host: &EntityId) -> Result<()
     {
         return Err(Error::TeamDisclosure);
     }
-    for (index, path) in chain.merkle.paths()[..2].iter().enumerate() {
+    let name_paths = chain.merkle.paths().get(..2).ok_or(Error::TeamDisclosure)?;
+    for (index, path) in name_paths.iter().enumerate() {
         let sequence = u64::try_from(index)
             .ok()
             .and_then(|index| index.checked_add(1))

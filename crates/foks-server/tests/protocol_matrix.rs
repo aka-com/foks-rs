@@ -119,6 +119,8 @@ fn authentication_policy_matches_listener_principal_availability() {
         "team_view_token",
         "self_view_token",
         "delegated_tls_and_view_policy",
+        "transport_tls_optional_active_device",
+        "log_send_session_capability",
     ];
     for route in ROUTES.iter() {
         let principal_bound = route.authentication.starts_with("active_")
@@ -242,14 +244,18 @@ fn protocol_contract_is_valid_and_exactly_registered() {
             ("bad_invite".to_owned(), 1019),
             ("bad_passphrase".to_owned(), 1011),
             ("device_already_provisioned".to_owned(), 1072),
+            ("duplicate".to_owned(), 1001),
             ("expired".to_owned(), 1062),
+            ("kex_bad_secret".to_owned(), 1032),
             ("key_not_found".to_owned(), 1025),
             ("kv_noent".to_owned(), 8016),
             ("kv_permission".to_owned(), 8011),
+            ("kv_race".to_owned(), 8003),
             ("lock_timeout".to_owned(), 8015),
             ("locked".to_owned(), 8014),
             ("merkle_leaf_not_found".to_owned(), 4002),
             ("merkle_no_root".to_owned(), 4001),
+            ("merkle_verify".to_owned(), 4003),
             ("name_in_use".to_owned(), 1023),
             ("not_found".to_owned(), 1049),
             ("ok".to_owned(), 0),

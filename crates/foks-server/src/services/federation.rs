@@ -237,7 +237,7 @@ pub(crate) fn load_remote_user_chain(
         }
         _ => return Err(permission_denied()),
     }
-    super::user::render_user_chain(database, local_host, &request)
+    super::user::render_user_chain(database, local_host, &request, false)
 }
 
 struct TokenBinding<'a> {

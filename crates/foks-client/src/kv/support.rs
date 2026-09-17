@@ -87,6 +87,9 @@ pub(crate) fn validate_kv_component(name: &[u8]) -> Result<()> {
 }
 
 pub(crate) fn random_kv_node_id(node_type: KvNodeType) -> Result<KvNodeId> {
+    // In go-foks v0.1.9 the object ID is also the deterministic Secretbox
+    // nonce suffix. Every new ciphertext therefore gets a new 128-bit ID,
+    // including overwrites of an existing path.
     let mut bytes = [0; 17];
     bytes[0] = node_type as u8;
     bytes[1..].copy_from_slice(&random_bytes::<16>()?);

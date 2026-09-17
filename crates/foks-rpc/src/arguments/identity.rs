@@ -1,4 +1,7 @@
-use foks_proto::{EntityId, PermissionToken, ENTITY_DEVICE, ENTITY_USER, ENTITY_YUBI};
+use foks_proto::{
+    EntityId, PermissionToken, ENTITY_BACKUP_KEY, ENTITY_BOT_TOKEN_KEY, ENTITY_DEVICE, ENTITY_USER,
+    ENTITY_YUBI,
+};
 use foks_snowpack::{decode, encode, Value};
 
 use crate::{Error, Result};
@@ -65,7 +68,10 @@ pub fn decode_probe_key_exists(bytes: &[u8]) -> Result<ProbeKeyExistsArgument> {
     };
     let uid = EntityId::from_bytes(uid.clone())?.require_type(ENTITY_USER)?;
     let device_id = EntityId::from_bytes(device_id.clone())?;
-    if !matches!(device_id.entity_type(), ENTITY_DEVICE | ENTITY_YUBI) {
+    if !matches!(
+        device_id.entity_type(),
+        ENTITY_DEVICE | ENTITY_YUBI | ENTITY_BACKUP_KEY | ENTITY_BOT_TOKEN_KEY
+    ) {
         return Err(shape("device identifier"));
     }
     Ok(ProbeKeyExistsArgument {
@@ -118,5 +124,22 @@ mod tests {
             decode_probe_key_exists(&probe).unwrap().self_token.expose(),
             &[3; 17]
         );
+        for entity_type in [ENTITY_BACKUP_KEY, ENTITY_BOT_TOKEN_KEY] {
+            let mut credential = vec![2; 33];
+            credential[0] = entity_type;
+            let probe = encode(&Value::Array(vec![
+                Value::Binary([vec![ENTITY_USER], vec![1; 32]].concat()),
+                Value::Binary(credential),
+                Value::Binary(vec![3; 17]),
+            ]))
+            .unwrap();
+            assert_eq!(
+                decode_probe_key_exists(&probe)
+                    .unwrap()
+                    .device_id
+                    .entity_type(),
+                entity_type
+            );
+        }
     }
 }

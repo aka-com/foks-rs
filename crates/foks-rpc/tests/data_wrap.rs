@@ -9,10 +9,11 @@ use std::io::Cursor;
 
 use foks_rpc::{
     decode_bare_response, encode_bare_success_response_at, encode_bare_void_success_response_at,
-    encode_call, is_headerless_protocol, read_bare_response, read_bare_void_response, read_call,
-    BEACON_PROTOCOL_ID, DEFAULT_MAX_FRAME_LENGTH, KV_STORE_PROTOCOL_ID, MERKLE_QUERY_PROTOCOL_ID,
-    PROBE_PROTOCOL_ID, REG_PROTOCOL_ID, TEAM_ADMIN_PROTOCOL_ID, TEAM_LOADER_PROTOCOL_ID,
-    TEAM_MEMBER_PROTOCOL_ID, USER_PROTOCOL_ID,
+    encode_call, is_headerless_argument_protocol, is_headerless_result_protocol,
+    read_bare_response, read_bare_void_response, read_call, BEACON_PROTOCOL_ID,
+    DEFAULT_MAX_FRAME_LENGTH, KV_STORE_PROTOCOL_ID, MERKLE_QUERY_PROTOCOL_ID, PROBE_PROTOCOL_ID,
+    REG_PROTOCOL_ID, TEAM_ADMIN_PROTOCOL_ID, TEAM_LOADER_PROTOCOL_ID, TEAM_MEMBER_PROTOCOL_ID,
+    USER_PROTOCOL_ID,
 };
 use foks_snowpack::{encode, Value};
 
@@ -34,7 +35,14 @@ fn headerless_predicate_matches_the_go_v019_protocol_split() {
         TEAM_GUEST_PROTOCOL_ID,
         KEX_PROTOCOL_ID,
     ] {
-        assert!(is_headerless_protocol(id), "{id:#010x} should be bare");
+        assert!(
+            is_headerless_argument_protocol(id),
+            "{id:#010x} argument should be bare"
+        );
+        assert!(
+            is_headerless_result_protocol(id),
+            "{id:#010x} result should be bare"
+        );
     }
     for id in [
         PROBE_PROTOCOL_ID,
@@ -44,7 +52,14 @@ fn headerless_predicate_matches_the_go_v019_protocol_split() {
         KV_STORE_PROTOCOL_ID,
         BEACON_PROTOCOL_ID,
     ] {
-        assert!(!is_headerless_protocol(id), "{id:#010x} should be wrapped");
+        assert!(
+            !is_headerless_argument_protocol(id),
+            "{id:#010x} argument should be wrapped"
+        );
+        assert!(
+            !is_headerless_result_protocol(id),
+            "{id:#010x} result should be wrapped"
+        );
     }
 }
 

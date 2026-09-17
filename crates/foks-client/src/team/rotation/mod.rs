@@ -1134,12 +1134,12 @@ impl FoksClient {
         // Once Submitting is durable, every exit must conservatively assume
         // that the exact edit could have reached the server.
         let bearer = match &actor.secrets {
-            RefreshActorSecrets::Team(actor_team) => Some(self.activate_team_admin_bearer(
+            RefreshActorSecrets::Team(_) => Some(self.activate_team_admin_bearer(
                 host,
                 uid,
                 auth_seed,
                 certificate_chain,
-                actor_team,
+                authenticated_team,
             )?),
             RefreshActorSecrets::User(_) => None,
         };
@@ -1811,7 +1811,7 @@ impl FoksClient {
                     transport_uid,
                     auth_seed,
                     certificate_chain,
-                    authority,
+                    authenticated_team,
                 )?)
             }
             None if actor.entity_type() == foks_proto::ENTITY_USER => None,
@@ -2227,6 +2227,43 @@ impl FoksClient {
             expected_seqno,
             authenticated,
         })
+    }
+
+    /// Marks a recorded member edit terminal after an authenticated, different
+    /// transition occupied its reserved sequence. This is intentionally
+    /// separate from reconciliation: callers invoke it only after observing
+    /// an operation-binding failure at or beyond `expected_seqno`.
+    pub fn supersede_recorded_team_member_change(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        team: &EntityId,
+        expected_seqno: u64,
+        expected_operation_id: &[u8; 16],
+        protected_store: &mut dyn ProtectedMutationStore,
+    ) -> Result<()> {
+        let mut hard_store = HardStateStore::open(&host.database_path)?;
+        let operation = hard_store
+            .team_mutation(expected_operation_id)?
+            .ok_or(Error::TeamRequest("team transition is not recorded"))?;
+        validate_rotation_operation(&operation, host, &credential.uid, team, expected_seqno)?;
+        match operation.state {
+            TeamMutationState::Verified => {
+                return Err(Error::OperationBinding(
+                    "verified team transition cannot be superseded",
+                ));
+            }
+            TeamMutationState::Rejected | TeamMutationState::Superseded => {}
+            _ => hard_store.advance_team_mutation(
+                expected_operation_id,
+                TeamMutationState::Superseded,
+                now_microseconds()?,
+            )?,
+        }
+        remove_team_rekey_material(
+            protected_store,
+            &team_rotation_material_key(expected_operation_id),
+        )
     }
 
     pub fn resume_change_team_member_and_rotate_ptks_yubi(

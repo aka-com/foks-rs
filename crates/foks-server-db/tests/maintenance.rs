@@ -92,12 +92,20 @@ fn maintenance_reclaims_only_expired_or_abandoned_state() {
                 rusqlite::params![UID, [1_u8; 33], [2_u8; 33], [0x90_u8; 16]],
             )
             .unwrap();
+        connection
+            .execute(
+                "INSERT INTO log_sends(log_send_id, uid, created_at)
+                 VALUES (?1, NULL, 0)",
+                [[0x48_u8; 17]],
+            )
+            .unwrap();
     }
 
     let report = test.database.run_maintenance(21, 11).unwrap();
     assert_eq!(report.reservations, 1);
     assert_eq!(report.locks, 0);
     assert_eq!(report.uploads, 2);
+    assert_eq!(report.log_sends, 1);
     assert_eq!(report.receipts, 0);
     assert_eq!(report.challenges, 0);
     assert_eq!(report.team_reservations, 0);

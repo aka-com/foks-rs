@@ -44,3 +44,24 @@ fn baseline_is_the_checksum_pinned_v019_module() {
         "f07a5816f54120f5fb4985cf980a7c45d74449b1"
     );
 }
+
+#[test]
+fn merkle_root_result_types_are_exactly_pinned() {
+    let artifact = parse_artifact(UPSTREAM).unwrap();
+    let protocol = artifact
+        .protocols
+        .iter()
+        .find(|protocol| protocol.name == "MerkleQuery")
+        .unwrap();
+    let result_at = |position| {
+        protocol
+            .methods
+            .iter()
+            .find(|method| method.position == position)
+            .map(|method| method.result_type.as_str())
+            .unwrap()
+    };
+    assert_eq!(result_at(2), "lib.MerkleRoot");
+    assert_eq!(result_at(3), "lib.TreeRoot");
+    assert_eq!(result_at(5), "lib.SignedMerkleRoot");
+}

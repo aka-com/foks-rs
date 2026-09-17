@@ -74,6 +74,7 @@ fn every_team_publication_boundary_is_atomic() {
             member_host_id: &[2; 33],
             source_role_type: 3,
             source_visibility: 0,
+            exact_box: b"member-removal-box",
             exact_removal: b"member-removal-proof",
         };
         let team = {
@@ -227,6 +228,20 @@ fn every_team_publication_boundary_is_atomic() {
             .unwrap();
         assert_eq!(removal.exact_box, b"member-removal-box");
         assert_eq!(removal.exact_removal, b"member-removal-proof");
+        rusqlite::Connection::open(&fixture.path)
+            .unwrap()
+            .execute(
+                "UPDATE team_removal_boxes SET exact_box = ?3
+                 WHERE team_id = ?1 AND member_id = ?2",
+                rusqlite::params![team, [1_u8; 33], b"re-added-member-removal-box"],
+            )
+            .unwrap();
+        let historical = fixture
+            .database
+            .team_removal(&team, &[0x74; 32])
+            .unwrap()
+            .unwrap();
+        assert_eq!(historical.exact_box, b"member-removal-box");
         assert!(fixture.database.ensure_kv_namespace(&team).unwrap());
         let kv_root = [0x7b; 16];
         fixture

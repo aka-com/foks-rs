@@ -1,4 +1,6 @@
-use foks_protocol_metadata::{merge, parse_artifact, parse_policy, MetadataError};
+use foks_protocol_metadata::{
+    merge, parse_artifact, parse_policy, render_protocol_ids, MetadataError,
+};
 
 const ARTIFACT: &str = r#"{
   "schema_version": 2,
@@ -117,11 +119,35 @@ fn principal_bound_routes_must_use_the_authenticated_listener() {
 }
 
 #[test]
-fn rejects_asymmetric_protocol_headers() {
+fn preserves_asymmetric_protocol_headers_by_direction() {
     let artifact =
         parse_artifact(&ARTIFACT.replace("\"result_header\":true", "\"result_header\":false"))
             .unwrap();
     let policy = parse_policy(POLICY).unwrap();
+    let merged = merge(&artifact, &policy).unwrap();
+    let rendered = render_protocol_ids(&merged);
+    assert!(rendered.contains("pub const fn is_headerless_argument_protocol"));
+    assert!(rendered.contains("pub const fn is_headerless_result_protocol"));
+    let argument = rendered
+        .split("pub const fn is_headerless_argument_protocol")
+        .nth(1)
+        .unwrap()
+        .split("pub const fn is_headerless_result_protocol")
+        .next()
+        .unwrap();
+    let result = rendered
+        .split("pub const fn is_headerless_result_protocol")
+        .nth(1)
+        .unwrap();
+    assert!(!argument.contains("0x00000001"));
+    assert!(result.contains("0x00000001"));
+}
+
+#[test]
+fn rejects_unimplemented_local_result_labels() {
+    let artifact = parse_artifact(ARTIFACT).unwrap();
+    let policy =
+        parse_policy(&POLICY.replace("result = \"ProbeResponse\"", "result = \"Banana\"")).unwrap();
     assert!(matches!(
         merge(&artifact, &policy),
         Err(MetadataError::Invalid(_))

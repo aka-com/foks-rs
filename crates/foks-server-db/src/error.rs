@@ -36,6 +36,8 @@ pub enum Error {
     StaleRoot,
     #[error("KV object conflicts with authoritative state")]
     KvConflict,
+    #[error("KV mutation is not permitted by the stored object role")]
+    KvPermission,
     #[error("KV lock is held by another token")]
     KvLocked,
     #[error("KV lock was already released or timed out")]

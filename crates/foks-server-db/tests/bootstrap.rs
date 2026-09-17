@@ -68,7 +68,11 @@ fn example() -> HostBootstrap {
             })
             .collect(),
         root_hash: [3; 32],
-        root_node: [0; 32],
+        root_node: foks_merkle_store::hash_node(&foks_merkle_store::Node::Leaf {
+            key: [0; 32],
+            value: [0; 32],
+        })
+        .unwrap(),
         root_epoch: 1,
         exact_root: b"root".to_vec(),
         exact_signed_root: b"signed-root".to_vec(),

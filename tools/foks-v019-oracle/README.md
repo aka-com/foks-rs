@@ -153,7 +153,9 @@ twice to require byte-identical output. The generator opens the team eldest,
 addition, removal, and creator membership through the official server-shared
 validators, then checks
 their team, host, owner, roles, PTK/box counts, and hidden-location bindings
-against the RPC argument before setting `server_semantics_verified`.
+against the RPC argument. The manifest records hashes and generator identity;
+it deliberately carries no self-asserted verification booleans. A manifest is
+only written after all of those checks succeed.
 
 This exercises canonical signed bytes, arguments, RPC framing, and the
 stateless validation used by `CreateTeamAdHoc`, including v0.1.9's retained

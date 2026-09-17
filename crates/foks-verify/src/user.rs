@@ -569,6 +569,27 @@ pub fn verify_user_chain(
         expected_host,
         authenticated_roots,
         latest.root(),
+        false,
+    )
+}
+
+/// Verifies a non-self user-chain response, for which go-foks deliberately
+/// omits device-name openings. If the server supplies openings anyway, they
+/// are still required to match every authenticated commitment exactly.
+pub fn verify_non_self_user_chain(
+    chain_bytes: &[u8],
+    expected_uid: &EntityId,
+    expected_host: &EntityId,
+    authenticated_roots: &AuthenticatedMerkleRoots,
+    latest: &VerifiedMerkleAdvance,
+) -> Result<VerifiedUserState> {
+    verify_user_chain_at_root(
+        chain_bytes,
+        expected_uid,
+        expected_host,
+        authenticated_roots,
+        latest.root(),
+        true,
     )
 }
 
@@ -578,6 +599,7 @@ fn verify_user_chain_at_root(
     expected_host: &EntityId,
     authenticated_roots: &AuthenticatedMerkleRoots,
     expected_root: &foks_proto::MerkleRoot,
+    allow_omitted_device_names: bool,
 ) -> Result<VerifiedUserState> {
     let chain = UserChain::decode(chain_bytes)?;
     if chain.links.is_empty() || chain.locations.len() != chain.links.len() {
@@ -586,14 +608,20 @@ fn verify_user_chain_at_root(
     let root_bytes = chain.merkle.encoded_root()?;
     let authenticated_chain_bytes = authenticated_user_chain_bytes(&chain.links)?;
     let root_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &root_bytes)?;
-    if chain.merkle.root() != expected_root
+    if chain.merkle.root().epoch < expected_root.epoch
+        || (chain.merkle.root().epoch == expected_root.epoch
+            && chain.merkle.root() != expected_root)
         || authenticated_roots.get(&chain.merkle.root().epoch) != Some(&root_hash)
     {
         return Err(Error::UntrustedUserRoot);
     }
 
-    let (username, username_utf8, username_sequence) =
-        verify_user_disclosures(&chain, expected_uid, expected_host)?;
+    let (username, username_utf8, username_sequence) = verify_user_disclosures(
+        &chain,
+        expected_uid,
+        expected_host,
+        allow_omitted_device_names,
+    )?;
     let path_offset =
         usize::try_from(chain.num_username_links).map_err(|_| Error::UserMerkleProof)?;
     // The username-link offset and link count are attacker-controlled fields of
@@ -603,6 +631,11 @@ fn verify_user_chain_at_root(
         .checked_add(chain.links.len())
         .filter(|end| *end <= chain.merkle.paths().len())
         .ok_or(Error::UserMerkleProof)?;
+    let chain_paths = chain
+        .merkle
+        .paths()
+        .get(path_offset..path_end)
+        .ok_or(Error::UserMerkleProof)?;
 
     let mut replay_state = None;
     let mut previous_hash = None;
@@ -611,7 +644,7 @@ fn verify_user_chain_at_root(
         .links
         .iter()
         .zip(&chain.locations)
-        .zip(&chain.merkle.paths()[path_offset..path_end])
+        .zip(chain_paths)
         .enumerate()
     {
         let sequence = u64::try_from(index)
@@ -772,6 +805,28 @@ pub fn verify_user_chain_increment(
         expected_host,
         authenticated_roots,
         latest.root(),
+        false,
+    )
+}
+
+/// Verifies an incremental non-self user-chain response with Go's omitted
+/// device-name openings while retaining exact verification when present.
+pub fn verify_non_self_user_chain_increment(
+    chain_bytes: &[u8],
+    prior: &VerifiedUserState,
+    expected_uid: &EntityId,
+    expected_host: &EntityId,
+    authenticated_roots: &AuthenticatedMerkleRoots,
+    latest: &VerifiedMerkleAdvance,
+) -> Result<VerifiedUserState> {
+    verify_user_chain_increment_at_root(
+        chain_bytes,
+        prior,
+        expected_uid,
+        expected_host,
+        authenticated_roots,
+        latest.root(),
+        true,
     )
 }
 
@@ -782,6 +837,7 @@ fn verify_user_chain_increment_at_root(
     expected_host: &EntityId,
     authenticated_roots: &AuthenticatedMerkleRoots,
     expected_root: &foks_proto::MerkleRoot,
+    allow_omitted_device_names: bool,
 ) -> Result<VerifiedUserState> {
     if prior.uid != *expected_uid || prior.host != *expected_host {
         return Err(Error::UserChainContinuity);
@@ -794,15 +850,30 @@ fn verify_user_chain_increment_at_root(
     }
     let root_bytes = chain.merkle.encoded_root()?;
     let root_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &root_bytes)?;
-    if chain.merkle.root() != expected_root
+    if chain.merkle.root().epoch < expected_root.epoch
+        || (chain.merkle.root().epoch == expected_root.epoch
+            && chain.merkle.root() != expected_root)
         || authenticated_roots.get(&chain.merkle.root().epoch) != Some(&root_hash)
     {
         return Err(Error::UntrustedUserRoot);
     }
-    let (username, username_utf8, username_sequence) =
-        verify_incremental_user_disclosures(&chain, prior, expected_uid, expected_host)?;
+    let (username, username_utf8, username_sequence) = verify_incremental_user_disclosures(
+        &chain,
+        prior,
+        expected_uid,
+        expected_host,
+        allow_omitted_device_names,
+    )?;
     let path_offset =
         usize::try_from(chain.num_username_links).map_err(|_| Error::UserMerkleProof)?;
+    let path_end = path_offset
+        .checked_add(chain.links.len())
+        .ok_or(Error::UserMerkleProof)?;
+    let chain_paths = chain
+        .merkle
+        .paths()
+        .get(path_offset..path_end)
+        .ok_or(Error::UserMerkleProof)?;
     let mut replay_state = UserReplayState::from_verified(
         &prior.devices,
         &prior.shared_keys,
@@ -819,7 +890,7 @@ fn verify_user_chain_increment_at_root(
         .links
         .iter()
         .zip(chain.locations.windows(2))
-        .zip(&chain.merkle.paths()[path_offset..path_offset + chain.links.len()])
+        .zip(chain_paths)
         .enumerate()
     {
         let sequence = start_sequence
@@ -933,6 +1004,7 @@ pub fn restore_verified_user(
         } else {
             first_chain.merkle.root()
         },
+        true,
     )?;
     for (index, segment) in segments.enumerate() {
         let chain = UserChain::decode(&segment)?;
@@ -948,6 +1020,7 @@ pub fn restore_verified_user(
             } else {
                 chain.merkle.root()
             },
+            true,
         )?;
     }
     let reproduced = verified.hard_state_snapshot()?;
@@ -1050,6 +1123,7 @@ fn verify_incremental_user_disclosures(
     prior: &VerifiedUserState,
     expected_uid: &EntityId,
     expected_host: &EntityId,
+    allow_omitted_device_names: bool,
 ) -> Result<(Vec<u8>, Vec<u8>, u64)> {
     let mut username_commitments = Vec::new();
     let mut device_name_commitments = Vec::new();
@@ -1063,7 +1137,8 @@ fn verify_incremental_user_disclosures(
         }
     }
     if username_commitments.len() != chain.usernames.len()
-        || device_name_commitments.len() != chain.device_names.len()
+        || (device_name_commitments.len() != chain.device_names.len()
+            && !(allow_omitted_device_names && chain.device_names.is_empty()))
     {
         return Err(Error::UserDisclosure);
     }
@@ -1126,7 +1201,12 @@ fn verify_incremental_user_disclosures(
     if path_count != expected_count || path_count == 0 {
         return Err(Error::UserDisclosure);
     }
-    for (index, path) in chain.merkle.paths()[..path_count].iter().enumerate() {
+    let name_paths = chain
+        .merkle
+        .paths()
+        .get(..path_count)
+        .ok_or(Error::UserDisclosure)?;
+    for (index, path) in name_paths.iter().enumerate() {
         let sequence = name_start
             .checked_add(u64::try_from(index).map_err(|_| Error::UserDisclosure)?)
             .ok_or(Error::UserDisclosure)?;
@@ -1151,6 +1231,7 @@ fn verify_user_disclosures(
     chain: &UserChain,
     expected_uid: &EntityId,
     expected_host: &EntityId,
+    allow_omitted_device_names: bool,
 ) -> Result<(Vec<u8>, Vec<u8>, u64)> {
     let mut username_commitments = Vec::new();
     let mut device_name_commitments = Vec::new();
@@ -1164,7 +1245,8 @@ fn verify_user_disclosures(
         }
     }
     if username_commitments.len() != chain.usernames.len()
-        || device_name_commitments.len() != chain.device_names.len()
+        || (device_name_commitments.len() != chain.device_names.len()
+            && !(allow_omitted_device_names && chain.device_names.is_empty()))
         || chain.usernames.is_empty()
     {
         return Err(Error::UserDisclosure);
@@ -1209,7 +1291,12 @@ fn verify_user_disclosures(
     if path_count < 2 || last_sequence.checked_add(1) != Some(chain.num_username_links) {
         return Err(Error::UserDisclosure);
     }
-    for (index, path) in chain.merkle.paths()[..path_count].iter().enumerate() {
+    let name_paths = chain
+        .merkle
+        .paths()
+        .get(..path_count)
+        .ok_or(Error::UserDisclosure)?;
+    for (index, path) in name_paths.iter().enumerate() {
         let sequence = u64::try_from(index)
             .ok()
             .and_then(|index| index.checked_add(1))

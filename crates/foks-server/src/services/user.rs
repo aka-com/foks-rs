@@ -22,25 +22,25 @@ pub(crate) fn resolve_username(
     argument: &[u8],
     principal: Option<&Principal>,
 ) -> Result<Vec<u8>, RpcStatus> {
-    if let Some(principal) = principal {
-        authorize(database, principal)?;
-    }
     let request = foks_rpc::arguments::decode_resolve_username(argument).map_err(bad_arguments)?;
     if foks_verify::normalize_username(&request.name).as_deref() != Some(request.name.as_slice()) {
         return Err(bad_arguments("username is not normalized"));
+    }
+    let principal = principal.ok_or_else(permission_denied)?;
+    authorize(database, principal)?;
+    match request.authorization {
+        // The Go server requires a local_view_permissions grant for
+        // AsLocalUser. This server does not implement that grant route yet,
+        // so only the advertised open-viewership form is authorized.
+        foks_rpc::arguments::ResolveUsernameAuthorization::OpenHost
+            if crate::services::registration::USER_VIEWERSHIP
+                == foks_proto::ViewershipMode::Open => {}
+        _ => return Err(permission_denied()),
     }
     let uid = database
         .uid_by_normalized_name(&request.name)
         .map_err(|_| RpcStatus::TransactionRetry)?
         .ok_or_else(permission_denied)?;
-    match request.authorization {
-        // `AsLocalUser` proves the caller is an active local account; it is
-        // not a self-only selector. Team administration resolves another
-        // local username before that user has a team-view capability.
-        foks_rpc::arguments::ResolveUsernameAuthorization::LocalUser if principal.is_some() => {}
-        foks_rpc::arguments::ResolveUsernameAuthorization::OpenHost => {}
-        _ => return Err(permission_denied()),
-    }
     EntityId::from_bytes(uid.clone())
         .and_then(|entity| entity.require_type(foks_proto::ENTITY_USER))
         .map_err(|_| RpcStatus::TransactionRetry)?;
@@ -333,7 +333,7 @@ pub(crate) fn host_config(
         meter_users: false,
         meter_vhosts: false,
         meter_per_vhost_disk: false,
-        user_viewership: foks_proto::ViewershipMode::Open,
+        user_viewership: crate::services::registration::USER_VIEWERSHIP,
         team_viewership: foks_proto::ViewershipMode::Open,
         host_type: 4,
         invite_code_regime,
@@ -353,7 +353,8 @@ pub(crate) fn load_user_chain(
         foks_rpc::arguments::decode_load_user_chain_argument(argument).map_err(bad_arguments)?;
     authorize(database, principal)?;
     authorize_user_chain_load(database, host, &request, principal, now)?;
-    render_user_chain(database, host, &request)
+    let disclose_device_names = request.uid.as_bytes() == principal.uid();
+    render_user_chain(database, host, &request, disclose_device_names)
 }
 
 fn authorize_user_chain_load(
@@ -427,6 +428,7 @@ pub(crate) fn render_user_chain(
     database: &foks_server_db::ReadSnapshot<'_>,
     host: &EntityId,
     request: &foks_rpc::arguments::LoadUserChainArgument,
+    disclose_device_names: bool,
 ) -> Result<Vec<u8>, RpcStatus> {
     let uid = &request.uid;
     let start = request.start;
@@ -545,15 +547,19 @@ pub(crate) fn render_user_chain(
             Ok((device_name_commitment(&name)?, name))
         })
         .collect::<Result<std::collections::BTreeMap<_, _>, RpcStatus>>()?;
-    let device_names = expected_device_names
-        .iter()
-        .map(|commitment| {
-            stored_device_names
-                .get(commitment)
-                .cloned()
-                .ok_or(RpcStatus::TransactionRetry)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let device_names = if disclose_device_names {
+        expected_device_names
+            .iter()
+            .map(|commitment| {
+                stored_device_names
+                    .get(commitment)
+                    .cloned()
+                    .ok_or(RpcStatus::TransactionRetry)
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
     let hepks = chain
         .exact_shared_hepks
         .iter()

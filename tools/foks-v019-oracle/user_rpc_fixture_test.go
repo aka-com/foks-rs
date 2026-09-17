@@ -144,6 +144,11 @@ func TestCheckedUserRPCFixtures(t *testing.T) {
 	if len(chain.Links) == 0 {
 		t.Fatal("checked team chain is empty")
 	}
+	teamLoadResponse, err := rpcResponseFrame(rem.TeamLoaderProtocolID, 3, 0, chain.Export())
+	if err != nil {
+		t.Fatalf("encode bare team-load response: %v", err)
+	}
+	checkRPCFixture(t, "team-load-response.frame", teamLoadResponse)
 	change, _, err := core.OpenGroupChange(&chain.Links[0])
 	if err != nil {
 		t.Fatalf("open checked team eldest: %v", err)
@@ -268,6 +273,30 @@ func TestCheckedUserRPCFixtures(t *testing.T) {
 	if !bytes.Equal(frame, want) {
 		t.Fatal("checked current-root request does not use the generated v0.1.9 argument wrapper")
 	}
+	currentRootResponse, err := rpcResponseFrame(
+		rem.MerkleQueryProtocolID,
+		2,
+		1,
+		checkedPaths.Root.Export(),
+	)
+	if err != nil {
+		t.Fatalf("encode current-root response: %v", err)
+	}
+	checkRPCFixture(t, "merkle-current-root-response.frame", currentRootResponse)
+	omittedHistoricalFrame, err := rpcRequestFrameAt(
+		rem.MerkleQueryProtocolID,
+		1,
+		(&rem.GetHistoricalRootsArg{
+			HostID: nil,
+			Full:   []proto.MerkleEpno{996},
+			Hashes: []proto.MerkleEpno{997, 996, 994, 992},
+		}).Export(),
+		1,
+	)
+	if err != nil {
+		t.Fatalf("encode omitted-host historical-roots request: %v", err)
+	}
+	checkRPCFixture(t, "merkle-historical-roots-omitted-host-request.frame", omittedHistoricalFrame)
 
 	var uid proto.UID
 	uidBytes, err := os.ReadFile(filepath.Join(checkedUserFixtureDirectory, "uid.snowp"))

@@ -1,8 +1,8 @@
-use foks_proto::KvPathVersionVector;
+use foks_proto::{KvPathVersionVector, TeamChain};
 use foks_rpc::{
-    encode_bare_void_success_response_at, encode_status_response_at,
-    encode_void_success_response_at, read_bare_void_response, read_void_response, RpcStatus,
-    DEFAULT_MAX_FRAME_LENGTH,
+    encode_bare_success_response_at, encode_bare_void_success_response_at,
+    encode_status_response_at, encode_void_success_response_at, read_bare_response,
+    read_bare_void_response, read_void_response, RpcStatus, DEFAULT_MAX_FRAME_LENGTH,
 };
 
 fn fixture(path: &str) -> Vec<u8> {
@@ -73,6 +73,20 @@ fn headerless_void_success_matches_the_official_go_frame() {
 }
 
 #[test]
+fn headerless_nonvoid_success_matches_the_generated_go_client_envelope() {
+    let chain = fixture("team-chain.snowp");
+    let expected = fixture("team-load-response.frame");
+    assert_eq!(
+        encode_bare_success_response_at(&chain, 0).unwrap(),
+        expected
+    );
+    let decoded =
+        read_bare_response(&mut expected.as_slice(), DEFAULT_MAX_FRAME_LENGTH, 0).unwrap();
+    assert_eq!(decoded, chain);
+    TeamChain::decode(&decoded).unwrap();
+}
+
+#[test]
 fn every_typed_status_is_observed_as_an_application_error() {
     let versions = KvPathVersionVector::decode(&fixture("kv-path-version-vector.snowp")).unwrap();
     let statuses = [
@@ -82,7 +96,9 @@ fn every_typed_status_is_observed_as_an_application_error() {
         RpcStatus::Locked,
         RpcStatus::MerkleLeafNotFound,
         RpcStatus::MerkleNoRoot,
+        RpcStatus::MerkleVerify("proof verification failed".into()),
         RpcStatus::KvNoEnt,
+        RpcStatus::KvRace("raced".into()),
         RpcStatus::KvPermission {
             operation: 0,
             resource: 0,

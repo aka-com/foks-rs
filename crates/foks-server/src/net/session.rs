@@ -41,7 +41,6 @@ pub(crate) struct ServerData {
     metrics: Arc<crate::ServerMetrics>,
     rate_limiter: Arc<crate::rate_limit::RateLimiter>,
     execution: Arc<Semaphore>,
-    kex_execution: Arc<Semaphore>,
     request_memory: Arc<Semaphore>,
     kex_relay: Arc<kex::Relay>,
 }
@@ -134,7 +133,6 @@ impl ServerData {
             metrics: Arc::clone(&config.metrics),
             rate_limiter,
             execution: Arc::new(Semaphore::new(config.limits.maximum_in_flight_requests)),
-            kex_execution: Arc::new(Semaphore::new(kex::MAXIMUM_WAITERS)),
             request_memory: Arc::new(Semaphore::new(config.limits.maximum_request_memory_bytes)),
             kex_relay: Arc::new(kex::Relay::default()),
         })
@@ -288,7 +286,7 @@ impl ServerData {
             let root = MerkleRoot {
                 epoch: root_epoch,
                 time: now / 1_000,
-                back_pointers: foks_merkle_store::back_pointer_hash(&back_pointers)?,
+                back_pointers: foks_merkle_store::back_pointer_hash(root_epoch, &back_pointers)?,
                 root_node: merkle_commit.root,
                 hostchain: hostchain_tail,
                 extensions: Vec::new(),
@@ -431,6 +429,7 @@ impl ServerData {
                     .as_ref()
                     .map(|passphrase| passphrase.as_database(now)),
                 user_settings,
+                cited_root_epoch: cited_root.epoch,
                 expected_root_epoch: authoritative_root.epoch,
                 expected_root_hash: &authoritative_root.root_hash,
                 merkle_commit: &merkle_commit,
@@ -460,7 +459,8 @@ impl ServerData {
                 Err(bad_arguments("user mutation retry binding failed"))
             }
             Err(crate::Error::WriterQueue) => Err(RpcStatus::RateLimited),
-            Err(_) => Err(bad_arguments("user mutation validation failed")),
+            Err(error) => Err(crate::error::merkle_mint_status(&error)
+                .unwrap_or_else(|| bad_arguments("user mutation validation failed"))),
         }
     }
 
@@ -487,8 +487,13 @@ impl ServerData {
             .clock
             .now_micros()
             .map_err(|_| RpcStatus::TransactionRetry)?;
-        let expires_at = now
-            .checked_add(RESERVATION_LIFETIME_MICROSECONDS)
+        // The reservation is replayed over the Go `lib.Time` wire type, whose
+        // millisecond precision must round-trip exactly into the database.
+        let expires_at_millis = (now / 1_000)
+            .checked_add(RESERVATION_LIFETIME_MICROSECONDS / 1_000)
+            .ok_or(RpcStatus::TransactionRetry)?;
+        let expires_at = expires_at_millis
+            .checked_mul(1_000)
             .ok_or(RpcStatus::TransactionRetry)?;
         let writer = self.writer.as_ref().ok_or(RpcStatus::Unsupported)?;
         let result = writer.call_with_current_time(
@@ -502,7 +507,7 @@ impl ServerData {
             Ok(()) => UsernameReservation {
                 token,
                 sequence: 1,
-                expires_at,
+                expires_at: expires_at_millis,
             }
             .encoded()
             .map_err(|_| RpcStatus::TransactionRetry),
@@ -570,6 +575,12 @@ impl ServerData {
         let clock = Arc::clone(&self.clock);
         let hostchain_tail = self.hostchain_tail.clone();
         let reservation = request.reservation;
+        // lib.Time is milliseconds on the Go wire, while the database stores
+        // reservation deadlines in microseconds alongside its clock values.
+        let reservation_expires_at = reservation
+            .expires_at
+            .checked_mul(1_000)
+            .ok_or_else(|| bad_arguments("reservation expiry overflows server clock units"))?;
         let result = writer.call(move |database| {
             let now = clock.now_micros()?;
             let receipt_expires_at = now
@@ -617,7 +628,7 @@ impl ServerData {
             let root = MerkleRoot {
                 epoch: root_epoch,
                 time: now / 1_000,
-                back_pointers: foks_merkle_store::back_pointer_hash(&back_pointers)?,
+                back_pointers: foks_merkle_store::back_pointer_hash(root_epoch, &back_pointers)?,
                 root_node: merkle_commit.root,
                 hostchain: hostchain_tail,
                 extensions: Vec::new(),
@@ -639,7 +650,7 @@ impl ServerData {
                 normalized_name: &validated.normalized_name,
                 reservation_token: &reservation.token,
                 reservation_sequence: reservation.sequence,
-                reservation_expires_at: reservation.expires_at,
+                reservation_expires_at,
                 username_utf8: &validated.username_utf8,
                 username_commitment_key: &validated.username_commitment_key,
                 uid: validated.uid.as_bytes(),
@@ -707,7 +718,9 @@ impl ServerData {
                 foks_server_db::Error::Reservation | foks_server_db::Error::ReceiptConflict,
             )) => Err(bad_arguments("signup reservation or retry binding failed")),
             Err(crate::Error::WriterQueue) => Err(RpcStatus::RateLimited),
-            Err(_) => Err(RpcStatus::TransactionRetry),
+            Err(error) => {
+                Err(crate::error::merkle_mint_status(&error).unwrap_or(RpcStatus::TransactionRetry))
+            }
         }
     }
 
@@ -875,17 +888,7 @@ impl ServerData {
     }
 
     fn historical_roots(&self, argument: &[u8]) -> std::result::Result<Vec<u8>, RpcStatus> {
-        let Value::Array(fields) = decode(argument).map_err(bad_arguments)? else {
-            return Err(bad_arguments("historical roots argument is not a struct"));
-        };
-        let [host, full_epochs, hash_epochs] = fields.as_slice() else {
-            return Err(bad_arguments(
-                "historical roots argument has the wrong shape",
-            ));
-        };
-        self.validate_host_value(host)?;
-        let full_epochs = decode_epochs(full_epochs)?;
-        let hash_epochs = decode_epochs(hash_epochs)?;
+        let (full_epochs, hash_epochs) = decode_historical_roots_argument(argument, &self.host_id)?;
         if self.read_database.is_none() {
             return Err(RpcStatus::Unsupported);
         }
@@ -924,7 +927,7 @@ impl ServerData {
             .map_err(|_| RpcStatus::TransactionRetry)?;
         let root = select_merkle_lookup_root(&snapshot, argument.signed, argument.root)?;
         let path = foks_merkle_store::proof(&snapshot.node_reader(), root.root_node, argument.key)
-            .map_err(|_| RpcStatus::TransactionRetry)?;
+            .map_err(map_merkle_proof_error)?;
         MerkleLookupResponse {
             root: validated_root(&root)?,
             path,
@@ -947,7 +950,7 @@ impl ServerData {
             .into_iter()
             .map(|key| {
                 foks_merkle_store::proof(&reader, root.root_node, key)
-                    .map_err(|_| RpcStatus::TransactionRetry)
+                    .map_err(map_merkle_proof_error)
             })
             .collect::<std::result::Result<Vec<_>, _>>()?;
         MerkleMultiLookupResponse {
@@ -1004,10 +1007,6 @@ impl ServerData {
         argument: &[u8],
     ) -> std::result::Result<(), RpcStatus> {
         validate_host_argument_against(argument, &self.host_id, true)
-    }
-
-    fn validate_host_value(&self, host: &Value) -> std::result::Result<(), RpcStatus> {
-        validate_host_value_against(host, &self.host_id)
     }
 
     fn validate_optional_host(
@@ -1079,6 +1078,16 @@ fn select_merkle_lookup_root(
     Ok(root)
 }
 
+fn map_merkle_proof_error(error: foks_merkle_store::Error) -> RpcStatus {
+    match error {
+        // Storage access can be transient. Every other proof failure means
+        // that the selected authenticated root cannot be traversed as a
+        // valid content-addressed tree and is the Go MERKLE_VERIFY_ERROR.
+        foks_merkle_store::Error::Storage(_) => RpcStatus::TransactionRetry,
+        _ => RpcStatus::MerkleVerify("Merkle proof verification failed".to_owned()),
+    }
+}
+
 fn validate_host_argument_against(
     argument: &[u8],
     expected_host: &[u8],
@@ -1110,6 +1119,32 @@ fn validate_host_value_against(
         return Err(RpcStatus::NotFound("host not found".to_owned()));
     }
     Ok(())
+}
+
+fn validate_optional_host_value_against(
+    host: &Value,
+    expected_host: &[u8],
+) -> std::result::Result<(), RpcStatus> {
+    if matches!(host, Value::Null) {
+        return Ok(());
+    }
+    validate_host_value_against(host, expected_host)
+}
+
+fn decode_historical_roots_argument(
+    argument: &[u8],
+    expected_host: &[u8],
+) -> std::result::Result<(Vec<u64>, Vec<u64>), RpcStatus> {
+    let Value::Array(fields) = decode(argument).map_err(bad_arguments)? else {
+        return Err(bad_arguments("historical roots argument is not a struct"));
+    };
+    let [host, full_epochs, hash_epochs] = fields.as_slice() else {
+        return Err(bad_arguments(
+            "historical roots argument has the wrong shape",
+        ));
+    };
+    validate_optional_host_value_against(host, expected_host)?;
+    Ok((decode_epochs(full_epochs)?, decode_epochs(hash_epochs)?))
 }
 
 fn validated_root(
@@ -1322,100 +1357,144 @@ pub(crate) async fn serve(
             &routed,
             Ok(call) if call.route.id == crate::rpc::RouteId::KexReceive
         );
-        let execution = if kex_receive {
-            Arc::clone(&service_data.kex_execution)
-        } else {
-            Arc::clone(&service_data.execution)
-        };
-        let request_timeout = if kex_receive {
-            kex::MAX_BLOCKING_WAIT.saturating_add(std::time::Duration::from_secs(5))
-        } else {
-            limits.request_timeout
-        };
-        let outcome = match execute_bounded(
-            execution,
-            request_timeout,
-            &mut stop,
-            move || -> Result<RequestOutcome> {
-                // A timed-out blocking handler can still own decoded request
-                // memory, so keep its reservation in the same closure.
-                let _request_memory = request_memory;
-                let _handler_timer = crate::ServerMetrics::handler_timer(Arc::clone(&data.metrics));
-                let principal = if listener == Listener::Authenticated {
-                    let certificate = CertificateDer::from(certificate.ok_or(
-                        crate::Error::Config("authenticated TLS session has no client certificate"),
-                    )?);
-                    let now = data.clock.now_micros()?;
-                    let database = match data.read_database() {
-                        Ok(database) => database,
-                        Err(status) => {
-                            return Ok(RequestOutcome {
-                                response: encode_status_response_at(&status, sequence)?,
-                                route: None,
-                                disconnect_before_response: false,
-                            });
-                        }
-                    };
-                    Some(Principal::authenticate(&certificate, &database, now)?)
-                } else {
-                    None
-                };
-                let mut route = None;
-                let response = match routed {
-                    Ok(call) => {
-                        let protocol = call.route.protocol;
-                        let method = call.route.method;
-                        route = Some(call.route);
-                        if data.should_disconnect(
-                            crate::SessionFaultPoint::BeforeDurableMutation,
-                            protocol,
-                            method,
-                        ) {
-                            return Ok(RequestOutcome {
-                                response: Vec::new(),
-                                route,
-                                disconnect_before_response: true,
-                            });
-                        }
-                        match handlers::response(data.as_ref(), call, principal.as_ref()) {
+        let outcome = if kex_receive {
+            // Go-compatible KEX receives can remain open for up to an hour.
+            // Await the relay directly rather than occupying a blocking worker;
+            // the listener's active-connection semaphore remains the bound.
+            let _request_memory = request_memory;
+            let _handler_timer =
+                crate::ServerMetrics::handler_timer(Arc::clone(&service_data.metrics));
+            let call = match routed {
+                Ok(call) => call,
+                Err(_) => unreachable!("KEX receive was recognized above"),
+            };
+            let route = Some(call.route);
+            if service_data.should_disconnect(
+                crate::SessionFaultPoint::BeforeDurableMutation,
+                call.route.protocol,
+                call.route.method,
+            ) {
+                RequestOutcome {
+                    response: Vec::new(),
+                    route,
+                    disconnect_before_response: true,
+                }
+            } else {
+                let response = tokio::select! {
+                    result = handlers::kex_receive_response(service_data.as_ref(), call) => {
+                        match result {
                             Ok(response) => response,
                             Err(status) => encode_status_response_at(&status, sequence)?,
                         }
                     }
-                    Err(RouteError::RequestTooLarge { .. }) => encode_status_response_at(
-                        &RpcStatus::BadArguments("request exceeds the method limit".to_owned()),
-                        sequence,
-                    )?,
-                    Err(RouteError::Unknown { .. } | RouteError::WrongListener) => {
-                        encode_status_response_at(&RpcStatus::Unsupported, sequence)?
+                    // Snowpack is request/response serial. Readability while
+                    // this response is pending is therefore either a client
+                    // cancellation/control frame or socket shutdown. Closing
+                    // promptly drops the relay future and active-connection
+                    // permit instead of retaining an abandoned Go long poll.
+                    result = stream.get_ref().0.readable() => {
+                        let _ = result;
+                        return Ok(());
+                    }
+                    result = stop.changed() => {
+                        let _ = result;
+                        break;
                     }
                 };
-                Ok(RequestOutcome {
+                RequestOutcome {
                     response,
                     route,
                     disconnect_before_response: false,
-                })
-            },
-        )
-        .await?
-        {
-            BoundedExecution::Completed(outcome) => outcome?,
-            BoundedExecution::Saturated => {
-                service_data.metrics.request_rate_limited();
-                let response = encode_status_response_at(&RpcStatus::RateLimited, sequence)?;
-                write_response(&mut stream, &response, limits.io_timeout).await?;
-                service_data.metrics.response_completed();
-                return Ok(());
+                }
             }
-            BoundedExecution::TimedOut => {
-                // A durable mutation may still be reconciling in the bounded
-                // blocking pool. Close without a protocol response so clients
-                // preserve the operation's ambiguous outcome semantics.
-                return Err(crate::Error::Io(timeout_error(
-                    "request execution timed out",
-                )));
+        } else {
+            match execute_bounded(
+                Arc::clone(&service_data.execution),
+                limits.request_timeout,
+                &mut stop,
+                move || -> Result<RequestOutcome> {
+                    // A timed-out blocking handler can still own decoded request
+                    // memory, so keep its reservation in the same closure.
+                    let _request_memory = request_memory;
+                    let _handler_timer =
+                        crate::ServerMetrics::handler_timer(Arc::clone(&data.metrics));
+                    let principal = if listener == Listener::Authenticated {
+                        let certificate =
+                            CertificateDer::from(certificate.ok_or(crate::Error::Config(
+                                "authenticated TLS session has no client certificate",
+                            ))?);
+                        let now = data.clock.now_micros()?;
+                        let database = match data.read_database() {
+                            Ok(database) => database,
+                            Err(status) => {
+                                return Ok(RequestOutcome {
+                                    response: encode_status_response_at(&status, sequence)?,
+                                    route: None,
+                                    disconnect_before_response: false,
+                                });
+                            }
+                        };
+                        Some(Principal::authenticate(&certificate, &database, now)?)
+                    } else {
+                        None
+                    };
+                    let mut route = None;
+                    let response = match routed {
+                        Ok(call) => {
+                            let protocol = call.route.protocol;
+                            let method = call.route.method;
+                            route = Some(call.route);
+                            if data.should_disconnect(
+                                crate::SessionFaultPoint::BeforeDurableMutation,
+                                protocol,
+                                method,
+                            ) {
+                                return Ok(RequestOutcome {
+                                    response: Vec::new(),
+                                    route,
+                                    disconnect_before_response: true,
+                                });
+                            }
+                            match handlers::response(data.as_ref(), call, principal.as_ref()) {
+                                Ok(response) => response,
+                                Err(status) => encode_status_response_at(&status, sequence)?,
+                            }
+                        }
+                        Err(RouteError::RequestTooLarge { .. }) => encode_status_response_at(
+                            &RpcStatus::BadArguments("request exceeds the method limit".to_owned()),
+                            sequence,
+                        )?,
+                        Err(RouteError::Unknown { .. } | RouteError::WrongListener) => {
+                            encode_status_response_at(&RpcStatus::Unsupported, sequence)?
+                        }
+                    };
+                    Ok(RequestOutcome {
+                        response,
+                        route,
+                        disconnect_before_response: false,
+                    })
+                },
+            )
+            .await?
+            {
+                BoundedExecution::Completed(outcome) => outcome?,
+                BoundedExecution::Saturated => {
+                    service_data.metrics.request_rate_limited();
+                    let response = encode_status_response_at(&RpcStatus::RateLimited, sequence)?;
+                    write_response(&mut stream, &response, limits.io_timeout).await?;
+                    service_data.metrics.response_completed();
+                    return Ok(());
+                }
+                BoundedExecution::TimedOut => {
+                    // A durable mutation may still be reconciling in the bounded
+                    // blocking pool. Close without a protocol response so clients
+                    // preserve the operation's ambiguous outcome semantics.
+                    return Err(crate::Error::Io(timeout_error(
+                        "request execution timed out",
+                    )));
+                }
+                BoundedExecution::Stopped => break,
             }
-            BoundedExecution::Stopped => break,
         };
         if outcome.disconnect_before_response {
             return Ok(());
@@ -1654,6 +1733,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn merkle_integrity_failures_are_not_laundered_as_retries() {
+        assert_eq!(
+            map_merkle_proof_error(foks_merkle_store::Error::HashMismatch),
+            RpcStatus::MerkleVerify("Merkle proof verification failed".to_owned())
+        );
+        assert_eq!(
+            map_merkle_proof_error(foks_merkle_store::Error::MissingNode([0x41; 32])),
+            RpcStatus::MerkleVerify("Merkle proof verification failed".to_owned())
+        );
+        assert_eq!(
+            map_merkle_proof_error(foks_merkle_store::Error::EmptyTree),
+            RpcStatus::MerkleVerify("Merkle proof verification failed".to_owned())
+        );
+        assert_eq!(
+            map_merkle_proof_error(foks_merkle_store::Error::Storage("busy".to_owned())),
+            RpcStatus::TransactionRetry
+        );
+    }
+
+    #[test]
     fn only_an_exact_historical_user_head_is_a_retryable_race() {
         let uid = EntityId::from_bytes(
             std::iter::once(foks_proto::ENTITY_USER)
@@ -1726,7 +1825,7 @@ mod tests {
     }
 
     #[test]
-    fn current_root_host_may_be_omitted_but_vhost_selection_remains_strict() {
+    fn merkle_query_hosts_may_be_omitted_but_vhost_selection_remains_strict() {
         let mut host = vec![0x41; 33];
         host[0] = foks_proto::ENTITY_HOST;
         let omitted = foks_snowpack::encode(&Value::Array(vec![Value::Null])).unwrap();
@@ -1735,13 +1834,34 @@ mod tests {
         let mut other_host = host.clone();
         other_host[1] ^= 1;
         let mismatched =
-            foks_snowpack::encode(&Value::Array(vec![Value::Binary(other_host)])).unwrap();
+            foks_snowpack::encode(&Value::Array(vec![Value::Binary(other_host.clone())])).unwrap();
 
         validate_host_argument_against(&omitted, &host, true).unwrap();
         validate_host_argument_against(&explicit, &host, true).unwrap();
         validate_host_argument_against(&explicit, &host, false).unwrap();
+        validate_optional_host_value_against(&Value::Null, &host).unwrap();
+        validate_optional_host_value_against(&Value::Binary(host.clone()), &host).unwrap();
+        let omitted_historical = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+                "../foks-snowpack/tests/fixtures/foks-v0.1.9/user/merkle-historical-roots-omitted-host-request.frame",
+            ),
+        )
+        .unwrap();
+        let call = foks_rpc::read_call(
+            &mut std::io::Cursor::new(omitted_historical),
+            foks_rpc::DEFAULT_MAX_FRAME_LENGTH,
+        )
+        .unwrap();
+        assert_eq!(
+            decode_historical_roots_argument(call.argument(), &host).unwrap(),
+            (vec![996], vec![997, 996, 994, 992])
+        );
         assert!(matches!(
             validate_host_argument_against(&mismatched, &host, true),
+            Err(RpcStatus::NotFound(_))
+        ));
+        assert!(matches!(
+            validate_optional_host_value_against(&Value::Binary(other_host), &host),
             Err(RpcStatus::NotFound(_))
         ));
         assert!(matches!(

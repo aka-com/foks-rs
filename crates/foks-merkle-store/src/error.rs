@@ -20,6 +20,10 @@ pub enum Error {
     EmptyTree,
     #[error("Merkle tree exceeds the 256-bit key depth")]
     Depth,
+    #[error(
+        "cannot mint FOKS v0.1.9 Merkle epoch {epoch}: its {pointer_count}-entry back-pointer array is rejected by go-foks canonical signable validation"
+    )]
+    GoV019EpochCliff { epoch: u64, pointer_count: usize },
     #[error("node storage failed: {0}")]
     Storage(String),
 }

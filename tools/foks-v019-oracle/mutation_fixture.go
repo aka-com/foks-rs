@@ -1198,21 +1198,21 @@ func writeMutationFixtures(output, userDir string) error {
 	sort.Slice(w.files, func(i, j int) bool { return w.files[i].File < w.files[j].File })
 	sort.Slice(w.rpcFiles, func(i, j int) bool { return w.rpcFiles[i].File < w.rpcFiles[j].File })
 	manifest := struct {
-		Format                  string    `json:"format"`
-		FOKSVersion             string    `json:"foks_version"`
-		Generator               string    `json:"generator"`
-		OfficialBuilt           bool      `json:"official_built"`
-		ServerSemanticsVerified bool      `json:"server_semantics_verified"`
-		Files                   []fixture `json:"files"`
-		RawFiles                []fixture `json:"raw_files"`
+		Format            string    `json:"format"`
+		FOKSVersion       string    `json:"foks_version"`
+		Generator         string    `json:"generator"`
+		GoModuleGenerated bool      `json:"go_module_generated"`
+		ServerObserved    bool      `json:"server_observed"`
+		Files             []fixture `json:"files"`
+		RawFiles          []fixture `json:"raw_files"`
 	}{
-		Format:                  "foks-v0.1.9-user-mutation-fixtures-v2",
-		FOKSVersion:             "v0.1.9",
-		Generator:               "sha256-counter-v1",
-		OfficialBuilt:           true,
-		ServerSemanticsVerified: true,
-		Files:                   w.files,
-		RawFiles:                w.rpcFiles,
+		Format:            "foks-v0.1.9-user-mutation-fixtures-v3",
+		FOKSVersion:       "v0.1.9",
+		Generator:         "sha256-counter-v1",
+		GoModuleGenerated: true,
+		ServerObserved:    false,
+		Files:             w.files,
+		RawFiles:          w.rpcFiles,
 	}
 	encoded, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {

@@ -15,7 +15,7 @@ pub(crate) fn issue_challenge(
     principal: &Principal,
     host: &EntityId,
     reader: &foks_server_db::ReadDatabase,
-    writer: &WriterHandle,
+    _writer: &WriterHandle,
     keys: &dyn HostKeyProvider,
     clock: &Arc<dyn foks_server_db::Clock>,
     entropy: &dyn Entropy,
@@ -41,18 +41,6 @@ pub(crate) fn issue_challenge(
     {
         return Err(permission_denied());
     }
-    let (source_role, source_visibility) = team::role_parts(request.source_role);
-    let authority = reader
-        .team_view_authority(
-            request.team.as_bytes(),
-            request.member.as_bytes(),
-            request.member_host.as_bytes(),
-            source_role,
-            source_visibility,
-            request.generation,
-        )
-        .map_err(|_| RpcStatus::TransactionRetry)?
-        .ok_or_else(permission_denied)?;
     let key = crate::keys::load_capability_generation(
         keys,
         reader
@@ -63,16 +51,13 @@ pub(crate) fn issue_challenge(
     let now = clock
         .now_micros()
         .map_err(|_| RpcStatus::TransactionRetry)?;
-    let expires_at = now
-        .checked_add(VIEW_LIFETIME_MICROSECONDS)
-        .ok_or(RpcStatus::TransactionRetry)?;
     let mut token = [0; 16];
     entropy
         .fill(&mut token)
         .map_err(|_| RpcStatus::TransactionRetry)?;
     let mut challenge = TeamViewChallenge {
         request,
-        time: now,
+        time: now / 1_000,
         token,
         key_id: key.generation().as_bytes(),
         mac: [0; 32],
@@ -85,26 +70,7 @@ pub(crate) fn issue_challenge(
         foks_proto::TEAM_VIEW_CHALLENGE_TYPE_ID,
         &payload,
     );
-    let exact = challenge
-        .encoded()
-        .map_err(|_| RpcStatus::TransactionRetry)?;
-    let challenge_hash = team::challenge_hash(&exact);
-    let token_hash = team::token_hash(&token);
-    let key_generation = key.generation().as_bytes();
-    writer
-        .call_with_current_time(Arc::clone(clock), move |database, current_time| {
-            database.issue_team_view_challenge(
-                &challenge_hash,
-                &token_hash,
-                &authority,
-                &key_generation,
-                expires_at,
-                current_time,
-            )?;
-            Ok(())
-        })
-        .map_err(map_write_error)?;
-    Ok(exact)
+    challenge.encoded().map_err(|_| RpcStatus::TransactionRetry)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -133,10 +99,12 @@ pub(crate) fn activate(
     let observed_now = clock
         .now_micros()
         .map_err(|_| RpcStatus::TransactionRetry)?;
+    let observed_now_millis = observed_now / 1_000;
     if challenge
         .time
-        .checked_add(VIEW_LIFETIME_MICROSECONDS)
-        .is_none_or(|expires_at| expires_at <= observed_now)
+        .checked_add(VIEW_LIFETIME_MICROSECONDS / 1_000)
+        .is_none_or(|expires_at| expires_at <= observed_now_millis)
+        || challenge.time > observed_now_millis
     {
         return Err(RpcStatus::Expired);
     }
@@ -162,7 +130,7 @@ pub(crate) fn activate(
         )
         .map_err(|_| RpcStatus::TransactionRetry)?
         .ok_or_else(permission_denied)?;
-    let verify_key = EntityId::from_bytes(authority.source_verify_key)
+    let verify_key = EntityId::from_bytes(authority.source_verify_key.clone())
         .map_err(|_| RpcStatus::TransactionRetry)?;
     let exact_challenge = challenge.encoded().map_err(bad_arguments)?;
     foks_crypto::verify_typed(
@@ -173,11 +141,26 @@ pub(crate) fn activate(
     )
     .map_err(|_| permission_denied())?;
     let challenge_hash = team::challenge_hash(&exact_challenge);
+    let token_hash = team::token_hash(&challenge.token);
+    let key_generation = challenge.key_id;
+    let expires_at = challenge
+        .time
+        .checked_mul(1_000)
+        .and_then(|time| time.checked_add(VIEW_LIFETIME_MICROSECONDS))
+        .ok_or(RpcStatus::Expired)?;
     const ACTIVATION_TYPE_ID: u64 = 0x6d10_7e4c_464f_4b53;
     let activation_hash = foks_crypto::prefixed_hash(ACTIVATION_TYPE_ID, argument);
     let activated = writer
         .call_with_current_time(Arc::clone(clock), move |database, now| {
-            Ok(database.activate_team_view_challenge(&challenge_hash, &activation_hash, now)?)
+            Ok(database.activate_stateless_team_view_challenge(
+                &challenge_hash,
+                &activation_hash,
+                &token_hash,
+                &authority,
+                &key_generation,
+                expires_at,
+                now,
+            )?)
         })
         .map_err(map_write_error)?
         .ok_or(RpcStatus::Expired)?;

@@ -13,6 +13,7 @@ pub struct MaintenanceReport {
     pub receipts: u64,
     pub locks: u64,
     pub uploads: u64,
+    pub log_sends: u64,
     pub federation_user_permissions: u64,
     pub federation_team_permissions: u64,
 }
@@ -87,6 +88,10 @@ impl Database {
                )",
             params![sql_integer(abandon_uploads_before)?],
         )?;
+        let log_sends = transaction.execute(
+            "DELETE FROM log_sends WHERE created_at <= ?1",
+            [sql_integer(now.saturating_sub(24 * 60 * 60 * 1_000_000))?],
+        )?;
         // Active federation rows are renewable capability envelopes even
         // after bearer expiry; revoked rows are retained as non-resurrection
         // tombstones. Neither class is ordinary expiry garbage.
@@ -104,6 +109,7 @@ impl Database {
             receipts: u64::try_from(receipts).map_err(|_| Error::IntegerRange)?,
             locks: u64::try_from(locks).map_err(|_| Error::IntegerRange)?,
             uploads: u64::try_from(uploads).map_err(|_| Error::IntegerRange)?,
+            log_sends: u64::try_from(log_sends).map_err(|_| Error::IntegerRange)?,
             federation_user_permissions: u64::try_from(federation_user_permissions)
                 .map_err(|_| Error::IntegerRange)?,
             federation_team_permissions: u64::try_from(federation_team_permissions)

@@ -836,6 +836,12 @@ impl FoksClient {
                         &parcel,
                         &owner.seed,
                     )?;
+                    self.trust_passphrase_parcel_if_safe(
+                        current_host,
+                        &credential.uid,
+                        &authenticated,
+                        &parcel,
+                    )?;
                     self.require_trusted_passphrase_parcel(current_host, &credential.uid, &parcel)?;
                     require_next_passphrase_generation(&argument, predecessor)?;
                 }
@@ -847,6 +853,12 @@ impl FoksClient {
                             "passphrase parcel changed while preparing its update",
                         ));
                     }
+                    self.trust_passphrase_parcel_if_safe(
+                        current_host,
+                        &credential.uid,
+                        &authenticated,
+                        &parcel,
+                    )?;
                     self.require_trusted_passphrase_parcel(current_host, &credential.uid, &parcel)?;
                     require_next_passphrase_generation(&argument, predecessor)?;
                 }
@@ -912,6 +924,12 @@ impl FoksClient {
                         &parcel,
                         &owner.seed,
                     )?;
+                    self.trust_passphrase_parcel_if_safe(
+                        current_host,
+                        &credential.uid,
+                        &authenticated,
+                        &parcel,
+                    )?;
                     self.require_trusted_passphrase_parcel(current_host, &credential.uid, &parcel)?;
                     require_next_passphrase_generation(&argument, predecessor)?;
                 }
@@ -923,6 +941,12 @@ impl FoksClient {
                             "passphrase parcel changed while preparing its update",
                         ));
                     }
+                    self.trust_passphrase_parcel_if_safe(
+                        current_host,
+                        &credential.uid,
+                        &authenticated,
+                        &parcel,
+                    )?;
                     self.require_trusted_passphrase_parcel(current_host, &credential.uid, &parcel)?;
                     require_next_passphrase_generation(&argument, predecessor)?;
                 }
@@ -993,13 +1017,12 @@ impl FoksClient {
         authenticated: &crate::AuthenticatedUserOutcome,
         parcel: &PpeParcel,
     ) -> Result<bool> {
-        if authenticated
-            .verified
-            .stale_shared_key_roles()
-            .contains(&foks_proto::Role::OWNER)
-        {
-            return Ok(false);
-        }
+        // A stale role means a revoked credential might still know this PUK;
+        // it does not make the authenticated PPE parcel untrustworthy. The
+        // exact parcel is bound to the signed settings chain below and must
+        // open under the currently published owner PUK. Allowing that proof
+        // to refresh the local pin is what lets another owner rotate the stale
+        // PUK instead of deadlocking on the pin it is trying to establish.
         let Ok(owner) = current_owner_puk(authenticated) else {
             return Ok(false);
         };

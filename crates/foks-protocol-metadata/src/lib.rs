@@ -312,13 +312,6 @@ pub fn merge<'a>(artifact: &'a Artifact, policy: &'a Policy) -> Result<Merged<'a
         if !upstream_protocols.contains_key(protocol.upstream.as_str()) {
             return invalid(format!("unknown upstream protocol {}", protocol.upstream));
         }
-        let upstream_protocol = upstream_protocols[protocol.upstream.as_str()];
-        if upstream_protocol.argument_header != upstream_protocol.result_header {
-            return invalid(format!(
-                "protocol {} uses asymmetric argument/result headers",
-                protocol.upstream
-            ));
-        }
         validate_constant(&protocol.id_constant)?;
         if !constants.insert(protocol.id_constant.as_str()) {
             return invalid(format!("duplicate Rust constant {}", protocol.id_constant));
@@ -447,6 +440,7 @@ pub fn merge<'a>(artifact: &'a Artifact, policy: &'a Policy) -> Result<Merged<'a
                 route.protocol, route.method
             ));
         }
+        validate_route_result(&route.result)?;
         for status in &route.statuses {
             if !status_codes.contains_key(status.as_str()) {
                 return invalid(format!(
@@ -511,6 +505,71 @@ fn validate_listener(value: &str) -> Result<(), MetadataError> {
     }
 }
 
+fn validate_route_result(value: &str) -> Result<(), MetadataError> {
+    if matches!(
+        value,
+        "ActivatedTeamView"
+            | "CertificateChain"
+            | "DeviceNagInfo"
+            | "GenericChain"
+            | "HistoricalMerkleRoots"
+            | "HostConfig"
+            | "HybridBox"
+            | "KexWrapperMessage"
+            | "KvDirectory"
+            | "KvEncryptedChunk"
+            | "KvGetResponse"
+            | "KvList"
+            | "KvLock"
+            | "KvNode"
+            | "KvPathVersionVector"
+            | "KvRoot"
+            | "KvUsage"
+            | "LocalTeamList"
+            | "LogSendID"
+            | "LookupUserResult"
+            | "MerkleExistsResponse"
+            | "MerklePathCompressed"
+            | "MerklePathsCompressed"
+            | "MerkleRoot"
+            | "PassphraseGeneration"
+            | "PassphraseLoginResult"
+            | "PassphraseSalt"
+            | "PermissionToken"
+            | "PpeParcel"
+            | "ProbeResponse"
+            | "RegServerConfig"
+            | "RegistrationChallenge"
+            | "ServerClientVersionInfo"
+            | "SharedKeyParcel"
+            | "SignedBlob"
+            | "StretchVersion"
+            | "TcpAddress"
+            | "TeamBearerToken"
+            | "TeamChain"
+            | "TeamConfig"
+            | "TeamEditResult"
+            | "TeamNameReservation"
+            | "TeamRemoteViewTokenSet"
+            | "TeamRemovalAndKeyBox"
+            | "TeamRemovalKeyBox"
+            | "TeamViewChallenge"
+            | "TreeRoot"
+            | "UID"
+            | "Unsupported"
+            | "UserChain"
+            | "UsernameReservation"
+            | "Void"
+            | "WaitListID"
+            | "YubiEncryptedManagementKey"
+            | "YubiEncryptedManagementKeyList"
+    ) {
+        Ok(())
+    } else {
+        invalid(format!("unknown local route result {value}"))
+    }
+}
+
 fn invalid<T>(message: impl Into<String>) -> Result<T, MetadataError> {
     Err(MetadataError::Invalid(message.into()))
 }
@@ -547,16 +606,46 @@ pub fn render_protocol_ids(merged: &Merged<'_>) -> String {
         output.pop();
     }
 
-    output.push_str(
-        "\n/// Reports whether go-foks sends this protocol without argument/result headers.\n",
+    render_headerless_predicate(
+        &mut output,
+        "is_headerless_argument_protocol",
+        "argument",
+        merged
+            .artifact
+            .protocols
+            .iter()
+            .filter(|protocol| !protocol.argument_header),
     );
-    output.push_str("pub const fn is_headerless_protocol(protocol_id: u64) -> bool {\n");
-    let headerless = merged
-        .artifact
-        .protocols
-        .iter()
-        .filter(|protocol| !protocol.argument_header && !protocol.result_header)
-        .collect::<Vec<_>>();
+    render_headerless_predicate(
+        &mut output,
+        "is_headerless_result_protocol",
+        "result",
+        merged
+            .artifact
+            .protocols
+            .iter()
+            .filter(|protocol| !protocol.result_header),
+    );
+    output
+}
+
+fn render_headerless_predicate<'a>(
+    output: &mut String,
+    function: &str,
+    direction: &str,
+    protocols: impl Iterator<Item = &'a Protocol>,
+) {
+    writeln!(
+        output,
+        "\n/// Reports whether go-foks sends this protocol without its {direction} header."
+    )
+    .expect("write String");
+    writeln!(
+        output,
+        "pub const fn {function}(protocol_id: u64) -> bool {{"
+    )
+    .expect("write String");
+    let headerless = protocols.collect::<Vec<_>>();
     if headerless.is_empty() {
         output.push_str("    let _ = protocol_id;\n    false\n");
     } else {
@@ -570,7 +659,6 @@ pub fn render_protocol_ids(merged: &Merged<'_>) -> String {
         output.push_str("\n    )\n");
     }
     output.push_str("}\n");
-    output
 }
 
 pub fn render_status_codes(merged: &Merged<'_>) -> String {

@@ -41,15 +41,20 @@ pub(crate) fn reserve_name(
         .filter(|normalized| normalized == &name)
         .ok_or_else(|| bad_arguments("team name is not normalized"))?;
     let now = clock.now_micros().map_err(internal)?;
-    let expires_at = now
-        .checked_add(RESERVATION_LIFETIME_MICROSECONDS)
+    // Store a millisecond-aligned value so the Go `lib.Time` response can be
+    // replayed losslessly during named-team creation.
+    let expires_at_millis = (now / 1_000)
+        .checked_add(RESERVATION_LIFETIME_MICROSECONDS / 1_000)
+        .ok_or_else(|| internal("team-name expiry overflow"))?;
+    let expires_at = expires_at_millis
+        .checked_mul(1_000)
         .ok_or_else(|| internal("team-name expiry overflow"))?;
     let mut token = [0_u8; 17];
     entropy.fill(&mut token).map_err(internal)?;
     let reservation = UsernameReservation {
         token,
         sequence: 1,
-        expires_at,
+        expires_at: expires_at_millis,
     };
     writer
         .call_with_current_time(Arc::clone(clock), move |database, current_time| {
@@ -434,7 +439,7 @@ pub(crate) fn create(
             let root = MerkleRoot {
                 epoch: root_epoch,
                 time: now / 1_000,
-                back_pointers: foks_merkle_store::back_pointer_hash(&back_pointers)?,
+                back_pointers: foks_merkle_store::back_pointer_hash(root_epoch, &back_pointers)?,
                 root_node: merkle_commit.root,
                 hostchain: hostchain_tail,
                 extensions: Vec::new(),
@@ -768,7 +773,7 @@ pub(crate) fn edit(
             let next_root = MerkleRoot {
                 epoch: root_epoch,
                 time: now / 1_000,
-                back_pointers: foks_merkle_store::back_pointer_hash(&back_pointers)?,
+                back_pointers: foks_merkle_store::back_pointer_hash(root_epoch, &back_pointers)?,
                 root_node: merkle_commit.root,
                 hostchain: hostchain_tail,
                 extensions: Vec::new(),
@@ -894,10 +899,31 @@ pub(crate) fn edit(
                     }
                 })
                 .collect::<Vec<_>>();
-            let removal_proofs = command
+            // A member tuple can be removed and later re-added with a new
+            // removal key. Snapshot the box proven by this removal so an old
+            // proof never starts resolving through the re-added member's box.
+            let exact_removal_proof_boxes = command
                 .removal_proofs
                 .iter()
                 .map(|proof| {
+                    let (source_role_type, source_visibility) =
+                        crate::auth::team::role_parts(proof.source_role);
+                    database
+                        .team_removal_box(
+                            command.team.as_bytes(),
+                            &proof.member_id,
+                            &proof.member_host_id,
+                            source_role_type,
+                            source_visibility,
+                        )?
+                        .ok_or(crate::Error::Signup("team removal box is absent"))
+                })
+                .collect::<crate::Result<Vec<_>>>()?;
+            let removal_proofs = command
+                .removal_proofs
+                .iter()
+                .zip(&exact_removal_proof_boxes)
+                .map(|(proof, exact_box)| {
                     let (source_role_type, source_visibility) =
                         crate::auth::team::role_parts(proof.source_role);
                     foks_server_db::TeamRemovalProofMutation {
@@ -906,6 +932,7 @@ pub(crate) fn edit(
                         member_host_id: &proof.member_host_id,
                         source_role_type,
                         source_visibility,
+                        exact_box,
                         exact_removal: &proof.exact,
                     }
                 })
@@ -1257,6 +1284,9 @@ mod tests {
 }
 
 fn map_edit_error(error: crate::Error) -> RpcStatus {
+    if let Some(status) = crate::error::merkle_mint_status(&error) {
+        return status;
+    }
     match error {
         crate::Error::WriterQueue => RpcStatus::RateLimited,
         crate::Error::Database(foks_server_db::Error::StaleRoot) => {
@@ -1299,6 +1329,9 @@ fn require_cited_root(
 }
 
 fn map_create_error(error: crate::Error) -> RpcStatus {
+    if let Some(status) = crate::error::merkle_mint_status(&error) {
+        return status;
+    }
     match error {
         crate::Error::WriterQueue => RpcStatus::RateLimited,
         crate::Error::Database(foks_server_db::Error::NameInUse) => RpcStatus::NameInUse,
@@ -1315,6 +1348,9 @@ fn map_create_error(error: crate::Error) -> RpcStatus {
 }
 
 fn map_write_error(error: crate::Error) -> RpcStatus {
+    if let Some(status) = crate::error::merkle_mint_status(&error) {
+        return status;
+    }
     match error {
         crate::Error::WriterQueue => RpcStatus::RateLimited,
         crate::Error::Database(foks_server_db::Error::NameInUse) => RpcStatus::NameInUse,
@@ -1342,20 +1378,13 @@ fn team_edit_transport_requires_bearer(principal: &[u8], signer_owner: &EntityId
 fn team_edit_bearer_scope_allowed(
     authority_team: &[u8],
     target_team: &EntityId,
-    signer_owner: &EntityId,
-    stale_nested_handoff: bool,
+    _signer_owner: &EntityId,
+    _stale_nested_handoff: bool,
 ) -> bool {
-    let nested = matches!(
-        signer_owner.entity_type(),
-        foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
-    );
-    if nested && stale_nested_handoff {
-        authority_team == signer_owner.as_bytes()
-    } else if nested {
-        authority_team == signer_owner.as_bytes() || authority_team == target_team.as_bytes()
-    } else {
-        authority_team == target_team.as_bytes()
-    }
+    // Go scopes TeamAdmin bearer tokens to the team being edited, including
+    // edits signed by a nested member team's PTK. The actor identity remains
+    // independently bound by the signed roster key and authenticated holder.
+    authority_team == target_team.as_bytes()
 }
 
 fn validate_team_edit_bearer(
@@ -1559,7 +1588,7 @@ mod stale_handoff_tests {
         ));
 
         let parent = entity(foks_proto::ENTITY_NAMED_TEAM, 0x44);
-        assert!(team_edit_bearer_scope_allowed(
+        assert!(!team_edit_bearer_scope_allowed(
             nested_team.as_bytes(),
             &parent,
             &nested_team,
@@ -1571,13 +1600,13 @@ mod stale_handoff_tests {
             &nested_team,
             false,
         ));
-        assert!(!team_edit_bearer_scope_allowed(
+        assert!(team_edit_bearer_scope_allowed(
             parent.as_bytes(),
             &parent,
             &nested_team,
             true,
         ));
-        assert!(team_edit_bearer_scope_allowed(
+        assert!(!team_edit_bearer_scope_allowed(
             nested_team.as_bytes(),
             &parent,
             &nested_team,

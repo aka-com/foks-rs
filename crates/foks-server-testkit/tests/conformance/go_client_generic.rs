@@ -110,6 +110,19 @@ pub(crate) fn generic_membership_chains_and_trusted_team_lists_work() {
             .len(),
         2
     );
+    let incremental = fixture
+        .client
+        .foks()
+        .load_generic_chain(
+            fixture.host(),
+            &account.credential,
+            CHAIN_TYPE_TEAM_MEMBERSHIP,
+            2,
+        )
+        .unwrap();
+    assert_eq!(incremental.links.len(), 1);
+    assert_eq!(incremental.locations.len(), 2);
+    assert_eq!(incremental.locations[0], first.locations[0]);
 
     let named = fixture
         .client

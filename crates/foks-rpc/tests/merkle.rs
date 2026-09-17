@@ -1,7 +1,10 @@
-use foks_proto::{EntityId, MerkleExistsResponse, MerkleLookupResponse, MerkleMultiLookupResponse};
+use foks_proto::{
+    EntityId, MerkleExistsResponse, MerkleLookupResponse, MerkleMultiLookupResponse, MerkleRoot,
+};
 use foks_rpc::{
     encode_get_current_merkle_root_hash_request, encode_merkle_check_key_exists_request,
-    encode_merkle_lookup_request, encode_merkle_multi_lookup_request,
+    encode_merkle_lookup_request, encode_merkle_multi_lookup_request, read_response,
+    DEFAULT_MAX_FRAME_LENGTH,
 };
 use foks_snowpack::Value;
 
@@ -55,6 +58,15 @@ fn requests_match_the_official_generated_go_stubs() {
 
 #[test]
 fn responses_match_official_go_positional_shapes() {
+    let current_root = read_response(
+        &mut std::io::Cursor::new(user_fixture("merkle-current-root-response.frame")),
+        DEFAULT_MAX_FRAME_LENGTH,
+        1,
+    )
+    .unwrap();
+    assert_eq!(current_root, user_fixture("merkle-root-998.snowp"));
+    MerkleRoot::decode(&current_root).unwrap();
+
     let lookup = user_fixture("merkle-lookup-response.snowp");
     assert_eq!(
         MerkleLookupResponse::decode(&lookup)

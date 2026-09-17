@@ -1,5 +1,5 @@
 {
-  "format": "foks-v0.1.9-user-fixtures-v1",
+  "format": "foks-v0.1.9-user-fixtures-v2",
   "foks_version": "v0.1.9",
   "generated_at": "2026-08-23T20:36:24Z",
   "host_id": ".2odx9o0uGZpOZRvH2CyD1qRmhZUR7FCGRZZo0uTYNc2X",
@@ -9,7 +9,6 @@
   "user_merkle_key": "a4307a355bfb2162a3bf768407eb6ebee2f3d5c2906da3830f9e289c6f80a503",
   "user_link_hash": "nK0qO6yIbdZgggyNxgYmTpIrp6paqdbBeUpyYmcBdsa",
   "puk_generation": 2,
-  "official_unboxed": true,
   "files": [
     {
       "file": "device-id.snowp",
@@ -165,6 +164,11 @@
       "file": "team-chain.snowp",
       "bytes": 12156,
       "sha256": "2c4ca6e262ec65c3ccbb3a803ded8d3a590f1f76ef034611f4a350cf7e3b0708"
+    },
+    {
+      "file": "team-create-response.frame",
+      "bytes": 6,
+      "sha256": "2050f55aecb89ecf3d3b399c6a1d3a17eb68c1602bf30796081d18ec31fa1fb8"
     },
     {
       "file": "team-eldest-link.snowp",
@@ -379,6 +383,11 @@
       "sha256": "8652a1897ad4d6465ac3cd92a42c0278d2286b71ee39ef68eaa8e222d315a8f4"
     },
     {
+      "file": "merkle-current-root-response.frame",
+      "bytes": 155,
+      "sha256": "112e396c0bef5ab0d75405a80aba7958d98ea61c5dec63b0112be6ba24f9b555"
+    },
+    {
       "file": "merkle-check-key-request.frame",
       "bytes": 107,
       "sha256": "4ec610daee2baacc7d44d2701bff66f941d5b5dc2f670ebf64a1c7696a623120"
@@ -392,6 +401,11 @@
       "file": "merkle-historical-roots-request.frame",
       "bytes": 90,
       "sha256": "d92a06d1bd6bedc21f33557d598222316b33a8d7a262e496ee830fb138c0ea23"
+    },
+    {
+      "file": "merkle-historical-roots-omitted-host-request.frame",
+      "bytes": 56,
+      "sha256": "19707104fcde921d4c99c27ac6bd56e17e092ea60e2d6d8cdfd647153552e271"
     },
     {
       "file": "merkle-leaf-not-found-response.frame",
@@ -497,6 +511,11 @@
       "file": "team-load-request.frame",
       "bytes": 110,
       "sha256": "04dd6fd1b62955b76a535591ab1cf4bfceff2183084a46f8cd85f6033f4d8582"
+    },
+    {
+      "file": "team-load-response.frame",
+      "bytes": 12163,
+      "sha256": "e57125bb773e5f2055ccdc952050ce2645a4763d40785ada322f2f8933c17eff"
     },
     {
       "file": "team-load-local-parent-request.frame",

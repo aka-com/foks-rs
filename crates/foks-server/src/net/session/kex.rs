@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::sync::{Condvar, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use foks_proto::{
@@ -11,7 +11,6 @@ const MAX_MESSAGES: usize = 4096;
 const MAX_RELAY_BYTES: usize = 32 * 1024 * 1024;
 const MESSAGE_LIFETIME: Duration = Duration::from_secs(2 * 60 * 60);
 pub(super) const MAX_BLOCKING_WAIT: Duration = Duration::from_secs(60 * 60);
-pub(super) const MAXIMUM_WAITERS: usize = 16;
 
 struct Queued {
     inserted: Instant,
@@ -28,7 +27,7 @@ struct State {
 #[derive(Default)]
 pub(super) struct Relay {
     state: Mutex<State>,
-    changed: Condvar,
+    changed: tokio::sync::Notify,
 }
 
 impl Relay {
@@ -44,22 +43,23 @@ impl Relay {
                 && queued.message.sequence == argument.message.sequence
                 && queued.message.sender == argument.message.sender
         }) {
-            // The authenticated `(session, sender, seqno)` slot is immutable
-            // to receivers. Treat retransmission as success so a lost send
-            // response does not wedge the pairing.
+            // Go's insert is conflict-idempotent for this authenticated slot.
+            // In particular, replaying the same semantic packet normally has
+            // different randomized box bytes, so retain the first packet and
+            // report success for every retransmission.
             return Ok(());
         }
         let encoded_bytes = argument.message.encoded().map_err(bad_arguments)?.len();
-        while state.messages.len() == MAX_MESSAGES
+        if state.messages.len() == MAX_MESSAGES
             || state
                 .encoded_bytes
                 .checked_add(encoded_bytes)
                 .is_none_or(|total| total > MAX_RELAY_BYTES)
         {
-            let Some(evicted) = state.messages.pop_front() else {
-                return Err(RpcStatus::RateLimited);
-            };
-            state.encoded_bytes = state.encoded_bytes.saturating_sub(evicted.encoded_bytes);
+            // Never reclaim a live pairing packet to admit an anonymous one.
+            // Expired packets were removed above; capacity pressure rejects
+            // the new send just as an ordinary bounded store would.
+            return Err(RpcStatus::RateLimited);
         }
         state.encoded_bytes += encoded_bytes;
         state.messages.push_back(Queued {
@@ -67,31 +67,36 @@ impl Relay {
             encoded_bytes,
             message: argument.message,
         });
-        self.changed.notify_all();
+        self.changed.notify_waiters();
         Ok(())
     }
 
-    pub(super) fn receive(&self, encoded: &[u8]) -> Result<KexWrapperMessage, RpcStatus> {
+    pub(super) async fn receive(&self, encoded: &[u8]) -> Result<KexWrapperMessage, RpcStatus> {
         let argument = KexReceiveArgument::decode(encoded).map_err(bad_arguments)?;
         require_device(&argument.receiver)?;
         let requested_wait = Duration::from_millis(argument.poll_wait_milliseconds);
         let deadline = Instant::now()
             .checked_add(requested_wait.min(MAX_BLOCKING_WAIT))
             .ok_or_else(|| bad_arguments("KEX poll deadline overflows"))?;
-        let mut state = self.state.lock().map_err(|_| RpcStatus::TransactionRetry)?;
         loop {
+            // Register before inspecting the queue so a concurrent send cannot
+            // be lost between the empty check and the asynchronous wait.
+            let changed = self.changed.notified();
             let now = Instant::now();
-            cleanup(&mut state, now);
-            if let Some(message) = state
-                .messages
-                .iter()
-                .find(|queued| {
-                    queued.message.session_id == argument.session_id
-                        && queued.message.sequence == argument.sequence
-                        && queued.message.sender != argument.receiver
-                })
-                .map(|queued| queued.message.clone())
-            {
+            let message = {
+                let mut state = self.state.lock().map_err(|_| RpcStatus::TransactionRetry)?;
+                cleanup(&mut state, now);
+                state
+                    .messages
+                    .iter()
+                    .find(|queued| {
+                        queued.message.session_id == argument.session_id
+                            && queued.message.sequence == argument.sequence
+                            && queued.message.sender != argument.receiver
+                    })
+                    .map(|queued| queued.message.clone())
+            };
+            if let Some(message) = message {
                 return Ok(message);
             }
             if requested_wait.is_zero() {
@@ -101,11 +106,10 @@ impl Relay {
             if remaining.is_zero() {
                 return Err(RpcStatus::TransactionRetry);
             }
-            let (next, _) = self
-                .changed
-                .wait_timeout(state, remaining.min(Duration::from_secs(1)))
-                .map_err(|_| RpcStatus::TransactionRetry)?;
-            state = next;
+            // Go checks the durable queue in five-second slices. Keep the
+            // public long-poll request alive while yielding the Tokio worker,
+            // so abandoned polls cannot strand the bounded blocking pool.
+            let _ = tokio::time::timeout(remaining.min(Duration::from_secs(5)), changed).await;
         }
     }
 }
@@ -171,8 +175,8 @@ mod tests {
         )
     }
 
-    #[test]
-    fn long_poll_wakes_without_consuming_the_packet() {
+    #[tokio::test]
+    async fn long_poll_wakes_without_consuming_the_packet() {
         let relay = Arc::new(Relay::default());
         let (send, receiver) = packet();
         let receive = KexReceiveArgument {
@@ -185,13 +189,13 @@ mod tests {
         let waiting = {
             let relay = Arc::clone(&relay);
             let encoded = receive.encoded().unwrap();
-            std::thread::spawn(move || relay.receive(&encoded).unwrap())
+            tokio::spawn(async move { relay.receive(&encoded).await.unwrap() })
         };
-        std::thread::sleep(Duration::from_millis(25));
+        tokio::time::sleep(Duration::from_millis(25)).await;
         relay.send(&send.encoded().unwrap()).unwrap();
-        assert_eq!(waiting.join().unwrap(), send.message);
+        assert_eq!(waiting.await.unwrap(), send.message);
         assert_eq!(
-            relay.receive(&receive.encoded().unwrap()).unwrap(),
+            relay.receive(&receive.encoded().unwrap()).await.unwrap(),
             send.message
         );
     }
@@ -205,5 +209,48 @@ mod tests {
             relay.send(&send.encoded().unwrap()),
             Err(RpcStatus::BadArguments(_))
         ));
+    }
+
+    #[test]
+    fn conflicting_retransmissions_are_idempotent_and_retain_the_first_packet() {
+        let relay = Relay::default();
+        let (send, _) = packet();
+        relay.send(&send.encoded().unwrap()).unwrap();
+        let mut conflict = send.clone();
+        conflict.message.payload.ciphertext[0] ^= 1;
+        conflict.signature =
+            foks_crypto::sign_kex_wrapper(&SecretSeed::new([0x31; 32]), &conflict.message).unwrap();
+        relay.send(&conflict.encoded().unwrap()).unwrap();
+        assert_eq!(
+            relay.state.lock().unwrap().messages[0].message,
+            send.message
+        );
+    }
+
+    #[test]
+    fn a_full_relay_rejects_new_packets_without_evicting_live_ones() {
+        let relay = Relay::default();
+        let (send, _) = packet();
+        let encoded_bytes = send.message.encoded().unwrap().len();
+        {
+            let mut state = relay.state.lock().unwrap();
+            state.messages = (0..MAX_MESSAGES)
+                .map(|_| Queued {
+                    inserted: Instant::now(),
+                    encoded_bytes,
+                    message: send.message.clone(),
+                })
+                .collect();
+            state.encoded_bytes = encoded_bytes * MAX_MESSAGES;
+        }
+        let mut next = send;
+        next.message.sequence += 1;
+        next.signature =
+            foks_crypto::sign_kex_wrapper(&SecretSeed::new([0x31; 32]), &next.message).unwrap();
+        assert!(matches!(
+            relay.send(&next.encoded().unwrap()),
+            Err(RpcStatus::RateLimited)
+        ));
+        assert_eq!(relay.state.lock().unwrap().messages.len(), MAX_MESSAGES);
     }
 }

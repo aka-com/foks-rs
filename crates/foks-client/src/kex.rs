@@ -16,6 +16,8 @@ use foks_rpc::{
     encode_kex_receive_request, encode_kex_send_request, encode_provision_device_request,
     encode_registration_select_vhost_request,
 };
+use std::time::{Duration, Instant};
+
 use zeroize::Zeroizing;
 
 use crate::{
@@ -24,6 +26,8 @@ use crate::{
 };
 
 const KEX_POLL_MILLISECONDS: u64 = 5 * 60 * 1_000;
+const KEX_SERVER_POLL_SLICE: Duration = Duration::from_secs(5);
+const KEX_TRANSPORT_SLACK: Duration = Duration::from_secs(15);
 
 pub struct KexProvisionOffer {
     secret: KexSecret,
@@ -547,18 +551,50 @@ impl FoksClient {
     ) -> Result<KexMessage> {
         let keys = secret.keys()?;
         let receiver = derive_device_public(seed)?.id;
-        let response = self.call_after_vhost_selection(
-            host,
-            &host.registration,
-            &encode_registration_select_vhost_request(host.host_id())?,
-            &encode_kex_receive_request(&KexReceiveArgument {
+        // Go's server checks its durable relay in five-second slices. Use the
+        // same bounded waits and retry TX_RETRY until the caller's complete
+        // pairing deadline, so a lost connection never leaves one long RPC
+        // occupying server resources for the whole five minutes.
+        let requested_wait = Duration::from_millis(poll_wait_milliseconds);
+        let deadline = Instant::now()
+            .checked_add(requested_wait)
+            .ok_or(Error::Kex("KEX poll deadline overflows"))?;
+        let response = loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let poll_slice = if requested_wait.is_zero() {
+                Duration::ZERO
+            } else {
+                remaining.min(KEX_SERVER_POLL_SLICE)
+            };
+            let mut polling_client = self.clone();
+            polling_client.set_timeout(kex_poll_transport_timeout(poll_slice));
+            let request = encode_kex_receive_request(&KexReceiveArgument {
                 session_id: keys.session_id,
                 receiver: receiver.clone(),
                 sequence,
-                poll_wait_milliseconds,
+                poll_wait_milliseconds: poll_slice.as_millis() as u64,
                 actor,
-            })?,
-        )?;
+            })?;
+            match polling_client.call_after_vhost_selection(
+                host,
+                &host.registration,
+                &encode_registration_select_vhost_request(host.host_id())?,
+                &request,
+            ) {
+                Ok(response) => break response,
+                Err(Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1014, .. }))
+                    if !requested_wait.is_zero() && Instant::now() < deadline =>
+                {
+                    continue;
+                }
+                Err(Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1014, .. }))
+                    if !requested_wait.is_zero() =>
+                {
+                    return Err(Error::DeadlineExceeded);
+                }
+                Err(error) => return Err(error),
+            }
+        };
         let wrapper = KexWrapperMessage::decode(&response)?;
         if wrapper.session_id != keys.session_id
             || wrapper.sequence != sequence
@@ -575,6 +611,10 @@ impl FoksClient {
     }
 }
 
+fn kex_poll_transport_timeout(poll_wait: Duration) -> Duration {
+    poll_wait.saturating_add(KEX_TRANSPORT_SLACK)
+}
+
 fn validate_hello(hello: &KexHelloMessage) -> Result<()> {
     hello
         .entity
@@ -588,4 +628,18 @@ fn validate_hello(hello: &KexHelloMessage) -> Result<()> {
         return Err(Error::Kex("provisionee device label is invalid"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kex_poll_deadline_outlives_the_advertised_wait() {
+        assert_eq!(
+            kex_poll_transport_timeout(KEX_SERVER_POLL_SLICE),
+            KEX_SERVER_POLL_SLICE + KEX_TRANSPORT_SLACK
+        );
+        assert!(kex_poll_transport_timeout(KEX_SERVER_POLL_SLICE) > Duration::from_secs(15));
+    }
 }

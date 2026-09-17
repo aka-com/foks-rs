@@ -130,10 +130,7 @@ CREATE TABLE team_removal_proofs (
     member_host_id BLOB NOT NULL CHECK (length(member_host_id) = 33),
     source_role_type INTEGER NOT NULL CHECK (source_role_type BETWEEN 1 AND 3),
     source_visibility INTEGER NOT NULL,
+    exact_box BLOB NOT NULL,
     exact_removal BLOB NOT NULL,
-    PRIMARY KEY (team_id, commitment),
-    FOREIGN KEY (team_id, member_id, member_host_id, source_role_type, source_visibility)
-        REFERENCES team_removal_boxes(
-            team_id, member_id, member_host_id, source_role_type, source_visibility
-        )
+    PRIMARY KEY (team_id, commitment)
 ) STRICT;

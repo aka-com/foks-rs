@@ -11,13 +11,22 @@ pub(super) fn response(data: &ServerData, call: RoutedCall) -> Result<Vec<u8>, R
             data.kex_relay.send(call.call.argument())?;
             encode_bare_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported)
         }
-        RouteId::KexReceive => {
-            let message = data.kex_relay.receive(call.call.argument())?;
-            encode_bare_success_response_at(&message.encoded().map_err(bad_arguments)?, sequence)
-                .map_err(|_| RpcStatus::Unsupported)
-        }
+        RouteId::KexReceive => Err(RpcStatus::Unsupported),
         _ => Err(RpcStatus::Unsupported),
     }
+}
+
+pub(super) async fn receive_response(
+    data: &ServerData,
+    call: RoutedCall,
+) -> Result<Vec<u8>, RpcStatus> {
+    if call.route.id != RouteId::KexReceive {
+        return Err(RpcStatus::Unsupported);
+    }
+    let sequence = call.call.sequence();
+    let message = data.kex_relay.receive(call.call.argument()).await?;
+    encode_bare_success_response_at(&message.encoded().map_err(bad_arguments)?, sequence)
+        .map_err(|_| RpcStatus::Unsupported)
 }
 
 fn bad_arguments(error: impl std::fmt::Display) -> RpcStatus {

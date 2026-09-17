@@ -292,6 +292,7 @@ impl Database {
         &mut self,
         uid: &[u8],
         precondition: Option<&foks_proto::KvPathVersionVector>,
+        caller_role: foks_proto::Role,
         mutations: &[KvDirentMutation<'_>],
     ) -> Result<()> {
         if uid.len() != 33 || mutations.is_empty() || mutations.len() > 64 {
@@ -369,6 +370,15 @@ impl Database {
             u64::try_from(added_dirents).map_err(|_| Error::IntegerRange)?,
         )?;
         for (mutation, existing) in mutations.iter().zip(existing_heads) {
+            if caller_role < foks_proto::Role::OWNER {
+                if let Some((_, exact)) = existing.as_ref() {
+                    let stored = foks_proto::KvDirent::decode(exact)
+                        .map_err(|_| Error::Invalid("stored KV dirent"))?;
+                    if caller_role < stored.write_role {
+                        return Err(Error::KvPermission);
+                    }
+                }
+            }
             let directory_exists = transaction
                 .query_row(
                     "SELECT 1 FROM kv_directories
@@ -1089,7 +1099,7 @@ fn node_reference_exists(
         2 => Ok(connection
             .query_row(
                 "SELECT 1 FROM kv_file_uploads
-                 WHERE uid = ?1 AND file_id = ?2 AND complete = 1",
+                 WHERE uid = ?1 AND file_id = ?2",
                 params![uid, &node[1..]],
                 |_| Ok(()),
             )
