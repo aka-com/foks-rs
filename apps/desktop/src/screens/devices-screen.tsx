@@ -1,3 +1,4 @@
+import { useDeviceCache } from '../device-cache';
 import { useTabSheetState } from '../navigation-guard';
 /**
  * The Devices tab: one page per account, with no sub-navigation.
@@ -21,7 +22,7 @@ import {
 } from 'react';
 import type { ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
-import { normalizeCommandError } from '../bridge';
+import { enqueueProfileWork, normalizeCommandError } from '../bridge';
 import type {
   AccountDevice,
   BackupEnrollment,
@@ -59,7 +60,6 @@ import {
 import type { Location, NavigateOptions } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { PageHeader } from '../shell/page-header';
-import { AccountSwitcher } from './account-switcher';
 import {
   AddDeviceSheet,
   EnrollSheet,
@@ -153,6 +153,7 @@ export function DevicesScreen({
   // The shell canonicalizes the route on mount; the scene it was entered at
   // is what decides whether a sheet opens with the page.
   const [enteredScene] = useState(scene);
+  const deviceCache = useDeviceCache();
   const toasts = useToast();
   const stores = accountStores(snapshot);
   const requested = location.store;
@@ -185,13 +186,22 @@ export function DevicesScreen({
     null,
   );
   useEffect(() => () => paperResume.conceal(), [paperResume]);
-  const [devices, setDevices] = useState<AccountDevice[]>([]);
-  const [backups, setBackups] = useState<BackupEnrollment[]>([]);
-  const [yubi, setYubi] = useState<YubiEnrollment[]>([]);
+  const initialKeys =
+    selected && !stopped.stopped
+      ? deviceCache?.peek(selected.server, selected.id)
+      : undefined;
+  const [devices, setDevices] = useState<AccountDevice[]>(
+    () => initialKeys?.devices ?? [],
+  );
+  const [backups, setBackups] = useState<BackupEnrollment[]>(
+    () => initialKeys?.backups ?? [],
+  );
+  const [yubi, setYubi] = useState<YubiEnrollment[]>(
+    () => initialKeys?.yubi ?? [],
+  );
   const [cards, setCards] = useState<{ serial: number }[]>([]);
-  // The first paint has read nothing yet, so the page loads until the four
-  // calls answer rather than reporting three zeroes.
-  const [loading, setLoading] = useState(true);
+  // Cached metadata is available on the first paint of a returning tab.
+  const [loading, setLoading] = useState(() => !initialKeys);
   const [pendingYubi, setPendingYubi] = useState<SimpleYubiAction | null>(null);
   const [removing, setRemoving] = useState<AccountDevice | null>(null);
   const [revoking, setRevoking] = useState<BackupEnrollment | null>(null);
@@ -265,22 +275,28 @@ export function DevicesScreen({
     closeSheets();
   }, [closeSheets, selectedId]);
 
-  // Four separate calls with four separate failure modes. They are read
-  // together because the page lists them together, and a catalog the agent
-  // replaced mid-read is recovered once and retried once.
+  // Metadata can outlive this tab. A catalog replaced mid-read is recovered
+  // once and retried once; connected-card presence is read separately below.
   useEffect(() => {
     let alive = true;
-    setDevices([]);
-    setBackups([]);
-    setYubi([]);
-    setCards([]);
+    const cached =
+      selectedId && profile && !accessStopped
+        ? deviceCache?.peek(profile, selectedId)
+        : undefined;
+    setDevices(cached?.devices ?? []);
+    setBackups(cached?.backups ?? []);
+    setYubi(cached?.yubi ?? []);
     if (!selectedId || !profile || accessStopped) {
       setLoading(false);
       return;
     }
-    setLoading(true);
+    setLoading(!cached);
     const load = (): Promise<DeviceLists> =>
-      readAccountAndProfileKeys(bridge, profile, selectedId);
+      deviceCache
+        ? deviceCache.load(profile, selectedId)
+        : readAccountAndProfileKeys(bridge, profile, selectedId, {
+            cards: false,
+          });
     void (async () => {
       try {
         let result: DeviceLists;
@@ -297,13 +313,13 @@ export function DevicesScreen({
           recovered.current.add(selectedId);
           await recoverCatalog();
           if (!alive) return;
+          deviceCache?.clear();
           result = await load();
         }
         if (!alive) return;
         recovered.current.delete(selectedId);
         setDevices(result.devices);
         setBackups(result.backups);
-        setCards(result.cards);
         setYubi(result.yubi);
         setLoading(false);
       } catch (error) {
@@ -316,7 +332,35 @@ export function DevicesScreen({
     return () => {
       alive = false;
     };
-  }, [accessStopped, bridge, onError, profile, recoverCatalog, selectedId]);
+  }, [
+    accessStopped,
+    bridge,
+    deviceCache,
+    onError,
+    profile,
+    recoverCatalog,
+    selectedId,
+  ]);
+
+  // Card presence is live hardware state, never part of the metadata cache.
+  useEffect(() => {
+    let alive = true;
+    setCards([]);
+    if (profile && !accessStopped) {
+      void enqueueProfileWork(bridge, profile, () =>
+        bridge.listYubiCards(profile),
+      )
+        .then((cards) => {
+          if (alive) setCards(cards);
+        })
+        .catch((error: unknown) => {
+          if (alive) onError(error);
+        });
+    }
+    return () => {
+      alive = false;
+    };
+  }, [accessStopped, bridge, deviceCache, onError, profile, selectedId]);
 
   // A `section=` address — the Devices addresses written before the page was
   // one — lands on the section it names.
@@ -408,7 +452,7 @@ export function DevicesScreen({
         ? (complete ?? pending)
           ? undefined
           : 'No enrollment on the connected card'
-        : 'No security key is connected';
+        : 'No security key connected';
     return complete
       ? undefined
       : completed.length > 1
@@ -533,16 +577,6 @@ export function DevicesScreen({
           />
           <div className="body">
             <div className="settings-main">
-              <SectionLabel id="devices-accounts-label">
-                Accounts on this Mac
-              </SectionLabel>
-              <AccountSwitcher
-                snapshot={snapshot}
-                stores={stores}
-                selected={selected}
-                labelledBy="devices-accounts-label"
-                onSwitch={(store) => onNavigate(listAt(store.id))}
-              />
               {stopped.stopped ? (
                 <Band
                   severity="crit"
@@ -729,12 +763,9 @@ export function DevicesScreen({
                       </Button>
                     }
                   >
-                    Use a paper key to recover an existing account on this Mac.
+                    Use a paper key to recover an existing account.
                   </InsetRow>
                 </Inset>
-                <p className="fn">
-                  Only paper keys stored on this Mac are listed.
-                </p>
               </div>
               <div
                 className="settings-section"
@@ -766,7 +797,7 @@ export function DevicesScreen({
                           >
                             Create an account on a YubiKey…
                           </MenuItem>
-                          <hr />
+                          <div className="menu-separator" role="separator" />
                           {RECOVERY_ACTIONS.map((action) => (
                             <MenuItem
                               key={action}
@@ -847,7 +878,7 @@ export function DevicesScreen({
                     <InsetRow label="None">
                       {stopped.stopped
                         ? 'Not listed while access is stopped'
-                        : 'No YubiKeys enrolled.'}
+                        : 'No YubiKey enrolled.'}
                     </InsetRow>
                   )}
                   {cards.length ? (
@@ -900,7 +931,7 @@ export function DevicesScreen({
                     <InsetRow label="Connected now">
                       {stopped.stopped
                         ? 'Not read while access is stopped'
-                        : 'No security key is connected.'}
+                        : 'No security key connected.'}
                     </InsetRow>
                   )}
                   <InsetRow
@@ -925,10 +956,6 @@ export function DevicesScreen({
                     Changed with the other credentials you type.
                   </InsetRow>
                 </Inset>
-                <p className="fn">
-                  Enrollments are listed for {serverName(snapshot, selected)},
-                  across all accounts on that server.
-                </p>
               </div>
             </div>
           </div>

@@ -66,7 +66,7 @@ test('the rail draws the six tabs, the unread badge and the attention dot', () =
   ];
   assert.deepEqual(
     tabs.map((tab) => tab.querySelector('.t')?.textContent),
-    ['Accounts', 'Chat', 'Files', 'Teams', 'Devices', 'Settings'],
+    ['Files', 'Chat', 'Teams', 'Devices', 'Accounts', 'Settings'],
   );
   // The fixture's two open notifications light the dot on the avatar, which is
   // the only place attention is advertised.
@@ -75,8 +75,8 @@ test('the rail draws the six tabs, the unread badge and the attention dot', () =
   assert.equal(dot.getAttribute('aria-label'), '2 things need attention');
   assert.equal(document.querySelector('.rail-tabs .dot'), null);
   // Files is the tab that owns All items, the shell's starting location.
-  assert.equal(tabs[2].getAttribute('aria-current'), 'page');
-  assert.equal(tabs[0].getAttribute('aria-current'), null);
+  assert.equal(tabs[0].getAttribute('aria-current'), 'page');
+  assert.equal(tabs[4].getAttribute('aria-current'), null);
 });
 
 test('the status light reports a connected service at the rail foot', () => {
@@ -166,14 +166,14 @@ test('the Files roots page lists the stores the rail used to enumerate', async (
   await testingLibrary.waitFor(() => {
     assert.equal(document.querySelector('.loc h1')?.textContent, 'Engineering');
   });
-  // The topbar names where the reader is, and its chevron returns to the tab's
+  // The topbar names where the reader is, and the rail chevron returns to the tab's
   // root page.
   assert.equal(
     document.querySelector('.topbar .crumbs')?.textContent,
     'Files›Engineering',
   );
-  const back = document.querySelector<HTMLButtonElement>('.topbar .back');
-  assert.ok(back, 'the topbar carries the back chevron');
+  const back = document.querySelector<HTMLButtonElement>('.side.rail .rail-back');
+  assert.ok(back, 'the expanded rail carries the back chevron');
   assert.equal(back.disabled, false);
   testingLibrary.fireEvent.click(back);
   await testingLibrary.waitFor(() => {
@@ -300,7 +300,7 @@ test('Accounts, Devices and Settings draw no StoreRef', async () => {
     ].join(' ');
 
   for (const [name, settled] of [
-    ['Accounts', 'Accounts on this Mac'],
+    ['Accounts', 'Actions on this account'],
     ['Devices', 'Macs and device keys'],
     ['Settings', 'Danger zone'],
   ] as const) {

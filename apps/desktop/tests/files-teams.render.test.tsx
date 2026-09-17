@@ -229,51 +229,81 @@ test('a Teams row says the server, the roster summary and your role', async () =
   assert.equal(document.body.textContent?.includes('items readable'), false);
 });
 
-test('the Teams page carries one check row per account store', async () => {
+test('Find groups lists accounts under their servers', async () => {
   const rendered = await teams();
-  const personal = row('Personal server');
-  assert.equal(
-    personal.querySelector('.name small')?.textContent,
-    'as satoshi · personal',
-  );
-  const work = row('Acme');
-  assert.equal(
-    work.querySelector('.name small')?.textContent,
-    'as vitalik · work',
-  );
-  // One check and one invite entry for each account, and no repeated
-  // "Needs attention" list: the rows carry each store's state.
-  assert.equal(rendered.getAllByText('Check for groups').length, 2);
-  assert.equal(rendered.getAllByText('Send setup instructions…').length, 2);
-  assert.equal(rendered.queryByText('Needs attention'), null);
+  assert.equal(rendered.queryByRole('menu', { name: 'Find groups' }), null);
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Find groups' }));
+  assert.ok(rendered.getByRole('group', { name: 'Personal server' }));
+  assert.ok(rendered.getByRole('group', { name: 'Acme' }));
+  assert.ok(rendered.getByRole('menuitem', { name: 'Check as satoshi' }));
+  assert.ok(rendered.getByRole('menuitem', { name: 'Check as vitalik' }));
+  assert.equal(rendered.queryByText('Send setup instructions…'), null);
   assert.ok(rendered.getByText('Create a group'));
   assert.ok(rendered.getByText('Join a group…'));
 });
 
-test('checking an account store reports its result on that row', async () => {
+test('Find groups keeps two accounts on one server distinct', async () => {
+  const snapshot = await fixture();
+  const account = snapshot.accounts.find(
+    (account) => account.store === 'acct:work',
+  )!;
+  const store = snapshot.stores.find((store) => store.id === account.store)!;
+  const rendered = await teams(() => {}, {
+    snapshot: {
+      ...snapshot,
+      accounts: [
+        ...snapshot.accounts,
+        { ...account, store: 'acct:other', alias: 'other', username: 'alice' },
+      ],
+      stores: [
+        ...snapshot.stores,
+        { ...store, id: 'acct:other', account: 'other' },
+      ],
+    },
+  });
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Find groups' }));
+  const server = rendered.getByRole('group', { name: 'Acme' });
+  assert.equal(server.querySelectorAll('button').length, 2);
+  assert.ok(server.textContent?.includes('Check as vitalik'));
+  assert.ok(server.textContent?.includes('Check as alice'));
+});
+
+test('Find groups provides an empty state without an account', async () => {
+  const snapshot = await fixture();
+  const rendered = await teams(() => {}, {
+    snapshot: { ...snapshot, accounts: [], stores: [] },
+  });
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Find groups' }));
+  assert.ok(rendered.getByText('Add an account to find its groups.'));
+  assert.equal(rendered.queryByRole('menuitem'), null);
+  ui.fireEvent.pointerDown(document.body);
+  assert.equal(rendered.queryByRole('menu', { name: 'Find groups' }), null);
+});
+
+test('discovery keeps its result in the open menu and across reopening', async () => {
   const rendered = await teams();
-  const work = row('Acme');
-  const status = work.querySelector('[role="status"]');
-  assert.ok(status, 'the live region exists before the result arrives');
-  assert.equal(status.textContent, '');
-  const check = [...work.querySelectorAll('button')].find(
-    (button) => button.textContent === 'Check for groups',
-  );
-  assert.ok(check);
+  const trigger = rendered.getByRole('button', { name: 'Find groups' });
+  ui.fireEvent.click(trigger);
+  const check = rendered.getByRole('menuitem', { name: 'Check as vitalik' });
+  assert.equal(check.querySelector('[role="status"]')?.textContent, '');
   await ui.act(async () => {
     ui.fireEvent.click(check);
   });
   await ui.waitFor(() =>
-    assert.ok(row('Acme').querySelector('.tail .summary')?.textContent),
+    assert.match(
+      check.querySelector('[role="status"]')?.textContent ?? '',
+      /for vitalik/,
+    ),
   );
-  const result = row('Acme').querySelector('.tail .summary')?.textContent;
-  assert.ok(
-    result?.includes('for vitalik'),
-    `the check row reported "${result ?? ''}"`,
+  assert.ok(rendered.getByRole('menu', { name: 'Find groups' }));
+  ui.fireEvent.keyDown(document, { key: 'Escape' });
+  assert.equal(rendered.queryByRole('menu', { name: 'Find groups' }), null);
+  assert.equal(document.activeElement, trigger);
+  ui.fireEvent.click(trigger);
+  assert.match(
+    rendered.getByRole('group', { name: 'Acme' }).textContent ?? '',
+    /for vitalik/,
   );
-  assert.equal(rendered.queryByText('Find groups'), null);
-  // The row is the only report: a toast repeating the same sentence would say
-  // it twice.
   assert.equal(document.querySelector('.toasts')?.textContent ?? '', '');
 });
 
@@ -363,28 +393,21 @@ test('a roster failure gives the Teams row menu its own reasons', async () => {
   assert.equal(admit.getAttribute('title'), unread);
 });
 
-test('a server row whose access lapsed says so with a chip', async () => {
+test('an unavailable account explains why discovery is disabled', async () => {
   const { applyLease } = (await vite.ssrLoadModule(
     '/src/model/lease.ts',
   )) as typeof import('../src/model/lease');
-  await teams(() => {}, { snapshot: applyLease(await fixture(), 'lapsed') });
-  const work = row('Acme');
-  assert.equal(stateChip(work), 'Check-in expired');
-  // The caption still says only which account the row is.
-  assert.equal(
-    work.querySelector('.name small')?.textContent,
-    'as vitalik · work',
-  );
-  const invite = [...work.querySelectorAll('button')].find(
-    (button) => button.textContent === 'Send setup instructions…',
-  );
-  assert.ok(invite);
-  assert.equal(invite.disabled, true);
-  // The invitation names the server the invitee joins, so it says so.
-  assert.equal(
-    invite.getAttribute('title'),
-    'Restore access to Acme before inviting someone.',
-  );
+  const rendered = await teams(() => {}, {
+    snapshot: applyLease(await fixture(), 'lapsed'),
+  });
+  const trigger = rendered.getByRole('button', { name: 'Find groups' });
+  assert.equal(trigger.getAttribute('aria-expanded'), 'false');
+  ui.fireEvent.click(trigger);
+  const check = rendered.getByRole('menuitem', { name: /Check as vitalik/ });
+  assert.equal(check.getAttribute('aria-disabled'), 'true');
+  assert.ok(check.querySelector('small')?.textContent);
+  ui.fireEvent.click(check);
+  assert.ok(rendered.getByRole('menu', { name: 'Find groups' }));
 });
 
 /** The server and account the create sheet is seeded to. */
@@ -406,22 +429,21 @@ test('creating and joining act as the account the address names', async () => {
     created.getByRole('heading', { name: 'Create a group' }).textContent,
     'Create a group',
   );
-  // Creating acts as one account on one server, and the sheet says which —
-  // both in its subtitle and in the choice it is seeded to.
+  // The account choice identifies the server without a repeated subtitle.
   assert.equal(
     document.querySelector('.sheet .hd small')?.textContent,
-    'vitalik on Acme',
+    undefined,
   );
   assert.equal(seededAccount(), 'Acme');
-  // The button says the alias the server is asked to create, not the name.
-  assert.ok(created.getByRole('button', { name: 'Create platform' }));
+  // The action label stays stable while the group name is edited.
+  assert.ok(created.getByRole('button', { name: 'Create group' }));
   ui.cleanup();
 
   // Another account in the address seeds the sheet to that one instead.
   await teams(() => {}, { store: 'acct:personal', scene: 'create' });
   assert.equal(
     document.querySelector('.sheet .hd small')?.textContent,
-    'satoshi on Personal server',
+    undefined,
   );
   assert.equal(seededAccount(), 'Personal server');
   ui.cleanup();
@@ -434,131 +456,6 @@ test('creating and joining act as the account the address names', async () => {
   assert.equal(
     document.querySelector('.sheet .hd small')?.textContent,
     'vitalik on Acme',
-  );
-});
-
-test('an account row invites as its own account, and the sheet can change it', async () => {
-  const rendered = await teams();
-  const work = row('Acme');
-  const invite = [...work.querySelectorAll('button')].find(
-    (button) => button.textContent === 'Send setup instructions…',
-  );
-  assert.ok(invite);
-  await ui.act(async () => {
-    ui.fireEvent.click(invite);
-  });
-  assert.ok(rendered.getByRole('heading', { name: 'Send setup instructions' }));
-  // The account is the first choice on the sheet, seeded to the row it was
-  // opened from, and it is what the consequence line and the message say.
-  const picker = document.querySelector(
-    '[role="radiogroup"][aria-label="Send as"]',
-  );
-  assert.ok(picker);
-  assert.equal(
-    picker.querySelector('[aria-checked="true"] .t b')?.textContent,
-    'vitalik',
-  );
-  assert.match(
-    document.querySelector('.band.info')?.textContent ?? '',
-    /You are sending as vitalik, on Acme/,
-  );
-  assert.match(
-    document.querySelector('.copybox .v')?.textContent ?? '',
-    /enter foks\.acme-corp\.com/,
-  );
-  assert.match(
-    document.querySelector('.copybox .v')?.textContent ?? '',
-    /Ask me for the FOKS installer and install it/,
-  );
-  assert.doesNotMatch(document.body.textContent ?? '', /foks\.app\/download/);
-  assert.match(
-    document.body.textContent ?? '',
-    /may require a signup code; get that code from the server administrator/,
-  );
-
-  // Choosing the other account rewrites the band, the group list and the
-  // message: an invitation is to one server, and this is which.
-  const other = [
-    ...picker.querySelectorAll<HTMLButtonElement>('[role="radio"]'),
-  ].find((node) => node.querySelector('.t b')?.textContent === 'satoshi');
-  assert.ok(other);
-  await ui.act(async () => {
-    ui.fireEvent.click(other);
-  });
-  assert.match(
-    document.querySelector('.band.info')?.textContent ?? '',
-    /You are sending as satoshi, on Personal server/,
-  );
-  const groups = document.querySelector(
-    '[role="radiogroup"][aria-label="Which group you plan to add them to"]',
-  );
-  assert.ok(groups);
-  assert.deepEqual(
-    [...groups.querySelectorAll('[role="radio"] .t b')].map(
-      (node) => node.textContent,
-    ),
-    ['No group yet', 'Household'],
-  );
-});
-
-test('a group row invites as the account that holds the group, naming it', async () => {
-  const rendered = await teams();
-  openRowMenu('Engineering');
-  await ui.act(async () => {
-    ui.fireEvent.click(menuItem('Engineering', 'Send setup instructions…'));
-  });
-  assert.ok(rendered.getByRole('heading', { name: 'Send setup instructions' }));
-  assert.equal(
-    document.querySelector(
-      '[role="radiogroup"][aria-label="Which group you plan to add them to"] [aria-checked="true"] .t b',
-    )?.textContent,
-    'Engineering',
-  );
-  // The message names the group, and says the one step that grants access.
-  const message = document.querySelector('.copybox .v')?.textContent ?? '';
-  assert.match(message, /I'd like to add you to Engineering on FOKS\./);
-  assert.match(message, /ask them for a team invitation/);
-  assert.match(message, /signup code/);
-  assert.doesNotMatch(message, /foks\.app\/download|does not use invite links/);
-});
-
-test('the per-account checks are folded into one row', async () => {
-  const rendered = await teams();
-  const disclosure = rendered.getByRole('button', {
-    name: /Check other servers for groups/,
-  });
-  // Folded by default: discovery is an occasional per-server action.
-  assert.equal(disclosure.getAttribute('aria-expanded'), 'false');
-  const body = document.getElementById('teams-servers');
-  assert.ok(body);
-  assert.equal(body.hasAttribute('hidden'), true);
-  // The head counts what it holds rather than listing it.
-  assert.equal(disclosure.querySelector('.tail')?.textContent, '2 servers');
-  await ui.act(async () => {
-    ui.fireEvent.click(disclosure);
-  });
-  assert.equal(disclosure.getAttribute('aria-expanded'), 'true');
-  assert.equal(body.hasAttribute('hidden'), false);
-  assert.equal(rendered.getAllByText('Check for groups').length, 2);
-});
-
-test('a lapsed account opens the checks rather than hiding its state', async () => {
-  const { applyLease } = (await vite.ssrLoadModule(
-    '/src/model/lease.ts',
-  )) as typeof import('../src/model/lease');
-  const rendered = await teams(() => {}, {
-    snapshot: applyLease(await fixture(), 'lapsed'),
-  });
-  // The row is the only report of that state, so it is not folded away.
-  assert.equal(
-    rendered
-      .getByRole('button', { name: /Check other servers for groups/ })
-      .getAttribute('aria-expanded'),
-    'true',
-  );
-  assert.equal(
-    document.getElementById('teams-servers')?.hasAttribute('hidden'),
-    false,
   );
 });
 

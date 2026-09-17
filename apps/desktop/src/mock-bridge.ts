@@ -857,6 +857,28 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       rows: [],
       message: 'Bot credentials require a connected agent.',
     }),
+    setLocalAccountAlias: async (store, label) => {
+      if (
+        !label ||
+        label !== label.trim() ||
+        new TextEncoder().encode(label).length > 64 ||
+        /[\p{Cc}]/u.test(label)
+      )
+        throw new Error('Invalid local alias.');
+      const account = accounts.find((entry) => entry.store === store);
+      if (!account) throw new Error('Account not found.');
+      if (
+        accounts.some(
+          (other) =>
+            other.store !== store &&
+            other.server === account.server &&
+            (other.localAlias ?? other.alias) === label,
+        )
+      )
+        throw new Error('Another account already uses this local alias.');
+      account.localAlias = label === account.alias ? undefined : label;
+      return { store, alias: label };
+    },
     renameAccount: async (_profile, accountAlias, action) =>
       action
         ? [

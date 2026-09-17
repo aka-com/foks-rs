@@ -1,3 +1,4 @@
+import { localAliasOf } from '../model';
 /**
  * The Settings tab: one scrolling page, with no sub-navigation.
  *
@@ -237,7 +238,8 @@ export function SettingsScreen({
                       <span className="t">
                         <b>{usernameOf(snapshot, store) ?? store.account}</b>
                         <small>
-                          {store.account} · {serverName(snapshot, store)}
+                          {localAliasOf(snapshot, store)} ·{' '}
+                          {serverName(snapshot, store)}
                         </small>
                         {/* Why the three actions are off, on the row and not
                             only in each button's title. */}
@@ -783,7 +785,7 @@ function ResetMacSheet({
             ? stores
                 .map(
                   (store) =>
-                    `${usernameOf(snapshot, store) ?? store.account} (${store.account})`,
+                    `${usernameOf(snapshot, store) ?? store.account} (${localAliasOf(snapshot, store)})`,
                 )
                 .join(', ')
             : 'None'}

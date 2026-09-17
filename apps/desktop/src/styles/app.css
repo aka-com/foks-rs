@@ -303,7 +303,7 @@ body {
 }
 
 .rt.bare .prow:first-of-type {
-  border-top: 0;
+  border-top: 1px solid var(--line-soft);
 }
 
 .rt.bare .prow .who2 {
@@ -2117,4 +2117,124 @@ body {
 
 .panel-body > details.dd > .inset {
   margin-top: 6px;
+}
+
+/* Group discovery menu */
+.menu.find-groups-menu {
+  width: 320px;
+  max-width: calc(100vw - 24px);
+  max-height: min(480px, calc(100vh - 120px));
+  overflow-y: auto;
+}
+.find-groups-server {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.find-groups-server .ic {
+  width: 14px;
+  height: 14px;
+}
+.find-groups-menu > [role='group'] + [role='group'] {
+  border-top: 1px solid var(--line);
+  margin-top: 6px;
+  padding-top: 4px;
+}
+.find-groups-account {
+  display: grid;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+.find-groups-account small {
+  white-space: normal;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.find-groups-account small:empty {
+  display: none;
+}
+.find-groups-empty {
+  padding: 8px 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* List section top divider */
+.nav-rows .virtual-rows > .row:first-child,
+.nav-rows .virtual-rows > .rowline:first-child,
+.nav-rows .sec + .row,
+.nav-rows .sec + .rowline {
+  border-top: 1px solid var(--line-soft);
+}
+.radios[aria-label='What to add'] .radio {
+  align-items: center;
+}
+.radios[aria-label='What to add'] .radio .rb {
+  margin-top: 0;
+}
+
+/* Security key actions menu */
+.menu[aria-label='Security key operations'] {
+  width: 300px;
+  max-width: calc(100vw - 24px);
+  font-size: 13px;
+}
+.menu[aria-label='Security key operations'] button {
+  min-height: 30px;
+  line-height: 1.35;
+}
+.menu[aria-label='Security key operations'] .menu-separator {
+  margin: 5px 3px;
+}
+
+.device-notification-settings.chat-local-settings {
+  padding: 0;
+  border: 0;
+  font-size: 13px;
+}
+.device-notification-settings .notification-preferences > label {
+  flex-direction: row-reverse;
+  flex-wrap: nowrap;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0;
+  padding: 12px 14px;
+  min-height: 44px;
+}
+.device-notification-settings .notification-preferences > label + label {
+  border-top: 1px solid var(--line-soft);
+}
+.device-notification-settings .notification-preferences input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+.device-notification-settings
+  .notification-preferences
+  label:has(input:disabled) {
+  color: var(--muted);
+}
+.device-notification-settings.chat-local-settings > p {
+  margin: 8px 2px 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.cli-server-fields .fr .k {
+  width: 112px;
+}
+.cli-server-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
 }

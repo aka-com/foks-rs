@@ -395,19 +395,6 @@ function NoTeamWithChat({
       <Button variant="primary" onClick={() => onNavigate({ kind: 'teams' })}>
         Create or join a team
       </Button>
-      <div className="chat-how">
-        <h3>How chat gets turned on</h3>
-        <ol>
-          <li>
-            The store has to be a named team. Vaults and shares never have chat.
-          </li>
-          <li>The team&apos;s server has to offer chat.</li>
-          <li>
-            The team has to be active and readable by your role, and the
-            server&apos;s check-in has to be current.
-          </li>
-        </ol>
-      </div>
     </div>
   );
 }

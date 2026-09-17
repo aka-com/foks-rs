@@ -361,8 +361,7 @@ rail's light says which one is in force.
 
 - **Starting.** The rail and topbar are displayed before a snapshot exists,
   dimmed and inert. The content area displays a spinner, "Starting the FOKS
-  agent…", and "Startup usually takes a few seconds. Your vaults remain
-  encrypted until startup completes." Internal step names remain hidden, and
+  agent…", and "Startup usually takes a few seconds." Internal step names remain hidden, and
   maintenance uses the same presentation as the first connection.
 - **Stopped** (`restart-required`, `recovery-required`, `restoration-failed`).
   The page remains visible behind a light veil below the topbar (`.stopveil`).
@@ -1026,3 +1025,22 @@ held through multiple accounts on one server also names its holding account.
 Duplicate server labels include the underlying profile name. Server details and
 setup instructions retain the configured address rather than substituting a
 local display name for it.
+
+### Device metadata cache
+
+Accounts and Devices share an in-memory cache for the unlocked shell session.
+Device and paper-key metadata is keyed by profile and account store; security-key
+enrollments are shared by profile. Fresh entries are reused for one minute.
+Returning to either tab paints cached rows immediately; expired entries remain
+visible while a read refreshes them. Concurrent metadata reads share requests.
+
+Explicit Refresh and mutation refreshes replace the cache after installing the
+new catalog. Account/profile identity or access changes and session concealment
+also replace it; lock/unmount clears it. Late reads cannot refill a cleared
+cache. Enrollment actions on the server page invalidate the cached metadata.
+
+Connected-card presence is probed separately on Devices and does not delay
+metadata rows. PIN state remains action-specific. The cache never stores recovery
+phrases, PINs, passphrases, or other secret inputs, and never persists to disk.
+Removing a device first reloads the native device list; cached display metadata
+does not replace target validation for the write.

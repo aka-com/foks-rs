@@ -599,11 +599,8 @@ function SearchSheet({
         >
           {groups.length === 0 ? (
             <p className="pal-none">
-              {query.trim()
-                ? `No matches for “${query.trim()}”.`
-                : 'Nothing to search yet.'}{' '}
-              Search covers item names and paths, store names, usernames and
-              channels — not item contents.
+              {query.trim() ? `No matches for “${query.trim()}”. ` : ''}
+              Search item names, paths, usernames, and channels.
             </p>
           ) : (
             groups.map((section) => (

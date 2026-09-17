@@ -8,6 +8,7 @@ pub(crate) struct VaultRecordDescriptor {
 
 #[derive(Clone, Copy)]
 enum VaultFamily {
+    LocalAlias,
     Account,
     YubiAccount,
     BotAccount,
@@ -33,6 +34,7 @@ fn parse_key(key: &str) -> Result<(VaultFamily, &str)> {
         .ok_or(Error::InvalidAccount("unknown vault record family"))?;
     validate_name(alias)?;
     let family = match family {
+        "account-local-alias" => VaultFamily::LocalAlias,
         "account" => VaultFamily::Account,
         "yubi-account" => VaultFamily::YubiAccount,
         "bot-account" => VaultFamily::BotAccount,
@@ -86,6 +88,10 @@ impl AccountVault<'_> {
     ) -> Result<VaultRecordDescriptor> {
         let (family, alias) = parse_key(key)?;
         let exportable = match family {
+            VaultFamily::LocalAlias => {
+                self.local_account_alias(alias)?;
+                true
+            }
             VaultFamily::Account => {
                 self.account(alias)?.credential.public_material()?;
                 true

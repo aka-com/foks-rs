@@ -308,7 +308,7 @@ export function GoProfileConnectSheet({
       {selected && !checked ? (
         <>
           <SectionLabel>Add the server before pairing</SectionLabel>
-          <Inset>
+          <Inset className="cli-server-fields">
             <Field
               disabled={busy}
               label="Server address"
@@ -316,16 +316,23 @@ export function GoProfileConnectSheet({
               onChange={setServer}
               placeholder="foks.app:4430"
             />
-            <Button disabled={busy} onClick={() => setServer('foks.app:4430')}>
-              Use official FOKS server
-            </Button>
             <Field
               disabled={busy}
               label="Profile name"
               value={profileName}
               onChange={setProfileName}
             />
+          </Inset>
+          <div className="cli-server-actions">
             <Button
+              size="sm"
+              disabled={busy}
+              onClick={() => setServer('foks.app:4430')}
+            >
+              Use official FOKS server
+            </Button>
+            <Button
+              size="sm"
               disabled={busy}
               onClick={() => {
                 setSelected(null);
@@ -334,7 +341,7 @@ export function GoProfileConnectSheet({
             >
               Choose another account
             </Button>
-          </Inset>
+          </div>
         </>
       ) : null}
       {selected && checked ? (

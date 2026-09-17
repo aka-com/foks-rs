@@ -104,3 +104,95 @@ mod tests {
         assert!(decode_progress(serde_json::json!([value]), false, "work", None).is_ok());
     }
 }
+
+#[derive(serde::Serialize)]
+pub struct LocalAliasDto {
+    pub store: String,
+    pub alias: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LocalAliasResponse {
+    profile: String,
+    account_alias: String,
+    label: String,
+}
+
+fn local_alias_response(
+    value: serde_json::Value,
+    account: &foks_agent_proto::AccountStoreRef,
+    label: &str,
+    store: String,
+) -> Result<LocalAliasDto, AgentError> {
+    let response: LocalAliasResponse = serde_json::from_value(value)
+        .map_err(|_| invalid_response("Invalid local alias response."))?;
+    if response.profile != account.profile
+        || response.account_alias != account.account_alias
+        || response.label != label
+    {
+        return Err(invalid_response(
+            "Local alias response belongs to a different account or label.",
+        ));
+    }
+    Ok(LocalAliasDto {
+        store,
+        alias: response.label,
+    })
+}
+
+#[tauri::command]
+pub async fn set_local_account_alias(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    account_store_id: String,
+    label: String,
+) -> Result<LocalAliasDto, AgentError> {
+    require_main_window(&webview)?;
+    let generation = crate::applock::unlocked_generation(webview.app_handle())?;
+    foks_client_app::validate_local_alias(&label).map_err(|_| invalid_request("Enter a local alias of 1–64 UTF-8 bytes without surrounding whitespace or control characters."))?;
+    let _mutation = state.begin_mutation()?;
+    let account = state.local_account(&account_store_id)?;
+    let transport = state.agent.transport();
+    state.invalidate_catalog();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let value = transport
+            .call(Operation::SetLocalAccountAlias {
+                profile: account.profile.clone(),
+                account_alias: account.account_alias.clone(),
+                label: label.clone(),
+            })
+            .map_err(AgentError::from_desktop)?;
+        local_alias_response(value, &account, &label, account_store_id)
+    })
+    .await
+    .map_err(|_| {
+        invalid_request("Local alias update interrupted. Refresh the account before trying again.")
+    })?;
+    state.invalidate_catalog();
+    crate::applock::require_unlocked_generation(webview.app_handle(), generation)?;
+    result
+}
+
+#[cfg(test)]
+mod local_alias_tests {
+    use super::*;
+    #[test]
+    fn local_alias_response_is_bound_and_rejects_extra_fields() {
+        let account = foks_agent_proto::AccountStoreRef {
+            profile: "local".into(),
+            account_alias: "work".into(),
+        };
+        let good = serde_json::json!({"profile":"local", "account_alias":"work", "label":"Office"});
+        assert!(local_alias_response(good.clone(), &account, "Office", "store".into()).is_ok());
+        assert!(local_alias_response(good.clone(), &account, "Other", "store".into()).is_err());
+        for field in ["profile", "account_alias"] {
+            let mut bad = good.clone();
+            bad[field] = serde_json::json!("other");
+            assert!(local_alias_response(bad, &account, "Office", "store".into()).is_err());
+        }
+        let mut bad = good;
+        bad["pin"] = serde_json::json!("secret");
+        assert!(local_alias_response(bad, &account, "Office", "store".into()).is_err());
+    }
+}

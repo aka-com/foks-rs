@@ -221,6 +221,8 @@ pub use bot_token::{
 pub use web_admin::AdminHandoff;
 mod account;
 mod account_conveniences;
+mod local_alias;
+pub use local_alias::validate_local_alias;
 mod invitations;
 pub use account_conveniences::{RenameAction, RenameReport};
 pub use invitations::InvitationAction;

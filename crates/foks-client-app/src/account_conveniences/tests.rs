@@ -217,3 +217,68 @@ fn hardware_rename_defers_without_pin_and_signs_with_selected_parent() {
         Ok(())
     });
 }
+
+#[test]
+fn local_alias_persists_without_changing_credentials_or_command_selectors() {
+    let f = Fixture::start();
+    f.run(|s, v, k| s.create_account("work", "localaliasalice", "laptop", "", "", None, v, k));
+    f.run(|s, v, k| s.create_account("other", "localaliasbob", "laptop", "", "", None, v, k));
+    let original = f.run(|_, v, _| {
+        let bytes = v.store.get("account.work")?;
+        v.store.put("kex-offer.work", b"existing pending state")?;
+        v.set_local_account_alias("work", "Office")?;
+        Ok(bytes.to_vec())
+    });
+    f.run(|s, v, _| {
+        assert_eq!(v.local_account_alias("work")?.as_deref(), Some("Office"));
+        assert_eq!(v.account("work")?.username, "localaliasalice");
+        assert!(v.account("Office").is_err());
+        assert_eq!(v.store.get("account.work")?.as_slice(), original);
+        assert_eq!(
+            v.store.get("kex-offer.work")?.as_slice(),
+            b"existing pending state"
+        );
+        assert_eq!(v.local_account_alias("other")?, None);
+        assert!(v.set_local_account_alias("other", "Office").is_err());
+        assert!(v.set_local_account_alias("work", "other").is_err());
+        assert!(v.set_local_account_alias("missing", "Name").is_err());
+        let hard = HardStateStore::open(&s.paths.hard_database)?;
+        assert!(
+            v.inventory_record("account-local-alias.work", &hard, &[])?
+                .exportable
+        );
+        crate::account::validate_archive_vault_key("account-local-alias.work")?;
+        v.set_local_account_alias("work", "work")?;
+        assert_eq!(v.local_account_alias("work")?, None);
+        Ok(())
+    });
+}
+
+#[test]
+fn local_alias_does_not_transfer_to_a_replaced_account() {
+    let f = Fixture::start();
+    f.run(|s, v, k| s.create_account("first", "aliasfirst", "laptop", "", "", None, v, k));
+    f.run(|s, v, k| s.create_account("second", "aliassecond", "laptop", "", "", None, v, k));
+    f.run(|_, v, _| {
+        v.set_local_account_alias("first", "Old account")?;
+        let second = v.account("second")?;
+        v.commit_created("first", &second.username, &second.credential)?;
+        assert_eq!(v.local_account_alias("first")?, None);
+        v.set_local_account_alias("first", "New account")?;
+        assert_eq!(
+            v.local_account_alias("first")?.as_deref(),
+            Some("New account")
+        );
+        Ok(())
+    });
+}
+
+#[test]
+fn local_alias_validation_rejects_empty_controls_and_oversized_utf8() {
+    for label in ["", " x", "x ", "x\n", "x\0y", "x\u{7f}", "x\u{85}"] {
+        assert!(validate_local_alias(label).is_err(), "{label:?}");
+    }
+    assert!(validate_local_alias(&"a".repeat(64)).is_ok());
+    assert!(validate_local_alias(&"界".repeat(22)).is_err());
+    assert!(validate_local_alias("Personal account").is_ok());
+}

@@ -581,11 +581,11 @@ test('a channel row of a team that went out of reach opens the locked pane', asy
   await ui.screen.findByRole('heading', { name: 'Engineering chat is locked' });
 });
 
-test('with no team at all the tab says how chat gets turned on', async () => {
+test('with no team at all the tab offers team creation', async () => {
   const snapshot = await snapshotWithChat([]);
   const journal = await mount(snapshot, { kind: 'chat' });
   await ui.screen.findByRole('heading', { name: 'No team chats yet' });
-  await ui.screen.findByText('How chat gets turned on');
+  assert.equal(ui.screen.queryByText('How chat gets turned on'), null);
   assert.ok(ui.screen.getByText('No team on this Mac has chat.'));
   // The "No chat" teams are still a column worth searching, so the field is
   // live even though New chat has no team to offer.

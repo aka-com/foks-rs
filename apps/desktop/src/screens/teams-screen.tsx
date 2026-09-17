@@ -8,7 +8,8 @@ import { useTabSheetState } from '../navigation-guard';
  * end of the row. A row opens the group's page; the group page returns here.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Menu, Popover } from '/kit/overlay-primitives';
 import type { ReactNode } from 'react';
 import {
   Button,
@@ -33,7 +34,6 @@ import {
   storeDescription,
   storeDescriptionState,
   storeNavigationOrder,
-  storeReadable,
   teamCaption,
 } from '../model';
 import type {
@@ -50,16 +50,13 @@ import { PageHeader } from '../shell/page-header';
 import { useToast } from '/kit/toasts';
 import { GroupMark } from './group-mark';
 import {
-  checkLabel,
   discoveryContext,
-  inviteUnavailableTitle,
   manageReason,
   unavailableTitle,
 } from './group-model';
 import type { DiscoveryContext } from './group-model';
 import { GroupSheet } from './groups-screen';
 import type { GroupSheetKind } from './groups-screen';
-import { InviteSheet } from './invite-sheet';
 
 /** Only what this page uses; the tab shares no state with Settings. */
 export interface TeamsScreenProps {
@@ -80,54 +77,110 @@ interface ListSheet {
   store: Store;
 }
 
-/**
- * The collapsed row that holds the per-account checks.
- *
- * Discovery is an occasional per-server action, not a landing surface, so the
- * rows are folded away — unless one of the accounts is in a state the page
- * would otherwise be hiding, in which case the disclosure opens on the state
- * rather than making the reader find it.
- */
-function CheckServers({
-  count,
-  open,
-  onToggle,
-  children,
+/** Account-scoped discovery, grouped by server in an anchored menu. */
+function FindGroups({
+  snapshot,
+  accounts,
+  discovering,
+  results,
+  onCheck,
 }: {
-  count: number;
-  open: boolean;
-  onToggle: () => void;
-  children: ReactNode;
+  snapshot: AgentSnapshot;
+  accounts: AccountStore[];
+  discovering: StoreRef | null;
+  results: Readonly<Record<string, string>>;
+  onCheck: (context: DiscoveryContext) => void;
 }): ReactNode {
+  const anchorRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const servers = [...new Set(accounts.map((account) => account.server))];
   return (
-    <div className={open ? 'disc open' : 'disc'}>
-      <button
-        type="button"
-        className="disc-head"
+    <>
+      <Button
+        ref={anchorRef}
+        aria-haspopup="menu"
         aria-expanded={open}
-        aria-controls="teams-servers"
-        onClick={onToggle}
+        onClick={() => setOpen(!open)}
       >
-        <span className="chev" aria-hidden="true">
-          <Icon name="chev" />
-        </span>
-        <span className="name">
-          <span className="tt">
-            <span>Check other servers for groups</span>
-          </span>
-          <small>
-            Check configured servers on demand for group updates. FOKS does not
-            poll servers in the background.
-          </small>
-        </span>
-        <span className="tail">
-          <span className="summary">{plural(count, 'server')}</span>
-        </span>
-      </button>
-      <div id="teams-servers" className="disc-body" hidden={!open}>
-        {children}
-      </div>
-    </div>
+        Find groups <Icon name="chev" className="chevron" />
+      </Button>
+      {open ? (
+        <Popover
+          anchorRef={anchorRef}
+          className="menu-portal"
+          onClose={() => setOpen(false)}
+        >
+          <Menu
+            className="menu find-groups-menu"
+            aria-label="Find groups"
+            anchorRef={anchorRef}
+            onClose={() => setOpen(false)}
+          >
+            {servers.map((server) => {
+              const members = accounts.filter(
+                (account) => account.server === server,
+              );
+              const context = discoveryContext(snapshot, members[0].id);
+              return (
+                <div
+                  key={server}
+                  role="group"
+                  aria-label={
+                    context ? serverDisplayName(context.server) : server
+                  }
+                >
+                  <div className="find-groups-server">
+                    <Icon name="server" />
+                    <span>
+                      {context ? serverDisplayName(context.server) : server}
+                    </span>
+                  </div>
+                  {members.map((store) => {
+                    const context = discoveryContext(snapshot, store.id);
+                    const busy = discovering === store.id;
+                    const reason = !context
+                      ? 'This account is not signed in on this Mac.'
+                      : !context.available
+                        ? unavailableTitle(context)
+                        : discovering
+                          ? 'Wait for the current check to finish.'
+                          : undefined;
+                    return (
+                      <MenuItem
+                        key={store.id}
+                        reason={reason}
+                        onClick={() => {
+                          if (context) onCheck(context);
+                        }}
+                      >
+                        <span className="find-groups-account">
+                          <span>
+                            {context
+                              ? `Check as ${context.account.username}`
+                              : store.account}
+                          </span>
+                          <small role="status">
+                            {busy
+                              ? 'Checking…'
+                              : (results[store.id] ?? (reason ? reason : ''))}
+                          </small>
+                        </span>
+                        <Icon name="again" />
+                      </MenuItem>
+                    );
+                  })}
+                </div>
+              );
+            })}
+            {!accounts.length ? (
+              <p className="find-groups-empty">
+                Add an account to find its groups.
+              </p>
+            ) : null}
+          </Menu>
+        </Popover>
+      ) : null}
+    </>
   );
 }
 
@@ -196,93 +249,6 @@ function TeamRow({
   );
 }
 
-/**
- * One account store's row: what the server lists for it, and the invitation
- * message that brings someone new to that server.
- */
-function AccountRow({
-  snapshot,
-  store,
-  busy,
-  result,
-  onCheck,
-  onInvite,
-}: {
-  snapshot: AgentSnapshot;
-  store: AccountStore;
-  busy: boolean;
-  result?: string;
-  onCheck: (context: DiscoveryContext) => void;
-  onInvite: () => void;
-}): ReactNode {
-  const context = discoveryContext(snapshot, store.id);
-  const account = snapshot.accounts.find(
-    (candidate) => candidate.store === store.id,
-  );
-  const available = Boolean(context?.available);
-  // The server this account signs in to, named as the row's heading. Its
-  // store's name is the account's, not a server's, so it is no fallback here.
-  const serverName = context ? serverDisplayName(context.server) : store.server;
-  const caption = account
-    ? `as ${account.username} · ${store.account}`
-    : 'This account is not signed in on this Mac.';
-  // An account row says its state the way every other row does: a chip at the
-  // end of the row, not a second caption under the name.
-  const state = storeDescriptionState(snapshot, store);
-  return (
-    <div className={available ? 'row flat' : 'row flat off'}>
-      <span className="kic Store">
-        <Icon name="server" />
-      </span>
-      <span className="name">
-        <span className="tt">
-          <span>{serverName}</span>
-        </span>
-        <small>{caption}</small>
-      </span>
-      <span className="tail">
-        {state === 'normal' ? null : (
-          <Chip tone="warn">{storeDescription(snapshot, store)}</Chip>
-        )}
-        {/* This live region exists before a check finishes so updating its
-            contents is announced reliably. */}
-        <span className="summary" role="status">
-          {result ?? ''}
-        </span>
-        <Button
-          size="sm"
-          aria-label={context ? checkLabel(context) : 'Check for groups'}
-          title={
-            context && !context.available
-              ? unavailableTitle(context)
-              : 'Ask the server which groups this account belongs to.'
-          }
-          disabled={!available || busy}
-          onClick={() => {
-            if (context) onCheck(context);
-          }}
-        >
-          {busy ? 'Checking…' : 'Check for groups'}
-        </Button>
-        <Button
-          size="sm"
-          disabled={!available}
-          title={
-            available
-              ? 'Copy a message that helps someone create an account on this server.'
-              : context
-                ? inviteUnavailableTitle(serverDisplayName(context.server))
-                : 'This account is not signed in on this Mac.'
-          }
-          onClick={onInvite}
-        >
-          Send setup instructions…
-        </Button>
-      </span>
-    </div>
-  );
-}
-
 export function TeamsScreen({
   snapshot,
   bridge,
@@ -321,21 +287,8 @@ export function TeamsScreen({
     () => (scene === 'join' ? (acting ?? null) : null),
     (value) => value !== null,
   );
-  // The invitation is an account's; a group only names itself in the message.
-  const [inviting, setInviting] = useState<{
-    account: AccountStore;
-    group?: TeamStore;
-  } | null>(null);
   const [discovering, setDiscovering] = useState<StoreRef | null>(null);
   const [results, setResults] = useState<Readonly<Record<string, string>>>({});
-  // Collapsed by default. Open the disclosure whenever a contained account
-  // enters an abnormal state, including after mount. Once the user changes the
-  // disclosure state, preserve that selection.
-  const [checksToggled, setChecksToggled] = useState<boolean | null>(null);
-  const abnormalAccount = accounts.some(
-    (store) => storeDescriptionState(snapshot, store) !== 'normal',
-  );
-  const checksOpen = checksToggled ?? abnormalAccount;
   const canCreate = accounts.some((store) =>
     canCreateInStore(snapshot, store.id),
   );
@@ -370,6 +323,10 @@ export function TeamsScreen({
       setResults((old) => ({ ...old, [context.store.id]: message }));
       await onRefreshSnapshot();
     } catch (error) {
+      setResults((old) => ({
+        ...old,
+        [context.store.id]: 'Check failed. Try again.',
+      }));
       await onMutationError(error);
     } finally {
       setDiscovering(null);
@@ -398,19 +355,6 @@ export function TeamsScreen({
     const serverName = displayServerName(snapshot, store);
     const rosterReason = manageReason(snapshot, store, 'roster');
     const federationReason = manageReason(snapshot, store, 'federation');
-    // The invitation is sent as the account that holds the group, so with no
-    // such account on this Mac there is nothing to send it as: the item says
-    // that rather than closing the menu and doing nothing.
-    const holder = accounts.find(
-      (candidate) =>
-        candidate.server === store.server &&
-        candidate.account === store.account,
-    );
-    const inviteReason = !holder
-      ? `No account on this Mac signs in to ${serverName}.`
-      : storeReadable(snapshot, store.id)
-        ? undefined
-        : inviteUnavailableTitle(serverName);
     return (
       <span className="rowmenu">
         <MenuButton
@@ -453,16 +397,6 @@ export function TeamsScreen({
                 }}
               >
                 Add a group…
-              </MenuItem>
-              <MenuItem
-                icon="mail"
-                reason={inviteReason}
-                onClick={() => {
-                  close();
-                  if (holder) setInviting({ account: holder, group: store });
-                }}
-              >
-                Send setup instructions…
               </MenuItem>
               <hr />
               <MenuItem
@@ -522,6 +456,13 @@ export function TeamsScreen({
         ].join(' · ')}
         action={
           <>
+            <FindGroups
+              snapshot={snapshot}
+              accounts={accounts}
+              discovering={discovering}
+              results={results}
+              onCheck={(context) => void discover(context)}
+            />
             <Button
               disabled={!acting}
               title={
@@ -591,35 +532,6 @@ export function TeamsScreen({
                 {teamRows(shares)}
               </>
             ) : null}
-            <CheckServers
-              // The row counts what it says it counts: the servers this Mac
-              // can ask, not the accounts it holds on them.
-              count={servers.size}
-              open={checksOpen}
-              onToggle={() => setChecksToggled(!checksOpen)}
-            >
-              {accounts.length ? (
-                accounts.map((store) => (
-                  <AccountRow
-                    key={store.id}
-                    snapshot={snapshot}
-                    store={store}
-                    busy={discovering === store.id}
-                    result={results[store.id]}
-                    onCheck={(context) => void discover(context)}
-                    onInvite={() => setInviting({ account: store })}
-                  />
-                ))
-              ) : (
-                <p className="fn">No accounts configured on this Mac.</p>
-              )}
-            </CheckServers>
-            {canCreate ? null : (
-              <p className="fn">
-                No available account can create a group right now. Add an
-                account, or restore access to a server.
-              </p>
-            )}
           </div>
         </div>
       </div>
@@ -638,19 +550,6 @@ export function TeamsScreen({
           // group: the sheet's store does not change, only what is added.
           onSwitch={(next) => {
             if (next) setSheet({ kind: next, store: sheet.store });
-          }}
-          onInvite={() => {
-            const holder = accounts.find(
-              (candidate) =>
-                candidate.server === sheet.store.server &&
-                candidate.account === sheet.store.account,
-            );
-            if (!holder) return;
-            setSheet(null);
-            setInviting({
-              account: holder,
-              ...(sheet.store.kind === 'team' ? { group: sheet.store } : {}),
-            });
           }}
           onApplied={async (message, created) => {
             const next = await onRefreshSnapshot();
@@ -674,16 +573,6 @@ export function TeamsScreen({
               onNavigate({ kind: 'store', ref: createdStore.id });
           }}
           onMutationError={onMutationError}
-        />
-      ) : null}
-      {inviting ? (
-        <InviteSheet
-          snapshot={snapshot}
-          bridge={bridge}
-          account={inviting.account}
-          {...(inviting.group ? { group: inviting.group } : {})}
-          onClose={() => setInviting(null)}
-          onError={onError}
         />
       ) : null}
       {joining ? (

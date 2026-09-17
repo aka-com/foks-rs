@@ -1,3 +1,4 @@
+import { Inset } from '../components';
 import { chatClient, sameScope } from './client';
 import { failure } from './actions';
 import type { Location } from '../location';
@@ -194,14 +195,16 @@ export function NotificationSettings({
   if (!context) return null;
   const { session, error, configure } = context;
   return (
-    <div className="chat-local-settings">
+    <div
+      className={`chat-local-settings${storeId ? '' : ' device-notification-settings'}`}
+    >
       {!session ? (
         <p role="status">Checking local alert settings…</p>
       ) : !session.available ? (
         <p>Desktop alerts are unavailable in this runtime.</p>
       ) : null}
       {!storeId && (
-        <>
+        <Inset className="notification-preferences">
           <label>
             <input
               type="checkbox"
@@ -230,7 +233,7 @@ export function NotificationSettings({
             />
             Include message previews
           </label>
-        </>
+        </Inset>
       )}
       {storeId && scope && channel && key && (
         <label>

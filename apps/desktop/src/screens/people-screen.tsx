@@ -1,3 +1,6 @@
+import { useDeviceCache } from '../device-cache';
+import { LocalAliasPanel } from '../components/local-alias-panel';
+import { localAliasOf } from '../model';
 import { useTabSheetState } from '../navigation-guard';
 /**
  * The Accounts tab: what needs attention, then the accounts on this Mac.
@@ -61,7 +64,8 @@ import type { FoksIconName } from '../icons';
 import type { Location, NavigateOptions } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { PageHeader } from '../shell/page-header';
-import { AccountMark, AccountSwitcher } from './account-switcher';
+import { AccountMark } from './account-switcher';
+import { AccountHeader } from '../shell/sidebar';
 import {
   deviceEntries,
   NO_DEVICES,
@@ -82,7 +86,7 @@ const SEVERITY_LABELS: Record<Notification['severity'], string> = {
 };
 
 /** The account panels reached from a row on this page. */
-type AccountSheet = 'rename' | 'bot' | 'admin' | 'join' | 'sso';
+type AccountSheet = 'local-alias' | 'rename' | 'bot' | 'admin' | 'join' | 'sso';
 
 interface AttentionListProps {
   snapshot: AgentSnapshot;
@@ -185,6 +189,7 @@ function AttentionList({
 }: AttentionListProps): ReactNode {
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const notes = notesNow(snapshot);
+  if (!notes.length) return null;
 
   const retry = (note: Notification): void => {
     if (!canRetry(note) || busy.has(note.id)) return;
@@ -274,12 +279,7 @@ function AttentionList({
             );
           })}
         </div>
-      ) : (
-        <p className="allclear">
-          <Icon name="check" />
-          <span id="people-attention-label">Nothing needs attention.</span>
-        </p>
-      )}
+      ) : null}
     </section>
   );
 }
@@ -299,6 +299,7 @@ export interface PeopleScreenProps {
   onRefreshSnapshot: () => Promise<AgentSnapshot>;
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
+  onLock?: () => void;
 }
 
 export function PeopleScreen({
@@ -310,6 +311,7 @@ export function PeopleScreen({
   onRefreshSnapshot,
   onError,
   onMutationError,
+  onLock,
 }: PeopleScreenProps): ReactNode {
   const stores = accountStores(snapshot);
   // Select by exact StoreRef: two servers may both hold an account aliased
@@ -325,14 +327,21 @@ export function PeopleScreen({
   const [pairingProfile, setPairingProfile] = useState<Server | undefined>();
   // What this account holds: the keys are read here because the profile lists
   // them, not because anything on this page acts on one.
-  const [lists, setLists] = useState<DeviceLists>(NO_DEVICES);
-  const [loadingKeys, setLoadingKeys] = useState(true);
-  // A read that failed is not an account with no keys, and the sections say
-  // which of the two this is.
-  const [keysFailed, setKeysFailed] = useState(false);
   const stopped = selected
     ? accountStopped(snapshot, selected)
     : { stopped: true, reason: '' };
+  const deviceCache = useDeviceCache();
+  const initialKeys =
+    selected && !stopped.stopped
+      ? deviceCache?.peek(selected.server, selected.id)
+      : undefined;
+  const [lists, setLists] = useState<DeviceLists>(
+    () => initialKeys ?? NO_DEVICES,
+  );
+  const [loadingKeys, setLoadingKeys] = useState(() => !initialKeys);
+  // A read that failed is not an account with no keys, and the sections say
+  // which of the two this is.
+  const [keysFailed, setKeysFailed] = useState(false);
 
   // Secrets typed into a panel must not stay on screen behind another window.
   // Browser sign-in is the exception: it hands focus away on purpose.
@@ -340,7 +349,12 @@ export function PeopleScreen({
   open.current = sheet;
   useEffect(() => {
     const conceal = (): void => {
-      if (open.current === 'go-profile' || open.current === 'sso') return;
+      if (
+        open.current === 'local-alias' ||
+        open.current === 'go-profile' ||
+        open.current === 'sso'
+      )
+        return;
       setSheet(null);
     };
     const concealWhenHidden = (): void => {
@@ -389,18 +403,24 @@ export function PeopleScreen({
   const accessStopped = stopped.stopped;
   useEffect(() => {
     let alive = true;
-    setLists(NO_DEVICES);
+    const cached =
+      selectedId && selectedProfile && !accessStopped
+        ? deviceCache?.peek(selectedProfile, selectedId)
+        : undefined;
+    setLists(cached ?? NO_DEVICES);
     setKeysFailed(false);
     setSheet(null);
     if (!selectedId || !selectedProfile || accessStopped) {
       setLoadingKeys(false);
       return;
     }
-    setLoadingKeys(true);
+    setLoadingKeys(!cached);
     const load = (): Promise<DeviceLists> =>
-      readAccountAndProfileKeys(bridge, selectedProfile, selectedId, {
-        cards: false,
-      });
+      deviceCache
+        ? deviceCache.load(selectedProfile, selectedId)
+        : readAccountAndProfileKeys(bridge, selectedProfile, selectedId, {
+            cards: false,
+          });
     void (async () => {
       try {
         let result: DeviceLists;
@@ -415,6 +435,7 @@ export function PeopleScreen({
           recovered.current.add(selectedId);
           await recoverCatalog();
           if (!alive) return;
+          deviceCache?.clear();
           result = await load();
         }
         if (!alive) return;
@@ -426,7 +447,7 @@ export function PeopleScreen({
         setLoadingKeys(false);
         // The sections say the read failed rather than reporting no keys; the
         // failure itself is the shell's to report.
-        setKeysFailed(true);
+        setKeysFailed(!cached);
         onError(error);
       }
     })();
@@ -435,6 +456,7 @@ export function PeopleScreen({
     };
   }, [
     accessStopped,
+    deviceCache,
     bridge,
     onError,
     recoverCatalog,
@@ -501,19 +523,17 @@ export function PeopleScreen({
             />
           ) : selected ? (
             <>
-              <SectionLabel id="people-accounts-label">
-                Accounts on this Mac
-              </SectionLabel>
-              <AccountSwitcher
-                snapshot={snapshot}
-                stores={stores}
-                selected={selected}
-                labelledBy="people-accounts-label"
-                onSwitch={(store) =>
-                  onNavigate({ kind: 'people', store: store.id })
-                }
-              />
               <AccountPanel
+                accountSelector={
+                  <AccountHeader
+                    compact
+                    snapshot={snapshot}
+                    location={location}
+                    account={selected.id}
+                    onNavigate={onNavigate}
+                    onLock={onLock}
+                  />
+                }
                 snapshot={snapshot}
                 store={selected}
                 lists={lists}
@@ -545,6 +565,23 @@ export function PeopleScreen({
             await onRefresh(`Connected account "${alias}" from FOKS CLI`);
           }}
           onError={(error) => void onMutationError(error)}
+        />
+      ) : null}
+      {selected && sheet === 'local-alias' ? (
+        <LocalAliasPanel
+          key={selected.id}
+          bridge={bridge}
+          store={selected.id}
+          alias={localAliasOf(snapshot, selected)}
+          presentation={{
+            title: 'Change local alias',
+            subtitle: accountSubtitle(snapshot, selected),
+            onClose: () => setSheet(null),
+          }}
+          onComplete={async () => {
+            await onRefresh('Local alias updated');
+            setSheet(null);
+          }}
         />
       ) : null}
       {selected && sheet === 'rename' ? (
@@ -626,6 +663,7 @@ function AccountPanel({
   stopped,
   onNavigate,
   onSheet,
+  accountSelector,
 }: {
   snapshot: AgentSnapshot;
   store: AccountStore;
@@ -637,14 +675,9 @@ function AccountPanel({
   stopped: { stopped: boolean; reason: string };
   onNavigate: (location: Location) => void;
   onSheet: (sheet: AccountSheet) => void;
+  accountSelector: ReactNode;
 }): ReactNode {
   const username = usernameOf(snapshot, store);
-  const server = snapshot.servers.find((entry) => entry.id === store.server);
-  const status = stopped.stopped
-    ? storeDescription(snapshot, store)
-    : server?.compatibility.status === 'not-required'
-      ? 'Check-in not required'
-      : 'Available';
   const reason = stopped.stopped ? stopped.reason : undefined;
   const keys = deviceEntries(lists);
   return (
@@ -659,10 +692,13 @@ function AccountPanel({
               sit on it rather than at the far end of the band. */}
           <span className="line">
             <small>on {serverName(snapshot, store)}</small>
-            <Chip>{store.account}</Chip>
-            <Chip tone={stopped.stopped ? 'warn' : 'ok'}>{status}</Chip>
+            <Chip>{localAliasOf(snapshot, store)}</Chip>
+            {stopped.stopped ? (
+              <Chip tone="warn">{storeDescription(snapshot, store)}</Chip>
+            ) : null}
           </span>
         </span>
+        {accountSelector}
       </div>
       {stopped.stopped ? (
         <Band
@@ -722,17 +758,22 @@ function AccountPanel({
           }
         >
           <b>{username ?? 'Identity unavailable'}</b>
-          <small>
-            Changing a username is a signed operation on the server; the local
-            alias does not change with it.
-          </small>
         </InsetRow>
-        <InsetRow label="Local alias">
-          {store.account}
-          <small>
-            Set when the account was added. No command changes it, so this row
-            has no action.
-          </small>
+        <InsetRow
+          label="Local alias"
+          action={
+            <Button
+              size="sm"
+              aria-label="Change local alias"
+              disabled={stopped.stopped}
+              title={reason}
+              onClick={() => onSheet('local-alias')}
+            >
+              Change…
+            </Button>
+          }
+        >
+          {localAliasOf(snapshot, store)}
         </InsetRow>
         <InsetRow
           label="Passphrase"
@@ -750,9 +791,7 @@ function AccountPanel({
               Settings › Account
             </Button>
           }
-        >
-          Set, changed and verified with the other typed credentials.
-        </InsetRow>
+        ></InsetRow>
       </Inset>
       <SectionLabel>Actions on this account</SectionLabel>
       <Inset className="settings-inset wide">
@@ -797,11 +836,6 @@ function AccountPanel({
           Request membership with an invitation from an administrator.
         </InsetRow>
       </Inset>
-      <p className="fn">
-        Account recovery options (Organization sign-in, Bot accounts, Web admin,
-        and Join a group) remain available while access is suspended. Changing a
-        username is disabled until access is restored.
-      </p>
     </>
   );
 }
@@ -1052,13 +1086,6 @@ function KeyList({
           </InsetRow>
         )}
       </Inset>
-      <p className="fn">
-        Key ids are shortened; a key’s own page under Devices carries the full
-        id. An enrollment on a card is listed for {server}, not for one account
-        on it, and the agent reports no id for one. Only the keys this Mac can
-        list are shown, and the check marks the one it is authenticated with
-        now.
-      </p>
     </div>
   );
 }
@@ -1086,7 +1113,7 @@ export function UnavailableAccount({
           </Button>
           {stores.map((store) => (
             <Button key={store.id} onClick={() => onSelect(store)}>
-              {store.account} · {serverName(snapshot, store)}
+              {localAliasOf(snapshot, store)} · {serverName(snapshot, store)}
             </Button>
           ))}
         </>

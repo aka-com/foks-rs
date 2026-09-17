@@ -27,6 +27,8 @@ use zeroize::Zeroizing;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AccountResponse {
+    #[serde(default)]
+    local_alias: Option<String>,
     profile: String,
     alias: String,
     username: String,
@@ -379,6 +381,8 @@ struct BackupEnrollmentResponse {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AccountDto {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_alias: Option<String>,
     pub store: String,
     pub profile: String,
     pub alias: String,
@@ -456,6 +460,10 @@ pub(super) fn load_accounts(
             if row.profile != profile
                 || !valid_local_name(&row.alias)
                 || !valid_response_text(&row.username, 256)
+                || row
+                    .local_alias
+                    .as_deref()
+                    .is_some_and(|label| foks_client_app::validate_local_alias(label).is_err())
             {
                 return Err(invalid_response(
                     "The agent returned invalid account details.",
@@ -468,6 +476,7 @@ pub(super) fn load_accounts(
                 ));
             };
             accounts.push(AccountDto {
+                local_alias: row.local_alias,
                 store,
                 profile: row.profile,
                 alias: row.alias,

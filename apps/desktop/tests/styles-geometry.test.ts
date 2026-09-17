@@ -158,7 +158,7 @@ test('shell stylesheet contains required grid and flexbox layout rules', async (
   // Layout tokens live on `.app`, never on `:root`.
   assert.match(shell, /\.app\{[^}]*--side-w-open:224px[;}]/);
   assert.match(shell, /\.app\{[^}]*--details-w:300px[;}]/);
-  assert.match(shell, /\.app\.side-narrow\{--side-w:56px\}/);
+  assert.match(shell, /\.app\.side-narrow\{--side-w:46px\}/);
   // The collapsed rail is a fixed track: no hover or focus expansion.
   assert.match(shell, /\.side\.is-narrow[^{]*\{/);
   assert.doesNotMatch(shell, /\.side\.is-narrow[^{]*:hover/);

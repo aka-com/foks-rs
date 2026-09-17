@@ -1,8 +1,9 @@
+import { useDeviceCache } from '../device-cache';
 import { useCallback, useEffect, useState } from 'react';
 import type { Bridge, YubiEnrollment } from '../bridge';
 import { enqueueProfileWork } from '../bridge';
 import { Button, Inset, InsetRow, SectionLabel } from '../components';
-import { serverAvailability, serverDisplayName } from '../model';
+import { serverAvailability } from '../model';
 import type { AgentSnapshot, Server } from '../model';
 import { YubiActionSheet } from './device-sheets';
 import type { SimpleYubiAction } from './device-sheets';
@@ -18,6 +19,7 @@ export function ProfileKeys({
   bridge: Bridge;
   onError: (error: unknown) => void;
 }) {
+  const deviceCache = useDeviceCache();
   const [entries, setEntries] = useState<YubiEnrollment[]>([]);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
@@ -69,10 +71,7 @@ export function ProfileKeys({
   return (
     <section aria-label="Security key enrollments">
       <SectionLabel>Security key enrollments</SectionLabel>
-      <p>
-        Enrollments are listed for {serverDisplayName(server)}, across all
-        accounts on that server.
-      </p>
+
       <Inset>
         {!available ? (
           <InsetRow label="Unavailable">
@@ -146,6 +145,7 @@ export function ProfileKeys({
           onClose={() => setAction(null)}
           onError={onError}
           onDone={async () => {
+            deviceCache?.clear();
             setAction(null);
             setEntries(await load());
           }}

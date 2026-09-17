@@ -310,14 +310,17 @@ test('Tab cycles the scope chips and never moves focus', async () => {
   assert.equal(current(), 'All');
 });
 
-test('an empty result says what search does not cover', async () => {
+test('an empty result describes searchable fields', async () => {
   await palette(true);
   type('zzzznothing');
   assert.equal(rows().length, 0);
   const none = document.querySelector('.pal-none');
   assert.ok(none);
   assert.match(none.textContent ?? '', /No matches for “zzzznothing”/);
-  assert.match(none.textContent ?? '', /not item contents/);
+  assert.match(
+    none.textContent ?? '',
+    /Search item names, paths, usernames, and channels\./,
+  );
   assert.equal(document.querySelector('.pal-count')?.textContent, '0 results');
   // With nothing highlighted, Enter does nothing rather than opening a row.
   ui.fireEvent.keyDown(field(), { key: 'Enter' });

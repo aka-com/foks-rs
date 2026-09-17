@@ -1,5 +1,5 @@
 /**
- * Page header displaying title, subtitle, and search input.
+ * Page header displaying the title, actions, and search input.
  *
  * Search input state is controlled by the active location. When searching is
  * unsupported for the current view, omitting the query handlers hides the input.
@@ -54,7 +54,6 @@ export interface PageHeaderProps extends HeaderParts {
 
 export function PageHeader({
   title,
-  subtitle,
   tail,
   action,
   query,
@@ -65,7 +64,6 @@ export function PageHeader({
       <div className="loc">
         <div className="loc-copy">
           <h1>{title}</h1>
-          {subtitle ? <small>{subtitle}</small> : null}
         </div>
       </div>
       {tail || action ? (

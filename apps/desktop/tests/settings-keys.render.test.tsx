@@ -134,14 +134,16 @@ test('one page lists the Macs, the paper keys and the security keys', async () =
   assert.ok(rendered.getByText('Macs and device keys'));
   assert.ok(rendered.getByText('Paper keys'));
   assert.ok(rendered.getByText('Security key enrollments'));
-  assert.ok(
-    rendered.getByText('Only paper keys stored on this Mac are listed.'),
+  assert.equal(
+    rendered.queryByText('Only paper keys stored on this Mac are listed.'),
+    null,
   );
-  assert.ok(
-    rendered.getByText(
-      'Enrollments are listed for Personal server, across all accounts on that server.',
-    ),
+  assert.equal(rendered.queryByText(/Enrollments are listed for/), null);
+  assert.equal(
+    rendered.queryByRole('group', { name: 'Accounts on this Mac' }),
+    null,
   );
+
   // This Mac says so and cannot remove itself; the other Mac can be removed,
   // and the key on a card is neither — it is revoked under its enrollment.
   assert.ok(rendered.getByText('This device'));
@@ -981,4 +983,79 @@ test('a card-backed device opens its enrollment by the native key id', async () 
     store: 'acct:personal',
     device: 'yubi:travel',
   });
+});
+
+test('Devices reads only the current account and follows sidebar account changes', async () => {
+  const reads: StoreRef[] = [];
+  const rendered = await renderDevices(await fixture(), {
+    store: 'acct:personal',
+    decorate: (base) => ({
+      ...base,
+      listAccountDevices: async (store) => {
+        reads.push(store);
+        return [
+          {
+            id: '04' + 'ab'.repeat(32),
+            name: store === 'acct:personal' ? 'Personal Mac' : 'Work Mac',
+            role: 'owner',
+            current: true,
+          },
+        ];
+      },
+      listBackupEnrollments: async () => [],
+      listYubiAccounts: async () => [],
+      listYubiCards: async () => [],
+    }),
+  });
+  assert.ok(await rendered.findByText('Personal Mac'));
+  assert.equal(rendered.queryByText('Work Mac'), null);
+  assert.equal(
+    rendered.queryByRole('group', { name: 'Accounts on this Mac' }),
+    null,
+  );
+  assert.ok(rendered.getByText('No YubiKey enrolled.'));
+  assert.ok(rendered.getByText('No security key connected.'));
+  assert.ok(
+    rendered.getByText('Use a paper key to recover an existing account.'),
+  );
+  await rendered.showAccount('acct:work');
+  assert.ok(await rendered.findByText('Work Mac'));
+  assert.equal(rendered.queryByText('Personal Mac'), null);
+  assert.deepEqual(reads, ['acct:personal', 'acct:work']);
+});
+
+test('device removal refreshes native device records before submitting the write', async () => {
+  const snapshot = await fixture();
+  const target = deviceId(snapshot, 1);
+  const calls: string[] = [];
+  const page = await renderDevices(snapshot, {
+    store: 'acct:personal',
+    device: target,
+    decorate: (bridge) => ({
+      ...bridge,
+      listAccountDevices: async (store) => {
+        calls.push('read');
+        return bridge.listAccountDevices(store);
+      },
+      removeAccountDevice: async (store, device) => {
+        calls.push('remove');
+        return bridge.removeAccountDevice(store, device);
+      },
+    }),
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      page.getByRole('button', { name: 'Remove this device…' }),
+    );
+  });
+  const input = document.querySelector<HTMLInputElement>('.sheet input');
+  assert.ok(input);
+  ui.fireEvent.change(input, {
+    target: { value: input.placeholder.replace(/^type /, '') },
+  });
+  calls.length = 0;
+  await ui.act(async () => {
+    ui.fireEvent.click(page.getByRole('button', { name: 'Remove device' }));
+  });
+  assert.deepEqual(calls, ['read', 'remove']);
 });

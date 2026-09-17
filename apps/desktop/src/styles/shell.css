@@ -31,7 +31,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .app{flex:1;min-height:0;display:grid;position:relative;--side-track:auto;--side-w-open:224px;--side-w:var(--side-w-open);--side-pad:10px;--side-head-pad:10px;--side-open-content:calc(var(--side-w-open) - var(--side-pad) * 2);--details-w:300px;grid-template-columns:var(--side-track) minmax(0,1fr);transition:grid-template-columns .2s ease}
 .app.with-details{grid-template-columns:var(--side-track) minmax(0,1fr) var(--details-w)}
 /* Collapsed rail width */
-.app.side-narrow{--side-w:56px}
+.app.side-narrow{--side-w:46px}
 @media (prefers-reduced-motion:reduce){.app{transition:none}}
 
 /* Sidebar */
@@ -54,9 +54,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side .foot{padding-top:10px;border-top:1px solid var(--line-soft)}
 .side .foot .nav{font-size:13px}
 
-/* Collapsed rail. Collapsing is CSS only: the DOM is identical in both states,
-   and the width is the one the reader chose from the topbar — the rail does not
-   expand on hover or on focus. */
+/* Collapsed rail */
 .side{width:var(--side-w);transition:width .18s ease;overflow-x:hidden}
 /* Adjacent row spacing */
 .side .nav+.nav{margin-top:3px}
@@ -84,8 +82,8 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
    header, the tabs, and the agent light at the foot. There is no title bar
    above it. First run replaces it with its own step list, which is `.side`
    alone, so every blue rule below is scoped to `.rail` and the collapse
-   machinery above is shared. The rail is 200px open and 56px collapsed, and it
-   never expands on hover: the width is the one the topbar's toggle chose. */
+   machinery above is shared. The rail is 200px open and 46px collapsed, and it
+   never expands on hover: the width is the one the rail's toggle chose. */
 .app:has(>.side.rail){--side-w-open:200px}
 .side.rail{--rail-badge:var(--unread);background:var(--rail);border-right-color:rgba(0,0,0,.12);color:var(--rail-ink);padding:0;overflow-x:hidden;overflow-y:auto;user-select:none}
 /* Window drag strip */
@@ -110,7 +108,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side.rail .rail-head{position:relative;border-bottom:1px solid var(--rail-line)}
 .side.rail .who{display:flex;align-items:center;gap:10px;width:100%;padding:10px 14px 14px;text-align:left;color:inherit}
 .side.rail .who:hover,.side.rail .who[aria-expanded="true"]{background:rgba(255,255,255,.1)}
-.side.rail .who .avatar{width:32px;height:32px;flex:none;border-radius:50%;background:#fff;color:var(--rail);font-weight:700;font-size:13px;display:grid;place-items:center}
+.side.rail .who .avatar{width:24px;height:24px;flex:none;border-radius:50%;background:#fff;color:var(--rail);font-weight:700;font-size:13px;display:grid;place-items:center}
 .side.rail .who.who-empty .avatar{background:rgba(255,255,255,.35)}
 .side.rail .who .t{flex:1;min-width:0;line-height:1.2;overflow:hidden}
 .side.rail .who .t b{display:block;color:#fff;font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -140,10 +138,10 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
    `.side.is-narrow` rules, and the unread count rides the glyph's corner as a
    count rather than shrinking to a dot. */
 .side.rail.is-narrow .traffic{padding:14px 6px 6px}
-.side.rail.is-narrow .traffic .lights{gap:5px}
+.side.rail.is-narrow .traffic .lights{visibility:hidden;gap:5px}
 .side.rail.is-narrow .who{justify-content:center;padding-left:0;padding-right:0;gap:0}
 .side.rail.is-narrow .who .t,.side.rail.is-narrow .who .chev{display:none}
-.side.rail.is-narrow .attn{left:36px}
+.side.rail.is-narrow .attn{left:calc(50% + 8px);top:9px}
 .side.rail.is-narrow .nav>.chat-unread{position:absolute;top:2px;left:calc(50% + 2px);margin:0;box-shadow:0 0 0 2px var(--rail)}
 .side.rail.is-narrow .status{justify-content:center;padding-left:0;padding-right:0;gap:0}
 .side.rail.is-narrow .status .t{display:none}
@@ -806,3 +804,23 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;margi
 .toast-action{font-weight:650;padding:2px 4px}
 .toast-dismiss{opacity:.7;font-size:16px;line-height:1;padding:2px 4px}
 .toast-action:hover,.toast-dismiss:hover{opacity:1}
+
+/* Collapsed rail nav overrides */
+.side.rail.is-narrow .nav{justify-content:center;padding-left:0;padding-right:0;gap:0;border-right:3px solid transparent}
+.side.rail.is-narrow .attn{left:32px}
+.phead>.t{flex:1}
+.account-dropdown{margin-left:auto;flex:none;max-width:220px}
+.account-dropdown-trigger{display:flex;align-items:center;gap:8px;border:1px solid var(--line-soft);border-radius:8px;padding:6px 9px;text-align:left;color:var(--ink-2);background:var(--surface)}
+.account-dropdown-trigger:hover{background:var(--hover)}
+.account-dropdown-trigger .avatar{display:none}
+.account-dropdown-trigger .t{min-width:0}
+.account-dropdown-trigger .t b{display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.account-dropdown-trigger .t small{display:none}
+.account-dropdown-trigger .chev{display:flex;flex:none}
+
+.side.rail.is-narrow .who .avatar{transform:translateY(2px)}
+.side.rail .traffic{position:relative}
+.rail-back{position:absolute;right:8px;top:calc(50% + 4px);transform:translateY(-50%);display:grid;place-items:center;width:24px;height:24px;border-radius:5px;color:var(--rail-ink);-webkit-app-region:no-drag}
+.rail-back .ic{width:15px;height:15px}
+.rail-back:hover:not(:disabled){background:rgba(255,255,255,.12)}
+.rail-back:disabled{opacity:.35}

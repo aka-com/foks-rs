@@ -203,8 +203,10 @@ export function serverDisplayName(
 export interface Account {
   /** Canonical identifier of the account store. */
   store: StoreRef;
-  /** The profile-local display label. Never an identity. */
+  /** Stable profile-local command selector. */
   alias: string;
+  /** Editable local display alias; absent until changed. */
+  localAlias?: string;
   username: string;
   server: string;
 }

@@ -180,6 +180,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::sso::sso_request,
             commands::account_conveniences::rename_account_request,
+            commands::account_conveniences::set_local_account_alias,
             commands::invitations::invitation_request,
             commands::bot::bot_account_request,
             commands::web_admin::configure_web_admin,

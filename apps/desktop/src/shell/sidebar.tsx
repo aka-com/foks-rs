@@ -1,14 +1,13 @@
 /**
  * The navigation rail.
  *
- * Six fixed tabs — Accounts, Chat, Files, Teams, Devices, Settings — under an
+ * Six fixed tabs — Files, Chat, Teams, Devices, Accounts, Settings — under an
  * account header that names the active account and opens the account menu, and
  * over the agent light at the foot. The rail's top is the window's traffic-light
  * strip: there is no title bar above it. The rail does not enumerate stores;
  * Files and Teams list them on their own pages. Control-Tab walks the six tabs.
- *
- * The rail is 200px open and 56px collapsed, and collapsing is a width the
- * reader chooses from the topbar: it never expands on hover or focus.
+ * * The rail is 200px open and 46px collapsed. The width is selected by the user
+ * from the rail itself: it never expands on hover or focus.
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
@@ -16,6 +15,7 @@ import { Menu, Popover, anyDialogOpen } from '/kit/overlay-primitives';
 import { Icon } from '../components';
 import {
   chatAvailable,
+  localAliasOf,
   serverDisplayName,
   serverName,
   storeAvailability,
@@ -29,7 +29,12 @@ import type { AgentLifecycle } from '../agent-lifecycle';
 import type { FoksIconName } from '../icons';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { teamUnread } from '../chat/unread';
-import { accountAtLocation, chatTabLocation, railTabOf } from '../location';
+import {
+  accountAtLocation,
+  chatTabLocation,
+  parentLocation,
+  railTabOf,
+} from '../location';
 import type { Location, RailTab } from '../location';
 
 interface RailTabSpec {
@@ -40,20 +45,20 @@ interface RailTabSpec {
 }
 
 const RAIL_TABS: readonly RailTabSpec[] = [
-  {
-    id: 'people',
-    label: 'Accounts',
-    icon: 'person',
-    location: { kind: 'people' },
-  },
-  { id: 'chat', label: 'Chat', icon: 'chat', location: { kind: 'chat' } },
   { id: 'files', label: 'Files', icon: 'folder', location: { kind: 'files' } },
+  { id: 'chat', label: 'Chat', icon: 'chat', location: { kind: 'chat' } },
   { id: 'teams', label: 'Teams', icon: 'people', location: { kind: 'teams' } },
   {
     id: 'devices',
     label: 'Devices',
     icon: 'shield',
     location: { kind: 'devices' },
+  },
+  {
+    id: 'people',
+    label: 'Accounts',
+    icon: 'person',
+    location: { kind: 'people' },
   },
   {
     id: 'settings',
@@ -99,8 +104,10 @@ export function nextSidebarCycleLocation(
  */
 export function TrafficStrip({
   native = false,
+  children,
 }: {
   native?: boolean;
+  children?: ReactNode;
 }): ReactNode {
   return (
     <div className="traffic" data-tauri-drag-region="">
@@ -111,6 +118,7 @@ export function TrafficStrip({
           <span className="light" />
         </span>
       )}
+      {children}
     </div>
   );
 }
@@ -220,7 +228,7 @@ export interface SidebarProps {
   onReenter?: () => void;
   /** Arms the application lock. Omitted where no lock command is reachable. */
   onLock?: () => void;
-  /** Collapsed to the 56px icon-only track. The topbar owns the toggle. */
+  /** Collapsed to the 46px icon-only track. The rail carries the toggle. */
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
   /** Connection status displayed in the rail footer. */
@@ -237,11 +245,12 @@ export interface SidebarProps {
  * locking the app. The attention dot rides the avatar and opens the Accounts
  * tab, which is where the list of things to attend to lives.
  */
-function AccountHeader({
+export function AccountHeader({
   snapshot,
   location,
   account,
-  attention,
+  attention = 0,
+  compact = false,
   onNavigate,
   onTabNavigate,
   onReenter,
@@ -250,7 +259,8 @@ function AccountHeader({
   snapshot: AgentSnapshot;
   location: Location;
   account?: StoreRef;
-  attention: number;
+  attention?: number;
+  compact?: boolean;
   onNavigate: (location: Location) => void;
   onTabNavigate?: (tab: RailTab) => void;
   onReenter?: () => void;
@@ -295,11 +305,11 @@ function AccountHeader({
   const hues = storeHues(storeNavigationOrder(snapshot));
   const close = (): void => setOpen(false);
   return (
-    <div className="rail-head">
+    <div className={compact ? 'account-dropdown' : 'rail-head'}>
       <button
         type="button"
         ref={anchorRef}
-        className="who"
+        className={compact ? 'account-dropdown-trigger' : 'who'}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`${username} · ${server}`}
@@ -413,7 +423,7 @@ function AccountHeader({
                           </span>
                           <span className="t">
                             {usernameOf(store)}
-                            <small>{store.account}</small>
+                            <small>{localAliasOf(snapshot, store)}</small>
                           </span>
                           <span
                             className={
@@ -531,6 +541,7 @@ export function Sidebar({
   onReenter,
   onLock,
   collapsed = false,
+  onToggleCollapsed,
   agent = 'ready',
   nativeChrome = false,
   blocked = false,
@@ -570,7 +581,23 @@ export function Sidebar({
         .join(' ')}
       aria-label="Main Navigation"
     >
-      <TrafficStrip native={nativeChrome} />
+      <TrafficStrip native={nativeChrome}>
+        {!collapsed ? (
+          <button
+            type="button"
+            className="rail-back"
+            aria-label="Back"
+            title="Back"
+            disabled={blocked || !parentLocation(location)}
+            onClick={() => {
+              const parent = parentLocation(location);
+              if (parent) onNavigate(parent);
+            }}
+          >
+            <Icon name="back" />
+          </button>
+        ) : null}
+      </TrafficStrip>
       <div className={blocked ? 'rail-body is-blocked' : 'rail-body'}>
         {snapshot ? (
           <AccountHeader
@@ -624,6 +651,22 @@ export function Sidebar({
       </div>
       <div className="side-bottom">
         {status}
+        {onToggleCollapsed ? (
+          <button
+            type="button"
+            className="nav side-collapse"
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? 'Expand rail' : 'Collapse rail'}
+            title={collapsed ? 'Expand rail' : 'Collapse rail'}
+            disabled={blocked}
+            onClick={onToggleCollapsed}
+          >
+            <Icon name={collapsed ? 'panel-hollow' : 'panel-filled'} />
+            <span className="t">
+              {collapsed ? 'Expand rail' : 'Collapse rail'}
+            </span>
+          </button>
+        ) : null}
         <div className="foot">
           <AgentLight state={agent} />
         </div>

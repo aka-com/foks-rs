@@ -83,12 +83,12 @@ async function shell(
   return rendered;
 }
 
-/** The topbar's collapse toggle. */
+/** The rail's collapse toggle. */
 function toggle(): HTMLButtonElement {
   const button = document.querySelector<HTMLButtonElement>(
-    '.topbar .side-collapse',
+    '.side .side-collapse',
   );
-  assert.ok(button, 'the topbar draws the collapse toggle');
+  assert.ok(button, 'the rail draws the collapse toggle');
   return button;
 }
 
@@ -198,7 +198,7 @@ test('every tab draws a glyph, so all six survive the collapsed rail', async () 
   const tabs = [...document.querySelectorAll('.side.rail .rail-tabs .nav')];
   assert.deepEqual(
     tabs.map((tab) => tab.querySelector('.t')?.textContent),
-    ['Accounts', 'Chat', 'Files', 'Teams', 'Devices', 'Settings'],
+    ['Files', 'Chat', 'Teams', 'Devices', 'Accounts', 'Settings'],
   );
   for (const tab of tabs)
     assert.ok(tab.querySelector('.ic'), `${tab.textContent} has a glyph`);

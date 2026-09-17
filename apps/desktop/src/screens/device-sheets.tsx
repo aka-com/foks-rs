@@ -1493,8 +1493,13 @@ export function RemoveDeviceSheet({
             disabled={confirmation !== expected || busy}
             onClick={() => {
               setBusy(true);
-              void bridge
-                .removeAccountDevice(store.id, device.id)
+              // The display cache can outlive the native catalog's retained
+              // device list. Re-read before a destructive action so native
+              // target/current-device validation uses fresh records.
+              void enqueueProfileWork(bridge, store.server, async () => {
+                await bridge.listAccountDevices(store.id);
+                return bridge.removeAccountDevice(store.id, device.id);
+              })
                 .then((removed) => {
                   if (removed.deviceId !== device.id)
                     throw new Error(

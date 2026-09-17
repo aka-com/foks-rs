@@ -65,3 +65,14 @@ export function accountStopped(
       : '',
   };
 }
+
+/** Display-only; never pass this value to a command or use it as a StoreRef. */
+export function localAliasOf(
+  snapshot: AgentSnapshot,
+  store: AccountStore,
+): string {
+  return (
+    snapshot.accounts.find((entry) => entry.store === store.id)?.localAlias ??
+    store.account
+  );
+}

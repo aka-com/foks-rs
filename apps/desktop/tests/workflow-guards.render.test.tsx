@@ -352,3 +352,30 @@ test('scanning and adding a CLI server both allow navigation', async () => {
   });
   assert.equal(h.verdict(store), null);
 });
+
+test('local alias draft prompts on navigation and an active save refuses it', async () => {
+  const h = await harness();
+  const { LocalAliasPanel } = (await vite.ssrLoadModule(
+    '/src/components/local-alias-panel.tsx',
+  )) as typeof import('../src/components/local-alias-panel');
+  const { store, rendered } = h.mount(
+    createElement(LocalAliasPanel, {
+      bridge: h.bridge({ setLocalAccountAlias: () => never() }),
+      store: 'acct:personal',
+      alias: 'personal',
+      presentation: {
+        title: 'Change local alias',
+        subtitle: 'Account',
+        onClose: () => {},
+      },
+      onComplete: async () => {},
+    }),
+  );
+  assert.equal(h.verdict(store), null);
+  ui.fireEvent.change(rendered.getByRole('textbox', { name: 'Local alias' }), {
+    target: { value: 'Private' },
+  });
+  assert.equal(h.verdict(store)?.verdict, 'prompt');
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Save' }));
+  assert.equal(h.verdict(store)?.verdict, 'refuse');
+});

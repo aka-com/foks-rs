@@ -370,6 +370,21 @@ impl AppState {
         &self,
         id: &str,
     ) -> Result<foks_agent_proto::AccountStoreRef, AgentError> {
+        self.selected_account_inner(id, true)
+    }
+
+    pub(super) fn local_account(
+        &self,
+        id: &str,
+    ) -> Result<foks_agent_proto::AccountStoreRef, AgentError> {
+        self.selected_account_inner(id, false)
+    }
+
+    fn selected_account_inner(
+        &self,
+        id: &str,
+        require_available: bool,
+    ) -> Result<foks_agent_proto::AccountStoreRef, AgentError> {
         let catalog = self
             .catalog
             .lock()
@@ -396,7 +411,9 @@ impl AppState {
                 false,
             ));
         };
-        require_profile_available(catalog, &account.profile)?;
+        if require_available {
+            require_profile_available(catalog, &account.profile)?;
+        }
         Ok(account)
     }
 

@@ -154,18 +154,20 @@ export function Topbar({
   const parent = blocked ? null : parentLocation(location);
   return (
     <div className="topbar" data-tauri-drag-region="">
-      <button
-        type="button"
-        className="back"
-        title="Back"
-        aria-label="Back"
-        disabled={!parent}
-        onClick={() => {
-          if (parent) onNavigate(parent);
-        }}
-      >
-        <Icon name="back" />
-      </button>
+      {collapsed ? (
+        <button
+          type="button"
+          className="back"
+          title="Back"
+          aria-label="Back"
+          disabled={!parent}
+          onClick={() => {
+            if (parent) onNavigate(parent);
+          }}
+        >
+          <Icon name="back" />
+        </button>
+      ) : null}
       <div className="crumbs" data-tauri-drag-region="">
         {trail.map((crumb, index) => (
           // Keyed by position as well as text: a store named after its own tab

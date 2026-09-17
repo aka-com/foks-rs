@@ -103,6 +103,8 @@ pub struct AccountStoreRef {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AccountSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_alias: Option<String>,
     pub profile: String,
     pub alias: String,
     pub username: String,
@@ -405,6 +407,11 @@ impl Request {
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "operation", rename_all = "kebab-case")]
 pub enum Operation {
+    SetLocalAccountAlias {
+        profile: String,
+        account_alias: String,
+        label: String,
+    },
     Invitations {
         profile: String,
         account_alias: String,
@@ -1027,6 +1034,9 @@ impl std::fmt::Debug for Operation {
             Self::BotAccount { .. } => formatter.write_str("BotAccount { [REDACTED] }"),
             Self::ListAccountRenames { .. } => formatter.write_str("ListAccountRenames { .. }"),
             Self::Invitations { .. } => formatter.write_str("Invitations { [REDACTED] }"),
+            Self::SetLocalAccountAlias { .. } => {
+                formatter.write_str("SetLocalAccountAlias { [REDACTED] }")
+            }
             Self::RenameAccount { .. } => formatter.write_str("RenameAccount { [REDACTED] }"),
             Self::Sso { .. } => formatter.write_str("Sso { [REDACTED] }"),
             Self::Chat { store, action } => formatter
@@ -2357,5 +2367,26 @@ mod tests {
                 "backup_id_hex": "1234"
             })
         );
+    }
+}
+
+#[cfg(test)]
+mod local_alias_tests {
+    use super::*;
+    #[test]
+    fn local_alias_is_a_serialized_local_mutation_without_debug_labels() {
+        let operation = Operation::SetLocalAccountAlias {
+            profile: "local".into(),
+            account_alias: "work".into(),
+            label: "Office".into(),
+        };
+        assert!(operation.is_mutation());
+        let value = serde_json::to_value(&operation).unwrap();
+        assert_eq!(value["operation"], "set-local-account-alias");
+        assert_eq!(
+            serde_json::from_value::<Operation>(value).unwrap(),
+            operation
+        );
+        assert!(!format!("{operation:?}").contains("Office"));
     }
 }

@@ -25,6 +25,7 @@ import {
   serverDisplayName,
   serverName as displayServerName,
   serverOf,
+  shortId,
   storeDescriptionState,
 } from '../model';
 import type {
@@ -346,31 +347,18 @@ export function IncompleteGroupPage({
     <div className="body">
       <div className="groups-wrap">
         <div className="roster">
-          <Band label={copy.title}>{copy.detail}</Band>
-          <Inset className="settings-inset">
-            <InsetRow
-              action={
-                <Button variant="primary" onClick={onFinish}>
-                  Finish setup
-                </Button>
-              }
-            >
-              <span className="t">
-                <b>Finish setup</b>
-                <small>
-                  Resumes setup for this incomplete group. The existing group
-                  is retained on the server, so no new group is created.
-                </small>
-              </span>
-            </InsetRow>
-          </Inset>
+          <Band
+            label={copy.title}
+            action={
+              <Button variant="primary" size="sm" onClick={onFinish}>
+                Finish setup
+              </Button>
+            }
+          >
+            {copy.detail}
+          </Band>
           <SectionLabel>What this Mac knows</SectionLabel>
           <Inset>
-            <InsetRow label="Kind">
-              {store.team_kind === 'named'
-                ? 'Named group — people can be added and removed over time'
-                : 'Ad-hoc share — fixed membership, no name on the server'}
-            </InsetRow>
             <InsetRow
               label="Account"
               action={
@@ -399,7 +387,9 @@ export function IncompleteGroupPage({
                 </Button>
               }
             >
-              <code>{store.team_id_hex}</code>
+              <code title={store.team_id_hex}>
+                {shortId(store.team_id_hex)}
+              </code>
             </InsetRow>
           </Inset>
         </div>

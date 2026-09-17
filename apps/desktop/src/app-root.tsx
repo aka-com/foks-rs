@@ -1,3 +1,5 @@
+import { accountStopped } from './model';
+import { DeviceCache, DeviceCacheContext } from './device-cache';
 import { useTabSheetState } from './navigation-guard';
 import type { DeviceLabel } from './model';
 import { ChatInboxProvider } from './chat/inbox-provider';
@@ -372,10 +374,7 @@ function StartingScreen(): ReactNode {
     <div className="booting" role="status">
       <span className="spin" aria-hidden="true" />
       <b>Starting the FOKS agent…</b>
-      <span className="line">
-        Startup usually takes a few seconds. Your vaults remain encrypted until
-        startup completes.
-      </span>
+      <span className="line">Startup usually takes a few seconds.</span>
     </div>
   );
 }
@@ -879,6 +878,7 @@ function VaultShell({
     };
   }, [locations, settlePrompt, toasts]);
   const [concealSignal, setConcealSignal] = useState(0);
+  const [deviceCacheEpoch, setDeviceCacheEpoch] = useState(0);
   // A conceal ends the session the remembered chat belonged to: the account
   // that comes back may not have that team on this Mac, so the rail's Chat tab
   // runs the first-team fallback again instead of reopening it. The Chat tab
@@ -1018,6 +1018,7 @@ function VaultShell({
         .then((next) => {
           if (generation === refreshSnapshotGeneration.current) {
             setLatest(next);
+            if (force) setDeviceCacheEpoch((value) => value + 1);
             setAgentCatalogReady(true);
           }
           return next;
@@ -1195,7 +1196,7 @@ function VaultShell({
   const refreshAll = (): void => {
     if (refreshingSnapshot) return;
     setRefreshingSnapshot(true);
-    void refreshSnapshot()
+    void refreshSnapshot(true)
       .then(() => toasts.show('Vaults and groups refreshed'))
       .catch(commandError)
       .finally(() => setRefreshingSnapshot(false));
@@ -1337,6 +1338,15 @@ function VaultShell({
         : (document.getElementById('overlays') ?? document.body),
     [],
   );
+  const lockFromMenu = () => {
+    void onLock().then(
+      (locked) => {
+        if (!locked)
+          toasts.show('Application lock is not available on this system.');
+      },
+      (error: unknown) => commandError(error),
+    );
+  };
   const accessNow = useCallback(() => leaseClock.now(), [leaseClock]);
   const chatClock = useMemo(
     () => ({
@@ -1543,6 +1553,7 @@ function VaultShell({
     // People owns its own sheets and shares no state with Settings, so it is
     // given exactly the props it declares.
     <PeopleScreen
+      onLock={lockFromMenu}
       key={`people:${concealSignal}`}
       snapshot={shown}
       bridge={bridge}
@@ -1646,17 +1657,7 @@ function VaultShell({
               onNavigate={(location) => {
                 locations.navigate(location);
               }}
-              onLock={() => {
-                void onLock().then(
-                  (locked) => {
-                    if (!locked)
-                      toasts.show(
-                        'Application lock is not available on this system.',
-                      );
-                  },
-                  (error: unknown) => commandError(error),
-                );
-              }}
+              onLock={lockFromMenu}
               status={
                 pendingFirstRun ? (
                   <FirstRunChecklistStatus
@@ -1665,6 +1666,7 @@ function VaultShell({
                   />
                 ) : undefined
               }
+              onToggleCollapsed={toggleSidebar}
               collapsed={sideCollapsed}
               agent={railAgentState(agentLifecycle.state, shown.agent.state)}
               nativeChrome={bridge.native}
@@ -1677,7 +1679,6 @@ function VaultShell({
                 onNavigate={(location) => locations.navigate(location)}
                 onSearch={() => setSearchOpen(true)}
                 collapsed={sideCollapsed}
-                onToggleCollapsed={toggleSidebar}
                 refreshing={refreshingSnapshot}
                 onRefresh={refreshAll}
               />
@@ -1793,6 +1794,33 @@ function VaultShell({
     </div>
   );
 
+  // Display labels do not identify accounts. Replacing identities or access
+  // retires all cached metadata; a forced catalog refresh does the same after
+  // the new catalog is installed, so reads cannot race its replacement.
+  const deviceIdentity = JSON.stringify({
+    accounts: shown.accounts.map(({ store, alias, server }) => [
+      store,
+      alias,
+      server,
+    ]),
+    servers: shown.servers.map(({ id, host_id, configuredProbe }) => [
+      id,
+      host_id,
+      configuredProbe,
+    ]),
+    access: shown.stores
+      .filter((store) => store.kind === 'account')
+      .map((store) => [store.id, accountStopped(shown, store).stopped]),
+    generations: [...accessGenerations],
+  });
+  const deviceCache = useMemo(
+    () => new DeviceCache(bridge),
+    // These values define the lifetime of the cache, not its read arguments.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [bridge, concealSignal, deviceCacheEpoch, deviceIdentity],
+  );
+  useEffect(() => () => deviceCache.clear(), [deviceCache]);
+
   const withToasts = (
     <ToastProvider controller={toasts} portalRoot={portalRoot}>
       <ChatInboxProvider
@@ -1804,7 +1832,9 @@ function VaultShell({
         accessNow={accessNow}
       >
         <NavigationGuardProvider store={locations}>
-          {shell}
+          <DeviceCacheContext.Provider value={deviceCache}>
+            {shell}
+          </DeviceCacheContext.Provider>
         </NavigationGuardProvider>
       </ChatInboxProvider>
     </ToastProvider>

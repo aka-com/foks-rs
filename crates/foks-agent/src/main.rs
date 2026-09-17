@@ -2394,6 +2394,7 @@ fn dispatch_result(
                     .accounts
                     .into_iter()
                     .map(|(alias, username)| AccountSummary {
+                        local_alias: None,
                         profile: profile.clone(),
                         alias,
                         username,
@@ -2417,6 +2418,7 @@ fn dispatch_result(
                     for alias in vault.aliases()? {
                         let username = vault.account_display_name(&alias)?;
                         accounts.push(AccountSummary {
+                            local_alias: vault.local_account_alias(&alias)?,
                             profile: profile.clone(),
                             alias,
                             username,
@@ -2473,6 +2475,22 @@ fn dispatch_result(
                 })?)
             })
         }
+        Operation::SetLocalAccountAlias {
+            profile,
+            account_alias,
+            label,
+        } => {
+            registry.profile(&profile)?;
+            let paths = registry.prepare_profile_directory(&profile)?;
+            let credentials = ClientCredentials::open(state_dir)?;
+            let master = credentials.master_key()?;
+            let mut store =
+                EncryptedFileSecretStore::open(&paths.credential_store, derive_vault_key(&master))?;
+            AccountVault::new(&mut store).set_local_account_alias(&account_alias, &label)?;
+            Ok(
+                serde_json::json!({"profile": profile, "account_alias": account_alias, "label": label}),
+            )
+        }
         Operation::ListAccounts { profile } => {
             let session =
                 ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
@@ -2485,6 +2503,7 @@ fn dispatch_result(
                         .accounts
                         .into_iter()
                         .map(|(alias, username)| AccountSummary {
+                            local_alias: None,
                             profile: profile.clone(),
                             alias,
                             username,
@@ -2497,6 +2516,7 @@ fn dispatch_result(
                 for alias in vault.aliases()? {
                     let username = vault.account_display_name(&alias)?;
                     accounts.push(AccountSummary {
+                        local_alias: vault.local_account_alias(&alias)?,
                         profile: profile.clone(),
                         alias,
                         username,
@@ -5464,6 +5484,50 @@ mod tests {
                     "username": "agentinvite"
                 }])
         ));
+        let missing_profile = dispatch(
+            &state,
+            Request::new(
+                110,
+                Operation::SetLocalAccountAlias {
+                    profile: "missing".into(),
+                    account_alias: "personal".into(),
+                    label: "Private account".into(),
+                },
+            ),
+        );
+        assert!(matches!(
+            missing_profile.result,
+            foks_agent_proto::ResponseResult::Error { .. }
+        ));
+        assert!(!state.join("profiles/missing").exists());
+        let renamed = dispatch(
+            &state,
+            Request::new(
+                111,
+                Operation::SetLocalAccountAlias {
+                    profile: "local".into(),
+                    account_alias: "personal".into(),
+                    label: "Private account".into(),
+                },
+            ),
+        );
+        assert!(
+            matches!(renamed.result, foks_agent_proto::ResponseResult::Success { value }
+            if value == serde_json::json!({"profile":"local", "account_alias":"personal", "label":"Private account"}))
+        );
+        let renamed_list = dispatch(
+            &state,
+            Request::new(
+                112,
+                Operation::ListAccounts {
+                    profile: "local".into(),
+                },
+            ),
+        );
+        assert!(
+            matches!(renamed_list.result, foks_agent_proto::ResponseResult::Success { value }
+            if value == serde_json::json!([{"profile":"local", "alias":"personal", "username":"agentinvite", "local_alias":"Private account"}]))
+        );
         let known = dispatch(
             &state,
             Request::new(

@@ -607,6 +607,7 @@ fn member_targets_require_fresh_local_non_self_user_facts() {
     state.accounts.lock().unwrap().insert(
         account_id.clone(),
         AccountDto {
+            local_alias: None,
             store: account_id,
             profile: "work.example".to_owned(),
             alias: "personal".to_owned(),
@@ -874,6 +875,7 @@ fn stale_group_reads_cannot_repopulate_authorization_caches() {
     state.accounts.lock().unwrap().insert(
         "old-account".to_owned(),
         AccountDto {
+            local_alias: None,
             store: "old-account".to_owned(),
             profile: "work.example".to_owned(),
             alias: "personal".to_owned(),

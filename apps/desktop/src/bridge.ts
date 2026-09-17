@@ -702,6 +702,10 @@ export interface Bridge {
     action: InvitationAction,
     pin: string | null,
   ): Promise<InvitationReply>;
+  setLocalAccountAlias(
+    store: StoreRef,
+    label: string,
+  ): Promise<{ store: StoreRef; alias: string }>;
   renameAccount(
     profile: string,
     accountAlias: string,
@@ -1219,6 +1223,9 @@ function decodeAccount(value: unknown, at: string): Account {
   return {
     store: string(item.store, `${at}.store`),
     server: string(item.profile, `${at}.profile`),
+    ...(item.local_alias == null
+      ? {}
+      : { localAlias: string(item.local_alias, `${at}.local_alias`) }),
     alias: string(item.alias, `${at}.alias`),
     username: string(item.username, `${at}.username`),
   };
@@ -2489,6 +2496,23 @@ export const tauriBridge: Bridge = {
       'invitation_request',
       { profile, accountAlias, action, pin },
       decodeInvitationReply,
+    ),
+  setLocalAccountAlias: (store, label) =>
+    checked(
+      'set_local_account_alias',
+      { accountStoreId: store, label },
+      (value) => {
+        const item = record(value, 'local alias response');
+        if (
+          Object.keys(item).sort().join(',') !== 'alias,store' ||
+          item.store !== store ||
+          item.alias !== label
+        )
+          throw new Error(
+            'Local alias response belongs to a different account or label.',
+          );
+        return { store, alias: label };
+      },
     ),
   renameAccount: (profile, accountAlias, action) =>
     checked(

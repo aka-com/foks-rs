@@ -53,7 +53,7 @@ export function NewItemButton({
       label="New"
       variant="primary"
       menuLabel="Create item"
-      align="start"
+      align="end"
     >
       {(close) => (
         <>
@@ -92,7 +92,6 @@ export function Toolbar({
 }: ToolbarProps): ReactNode {
   return (
     <div className="toolbar">
-      <NewItemButton onNew={onNew} />
       <SegmentedControl<KindFilter>
         label="Filter items by kind"
         value={kind}
@@ -106,12 +105,11 @@ export function Toolbar({
           })),
         ]}
       />
-      <span className="spacer" />
       {/* Sort selection menu trigger. */}
       <MenuButton
         label={<Icon name={SORT_ICONS[sort]} />}
         menuLabel="Item order"
-        align="end"
+        align="start"
         className="sortwrap"
         title={SORT_LABELS[sort]}
         aria-label={SORT_LABELS[sort]}
@@ -137,6 +135,8 @@ export function Toolbar({
           </>
         )}
       </MenuButton>
+      <span className="spacer" />
+      <NewItemButton onNew={onNew} />
       <SegmentedControl<ViewMode>
         label="View display mode"
         variant="icon"

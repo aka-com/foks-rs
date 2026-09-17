@@ -126,10 +126,10 @@ test('the rail draws six tabs and marks the one that owns the location', async (
   await rail({ kind: 'group-settings', ref: 'team:eng' });
   assert.deepEqual(
     tabs().map((tab) => tab.querySelector('.t')?.textContent),
-    ['Accounts', 'Chat', 'Files', 'Teams', 'Devices', 'Settings'],
+    ['Files', 'Chat', 'Teams', 'Devices', 'Accounts', 'Settings'],
   );
   // A group's settings page belongs to Teams.
-  assert.equal(tabs()[3].getAttribute('aria-current'), 'page');
+  assert.equal(tabs()[2].getAttribute('aria-current'), 'page');
   assert.equal(tabs().filter((tab) => tab.className.includes('on')).length, 1);
 });
 
@@ -174,18 +174,18 @@ test('the rail foot reports the connection, and says nothing about the step', as
 
 test('a tab click and Control-Tab both navigate over the six tabs', async () => {
   const { journal } = await rail({ kind: 'files' });
-  ui.fireEvent.click(tabs()[0]);
+  ui.fireEvent.click(tabs()[4]);
   assert.deepEqual(journal.navigations.at(-1), { kind: 'people' });
 
-  // Files is the third tab, so forward is Teams and backward is Chat.
+  // Files is the first tab, so forward is Chat and backward wraps to Settings.
   ui.fireEvent.keyDown(document, { key: 'Tab', ctrlKey: true });
-  assert.deepEqual(journal.navigations.at(-1), { kind: 'teams' });
+  assert.deepEqual(journal.navigations.at(-1), { kind: 'chat' });
   ui.fireEvent.keyDown(document, {
     key: 'Tab',
     ctrlKey: true,
     shiftKey: true,
   });
-  assert.deepEqual(journal.navigations.at(-1), { kind: 'chat' });
+  assert.deepEqual(journal.navigations.at(-1), { kind: 'settings' });
   // A plain Tab is the browser's own; the rail ignores it.
   const before = journal.navigations.length;
   ui.fireEvent.keyDown(document, { key: 'Tab' });
@@ -216,7 +216,7 @@ test('a tab is titled only where its label is hidden', async () => {
   await rail({ kind: 'files' }, '0', 0, true);
   assert.deepEqual(
     tabs().map((tab) => tab.getAttribute('title')),
-    ['Accounts', 'Chat', 'Files', 'Teams', 'Devices', 'Settings'],
+    ['Files', 'Chat', 'Teams', 'Devices', 'Accounts', 'Settings'],
   );
 });
 
@@ -226,11 +226,11 @@ test('the cycle helpers hold the rail order and wrap at both ends', async () => 
       '/src/shell/sidebar.tsx',
     )) as typeof import('../src/shell/sidebar');
   assert.deepEqual(sidebarCycleLocations(), [
-    { kind: 'people' },
-    { kind: 'chat' },
     { kind: 'files' },
+    { kind: 'chat' },
     { kind: 'teams' },
     { kind: 'devices' },
+    { kind: 'people' },
     { kind: 'settings' },
   ]);
   // Control-Tab walks the tab a location belongs to, not the location itself:
@@ -240,19 +240,19 @@ test('the cycle helpers hold the rail order and wrap at both ends', async () => 
     { kind: 'devices' },
   );
   assert.deepEqual(nextSidebarCycleLocation({ kind: 'store', ref: 'x' }, -1), {
-    kind: 'chat',
+    kind: 'settings',
   });
   // Both ends wrap.
   assert.deepEqual(nextSidebarCycleLocation({ kind: 'settings' }, 1), {
-    kind: 'people',
+    kind: 'files',
   });
-  assert.deepEqual(nextSidebarCycleLocation({ kind: 'people' }, -1), {
+  assert.deepEqual(nextSidebarCycleLocation({ kind: 'files' }, -1), {
     kind: 'settings',
   });
   // First run belongs to no tab, so the walk starts at the end it came from.
   assert.deepEqual(
     nextSidebarCycleLocation({ kind: 'first-run', step: 'who' }, 1),
-    { kind: 'people' },
+    { kind: 'files' },
   );
   assert.deepEqual(
     nextSidebarCycleLocation({ kind: 'first-run', step: 'who' }, -1),

@@ -516,7 +516,9 @@ test('a group whose setup never finished has no tabs, and two ways out', async (
     /Homelab was created on Personal server, but key setup is incomplete on this Mac\./,
   );
   assert.equal(band.textContent?.includes('Nothing runs while FOKS'), false);
-  assert.ok(rendered.getByRole('button', { name: 'Finish setup' }));
+  assert.ok(
+    band.contains(rendered.getByRole('button', { name: 'Finish setup' })),
+  );
   assert.equal(
     rendered.queryByRole('button', { name: 'Remove and rotate keys…' }),
     null,
@@ -525,7 +527,7 @@ test('a group whose setup never finished has no tabs, and two ways out', async (
   const labels = [...document.querySelectorAll('.roster .inset .fr .k')].map(
     (node) => node.textContent,
   );
-  assert.deepEqual(labels, ['Kind', 'Account', 'Group ID']);
+  assert.deepEqual(labels, ['Account', 'Group ID']);
 });
 
 test('Finish setup resumes the existing incomplete group', async () => {

@@ -78,6 +78,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
         fixture["teamItemCreateAccess"]
     );
     let account = AccountDto {
+        local_alias: None,
         store: "opaque-account-ref".to_owned(),
         profile: "foks.example".to_owned(),
         alias: "personal".to_owned(),

@@ -2551,3 +2551,56 @@ test('maintenance snapshot decoder rejects impossible loose values', () => {
     }),
   );
 });
+
+test('local display aliases decode separately from stable account selectors', () => {
+  assert.deepEqual(
+    decodeAccounts([
+      {
+        store: 'account-ref',
+        profile: 'local',
+        alias: 'personal',
+        username: 'alice',
+        local_alias: 'Private account',
+      },
+    ]),
+    [
+      {
+        store: 'account-ref',
+        server: 'local',
+        alias: 'personal',
+        username: 'alice',
+        localAlias: 'Private account',
+      },
+    ],
+  );
+});
+
+test('local alias changes preserve StoreRefs and command aliases and reset to the default', async () => {
+  const bridge = mockBridge(FIXTURE);
+  const before = await bridge.listAccounts();
+  await bridge.setLocalAccountAlias('acct:personal', 'Private account');
+  const after = await bridge.listAccounts();
+  assert.deepEqual(
+    after.find((a) => a.store === 'acct:personal'),
+    {
+      ...before.find((a) => a.store === 'acct:personal'),
+      localAlias: 'Private account',
+    },
+  );
+  assert.deepEqual(
+    after.filter((a) => a.store !== 'acct:personal'),
+    before.filter((a) => a.store !== 'acct:personal'),
+  );
+  await assert.rejects(() =>
+    bridge.setLocalAccountAlias('missing', 'Private account'),
+  );
+  await assert.rejects(() =>
+    bridge.setLocalAccountAlias('acct:personal', 'bad\nlabel'),
+  );
+  await bridge.setLocalAccountAlias('acct:personal', 'personal');
+  assert.equal(
+    (await bridge.listAccounts()).find((a) => a.store === 'acct:personal')
+      ?.localAlias,
+    undefined,
+  );
+});

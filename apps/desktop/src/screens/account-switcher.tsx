@@ -1,3 +1,4 @@
+import { localAliasOf } from '../model';
 /**
  * The account switcher Accounts, Devices and Settings' card credentials share.
  *
@@ -83,7 +84,7 @@ export function AccountSwitcher({
             <span className="t">
               <b>{name}</b>
               <small>
-                {store.account} · {serverName(snapshot, store)}
+                {localAliasOf(snapshot, store)} · {serverName(snapshot, store)}
               </small>
               {/* The reason is on the row, not only in its tooltip: a title
                   is not read by a pointer that never rests on the button. */}

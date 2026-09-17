@@ -25,7 +25,6 @@ import {
   Toggle,
 } from '../components';
 import {
-  accountSubtitle,
   actionableGroupMember,
   catalog,
   canCreateInStore,
@@ -43,6 +42,7 @@ import {
   serverDisplayName,
   serverName as displayServerName,
   serverOf,
+  shortId,
   storeDescriptionState,
   storeOf,
   storeReadable,
@@ -895,7 +895,9 @@ function FederationRemovalSheet({
           <code>{entry.remote_host_id_hex}</code>
         </InsetRow>
         <InsetRow label="Remote group">
-          <code>{entry.remote_team_id_hex}</code>
+          <code title={entry.remote_team_id_hex}>
+            {shortId(entry.remote_team_id_hex)}
+          </code>
         </InsetRow>
       </Inset>
       <label className="checkline">
@@ -1007,7 +1009,7 @@ function SettingsTab({
             </Button>
           }
         >
-          <code>{store.team_id_hex}</code>
+          <code title={store.team_id_hex}>{shortId(store.team_id_hex)}</code>
         </InsetRow>
       </Inset>
       {store.team_kind === 'adhoc' ? (
@@ -1237,11 +1239,7 @@ export function GroupSheet({
         : 'Create a group';
   const subtitle =
     sheet === 'create'
-      ? // Creating acts as one account on one server, and the sheet says which:
-        // the server's name alone would not say who is creating the group.
-        creationAccount
-        ? accountSubtitle(snapshot, creationAccount)
-        : 'No account on this Mac can create a group'
+      ? undefined
       : sheet === 'add'
         ? 'Members are added by username. Roles take effect the moment you add them.'
         : sheet === 'admit'
@@ -1429,8 +1427,7 @@ export function GroupSheet({
                   ? 'Change role'
                   : sheet === 'admit'
                     ? `Add ${remote?.alias ?? 'group'}`
-                    : // The alias is what the server is asked to create.
-                      `Create ${teamAlias || 'group'}`}
+                    : 'Create group'}
             </Button>
           )}
         </>
@@ -1767,10 +1764,8 @@ export function GroupSheet({
               <Field label="Name" value={name} onChange={setName} />
             </Inset>
             <p className="fn">
-              Others find it as <code>{teamAlias || '…'}</code> on the server.
-              Lowercase letters, digits, dots and dashes, unique on that server.{' '}
-              <b>A name is fixed at creation</b> — renaming means creating a new
-              group and moving its items.
+              Stored as <code>{teamAlias || '…'}</code>. Cannot be changed once
+              created.
             </p>
             <SectionLabel>Server and account</SectionLabel>
             <Inset>
@@ -1792,28 +1787,27 @@ export function GroupSheet({
                 </InsetRow>
               )}
             </Inset>
-            <p className="fn">
-              A group lives on one server. Only accounts on that server can be
-              added directly; other servers’ groups join by admission.
-            </p>
-            <SectionLabel>Kind</SectionLabel>
-            <Inset>
-              <RadioGroup label="Kind">
-                {(['named', 'adhoc'] as const).map((kind) => (
-                  <RadioCard
-                    key={kind}
-                    selected={kind === createKind}
-                    onSelect={() => setCreateKind(kind)}
-                    title={kind === 'named' ? 'Named' : 'Ad-hoc'}
-                    detail={
-                      kind === 'named'
-                        ? 'Has an alias on the server; people can be added and removed over time.'
-                        : 'Fixed membership, chosen now, no alias. For a one-off share.'
-                    }
-                  />
-                ))}
-              </RadioGroup>
-            </Inset>
+            <details className="dd">
+              <summary>Advanced</summary>
+              <SectionLabel>Kind</SectionLabel>
+              <Inset>
+                <RadioGroup label="Kind">
+                  {(['named', 'adhoc'] as const).map((kind) => (
+                    <RadioCard
+                      key={kind}
+                      selected={kind === createKind}
+                      onSelect={() => setCreateKind(kind)}
+                      title={kind === 'named' ? 'Named' : 'Ad-hoc'}
+                      detail={
+                        kind === 'named'
+                          ? 'Has an alias on the server; people can be added and removed over time.'
+                          : 'Fixed membership, chosen now, no alias. For a one-off share.'
+                      }
+                    />
+                  ))}
+                </RadioGroup>
+              </Inset>
+            </details>
           </>
         ) : null}
       </>

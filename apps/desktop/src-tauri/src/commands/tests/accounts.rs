@@ -389,6 +389,7 @@ fn device_removal_preflight_refuses_current_unknown_and_duplicate_ids() {
     state.accounts.lock().unwrap().insert(
         account_id.clone(),
         AccountDto {
+            local_alias: None,
             store: account_id.clone(),
             profile: "work.example".to_owned(),
             alias: "personal".to_owned(),

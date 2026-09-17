@@ -148,12 +148,11 @@ test('the account panel keeps every workflow row from the accounts pane', async 
   );
   // The row is named for the panel behind it, which is SsoPanel's own title.
   assert.ok(rendered.getByText('Organization sign-in'));
-  // Changing a username is a server operation, and the row says so.
-  assert.ok(
-    rendered.getByText(
-      'Changing a username is a signed operation on the server; the local alias does not change with it.',
-    ),
+  assert.equal(
+    rendered.queryByText(/Changing a username is a signed operation/),
+    null,
   );
+  assert.equal(rendered.queryByText('Check-in not required'), null);
 });
 
 test('the profile lists the account’s teams, its devices and its keys', async () => {
@@ -429,17 +428,20 @@ test('the switcher lists every account and switching navigates by StoreRef', asy
     (location) => chosen.push(location),
   );
 
-  // The switcher is named by the label above it, the one the reader sees.
-  const group = rendered.getByRole('group', { name: 'Accounts on this Mac' });
-  const accounts = ui.within(group).getAllByRole('button');
-  assert.equal(accounts.length, 2);
-  assert.equal(accounts[0].getAttribute('aria-pressed'), 'true');
-  assert.ok(accounts[0].textContent?.includes('satoshi'));
-  assert.ok(accounts[1].textContent?.includes('Acme'));
-
-  await ui.act(async () => {
-    ui.fireEvent.click(accounts[1]);
-  });
+  const trigger = rendered.container.querySelector<HTMLButtonElement>(
+    '.phead .account-dropdown-trigger',
+  );
+  assert.ok(trigger, 'the selector sits beside the account header');
+  await ui.act(async () => ui.fireEvent.click(trigger));
+  const menu = rendered.getByRole('menu', { name: 'Accounts on this Mac' });
+  assert.equal(menu.querySelectorAll('.acct').length, 2);
+  assert.ok(ui.within(menu).getByLabelText('Current account'));
+  assert.ok(
+    ui.within(menu).getByRole('menuitem', { name: /Add an account or server/ }),
+  );
+  await ui.act(async () =>
+    ui.fireEvent.click(menu.querySelectorAll('.acct')[1]),
+  );
   assert.deepEqual(chosen.at(-1), { kind: 'people', store: 'acct:work' });
 });
 
@@ -501,11 +503,12 @@ test('an attention card carries the route to where it is resolved', async () => 
   });
 });
 
-test('with nothing open the card is one line and no count', async () => {
+test('with nothing needing attention the alert is hidden', async () => {
   const snapshot = await fixture();
   const { rendered } = await renderPeople({ ...snapshot, notifications: [] });
 
-  assert.ok(rendered.getByText('Nothing needs attention.'));
+  assert.equal(rendered.queryByText('Nothing needs attention.'), null);
+  assert.equal(rendered.container.querySelector('.people-attention'), null);
   assert.equal(rendered.queryByText('Needs attention'), null);
   assert.equal(
     rendered.container.querySelector('.people-attention .attn-card'),
@@ -653,12 +656,14 @@ test('a stopped account disables username changes while recovery remains enabled
   assert.equal(rename.hasAttribute('disabled'), true);
   assert.match(rename.getAttribute('title') ?? '', /Account access is stopped/);
   assert.ok(rendered.getByText('Account access is stopped'));
-  // The reason is on the switcher row itself, not only in its tooltip.
-  const group = rendered.getByRole('group', { name: 'Accounts on this Mac' });
-  assert.ok(
-    ui.within(group).getByText(/^Account access is stopped · /),
-    'the stopped account says why on its row',
+  await ui.act(async () =>
+    ui.fireEvent.click(
+      rendered.container.querySelector('.account-dropdown-trigger')!,
+    ),
   );
+  const menu = rendered.getByRole('menu', { name: 'Accounts on this Mac' });
+  assert.ok(ui.within(menu).getByText('Verification failed'));
+  await ui.act(async () => ui.fireEvent.keyDown(menu, { key: 'Escape' }));
   for (const name of ['Sign in…', 'Manage…', 'Open…'])
     assert.equal(
       rendered.getByRole('button', { name }).hasAttribute('disabled'),
@@ -711,4 +716,76 @@ test('organization sign-in survives browser focus and can finish the same flow',
   assert.ok(
     rendered.getByText('Account authentication and service access verified.'),
   );
+});
+
+test('local alias save uses the stable account selector and retains input on failure', async () => {
+  const calls: [string, string][] = [];
+  let fail = true;
+  const { rendered, refreshed } = await renderPeople(
+    await fixture(),
+    'acct:personal',
+    () => {},
+    {
+      decorate: (base) => ({
+        ...base,
+        setLocalAccountAlias: async (store, label) => {
+          calls.push([store, label]);
+          if (fail) throw new Error('Could not save local alias.');
+          return { store, alias: label };
+        },
+      }),
+    },
+  );
+  ui.fireEvent.click(
+    rendered.getByRole('button', { name: 'Change local alias' }),
+  );
+  const dialog = rendered.getByRole('dialog', { name: 'Change local alias' });
+  const field = ui.within(dialog).getByRole('textbox', { name: 'Local alias' });
+  ui.fireEvent.change(field, { target: { value: '  Private account  ' } });
+  ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Save' }));
+  await rendered.findByText('Could not save local alias.');
+  assert.equal((field as HTMLInputElement).value, '  Private account  ');
+  fail = false;
+  await ui.act(async () => {
+    ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Save' }));
+  });
+  await ui.waitFor(() => assert.ok(!rendered.queryByRole('dialog')));
+  assert.deepEqual(calls, [
+    ['acct:personal', 'Private account'],
+    ['acct:personal', 'Private account'],
+  ]);
+  assert.deepEqual(refreshed, ['Local alias updated']);
+});
+
+test('local alias appears in account controls while commands keep the original alias', async () => {
+  const original = await fixture();
+  const snapshot = {
+    ...original,
+    accounts: original.accounts.map((a) =>
+      a.store === 'acct:personal' ? { ...a, localAlias: 'Private account' } : a,
+    ),
+  };
+  const calls: string[] = [];
+  const { rendered } = await renderPeople(snapshot, 'acct:personal', () => {}, {
+    decorate: (base) => ({
+      ...base,
+      renameAccount: async (profile, alias, action) => {
+        calls.push(alias);
+        return base.renameAccount(profile, alias, action);
+      },
+    }),
+  });
+  assert.ok(rendered.getAllByText('Private account').length >= 2);
+  ui.fireEvent.click(
+    rendered.container.querySelector('.account-dropdown-trigger')!,
+  );
+  assert.ok(ui.within(rendered.getByRole('menu')).getByText('Private account'));
+  ui.fireEvent.keyDown(rendered.getByRole('menu'), { key: 'Escape' });
+  ui.fireEvent.click(
+    rendered.getByRole('button', { name: 'Change…' }),
+  );
+  ui.fireEvent.click(
+    rendered.getByRole('button', { name: 'Show pending changes' }),
+  );
+  await ui.waitFor(() => assert.deepEqual(calls, ['personal']));
 });
