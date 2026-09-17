@@ -194,7 +194,7 @@ test('a section address opens that page, each with the sub-navigation beside it'
   }
 });
 
-test('Preferences holds one passphrase row per account and the desktop alert preferences', async () => {
+test('Preferences holds one passphrase row per account, the desktop alert preferences and the rail colour', async () => {
   const snapshot = await fixture();
   const rendered = await renderSettings(snapshot, {
     where: { section: 'preferences' },
@@ -209,7 +209,7 @@ test('Preferences holds one passphrase row per account and the desktop alert pre
     [...main.querySelectorAll(':scope > .sec')].map(
       (label) => label.textContent,
     ),
-    ['Passphrase', 'Desktop alerts'],
+    ['Passphrase', 'Desktop alerts', 'Appearance'],
   );
   // One button per account; the sheet's own control switches its mode.
   const accounts = snapshot.stores.filter((store) => store.kind === 'account');

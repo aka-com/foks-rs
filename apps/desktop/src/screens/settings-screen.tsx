@@ -48,6 +48,12 @@ import {
 } from '../model';
 import type { AccountStore, AgentSnapshot } from '../model';
 import { PageHeader } from '../shell/page-header';
+import {
+  RAIL_COLORS,
+  applyRailColor,
+  rememberRailColor,
+  storedRailColor,
+} from '../rail-theme';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { agentLifecycleLabel, type AgentLifecycle } from '../agent-lifecycle';
 import { NotificationSettings } from '../chat/notification-provider';
@@ -311,7 +317,49 @@ function PreferencesSection({
       </p>
       <SectionLabel>Desktop alerts</SectionLabel>
       <NotificationSettings />
+      <SectionLabel>Appearance</SectionLabel>
+      <RailColorPicker />
+      <p className="fn">
+        The navigation rail colour. This preference stays on this Mac and does
+        not sync.
+      </p>
     </>
+  );
+}
+
+/**
+ * The rail colour picker. Applies each choice at once, so the rail beside
+ * this page shows it.
+ */
+function RailColorPicker(): ReactNode {
+  const [color, setColor] = useState(storedRailColor);
+  const choose = (id: string): void => {
+    setColor(id);
+    applyRailColor(id);
+    rememberRailColor(id);
+  };
+  return (
+    <Inset className="settings-inset middle wide">
+      <InsetRow label="Rail colour">
+        <div className="swatches" role="radiogroup" aria-label="Rail colour">
+          {RAIL_COLORS.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              role="radio"
+              className={entry.id === color ? 'swatch on' : 'swatch'}
+              aria-checked={entry.id === color}
+              aria-label={entry.label}
+              title={entry.label}
+              onClick={() => choose(entry.id)}
+            >
+              <i style={{ background: entry.hex }} aria-hidden="true" />
+              <span>{entry.label}</span>
+            </button>
+          ))}
+        </div>
+      </InsetRow>
+    </Inset>
   );
 }
 

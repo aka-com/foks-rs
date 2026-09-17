@@ -432,9 +432,14 @@ people search because the bridge has no directory lookup. New people can be
 added only by invitation, which is managed in Teams. Chat is one inbox column, listing
 every team with chat, beside the open conversation; the tab with no
 conversation chosen opens the most recent one, and says how chat gets turned on
-when no team has any. Files is a roots page listing All items and
-then the vaults, groups and shares, each row opening its item page; an item
-page returns here through the topbar's back chevron. Teams lists the groups and
+when no team has any. The Files tab defaults to All items and displays items
+across all stores in a table with sortable Name, Kind, Location, and Size
+columns. A permanent tree lists All items followed by vaults, teams, and their
+folders, including item counts and team initials badges. Selecting a store or
+folder filters the table, omits Location for single-store views, and updates the
+toolbar search placeholder to "Search this vault", "Search this team", or
+"Search this folder". The topbar breadcrumb displays the active folder, and Back
+navigates up the hierarchy to All items. Teams lists the groups and
 shares — the group mark, name, server, the roster summary the per-group
 `list_group_details` call loaded on the last refresh, the role this Mac's
 account holds and a chip for an abnormal state — and the row itself is the

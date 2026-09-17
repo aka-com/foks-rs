@@ -96,6 +96,7 @@ import {
   rememberSideCollapsed,
   storedSideCollapsedPref,
 } from './sidebar-prefs';
+import { applyRailColor, storedRailColor } from './rail-theme';
 import { PeopleScreen, unroutedNotices } from './screens/people-screen';
 import {
   deviceAlertRegistry,
@@ -932,6 +933,11 @@ function VaultShell({
   );
   const [deviceLabel, setDeviceLabel] = useState<DeviceLabel | null>(null);
   const [sideCollapsed, setSideCollapsed] = useState(storedSideCollapsedPref);
+  // Initialize the rail color theme from local storage on initial render.
+  // Settings applies preference changes directly upon user selection.
+  useEffect(() => {
+    applyRailColor(storedRailColor());
+  }, []);
   // The topbar's toggle is the only writer of the stored preference; the
   // details panel's reaction below changes the width without recording it.
   const toggleSidebar = useCallback(() => {

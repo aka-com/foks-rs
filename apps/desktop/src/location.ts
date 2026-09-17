@@ -183,7 +183,7 @@ export function railTabOf(location: Location): RailTab | null {
 /**
  * The page the topbar's back chevron returns to, or `null` at a tab's root.
  *
- * Only an address that opens something *inside* a tab has a parent: an items
+ * Only an address that opens something *inside* a tab has a parent: a store
  * page under Files, a group page under Teams, a section or a device page under
  * Settings and Devices. The `store` parameter that People, Teams, Devices and
  * Settings carry names the account the page acts as — every address of those
@@ -192,7 +192,10 @@ export function railTabOf(location: Location): RailTab | null {
  */
 export function parentLocation(location: Location): Location | null {
   switch (location.kind) {
+    // `all` and `files` both open the "All items" leaf, so neither is inside
+    // the other.
     case 'all':
+      return null;
     case 'store':
       return { kind: 'files' };
     case 'group-settings':

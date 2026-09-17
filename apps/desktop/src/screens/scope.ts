@@ -154,21 +154,21 @@ export function folderKey(
 /**
  * Parses the tree/list's selected-folder value into a store id and path:
  * `store|/path` outside a `store` location, `/path` (or `''`, meaning root)
- * inside one, and the `ALL_ITEMS` sentinel for the "All items" leaf.
+ * inside one, and the `ALL_ITEMS` sentinel for the "All items" view. Outside
+ * a `store` location, an empty or malformed value defaults to `ALL_ITEMS`.
  */
 export function folderSelection(
   location: Location,
   value: string,
-): { store: string | null; path: string } {
+): { store: string; path: string } {
   if (location.kind === 'store') {
     return { store: location.ref, path: value || '/' };
   }
-  if (value === ALL_ITEMS) return { store: ALL_ITEMS, path: '/' };
-  if (!value) return { store: null, path: '/' };
+  if (!value || value === ALL_ITEMS) return { store: ALL_ITEMS, path: '/' };
   const cut = value.indexOf('|');
   return cut > 0
     ? { store: value.slice(0, cut), path: value.slice(cut + 1) || '/' }
-    : { store: null, path: '/' };
+    : { store: ALL_ITEMS, path: '/' };
 }
 
 /**
@@ -187,8 +187,10 @@ export function filesFolderCrumb(
 ): { labels: readonly string[]; back: string | null } {
   if (!listsItems(location)) return { labels: [], back: null };
   const selected = folderSelection(location, folder);
-  if (selected.store === ALL_ITEMS) return { labels: ['All items'], back: '' };
-  if (!selected.store || !snapshot) return { labels: [], back: null };
+  // The "All items" leaf is the tab's own root: nothing to step back to.
+  if (selected.store === ALL_ITEMS)
+    return { labels: ['All items'], back: null };
+  if (!snapshot) return { labels: [], back: null };
   const store = storeOf(snapshot, selected.store);
   if (!store) return { labels: [], back: null };
   const storePage = location.kind === 'store';

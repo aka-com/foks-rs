@@ -157,16 +157,24 @@ test('a tab navigates, and Control-Tab walks the six of them', async () => {
 
   testingLibrary.fireEvent.click(tab('Files'));
   await testingLibrary.waitFor(() => {
-    assert.equal(document.querySelector('.loc h1')?.textContent, 'Files');
+    assert.equal(crumbs(), 'Files›All items');
   });
   testingLibrary.fireEvent.click(
     testingLibrary.screen.getByRole('button', { name: 'Back' }),
   );
 });
 
+/** The topbar crumb, segments joined by the separator glyph. */
+function crumbs(): string | undefined {
+  return document
+    .querySelector('.topbar .crumbs')
+    ?.textContent?.replace(/\s*›\s*/g, '›')
+    .trim();
+}
+
 test('the Files tree lists the stores the roots page used to enumerate', async () => {
   await testingLibrary.waitFor(() => {
-    assert.equal(document.querySelector('.loc h1')?.textContent, 'Files');
+    assert.equal(crumbs(), 'Files›All items');
   });
   const rows = [
     ...document.querySelectorAll<HTMLButtonElement>('.tpane .fselect'),
@@ -183,7 +191,7 @@ test('the Files tree lists the stores the roots page used to enumerate', async (
   assert.ok(engineering);
   testingLibrary.fireEvent.click(engineering);
   await testingLibrary.waitFor(() => {
-    assert.equal(document.querySelector('.loc h1')?.textContent, 'Engineering');
+    assert.equal(crumbs(), 'Files›Engineering');
   });
   // Browsing a store through the tree is client-side selection, not a
   // location change, but the topbar reads that same selection: its own crumb
@@ -202,12 +210,11 @@ test('the Files tree lists the stores the roots page used to enumerate', async (
   assert.ok(back);
   assert.equal(back.disabled, false);
   testingLibrary.fireEvent.click(back);
-  // One step back deselects the store rather than leaving the Files tab: the
-  // tree itself is still the root there is nowhere further back from.
+  // One step back returns to All items rather than leaving the Files tab: the
+  // leaf the browser opens on is the root there is nowhere further back from.
   await testingLibrary.waitFor(() => {
-    assert.equal(document.querySelector('.loc h1')?.textContent, 'Files');
+    assert.equal(crumbs(), 'Files›All items');
   });
-  assert.equal(document.querySelector('.topbar .crumbs')?.textContent, 'Files');
   assert.equal(back.disabled, true);
 });
 
@@ -280,8 +287,9 @@ test('opens on All items, in the folder browser', async () => {
   assert.ok(all);
   testingLibrary.fireEvent.click(all);
   await testingLibrary.waitFor(() => {
-    assert.equal(document.querySelector('.loc h1')?.textContent, 'All items');
+    assert.equal(crumbs(), 'Files›All items');
   });
+  assert.equal(all.getAttribute('aria-current'), 'location');
   assert.ok(
     document.querySelector('.folder-layout'),
     'item pages open in the folder browser',

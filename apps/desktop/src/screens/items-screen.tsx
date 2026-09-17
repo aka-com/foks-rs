@@ -3,6 +3,12 @@
  * folder's contents in the middle. The details panel is a third, permanent
  * column that the shell mounts beside this screen; this file owns the tree
  * and the list only.
+ *
+ * The item browser defaults to the "All items" view across all stores,
+ * filtering results when a store or folder is selected. Items are presented in
+ * a table with Name, Kind, Location (omitted when filtered to a single store),
+ * and Size columns, with sortable column headers. The topbar breadcrumb
+ * displays the active folder path, omitting a redundant page header.
  */
 
 import { Fragment, useLayoutEffect, useRef, useState } from 'react';
@@ -12,26 +18,32 @@ import { virtualListWindow } from '/kit/virtual-list';
 import { Band, Button, Icon, KindIcon } from '../components';
 import type { FilterKind } from '../components';
 import type { FoksIconName } from '../icons';
-import { PageHeader } from '../shell/page-header';
 import { NewItemButton, Toolbar } from '../shell/toolbar';
 import {
   KINDS,
   defaultCreateStore,
+  fmtSize,
+  initials,
+  kindLabel,
   kindOf,
   nameOf,
-  partiesOf,
-  peopleGroups,
   prefixOf,
-  serverName,
   storeDescription,
   storeDescriptionState,
   storeDisplayOrder,
   storeAvailability,
+  storeHues,
+  storeNavigationOrder,
   storeOf,
   storeReadable,
 } from '../model';
 import type { Item, Store, AgentSnapshot } from '../model';
-import type { KindFilter, LocationStore, LocationState } from '../location';
+import type {
+  KindFilter,
+  LocationStore,
+  LocationState,
+  SortKey,
+} from '../location';
 import { normalizeCommandError } from '../bridge';
 import type { Bridge } from '../bridge';
 import { useFileDrop } from '../file-drop';
@@ -53,8 +65,8 @@ import { StoreAccessTakeover, storeAccessBands } from './store-access';
 
 function emptyStoreCopy(store: Store): string {
   return store.kind === 'team'
-    ? `Items saved in ${store.name} are accessible to all team members according to their permissions. Use New to add passwords or documents.`
-    : `Save logins, secure notes, and credentials in ${store.name}.`;
+    ? 'Items stored in this team vault are accessible to team members according to their assigned roles.'
+    : 'Passwords and documents you add here are private to this vault.';
 }
 
 function PathChip({ path }: { path: string }): ReactNode {
@@ -67,38 +79,96 @@ function PathChip({ path }: { path: string }): ReactNode {
   ) : null;
 }
 
+/**
+ * Store badge displayed in item table rows. Teams display their initials with
+ * their assigned theme color; personal vaults display a standard vault icon.
+ */
+function StoreMark({
+  store,
+  hue,
+}: {
+  store: Store;
+  hue: string | undefined;
+}): ReactNode {
+  return store.kind === 'team' ? (
+    <span className="av team" style={{ background: hue }} aria-hidden="true">
+      {initials(store.name)}
+    </span>
+  ) : (
+    <Icon name="vault" />
+  );
+}
+
+/** The table's column set: Location is drawn only while rows span stores. */
+interface Columns {
+  location: boolean;
+}
+
+function columnClass(columns: Columns, ...more: string[]): string {
+  return ['cols', columns.location ? 'loc' : '', ...more]
+    .filter(Boolean)
+    .join(' ');
+}
+
+function ListHeader({
+  columns,
+  sort,
+  onSort,
+}: {
+  columns: Columns;
+  sort: SortKey;
+  onSort: (sort: SortKey) => void;
+}): ReactNode {
+  // Within one store, ordering by store is ordering by name; the Name header
+  // says so while the Location header is not drawn.
+  const shown = !columns.location && sort === 'group' ? 'name' : sort;
+  const head = (key: SortKey, label: string): ReactNode => (
+    <button
+      type="button"
+      className={shown === key ? 'on' : ''}
+      aria-pressed={shown === key}
+      onClick={() => onSort(key)}
+    >
+      {label}
+      {shown === key ? ' ↓' : ''}
+    </button>
+  );
+  return (
+    <div className={`hdr ${columnClass(columns)}`}>
+      <span />
+      {head('name', 'Name')}
+      {head('kind', 'Kind')}
+      {columns.location ? head('group', 'Location') : null}
+      <span className="num">Size</span>
+    </div>
+  );
+}
+
 interface RowProps {
   snapshot: AgentSnapshot;
+  hues: ReadonlyMap<string, string>;
   item: Item;
+  columns: Columns;
   selected: boolean;
-  /** The full path is shown beside the store while a search is running. */
-  searching: boolean;
-  /** Store pages and grouped rows omit their redundant store subtitle. */
-  subtitle?: boolean;
-  /** Folder view already supplies the path, so it suppresses the chip. */
-  chip?: boolean;
+  /** The folder view already names the path, so it suppresses the chip. */
+  chip: boolean;
   onSelect: () => void;
 }
 
 function Row({
   snapshot,
+  hues,
   item,
+  columns,
   selected,
-  searching,
-  subtitle = true,
-  chip = true,
+  chip,
   onSelect,
 }: RowProps): ReactNode {
-  const sub = searching
-    ? `${whereOf(snapshot, item)} · ${item.path}`
-    : subtitle
-      ? whereOf(snapshot, item)
-      : '';
+  const kind = kindOf(item) as FilterKind;
+  const store = storeOf(snapshot, item.store);
   return (
     <div
-      className={['row', selected ? 'sel' : '', sub ? '' : 'one']
-        .filter(Boolean)
-        .join(' ')}
+      className={columnClass(columns, 'row', 'one', selected ? 'sel' : '')}
       role="button"
       tabIndex={0}
       aria-pressed={selected}
@@ -109,40 +179,23 @@ function Row({
         onSelect();
       }}
     >
-      <KindIcon kind={kindOf(item) as FilterKind} />
+      <KindIcon kind={kind} />
       <span className="name">
         <span className="tt">
           <span>{nameOf(item.path)}</span>
-          {chip && !searching ? <PathChip path={item.path} /> : null}
+          {chip ? <PathChip path={item.path} /> : null}
         </span>
-        {sub ? <small>{sub}</small> : null}
       </span>
-    </div>
-  );
-}
-
-/** The section header a grouped list sorts items under. */
-function TileSection({
-  snapshot,
-  store,
-}: {
-  snapshot: AgentSnapshot;
-  store: Store;
-}): ReactNode {
-  if (store.kind === 'team') {
-    return (
-      <div className="gsec">
-        <span>{store.name}</span>
-        <span className="n">
-          · {peopleGroups(partiesOf(snapshot, store.id))}
+      <span className="cell kind">{kindLabel(kind)}</span>
+      {columns.location ? (
+        <span className="cell mark">
+          {store ? <StoreMark store={store} hue={hues.get(store.id)} /> : null}
+          <span>{whereOf(snapshot, item)}</span>
         </span>
-      </div>
-    );
-  }
-  return (
-    <div className="gsec">
-      {store.name}
-      <span className="n">· {serverName(snapshot, store)}</span>
+      ) : null}
+      <span className="cell num">
+        {item.size === null ? '' : fmtSize(item.size)}
+      </span>
     </div>
   );
 }
@@ -152,20 +205,21 @@ interface StoreTree {
   root: FolderNode;
 }
 
+/** A subfolder of the selected folder, listed above its items. */
 function FolderRow({
-  icon,
   name,
   count,
+  columns,
   onSelect,
 }: {
-  icon: 'folder' | 'vault' | 'people';
   name: string;
   count: number;
+  columns: Columns;
   onSelect: () => void;
 }): ReactNode {
   return (
     <div
-      className="row one folder"
+      className={columnClass(columns, 'row', 'one', 'folder')}
       role="button"
       tabIndex={0}
       onClick={onSelect}
@@ -175,16 +229,18 @@ function FolderRow({
         onSelect();
       }}
     >
-      <span className={`kic ${icon === 'folder' ? 'Folder' : 'Store'}`}>
-        <Icon name={icon} />
+      <span className="kic Folder">
+        <Icon name="folder" />
       </span>
       <span className="name">
         <span className="tt">
           <span>{name}</span>
-          <span className="cnt">
-            {count} {count === 1 ? 'item' : 'items'}
-          </span>
         </span>
+      </span>
+      <span className="cell kind">Folder</span>
+      {columns.location ? <span className="cell" /> : null}
+      <span className="cell num">
+        {count} {count === 1 ? 'item' : 'items'}
       </span>
     </div>
   );
@@ -195,21 +251,28 @@ function TreeRow({
   active,
   root,
   icon,
+  mark,
   name,
   count,
   open,
   expandable,
+  action,
   onSelect,
   onToggle,
 }: {
   depth: number;
   active: boolean;
   root?: boolean;
-  icon: 'folder' | 'vault' | 'people' | 'grid';
+  icon: 'folder' | 'vault' | 'grid';
+  /** Drawn in place of `icon` when the row names a team. */
+  mark?: ReactNode;
   name: string;
+  /** Omitted, not drawn as 0, when there is nothing to count. */
   count?: number;
   open: boolean;
   expandable: boolean;
+  /** A control that belongs to the row, drawn after its name. */
+  action?: ReactNode;
   onSelect: () => void;
   onToggle: () => void;
 }): ReactNode {
@@ -220,9 +283,9 @@ function TreeRow({
         .join(' ')}
       style={{ '--d': depth } as React.CSSProperties}
     >
-      {/* The twist sits in the row's flow, in a gutter the stylesheet reserves
-          on every row, so a folder with children and one without put their
-          icons on the same left edge. Depth indents the row itself. */}
+      {/* Store root rows cannot be collapsed and have no expand toggle, so
+          their icons align flush with the left edge. Nested expandable folders
+          place the disclosure toggle within the indent column. */}
       {expandable ? (
         <button
           type="button"
@@ -243,10 +306,11 @@ function TreeRow({
         aria-current={active ? 'location' : undefined}
         onClick={onSelect}
       >
-        <Icon name={icon} />
+        {mark ?? <Icon name={icon} />}
         <span className="nm">{name}</span>
-        {count === undefined ? null : <span className="c">{count}</span>}
+        {count ? <span className="c">{count}</span> : null}
       </button>
+      {action}
     </div>
   );
 }
@@ -383,6 +447,14 @@ export interface ItemsScreenProps {
   accessNow?: () => number;
 }
 
+/** Single-line row height now that metadata is displayed in table columns. */
+const ROW_HEIGHT = 38;
+
+/** Whether `path` is `folder` itself or lies under it. */
+function underFolder(path: string, folder: string): boolean {
+  return folder === '/' || path === folder || path.startsWith(`${folder}/`);
+}
+
 export function ItemsScreen({
   snapshot,
   bridge,
@@ -408,10 +480,18 @@ export function ItemsScreen({
   const activeAccount = activeAccountRef
     ? storeOf(snapshot, activeAccountRef)
     : undefined;
-  const items = scopedItems(snapshot, state);
+  const storePage = location.kind === 'store';
+  const selected = folderSelection(location, state.folder);
   // Search flattens the browser to matching results; it must not invalidate
   // the selected folder or change where New saves.
   const folderItems = scopedItems(snapshot, { ...state, query: '' });
+  // A search runs over the tree's selection — one store and folder, or every
+  // item from the "All items" leaf — which is what the placeholder promises.
+  const items = scopedItems(snapshot, state).filter(
+    (item) =>
+      selected.store === ALL_ITEMS ||
+      (item.store === selected.store && underFolder(item.path, selected.path)),
+  );
   // Every store gets a tree entry, including one with nothing in it yet: the
   // tree is the only way into a store now, so none may be left unreachable.
   const trees: StoreTree[] = storeDisplayOrder(snapshot).map((candidate) => ({
@@ -420,6 +500,8 @@ export function ItemsScreen({
   }));
   const vaultTrees = trees.filter((tree) => tree.store.kind === 'account');
   const teamTrees = trees.filter((tree) => tree.store.kind === 'team');
+  // Teams keep the same hue here as they do in the account menu and Teams tab.
+  const hues = storeHues(storeNavigationOrder(snapshot));
 
   useLayoutEffect(() => {
     const body = bodyRef.current;
@@ -472,8 +554,6 @@ export function ItemsScreen({
 
   const accessBands = storeAccessBands(snapshot);
   const kindMeta = state.kind === 'All' ? null : KINDS[state.kind];
-  const storePage = location.kind === 'store';
-  const selected = folderSelection(location, state.folder);
   const selectedTree = trees.find((tree) => tree.store.id === selected.store);
   const selectedNode = selectedTree
     ? (folderAt(selectedTree.root, selected.path) ?? selectedTree.root)
@@ -520,45 +600,49 @@ export function ItemsScreen({
       );
     });
 
+  // Store root rows cannot be collapsed and have no expand toggle; their icons
+  // align flush with the left container edge.
   const storeRoot = (tree: StoreTree): ReactNode => {
-    const foldKey = `${tree.store.id}|/`;
-    const open = !closed.has(foldKey);
+    const active = selected.store === tree.store.id && selected.path === '/';
     return (
       <Fragment key={tree.store.id}>
         <TreeRow
           depth={0}
           root
-          active={selected.store === tree.store.id && selected.path === '/'}
-          icon={tree.store.kind === 'team' ? 'people' : 'vault'}
+          active={active}
+          icon="vault"
+          mark={
+            tree.store.kind === 'team' ? (
+              <StoreMark store={tree.store} hue={hues.get(tree.store.id)} />
+            ) : undefined
+          }
           name={tree.store.name}
-          open={open}
-          expandable={tree.root.folders.length > 0}
+          count={tree.root.count}
+          open
+          expandable={false}
+          action={
+            active && tree.store.kind === 'team' ? (
+              <button
+                type="button"
+                className="fact"
+                title="Team settings"
+                aria-label="Team settings"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSettings(tree.store.id);
+                }}
+              >
+                <Icon name="gear" />
+              </button>
+            ) : undefined
+          }
           onSelect={() => selectFolder(tree.store, '/')}
-          onToggle={() => locations.toggleFolder(foldKey)}
+          onToggle={() => {}}
         />
-        {open ? drawFolders(tree.root.folders, tree.store, 1) : null}
+        {drawFolders(tree.root.folders, tree.store, 1)}
       </Fragment>
     );
   };
-
-  // The page header names only the open folder; the topbar carries its path.
-  const headerTitle =
-    selected.store === ALL_ITEMS
-      ? 'All items'
-      : selectedTree && selectedNode
-        ? (selectedNode.path.split('/').filter(Boolean).at(-1) ??
-          selectedTree.store.name)
-        : 'Files';
-  const head = (
-    <PageHeader
-      ruled
-      title={headerTitle}
-      query={state.query}
-      onQuery={(query) => {
-        locations.search(query);
-      }}
-    />
-  );
 
   const createStore =
     selectedTree && storeReadable(snapshot, selectedTree.store.id)
@@ -612,9 +696,10 @@ export function ItemsScreen({
   // Search and the All items view use a flat virtualized list; folder views
   // display direct children.
   const flatMode = Boolean(state.query) || selected.store === ALL_ITEMS;
-  const rowHeight = state.query || location.kind === 'all' ? 50 : 40;
+  // Location is a column only when rows span multiple stores.
+  const columns: Columns = { location: selected.store === ALL_ITEMS };
   const rowWindow = virtualListWindow({
-    heights: items.map(() => rowHeight),
+    heights: items.map(() => ROW_HEIGHT),
     listTop: listMetrics.top,
     scrollTop,
     viewport: listMetrics.viewport,
@@ -622,27 +707,18 @@ export function ItemsScreen({
   });
   const visibleRows = items.slice(rowWindow.start, rowWindow.end);
 
-  const folders = selectedTree ? (selectedNode?.folders ?? []) : [];
-  const folderScopedItems = selectedTree ? (selectedNode?.items ?? []) : [];
+  const folders = selectedNode?.folders ?? [];
+  const folderScopedItems = selectedNode?.items ?? [];
   const showEmptyFolder =
     Boolean(selectedTree) && !folders.length && !folderScopedItems.length;
-  const paneRows = !selectedTree
-    ? trees.map((tree) => (
-        <FolderRow
-          key={tree.store.id}
-          icon={tree.store.kind === 'team' ? 'people' : 'vault'}
-          name={tree.store.name}
-          count={tree.root.count}
-          onSelect={() => selectFolder(tree.store, '/')}
-        />
-      ))
-    : [
+  const paneRows = selectedTree
+    ? [
         ...folders.map((folder) => (
           <FolderRow
             key={folder.path}
-            icon="folder"
             name={folder.name}
             count={folder.count}
+            columns={columns}
             onSelect={() => selectFolder(selectedTree.store, folder.path)}
           />
         )),
@@ -650,232 +726,194 @@ export function ItemsScreen({
           <Row
             key={`${item.store}|${item.path}`}
             snapshot={snapshot}
+            hues={hues}
             item={item}
+            columns={columns}
             selected={
               state.selection?.store === item.store &&
               state.selection.path === item.path
             }
-            searching={false}
-            subtitle={false}
             chip={false}
             onSelect={() =>
               locations.select({ store: item.store, path: item.path })
             }
           />
         )),
-      ];
+      ]
+    : [];
 
   const vaultHeading = vaultTrees.length === 1 ? 'Your vault' : 'Vaults';
+  const searchPlaceholder =
+    selected.store === ALL_ITEMS
+      ? 'Search all items'
+      : selected.path !== '/'
+        ? 'Search this folder'
+        : selectedTree?.store.kind === 'team'
+          ? 'Search this team'
+          : 'Search this vault';
+  const searchScope = selectedTree?.store.name ?? store?.name;
+  const allCount = folderItems.length;
 
   return (
-    <>
-      {head}
-      <div className="drop-area">
-        {dropZone}
-        <div className="folder-layout">
-          <div className="folder-split">
-            <aside className="tpane" aria-label="Folders">
-              {!storePage ? <h6>{vaultHeading}</h6> : null}
-              {vaultTrees.map(storeRoot)}
-              {!storePage && teamTrees.length ? <h6>Teams</h6> : null}
-              {!storePage ? teamTrees.map(storeRoot) : null}
-              {!storePage ? (
-                <>
-                  <h6>Everything</h6>
-                  <TreeRow
-                    depth={0}
-                    root
-                    active={selected.store === ALL_ITEMS}
-                    icon="grid"
-                    name="All items"
-                    open={false}
-                    expandable={false}
-                    onSelect={() => locations.setFolder(ALL_ITEMS)}
-                    onToggle={() => {}}
-                  />
-                </>
+    <div className="drop-area">
+      {dropZone}
+      <div className="folder-layout">
+        <div className="folder-split">
+          <aside className="tpane" aria-label="Folders">
+            {!storePage ? (
+              <div className="tree-all">
+                <TreeRow
+                  depth={0}
+                  root
+                  active={selected.store === ALL_ITEMS}
+                  icon="grid"
+                  name="All items"
+                  count={allCount}
+                  open={false}
+                  expandable={false}
+                  onSelect={() => locations.setFolder(ALL_ITEMS)}
+                  onToggle={() => {}}
+                />
+              </div>
+            ) : null}
+            {!storePage ? <h6>{vaultHeading}</h6> : null}
+            {vaultTrees.map(storeRoot)}
+            {!storePage && teamTrees.length ? <h6>Teams</h6> : null}
+            {!storePage ? teamTrees.map(storeRoot) : null}
+          </aside>
+          <section className="lpane" aria-label="Folder contents">
+            <Toolbar
+              onNew={createNew}
+              kind={state.kind}
+              onKind={(kind) => {
+                locations.setKind(kind);
+              }}
+              query={state.query}
+              onQuery={(query) => {
+                locations.search(query);
+              }}
+              searchPlaceholder={searchPlaceholder}
+            />
+            <div
+              className="body folder-body"
+              ref={bodyRef}
+              onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+            >
+              {location.kind === 'all' && accessBands.length ? (
+                <div className="bandstrip">
+                  {accessBands.map((band) => (
+                    <Band key={band.key}>{band.text}</Band>
+                  ))}
+                </div>
               ) : null}
-            </aside>
-            <section className="lpane" aria-label="Folder contents">
-              <Toolbar
-                onNew={createNew}
-                kind={state.kind}
-                onKind={(kind) => {
-                  locations.setKind(kind);
-                }}
-                sort={state.sort}
-                onSort={(sort) => {
-                  locations.setSort(sort);
-                }}
-                onSettings={
-                  selectedTree?.store.kind === 'team'
-                    ? () => onSettings(selectedTree.store.id)
-                    : undefined
-                }
-              />
-              <div
-                className="body folder-body"
-                ref={bodyRef}
-                onScroll={(event) =>
-                  setScrollTop(event.currentTarget.scrollTop)
-                }
-              >
-                {location.kind === 'all' && accessBands.length ? (
-                  <div className="bandstrip">
-                    {accessBands.map((band) => (
-                      <Band key={band.key}>{band.text}</Band>
-                    ))}
-                  </div>
-                ) : null}
-                {flatMode ? (
-                  !items.length ? (
-                    state.query ? (
-                      <div className="empty">
-                        <h2>
-                          No items {store ? `in ${store.name}` : 'here'} match “
-                          {state.query}”
-                        </h2>
-                        <p>
-                          Search by item name, path, or vault. Item contents are
-                          encrypted and cannot be searched.
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="empty">
-                        <div className="big">
-                          <Icon
-                            name={
-                              kindMeta ? (kindMeta.icon as FoksIconName) : 'key'
-                            }
-                          />
-                        </div>
-                        <h2>No items yet</h2>
-                        <p>
-                          {store
-                            ? emptyStoreCopy(store)
-                            : 'Save logins, secure notes, and credentials to get started.'}
-                        </p>
-                        <NewItemButton onNew={createNew} />
-                      </div>
-                    )
+              {flatMode ? (
+                !items.length ? (
+                  state.query ? (
+                    <div className="empty">
+                      <h2>
+                        No items{' '}
+                        {searchScope ? `in ${searchScope}` : 'anywhere'} match “
+                        {state.query}”
+                      </h2>
+                      <p>
+                        Search by item name, path, or vault. Item contents are
+                        encrypted and cannot be searched.
+                      </p>
+                    </div>
                   ) : (
-                    <div className="list-window">
-                      <div className="hdr">
-                        <span />
-                        <button
-                          type="button"
-                          className={state.sort === 'name' ? 'on' : ''}
-                          onClick={() => {
-                            locations.setSort('name');
-                          }}
-                        >
-                          Name{state.sort === 'name' ? ' ↓' : ''}
-                        </button>
+                    <div className="empty">
+                      <div className="big">
+                        <Icon
+                          name={
+                            kindMeta ? (kindMeta.icon as FoksIconName) : 'key'
+                          }
+                        />
                       </div>
-                      {location.kind === 'all' &&
-                      state.sort === 'group' &&
-                      !state.query ? (
-                        storeDisplayOrder(snapshot).map((sectionStore) => {
-                          const section = items.filter(
-                            (item) => item.store === sectionStore.id,
-                          );
-                          if (!section.length) return null;
-                          return (
-                            <Fragment key={sectionStore.id}>
-                              <TileSection
-                                snapshot={snapshot}
-                                store={sectionStore}
-                              />
-                              {section.map((item) => (
-                                <Row
-                                  key={`${item.store}|${item.path}`}
-                                  snapshot={snapshot}
-                                  item={item}
-                                  searching={false}
-                                  subtitle={false}
-                                  selected={
-                                    state.selection?.store === item.store &&
-                                    state.selection.path === item.path
-                                  }
-                                  onSelect={() =>
-                                    locations.select({
-                                      store: item.store,
-                                      path: item.path,
-                                    })
-                                  }
-                                />
-                              ))}
-                            </Fragment>
-                          );
-                        })
-                      ) : (
-                        <div className="virtual-rows" ref={listRef}>
-                          {rowWindow.padTop ? (
-                            <div
-                              className="virtual-spacer"
-                              style={{ height: rowWindow.padTop }}
-                            />
-                          ) : null}
-                          {visibleRows.map((item) => (
-                            <Row
-                              key={`${item.store}|${item.path}`}
-                              snapshot={snapshot}
-                              item={item}
-                              searching={Boolean(state.query)}
-                              subtitle={location.kind === 'all'}
-                              selected={
-                                state.selection?.store === item.store &&
-                                state.selection.path === item.path
-                              }
-                              onSelect={() => {
-                                locations.select({
-                                  store: item.store,
-                                  path: item.path,
-                                });
-                              }}
-                            />
-                          ))}
-                          {rowWindow.padBottom ? (
-                            <div
-                              className="virtual-spacer"
-                              style={{ height: rowWindow.padBottom }}
-                            />
-                          ) : null}
-                        </div>
-                      )}
+                      <h2>No items yet</h2>
+                      <p>
+                        {store
+                          ? emptyStoreCopy(store)
+                          : 'Save passwords and documents to get started.'}
+                      </p>
+                      <NewItemButton onNew={createNew} />
                     </div>
                   )
-                ) : showEmptyFolder ? (
-                  <div className="empty">
-                    <div className="big">
-                      <Icon
-                        name={
-                          kindMeta ? (kindMeta.icon as FoksIconName) : 'key'
-                        }
-                      />
-                    </div>
-                    <h2>No items yet</h2>
-                    <p>
-                      {selected.path === '/' && selectedTree
-                        ? emptyStoreCopy(selectedTree.store)
-                        : 'This folder is empty.'}
-                    </p>
-                    <NewItemButton onNew={createNew} />
-                  </div>
                 ) : (
                   <div className="list-window">
-                    <div className="hdr">
-                      <span />
-                      <span>Name</span>
+                    <ListHeader
+                      columns={columns}
+                      sort={state.sort}
+                      onSort={(sort) => {
+                        locations.setSort(sort);
+                      }}
+                    />
+                    <div className="virtual-rows" ref={listRef}>
+                      {rowWindow.padTop ? (
+                        <div
+                          className="virtual-spacer"
+                          style={{ height: rowWindow.padTop }}
+                        />
+                      ) : null}
+                      {visibleRows.map((item) => (
+                        <Row
+                          key={`${item.store}|${item.path}`}
+                          snapshot={snapshot}
+                          hues={hues}
+                          item={item}
+                          columns={columns}
+                          selected={
+                            state.selection?.store === item.store &&
+                            state.selection.path === item.path
+                          }
+                          chip
+                          onSelect={() => {
+                            locations.select({
+                              store: item.store,
+                              path: item.path,
+                            });
+                          }}
+                        />
+                      ))}
+                      {rowWindow.padBottom ? (
+                        <div
+                          className="virtual-spacer"
+                          style={{ height: rowWindow.padBottom }}
+                        />
+                      ) : null}
                     </div>
-                    <div className="virtual-rows">{paneRows}</div>
                   </div>
-                )}
-              </div>
-            </section>
-          </div>
+                )
+              ) : showEmptyFolder ? (
+                <div className="empty">
+                  <div className="big">
+                    <Icon
+                      name={kindMeta ? (kindMeta.icon as FoksIconName) : 'key'}
+                    />
+                  </div>
+                  <h2>No items yet</h2>
+                  <p>
+                    {selected.path === '/' && selectedTree
+                      ? emptyStoreCopy(selectedTree.store)
+                      : 'This folder is empty.'}
+                  </p>
+                  <NewItemButton onNew={createNew} />
+                </div>
+              ) : (
+                <div className="list-window">
+                  <ListHeader
+                    columns={columns}
+                    sort={state.sort}
+                    onSort={(sort) => {
+                      locations.setSort(sort);
+                    }}
+                  />
+                  <div className="virtual-rows">{paneRows}</div>
+                </div>
+              )}
+            </div>
+          </section>
         </div>
       </div>
-    </>
+    </div>
   );
 }

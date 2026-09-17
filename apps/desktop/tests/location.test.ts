@@ -968,7 +968,9 @@ test('remembered device pages follow a new acting account without reusing a key 
 /* ---------------------------------------------------------------- parents -- */
 
 test('a page inside a tab knows the page it returns to', () => {
-  assert.deepEqual(parentLocation({ kind: 'all' }), { kind: 'files' });
+  // All items is the Files tab's own root, whichever address names it.
+  assert.equal(parentLocation({ kind: 'all' }), null);
+  assert.equal(parentLocation({ kind: 'files' }), null);
   assert.deepEqual(parentLocation({ kind: 'store', ref: 'team:eng' }), {
     kind: 'files',
   });

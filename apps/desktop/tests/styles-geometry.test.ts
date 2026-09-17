@@ -48,7 +48,7 @@ test('the shared tokens come from the kit and are not re-declared here', async (
 
   const kitTokens = rootTokens(kit);
   const shellTokens = rootTokens(shell);
-  assert.equal(kitTokens.size, 42, 'expected exactly 42 shared kit tokens');
+  assert.equal(kitTokens.size, 43, 'expected exactly 43 shared kit tokens');
 
   for (const name of shellTokens.keys()) {
     assert.equal(
@@ -105,6 +105,9 @@ function typeSizes(css: string): { value: number; source: string }[] {
   const sizes: { value: number; source: string }[] = [];
   for (const match of declarations.matchAll(/font(-size)?\s*:\s*([^;}]+)/g)) {
     const value = match[2].trim();
+    // The one exemption: a store mark's initials, sized by `--mark-type` in
+    // tokens.css. They are a glyph in a tile, not text a reader runs through.
+    if (value === 'var(--mark-type)' || /^--mark-type/.test(match[0])) continue;
     const px = /(\d+(?:\.\d+)?)px/.exec(value);
     if (px) sizes.push({ value: Number(px[1]), source: `font: ${value}` });
   }
@@ -229,12 +232,13 @@ test('shell stylesheet contains required grid and flexbox layout rules', async (
   );
   assert.match(
     shell,
-    /\.tpane\{[^}]*background:var\(--main-surface\)[^}]*padding:4px 6px 8px/,
+    /\.tpane\{[^}]*background:var\(--main-surface\)[^}]*padding:6px 6px 8px/,
   );
   assert.match(shell, /\.tpane \.fn\{[^}]*font-weight:500/);
   assert.doesNotMatch(shell, /\.tpane \.fn\.on\{[^}]*font-weight/);
-  // Tree rows indent by depth and reserve an in-flow twist gutter, so a
-  // folder's icon starts at the same x whether or not it has children.
+  // Tree rows indent by depth; a root icon sits on the 16px edge the crumb
+  // and headings share, and a nested folder with children gives one indent
+  // back to its twist so its icon lands where a childless sibling's does.
   assert.match(
     shell,
     /\.tpane \.fn\{[^}]*padding-left:calc\(4px \+ var\(--d,0\) \* 18px\)/,
@@ -242,8 +246,10 @@ test('shell stylesheet contains required grid and flexbox layout rules', async (
   assert.match(shell, /\.tpane \.fn \.fselect\{[^}]*padding:0 8px 0 6px/);
   assert.match(
     shell,
-    /\.tpane \.fn:not\(:has\(>\.twist\)\) \.fselect\{padding-left:24px\}/,
+    /\.tpane \.fn:has\(>\.twist\)\{padding-left:calc\(4px \+ var\(--d,0\) \* 18px - 18px\)\}/,
   );
+  assert.doesNotMatch(shell, /\.fselect\{padding-left:24px\}/);
+  assert.match(shell, /\.tpane h6\{[^}]*padding:4px 10px/);
   assert.match(shell, /\.twist\{[^}]*flex:none;width:18px;height:18px/);
   assert.match(shell, /\.radio\{[^}]*text-align:left[^}]*width:100%/);
   // Layout server settings rows with right-aligned action banners.

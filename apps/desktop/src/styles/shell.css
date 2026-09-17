@@ -237,6 +237,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .search input{width:100%;height:32px;border:1px solid var(--line-field);border-radius:var(--radius-md);padding:0 54px 0 32px;background:var(--surface);outline:none}
 .search input:focus{border-color:var(--accent-border);background:#fff;box-shadow:0 0 0 3px var(--accent-wash)}
 .search .ic{position:absolute;left:10px;top:8px;font-size:16px;color:var(--muted)}
+.search.no-shortcut input{padding-right:12px}
 .search kbd{position:absolute;right:8px;top:7px;font:12px var(--sans);color:var(--faint);border:1px solid var(--line);border-radius:5px;padding:1px 5px;background:#fff}
 .toolbar{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;row-gap:6px;gap:6px;padding:6px 20px 10px;min-width:0;border-bottom:1px solid var(--line-soft)}
 .toolbar .btn,.toolbar .seg{height:32px}.toolbar .btn,.toolbar .seg.txt button{font-size:13px}
@@ -275,9 +276,8 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 /* Multi-line menu choice */
 .menu button .menu-choice{display:flex;flex-direction:column;gap:1px;min-width:0}
 .menu button .menu-choice small{font-weight:400;color:var(--muted);white-space:normal}
-.toolbar .sortwrap>.btn{padding:0 6px 0 9px;gap:2px}
-.toolbar .sortwrap>.btn>.ic{font-size:16px}
-.toolbar .sortwrap>.btn>.chevron{font-size:13px;color:var(--muted)}
+.toolbar .search{width:160px;flex:0 1 160px}
+.toolbar .search input{display:block}
 .menu .mark{color:var(--muted);font-size:15px;margin-right:2px}
 .menu button.on .mark{color:inherit}
 .menu .cap{font-size:12px;color:var(--muted);padding:6px 9px 4px}
@@ -296,7 +296,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .row .name small{display:block;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row .n{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
 .row .server{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pchip{display:inline-flex;align-items:center;gap:3px;flex:none;font:600 12px/16px inherit;font-family:inherit;color:var(--muted);background:var(--chip-bg);padding:1px 6px 1px 5px;border-radius:5px}
+.pchip{display:inline-flex;align-items:center;gap:3px;flex:none;margin-left:2px;font:600 12px/16px inherit;font-family:inherit;color:var(--muted);background:var(--chip-bg);padding:1px 6px 1px 5px;border-radius:5px}
 .pchip .ic{font-size:12px}
 .kic{width:26px;height:26px;border-radius:var(--radius-sm);display:grid;place-items:center;font-size:16px;flex:none}
 .kic.big{width:48px;height:48px;border-radius:var(--radius-lg);font-size:23px}.kic.big .ic{font-size:26px}
@@ -419,18 +419,23 @@ details.dd li b{color:var(--ink-2)}
 .folder-layout{flex:1;min-height:0;display:flex;flex-direction:column}
 .bandstrip{padding:8px 20px 0}
 .folder-split{flex:1;min-height:0;display:grid;grid-template-columns:236px minmax(0,1fr)}
-.tpane{border-right:1px solid var(--line-soft);background:var(--main-surface);overflow:auto;padding:4px 6px 8px}
-.tpane h6{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);padding:4px 8px}
-/* Every tree row shares one geometry, as the rail's rows do: 4px of edge, an
-   18px twist gutter, a 6px gap, then the icon. The gutter is in flow and
-   reserved whether or not the folder has children, so every icon starts on the
-   same 28px baseline; a row without a twist pays the same 24px inside its own
-   button instead, which keeps the whole row clickable. Depth indents the row
-   itself by one gutter per level, so a child's twist sits under its parent's
-   icon and the hover and selected fills still span the column's full width. */
-.tpane .fn{display:flex;align-items:center;width:100%;height:30px;padding-left:calc(4px + var(--d,0) * 18px);border-radius:7px;font-size:13px;font-weight:500;color:var(--ink-2)}
-.tpane .fn .fselect{display:flex;align-items:center;gap:6px;flex:1;min-width:0;height:30px;padding:0 8px 0 6px;border-radius:7px;color:inherit;text-align:left}
-.tpane .fn:not(:has(>.twist)) .fselect{padding-left:24px}
+.tpane{border-right:1px solid var(--line-soft);background:var(--main-surface);overflow:auto;padding:6px 6px 8px}
+.tpane h6{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);padding:4px 10px}
+/* Heading spacing after rows */
+.tpane .fn+h6{padding-top:5px}
+/* "All items" leaf */
+.tpane .tree-all{margin-bottom:5px}
+/* Tree row geometry */
+.tpane .fn{display:flex;align-items:center;width:100%;height:31px;padding-left:calc(4px + var(--d,0) * 18px);border-radius:7px;font-size:13px;font-weight:500;color:var(--ink-2)}
+.tpane .fn .fselect{display:flex;align-items:center;gap:6px;flex:1;min-width:0;height:31px;padding:0 8px 0 6px;border-radius:7px;color:inherit;text-align:left}
+.tpane .fn:has(>.twist){padding-left:calc(4px + var(--d,0) * 18px - 18px)}
+/* Tree twist offset */
+.tpane .fn>.twist{margin-left:3px;margin-right:-3px}
+/* Team mark */
+.tpane .fn .fselect>.av.team{width:18px;height:18px;border-radius:4px;font-size:var(--mark-type);flex:none}
+/* Row action button */
+.tpane .fn .fact{flex:none;width:22px;height:22px;margin-right:4px;border-radius:5px;display:grid;place-items:center;color:var(--accent-ink);font-size:14px}
+.tpane .fn .fact:hover{background:var(--accent-wash-2)}
 .tpane .fn:hover{background:var(--hover)}
 .tpane .fn.on{background:var(--accent-wash-2);color:var(--accent-ink)}
 .tpane .fn .fselect>.ic{font-size:15px;color:#b45309}
@@ -444,7 +449,20 @@ details.dd li b{color:var(--ink-2)}
 .twist.open{transform:none}
 .twist:hover{background:rgba(0,0,0,.08);color:var(--ink)}
 .lpane{min-width:0;display:flex;flex-direction:column}
-.lpane .folder-body{padding-top:4px}
+.lpane .folder-body{padding-top:6px}
+/* Folder table */
+.folder-body .row.one{height:38px}
+.hdr.cols,.row.cols{grid-template-columns:26px minmax(160px,1fr) 110px 90px}
+.hdr.cols.loc,.row.cols.loc{grid-template-columns:26px minmax(160px,1fr) 110px 140px 90px}
+.hdr.cols{letter-spacing:0;border-bottom:1px solid var(--line-soft);margin-bottom:2px}
+.hdr.cols button{letter-spacing:0}
+.hdr.cols button:hover{color:var(--ink)}
+.row .cell{font-size:12.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hdr .num,.row .cell.num{text-align:right;font-variant-numeric:tabular-nums}
+.row .cell.mark{display:flex;align-items:center;gap:6px}
+.row .cell.mark>span{overflow:hidden;text-overflow:ellipsis}
+.row .cell.mark .av.team{width:16px;height:16px;border-radius:4px;font-size:var(--mark-type);flex:none}
+.row .cell.mark>.ic{font-size:14px;color:var(--faint);flex:none}
 .crumbs{display:flex;align-items:center;gap:2px;font-size:13px;min-width:0}
 .crumbs button{padding:2px 7px;border-radius:6px;color:var(--muted);font-weight:500}
 .crumbs button:hover{background:var(--hover);color:var(--ink)}
@@ -452,7 +470,6 @@ details.dd li b{color:var(--ink-2)}
 .crumbs h1.cur{padding:0;color:var(--ink);white-space:nowrap}
 .crumbs>button:first-child{margin-left:-7px}
 .crumbs .sep{display:inline-grid;place-items:center;color:var(--faint);font-size:12px;transform:rotate(-90deg)}
-.row.folder .cnt{font-size:12px;font-weight:400;color:var(--muted);margin-left:4px}
 .kic.Folder{background:rgba(245,158,11,.14);color:#b45309}
 .kic.Store{background:var(--chip-bg);color:var(--ink-3)}
 @container (max-width:700px){.folder-split{grid-template-columns:minmax(0,1fr)}.tpane{display:none}}
