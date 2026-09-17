@@ -52,6 +52,7 @@ export function useChatComposer(
   };
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState('');
+  const [refreshError, setRefreshError] = useState('');
   const submission = useRef<Extract<
     ChatAction,
     { action: 'prepare-message' }
@@ -73,6 +74,7 @@ export function useChatComposer(
       sendLifetime.current++;
       sendGuard.current = false;
       setSending(false);
+      setRefreshError('');
       submission.current = null;
       durable.current = false;
       setDraftText('');
@@ -146,9 +148,21 @@ export function useChatComposer(
       active.current &&
       sendLifetime.current === lifetime &&
       persistenceRef.current?.key === store.key;
+    const refreshViews = (includeHistory: boolean) => {
+      for (const read of includeHistory
+        ? [refreshPending, load]
+        : [refreshPending]) {
+        void Promise.resolve()
+          .then(() => (current() ? read() : undefined))
+          .catch((error) => {
+            if (current()) setRefreshError(failure(error));
+          });
+      }
+    };
     sendGuard.current = true;
     setSending(true);
     setSendError('');
+    setRefreshError('');
     submission.current ??= {
       action: 'prepare-message',
       submission: submissionId(),
@@ -171,15 +185,11 @@ export function useChatComposer(
       submission.current = null;
       durable.current = false;
       setDraft('');
-      await refreshPending();
-      if (!current()) return;
       await request({
         action: 'attempt',
         operation: preparedId,
       });
-      if (!current()) return;
-      await refreshPending();
-      await load();
+      if (current()) refreshViews(true);
     } catch (e) {
       if (current()) {
         setSendError(failure(e));
@@ -193,14 +203,17 @@ export function useChatComposer(
             if (current()) setSendError(failure(cleanup));
           }
         }
+        if (current()) refreshViews(false);
         if (preparedId && current()) {
-          try {
-            await request({ action: 'status', operation: preparedId });
-          } catch {
-            /* Keep the durable identity visible if status is unavailable. */
-          }
+          const operation = preparedId;
+          void Promise.resolve()
+            .then(() =>
+              current() ? request({ action: 'status', operation }) : undefined,
+            )
+            .catch(() => {
+              /* Keep the durable identity visible if status is unavailable. */
+            });
         }
-        if (current()) void refreshPending().catch(() => {});
       }
     } finally {
       if (current()) {
@@ -257,6 +270,7 @@ export function useChatComposer(
     intentLoading,
     intentLoadError,
     sendError,
+    refreshError,
     draftBytes,
     send,
     overLimit,

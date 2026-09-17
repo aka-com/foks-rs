@@ -100,6 +100,7 @@ export function ChatThread({
     setDraft,
     sending,
     sendError,
+    refreshError,
     draftBytes,
     send,
     overLimit,
@@ -354,6 +355,13 @@ export function ChatThread({
               {sendError && (
                 <Band severity="crit">
                   <span role="alert">{sendError}</span>
+                </Band>
+              )}
+              {refreshError && (
+                <Band severity="info">
+                  <span role="status">
+                    Last message refresh failed: {refreshError}
+                  </span>
                 </Band>
               )}
               <textarea
