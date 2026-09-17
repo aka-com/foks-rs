@@ -1,4 +1,4 @@
-# Fennec
+# foks-rs
 
 A Rust implementation of FOKS, the federated open key store protocol,
 including client and server libraries, command-line tools, a local
