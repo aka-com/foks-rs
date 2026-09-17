@@ -2395,6 +2395,18 @@ test('mock resumeGroupCreation activates an inactive team', async () => {
   assert.equal(store.active, true);
 });
 
+test('mock abandonGroupCreation drops only an unfinished team', async () => {
+  const bridge = mockBridge(FIXTURE);
+  await bridge.abandonGroupCreation('team:homelab');
+  const stores = (await bridge.listCatalog()).stores;
+  assert.equal(
+    stores.some((candidate) => candidate.id === 'team:homelab'),
+    false,
+  );
+  // A team that finished creating is not removed this way.
+  await assert.rejects(() => bridge.abandonGroupCreation('team:eng'));
+});
+
 test('mock removeFederatedGroup requires both host ID and team ID to match', async () => {
   const active = { ...FIXTURE.federation[0], active: true };
   const bridge = mockBridge({ ...FIXTURE, federation: [active] });

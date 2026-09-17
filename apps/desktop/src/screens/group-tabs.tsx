@@ -254,11 +254,11 @@ export function ChannelsTab({
         >
           Add channel
         </Button>
+        <p className="fn">
+          Channels are encrypted with the team key. Access is determined by each
+          member’s assigned role.
+        </p>
       </div>
-      <p className="fn">
-        Channels are encrypted to the team key. A channel’s own read and write
-        roles decide who can take part in it.
-      </p>
     </div>
   );
 }
@@ -325,12 +325,14 @@ export function IncompleteGroupPage({
   snapshot,
   store,
   onFinish,
+  onRemove,
   onCopyId,
   onNavigate,
 }: {
   snapshot: AgentSnapshot;
   store: TeamStore;
   onFinish: () => void;
+  onRemove: () => void;
   onCopyId: () => void;
   onNavigate: (location: Location) => void;
 }): ReactNode {
@@ -395,6 +397,23 @@ export function IncompleteGroupPage({
               <code title={store.team_id_hex}>
                 {shortId(store.team_id_hex)}
               </code>
+            </InsetRow>
+          </Inset>
+          {/* Finishing setup cannot succeed for every record that reaches this
+              page — a name the server refused stays refused — so the page also
+              offers the only other way out. */}
+          <SectionLabel>Remove</SectionLabel>
+          <Inset>
+            <InsetRow
+              label="Remove team"
+              action={
+                <Button size="sm" danger icon="trash" onClick={onRemove}>
+                  Remove team…
+                </Button>
+              }
+            >
+              Drops this team’s saved identity and keys from this Mac. Use it
+              when setup cannot be finished.
             </InsetRow>
           </Inset>
         </div>

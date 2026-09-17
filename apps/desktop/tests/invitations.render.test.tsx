@@ -154,10 +154,9 @@ test('local certificate operations stay local while a remote inbox profile is se
       onComplete: () => {},
     }),
   );
-  ui.fireEvent.change(
-    r.getByLabelText('Server profile (for teams on another server)'),
-    { target: { value: 'remote' } },
-  );
+  ui.fireEvent.change(r.getByLabelText('Server profile'), {
+    target: { value: 'remote' },
+  });
   ui.fireEvent.click(r.getByText('Create invitation'));
   await ui.waitFor(() => assert.ok(r.getByText('Submit')));
   ui.fireEvent.click(r.getByText('Submit'));

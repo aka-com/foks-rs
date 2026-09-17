@@ -126,7 +126,7 @@ function sectionLabels(): string[] {
 }
 
 /**
- * The header's Add people menu item with this bold label — "A person" or "A
+ * The header's Add people menu item with this bold label — "A user" or "A
  * team from another server" — once the menu is open.
  */
 function addPeopleItem(label: string): HTMLButtonElement {
@@ -198,11 +198,23 @@ test('Members exposes invitation creation, requests and approval recovery for th
   await ui.act(async () => {});
   calls.length = 0;
   ui.fireEvent.click(r.getByRole('tab', { name: /^Requests/ }));
+  // The tab holds the decisions and nothing else: issuing an invitation is
+  // an add action, so its form is not on a list of pending requests.
+  assert.equal(r.queryByRole('button', { name: 'Create invitation' }), null);
+  assert.equal(r.queryByRole('button', { name: 'Refresh requests' }), null);
+  assert.equal(ui.screen.queryByText('Team nesting order'), null);
+  // The tab draws no role select, so it admits as Member and says so.
+  for (const label of ['Approve as Member', 'Reject']) {
+    ui.fireEvent.click(r.getByRole('button', { name: label }));
+    await ui.act(async () => {});
+  }
+  // The form is reached from Add people's third choice, which opens the same
+  // panel as a sheet.
+  addPeopleChoice(r, 'By invitation…');
+  await ui.act(async () => {});
   for (const label of [
     'Create invitation',
     'Refresh requests',
-    'Approve',
-    'Reject',
     'Show pending approvals',
     'Show pending operations',
   ]) {
@@ -213,17 +225,15 @@ test('Members exposes invitation creation, requests and approval recovery for th
     calls.map((call) => (call.action as { action: string }).action),
     [
       // Confirmed or pending mutations refresh the visible recovery count.
-      'create',
-      'list',
-      'pending-approvals',
-      'inbox',
       'approve',
       'list',
       'pending-approvals',
       'reject',
       'list',
       'pending-approvals',
+      'create',
       // These explicit read-only actions do not invalidate it again.
+      'inbox',
       'pending-approvals',
       'list',
     ],
@@ -234,8 +244,10 @@ test('Members exposes invitation creation, requests and approval recovery for th
     ),
   );
   assert.deepEqual(calls[0].action, {
-    action: 'create',
+    action: 'approve',
     team_alias: store.alias,
+    request_id: '1'.repeat(32),
+    role: { member: { visibility: 0 } },
   });
 });
 
@@ -260,7 +272,7 @@ test('Members does not expose invitation administration to an ordinary member', 
   );
   // Add people stays reachable, but neither choice applies to a Member.
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Add people' }));
-  assert.equal(inert(addPeopleItem('A person')), true);
+  assert.equal(inert(addPeopleItem('A user')), true);
   assert.equal(inert(addPeopleItem('A team from another server')), true);
 });
 
@@ -411,7 +423,7 @@ test('a single-action alert puts its action at the right end of the alert', asyn
   // roster that failed to load leaves both Add people choices unable to
   // say whether they apply, and they say so rather than disappearing.
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Add people' }));
-  assert.equal(inert(addPeopleItem('A person')), true);
+  assert.equal(inert(addPeopleItem('A user')), true);
   assert.equal(inert(addPeopleItem('A team from another server')), true);
 });
 
@@ -596,7 +608,7 @@ test('a member cannot act on their own row', async () => {
 test('Add people offers a person or a team from another server, each in its own words', async () => {
   const rendered = await group(await fixture());
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Add people' }));
-  const person = addPeopleItem('A person');
+  const person = addPeopleItem('A user');
   const team = addPeopleItem('A team from another server');
   assert.equal(
     person.querySelector('.menu-choice small')?.textContent,
@@ -604,7 +616,7 @@ test('Add people offers a person or a team from another server, each in its own 
   );
   assert.equal(
     team.querySelector('.menu-choice small')?.textContent,
-    'Everyone in it gets one role here.',
+    'By federation',
   );
   // And the sheet it opens says what it will do, in its own words, naming
   // the group it was given rather than "group".
@@ -680,9 +692,14 @@ test('the Settings tab states the name, the join policy and why leaving is not o
     (row) => row.querySelector('.k')?.textContent === 'Name',
   );
   assert.ok(nameRow);
+  // The name cannot be edited, and the row's action says so in the place
+  // every other row keeps its action, disabled.
+  const cannotChange = nameRow.querySelector<HTMLButtonElement>('.a .btn');
+  assert.equal(cannotChange?.textContent, 'Cannot change');
+  assert.equal(cannotChange?.getAttribute('aria-disabled'), 'true');
   assert.equal(
-    nameRow.querySelector('.hint')?.textContent,
-    'A name is fixed at creation.',
+    cannotChange?.title,
+    'Team names cannot be changed after creation.',
   );
   const policy = rows.find(
     (row) => row.querySelector('.k')?.textContent === 'Join policy',
@@ -709,7 +726,7 @@ test('Members invite action opens the group invitation workflow', async () => {
   });
   await ui.act(async () => {});
   calls.length = 0;
-  addPeopleChoice(r, 'A person');
+  addPeopleChoice(r, 'A user');
   ui.fireEvent.click(r.getByRole('button', { name: 'Invite them to Acme…' }));
   const dialog = r.getByRole('dialog');
   ui.fireEvent.click(
@@ -748,7 +765,7 @@ test('an invitation prepared after unmount is recovered from the group banner', 
     return row;
   };
   const first = await group(snapshot, { invitation });
-  addPeopleChoice(first, 'A person');
+  addPeopleChoice(first, 'A user');
   ui.fireEvent.click(
     first.getByRole('button', { name: 'Invite them to Acme…' }),
   );

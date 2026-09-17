@@ -843,6 +843,12 @@ pub enum Operation {
         profile: String,
         team_alias: String,
     },
+    /// Forgets the local record of a team whose creation never completed.
+    /// Local state only: nothing is withdrawn from the server.
+    AbandonTeamCreation {
+        profile: String,
+        team_alias: String,
+    },
     ListTeams {
         profile: String,
     },
@@ -1718,6 +1724,14 @@ impl std::fmt::Debug for Operation {
                 team_alias,
             } => formatter
                 .debug_struct("ResumeTeamCreation")
+                .field("profile", profile)
+                .field("team_alias", team_alias)
+                .finish(),
+            Self::AbandonTeamCreation {
+                profile,
+                team_alias,
+            } => formatter
+                .debug_struct("AbandonTeamCreation")
                 .field("profile", profile)
                 .field("team_alias", team_alias)
                 .finish(),

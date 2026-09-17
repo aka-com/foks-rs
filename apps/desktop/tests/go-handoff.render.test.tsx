@@ -1205,9 +1205,14 @@ test('a server added after unmount is listed on Accounts and pairs without anoth
       }),
     ),
   );
-  const row = accounts.getByText('CLI server').parentElement;
+  // The host is the row's value, not its label: the label column is a fixed
+  // width and a hostname overran it, so the row reads "Server" and states the
+  // host and its pairing state together.
+  const row = accounts
+    .getByText(/CLI server · Connected, not yet paired/)
+    .closest<HTMLElement>('.fr');
   assert.ok(row);
-  assert.ok(ui.within(row).getByText('Connected, not yet paired'));
+  assert.ok(ui.within(row).getByText('Server'));
   ui.fireEvent.click(ui.within(row).getByRole('button', { name: 'Pair' }));
   ui.fireEvent.click(await accounts.findByRole('radio', { name: /cli-owner/ }));
   assert.ok(accounts.getByRole('button', { name: 'Pair this device' }));

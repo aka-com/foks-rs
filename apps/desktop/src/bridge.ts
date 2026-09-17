@@ -775,6 +775,13 @@ export interface Bridge {
   ): Promise<MutationResponse>;
   pickAndReplaceFile(request: ItemRequest): Promise<MutationResponse>;
   resumeGroupCreation(storeId: StoreRef): Promise<MutationResponse>;
+  /**
+   * Forgets the local record of a team whose creation never finished. Only a
+   * team the catalog reports as inactive can be forgotten this way, and only
+   * local state is touched: a creation the server already accepted leaves the
+   * team on that server with no key here that can reach it.
+   */
+  abandonGroupCreation(storeId: StoreRef): Promise<MutationResponse>;
   takeAgentConnectionLoss(): Promise<string | null>;
   retryAgentConnection(): Promise<AgentStatus>;
   createGroup(request: CreateGroupRequest): Promise<MutationResponse>;
@@ -2452,6 +2459,8 @@ export const tauriBridge: Bridge = {
     ),
   resumeGroupCreation: (storeId) =>
     checked('resume_group_creation', { storeId }, decodeMutation),
+  abandonGroupCreation: (storeId) =>
+    checked('abandon_group_creation', { storeId }, decodeMutation),
   takeAgentConnectionLoss: () =>
     checked('take_agent_connection_loss', undefined, decodeConnectionLoss),
   retryAgentConnection: () =>

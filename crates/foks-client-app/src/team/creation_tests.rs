@@ -295,6 +295,55 @@ fn legacy_reconciliation_authenticates_existing_creation_and_original_secrets() 
 }
 
 #[test]
+fn abandoning_forgets_an_unfinishable_creation_and_frees_its_alias() {
+    let fixture = Fixture::start();
+    // A creation resuming cannot finish: its intent names an actor this
+    // device no longer is, which is the shape the invalid-name case leaves too.
+    fixture
+        .run(|s, v, k| {
+            let account = v.account("owner")?;
+            let mut team = StoredTeam::random_named("stuckteam", "owner", "stuckteam")?;
+            s.persist_creation_intent(&mut team, &account, v)?;
+            team.creation.as_mut().unwrap().actor_id[1] ^= 1;
+            v.put_team(&team)?;
+            assert!(s.resume_team_creation("stuckteam", v, k).is_err());
+            Ok(())
+        })
+        .unwrap();
+    let report = fixture
+        .run(|s, v, _| s.abandon_team_creation("stuckteam", v))
+        .unwrap();
+    assert_eq!(report.alias, "stuckteam");
+    assert_eq!(report.phase.as_deref(), Some("preparing"));
+    fixture
+        .run(|s, v, _| {
+            assert!(!v.contains_team("stuckteam")?);
+            assert!(!s.list_teams(v)?.iter().any(|t| t.alias == "stuckteam"));
+            // Gone means gone: there is nothing left to forget or resume.
+            assert!(s.abandon_team_creation("stuckteam", v).is_err());
+            Ok(())
+        })
+        .unwrap();
+    // The alias is free again, and a team created under it completes.
+    fixture
+        .run(|s, v, k| s.create_named_team("owner", "stuckteam", "stuckteam", v, k))
+        .unwrap();
+    fixture
+        .run(|s, v, _| {
+            assert!(v.team("stuckteam")?.active);
+            // A team that finished creating is not removed this way.
+            assert!(matches!(
+                s.abandon_team_creation("stuckteam", v),
+                Err(Error::InvalidAccount(
+                    "team has no incomplete local creation"
+                ))
+            ));
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
 fn preparing_intent_rejects_changed_actor_before_submission() {
     let fixture = Fixture::start();
     fixture

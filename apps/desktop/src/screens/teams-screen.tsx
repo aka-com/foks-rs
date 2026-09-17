@@ -51,7 +51,7 @@ import {
   unavailableTitle,
 } from './group-model';
 import type { DiscoveryContext } from './group-model';
-import { GroupSheet } from './groups-screen';
+import { AbandonGroupSheet, GroupSheet } from './groups-screen';
 import type { GroupSheetKind } from './groups-screen';
 
 /** Only what this page uses; the tab shares no state with Settings. */
@@ -190,11 +190,14 @@ function FindGroups({
 function TeamRow({
   snapshot,
   store,
+  requests = 0,
   menu,
   onOpen,
 }: {
   snapshot: AgentSnapshot;
   store: TeamStore;
+  /** Membership requests waiting on this team, drawn as a chip on the row. */
+  requests?: number;
   menu: ReactNode;
   onOpen: () => void;
 }): ReactNode {
@@ -212,7 +215,7 @@ function TeamRow({
   const caption = [
     displayServerName(snapshot, store),
     rosterKnown ? plural(partiesOf(snapshot, store.id).length, 'member') : null,
-    role ? `Your role: ${roleName(role)}` : null,
+    role ? roleName(role) : null,
   ]
     .filter((part): part is string => Boolean(part))
     .join(' · ');
@@ -234,6 +237,11 @@ function TeamRow({
         </span>
         <span className="tail">
           {abnormal ? <Chip tone="warn">{description}</Chip> : null}
+          {/* The band above the list names the team; the row says it too,
+              so on a long list the reader need not match the two by name. */}
+          {requests > 0 ? (
+            <Chip tone="warn">{plural(requests, 'request')}</Chip>
+          ) : null}
           <Chip className="kind">
             {store.team_kind === 'adhoc' ? 'Share' : 'Chat'}
           </Chip>
@@ -263,9 +271,14 @@ export function TeamsScreen({
   const stores = storeNavigationOrder(snapshot);
   // Named teams and ad-hoc shares are one list here; a row's own pill says
   // which it is, so nothing above the list needs to split them.
-  const teams = stores.filter(
-    (store): store is TeamStore => store.kind === 'team',
-  );
+  // A team whose setup never finished is listed after every team that works;
+  // among the rest the navigation order stands.
+  const teams = stores
+    .filter((store): store is TeamStore => store.kind === 'team')
+    .sort(
+      (left, right) =>
+        Number(left.active === false) - Number(right.active === false),
+    );
   const accounts = stores.filter(
     (store): store is AccountStore => store.kind === 'account',
   );
@@ -286,6 +299,9 @@ export function TeamsScreen({
     () => (scene === 'join' ? (acting ?? null) : null),
     (value) => value !== null,
   );
+  // The stuck creation a row asked to forget. Held apart from `sheet`, which
+  // is the group sheet's own set of kinds.
+  const [abandoning, setAbandoning] = useState<TeamStore | null>(null);
   const [discovering, setDiscovering] = useState<StoreRef | null>(null);
   const [results, setResults] = useState<Readonly<Record<string, string>>>({});
   // The rail's own Teams badge is this same registry, summed across the
@@ -377,36 +393,63 @@ export function TeamsScreen({
           {(close) => (
             <>
               {store.active === false ? (
-                <MenuItem
-                  icon="again"
-                  onClick={() => {
-                    close();
-                    finishSetup(store);
-                  }}
-                >
-                  Finish setup…
-                </MenuItem>
+                <>
+                  <MenuItem
+                    icon="again"
+                    onClick={() => {
+                      close();
+                      finishSetup(store);
+                    }}
+                  >
+                    Finish setup…
+                  </MenuItem>
+                  {/* Finishing cannot succeed for every stuck creation, so the
+                      row that offers it offers the way out beside it. */}
+                  <MenuItem
+                    icon="trash"
+                    danger
+                    onClick={() => {
+                      close();
+                      setAbandoning(store);
+                    }}
+                  >
+                    Remove team…
+                  </MenuItem>
+                  <div className="menu-separator" role="separator" />
+                </>
               ) : null}
-              {/* The team page asks this as one question, so the list does
-                  too: the sheet's own switch chooses between a person and a
-                  team on another server. It is inert only when neither way in
-                  is open; when one is, the sheet states the other's reason. */}
+              {/* Invitation options matching the team page: add an individual
+                  user or admit a federated team from another server. Disabled
+                  options provide an explanatory reason directly in the menu. */}
               <MenuItem
-                icon="plus"
-                reason={
-                  rosterReason && federationReason ? rosterReason : undefined
-                }
+                icon="person"
+                reason={rosterReason}
                 onClick={() => {
                   close();
-                  setSheet({
-                    kind: rosterReason ? 'admit' : 'add',
-                    store,
-                  });
+                  setSheet({ kind: 'add', store });
                 }}
               >
-                Add people…
+                <span className="menu-choice">
+                  <b>A user</b>
+                  <small>
+                    By username on {displayServerName(snapshot, store)}.
+                  </small>
+                </span>
               </MenuItem>
-              <hr />
+              <MenuItem
+                icon="people"
+                reason={federationReason}
+                onClick={() => {
+                  close();
+                  setSheet({ kind: 'admit', store });
+                }}
+              >
+                <span className="menu-choice">
+                  <b>A team from another server</b>
+                  <small>By federation</small>
+                </span>
+              </MenuItem>
+              <div className="menu-separator" role="separator" />
               <MenuItem
                 icon="copy"
                 onClick={() => {
@@ -438,6 +481,9 @@ export function TeamsScreen({
         key={store.id}
         snapshot={snapshot}
         store={store}
+        requests={
+          store.team_kind === 'named' ? (requestCounts.get(store.id) ?? 0) : 0
+        }
         menu={rowMenu(store)}
         onOpen={() =>
           onNavigate({
@@ -534,11 +580,7 @@ export function TeamsScreen({
                   <Icon name="people" />
                 </div>
                 <h2>No teams yet</h2>
-                <p>
-                  A team shares files and channels with members based on
-                  assigned roles. Create a new team on any connected server, or
-                  enter an invitation to join an existing one.
-                </p>
+                <p>Share files and channels with a team.</p>
                 <Button
                   variant="primary"
                   icon="plus"
@@ -620,6 +662,20 @@ export function TeamsScreen({
             onClose: () => setJoining(null),
           }}
           onComplete={() => onRefresh('Team membership refreshed')}
+        />
+      ) : null}
+      {abandoning ? (
+        <AbandonGroupSheet
+          snapshot={snapshot}
+          bridge={bridge}
+          store={abandoning}
+          onClose={() => setAbandoning(null)}
+          onRemoved={async () => {
+            const name = abandoning.name;
+            setAbandoning(null);
+            await onRefresh(`${name} removed`);
+          }}
+          onMutationError={onMutationError}
         />
       ) : null}
     </>

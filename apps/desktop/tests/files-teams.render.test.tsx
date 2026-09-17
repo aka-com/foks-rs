@@ -76,6 +76,8 @@ interface TeamsOptions {
   scene?: string;
   refresh?: (force?: boolean) => Promise<AgentSnapshot>;
   bridge?: Bridge;
+  /** Wraps the mock bridge to observe the commands a row's menu issues. */
+  patchBridge?: (base: Bridge) => Bridge;
   mutationError?: () => Promise<void>;
 }
 
@@ -106,7 +108,11 @@ async function teams(
         controller: new ToastController(),
         children: createElement(TeamsScreen, {
           snapshot,
-          bridge: options.bridge ?? mockBridge(snapshot),
+          bridge:
+            options.bridge ??
+            (options.patchBridge
+              ? options.patchBridge(mockBridge(snapshot))
+              : mockBridge(snapshot)),
           location: {
             kind: 'teams',
             ...(options.store ? { store: options.store } : {}),
@@ -161,6 +167,31 @@ test('a Teams row in an abnormal state carries the same chip, and opens team set
   });
 });
 
+test('a Teams row says how many requests are waiting on it', async () => {
+  const snapshot = await fixture();
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { teamRequestRegistry } = (await vite.ssrLoadModule(
+    '/src/screens/team-requests.ts',
+  )) as typeof import('../src/screens/team-requests');
+  const bridge = mockBridge(snapshot);
+  await teams(() => {}, { snapshot, bridge });
+  assert.equal(stateChip(row('Engineering')), null);
+  // The registry is what the team page's own request list reports into; the
+  // band above the list and the row's chip both read it.
+  await ui.act(async () => {
+    teamRequestRegistry(bridge).report('team:eng', 2);
+  });
+  assert.equal(stateChip(row('Engineering')), '2 requests');
+  assert.equal(kindChip(row('Engineering')), 'Chat');
+  assert.equal(stateChip(row('Household')), null);
+  await ui.act(async () => {
+    teamRequestRegistry(bridge).report('team:eng', 0);
+  });
+  assert.equal(stateChip(row('Engineering')), null);
+});
+
 test('a Teams row displays the server, member count, and user role', async () => {
   await teams();
   const eng = row('Engineering');
@@ -169,11 +200,11 @@ test('a Teams row displays the server, member count, and user role', async () =>
   // page's own summary counts them), and the role this account holds.
   assert.equal(
     eng.querySelector('.name small')?.textContent,
-    'Acme · 6 members · Your role: Admin',
+    'Acme · 6 members · Admin',
   );
   assert.equal(
     row('Household').querySelector('.name small')?.textContent,
-    'Personal server · 2 members · Your role: Owner',
+    'Personal server · 2 members · Owner',
   );
   // No item-readability count is drawn on the list.
   assert.equal(document.body.textContent?.includes('items readable'), false);
@@ -272,6 +303,23 @@ function menuItem(owner: string, label: string): HTMLButtonElement {
   return node;
 }
 
+/**
+ * One of the two Add people choices in a row's open menu, found by its bold
+ * label, since the item's text runs on into the line that explains it.
+ */
+function choiceItem(owner: string, label: string): HTMLButtonElement {
+  const menu = document.querySelector(
+    `.menu[aria-label="Actions for ${owner}"]`,
+  );
+  assert.ok(menu, `no open menu for ${owner}`);
+  const node = [...menu.querySelectorAll<HTMLButtonElement>('button')].find(
+    (candidate) =>
+      candidate.querySelector('.menu-choice b')?.textContent === label,
+  );
+  assert.ok(node, `no Add people choice labelled ${label} for ${owner}`);
+  return node;
+}
+
 /** Whether an item is present but does nothing. */
 function inert(node: HTMLButtonElement): boolean {
   return node.getAttribute('aria-disabled') === 'true';
@@ -294,20 +342,81 @@ test('a Teams row menu says why an action does not apply', async () => {
   await teams();
   // This account is an Admin of Engineering, so the roster actions apply.
   openRowMenu('Engineering');
-  assert.equal(inert(menuItem('Engineering', 'Add people…')), false);
+  // The list asks the add question the way the team page does: two choices,
+  // each with its own reason, and its own line saying how it works.
+  const user = choiceItem('Engineering', 'A user');
+  assert.equal(inert(user), false);
+  assert.equal(
+    user.querySelector('.menu-choice small')?.textContent,
+    'By username on Acme.',
+  );
+  const federated = choiceItem('Engineering', 'A team from another server');
+  assert.equal(inert(federated), false);
+  assert.equal(
+    federated.querySelector('.menu-choice small')?.textContent,
+    'By federation',
+  );
   assert.equal(ui.screen.queryByRole('menuitem', { name: 'Leave…' }), null);
 
   // An ad-hoc share has no membership to change, and its setup is unfinished.
   openRowMenu('Homelab');
-  const add = menuItem('Homelab', 'Add people…');
+  const add = choiceItem('Homelab', 'A user');
   assert.equal(inert(add), true);
   assert.equal(
     add.getAttribute('title'),
     'Memberships can’t be changed in an ad-hoc team.',
   );
+  assert.equal(
+    inert(choiceItem('Homelab', 'A team from another server')),
+    true,
+  );
   assert.equal(inert(menuItem('Homelab', 'Finish setup…')), false);
+  // Finishing cannot succeed for every stuck creation, so the way out sits
+  // beside it — and only on a row whose setup never finished.
+  assert.equal(inert(menuItem('Homelab', 'Remove team…')), false);
   // Copying the team ID is a local fact, so it applies throughout.
   assert.equal(inert(menuItem('Homelab', 'Copy team ID')), false);
+  openRowMenu('Engineering');
+  assert.equal(
+    [
+      ...document
+        .querySelectorAll<HTMLButtonElement>(
+          '.menu[aria-label="Actions for Engineering"] button',
+        )
+        .values(),
+    ].some((node) => (node.textContent ?? '').trim() === 'Remove team…'),
+    false,
+  );
+});
+
+test('a Teams row removes a creation that finishing cannot fix', async () => {
+  const abandoned: string[] = [];
+  const rendered = await teams(() => {}, {
+    patchBridge: (base) => ({
+      ...base,
+      abandonGroupCreation: async (storeId: string) => {
+        abandoned.push(storeId);
+        return base.abandonGroupCreation(storeId);
+      },
+    }),
+  });
+  openRowMenu('Homelab');
+  await ui.act(async () => {
+    ui.fireEvent.click(menuItem('Homelab', 'Remove team…'));
+  });
+  const confirm = rendered.getByRole('button', { name: 'Remove team' });
+  assert.equal(confirm.hasAttribute('disabled'), true);
+  const field = document.querySelector<HTMLInputElement>(
+    'input[placeholder="type homelab"]',
+  );
+  assert.ok(field);
+  await ui.act(async () => {
+    ui.fireEvent.change(field, { target: { value: 'homelab' } });
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Remove team' }));
+  });
+  assert.deepEqual(abandoned, ['team:homelab']);
 });
 
 test('a roster failure gives the Teams row menu its own reasons', async () => {
@@ -338,13 +447,16 @@ test('a roster failure gives the Teams row menu its own reasons', async () => {
   );
   const unread = 'The roster could not be read. Refresh before making changes.';
   openRowMenu('Engineering');
-  // Adding a person and admitting a team are one item now. Both are refused
-  // for the same reason — the role that would permit either is a roster fact,
-  // so an unread roster settles nothing about them — and with neither way in
-  // open, the item itself is inert and states it.
-  const add = menuItem('Engineering', 'Add people…');
+  // Both ways in are refused for the same reason — the role that would permit
+  // either is a roster fact, so an unread roster settles nothing about them —
+  // and each choice states it for itself.
+  const add = choiceItem('Engineering', 'A user');
   assert.equal(inert(add), true);
   assert.equal(add.getAttribute('title'), unread);
+  assert.equal(
+    inert(choiceItem('Engineering', 'A team from another server')),
+    true,
+  );
 });
 
 test('an unavailable account explains why discovery is disabled', async () => {
@@ -362,7 +474,7 @@ test('an unavailable account explains why discovery is disabled', async () => {
   assert.equal(kindChip(eng), 'Chat');
   assert.equal(
     eng.querySelector('.name small')?.textContent,
-    'Acme · 6 members · Your role: Admin',
+    'Acme · 6 members · Admin',
   );
   const trigger = rendered.getByRole('button', { name: 'Find teams' });
   assert.equal(trigger.getAttribute('aria-expanded'), 'false');

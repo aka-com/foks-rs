@@ -629,6 +629,18 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       store.active = true;
       return { applied: true };
     },
+    abandonGroupCreation: async (storeId) => {
+      const index = stores.findIndex((candidate) => candidate.id === storeId);
+      const store = index < 0 ? undefined : stores[index];
+      if (!store || store.kind !== 'team' || store.active !== false) {
+        throw failure(
+          'invalid-request',
+          'This team has no incomplete creation to remove.',
+        );
+      }
+      stores.splice(index, 1);
+      return { applied: true };
+    },
     takeAgentConnectionLoss: async () => null,
     retryAgentConnection: async () => ({ ...snapshot.agent }),
     createGroup: async ({ accountStoreId, teamAlias, name, kind }) => {

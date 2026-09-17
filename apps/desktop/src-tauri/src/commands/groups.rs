@@ -1027,3 +1027,36 @@ pub async fn resume_group_creation(
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_operation(&state, operation, MutationKind::Resume).await
 }
+
+/// Forgets a group whose creation never completed. Only a store the catalog
+/// reports as inactive qualifies, which is the gate resuming uses too: a group
+/// that finished creating is left to its own server-side removal paths.
+#[tauri::command]
+pub async fn abandon_group_creation(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    store_id: String,
+) -> Result<MutationDto, AgentError> {
+    let unlocked = crate::applock::unlocked_generation(&app)?;
+    require_main_window(&webview)?;
+    let _permit = prepare_catalog_mutation(&state).await?;
+    let (store, active) = state.selected_store(&store_id)?;
+    let CatalogStoreRef::Team(store) = store else {
+        return Err(invalid_request(
+            "Only pending group stores can be removed this way.",
+        ));
+    };
+    if active != Some(false) {
+        return Err(invalid_request(
+            "This group has no incomplete creation to remove.",
+        ));
+    }
+    state.ensure_profile_available(&store.profile)?;
+    let operation = Operation::AbandonTeamCreation {
+        profile: store.profile,
+        team_alias: store.team_alias,
+    };
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
+    apply_operation(&state, operation, MutationKind::Guarded).await
+}

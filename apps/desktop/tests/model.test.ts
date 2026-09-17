@@ -591,6 +591,47 @@ test('every store the sidebar orders is in the fixture', () => {
   assert.equal(ordered.length, FIXTURE.stores.length);
 });
 
+test('a creation that never finished is ordered last, and only it moves', () => {
+  const byId = new Map(FIXTURE.stores.map((store) => [store.id, store]));
+  const household = byId.get('team:household');
+  const engineering = byId.get('team:eng');
+  assert.ok(household?.kind === 'team' && engineering?.kind === 'team');
+  const snapshot: AgentSnapshot = {
+    ...FIXTURE,
+    stores: [
+      { ...household, active: false },
+      engineering,
+      byId.get('acct:personal'),
+    ].filter((store) => store !== undefined),
+  };
+  // Household came first and is a named team like Engineering, so nothing but
+  // its unfinished creation can be what moved it.
+  assert.deepEqual(
+    storeNavigationOrder(snapshot).map((store) => store.id),
+    ['acct:personal', 'team:eng', 'team:household'],
+  );
+  // Display order groups by server first, so the two teams compared there are
+  // on one server: within that group the unfinished one still falls to the end.
+  assert.deepEqual(
+    storeDisplayOrder({
+      ...snapshot,
+      stores: [
+        { ...household, active: false },
+        { ...household, id: 'team:shed', name: 'Shed' },
+        byId.get('acct:personal'),
+      ].filter((store) => store !== undefined),
+    }).map((store) => store.id),
+    ['acct:personal', 'team:shed', 'team:household'],
+  );
+  // The order among the rest is the order they were given in.
+  assert.deepEqual(
+    storeNavigationOrder({ ...snapshot, stores: [engineering, household] }).map(
+      (store) => store.id,
+    ),
+    ['team:eng', 'team:household'],
+  );
+});
+
 test('navigation orders vaults, named groups, then ad-hoc shares', () => {
   const byId = new Map(FIXTURE.stores.map((store) => [store.id, store]));
   const snapshot: AgentSnapshot = {

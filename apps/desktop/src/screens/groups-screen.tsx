@@ -58,6 +58,7 @@ import type {
   Party,
   Store,
   StoreRef,
+  TeamStore,
   AgentSnapshot,
 } from '../model';
 import { normalizeCommandError } from '../bridge';
@@ -475,6 +476,20 @@ function memberCountOf(snapshot: AgentSnapshot, store: Store): number {
 }
 
 /**
+ * What an admitted team's row keeps out of its caption: the server, the host
+ * this device knows it by, and the operation that admitted it. One block of
+ * text, so a failure can be reported without reading it off the screen.
+ */
+function admissionDetails(entry: FederationEntry, remoteName: string): string {
+  return [
+    `team ${entry.remote_team_alias} on ${remoteName}`,
+    `host ${entry.remote_host_id_hex}`,
+    `team id ${entry.remote_team_id_hex}`,
+    ...(entry.operation_id_hex ? [`operation ${entry.operation_id_hex}`] : []),
+  ].join('\n');
+}
+
+/**
  * A roster party that stands for another group whose admission record cannot be
  * resolved: the group as the roster names it, its role, and what is wrong.
  */
@@ -526,12 +541,15 @@ function FederationEntryRow({
   entry,
   onRerun,
   onRemove,
+  onCopy,
   manageable,
 }: {
   snapshot: AgentSnapshot;
   entry: FederationEntry;
   onRerun: (operationId: string) => void;
   onRemove: (entry: FederationEntry) => void;
+  /** Copies a row's identifiers, with the toast the page uses elsewhere. */
+  onCopy: (text: string, message: string) => void;
   manageable: boolean;
 }): ReactNode {
   const remoteServer = snapshot.servers.find(
@@ -559,15 +577,10 @@ function FederationEntryRow({
           <b>
             <span>{entry.remote_team_alias}</span>
           </b>
-          <small>
-            team on {remoteName} · host <code>{entry.remote_host_id_hex}</code>
-            {entry.operation_id_hex ? (
-              <>
-                {' '}
-                · operation <code>{entry.operation_id_hex}</code>
-              </>
-            ) : null}
-          </small>
+          {/* The server the team lives on is what a reader of the roster
+              needs. The host and operation identifiers are for reporting a
+              failed admission, so they are in the row's menu instead. */}
+          <small>team on {remoteName}</small>
         </span>
       </span>
       <span className="rowtail">
@@ -602,7 +615,20 @@ function FederationEntryRow({
             <>
               <MenuItem reason={memberReason}>Lower role…</MenuItem>
               <MenuItem reason={memberReason}>Remove a member…</MenuItem>
-              <hr />
+              <MenuItem
+                icon="copy"
+                title="Copies this admission’s host and operation identifiers, for reporting a failure."
+                onClick={() => {
+                  close();
+                  onCopy(
+                    admissionDetails(entry, remoteName),
+                    'Admission details copied.',
+                  );
+                }}
+              >
+                Copy admission details
+              </MenuItem>
+              <div className="menu-separator" role="separator" />
               <MenuItem
                 danger
                 reason={
@@ -652,6 +678,7 @@ function MembersTab({
   onRetryFederation,
   onRerun,
   onRemoveAdmission,
+  onCopy,
 }: {
   snapshot: AgentSnapshot;
   store: Store;
@@ -670,6 +697,7 @@ function MembersTab({
   onRetryFederation: () => void;
   onRerun: (operationId: string) => void;
   onRemoveAdmission: (entry: FederationEntry) => void;
+  onCopy: (text: string, message: string) => void;
 }): ReactNode {
   const manageable = rosterReason === undefined;
   const federationManageable = federationReason === undefined;
@@ -725,6 +753,7 @@ function MembersTab({
               entry={entry}
               onRerun={onRerun}
               onRemove={onRemoveAdmission}
+              onCopy={onCopy}
               manageable={federationManageable}
             />
           ))}
@@ -917,11 +946,22 @@ function SettingsTab({
       <SituationBand store={store} tab="settings" />
       <SectionLabel>About this team</SectionLabel>
       <Inset>
-        <InsetRow label="Name">
-          <span>
-            {store.name}
-            <span className="hint">A name is fixed at creation.</span>
-          </span>
+        <InsetRow
+          label="Name"
+          action={
+            // Inert rather than disabled: the native web view shows no
+            // tooltip on a disabled control, and the title is the only place
+            // the reason is stated.
+            <Button
+              size="sm"
+              aria-disabled="true"
+              title="Team names cannot be changed after creation."
+            >
+              Cannot change
+            </Button>
+          }
+        >
+          {store.name}
         </InsetRow>
         <InsetRow
           label="Server"
@@ -1086,6 +1126,103 @@ function inspectResponse(
         active: entry.active,
       })),
   };
+}
+
+/**
+ * The way out of a creation that finishing cannot fix: a name the server
+ * refused, or a saved identity bound to a host, account or device that no
+ * longer matches. Only the local record is dropped — nothing here reaches the
+ * server — so the sheet first says which of the two cases this record is in,
+ * because dropping keys the server already knows about is not the same act as
+ * dropping keys it never saw.
+ */
+export function AbandonGroupSheet({
+  snapshot,
+  bridge,
+  store,
+  onClose,
+  onRemoved,
+  onMutationError,
+}: {
+  snapshot: AgentSnapshot;
+  bridge: Bridge;
+  store: TeamStore;
+  onClose: () => void;
+  onRemoved: () => Promise<void>;
+  onMutationError: MutationFailureHandler;
+}): ReactNode {
+  const [confirmation, setConfirmation] = useState('');
+  const [busy, setBusy] = useState(false);
+  const serverName = displayServerName(snapshot, store);
+  // Only the two phases that prove nothing was accepted are treated as
+  // server-clean. Every other phase, including an unknown one, is read as
+  // possibly-created, which is the direction that cannot mislead.
+  const reachedServer =
+    store.creation_phase !== 'preparing' && store.creation_phase !== 'rejected';
+  // The removal is already with the agent once it starts, the same as the
+  // device removal sheet, so Escape, the backdrop and Cancel stop answering.
+  useSheetGuard(
+    busy
+      ? { verdict: 'refuse', reason: 'Wait for the removal to finish.' }
+      : null,
+  );
+  return (
+    <SheetDialog
+      danger
+      onClose={() => {
+        if (busy) return;
+        onClose();
+      }}
+      dismissible={!busy}
+      glyph={<GroupMark store={store} />}
+      title={`Remove ${store.name}?`}
+      subtitle={`Setup never finished · ${serverName}`}
+      footer={
+        <>
+          <Button disabled={busy} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            danger
+            disabled={confirmation !== store.alias || busy}
+            onClick={() => {
+              setBusy(true);
+              void bridge
+                .abandonGroupCreation(store.id)
+                .then(() => onRemoved())
+                .catch((error: unknown) => onMutationError(error))
+                .finally(() => setBusy(false));
+            }}
+          >
+            Remove team
+          </Button>
+        </>
+      }
+    >
+      <p>
+        {reachedServer
+          ? `${store.name} may already have been created on ${serverName}. Removing it from this device will delete its encryption keys, permanently removing access to the team.`
+          : `Creation of ${store.name} was not submitted to ${serverName}. Removing it will discard its local draft and keys without affecting the server.`}
+      </p>
+      <p className="fn">
+        This team has no members, channels or items, so nothing else is lost.
+        The name is not reserved by this record and can be used again.
+      </p>
+      <Inset>
+        <InsetRow label="Stored as">
+          <code>{store.alias}</code>
+        </InsetRow>
+        <InsetRow label="Confirm">
+          <input
+            value={confirmation}
+            onChange={(event) => setConfirmation(event.target.value)}
+            placeholder={`type ${store.alias}`}
+          />
+        </InsetRow>
+      </Inset>
+    </SheetDialog>
+  );
 }
 
 export function GroupSheet({
@@ -1872,6 +2009,9 @@ export function GroupSettingsScreen({
   const [removalTarget, setRemovalTarget] = useState<FederationEntry | null>(
     null,
   );
+  // Forgetting an unfinished creation is the one destructive action this page
+  // offers before a team exists, so it keeps its own confirmation.
+  const [abandoning, setAbandoning] = useState(false);
   // The Requests tab's own count: reported by the invitation panel, which is
   // mounted for the life of the page rather than only while that tab is
   // open, so the count shows before the reader ever switches to it.
@@ -1980,6 +2120,7 @@ export function GroupSettingsScreen({
       setSheet(null);
       setTarget(null);
       setRemovalTarget(null);
+      setAbandoning(false);
       setRekeyArmed(false);
       setInviting(false);
       setRequestCount(undefined);
@@ -2139,7 +2280,7 @@ export function GroupSettingsScreen({
                     }}
                   >
                     <span className="menu-choice">
-                      <b>A person</b>
+                      <b>A user</b>
                       <small>By username on {serverName}.</small>
                     </span>
                   </MenuItem>
@@ -2153,7 +2294,27 @@ export function GroupSettingsScreen({
                   >
                     <span className="menu-choice">
                       <b>A team from another server</b>
-                      <small>Everyone in it gets one role here.</small>
+                      <small>By federation</small>
+                    </span>
+                  </MenuItem>
+                  <div className="menu-separator" role="separator" />
+                  {/* The third way in, kept apart from the two that name a
+                      party: an invitation is issued now and answered later,
+                      by someone this device cannot name yet. */}
+                  <MenuItem
+                    icon="door"
+                    reason={rosterReason}
+                    onClick={() => {
+                      close();
+                      setInviting(true);
+                    }}
+                  >
+                    <span className="menu-choice">
+                      <b>By invitation…</b>
+                      <small>
+                        Create an invitation to send, and review pending
+                        operations.
+                      </small>
                     </span>
                   </MenuItem>
                 </>
@@ -2233,6 +2394,7 @@ export function GroupSettingsScreen({
           snapshot={snapshot}
           store={store}
           onFinish={finishSetup}
+          onRemove={() => setAbandoning(true)}
           onCopyId={() => void copy(store.team_id_hex, 'Team ID copied.')}
           onNavigate={onNavigate}
         />
@@ -2362,6 +2524,7 @@ export function GroupSettingsScreen({
                     )
                   }
                   onRemoveAdmission={setRemovalTarget}
+                  onCopy={(text, message) => void copy(text, message)}
                 />
               ) : tab === 'channels' ? (
                 <ChannelsTab
@@ -2400,6 +2563,7 @@ export function GroupSettingsScreen({
                     profile={store.server}
                     account={store.account}
                     teamAlias={store.alias}
+                    requestsOnly
                     onComplete={() => onApplied('Team requests updated')}
                     onRowsChange={(count) => {
                       setRequestCount(count);
@@ -2493,6 +2657,23 @@ export function GroupSettingsScreen({
           ) : null}
         </>
       )}
+      {/* Kept outside the tabs: the team it removes has none. */}
+      {abandoning ? (
+        <AbandonGroupSheet
+          snapshot={snapshot}
+          bridge={bridge}
+          store={store}
+          onClose={() => setAbandoning(false)}
+          onRemoved={async () => {
+            setAbandoning(false);
+            // The page's own store is gone, so the list it came from is the
+            // only place left to stand.
+            onNavigate({ kind: 'teams' });
+            await onApplied(`${store.name} removed`);
+          }}
+          onMutationError={onMutationError}
+        />
+      ) : null}
       {inviteSheet}
     </>
   );

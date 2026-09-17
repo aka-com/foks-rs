@@ -4120,6 +4120,23 @@ fn dispatch_result(
                 )?)?)
             })
         }
+        Operation::AbandonTeamCreation {
+            profile,
+            team_alias,
+        } => {
+            if team_alias.trim().is_empty() {
+                return Err(Box::new(AgentRequestError(
+                    "abandoning team creation requires a team alias",
+                )));
+            }
+            let session =
+                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                Ok(serde_json::to_value(
+                    session.abandon_team_creation(&team_alias, vault)?,
+                )?)
+            })
+        }
         Operation::Chat { store, action } => {
             let session = ProfileSession::open_with_control(
                 &registry,

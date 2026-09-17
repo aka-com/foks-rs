@@ -344,7 +344,7 @@ test('the Files tab links to the group vault and displays its item count', async
 
 test('the add sheet switches between a person and another server’s group', async () => {
   const rendered = await group('team:eng', 'people');
-  addPeopleChoice(rendered, 'A person');
+  addPeopleChoice(rendered, 'A user');
   const seg = document.querySelector(
     '[role="group"][aria-label="What to add"]',
   );
@@ -456,7 +456,7 @@ test('the add sheet clears the agent’s refusal when the username changes', asy
       },
     }),
   });
-  addPeopleChoice(rendered, 'A person');
+  addPeopleChoice(rendered, 'A user');
   const field = rendered.getByLabelText('Username');
   await ui.act(async () => {
     ui.fireEvent.change(field, { target: { value: 'nobody.one' } });
@@ -480,7 +480,7 @@ test('the add sheet clears the agent’s refusal when the username changes', asy
 
 test('add member dialog rejects usernames already present in roster', async () => {
   const rendered = await group('team:eng', 'people');
-  addPeopleChoice(rendered, 'A person');
+  addPeopleChoice(rendered, 'A user');
   await ui.act(async () => {
     ui.fireEvent.change(rendered.getByLabelText('Username'), {
       target: { value: 'dana.okafor' },
@@ -521,11 +521,47 @@ test('a group whose setup never finished has no tabs, and two ways out', async (
     rendered.queryByRole('button', { name: 'Remove and rotate keys…' }),
     null,
   );
-  // What the page can still say about the group it cannot open.
+  // What the page can still say about the group it cannot open, and the way
+  // out for a creation that finishing cannot fix.
   const labels = [...document.querySelectorAll('.roster .inset .fr .k')].map(
     (node) => node.textContent,
   );
-  assert.deepEqual(labels, ['Account', 'Team ID']);
+  assert.deepEqual(labels, ['Account', 'Team ID', 'Remove team']);
+  assert.ok(rendered.getByRole('button', { name: 'Remove team…' }));
+});
+
+test('removing an unfinished group is confirmed by its stored alias', async () => {
+  const abandoned: string[] = [];
+  const rendered = await group('team:homelab', 'people', {
+    patchBridge: (base) => ({
+      ...base,
+      abandonGroupCreation: async (storeId: string) => {
+        abandoned.push(storeId);
+        return base.abandonGroupCreation(storeId);
+      },
+    }),
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Remove team…' }));
+  });
+  const confirm = rendered.getByRole('button', { name: 'Remove team' });
+  // Nothing is removed until the alias is typed back.
+  assert.equal(confirm.hasAttribute('disabled'), true);
+  await ui.act(async () => {
+    ui.fireEvent.click(confirm);
+  });
+  assert.deepEqual(abandoned, []);
+  const field = document.querySelector<HTMLInputElement>(
+    'input[placeholder="type homelab"]',
+  );
+  assert.ok(field);
+  await ui.act(async () => {
+    ui.fireEvent.change(field, { target: { value: 'homelab' } });
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Remove team' }));
+  });
+  assert.deepEqual(abandoned, ['team:homelab']);
 });
 
 test('Finish setup resumes the existing incomplete group', async () => {

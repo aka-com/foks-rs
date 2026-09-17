@@ -168,6 +168,7 @@ pub(super) fn operation_scope(operation: &Operation) -> Scope {
         | RevokeYubiDevice { profile, .. }
         | CreateTeam { profile, .. }
         | ResumeTeamCreation { profile, .. }
+        | AbandonTeamCreation { profile, .. }
         | ListTeams { profile }
         | DiscoverTeams { profile, .. }
         | SyncTeam { profile, .. }

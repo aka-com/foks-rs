@@ -112,6 +112,38 @@ impl CheckedProfileSession<'_> {
         self.continue_team_creation(stored, &account, vault, master_key)
     }
 
+    /// Forgets the local record of a team whose creation never completed.
+    ///
+    /// This is the only way out of a partial creation that resuming cannot
+    /// finish: a name the server refused, or an intent bound to a host, actor
+    /// or device that no longer matches. It is a local action only. Nothing is
+    /// withdrawn from the server, so a creation the server already verified
+    /// leaves a team there that no key on this device can reach again; the
+    /// phase the record held is reported so a caller can say which case it was.
+    pub fn abandon_team_creation(
+        &self,
+        team_alias: &str,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<TeamAbandonReport> {
+        self.profile.require(Capability::Teams)?;
+        let stored = vault.team(team_alias)?;
+        if stored.origin != StoredTeamOrigin::CreatedHere || stored.active {
+            return Err(Error::InvalidAccount(
+                "team has no incomplete local creation",
+            ));
+        }
+        let journal = HardStateStore::open(&self.paths.hard_database)?;
+        let phase = stored.creation_phase(&journal)?.map(str::to_owned);
+        let team_id_hex = hex(&stored.team_id);
+        drop(stored);
+        vault.remove_team(team_alias)?;
+        Ok(TeamAbandonReport {
+            alias: team_alias.to_owned(),
+            team_id_hex,
+            phase,
+        })
+    }
+
     fn continue_team_creation(
         &self,
         mut stored: StoredTeam,
@@ -1388,6 +1420,17 @@ fn team_member_report(
     }
 }
 
+/// What a forgotten partial creation was, once its record is gone.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct TeamAbandonReport {
+    pub alias: String,
+    pub team_id_hex: String,
+    /// The creation phase the record held when it was forgotten. A
+    /// `remote-verified` phase means the team still exists on the server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TeamSummary {
     pub alias: String,
@@ -1963,6 +2006,18 @@ impl AccountVault<'_> {
         validate_stored_team(team, &team.alias)?;
         let encoded = Zeroizing::new(serde_json::to_vec(team)?);
         self.store.put(&team_key(&team.alias), &encoded)?;
+        Ok(())
+    }
+
+    /// Drops a team record and every alias-keyed companion record with it. A
+    /// companion left behind would be inherited by the next team created under
+    /// the same alias, so the alias is cleared as a whole.
+    pub(super) fn remove_team(&mut self, alias: &str) -> Result<()> {
+        validate_name(alias)?;
+        self.store.remove(&team_key(alias))?;
+        self.store.remove(&team_rekey_key(alias))?;
+        self.store.remove(&team_member_edit_key(alias))?;
+        self.store.remove(&federation_expulsion_key(alias))?;
         Ok(())
     }
 
