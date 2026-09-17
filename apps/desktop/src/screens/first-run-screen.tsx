@@ -122,10 +122,13 @@ export function profileNameFor(address: string): string {
     .trim()
     .toLowerCase()
     .replace(/^[a-z]+:\/\//, '')
-    .replace(/\/.*$/, '')
-    .replace(/:4430$/, '');
+    .replace(/\/.*$/, '');
+  // An IPv6 literal keeps its groups but would otherwise collapse to a run of
+  // dashes, so it is named for what it is: "[fe80::1]:4430" is `ipv6-fe80-1`.
+  const ipv6 = /^\[([^\]]+)\](?::\d+)?$/.exec(host);
+  const bare = ipv6 ? `ipv6-${ipv6[1]}` : host.replace(/:4430$/, '');
   return (
-    host
+    bare
       .replace(/[^a-z0-9_-]+/g, '-')
       .replace(/^-+|-+$/g, '')
       .slice(0, 52) || 'server'
@@ -2813,6 +2816,11 @@ function FirstRunSession({
               {serverCheckPresentation?.detail ??
                 'Confirm the address is correct, then retry.'}
             </p>
+            {serverCheckPresentation?.reason ? (
+              <Toggle label="Details">
+                <pre>{serverCheckPresentation.reason}</pre>
+              </Toggle>
+            ) : null}
           </div>
         ) : null}
         {checkpoint.path === 'invited' && state === 'no-address' ? (

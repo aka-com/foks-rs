@@ -784,11 +784,11 @@ unavailable, which is what a channel created a moment ago would otherwise read
 as. A synchronization that failed carries its error instead, so the wait always
 has something behind it.
 
-Four things in `dev/mockups/keybase-redesign/chat-*.html` are deliberately not
-built, because no `ChatAction` reaches them: reactions, "Retry all" and
-"Discard" over every pending operation at once (one attempt per operation is
-the rule the recovery model keeps), Leave / Delete / Mute / Edit description in
-the ⓘ panel, and the mock's "Join a team" button, which has no FOKS equivalent
+Four things the chat redesign drafts showed are deliberately not built, because
+no `ChatAction` reaches them: reactions, "Retry all" and "Discard" over every
+pending operation at once (one attempt per operation is the rule the recovery
+model keeps), Leave / Delete / Mute / Edit description in the ⓘ panel, and a
+"Join a team" button, which has no FOKS equivalent
 — a team arrives through an invitation or a per-server check for groups, both
 of which live in Teams, so the column's foot keeps the one "Create or join a
 team" button.
@@ -940,8 +940,6 @@ Teams → Chat → Files navigation and per-tab restoration at **1280×860** and
 **960×860**. The narrow run uses the keyboard throughout and checks that the
 channel-info overlay covers the conversation rather than squeezing it. It saves
 `redesign-*.png` screenshots alongside the other acceptance artifacts.
-See [the review follow-up log](../../SHELL_RAIL_REVIEW_FIXES.md) for changes,
-self-review notes and validation.
 
 Layer 4 is the Rust command layer. Runtime-dependent app lock, clipboard
 concealment/clearing, native picker/drop streaming and webview resident-set

@@ -157,5 +157,4 @@ whole file to learn its size first.
 Run `tools/foks-v019-oracle/run-mcp-compat.sh` from the repository to exercise the
 independent Go SDK with Rust MCP against both Rust and pinned Go FOKS services.
 The Go service target requires Docker. Ordinary Cargo tests require only local
-test sockets. See [the execution record](../../MCP_EXECUTION.md) for phase reviews
-and the exact scope of compatibility evidence.
+test sockets.

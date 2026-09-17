@@ -57,10 +57,22 @@ export async function reconcileFirstRunFailure(
 export interface FirstRunFailurePresentation {
   readonly title: string;
   readonly detail: string;
+  /** The raw error chain the agent kept out of the message, for reports. */
+  readonly reason?: string;
 }
 
 /** Pure presentation for a retained, operation-scoped failure. */
 export function presentFirstRunFailure(
+  failure: FirstRunFailure,
+): FirstRunFailurePresentation {
+  const base = describeFirstRunFailure(failure);
+  const reason = failure.error.details?.reason;
+  return reason && reason !== failure.error.message
+    ? { ...base, reason }
+    : base;
+}
+
+function describeFirstRunFailure(
   failure: FirstRunFailure,
 ): FirstRunFailurePresentation {
   if (failure.recovery === 'pending') {

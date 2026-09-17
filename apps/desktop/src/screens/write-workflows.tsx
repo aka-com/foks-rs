@@ -225,13 +225,13 @@ interface NewSheetProps {
 }
 
 /**
- * Formats a store option for the "Save in" vault selector.
+ * Formats a store option for the "Save in vault" selector.
  */
 function storeOption(snapshot: AgentSnapshot, store: Store): CardOption {
   return {
     id: store.id,
     title: store.name,
-    detail: storeDescription(snapshot, store),
+    detail: `${store.kind === 'account' ? 'Personal vault' : 'Team vault'} · ${storeDescription(snapshot, store)}`,
     off: !canCreateInStore(snapshot, store.id),
   };
 }
@@ -687,11 +687,11 @@ function NewSheet({
       }
     >
       <>
-        <SectionLabel>Save in</SectionLabel>
+        <SectionLabel>Save in vault</SectionLabel>
         <Inset>
           {snapshot.stores.length ? (
             <CardSelect
-              label="Save in"
+              label="Save in vault"
               options={storeNavigationOrder(snapshot).map((candidate) =>
                 storeOption(snapshot, candidate),
               )}

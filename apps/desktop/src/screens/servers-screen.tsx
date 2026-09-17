@@ -1114,10 +1114,6 @@ function ServerBody({
             <span className="hostid" title={host.hostId}>
               <code>{shortId(host.hostId, 8)}</code>
             </span>
-            <small>
-              Pinned on this device. Hover to view the full ID, or Copy to copy
-              the full value.
-            </small>
           </InsetRow>
           {/* `chain` and `epoch` are a length and a checkpoint number, not
               times: they are reported as the two numbers the agent sends. */}

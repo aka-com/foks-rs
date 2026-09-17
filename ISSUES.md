@@ -51,8 +51,6 @@ Evidence:
 - [`crates/foks-client-db/src/repositories/chat.rs`](crates/foks-client-db/src/repositories/chat.rs)
   enforces pending capacity and terminal transitions but has no terminal-row
   compaction.
-- [`TEAM_CHAT_PHASE3.md`](TEAM_CHAT_PHASE3.md) documents protected-material cleanup
-  and bounded anchors, but does not provide a terminal ledger-retention policy.
 
 Required resolution:
 
@@ -61,8 +59,7 @@ Required resolution:
   binding, scope, request commitment and outcome.
 - Reject reuse safely after compact evidence expires; deletion must not make an old
   submission identifier appear new.
-- Coordinate this with the protected-store reconciliation machinery in
-  [`MCP_RETENTION_LIFECYCLE_PLAN.md`](MCP_RETENTION_LIFECYCLE_PLAN.md), while keeping
+- Coordinate this with the protected-store reconciliation machinery, while keeping
   chat ledger policy separate from protected-object collection.
 
 ## Stage 3 — Invitation server retention and permanent capacity exhaustion
@@ -79,10 +76,9 @@ Evidence:
 - [`crates/foks-server-db/src/schema/team_invitations.sql`](crates/foks-server-db/src/schema/team_invitations.sql)
   records creation and decision metadata but has no tombstone or deletion lifecycle.
 - [`crates/foks-server-db/src/team_invitations.rs`](crates/foks-server-db/src/team_invitations.rs)
-  counts all certificate and request rows for global admission caps.
-- [`TEAM_INVITATIONS_EXECUTION.md`](TEAM_INVITATIONS_EXECUTION.md) records the caps
-  and says certificates are not age-pruned, but does not define recovery from the
-  global terminal-row limits.
+  counts all certificate and request rows for global admission caps. Certificates
+  are not age-pruned, and recovery from the global terminal-row limits is
+  undefined.
 
 Required resolution:
 
@@ -163,11 +159,8 @@ Go protocol, but a future upstream release could allocate the same position.
 Before any extended-chat capability is advertised, assign a durable protocol or
 method namespace and test negotiation against newer upstream registries.
 
-The remaining extended work in
-[`TEAM_CHAT_PROTOCOL_V2.md`](TEAM_CHAT_PROTOCOL_V2.md),
-[`TEAM_CHAT_EXTENSION_CONTRACTS.md`](TEAM_CHAT_EXTENSION_CONTRACTS.md), and
-[`TEAM_CHAT_PHASES_1_6.md`](TEAM_CHAT_PHASES_1_6.md) stays deferred. In particular,
-reaction equality, exact event-body wire forms, method/status allocation, attachment
+The remaining extended-chat work stays deferred. In particular, reaction
+equality, exact event-body wire forms, method/status allocation, attachment
 authorization and committed-object retention are designs rather than enabled
 features.
 
@@ -195,22 +188,3 @@ identify them accurately:
   attachments remain disabled.
 - The larger real-desktop catch-up and before/after foreground-latency benchmark
   has not been run.
-
-## Documentation maintenance
-
-- [`TEAM_CHAT_BATCHES.md`](TEAM_CHAT_BATCHES.md) links to missing
-  `TEAM_CHAT_PHASE1.md`.
-- [`TEAM_CHAT_LOCAL_BATCH.md`](TEAM_CHAT_LOCAL_BATCH.md) says the local batch is
-  not implemented even though the execution record marks L0–L4 complete.
-- [`TEAM_CHAT_FOLLOW_UP_REVIEW.md`](TEAM_CHAT_FOLLOW_UP_REVIEW.md) labels its table
-  as a current assessment while one row still says fairness/backoff are absent.
-- [`TEAM_CHAT_PHASES_1_6.md`](TEAM_CHAT_PHASES_1_6.md) still describes the completed
-  local batch as active.
-- [`TEAM_CHAT_RELEASE_PLAN.md`](TEAM_CHAT_RELEASE_PLAN.md) lists descriptions on
-  channel creation as a non-goal even though later work implemented them.
-- Historical phase reports and active roadmaps need a short status index identifying
-  the authoritative document for completed Basic chat, completed local notification
-  work, deferred extensions and invitation behavior.
-- Machine-specific `/Users/...` Go checkout paths in investigation documents should
-  be replaced with repository-relative oracle paths or clearly labeled as historical
-  environment notes.
