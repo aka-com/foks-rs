@@ -42,7 +42,8 @@ export const mockAppLifecycleRequests: AppLifecycleRequest[] = [];
 export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
   let connectionLoss =
     typeof window !== 'undefined' &&
-    new URLSearchParams(window.location.search).get('state') === 'agent-lost'
+    new URLSearchParams(window.location?.search ?? '').get('state') ===
+      'agent-lost'
       ? 'The agent socket closed while reading the catalog.'
       : null;
   const ssoModes = new Map<string, import('./sso-contract').SsoPurpose>();

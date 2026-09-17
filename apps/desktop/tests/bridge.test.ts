@@ -1073,6 +1073,30 @@ test('loadSnapshot propagates catalog-wide readiness failures to the lifecycle o
   }
 });
 
+test('mock connection-loss scenes tolerate a window without location and are consumed once', async () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  try {
+    Object.defineProperty(globalThis, 'window', {
+      value: {},
+      configurable: true,
+    });
+    assert.equal(await mockBridge(FIXTURE).takeAgentConnectionLoss(), null);
+    Object.defineProperty(globalThis, 'window', {
+      value: { location: { search: '?state=agent-lost' } },
+      configurable: true,
+    });
+    const bridge = mockBridge(FIXTURE);
+    assert.equal(
+      await bridge.takeAgentConnectionLoss(),
+      'The agent socket closed while reading the catalog.',
+    );
+    assert.equal(await bridge.takeAgentConnectionLoss(), null);
+  } finally {
+    if (previous) Object.defineProperty(globalThis, 'window', previous);
+    else delete (globalThis as { window?: Window }).window;
+  }
+});
+
 test('loadSnapshot reports native agent loss once without mislabeling it as lease failure', async () => {
   const previousWindow = globalThis.window;
   Object.defineProperty(globalThis, 'window', {
