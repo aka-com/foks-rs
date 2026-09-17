@@ -2227,7 +2227,6 @@ function FirstRunSession({
             <input
               type="password"
               aria-label="Backup phrase"
-              placeholder="word word word …"
               value={recoveryPhrase}
               onChange={(event) => setRecoveryPhrase(event.target.value)}
             />
@@ -2296,7 +2295,17 @@ function FirstRunSession({
           </CopyBox>
           <p>
             Select the account in the CLI, enter the pairing code below, and
-            follow the terminal prompts to complete pairing.
+            follow the terminal prompts to complete pairing. Or,{' '}
+            <button
+              type="button"
+              className="lnk"
+              aria-label="Resume pairing"
+              disabled={busy || !recoveryTargetAlias || !deviceName.trim()}
+              onClick={() => void acceptPairing(true)}
+            >
+              resume pairing
+            </button>{' '}
+            a past account.
           </p>
           <Inset className="recovery-fields">
             <InsetRow label="Account alias">
@@ -2326,6 +2335,7 @@ function FirstRunSession({
           </Inset>
           <div className="btns">
             <Button
+              variant="primary"
               disabled={
                 busy ||
                 !recoveryTargetAlias ||
@@ -2335,12 +2345,6 @@ function FirstRunSession({
               onClick={() => void acceptPairing(false)}
             >
               Accept pairing
-            </Button>
-            <Button
-              disabled={busy || !recoveryTargetAlias || !deviceName.trim()}
-              onClick={() => void acceptPairing(true)}
-            >
-              Resume pairing
             </Button>
           </div>
           {connectionErrors.pair ? (
@@ -2379,7 +2383,9 @@ function FirstRunSession({
         <p className="lead">
           {busy
             ? 'Account setup is running. You can finish later while it completes.'
-            : 'We couldn’t confirm whether account setup finished. Check its status to continue.'}
+            : operationProblem !== 'profile-missing' && operationStatus
+              ? operationStatus
+              : 'Checking account status…'}
         </p>
         {operationProblem === 'profile-missing' && operationStatus ? (
           <MissingServerWarning
@@ -2391,10 +2397,6 @@ function FirstRunSession({
               ) : null
             }
           />
-        ) : operationStatus ? (
-          <p className="status" role="status">
-            {operationStatus}
-          </p>
         ) : null}
         {operationResumable && intent?.kind === 'recovery' ? (
           <div className="local-field-card">
@@ -2439,7 +2441,6 @@ function FirstRunSession({
                 ? 'Checking status…'
                 : 'Check status'}
           </Button>
-          {reviewServerSettings}
         </div>
         {intent?.kind === 'sso' && intent.ssoOperationId && profile && !busy ? (
           <SsoPanel

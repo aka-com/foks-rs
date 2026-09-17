@@ -149,7 +149,7 @@ test('Chat displays total unread and the avatar displays an attention indicator'
   // is the control that opens the list.
   const dot = document.querySelector<HTMLButtonElement>('.side.rail .attn');
   assert.ok(dot, 'the avatar carries the dot');
-  assert.equal(dot.getAttribute('aria-label'), '3 items need attention');
+  assert.equal(dot.getAttribute('aria-label'), 'Needs attention');
   assert.equal(document.querySelector('.rail-tabs .dot'), null);
   ui.fireEvent.click(dot);
   assert.deepEqual(journal.navigations.at(-1), { kind: 'people' });

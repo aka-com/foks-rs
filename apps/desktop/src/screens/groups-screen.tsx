@@ -95,6 +95,22 @@ const VIS_MAX = 32767;
  */
 const SUGGESTED_MEMBER = 'jules.park';
 const SUGGESTED_GROUP = 'Platform';
+
+/**
+ * The name a group is created under, or null when FOKS would refuse it.
+ * Mirrors `server_team_name` in foks-client-app: runs of whitespace become one
+ * underscore, and the result must normalize (lowercased, dots and dashes as
+ * underscores) to 3 to 25 letters, digits and single underscores.
+ */
+export function serverTeamName(name: string): string | null {
+  const folded = name.trim().split(/\s+/).filter(Boolean).join('_');
+  const normalized = folded.toLowerCase().replace(/[.-]/g, '_');
+  return /^[a-z0-9]+(?:_[a-z0-9]+)*$/.test(normalized) &&
+    normalized.length >= 3 &&
+    normalized.length <= 25
+    ? folded
+    : null;
+}
 /** The base the group page's tab and panel ids are derived from. */
 const GROUP_TABS = 'group-sections';
 /** Why the join policy cannot be changed. */
@@ -1216,6 +1232,9 @@ export function GroupSheet({
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '');
+  // Previews the normalized group name using the client's whitespace rules,
+  // ensuring the dialog rejects invalid names before submitting to the agent.
+  const reservedName = serverTeamName(name);
   const remote =
     remotes.find((candidate) => candidate.id === remoteStoreId) ?? remotes[0];
   const requiredFailure =
@@ -1416,7 +1435,10 @@ export function GroupSheet({
                 (sheet === 'demote' &&
                   (!target || !canTarget(snapshot, target) || !demotion)) ||
                 (sheet === 'admit' && !remote) ||
-                (sheet === 'create' && (!teamAlias || !creationAccount))
+                (sheet === 'create' &&
+                  (!teamAlias ||
+                    !creationAccount ||
+                    (createKind === 'named' && !reservedName)))
               }
               onClick={() => void apply()}
             >
@@ -1757,8 +1779,22 @@ export function GroupSheet({
               <Field label="Name" value={name} onChange={setName} />
             </Inset>
             <p className="fn">
-              Stored as <code>{teamAlias || '…'}</code>. Cannot be changed once
-              created.
+              {createKind === 'named' ? (
+                reservedName ? (
+                  <>
+                    Named <code>{reservedName}</code> on the server and stored
+                    as <code>{teamAlias}</code>. Neither can be changed once
+                    created.
+                  </>
+                ) : (
+                  'Use 3 to 25 letters, numbers, spaces, dots, dashes, or underscores.'
+                )
+              ) : (
+                <>
+                  Stored as <code>{teamAlias || '…'}</code>. Cannot be changed
+                  once created.
+                </>
+              )}
             </p>
             <SectionLabel>Server and account</SectionLabel>
             <Inset>

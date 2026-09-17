@@ -88,7 +88,7 @@ pub enum Error {
     },
     #[error("RPC response sequence is {received}, expected {expected}")]
     Sequence { expected: u64, received: u64 },
-    #[error("FOKS server returned status {code}{detail}")]
+    #[error("{}", describe_status(*code, detail))]
     RemoteStatus { code: u64, detail: StatusDetail },
     #[error("FOKS server does not implement protocol {protocol_id:#x} method {position}")]
     MethodNotFound { protocol_id: u64, position: u64 },
@@ -108,6 +108,50 @@ pub enum Error {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StatusDetail(Option<String>);
+
+/// A plain phrase for the FOKS status codes a person can provoke, so the
+/// message names the refusal rather than only its number. Codes without a
+/// phrase fall back to the number alone.
+pub fn status_phrase(code: u64) -> Option<&'static str> {
+    Some(match code {
+        STATUS_USERNAME_IN_USE_ERROR => "that name is already in use on the server",
+        STATUS_DUPLICATE_ERROR => "the server already has this record",
+        STATUS_PERMISSION_ERROR => "the server refused permission",
+        STATUS_BAD_ARGS_ERROR => "the server rejected the request as malformed",
+        STATUS_BAD_INVITE_CODE_ERROR => "the invitation code is not valid",
+        STATUS_BAD_PASSPHRASE_ERROR => "the passphrase is not correct",
+        STATUS_PASSPHRASE_NOT_FOUND_ERROR => "no passphrase is set for this account",
+        STATUS_USER_NOT_FOUND_ERROR => "no such user on the server",
+        STATUS_WRONG_USER_ERROR => "the credentials belong to a different user",
+        STATUS_KEY_NOT_FOUND_ERROR => "the server does not know this key",
+        STATUS_DEVICE_ALREADY_PROVISIONED_ERROR => "this device is already set up on the account",
+        STATUS_KEX_BAD_SECRET => "the pairing phrase did not match",
+        STATUS_EXPIRED_ERROR => "the request has expired",
+        STATUS_RATE_LIMIT_ERROR => "the server is rate limiting requests; try again shortly",
+        STATUS_OVER_QUOTA_ERROR => "the account is over its storage quota",
+        STATUS_TIMEOUT_ERROR => "the server timed out",
+        STATUS_NOT_IMPLEMENTED => "the server does not support this operation",
+        STATUS_GENERIC_NOT_FOUND_ERROR => "the server has no such record",
+        STATUS_TEAM_NOT_FOUND_ERROR => "the server has no such team",
+        STATUS_TEAM_INVITE_ALREADY_ACCEPTED_ERROR => "this invitation was already accepted",
+        STATUS_TEAM_ADHOC_DUPLICATE_ERROR => "an identical share already exists",
+        STATUS_KV_PERM_ERROR => "you do not have permission for this item",
+        STATUS_KV_NOENT_ERROR => "the item no longer exists on the server",
+        STATUS_KV_LOCK_TIMEOUT_ERROR | STATUS_KV_LOCK_ALREADY_HELD_ERROR => {
+            "another change to this item is in progress; try again"
+        }
+        STATUS_RT_CHANNEL_EXISTS_ERROR => "a channel with this name already exists",
+        STATUS_RT_NOT_FOUND_ERROR => "the server has no such channel or message",
+        _ => return None,
+    })
+}
+
+fn describe_status(code: u64, detail: &StatusDetail) -> String {
+    match status_phrase(code) {
+        Some(phrase) => format!("FOKS server refused: {phrase} (status {code}){detail}"),
+        None => format!("FOKS server returned status {code}{detail}"),
+    }
+}
 
 impl StatusDetail {
     pub fn detail(&self) -> Option<&str> {

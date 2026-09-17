@@ -331,16 +331,8 @@ export function AccountHeader({
         <button
           type="button"
           className="attn"
-          aria-label={
-            attention === 1
-              ? '1 item needs attention'
-              : `${attention} items need attention`
-          }
-          title={
-            attention === 1
-              ? '1 item needs attention'
-              : `${attention} items need attention`
-          }
+          aria-label="Needs attention"
+          title="Needs attention"
           onClick={() => {
             if (onTabNavigate) onTabNavigate('people');
             else onNavigate({ kind: 'people' });

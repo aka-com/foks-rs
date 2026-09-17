@@ -18,6 +18,25 @@ static TEST_FAIL_AFTER_MEMBER_EDIT_COMMIT: std::sync::atomic::AtomicBool =
 static TEST_FAIL_AFTER_DISCOVERY_PERSIST: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// The name a named team is created under, derived from what the user typed.
+/// The server keeps this display form and a normalized form; the normalized
+/// form follows the v0.1.9 username rules (lowercase letters, digits and
+/// single underscores, 3 to 25 bytes) and is what `normalize_username` folds
+/// case, dots and dashes into. Spaces are the one thing it cannot fold, so runs
+/// of whitespace become one underscore here: "Test team" is created as
+/// `Test_team`. A name the rules still reject is refused before any record is
+/// written, with a message that says what a name may contain.
+pub fn server_team_name(display_name: &str) -> Result<String> {
+    let folded = display_name
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("_");
+    foks_verify::normalize_username(folded.as_bytes()).ok_or(Error::InvalidAccount(
+        "group names use 3 to 25 letters, numbers, spaces, dots, dashes, or underscores",
+    ))?;
+    Ok(folded)
+}
+
 impl CheckedProfileSession<'_> {
     pub fn create_named_team(
         &self,
@@ -31,8 +50,9 @@ impl CheckedProfileSession<'_> {
         if vault.contains_team(team_alias)? {
             return Err(Error::AccountExists);
         }
+        let team_name = server_team_name(team_name)?;
         let account = vault.account(account_alias)?;
-        let mut stored = StoredTeam::random_named(team_alias, account_alias, team_name)?;
+        let mut stored = StoredTeam::random_named(team_alias, account_alias, &team_name)?;
         self.persist_creation_intent(&mut stored, &account, vault)?;
         self.continue_team_creation(stored, &account, vault, master_key)
     }

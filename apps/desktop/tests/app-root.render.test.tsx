@@ -72,7 +72,7 @@ test('the rail draws the six tabs, the unread badge and the attention dot', () =
   // the only place attention is advertised.
   const dot = document.querySelector('.side.rail .attn');
   assert.ok(dot, 'the account avatar carries the attention dot');
-  assert.equal(dot.getAttribute('aria-label'), '2 items need attention');
+  assert.equal(dot.getAttribute('aria-label'), 'Needs attention');
   assert.equal(document.querySelector('.rail-tabs .dot'), null);
   // Files is the tab that owns All items, the shell's starting location.
   assert.equal(tabs[0].getAttribute('aria-current'), 'page');
