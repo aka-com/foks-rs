@@ -806,7 +806,7 @@ test('This Mac offers to restart the agent, and names the process it would stop'
       },
     }),
   });
-  const row = rendered.getByText('Restart').closest('.fr');
+  const row = rendered.getByText('Restart').closest<HTMLElement>('.fr');
   assert.ok(row);
   assert.equal(
     row.querySelector('.v small')?.textContent,
@@ -822,7 +822,7 @@ test('This Mac offers to restart the agent, and names the process it would stop'
       ui.within(row).getByRole('button', { name: 'Restart…' }),
     );
   });
-  const sheet = document.querySelector('.sheet');
+  const sheet = document.querySelector<HTMLElement>('.sheet');
   assert.ok(sheet);
   assert.equal(sheet.querySelector('h2')?.textContent, 'Restart the agent?');
   assert.match(
@@ -888,7 +888,7 @@ test('a maintenance action refused for a foreign agent asks to restart it, then 
     ui.fireEvent.click(rendered.getByRole('button', { name: 'Export…' }));
     await new Promise((resolve) => setTimeout(resolve, 20));
   });
-  const sheet = document.querySelector('.sheet');
+  const sheet = document.querySelector<HTMLElement>('.sheet');
   assert.ok(sheet);
   assert.equal(
     sheet.querySelector('h2')?.textContent,

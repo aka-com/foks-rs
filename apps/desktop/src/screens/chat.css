@@ -397,38 +397,6 @@
 .chat-conversation-body {
   padding: 20px;
 }
-/* The note that says the tab chose the team, until it is dismissed. */
-.chat-note {
-  flex: none;
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  padding: 9px 14px;
-  background: var(--accent-wash);
-  color: var(--accent-ink);
-  border-bottom: 1px solid var(--line-soft);
-  font-size: 12px;
-}
-.chat-note p {
-  flex: 1;
-  margin: 0;
-  line-height: 1.45;
-}
-.chat-note .chat-note-glyph {
-  flex: none;
-  display: grid;
-  place-items: center;
-  height: 18px;
-}
-.chat-note .btn.icon {
-  width: 22px;
-  height: 22px;
-  flex: none;
-  border: 0;
-  box-shadow: none;
-  background: transparent;
-  color: inherit;
-}
 .chat-locked {
   flex: 1;
   display: grid;
@@ -877,9 +845,7 @@
 .chat-create .fr .v small {
   font-size: 12px;
 }
-/* The name and description are one kind of control — a bordered field that
-   fills the value column — with the label on the field's first line and the
-   hint under it. A length outside the limits is said by the border alone. */
+/* Name and description fill the value column. */
 .chat-create .inset .fr {
   align-items: flex-start;
   padding: 9px 12px;

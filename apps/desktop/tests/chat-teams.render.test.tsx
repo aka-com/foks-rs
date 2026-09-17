@@ -288,9 +288,6 @@ test('the tab with no conversation opens the most recent one', async () => {
       channel: 'ab'.repeat(16),
     }),
   );
-  await ui.screen.findByText(
-    'Chat opened Household · #general because no conversation was selected.',
-  );
   // The row a conversation is open in is the current one; the rest are not.
   await ui.waitFor(() =>
     assert.equal(head('Household').getAttribute('aria-current'), 'page'),
@@ -314,9 +311,6 @@ test('with no message anywhere the tab opens the first team that has chat', asyn
   }));
   await ui.waitFor(() =>
     assert.deepEqual(journal.at(0), { kind: 'chat', ref: 'team:eng' }),
-  );
-  await ui.screen.findByText(
-    'Chat opened Engineering because no team was selected.',
   );
 });
 
@@ -606,40 +600,24 @@ test('with no team at all the tab offers team creation', async () => {
   assert.equal(journal.length, 0);
 });
 
-test('the note names the conversation the tab chose and leaves focus in the pane', async () => {
+test('the tab opens its chosen conversation without a note, and a pick sticks', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   await mount(snapshot, { kind: 'chat' });
   // Both teams' only messages arrived at the same moment, so the tie keeps
   // navigation order and Engineering is the conversation that opens.
-  await ui.screen.findByText(
-    'Chat opened Engineering · #general because no conversation was selected.',
-  );
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Dismiss' }));
-  await ui.waitFor(() =>
-    assert.equal(ui.screen.queryByText(/no conversation was selected/), null),
-  );
-  // The dismissed note took focus with it, so the conversation takes it back.
-  assert.equal(
-    document.activeElement?.getAttribute('aria-label'),
-    'Conversation',
-  );
-});
-
-test('picking a team ends the note, and returning does not bring it back', async () => {
-  const snapshot = await snapshotWithChat(['personal', 'acme']);
-  await mount(snapshot, { kind: 'chat' });
-  await ui.screen.findByText(/no conversation was selected/);
-  // An explicit selection removes the automatic-selection note permanently.
-  ui.fireEvent.click(head('Household'));
-  await ui.waitFor(() =>
-    assert.equal(head('Household').getAttribute('aria-current'), 'page'),
-  );
-  assert.equal(ui.screen.queryByText(/no conversation was selected/), null);
-  ui.fireEvent.click(head('Engineering'));
   await ui.waitFor(() =>
     assert.equal(head('Engineering').getAttribute('aria-current'), 'page'),
   );
   assert.equal(ui.screen.queryByText(/no conversation was selected/), null);
+  assert.equal(ui.screen.queryByRole('button', { name: 'Dismiss' }), null);
+  ui.fireEvent.click(head('Household'));
+  await ui.waitFor(() =>
+    assert.equal(head('Household').getAttribute('aria-current'), 'page'),
+  );
+  ui.fireEvent.click(head('Engineering'));
+  await ui.waitFor(() =>
+    assert.equal(head('Engineering').getAttribute('aria-current'), 'page'),
+  );
 });
 
 test('unfinished work sits in a bounded section and keeps the composer', async () => {
@@ -813,9 +791,19 @@ test('New chat creates a channel, refusing a name the agent would refuse', async
   const name = ui.screen.getByRole('textbox', { name: 'Channel name' });
   const create = () =>
     ui.screen.getByRole('button', { name: /Create channel/ });
+  // A length outside the limits is said by the field's border alone: the
+  // hint stays, and no sentence appears.
   ui.fireEvent.change(name, { target: { value: 'ab' } });
-  await ui.screen.findByText('Channel names are at least 3 characters.');
+  await ui.waitFor(() => assert.equal(name.classList.contains('over'), true));
+  assert.equal(name.getAttribute('aria-invalid'), 'true');
+  assert.equal(ui.screen.queryByText(/at least 3 characters/), null);
+  assert.ok(ui.screen.getByText(/Lowercase, 3–32 characters\./));
   assert.equal((create() as HTMLButtonElement).disabled, true);
+  ui.fireEvent.change(name, { target: { value: 'x'.repeat(33) } });
+  await ui.waitFor(() => assert.equal(name.classList.contains('over'), true));
+  assert.equal(ui.screen.queryByText(/at most 32 characters/), null);
+  // The channel picker gives way to the form once Create is chosen.
+  assert.equal(ui.screen.queryByRole('radio', { name: /#general/ }), null);
   // The general channel has no name of its own, so "general" is refused with
   // the instruction that works.
   ui.fireEvent.change(name, { target: { value: 'general' } });
@@ -823,7 +811,8 @@ test('New chat creates a channel, refusing a name the agent would refuse', async
     'Leave the name empty to create the general channel.',
   );
   ui.fireEvent.change(name, { target: { value: 'design' } });
-  await ui.screen.findByText('Created as #design.');
+  await ui.waitFor(() => assert.equal(name.classList.contains('over'), false));
+  assert.equal(ui.screen.queryByText('Created as #design.'), null);
   ui.fireEvent.click(create());
   await ui.screen.findByRole('button', { name: /#design/ });
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
@@ -1211,12 +1200,14 @@ test('newer messages in other teams do not switch away from the active conversat
     clock,
   );
   await clock.advance(1000);
-  // The tie kept navigation order, so the tab opened Engineering and said so.
-  await ui.screen.findByText(/Chat opened Engineering/);
+  // The tie kept navigation order, so the tab opened Engineering.
+  await ui.waitFor(() =>
+    assert.equal(head('Engineering').getAttribute('aria-current'), 'page'),
+  );
   const chosen = journal.length;
   // A message arrives in the other team. The tab's choice was provisional only
   // while the inbox it was made from was still filling in; it has landed, and
-  // the note standing is not a licence to move the reader.
+  // is not a licence to move the reader.
   newer = true;
   await clock.advance(60_000);
   assert.equal(journal.length, chosen);
@@ -1279,12 +1270,11 @@ test('a team that goes out of reach while step two is open refuses it and says w
   await ui.act(async () => {
     shell.setSnapshot?.(applyLease(fresh, 'lapsed', 'acme'));
   });
-  // The reason stands where the channels would be, and nothing is submitted
-  // against a team this Mac cannot reach.
+  // The reason stands over the form, and nothing is submitted against a team
+  // this Mac cannot reach.
   await ui.screen.findByText(
     'Chat is currently unavailable for Engineering: Check-in expired',
   );
-  await ui.screen.findByText('Loading channels…');
   assert.equal(
     ui.screen.getByRole<HTMLButtonElement>('button', {
       name: /Create channel/,
@@ -1343,7 +1333,7 @@ test('New chat refuses what the agent would refuse, by the button and by Enter',
   // Engineering already has a general channel, so an empty name is refused —
   // and the hint that says an empty name creates one does not stand beside it.
   await ui.screen.findByText('This team already has a general channel.');
-  assert.equal(ui.screen.queryByText(/An empty name creates/), null);
+  assert.equal(ui.screen.queryByText(/Leave empty to create/), null);
   assert.equal(create().disabled, true);
   // Enter is the button: it sends exactly what the button would send.
   ui.fireEvent.submit(form);
@@ -1353,15 +1343,18 @@ test('New chat refuses what the agent would refuse, by the button and by Enter',
   const description = ui.screen.getByRole('textbox', {
     name: 'Channel description',
   });
-  // The description band is the one `ChatLimits` admits, checked rather than
-  // merely printed, at both ends.
+  // The description band is the one `ChatLimits` admits, checked at both
+  // ends; the field's border says so, and the hint does not change.
   ui.fireEvent.change(description, { target: { value: 'ab' } });
-  await ui.screen.findByText(
-    'Descriptions must be at least 3 characters or empty.',
+  await ui.waitFor(() =>
+    assert.equal(description.classList.contains('over'), true),
   );
+  assert.equal(ui.screen.queryByText(/at least 3 characters or empty/), null);
   assert.equal(create().disabled, true);
   ui.fireEvent.change(description, { target: { value: 'x'.repeat(513) } });
-  await ui.screen.findByText('Descriptions are at most 512 characters.');
+  await ui.waitFor(() =>
+    assert.equal(description.classList.contains('over'), true),
+  );
   assert.equal(create().disabled, true);
   ui.fireEvent.submit(form);
   await new Promise((resolve) => setTimeout(resolve, 0));

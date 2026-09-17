@@ -231,6 +231,14 @@ export function NewChatSheet({
     listed.map(({ channel }) => channel.name),
   );
   const descriptionProblem = channelDescriptionProblem(description);
+  // A length outside the limits is shown by the field alone — its border —
+  // and the hint stays as it is; every other refusal is a sentence, since a
+  // border cannot say that a name is taken.
+  const nameLength = [...normalizeChannelName(name)].length;
+  const nameOverLimit =
+    nameLength > CHAT_NAME_MAX_CHARS ||
+    (nameLength > 0 && nameLength < CHAT_NAME_MIN_CHARS);
+  const descriptionOverLimit = descriptionProblem !== null;
   // Step two cannot be answered until the team's channels are known: an empty
   // name is the general channel, and whether the team already has one is the
   // difference between creating it and being refused.
@@ -513,47 +521,51 @@ export function NewChatSheet({
                 {picked.reason}
               </p>
             )}
-            <RadioGroup label="Channel" className="chat-pick">
-              {listed.map((option) => {
-                // A channel the column draws as stopped, restricted, hidden or
-                // muted says the same thing here: a picker that offered it as
-                // an ordinary channel would be offering something else.
-                const meta = channelMeta(option, entry?.blockedChannels);
-                const about =
-                  option.channel.description || accessSummary(option.channel);
-                return (
+            {/* Choosing Create takes the form over: the channel list it was
+                picked from is one Back away, not a second thing on screen. */}
+            {!creating && (
+              <RadioGroup label="Channel" className="chat-pick">
+                {listed.map((option) => {
+                  // A channel the column draws as stopped, restricted, hidden or
+                  // muted says the same thing here: a picker that offered it as
+                  // an ordinary channel would be offering something else.
+                  const meta = channelMeta(option, entry?.blockedChannels);
+                  const about =
+                    option.channel.description || accessSummary(option.channel);
+                  return (
+                    <RadioCard
+                      key={option.channel.id}
+                      title={channelTitle(option.channel)}
+                      detail={meta ? `${meta} · ${about}` : about}
+                      selected={!creating && option.channel.id === channel}
+                      disabled={locked || Boolean(picked?.reason)}
+                      onSelect={() => {
+                        setCreating(false);
+                        setChannel(option.channel.id);
+                      }}
+                    />
+                  );
+                })}
+                {/* Until the team's channel list has arrived there is nothing to
+                pick from and no way to tell whether a name is already taken. */}
+                {channelsKnown ? (
                   <RadioCard
-                    key={option.channel.id}
-                    title={channelTitle(option.channel)}
-                    detail={meta ? `${meta} · ${about}` : about}
-                    selected={!creating && option.channel.id === channel}
+                    title="Create a channel"
+                    detail="A new channel in this team"
+                    selected={creating}
                     disabled={locked || Boolean(picked?.reason)}
                     onSelect={() => {
-                      setCreating(false);
-                      setChannel(option.channel.id);
+                      setChannel(undefined);
+                      setCreating(true);
                     }}
                   />
-                );
-              })}
-              {/* Until the team's channel list has arrived there is nothing to
-                pick from and no way to tell whether a name is already taken. */}
-              {channelsKnown ? (
-                <RadioCard
-                  title="Create a channel"
-                  detail="A new channel in this team"
-                  selected={creating}
-                  disabled={locked || Boolean(picked?.reason)}
-                  onSelect={() => {
-                    setChannel(undefined);
-                    setCreating(true);
-                  }}
-                />
-              ) : (
-                <p className="hint" role="status">
-                  Loading channels…
-                </p>
-              )}
-            </RadioGroup>
+                ) : (
+                  <p className="hint" role="status">
+                    Loading channels…
+                  </p>
+                )}
+              </RadioGroup>
+            )}
             {creating && (
               <>
                 <Inset>
@@ -562,37 +574,46 @@ export function NewChatSheet({
                       aria-label="Channel name"
                       ref={nameField}
                       data-sheet-autofocus="true"
+                      className={nameOverLimit ? 'over' : undefined}
+                      aria-invalid={nameOverLimit || undefined}
                       value={name}
                       disabled={locked}
                       onChange={(event) => setName(event.target.value)}
                       placeholder="design"
                     />
-                    {/* The problem is drawn whenever there is one: an empty
-                      name is itself refused when the team already has a general
-                      channel, and the hint that describes an empty name would
-                      be saying it can be created. */}
-                    <small className={problem ? 'action-error' : ''}>
-                      {problem ??
-                        (name
-                          ? `Created as #${normalizeChannelName(name)}.`
-                          : `${CHAT_NAME_MIN_CHARS}–${CHAT_NAME_MAX_CHARS} characters, lowercased automatically. An empty name creates the team’s general channel.`)}
+                    {/* A refusal other than length is drawn in place of the
+                      hint: an empty name is itself refused when the team
+                      already has a general channel, and the hint that
+                      describes an empty name would be saying it can be
+                      created. */}
+                    <small
+                      className={
+                        problem && !nameOverLimit ? 'action-error' : ''
+                      }
+                    >
+                      {problem && !nameOverLimit
+                        ? problem
+                        : `Lowercase, ${CHAT_NAME_MIN_CHARS}–${CHAT_NAME_MAX_CHARS} characters. Leave empty to create the team’s #general channel.`}
                     </small>
                   </InsetRow>
                   <InsetRow label="Description">
                     <textarea
                       aria-label="Channel description"
+                      className={descriptionOverLimit ? 'over' : undefined}
+                      aria-invalid={descriptionOverLimit || undefined}
+                      rows={2}
                       value={description}
                       disabled={locked}
                       onChange={(event) => setDescription(event.target.value)}
                       placeholder="What this channel is for"
                     />
-                    <small className={descriptionProblem ? 'action-error' : ''}>
-                      {descriptionProblem ??
-                        `Optional, ${CHAT_DESCRIPTION_MIN_CHARS}–${CHAT_DESCRIPTION_MAX_CHARS} characters. Descriptions are lowercased automatically.`}
+                    <small>
+                      Optional. Lowercase, {CHAT_DESCRIPTION_MIN_CHARS}–
+                      {CHAT_DESCRIPTION_MAX_CHARS} characters.
                     </small>
                   </InsetRow>
                 </Inset>
-                <SectionLabel>Who can take part</SectionLabel>
+                <SectionLabel>Visibility</SectionLabel>
                 <Inset>
                   <RadioGroup label="Channel audience">
                     <RadioCard
@@ -604,7 +625,7 @@ export function NewChatSheet({
                     />
                     <RadioCard
                       title="Admins and owners"
-                      detail="Hidden from members. Only admins and owners can read or write."
+                      detail="Hidden from members."
                       selected={admin}
                       disabled={locked}
                       onSelect={() => setAdmin(true)}

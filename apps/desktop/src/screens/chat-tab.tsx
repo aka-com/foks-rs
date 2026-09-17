@@ -25,7 +25,7 @@ import type { Bridge } from '../bridge';
 import type { Location, NavigateOptions } from '../location';
 import { rememberChatLocation, rememberedChatRef } from '../location';
 import { useSidebarInbox } from '../chat/inbox-provider';
-import { channelTitle, listChannels, openChannel } from '../chat/presentation';
+import { listChannels, openChannel } from '../chat/presentation';
 import { ChatScreen } from './chat-screen';
 import { ChannelInfoPanel } from './chat-info';
 import { NewChatSheet } from './chat-new';
@@ -59,14 +59,6 @@ const NO_GENERATIONS: ReadonlyMap<string, number> = new Map();
 
 const systemAccessNow = () => Date.now() / 1000;
 
-/** The conversation the tab opened on its own, and why it chose that one. */
-interface AutoOpened {
-  ref: StoreRef;
-  channel?: string;
-  /** Chosen for its last message rather than for being the first team. */
-  recent: boolean;
-}
-
 export function ChatTab({
   snapshot,
   bridge,
@@ -85,8 +77,6 @@ export function ChatTab({
   const named = location.ref
     ? teams.find((store) => store.id === location.ref)
     : undefined;
-  const [autoOpened, setAutoOpened] = useState<AutoOpened | null>(null);
-  const [noteDismissed, setNoteDismissed] = useState(false);
   const resolving = !location.ref;
   const opening = resolving
     ? openingConversation(snapshot, inbox, accessOptions)
@@ -103,8 +93,7 @@ export function ChatTab({
     null,
     (value) => value !== null,
   );
-  // The ⓘ toggle takes focus back when the panel it opened closes, and the
-  // conversation takes it when the note that was focused is dismissed.
+  // The ⓘ toggle takes focus back when the panel it opened closes.
   const infoToggle = useRef<HTMLButtonElement | null>(null);
   const conversation = useRef<HTMLElement | null>(null);
   const search = useRef<HTMLInputElement | null>(null);
@@ -118,11 +107,6 @@ export function ChatTab({
     if (location.ref || !openingRef) return;
     if (location.ref === openingRef && location.channel === openingChannel)
       return;
-    setAutoOpened({
-      ref: openingRef,
-      channel: openingChannel,
-      recent: Boolean(openingChannel),
-    });
     onNavigate(
       openingChannel
         ? { kind: 'chat', ref: openingRef, channel: openingChannel }
@@ -181,11 +165,6 @@ export function ChatTab({
   // The panel stays through a team switch: its channel arrives with the new
   // team's inbox, and the panel says so meanwhile rather than flickering out.
   const showInfo = info && Boolean(open);
-  const autoNote =
-    open && autoOpened?.ref === open.id && !noteDismissed ? autoOpened : null;
-  const autoChannel = autoNote?.channel
-    ? listed.find(({ channel }) => channel.id === autoNote.channel)?.channel
-    : undefined;
   return (
     <section className={showInfo ? 'chat-screen with-info' : 'chat-screen'}>
       <ChatTeamColumn
@@ -195,8 +174,6 @@ export function ChatTab({
         accessOptions={accessOptions}
         searchRef={search}
         onOpen={(next, channelId) => {
-          // Remove the automatic-selection note after an explicit selection.
-          setAutoOpened(null);
           onNavigate(
             channelId
               ? { kind: 'chat', ref: next, channel: channelId }
@@ -217,30 +194,6 @@ export function ChatTab({
         tabIndex={-1}
         ref={conversation}
       >
-        {autoNote && open && (
-          <div className="chat-note">
-            <span className="chat-note-glyph">
-              <Icon name="info" size={15} />
-            </span>
-            <p>
-              {autoNote.recent && autoChannel
-                ? `Chat opened ${open.name} · ${channelTitle(autoChannel)} because no conversation was selected.`
-                : `Chat opened ${open.name} because no team was selected.`}
-            </p>
-            <Button
-              variant="quiet"
-              icon="x"
-              aria-label="Dismiss"
-              title="Dismiss"
-              onClick={() => {
-                setNoteDismissed(true);
-                // The dismissed note took focus with it; the conversation it
-                // sat above takes it back.
-                conversation.current?.focus();
-              }}
-            />
-          </div>
-        )}
         {ref &&
         !wanted &&
         open &&
@@ -318,7 +271,6 @@ export function ChatTab({
           onOpen={(next, channelId) => {
             newChatUnresolved.current = false;
             setNewChat(null);
-            setAutoOpened(null);
             onNavigate(
               channelId
                 ? { kind: 'chat', ref: next, channel: channelId }
