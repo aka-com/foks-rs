@@ -40,7 +40,6 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .nav .ic{font-size:17px;color:var(--muted);width:18px}.nav.on .ic{color:var(--accent-ink)}
 .nav .t{min-width:0;flex:1}
 .nav[disabled]{opacity:.45;cursor:default}
-.nav .dot{width:7px;height:7px;border-radius:50%;background:var(--warning-dot);flex:none}
 .badge,.nav .badge{font-size:12px;font-weight:600;color:var(--amber-ink);background:var(--amber-wash);padding:0 7px;border-radius:var(--radius-pill);line-height:19px;display:inline-block}
 .side .fn{font-size:12px;color:var(--faint);line-height:1.25;margin:0 0 10px;padding:1px 10px 4px}
 .side .fn code{font:12px var(--mono)}
