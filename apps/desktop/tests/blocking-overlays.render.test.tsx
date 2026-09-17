@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createElement } from 'react';
+import { createElement, useRef, useState } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge, MaintenanceSnapshot } from '../src/bridge';
@@ -195,6 +195,114 @@ async function shellOverlay(
   );
   return { rendered, bridge };
 }
+
+async function primitiveBlock(
+  kind: 'popover' | 'context',
+  initialBlocking: boolean,
+): Promise<void> {
+  const { ContextMenu, Dialog, Menu, OverlayProvider, Popover } =
+    (await vite.ssrLoadModule(
+      '/kit/overlay-primitives.tsx',
+    )) as typeof import('../kit/overlay-primitives');
+  const portalRoot = document.getElementById('overlays');
+  const background = document.getElementById('root');
+  assert.ok(portalRoot);
+  assert.ok(background);
+  const backgroundRef = { current: background };
+  let closes = 0;
+
+  function Host() {
+    const [open, setOpen] = useState(true);
+    const anchorRef = useRef<HTMLButtonElement>(null);
+    const close = (): void => {
+      closes++;
+      setOpen(false);
+    };
+    const portal = !open
+      ? null
+      : kind === 'popover'
+        ? createElement(Popover, {
+            anchorRef,
+            className: 'primitive-portal',
+            onClose: close,
+            children: createElement(Menu, {
+              anchorRef,
+              onClose: close,
+              children: createElement('button', {}, 'Choice'),
+            }),
+          })
+        : createElement(ContextMenu, {
+            point: { x: 20, y: 20 },
+            className: 'primitive-portal',
+            onClose: close,
+            children: 'Choice',
+          });
+    return createElement(
+      'div',
+      { className: 'primitive-host' },
+      createElement(Dialog, {
+        'aria-label': 'Persistent dialog',
+        children: 'Persistent dialog',
+      }),
+      createElement('button', { ref: anchorRef }, 'Anchor'),
+      portal,
+    );
+  }
+
+  const draw = (blocking: boolean) =>
+    createElement(OverlayProvider, {
+      backgroundRef,
+      portalRoot,
+      blocking,
+      children: createElement(Host),
+    });
+  const rendered = ui.render(draw(initialBlocking));
+  if (!initialBlocking)
+    await ui.waitFor(() =>
+      assert.ok(document.querySelector('.primitive-portal')),
+    );
+  const dialog = await rendered.findByRole('dialog', {
+    name: 'Persistent dialog',
+  });
+  assert.equal(background.inert, true);
+  if (!initialBlocking) rendered.rerender(draw(true));
+  await ui.waitFor(() => {
+    assert.equal(closes, 1);
+    assert.equal(document.querySelector('.primitive-portal'), null);
+  });
+  assert.ok(
+    document.querySelector('[aria-label="Persistent dialog"]') === dialog,
+  );
+  assert.equal(background.inert, true);
+  const host = document.querySelector('.primitive-host');
+  assert.ok(host);
+  await ui.act(async () => {
+    ui.fireEvent.pointerDown(host);
+    ui.fireEvent.keyDown(host, { key: 'Escape' });
+    await Promise.resolve();
+  });
+  assert.equal(closes, 1);
+  rendered.rerender(draw(true));
+  assert.equal(closes, 1);
+  rendered.rerender(draw(false));
+  assert.equal(closes, 1);
+  assert.equal(document.querySelector('.primitive-portal'), null);
+  assert.ok(
+    document.querySelector('[aria-label="Persistent dialog"]') === dialog,
+  );
+  assert.equal(background.inert, true);
+  rendered.unmount();
+}
+
+test('popover and context menu close once when overlays become blocked', async () => {
+  await primitiveBlock('popover', false);
+  await primitiveBlock('context', false);
+});
+
+test('popover and context menu suppress blocked initial mounts', async () => {
+  await primitiveBlock('popover', true);
+  await primitiveBlock('context', true);
+});
 
 test('initial startup uses the shared takeover frame', async () => {
   const { App, FIXTURE, mockBridge } = await modules();
@@ -975,6 +1083,169 @@ test('command-only agent loss preserves the active write workflow', async () => 
   assert.equal(document.querySelector('[aria-label="New password"]'), sheet);
   assert.equal(rendered.getByLabelText('Site'), site);
   assert.equal(site.value, 'command.example');
+  rendered.unmount();
+});
+
+test('agent loss closes the rail account menu before retry interaction', async () => {
+  const { App, FIXTURE, mockBridge } = await modules();
+  const loss = deferred<string | null>();
+  let consumed = false;
+  let retries = 0;
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    native: true,
+    takeAgentConnectionLoss: () => {
+      if (consumed) return Promise.resolve(null);
+      return loss.promise.then((message) => {
+        consumed = true;
+        return message;
+      });
+    },
+    retryAgentConnection: async () => {
+      retries++;
+      return { state: 'ready' };
+    },
+  };
+  const rendered = ui.render(createElement(App, { bridge }));
+  const account = await ui.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>('button.who');
+    assert.ok(button);
+    assert.equal(button.disabled, false);
+    return button;
+  });
+  ui.fireEvent.click(account);
+  await rendered.findByRole('menu');
+  await ui.act(async () => {
+    loss.resolve('The agent socket closed.');
+    await Promise.resolve();
+  });
+  await ui.waitFor(() =>
+    assert.equal(document.querySelector('[role="menu"]'), null),
+  );
+  const retry = await rendered.findByRole('button', { name: 'Retry' });
+  assert.equal(document.activeElement, retry);
+  await ui.act(async () => {
+    ui.fireEvent.pointerDown(retry);
+    ui.fireEvent.mouseDown(retry);
+    ui.fireEvent.click(retry);
+    await Promise.resolve();
+  });
+  await ui.waitFor(() =>
+    assert.equal(document.querySelector('.takeover'), null),
+  );
+  assert.equal(retries, 1);
+  assert.equal(document.querySelector('[role="menu"]'), null);
+  rendered.unmount();
+});
+
+test('agent loss closes the new-item store popover without replacing its draft', async () => {
+  const { App, FIXTURE, mockBridge } = await modules();
+  const loss = deferred<string | null>();
+  let consumed = false;
+  let retries = 0;
+  window.history.replaceState(null, '', '/?state=new');
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    native: true,
+    takeAgentConnectionLoss: () => {
+      if (consumed) return Promise.resolve(null);
+      return loss.promise.then((message) => {
+        consumed = true;
+        return message;
+      });
+    },
+    retryAgentConnection: async () => {
+      retries++;
+      return { state: 'ready' };
+    },
+  };
+  const rendered = ui.render(createElement(App, { bridge }));
+  const input = (await rendered.findByLabelText('Site')) as HTMLInputElement;
+  ui.fireEvent.change(input, { target: { value: 'retained.example' } });
+  const sheet = input.closest('[aria-label="New password"]');
+  const trigger = rendered.getByRole('button', { name: 'Save in vault' });
+  const selected = trigger.textContent;
+  assert.ok(sheet);
+  ui.fireEvent.click(trigger);
+  await rendered.findByRole('listbox', { name: 'Save in vault' });
+  await ui.act(async () => {
+    loss.resolve('The agent socket closed.');
+    await Promise.resolve();
+  });
+  await ui.waitFor(() =>
+    assert.equal(document.querySelector('[role="listbox"]'), null),
+  );
+  const retry = await rendered.findByRole('button', { name: 'Retry' });
+  assert.equal(document.querySelector('[aria-label="New password"]'), sheet);
+  assert.equal(rendered.getByLabelText('Site'), input);
+  assert.equal(input.value, 'retained.example');
+  assert.equal(retry.closest('[inert]'), null);
+  await ui.act(async () => {
+    retry.click();
+    await Promise.resolve();
+  });
+  await ui.waitFor(() =>
+    assert.equal(document.querySelector('.takeover'), null),
+  );
+  assert.equal(retries, 1);
+  assert.equal(document.querySelector('[role="listbox"]'), null);
+  assert.equal(trigger.textContent, selected);
+  assert.equal(input.value, 'retained.example');
+  rendered.unmount();
+});
+
+test('agent loss closes the search palette until a later shortcut reopens it', async () => {
+  const { App, FIXTURE, mockBridge } = await modules();
+  const loss = deferred<string | null>();
+  let consumed = false;
+  let retries = 0;
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    native: true,
+    takeAgentConnectionLoss: () => {
+      if (consumed) return Promise.resolve(null);
+      return loss.promise.then((message) => {
+        consumed = true;
+        return message;
+      });
+    },
+    retryAgentConnection: async () => {
+      retries++;
+      return { state: 'ready' };
+    },
+  };
+  const rendered = ui.render(createElement(App, { bridge }));
+  const search = await ui.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>('.topsearch');
+    assert.ok(button);
+    assert.equal(button.disabled, false);
+    return button;
+  });
+  ui.fireEvent.click(search);
+  await ui.waitFor(() => assert.ok(document.querySelector('.pal-back')));
+  await ui.act(async () => {
+    loss.resolve('The agent socket closed.');
+    await Promise.resolve();
+  });
+  await ui.waitFor(() => {
+    assert.equal(document.querySelector('.pal-back'), null);
+    assert.equal(document.querySelector('.pal-q'), null);
+  });
+  const retry = await rendered.findByRole('button', { name: 'Retry' });
+  assert.equal(document.activeElement, retry);
+  ui.fireEvent.keyDown(document, { key: 'k', metaKey: true });
+  assert.equal(document.querySelector('.pal-back'), null);
+  await ui.act(async () => {
+    retry.click();
+    await Promise.resolve();
+  });
+  await ui.waitFor(() =>
+    assert.equal(document.querySelector('.takeover'), null),
+  );
+  assert.equal(retries, 1);
+  assert.equal(document.querySelector('.pal-back'), null);
+  ui.fireEvent.keyDown(document, { key: 'k', metaKey: true });
+  await ui.waitFor(() => assert.ok(document.querySelector('.pal-back')));
   rendered.unmount();
 });
 

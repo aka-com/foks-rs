@@ -73,14 +73,17 @@ export function anyDialogOpen(): boolean {
 }
 
 const OverlayContext = createContext<OverlayEnvironment | null>(null);
+const OverlayBlockingContext = createContext(false);
 
 export function OverlayProvider({
   backgroundRef,
   portalRoot,
+  blocking = false,
   children,
 }: {
   backgroundRef: RefObject<HTMLElement | null>;
   portalRoot: HTMLElement;
+  blocking?: boolean;
   children: ReactNode;
 }): ReactNode {
   const environment = useRef<OverlayEnvironment>({
@@ -92,13 +95,28 @@ export function OverlayProvider({
   environment.portalRoot = portalRoot;
   return (
     <OverlayContext.Provider value={environment}>
-      {children}
+      <OverlayBlockingContext.Provider value={blocking}>
+        {children}
+      </OverlayBlockingContext.Provider>
     </OverlayContext.Provider>
   );
 }
 
 export function useHasOverlayProvider(): boolean {
   return useContext(OverlayContext) !== null;
+}
+
+export function useDismissOnOverlayBlock(
+  onClose: () => void,
+  open = true,
+): boolean {
+  const blocking = useContext(OverlayBlockingContext);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useLayoutEffect(() => {
+    if (blocking && open) onCloseRef.current();
+  }, [blocking, open]);
+  return blocking;
 }
 
 function useOverlayEnvironment(): OverlayEnvironment {
@@ -443,12 +461,14 @@ export function Popover({
   minWidth?: number;
   onClose: () => void;
 }): ReactNode {
+  const blocking = useDismissOnOverlayBlock(onClose);
   const { dialogs, portalRoot } = useOverlayEnvironment();
   const popoverRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
   useLayoutEffect(() => {
+    if (blocking) return;
     const anchor = anchorRef.current;
     const popover = popoverRef.current;
     if (!anchor || !popover) return;
@@ -486,8 +506,9 @@ export function Popover({
       document.removeEventListener('pointerdown', pointerDown, true);
       document.removeEventListener('keydown', keyDown, true);
     };
-  }, [align, anchorRef, dialogs, gap, matchAnchorWidth, minWidth]);
+  }, [align, anchorRef, blocking, dialogs, gap, matchAnchorWidth, minWidth]);
 
+  if (blocking) return null;
   return createPortal(
     <div ref={popoverRef} className={className}>
       {children}
@@ -507,12 +528,14 @@ export function ContextMenu({
   className?: string;
   onClose: () => void;
 }): ReactNode {
+  const blocking = useDismissOnOverlayBlock(onClose);
   const { portalRoot } = useOverlayEnvironment();
   const contextRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
   useLayoutEffect(() => {
+    if (blocking) return;
     const context = contextRef.current;
     if (!context) return;
     const position = () => {
@@ -547,8 +570,9 @@ export function ContextMenu({
       document.removeEventListener('pointerdown', pointerDown, true);
       document.removeEventListener('keydown', keyDown, true);
     };
-  }, [point.x, point.y]);
+  }, [blocking, point.x, point.y]);
 
+  if (blocking) return null;
   return createPortal(
     <div ref={contextRef} className={className}>
       {children}

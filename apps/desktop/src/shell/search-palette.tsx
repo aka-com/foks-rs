@@ -16,7 +16,11 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 
-import { DismissibleDialog, anyDialogOpen } from '/kit/overlay-primitives';
+import {
+  DismissibleDialog,
+  anyDialogOpen,
+  useDismissOnOverlayBlock,
+} from '/kit/overlay-primitives';
 import { Icon } from '../components/icon';
 import { GroupMark } from '../screens/group-mark';
 import {
@@ -664,6 +668,7 @@ function SearchSheet({
 /** The palette. Closed, it draws nothing at all. */
 export function SearchPalette(props: SearchPaletteProps): ReactNode {
   const { open, ...sheet } = props;
-  if (!open) return null;
+  const blocking = useDismissOnOverlayBlock(sheet.onClose, open);
+  if (!open || blocking) return null;
   return <SearchSheet {...sheet} />;
 }

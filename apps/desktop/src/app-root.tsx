@@ -2043,7 +2043,11 @@ function VaultShell({
   );
   if (!portalRoot) return withToasts;
   return (
-    <OverlayProvider backgroundRef={appRef} portalRoot={portalRoot}>
+    <OverlayProvider
+      backgroundRef={appRef}
+      portalRoot={portalRoot}
+      blocking={block !== null}
+    >
       {withToasts}
     </OverlayProvider>
   );
