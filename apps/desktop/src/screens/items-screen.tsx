@@ -221,6 +221,9 @@ function TreeRow({
         .join(' ')}
       style={{ '--d': depth } as React.CSSProperties}
     >
+      {/* The twist sits in the row's flow, in a gutter the stylesheet reserves
+          on every row, so a folder with children and one without put their
+          icons on the same left edge. Depth indents the row itself. */}
       {expandable ? (
         <button
           type="button"
@@ -352,7 +355,7 @@ function VaultDropZone({
           {uploading
             ? 'Encrypting and saving the file.'
             : (target.blocked ??
-              `${folder ? `Saved in ${folder}` : 'Saved at the vault root'} · one file at a time`)}
+              `${folder ? `Saved in ${folder}` : 'Saved at the top level'} · one file at a time`)}
         </small>
       </div>
     </div>
@@ -571,6 +574,7 @@ export function ItemsScreen({
   const headerTitle = crumbs[crumbs.length - 1]?.label ?? 'Files';
   const head = (
     <PageHeader
+      ruled
       title={headerTitle}
       crumbs={crumbs}
       query={state.query}
@@ -756,8 +760,8 @@ export function ItemsScreen({
                           {state.query}”
                         </h2>
                         <p>
-                          Search covers item names, paths, and vaults. Item
-                          contents are encrypted and not searched.
+                          Search by item name, path, or vault. Item contents are
+                          encrypted and cannot be searched.
                         </p>
                       </div>
                     ) : (
@@ -772,7 +776,7 @@ export function ItemsScreen({
                         <h2>No items yet</h2>
                         <p>
                           {store
-                            ? `Save logins, secure notes, and credentials in ${store.name}.`
+                            ? emptyStoreCopy(store)
                             : 'Save logins, secure notes, and credentials to get started.'}
                         </p>
                         <NewItemButton onNew={createNew} />
@@ -877,8 +881,8 @@ export function ItemsScreen({
                     <h2>No items yet</h2>
                     <p>
                       {selected.path === '/' && selectedTree
-                        ? `Save logins, secure notes, and credentials in ${selectedTree.store.name}.`
-                        : 'This folder has nothing in it yet.'}
+                        ? emptyStoreCopy(selectedTree.store)
+                        : 'This folder is empty.'}
                     </p>
                     <NewItemButton onNew={createNew} />
                   </div>

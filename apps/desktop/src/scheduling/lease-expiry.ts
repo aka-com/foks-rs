@@ -26,7 +26,9 @@ export function reconcileObservedLeaseExpiries(
   previous: readonly ObservedLeaseExpiry[],
   nowSeconds: number,
 ): ObservedLeaseExpiry[] {
-  const old = new Map(previous.map((entry) => [entry.profile, entry.expiresAt]));
+  const old = new Map(
+    previous.map((entry) => [entry.profile, entry.expiresAt]),
+  );
   const next: ObservedLeaseExpiry[] = [];
   for (const server of servers) {
     const expiry = server.compatibility;
@@ -136,11 +138,11 @@ export class LeaseExpiryCoordinator {
       .flatMap((server) => {
         const compatibility = server.compatibility;
         return compatibility.status === 'required' &&
-        !next.some(
-          (entry) =>
-            entry.profile === server.id &&
-            entry.expiresAt >= compatibility.expiresAt,
-        )
+          !next.some(
+            (entry) =>
+              entry.profile === server.id &&
+              entry.expiresAt >= compatibility.expiresAt,
+          )
           ? [compatibility.expiresAt]
           : [];
       })

@@ -147,7 +147,11 @@ export function deviceEntries(lists: DeviceLists): DeviceEntry[] {
   return [
     ...lists.devices.map(deviceEntry),
     ...lists.backups.map(backupEntry),
-    ...lists.yubi.map(yubiEntry),
+    // An enrollment that never completed holds no key this account can use and
+    // cannot even be revoked, so it is listed after the ones that work. Each of
+    // the two runs keeps the order the account gave it.
+    ...lists.yubi.filter((entry) => entry.state === 'complete').map(yubiEntry),
+    ...lists.yubi.filter((entry) => entry.state !== 'complete').map(yubiEntry),
   ];
 }
 

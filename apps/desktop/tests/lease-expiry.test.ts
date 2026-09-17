@@ -168,9 +168,10 @@ test('an older seeded observation cannot lower the fail-closed floor', () => {
   const coordinator = new LeaseExpiryCoordinator(clock, () => undefined);
   coordinator.update([leased('one', 1_500)]);
   clock.seconds = 1_000;
-  coordinator.update([leased('one', 1_500)], [
-    { profile: 'one', expiresAt: 1_200 },
-  ]);
+  coordinator.update(
+    [leased('one', 1_500)],
+    [{ profile: 'one', expiresAt: 1_200 }],
+  );
   assert.deepEqual(coordinator.snapshot(), [
     { profile: 'one', expiresAt: 1_500 },
   ]);

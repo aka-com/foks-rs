@@ -7,3 +7,7 @@ node_modules/
 
 # Preserve the compact formatting of the imported shell stylesheet.
 apps/desktop/src/styles/shell.css
+
+# Test fixtures whose bytes are pinned by a manifest: reformatting one changes
+# its recorded size and hash, and the fixture tests fail on it.
+crates/*/tests/fixtures/

@@ -30,6 +30,7 @@ export function InvitationPanel({
   teamId,
   presentation,
   recover = false,
+  requestsOnly = false,
   onComplete,
   onRowsChange,
 }: {
@@ -44,6 +45,14 @@ export function InvitationPanel({
    */
   presentation?: PanelPresentation;
   recover?: boolean;
+  /**
+   * Draw the membership requests alone: the label and one row per request,
+   * without the form that issues invitations. The team page's Requests tab
+   * is a list of decisions to take; issuing an invitation is an add action
+   * and is reached from its Add people control, which opens this same panel
+   * as a sheet.
+   */
+  requestsOnly?: boolean;
   onComplete: () => Promise<void> | void;
   /**
    * The team side is mounted whether or not its tab is open, so a Requests
@@ -276,9 +285,10 @@ export function InvitationPanel({
       .copyText(text)
       .catch((e) => setError(normalizeCommandError(e).message));
   const remoteRow = (
-    <InsetRow label="Server profile (for teams on another server)">
+    <InsetRow label="Server profile">
       <input
         value={remote}
+        placeholder="For teams on another server"
         maxLength={128}
         disabled={busy}
         onChange={(e) => {
@@ -292,10 +302,11 @@ export function InvitationPanel({
     </InsetRow>
   );
   const pinRow = (
-    <InsetRow label="Security key PIN (enrolled keys only)">
+    <InsetRow label="Security key PIN">
       <input
         type="password"
         autoComplete="off"
+        placeholder="Enrolled keys only"
         maxLength={32}
         value={pin}
         disabled={busy}
@@ -553,6 +564,110 @@ export function InvitationPanel({
       ))}
     </>
   );
+  // One request, wherever the list is drawn. A remote request names the
+  // server it came from, so it is approved and verified against that profile
+  // rather than against whatever the invitation form last had typed in it.
+  const alias = teamAlias;
+  // The role select lives on the invitation form, which the Requests tab
+  // does not draw, and its value is kept per page, so the tab cannot approve
+  // at a role the reader never saw: there it admits as Member and its button
+  // says so. A higher role is granted afterwards from the Members list.
+  const grantRole = requestsOnly ? 'member' : role;
+  const requestRows = !alias
+    ? []
+    : rows.map((row) => {
+        const rowRemote = row.source_profile ?? row.remote_profile ?? remote;
+        return (
+          <article key={row.request_id} className="op">
+            <p>
+              {row.username ?? 'Unverified requester'} ·{' '}
+              {row.joiner_kind ?? (row.remote ? 'remote' : 'local')}
+            </p>
+            {row.joiner_id && <code>{row.joiner_id}</code>}
+            {row.error && !row.verified && <p>{row.error}</p>}
+            <div className="btns">
+              <Button
+                variant="primary"
+                disabled={
+                  busy ||
+                  !row.verified ||
+                  (!!row.remote && (!rowRemote || grantRole !== 'member'))
+                }
+                onClick={() =>
+                  void run(
+                    row.remote
+                      ? {
+                          action: 'approve-remote',
+                          remote_profile: rowRemote,
+                          team_alias: alias,
+                          request_id: row.request_id!,
+                          role: nativeRole(grantRole),
+                        }
+                      : {
+                          action: 'approve',
+                          team_alias: alias,
+                          request_id: row.request_id!,
+                          role: nativeRole(grantRole),
+                        },
+                  )
+                }
+              >
+                {requestsOnly ? 'Approve as Member' : 'Approve'}
+              </Button>
+              {row.remote && (
+                <Button
+                  disabled={busy || !rowRemote}
+                  onClick={() =>
+                    void run({
+                      action: 'inspect-remote',
+                      remote_profile: rowRemote,
+                      team_alias: alias,
+                      request_id: row.request_id!,
+                    })
+                  }
+                >
+                  Verify on server
+                </Button>
+              )}
+              <Button
+                danger
+                disabled={busy}
+                onClick={() =>
+                  void run({
+                    action: 'reject',
+                    team_alias: alias,
+                    request_id: row.request_id!,
+                  })
+                }
+              >
+                Reject
+              </Button>
+            </div>
+          </article>
+        );
+      });
+  const requestList = (
+    <>
+      {rows.length > 0 && <SectionLabel>Membership requests</SectionLabel>}
+      {requestRows}
+    </>
+  );
+  // The Requests tab asks for the decisions only. The label stays even with
+  // nothing pending, so the tab names what it is rather than reading as a
+  // page that failed to load.
+  if (requestsOnly)
+    return (
+      <section className="pcard" aria-label="Membership requests">
+        {errorLine}
+        <SectionLabel>Membership requests</SectionLabel>
+        {rows.length ? (
+          requestRows
+        ) : (
+          <p>No one is waiting to join this team.</p>
+        )}
+        {reportsNode}
+      </section>
+    );
   // The sheet presentation covers the join flow only; the group-side
   // invitation card is reached from group settings and keeps its card.
   if (presentation && !teamAlias)
@@ -698,75 +813,7 @@ export function InvitationPanel({
               </Button>
             </div>
           </details>
-          {rows.length > 0 && <SectionLabel>Membership requests</SectionLabel>}
-          {rows.map((row) => (
-            <article key={row.request_id} className="op">
-              <p>
-                {row.username ?? 'Unverified requester'} ·{' '}
-                {row.joiner_kind ?? (row.remote ? 'remote' : 'local')}
-              </p>
-              {row.joiner_id && <code>{row.joiner_id}</code>}
-              {row.error && !row.verified && <p>{row.error}</p>}
-              <div className="btns">
-                <Button
-                  variant="primary"
-                  disabled={
-                    busy ||
-                    !row.verified ||
-                    (!!row.remote && (!remote || role !== 'member'))
-                  }
-                  onClick={() =>
-                    void run(
-                      row.remote
-                        ? {
-                            action: 'approve-remote',
-                            remote_profile: remote,
-                            team_alias: teamAlias,
-                            request_id: row.request_id!,
-                            role: nativeRole(role),
-                          }
-                        : {
-                            action: 'approve',
-                            team_alias: teamAlias,
-                            request_id: row.request_id!,
-                            role: nativeRole(role),
-                          },
-                    )
-                  }
-                >
-                  Approve
-                </Button>
-                {row.remote && (
-                  <Button
-                    disabled={busy || !remote}
-                    onClick={() =>
-                      void run({
-                        action: 'inspect-remote',
-                        remote_profile: remote,
-                        team_alias: teamAlias,
-                        request_id: row.request_id!,
-                      })
-                    }
-                  >
-                    Verify on server
-                  </Button>
-                )}
-                <Button
-                  danger
-                  disabled={busy}
-                  onClick={() =>
-                    void run({
-                      action: 'reject',
-                      team_alias: teamAlias,
-                      request_id: row.request_id!,
-                    })
-                  }
-                >
-                  Reject
-                </Button>
-              </div>
-            </article>
-          ))}
+          {requestList}
         </>
       ) : (
         <>

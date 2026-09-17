@@ -108,7 +108,9 @@ test('a deep folder draws every ancestor in the breadcrumb, each but the current
     crumbs.map((crumb) => crumb.textContent),
     ['Personal', 'env', 'prod'],
   );
-  assert.equal(crumbs.at(-1)?.tagName, 'SPAN');
+  // The current folder is the page's heading, at the size every other page
+  // draws its own title; only the folders above it are buttons.
+  assert.equal(crumbs.at(-1)?.tagName, 'H1');
   assert.ok(crumbs.slice(0, -1).every((crumb) => crumb.tagName === 'BUTTON'));
 
   ui.fireEvent.click(crumbs[1]);

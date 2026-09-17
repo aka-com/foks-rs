@@ -519,9 +519,11 @@ function ConversationRow({
         'chat-conv',
         current ? 'on' : '',
         count ? 'unread' : '',
-        // A hidden conversation is listed and says so; it is drawn dimmed to
-        // match, rather than reading as an ordinary row with a caption.
+        // A hidden or muted conversation is listed and says so; it is drawn
+        // dimmed to match, rather than reading as an ordinary row with a
+        // caption.
         only?.conversation?.hidden ? 'hidden' : '',
+        muted ? 'muted' : '',
       ]
         .filter(Boolean)
         .join(' ')}
@@ -687,6 +689,9 @@ function TeamHeading({
                   active ? 'on' : '',
                   count ? 'unread' : '',
                   conversation?.hidden ? 'hidden' : '',
+                  // Muted is drawn the way hidden is: the caption beside the
+                  // name already says so, and the row reads at that volume.
+                  conversation?.muted ? 'muted' : '',
                   row.reachable ? '' : 'off',
                 ]
                   .filter(Boolean)

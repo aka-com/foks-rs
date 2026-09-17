@@ -683,7 +683,7 @@ export function DevicesScreen({
                     </Button>
                   }
                 >
-                  This account cannot be recovered on a new device without one.
+                  This account cannot be recovered on a new device.
                 </Band>
               ) : null}
 

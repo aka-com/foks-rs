@@ -1411,7 +1411,14 @@ function VaultShell({
   }, [locations]);
 
   const here = state.location;
-  const trafficLightsVisible = !sideCollapsed || here.kind === 'first-run';
+  // The checklist screens draw the shell's own rail, collapse toggle and all.
+  // The setup steps draw a rail with no toggle, which stays open.
+  const firstRunRailCollapsible =
+    here.kind === 'first-run' &&
+    ['added', 'checklist-invited', 'checklist-own'].includes(here.step ?? '');
+  const railCollapsed =
+    sideCollapsed && (here.kind !== 'first-run' || firstRunRailCollapsible);
+  const trafficLightsVisible = !railCollapsed;
   useEffect(() => {
     if (bridge.native)
       void bridge
@@ -1649,8 +1656,9 @@ function VaultShell({
           detailsShown || (here.kind === 'first-run' && here.step === 'added')
             ? 'with-details'
             : '',
-          // First run replaces the sidebar with its own, which has no toggle.
-          sideCollapsed && here.kind !== 'first-run' ? 'side-narrow' : '',
+          // The setup steps replace the rail with one that has no toggle; the
+          // checklist screens draw the rail itself and collapse with it.
+          railCollapsed ? 'side-narrow' : '',
         ]
           .filter(Boolean)
           .join(' ')}
@@ -1675,6 +1683,10 @@ function VaultShell({
             onAgentReadinessFailure={handleAgentReadinessFailure}
             automaticEntry={automaticFirstRun}
             managedProfile={managedProfile ?? undefined}
+            agent={railAgentState(agentLifecycle.state, shown.agent.state)}
+            collapsed={sideCollapsed}
+            onToggleCollapsed={toggleSidebar}
+            devicesAlert={devicesAlertSummary(shown, deviceAlerts)}
           />
         ) : (
           <>

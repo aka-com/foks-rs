@@ -220,7 +220,18 @@ test('shell stylesheet contains required grid and flexbox layout rules', async (
   );
   assert.match(shell, /\.tpane \.fn\{[^}]*font-weight:500/);
   assert.doesNotMatch(shell, /\.tpane \.fn\.on\{[^}]*font-weight/);
-  assert.match(shell, /\.twist\{[^}]*left:calc\(6px \+ var\(--d,0\) \* 18px\)/);
+  // Tree rows indent by depth and reserve an in-flow twist gutter, so a
+  // folder's icon starts at the same x whether or not it has children.
+  assert.match(
+    shell,
+    /\.tpane \.fn\{[^}]*padding-left:calc\(4px \+ var\(--d,0\) \* 18px\)/,
+  );
+  assert.match(shell, /\.tpane \.fn \.fselect\{[^}]*padding:0 8px 0 6px/);
+  assert.match(
+    shell,
+    /\.tpane \.fn:not\(:has\(>\.twist\)\) \.fselect\{padding-left:24px\}/,
+  );
+  assert.match(shell, /\.twist\{[^}]*flex:none;width:18px;height:18px/);
   assert.match(shell, /\.radio\{[^}]*text-align:left[^}]*width:100%/);
   // Layout server settings rows with right-aligned action banners.
   assert.match(shell, /\.settings-inset \.fr \.v\.srv\{flex-direction:row/);

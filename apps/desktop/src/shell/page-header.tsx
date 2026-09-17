@@ -16,7 +16,10 @@ import { Icon, SearchField } from '../components';
 
 export interface HeaderParts {
   title: string;
-  /** Unrendered by this component today; screens still pass it through. */
+  /**
+   * Unrendered by this component; screens still pass it through. A header that
+   * wants a second line passes `PageHeaderProps.sub`, which is drawn.
+   */
   subtitle?: string;
   tail?: ReactNode;
 }
@@ -35,6 +38,19 @@ export function searchPlaceholder(title: string): string {
 }
 
 export interface PageHeaderProps extends HeaderParts {
+  /**
+   * A mark drawn before the title, for a page that is about one subject rather
+   * than a list of them — the Account tab's own account.
+   */
+  mark?: ReactNode;
+  /**
+   * A line under the title, drawn as `.loc-copy .sub`. Distinct from
+   * `HeaderParts.subtitle`, which is a plain string several screens already
+   * pass and this header has never drawn: an identity line carries elements,
+   * such as a chip for the local alias, so it is a node. Drawing it is opt-in,
+   * which leaves every existing caller's header as it is.
+   */
+  sub?: ReactNode;
   /** A page-level action aligned at the far right of the header. */
   action?: ReactNode;
   /** A rule under the header, for pages with no toolbar to carry one. */
@@ -49,6 +65,8 @@ export interface PageHeaderProps extends HeaderParts {
 export function PageHeader({
   title,
   crumbs,
+  mark,
+  sub,
   tail,
   action,
   ruled = false,
@@ -74,15 +92,21 @@ export function PageHeader({
                     {crumb.label}
                   </button>
                 ) : (
-                  <span className="cur">{crumb.label}</span>
+                  // The current folder is the page's title, at the size every
+                  // other page draws its own; the folders above it are small.
+                  <h1 className="cur">{crumb.label}</h1>
                 )}
               </Fragment>
             ))}
           </nav>
         ) : (
-          <div className="loc-copy">
-            <h1>{title}</h1>
-          </div>
+          <>
+            {mark}
+            <div className="loc-copy">
+              <h1>{title}</h1>
+              {sub === undefined ? null : <div className="sub">{sub}</div>}
+            </div>
+          </>
         )}
       </div>
       {tail || action ? (

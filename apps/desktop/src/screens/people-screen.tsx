@@ -6,10 +6,13 @@ import { useTabSheetState } from '../navigation-guard';
 /**
  * The Account tab: one account's profile, the account the rail header names.
  *
- * The mark and the identity that name the account sit on one row, with a
- * "Switch account" button that opens the same menu the rail header's avatar
- * opens — there is exactly one account switcher, not a second one repeating
- * it. Under that, five facts are rows with their action at the right:
+ * The account is the page's header: its mark, its username as the title, and
+ * the server, the server's trust state and the local alias on the line under
+ * it — the shape the team page already uses for a team. "Switch account" sits
+ * in the header's action slot beside Connect from FOKS CLI, and opens the same
+ * menu the rail header's avatar opens; there is exactly one account switcher,
+ * not a second one repeating it. The body opens on five facts, rows with their
+ * action at the right:
  * Username, Shown as (the local alias), Server, Devices and Teams, each
  * linking to where it is changed or managed. Bot accounts, Manage via web
  * and Organization sign-in stay reachable from a quieter line under the
@@ -402,35 +405,89 @@ export function PeopleScreen({
     setSheet(null);
   }, [selected?.id, setSheet]);
 
+  // The page's header is the account the page is about: its mark, its username
+  // as the title, and the server, the server's trust state and the local alias
+  // on the line under it. The branches that name no account — an address
+  // naming one this Mac no longer holds, or no account at all — have no
+  // identity to state, so they keep the tab's own name as the title.
+  const headerServer = selected
+    ? snapshot.servers.find((entry) => entry.id === selected.server)
+    : undefined;
+  const headerUsername = selected ? usernameOf(snapshot, selected) : undefined;
+  const identity = selected
+    ? {
+        title: headerUsername ?? 'Identity unavailable',
+        mark: (
+          <AccountMark name={headerUsername ?? selected.account} size="round" />
+        ),
+        sub: (
+          <>
+            {/* The trust state qualifies the server, so it reads on the same
+                run of text rather than as a chip of its own. */}
+            <span>
+              on {serverName(snapshot, selected)}
+              {headerServer?.trust.status === 'verified' ? ' · verified' : ''}
+            </span>
+            <Chip>{localAliasOf(snapshot, selected)}</Chip>
+            {stopped.stopped ? (
+              <Chip tone="warn">{storeDescription(snapshot, selected)}</Chip>
+            ) : null}
+          </>
+        ),
+      }
+    : undefined;
+
+  // The fallback band belongs above the facts of the account the page names.
+  // The branches that state no identity draw no facts either, so they keep it
+  // at the top of the page.
+  const notices = (
+    <UnroutedNotices
+      snapshot={snapshot}
+      onRefreshSnapshot={onRefreshSnapshot}
+      onError={onError}
+    />
+  );
+
   return (
     <>
       <PageHeader
         ruled
-        title="Account"
+        title={identity?.title ?? 'Account'}
+        mark={identity?.mark}
+        sub={identity?.sub}
         action={
-          <Button
-            onClick={() => {
-              setPairingProfile(undefined);
-              setSheet('go-profile');
-            }}
-          >
-            Connect from FOKS CLI…
-          </Button>
+          <>
+            <Button
+              onClick={() => {
+                setPairingProfile(undefined);
+                setSheet('go-profile');
+              }}
+            >
+              Connect from FOKS CLI…
+            </Button>
+            {selected ? (
+              <AccountHeader
+                compact
+                snapshot={snapshot}
+                location={location}
+                account={selected.id}
+                onNavigate={onNavigate}
+                onLock={onLock}
+              />
+            ) : null}
+          </>
         }
       />
       <div className="body">
-        <div className="settings-main">
-          <UnroutedNotices
-            snapshot={snapshot}
-            onRefreshSnapshot={onRefreshSnapshot}
-            onError={onError}
-          />
+        <div className="settings-main account-main">
           {snapshot.servers
             .filter((server) => server.accounts.length === 0)
             .map((server) => (
               <Inset key={server.id}>
+                {/* The server's name is the value, not the label: the label
+                    column is a fixed 88px and a hostname overran it. */}
                 <InsetRow
-                  label={serverDisplayName(server)}
+                  label="Server"
                   action={
                     <Button
                       onClick={() => {
@@ -442,31 +499,25 @@ export function PeopleScreen({
                     </Button>
                   }
                 >
-                  Connected, not yet paired
+                  {serverDisplayName(server)} · Connected, not yet paired
                 </InsetRow>
               </Inset>
             ))}
           {unavailable ? (
-            <UnavailableAccount
-              stores={stores}
-              snapshot={snapshot}
-              onSelect={(store) =>
-                onNavigate({ kind: 'people', store: store.id })
-              }
-              onRefresh={() => void onRefreshSnapshot().catch(onError)}
-            />
+            <>
+              {notices}
+              <UnavailableAccount
+                stores={stores}
+                snapshot={snapshot}
+                onSelect={(store) =>
+                  onNavigate({ kind: 'people', store: store.id })
+                }
+                onRefresh={() => void onRefreshSnapshot().catch(onError)}
+              />
+            </>
           ) : selected ? (
             <AccountPanel
-              accountSelector={
-                <AccountHeader
-                  compact
-                  snapshot={snapshot}
-                  location={location}
-                  account={selected.id}
-                  onNavigate={onNavigate}
-                  onLock={onLock}
-                />
-              }
+              notices={notices}
               snapshot={snapshot}
               store={selected}
               lists={lists}
@@ -477,9 +528,12 @@ export function PeopleScreen({
               onSheet={setSheet}
             />
           ) : (
-            <NoAvailableAccount
-              onConnectGoProfile={() => setSheet('go-profile')}
-            />
+            <>
+              {notices}
+              <NoAvailableAccount
+                onConnectGoProfile={() => setSheet('go-profile')}
+              />
+            </>
           )}
         </div>
       </div>
@@ -577,7 +631,7 @@ function AccountPanel({
   stopped,
   onNavigate,
   onSheet,
-  accountSelector,
+  notices,
 }: {
   snapshot: AgentSnapshot;
   store: AccountStore;
@@ -589,33 +643,18 @@ function AccountPanel({
   stopped: { stopped: boolean; reason: string };
   onNavigate: (location: Location) => void;
   onSheet: (sheet: AccountSheet) => void;
-  accountSelector: ReactNode;
+  /** The notices no tab can resolve, drawn above the facts they qualify. */
+  notices: ReactNode;
 }): ReactNode {
   const username = usernameOf(snapshot, store);
   const reason = stopped.stopped ? stopped.reason : undefined;
   const deviceCount = deviceEntries(lists).length;
   const teams = teamsOnAccount(snapshot, store);
   const server = snapshot.servers.find((entry) => entry.id === store.server);
+  // The account this page is about is named by the page's own header, so the
+  // body opens on the facts rather than stating the identity a second time.
   return (
     <>
-      {/* The profile head: the account's mark, the four facts that name it,
-          and the button that switches to another account. */}
-      <div className="phead">
-        <AccountMark name={username ?? store.account} size="big" />
-        <span className="t">
-          <h2>{username ?? 'Identity unavailable'}</h2>
-          {/* The alias and the availability qualify the server line, so they
-              sit on it rather than at the far end of the band. */}
-          <span className="line">
-            <small>on {serverName(snapshot, store)}</small>
-            <Chip>{localAliasOf(snapshot, store)}</Chip>
-            {stopped.stopped ? (
-              <Chip tone="warn">{storeDescription(snapshot, store)}</Chip>
-            ) : null}
-          </span>
-        </span>
-        {accountSelector}
-      </div>
       {stopped.stopped ? (
         <Band
           severity="crit"
@@ -639,6 +678,7 @@ function AccountPanel({
           {serverName(snapshot, store)} is checked.
         </Band>
       ) : null}
+      {notices}
       <Inset className="settings-inset wide">
         <InsetRow
           label="Username"
@@ -730,8 +770,7 @@ function AccountPanel({
           {teams.length ? teams.map((team) => team.name).join(', ') : 'None'}
         </InsetRow>
       </Inset>
-      <p className="fn">
-        More:{' '}
+      <div className="fn account-more">
         <Button
           variant="plain"
           size="sm"
@@ -740,7 +779,6 @@ function AccountPanel({
         >
           Bot accounts
         </Button>
-        {' · '}
         <Button
           variant="plain"
           size="sm"
@@ -749,7 +787,6 @@ function AccountPanel({
         >
           Manage via web
         </Button>
-        {' · '}
         <Button
           variant="plain"
           size="sm"
@@ -758,7 +795,7 @@ function AccountPanel({
         >
           Organization sign-in
         </Button>
-      </p>
+      </div>
     </>
   );
 }

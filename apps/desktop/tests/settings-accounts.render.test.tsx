@@ -387,8 +387,8 @@ test('the switcher lists every account and switching navigates by StoreRef', asy
 
   const trigger = rendered.getByRole('button', { name: 'Switch account' });
   assert.ok(
-    trigger.closest('.phead'),
-    'the switcher sits beside the account header',
+    trigger.closest('.path .header-action'),
+    'the switcher sits in the page header, beside the page’s own action',
   );
   await ui.act(async () => ui.fireEvent.click(trigger));
   const menu = rendered.getByRole('menu', { name: 'Accounts on this device' });
@@ -475,6 +475,18 @@ test('a team note with the same alias on two profiles routes to neither', async 
   assert.equal(rendered.queryByRole('button', { name: 'Open Homelab' }), null);
   const list = rendered.getByRole('region', { name: /^Needs attention/ });
   assert.ok(ui.within(list).getByText('Resume creation'));
+  // The band qualifies this account's facts, so it sits directly above them
+  // rather than ahead of the account the page names.
+  const section = list.closest('.people-attention');
+  assert.ok(section, 'the notes are drawn in the page’s notice section');
+  assert.ok(
+    section.closest('.account-main'),
+    'the section is in the page body, under the header that names the account',
+  );
+  assert.ok(
+    section.nextElementSibling?.classList.contains('settings-inset'),
+    'the section precedes the facts',
+  );
 });
 
 test('a fed- note admitted by two hosts routes to neither', async () => {

@@ -345,7 +345,8 @@ test('Accounts, Devices and Settings draw no StoreRef', async () => {
     ].join(' ');
 
   for (const [name, heading, settled] of [
-    ['Account', 'Account', 'Switch account'],
+    // Account's header names the account it is about, not the tab.
+    ['Account', 'satoshi', 'Switch account'],
     ['Devices', 'Devices', 'paper-backup'],
     // Settings' sub-navigation opens on Servers, its landing page.
     ['Settings', 'Servers', 'foks.example.net'],

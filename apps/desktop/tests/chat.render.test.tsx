@@ -200,6 +200,12 @@ test('the composer exposes only supported actions', async () => {
 
 test('renders channel descriptions, message times, and bounded inbox previews', async () => {
   await setup();
+  // The header's subtitle is the member count alone; the description is in the
+  // channel info panel, which is where the header's Channel info button opens.
+  await ui.waitFor(() =>
+    assert.ok(document.querySelector('.chat-member-count')?.textContent),
+  );
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Channel info' }));
   await ui.screen.findByText('A place for the whole team.');
   assert.ok(
     ui.screen.getByText('Team member: Team chat is ready.', { exact: true }),

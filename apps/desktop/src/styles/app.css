@@ -383,12 +383,12 @@ body {
 
 .roster-actions {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: 12px;
   margin-top: 14px;
 }
 
-/* A tab's footnote is a line of quiet text, under the content or, in an
-   action row, beside the button it explains. */
+/* Roster footnote */
 .roster p.fn {
   font-size: 12.5px;
   color: var(--muted);
@@ -538,6 +538,13 @@ body {
   margin: 2px 0 0;
 }
 
+/* Account tool links */
+.settings-main .account-more {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .group-settings p.fn,
 .settings-main p.fn,
 .settings-main .fn {
@@ -545,6 +552,25 @@ body {
   color: var(--muted);
   margin: 8px 2px 0;
   line-height: 1.5;
+}
+
+/* Account page block spacing */
+.settings-main.account-main > * + * {
+  margin-top: 18px;
+}
+
+/* Top block margin */
+.settings-main.account-main > :first-child {
+  margin-top: 10px;
+}
+
+/* Attention band spacing */
+.account-main > .people-attention > .band {
+  margin: 0;
+}
+
+.account-main > .people-attention > .band + .band {
+  margin-top: 6px;
 }
 
 .inset.danger {
@@ -653,57 +679,7 @@ body {
   padding-bottom: 24px;
 }
 
-.setup-side {
-  display: flex;
-  flex-direction: column;
-}
-
-.setup-steps {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 0 8px;
-}
-
-.setup-step {
-  display: flex;
-  gap: 9px;
-  align-items: flex-start;
-  padding: 8px;
-  border-radius: 8px;
-  text-align: left;
-}
-
-.setup-step.on {
-  background: var(--selected);
-}
-
-.setup-step .t {
-  flex: 1;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 600;
-  transform: translateY(1px);
-}
-
-.setup-mark {
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  flex: none;
-  border: 1px solid var(--line-field);
-  border-radius: 50%;
-  font-size: 12px;
-  line-height: 1;
-}
-
-.setup-step.done .setup-mark,
-.setup-step.on .setup-mark {
-  background: var(--ok-solid);
-  border-color: var(--ok-solid);
-  color: var(--main-surface);
-}
+/* Setup rail */
 
 .local-server-card {
   padding: 18px 20px;
@@ -1085,6 +1061,12 @@ body {
   align-items: center;
   flex-wrap: wrap;
   font-size: 14px;
+  line-height: 1.3;
+}
+
+/* Card header layout */
+.pcard h3 + p {
+  margin-top: -4px;
 }
 
 .pcard.ok {

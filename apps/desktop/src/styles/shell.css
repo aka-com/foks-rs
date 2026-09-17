@@ -47,9 +47,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .badge,.nav .badge{font-size:12px;font-weight:600;color:var(--amber-ink);background:var(--amber-wash);padding:0 7px;border-radius:var(--radius-pill);line-height:19px;display:inline-block}
 .side .fn{font-size:12px;color:var(--faint);line-height:1.25;margin:0 0 10px;padding:1px 10px 4px}
 .side .fn code{font:12px var(--mono)}
-/* `.side-bottom` wraps the status slot and the footer, so a status node sits
-   directly above the footer. The setup sidebar has no wrapper and anchors its
-   own `.foot`. */
+/* Sidebar footer container */
 .side .side-bottom,.side>.foot{margin-top:auto}
 .side .foot{padding-top:10px;border-top:1px solid var(--line-soft)}
 .side .foot .nav{font-size:13px}
@@ -77,23 +75,13 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
   .side,.side h6,.side .nav .t,.side .nav .t small{transition:none}
 }
 
-/* ---------- the navigation rail ----------
-   `.side.rail` is the six-tab rail: the window's drag strip, the account
-   header, the tabs, and the agent light at the foot. There is no title bar
-   above it. First run replaces it with its own step list, which is `.side`
-   alone, so every blue rule below is scoped to `.rail` and the collapse
-   machinery above is shared. The rail is 200px open and 46px collapsed, and it
-   never expands on hover: the width is the one the rail's toggle chose. */
-.app:has(>.side.rail){--side-w-open:200px}
-.side.rail{--rail-badge:var(--unread);background:var(--rail);border-right-color:rgba(0,0,0,.12);color:var(--rail-ink);padding:0;overflow-x:hidden;overflow-y:auto;user-select:none}
+/* Navigation rail */
+.window:has(>.app>.side.rail){--side-w-open:200px}
 /* Window drag strip */
+.side.rail{background:var(--rail);border-right-color:rgba(0,0,0,.12);color:var(--rail-ink);padding:0;overflow-x:hidden;overflow-y:auto;user-select:none}
 .traffic{flex:none;display:flex;align-items:center;min-height:32px;padding:14px 14px 6px}
 .traffic .lights{display:flex;gap:8px}
 .traffic .light{width:12px;height:12px;border-radius:50%;background:rgba(255,255,255,.35)}
-/* First run's step list is the pale sidebar, and it bleeds the strip out to
-   the pane's own edges rather than sitting inside its padding. */
-.side:not(.rail) .traffic{margin:-12px calc(var(--side-pad) * -1) 0}
-.side:not(.rail) .traffic .light{background:rgba(0,0,0,.12)}
 .side.rail .nav{color:var(--rail-ink);border-radius:0;border-left:3px solid transparent;padding:11px 18px;gap:14px;font-size:14px;font-weight:500}
 .side.rail .nav:hover{background:rgba(255,255,255,.08);color:#fff}
 .side.rail .nav.on{background:var(--rail-active);border-left-color:#fff;color:#fff;font-weight:600}
@@ -106,6 +94,21 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side.rail .nav .tabdot{margin-left:auto;width:8px;height:8px;border-radius:50%;background:var(--rail-badge);flex:none}
 .side.rail .nav .tabdot.warn{background:var(--warning-dot)}
 .side.rail .rail-tabs{display:flex;flex-direction:column;padding:10px 0}
+/* Setup step rail */
+.side.rail.setup-side{width:var(--side-w-open)}
+.side.rail .setup-steps{display:flex;flex-direction:column;padding:10px 0}
+/* Step items */
+.side.rail .setup-step{cursor:default;align-items:center;white-space:normal}
+.side.rail .setup-step .t{font-size:inherit;font-weight:inherit;transform:none;white-space:normal;overflow:visible;line-height:1.25}
+.side.rail .setup-step:hover{background:none;color:var(--rail-ink)}
+.side.rail .setup-step.on:hover{background:var(--rail-active);color:#fff}
+.side.rail .setup-step.done{color:rgba(255,255,255,.82)}
+.side.rail .setup-step:not(.on):not(.done){color:rgba(255,255,255,.62)}
+/* Step mark */
+.side.rail .setup-mark{width:20px;height:20px;flex:none;display:grid;place-items:center;border:1.5px solid rgba(255,255,255,.55);border-radius:50%;background:none;color:#fff;font-size:12px;font-weight:700;line-height:1}
+.side.rail .setup-step:not(.on):not(.done) .setup-mark{border-color:rgba(255,255,255,.4);color:rgba(255,255,255,.75)}
+.side.rail .setup-step.done .setup-mark,.side.rail .setup-step.on .setup-mark{background:#fff;border-color:#fff;color:var(--rail)}
+.side.rail .setup-mark .ic{width:12px;height:12px;font-size:12px;stroke-width:2.6}
 /* The header and the tabs, dimmed together while a blocking state owns the
    window: the frame is drawn, and none of it acts. */
 .side.rail .rail-body.is-blocked{opacity:.45;pointer-events:none}
@@ -224,6 +227,10 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .loc{display:flex;align-items:center;gap:9px;min-width:0;flex:1 1 auto}
 .loc-copy{min-width:0;flex:1 1 auto;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .loc h1{display:inline;font-size:20px;font-weight:700;letter-spacing:-.01em}
+/* Subtitle layout */
+.loc-copy:has(>.sub)>h1{display:block;line-height:1.15}
+.loc-copy .sub{display:flex;align-items:center;gap:8px;min-width:0;font-size:13px;line-height:1.3;color:var(--muted)}
+.loc-copy .sub>span{overflow:hidden;text-overflow:ellipsis}
 .loc small{display:inline;font-size:13px;color:var(--muted);margin-left:9px}
 .loc .btn{height:28px;font-size:13px;flex:none}
 .search{position:relative;width:230px;flex:0 6 230px;min-width:124px}
@@ -338,15 +345,13 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .notice.info .who{color:var(--muted)}
 .notice.stop{border-color:var(--danger-border);background:var(--danger-wash)}
 .notice.stop .who{color:var(--danger-ink)}
-/* The icon, the text and the action are one line of three parts: when the text
-   wraps the icon and the text centre against the button rather than the button
-   floating beside a first line the icon has already left behind. */
+/* Notice band */
 .band{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:var(--radius-md);background:var(--amber-wash);border:1px solid var(--amber-border);color:var(--amber-ink);font-size:12.5px;line-height:1.45}
 /* Band heading */
 .band b,.band h2{display:inline;font-size:inherit;font-weight:700;white-space:nowrap}
 /* Screen reader only */
 .offscreen{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-.band .ic{flex:none;margin-top:1px}
+.band .ic{flex:none}
 .band.stop{background:var(--danger-wash);border-color:var(--danger-border);color:var(--danger-text)}
 .band.stop b,.band.stop h2{color:var(--danger-ink);white-space:normal}
 .band.ok{background:var(--ok-wash);border-color:var(--ok-border);color:var(--ok-ink)}
@@ -418,8 +423,16 @@ details.dd li b{color:var(--ink-2)}
 .folder-split{flex:1;min-height:0;display:grid;grid-template-columns:236px minmax(0,1fr)}
 .tpane{border-right:1px solid var(--line-soft);background:var(--main-surface);overflow:auto;padding:4px 6px 8px}
 .tpane h6{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);padding:4px 8px}
-.tpane .fn{position:relative;width:100%;height:30px;border-radius:7px;font-size:13px;font-weight:500;color:var(--ink-2)}
-.tpane .fn .fselect{display:flex;align-items:center;gap:6px;width:100%;height:30px;padding:0 8px 0 calc(28px + var(--d,0) * 18px);border-radius:7px;color:inherit;text-align:left}
+/* Every tree row shares one geometry, as the rail's rows do: 4px of edge, an
+   18px twist gutter, a 6px gap, then the icon. The gutter is in flow and
+   reserved whether or not the folder has children, so every icon starts on the
+   same 28px baseline; a row without a twist pays the same 24px inside its own
+   button instead, which keeps the whole row clickable. Depth indents the row
+   itself by one gutter per level, so a child's twist sits under its parent's
+   icon and the hover and selected fills still span the column's full width. */
+.tpane .fn{display:flex;align-items:center;width:100%;height:30px;padding-left:calc(4px + var(--d,0) * 18px);border-radius:7px;font-size:13px;font-weight:500;color:var(--ink-2)}
+.tpane .fn .fselect{display:flex;align-items:center;gap:6px;flex:1;min-width:0;height:30px;padding:0 8px 0 6px;border-radius:7px;color:inherit;text-align:left}
+.tpane .fn:not(:has(>.twist)) .fselect{padding-left:24px}
 .tpane .fn:hover{background:var(--hover)}
 .tpane .fn.on{background:var(--accent-wash-2);color:var(--accent-ink)}
 .tpane .fn .fselect>.ic{font-size:15px;color:#b45309}
@@ -428,7 +441,8 @@ details.dd li b{color:var(--ink-2)}
 .tpane .fn .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tpane .fn .c{font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
 .tpane .fn.on .c{color:var(--accent-ink);opacity:.8}
-.twist{position:absolute;z-index:1;top:6px;left:calc(6px + var(--d,0) * 18px);width:18px;height:18px;display:grid;place-items:center;color:var(--faint);border-radius:4px;font-size:13px;transform:rotate(-90deg);transition:transform .12s ease}
+/* Twist toggle */
+.twist{flex:none;width:18px;height:18px;display:grid;place-items:center;color:var(--faint);border-radius:4px;font-size:13px;transform:rotate(-90deg);transition:transform .12s ease}
 .twist.open{transform:none}
 .twist:hover{background:rgba(0,0,0,.08);color:var(--ink)}
 .lpane{min-width:0;display:flex;flex-direction:column}
@@ -436,7 +450,9 @@ details.dd li b{color:var(--ink-2)}
 .crumbs{display:flex;align-items:center;gap:2px;font-size:13px;min-width:0}
 .crumbs button{padding:2px 7px;border-radius:6px;color:var(--muted);font-weight:500}
 .crumbs button:hover{background:var(--hover);color:var(--ink)}
-.crumbs .cur{padding:2px 7px;font-weight:600;color:var(--ink)}
+/* Active page title crumb */
+.crumbs h1.cur{padding:0;color:var(--ink);white-space:nowrap}
+.crumbs>button:first-child{margin-left:-7px}
 .crumbs .sep{display:inline-grid;place-items:center;color:var(--faint);font-size:12px;transform:rotate(-90deg)}
 .row.folder .cnt{font-size:12px;font-weight:400;color:var(--muted);margin-left:4px}
 .kic.Folder{background:rgba(245,158,11,.14);color:#b45309}
@@ -734,7 +750,6 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 /* Collapsed rail nav overrides */
 .side.rail.is-narrow .nav{justify-content:center;padding-left:0;padding-right:0;gap:0;border-right:3px solid transparent}
 .side.rail.is-narrow .attn{left:32px}
-.phead>.t{flex:1}
 .account-switch{flex:none}
 .side.rail.is-narrow .who .avatar{transform:translateY(2px)}
 .side.rail .traffic{position:relative}

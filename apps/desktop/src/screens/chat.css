@@ -280,10 +280,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* A hidden conversation keeps its channel in the column and says it is hidden
-   (`presentation.ts`); it is drawn dimmed so the caption and the look agree. */
+/* Hidden or muted conversations shown in the column as dimmed rows. */
 .chat-conv.hidden .t,
-.chat-channel.hidden .t {
+.chat-channel.hidden .t,
+.chat-conv.muted .t,
+.chat-channel.muted .t {
   opacity: 0.6;
 }
 .chat-channel .lock {

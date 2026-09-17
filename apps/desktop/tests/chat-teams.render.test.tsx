@@ -963,6 +963,10 @@ test('muted and hidden conversations stay listed and say what they are', async (
   const choresBadge = chores.querySelector('.chat-unread');
   assert.equal(choresBadge?.textContent, '3');
   assert.ok(choresBadge?.classList.contains('muted'));
+  // The row is dimmed the way a hidden one is, so the caption and the look
+  // agree rather than only the badge being quiet.
+  assert.ok(chores.classList.contains('muted'));
+  assert.ok(channelRow('#archive').classList.contains('hidden'));
   assert.equal(
     channelRow('#archive').querySelector('small:not(.chat-row-identity)')
       ?.textContent,
@@ -981,6 +985,7 @@ test('muted and hidden conversations stay listed and say what they are', async (
   assert.equal(badge?.textContent, '2');
   assert.equal(badge?.getAttribute('aria-label'), '2 unread');
   assert.ok(badge?.classList.contains('muted'));
+  assert.ok(engineering.classList.contains('muted'));
 });
 
 test('a conversation opened into a heading team marks the channel row it mounts', async () => {
@@ -1112,7 +1117,9 @@ test('an interrupted attempt recovers the same preparation rather than a second'
     name: 'Retry channel creation',
   });
   await ui.screen.findByText('The reply was lost.');
-  await ui.screen.findByText(/Select Retry to resend the request without creating a duplicate/);
+  await ui.screen.findByText(
+    /Select Retry to resend the request without creating a duplicate/,
+  );
   ui.fireEvent.click(recover);
   await ui.screen.findByRole('button', { name: /#design/ });
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
@@ -1786,8 +1793,8 @@ test('the header omits the member count while the open team’s roster has not a
       /Engineering/,
     ),
   );
-  // The rest of the subtitle line is unaffected — only the count is missing,
-  // not shown as a false zero.
-  assert.ok(document.querySelector('.chat-access')?.textContent);
+  // The count is the whole subtitle, so a roster that has not arrived leaves
+  // the line empty rather than showing a false zero.
   assert.equal(document.querySelector('.chat-member-count'), null);
+  assert.equal(document.querySelector('.chat-thread-title p')?.textContent, '');
 });

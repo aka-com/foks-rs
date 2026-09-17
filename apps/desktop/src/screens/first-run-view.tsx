@@ -12,7 +12,8 @@ import type { AgentSnapshot, RoleWire } from '../model';
 import { kindOf, plural, parseRole, formatRole } from '../model';
 import type { FilterKind } from '../components';
 import type { Location } from '../location';
-import { NavRow, Sidebar, TrafficStrip } from '../shell/sidebar';
+import { AgentLight, NavRow, Sidebar, TrafficStrip } from '../shell/sidebar';
+import type { RailAgentState } from '../shell/sidebar';
 import { PageHeader } from '../shell/page-header';
 import {
   completedFirstRunSteps,
@@ -64,6 +65,7 @@ export function SetupSidebar({
   onAnotherServer,
   onRecoverAccount,
   recoverEnabled = false,
+  agent = 'ready',
 }: {
   checkpoint: FirstRunCheckpoint;
   /** The OS draws the window controls over the step list's own drag strip. */
@@ -78,6 +80,8 @@ export function SetupSidebar({
   onAnotherServer?: () => void;
   onRecoverAccount?: () => void;
   recoverEnabled?: boolean;
+  /** Connection status displayed in the rail footer. */
+  agent?: RailAgentState;
 }): ReactNode {
   const restart = onRestart ? (
     <button
@@ -95,61 +99,62 @@ export function SetupSidebar({
     const current = localStepOf(checkpoint.state);
     const labels = ['Local server', 'Create account', 'Account recovery'];
     return (
-      <nav className="side setup-side" aria-label="Setup steps">
+      <nav className="side rail setup-side" aria-label="Setup steps">
         <TrafficStrip native={native} />
         <div className="setup-steps">
           {labels.map((label, index) => (
             <div
               key={label}
-              className={`setup-step${index === current ? ' on' : ''}${index < current ? ' done' : ''}`}
+              className={`nav setup-step${index === current ? ' on' : ''}${index < current ? ' done' : ''}`}
               aria-current={index === current ? 'step' : undefined}
             >
               <span className="setup-mark" aria-hidden="true">
-                {index < current ? '✓' : index + 1}
+                {index < current ? <Icon name="check" /> : index + 1}
               </span>
               <span className="t">{label}</span>
             </div>
           ))}
         </div>
-        {onAnotherServer || onRecoverAccount || onCancel ? (
+        <div className="side-bottom">
+          {onAnotherServer ? (
+            <button type="button" className="nav" onClick={onAnotherServer}>
+              <Icon name="server" />
+              <span className="t">Connect to another server</span>
+            </button>
+          ) : null}
+          {onRecoverAccount ? (
+            <button
+              type="button"
+              className="nav"
+              disabled={!recoverEnabled}
+              onClick={onRecoverAccount}
+            >
+              <Icon name="person" />
+              <span className="t">Recover account</span>
+            </button>
+          ) : null}
+          {restart}
+          {onCancel ? (
+            <button
+              type="button"
+              className="nav"
+              disabled={cancelDisabled}
+              onClick={onCancel}
+            >
+              <Icon name="x" />
+              <span className="t">
+                {checkpoint.account ||
+                checkpoint.provisionedAccount ||
+                checkpoint.provisioning
+                  ? 'Finish later'
+                  : 'Leave setup'}
+              </span>
+            </button>
+          ) : null}
           <div className="foot">
-            {onAnotherServer ? (
-              <button type="button" className="nav" onClick={onAnotherServer}>
-                <Icon name="server" />
-                <span className="t">Connect to another server</span>
-              </button>
-            ) : null}
-            {onRecoverAccount ? (
-              <button
-                type="button"
-                className="nav"
-                disabled={!recoverEnabled}
-                onClick={onRecoverAccount}
-              >
-                <Icon name="person" />
-                <span className="t">Recover account</span>
-              </button>
-            ) : null}
-            {restart}
-            {onCancel ? (
-              <button
-                type="button"
-                className="nav"
-                disabled={cancelDisabled}
-                onClick={onCancel}
-              >
-                <Icon name="x" />
-                <span className="t">
-                  {checkpoint.account ||
-                  checkpoint.provisionedAccount ||
-                  checkpoint.provisioning
-                    ? 'Finish later'
-                    : 'Leave setup'}
-                </span>
-              </button>
-            ) : null}
+            <AgentLight state={agent} />
           </div>
-        ) : null}
+        </div>
       </nav>
     );
   }
@@ -166,42 +171,47 @@ export function SetupSidebar({
     'Complete',
   ];
   return (
-    <nav className="side setup-side" aria-label="Setup steps">
+    <nav className="side rail setup-side" aria-label="Setup steps">
       <TrafficStrip native={native} />
       <div className="setup-steps">
         {labels.map((label, index) => (
           <div
             key={label}
-            className={`setup-step${index === current ? ' on' : ''}${index < current ? ' done' : ''}`}
+            className={`nav setup-step${index === current ? ' on' : ''}${index < current ? ' done' : ''}`}
             aria-current={index === current ? 'step' : undefined}
           >
             <span className="setup-mark">
-              {index < current ? '✓' : index + 1}
+              {index < current ? <Icon name="check" /> : index + 1}
             </span>
             <span className="t">{label}</span>
           </div>
         ))}
       </div>
-      {onCancel ? (
+      <div className="side-bottom">
+        {onCancel ? (
+          <>
+            {restart}
+            <button
+              type="button"
+              className="nav"
+              disabled={cancelDisabled}
+              onClick={onCancel}
+            >
+              <Icon name="x" />
+              <span className="t">
+                {checkpoint.account ||
+                checkpoint.provisionedAccount ||
+                checkpoint.provisioning
+                  ? 'Finish later'
+                  : 'Leave setup'}
+              </span>
+            </button>
+          </>
+        ) : null}
         <div className="foot">
-          {restart}
-          <button
-            type="button"
-            className="nav"
-            disabled={cancelDisabled}
-            onClick={onCancel}
-          >
-            <Icon name="x" />
-            <span className="t">
-              {checkpoint.account ||
-              checkpoint.provisionedAccount ||
-              checkpoint.provisioning
-                ? 'Finish later'
-                : 'Leave setup'}
-            </span>
-          </button>
+          <AgentLight state={agent} />
         </div>
-      ) : null}
+      </div>
     </nav>
   );
 }
@@ -219,7 +229,9 @@ export function FirstRunChecklistStatus({
   const total = firstRunStepCount(checkpoint);
   // Completed setup leaves no checklist row in the rail.
   if (completed >= total) return null;
-  const name = checkpoint.account ? 'Setup checklist' : 'Continue setup';
+  // One row, one name: the row reads the same before and after an account
+  // exists.
+  const name = 'Continue setup';
   return (
     <>
       <NavRow
@@ -247,6 +259,10 @@ export function FirstRunAppSidebar({
   native,
   onNavigate,
   onReenter,
+  collapsed = false,
+  onToggleCollapsed,
+  agent = 'ready',
+  devicesAlert = null,
 }: {
   snapshot: AgentSnapshot;
   native: boolean;
@@ -255,6 +271,12 @@ export function FirstRunAppSidebar({
   location: Location;
   onNavigate: (location: Location) => void;
   onReenter: () => void;
+  /** The rail's own width, carried across first run as on every other screen. */
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
+  agent?: RailAgentState;
+  /** The Devices tab's dot, as the shell computes it elsewhere. */
+  devicesAlert?: { description: string } | null;
 }): ReactNode {
   // Render setup progress in the sidebar status slot.
   const status = (
@@ -277,10 +299,23 @@ export function FirstRunAppSidebar({
       snapshot={snapshot}
       location={location}
       attention={checkpoint.path === 'invited' && !checkpoint.added ? 1 : 0}
+      // A skipped recovery step is the same fact the Devices dot reports
+      // everywhere else — an account with no backup — and the registry the
+      // shell reads has not been filled during setup, so the checkpoint
+      // answers for it here.
+      devicesAlert={
+        devicesAlert ??
+        (checkpoint.protectSkipped
+          ? { description: 'An account has no paper key' }
+          : null)
+      }
       nativeChrome={native}
       onNavigate={onNavigate}
       status={status}
       onReenter={onReenter}
+      collapsed={collapsed}
+      onToggleCollapsed={onToggleCollapsed}
+      agent={agent}
     />
   );
 }

@@ -161,7 +161,11 @@ export function railAgentState(
   }
 }
 
-function AgentLight({ state }: { state: RailAgentState }): ReactNode {
+/**
+ * The light itself. Exported because first run's step list is the same rail
+ * and closes with the same row.
+ */
+export function AgentLight({ state }: { state: RailAgentState }): ReactNode {
   const label = AGENT_LABEL[state];
   return (
     <div className={`status agent-${state}`} title={label}>
@@ -503,7 +507,7 @@ export function AccountHeader({
                   })}
               </div>
             ))}
-            <div className="menu-separator" />
+            <div className="menu-separator" role="separator" />
             <button
               type="button"
               onClick={() => {

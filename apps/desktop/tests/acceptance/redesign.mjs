@@ -73,8 +73,9 @@ try {
     };
     try {
       await page.goto(`${site.origin}/?state=people`);
+      // The Account tab's header states the account, not the tab's own name.
       await page
-        .getByRole('heading', { name: 'Account', exact: true })
+        .getByRole('heading', { name: 'satoshi', exact: true })
         .waitFor();
       await activate(page.locator('.rail .who'));
       await activate(
@@ -109,9 +110,13 @@ try {
       );
       await page.locator('.ghero', { hasText: 'Household' }).waitFor();
       assert.match(await page.locator('.rail .who').innerText(), /satoshi/);
-      // Invitations and requests is the team page's own Requests tab now,
-      // not a toggle button.
+      // The Requests tab is the team page's own list of pending decisions.
+      // Issuing an invitation is an add action, so its form is reached from
+      // the third choice on Add people, which opens the panel as a sheet.
       await activate(page.getByRole('tab', { name: /^Requests/ }));
+      await page.getByRole('region', { name: 'Membership requests' }).waitFor();
+      await activate(page.getByRole('button', { name: 'Add people' }));
+      await activate(page.getByRole('menuitem', { name: /^By invitation/ }));
       const invitations = page.getByRole('region', {
         name: 'Team invitations and requests',
       });
@@ -155,6 +160,9 @@ try {
       );
       assert.equal(await invitations.locator('article').count(), 0);
       await shot('invitations');
+      await activate(
+        invitations.getByRole('button', { name: 'Close', exact: true }),
+      );
 
       await activate(page.getByRole('tab', { name: /^Channels/ }));
       await activate(

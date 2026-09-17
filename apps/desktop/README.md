@@ -212,7 +212,9 @@ other.
 
 Phase 3 adds `create_text_item`, `create_link`, `edit_text_item`,
 `remove_item`, dropped/native-picker file import and exact-version file
-replacement, and `resume_group_creation`. Rust-originated drop events contain
+replacement, `resume_group_creation` and `abandon_group_creation`, the local
+forgetting of a group whose creation can no longer be finished. Rust-originated
+drop events contain
 paths only; file bytes never cross into the renderer. The shell polls
 `take_agent_connection_loss`; Retry calls `retry_agent_connection` and then
 reloads the catalog, never replaying the interrupted write.

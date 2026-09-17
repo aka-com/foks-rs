@@ -11,12 +11,7 @@ import { useChatReadIntent } from './use-chat-read-intent';
 import { useChatViewport } from './use-chat-viewport';
 import { useChatHistory } from './use-chat-history';
 import { PendingRow } from './pending-row';
-import {
-  channelTitle,
-  accessSummary,
-  messageDate,
-  messageTime,
-} from './presentation';
+import { channelTitle, messageDate, messageTime } from './presentation';
 export function ChatThread({
   channel,
   teamName,
@@ -142,18 +137,17 @@ export function ChatThread({
             )}
             <span className="chan">{title}</span>
           </h2>
+          {/* Who is here, and nothing else: the channel's description and its
+              access line are both in the info panel, which draws the
+              description under "Description" and the access under "Who can
+              take part". A channel whose roster has not arrived has no count,
+              and the line is empty rather than shortened. */}
           <p>
-            {channel.description && <span>{channel.description}</span>}
-            {channel.description ? ' · ' : ''}
             {memberCount !== undefined && (
-              <>
-                <span className="chat-member-count">
-                  {plural(memberCount, 'member')}
-                </span>
-                {' · '}
-              </>
+              <span className="chat-member-count">
+                {plural(memberCount, 'member')}
+              </span>
             )}
-            <span className="chat-access">{accessSummary(channel)}</span>
           </p>
         </div>
         {channel.admin && <Chip>Admins</Chip>}

@@ -99,6 +99,7 @@ import {
   type FirstRunOperation,
 } from '../first-run-failure';
 import type { FoksIconName } from '../icons';
+import type { RailAgentState } from '../shell/sidebar';
 import type { Location } from '../location';
 import { kindOf, storeReadable } from '../model';
 import type { AgentSnapshot } from '../model';
@@ -387,6 +388,13 @@ export interface FirstRunExperienceProps {
   onAgentReadinessFailure?: (error: CommandError) => void;
   automaticEntry?: boolean;
   managedProfile?: string;
+  /** Connection status indicator in the sidebar footer during first-run setup. */
+  agent?: RailAgentState;
+  /** The rail's width, carried in and out of setup. */
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
+  /** The Devices tab's dot, as the shell computes it for every other screen. */
+  devicesAlert?: { description: string } | null;
 }
 
 /**
@@ -449,6 +457,10 @@ function FirstRunSession({
   onAgentReadinessFailure,
   automaticEntry = false,
   managedProfile,
+  agent = 'ready',
+  collapsed = false,
+  onToggleCollapsed,
+  devicesAlert = null,
   onReplaceSession,
   sessionEntry,
 }: FirstRunExperienceProps & {
@@ -3802,11 +3814,16 @@ function FirstRunSession({
           location={location}
           onNavigate={onNavigate}
           onReenter={reenterSetup}
+          collapsed={collapsed}
+          onToggleCollapsed={onToggleCollapsed}
+          agent={agent}
+          devicesAlert={devicesAlert}
         />
       ) : (
         <SetupSidebar
           checkpoint={checkpoint}
           native={Boolean(bridge.native)}
+          agent={agent}
           pendingPath={pendingPath}
           onAnotherServer={
             !busy &&

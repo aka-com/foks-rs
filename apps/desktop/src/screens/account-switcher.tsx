@@ -23,8 +23,11 @@ export function AccountMark({
 }: {
   /** The username, or the local alias when the catalog has no username. */
   name: string;
-  /** `sm` is the switcher's 26px mark; `big` the account band's. */
-  size?: 'sm' | 'md' | 'big';
+  /**
+   * `sm` is the switcher's 26px mark, `round` the Account header's 30px circle,
+   * `big` the 48px one a card draws.
+   */
+  size?: 'sm' | 'md' | 'round' | 'big';
 }): ReactNode {
   return (
     <span

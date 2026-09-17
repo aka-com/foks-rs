@@ -60,11 +60,11 @@ function noChannelsReason(
   store: TeamStore,
 ): string | undefined {
   if (store.team_kind !== 'named')
-    return 'An ad-hoc share has no chat: chat lives in a named team.';
+    return 'Chat is only available in teams, not shared folders.';
   const server = serverOf(snapshot, store.id);
   if (!server) return 'This team’s server is not configured on this device.';
   if (!server.capabilities.chat)
-    return `${serverDisplayName(server)} does not offer chat, so this team has no channels.`;
+    return `Chat is not enabled on ${serverDisplayName(server)}.`;
   return undefined;
 }
 
@@ -128,7 +128,7 @@ export function ChannelsTab({
       <div className="roster">
         <Band label={copy?.title ?? 'Channels unavailable'}>
           {copy?.detail ??
-            `${store.name}’s channels cannot be read until access to ${serverName} is restored.`}
+            `Channels in ${store.name} are unavailable until access to ${serverName} is restored.`}
         </Band>
       </div>
     );
@@ -142,7 +142,7 @@ export function ChannelsTab({
     return (
       <div className="roster">
         <Band label="Channels unavailable">
-          {entry.error || 'This team’s channel list could not be read.'}
+          {entry.error || 'Could not load this team’s channels.'}
         </Band>
       </div>
     );
@@ -302,7 +302,7 @@ export function FilesTab({
             <Icon name="folder" />
           </span>
           <span className="t">
-            <b>{store.name}’s items live in Files</b>
+            <b>View {store.name}’s items in Files</b>
             <small>
               {items ? plural(items, 'item') : 'No items yet'} — the passwords
               and documents shared with this team. Permissions set here control
