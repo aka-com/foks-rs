@@ -24,7 +24,7 @@ test.before(async () => {
 test.afterEach(() => ui.cleanup());
 test.after(async () => vite.close());
 
-test('Accounts and Devices share metadata across navigation; Refresh reloads it and card presence stays live', async () => {
+test('Account and Devices share metadata across navigation; Refresh reloads it and card presence stays live', async () => {
   const { App } = (await vite.ssrLoadModule(
     '/src/app-root.tsx',
   )) as typeof import('../src/app-root');
@@ -79,7 +79,7 @@ test('Accounts and Devices share metadata across navigation; Refresh reloads it 
   await ui.act(async () => {
     releaseCard([]);
   });
-  await navigate('Accounts');
+  await navigate('Account');
   await navigate('Devices');
   await ui.waitFor(() => assert.equal(calls.cards, 2));
   assert.equal(calls.devices, 1);

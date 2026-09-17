@@ -2477,7 +2477,7 @@ function FirstRunSession({
               <b>Start over</b>
               <span>
                 Starting over won’t delete any account already created on the
-                server. You can find existing accounts in Settings → Accounts.
+                server. You can find existing accounts on the Account tab.
               </span>
             </div>
             <Button variant="danger" onClick={discardProvisioning}>

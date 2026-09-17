@@ -57,7 +57,7 @@ import {
   useLocationState,
 } from './location';
 import { INITIAL_SCENE } from './location';
-import type { Location, Scene } from './location';
+import type { Location, NavigateOptions, Scene } from './location';
 import {
   NavigationGuardProvider,
   NavigationPrompt,
@@ -1478,7 +1478,8 @@ function VaultShell({
     snapshot: shown,
     bridge,
     scene: enteredScene,
-    onNavigate: (location: Location) => locations.navigate(location),
+    onNavigate: (location: Location, options?: NavigateOptions) =>
+      locations.navigate(location, options),
     onRefresh: refresh,
     onRefreshSnapshot: refreshSnapshot,
     onError: commandError,

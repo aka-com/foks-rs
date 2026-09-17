@@ -3,52 +3,38 @@ import { LocalAliasPanel } from '../components/local-alias-panel';
 import { localAliasOf } from '../model';
 import { useTabSheetState } from '../navigation-guard';
 /**
- * The Accounts tab: what needs attention, then the accounts on this Mac.
+ * The Account tab: one account's profile, the account the rail header names.
  *
- * `AttentionList` is the page that used to be called Alerts. It is one amber
- * card: a head that names the region and counts the open notes, then a row per
- * note. Each row describes the issue's effect, identifies where to resolve it,
- * and provides the action at the right end. The catalog action retries; every
- * other action opens the relevant page. With no notes
- * the card is replaced by a single green line. Under it, the account switcher
- * chooses which account the page is about, and that account's facts and
- * workflows are rows with their action at the right — the rows Settings ›
- * Accounts had, with the same panels behind them.
+ * The mark and the identity that name the account sit on one row, with a
+ * "Switch account" button that opens the same menu the rail header's avatar
+ * opens — there is exactly one account switcher, not a second one repeating
+ * it. Under that, five facts are rows with their action at the right:
+ * Username, Shown as (the local alias), Server, Devices and Teams, each
+ * linking to where it is changed or managed. Bot accounts, Manage via web
+ * and Organization sign-in stay reachable from a quieter line under the
+ * facts. A stray notice this page cannot route anywhere else — a catalog
+ * read that only a retry can fix, or a note whose place could not be
+ * resolved — is kept in a small band above the facts; every other notice
+ * already has a home of its own on Settings, Teams or a team's own page.
  */
 
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AdminPanel } from '../components/admin-panel';
 import { BotPanel } from '../components/bot-panel';
-import { InvitationPanel } from '../components/invitation-panel';
 import { RenamePanel } from '../components/rename-panel';
 import { SsoPanel } from '../components/sso-panel';
-import {
-  Band,
-  Button,
-  Chip,
-  Icon,
-  Inset,
-  InsetRow,
-  Notice,
-  SectionLabel,
-} from '../components';
+import { Band, Button, Chip, Inset, InsetRow, Notice } from '../components';
 import type { Bridge } from '../bridge';
 import {
   accountStopped,
   accountStores,
   notesNow,
-  parseRole,
-  partiesOf,
   plural,
-  roleName,
   serverDisplayName,
   serverName,
-  shortId,
-  storeAttentionState,
   storeDescription,
   storeNavigationOrder,
-  teamCaption,
   usernameOf,
 } from '../model';
 import type {
@@ -58,52 +44,23 @@ import type {
   TeamStore,
 } from '../model';
 import type { Server } from '../model';
-import type { FoksIconName } from '../icons';
 import type { Location, NavigateOptions } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { PageHeader } from '../shell/page-header';
 import { AccountMark } from './account-switcher';
 import { AccountHeader } from '../shell/sidebar';
 import { deviceEntries } from './device-model';
-import type { DeviceEntry, DeviceLists } from './device-model';
-import { GroupMark } from './group-mark';
+import type { DeviceLists } from './device-model';
 import { GoProfileConnectSheet } from './go-profile-connect';
 
 const ACTION_UNAVAILABLE =
   'Resolve this in Settings › Servers, or in the team’s settings.';
 
-/** The accessible name for the severity indicator. */
-const SEVERITY_LABELS: Record<Notification['severity'], string> = {
-  crit: 'Critical',
-  warn: 'Warning',
-  info: 'Information',
-};
-
 /** The account panels reached from a row on this page. */
-type AccountSheet = 'local-alias' | 'rename' | 'bot' | 'admin' | 'join' | 'sso';
-
-interface AttentionListProps {
-  snapshot: AgentSnapshot;
-  onNavigate: (location: Location) => void;
-  onRefreshSnapshot: () => Promise<AgentSnapshot>;
-  onError: (error: unknown) => void;
-}
+type AccountSheet = 'local-alias' | 'rename' | 'bot' | 'admin' | 'sso';
 
 function canRetry(note: Notification): boolean {
   return note.action === 'Retry' && note.id.startsWith('catalog-');
-}
-
-/**
- * The glyph on a row's mark, chosen by what the note is about: a group whose
- * setup is unfinished, a group's membership in another group, or a server this
- * Mac has not checked in with. A note of any other kind keeps the generic
- * warning glyph.
- */
-function markGlyph(note: Notification): FoksIconName {
-  if (note.id.startsWith('team-')) return 'flag';
-  if (note.id.startsWith('fed-')) return 'people';
-  if (note.id.startsWith('lease-')) return 'server';
-  return 'alert';
 }
 
 /**
@@ -132,6 +89,10 @@ interface Destination {
  * not set up, and a `fed-` note names the *admitted* group, whose admission is
  * resolved in the host group it was admitted to. A note whose place cannot be
  * derived keeps the label it always had rather than opening the wrong page.
+ *
+ * A note this resolves is not drawn on this page at all: the place it names
+ * already shows the same state, so this function is used only to tell such a
+ * note apart from one that has nowhere else to go.
  */
 function destinationOf(
   snapshot: AgentSnapshot,
@@ -174,15 +135,31 @@ function destinationOf(
   return null;
 }
 
-/** Active warnings and blocked operations, each with the action it allows. */
-function AttentionList({
+interface UnroutedNoticesProps {
+  snapshot: AgentSnapshot;
+  onRefreshSnapshot: () => Promise<AgentSnapshot>;
+  onError: (error: unknown) => void;
+}
+
+/**
+ * Notices this page cannot route anywhere else: a catalog read that only a
+ * retry can fix, or a note whose place could not be resolved — an alias that
+ * matches more than one store, or an admission this Mac cannot place. Every
+ * other note already has a home: a lapsed or unverified server shows on
+ * Settings › Servers, a team whose setup is incomplete shows on Teams, and a
+ * team's admission into another team shows as Inactive on the host team's own
+ * Members page. Drawing those again here would be a second copy of a state
+ * the reader can already see where it is acted on.
+ */
+function UnroutedNotices({
   snapshot,
-  onNavigate,
   onRefreshSnapshot,
   onError,
-}: AttentionListProps): ReactNode {
+}: UnroutedNoticesProps): ReactNode {
   const [busy, setBusy] = useState<Set<string>>(new Set());
-  const notes = notesNow(snapshot);
+  const notes = notesNow(snapshot).filter(
+    (note) => canRetry(note) || destinationOf(snapshot, note) === null,
+  );
   if (!notes.length) return null;
 
   const retry = (note: Notification): void => {
@@ -200,81 +177,47 @@ function AttentionList({
   };
 
   return (
-    <section
-      className="people-attention"
-      aria-labelledby="people-attention-label"
-    >
-      {notes.length ? (
-        <div className="attn-card">
-          {/* The card's head is the region's label: there is no separate
-              section label over it. */}
-          <div className="attn-head">
-            <Icon name="alert" />
-            <span id="people-attention-label">Needs attention</span>
-            <span className="grow" />
-            <span className="n">{notes.length}</span>
-          </div>
-          {notes.map((note) => {
-            const destination = canRetry(note)
-              ? null
-              : destinationOf(snapshot, note);
-            return (
-              <div className="attn-row" key={note.id}>
-                {/* The severity is a colour, so it is also a name: a reader
-                    who cannot see the colour is told the same thing. */}
-                <span
-                  className="mk"
-                  role="img"
-                  aria-label={SEVERITY_LABELS[note.severity]}
-                >
-                  <Icon name={markGlyph(note)} />
-                </span>
-                <div className="t">
-                  <b>{note.title}</b>
-                  <small>{note.detail}</small>
-                  {/* The same place the action button opens, named as the
-                      reader would read the path aloud. */}
-                  {destination ? (
-                    <button
-                      type="button"
-                      className="go"
-                      onClick={() => onNavigate(destination.location)}
-                    >
-                      {destination.where}
-                    </button>
-                  ) : null}
-                </div>
-                {/* Not the design's `.acts`: that class is the hover-only
-                    icon strip a tile carries, and it hides what it holds. */}
-                <div className="attn-acts">
-                  {canRetry(note) ? (
-                    <Button
-                      variant="primary"
-                      disabled={busy.has(note.id)}
-                      title="Retry loading"
-                      onClick={() => retry(note)}
-                    >
-                      {note.action}
-                    </Button>
-                  ) : destination ? (
-                    <Button
-                      variant="primary"
-                      onClick={() => onNavigate(destination.location)}
-                    >
-                      {destination.label}
-                    </Button>
-                  ) : note.action ? (
-                    <Chip tone="warn" title={ACTION_UNAVAILABLE}>
-                      {note.action}
-                    </Chip>
-                  ) : null}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
+    <section className="people-attention" aria-label="Needs attention">
+      {notes.map((note) => (
+        <Band
+          key={note.id}
+          severity={note.severity}
+          label={note.title}
+          action={
+            canRetry(note) ? (
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={busy.has(note.id)}
+                title="Retry loading"
+                onClick={() => retry(note)}
+              >
+                {note.action}
+              </Button>
+            ) : note.action ? (
+              <Chip tone="warn" title={ACTION_UNAVAILABLE}>
+                {note.action}
+              </Chip>
+            ) : null
+          }
+        >
+          {note.detail}
+        </Band>
+      ))}
     </section>
+  );
+}
+
+/** The teams this account belongs to, as the catalog holds them. */
+function teamsOnAccount(
+  snapshot: AgentSnapshot,
+  store: AccountStore,
+): TeamStore[] {
+  return storeNavigationOrder(snapshot).filter(
+    (candidate): candidate is TeamStore =>
+      candidate.kind === 'team' &&
+      candidate.server === store.server &&
+      candidate.account === store.account,
   );
 }
 
@@ -317,10 +260,10 @@ export function PeopleScreen({
   const unavailable = requested !== undefined && selected === undefined;
   const [sheet, setSheet] = useTabSheetState<
     AccountSheet | 'go-profile' | null
-  >('people.sheet', null, (value) => value === 'join');
+  >('people.sheet', null, false);
   const [pairingProfile, setPairingProfile] = useState<Server | undefined>();
-  // What this account holds: the keys are read here because the profile lists
-  // them, not because anything on this page acts on one.
+  // What this account holds: the keys are read here because the profile's
+  // Devices row counts them, not because anything on this page acts on one.
   const stopped = selected
     ? accountStopped(snapshot, selected)
     : { stopped: true, reason: '' };
@@ -376,14 +319,11 @@ export function PeopleScreen({
     setSheet(null);
   }, [selected?.id, setSheet]);
 
-  const subtitle = plural(stores.length, 'account');
-
   return (
     <>
       <PageHeader
         ruled
-        title="Accounts"
-        subtitle={subtitle}
+        title="Account"
         action={
           <Button
             onClick={() => {
@@ -397,9 +337,8 @@ export function PeopleScreen({
       />
       <div className="body">
         <div className="settings-main">
-          <AttentionList
+          <UnroutedNotices
             snapshot={snapshot}
-            onNavigate={onNavigate}
             onRefreshSnapshot={onRefreshSnapshot}
             onError={onError}
           />
@@ -434,28 +373,26 @@ export function PeopleScreen({
               onRefresh={() => void onRefreshSnapshot().catch(onError)}
             />
           ) : selected ? (
-            <>
-              <AccountPanel
-                accountSelector={
-                  <AccountHeader
-                    compact
-                    snapshot={snapshot}
-                    location={location}
-                    account={selected.id}
-                    onNavigate={onNavigate}
-                    onLock={onLock}
-                  />
-                }
-                snapshot={snapshot}
-                store={selected}
-                lists={lists}
-                loading={loadingKeys}
-                failed={keysFailed}
-                stopped={stopped}
-                onNavigate={onNavigate}
-                onSheet={setSheet}
-              />
-            </>
+            <AccountPanel
+              accountSelector={
+                <AccountHeader
+                  compact
+                  snapshot={snapshot}
+                  location={location}
+                  account={selected.id}
+                  onNavigate={onNavigate}
+                  onLock={onLock}
+                />
+              }
+              snapshot={snapshot}
+              store={selected}
+              lists={lists}
+              loading={loadingKeys}
+              failed={keysFailed}
+              stopped={stopped}
+              onNavigate={onNavigate}
+              onSheet={setSheet}
+            />
           ) : (
             <NoAvailableAccount
               onConnectGoProfile={() => setSheet('go-profile')}
@@ -530,18 +467,6 @@ export function PeopleScreen({
           }}
         />
       ) : null}
-      {selected && sheet === 'join' ? (
-        <InvitationPanel
-          bridge={bridge}
-          profile={selected.server}
-          account={selected.account}
-          presentation={{
-            title: 'Join a team',
-            onClose: () => setSheet(null),
-          }}
-          onComplete={() => onRefresh('Team membership refreshed')}
-        />
-      ) : null}
       {selected && sheet === 'sso' ? (
         <SsoPanel
           bridge={bridge}
@@ -559,7 +484,7 @@ export function PeopleScreen({
   );
 }
 
-/** The chosen account: who it is, what it is, and what can be done to it. */
+/** The chosen account: who it is, and the facts and workflows that act on it. */
 function AccountPanel({
   snapshot,
   store,
@@ -585,11 +510,13 @@ function AccountPanel({
 }): ReactNode {
   const username = usernameOf(snapshot, store);
   const reason = stopped.stopped ? stopped.reason : undefined;
-  const keys = deviceEntries(lists);
+  const deviceCount = deviceEntries(lists).length;
+  const teams = teamsOnAccount(snapshot, store);
+  const server = snapshot.servers.find((entry) => entry.id === store.server);
   return (
     <>
-      {/* The profile head: the account's mark and the four facts that name
-          it, on one row. */}
+      {/* The profile head: the account's mark, the four facts that name it,
+          and the button that switches to another account. */}
       <div className="phead">
         <AccountMark name={username ?? store.account} size="big" />
         <span className="t">
@@ -629,26 +556,6 @@ function AccountPanel({
           {serverName(snapshot, store)} is checked.
         </Band>
       ) : null}
-      <TeamsOnAccount
-        snapshot={snapshot}
-        store={store}
-        onNavigate={onNavigate}
-      />
-      <DeviceSummary
-        keys={keys}
-        loading={loading}
-        failed={failed}
-        stopped={stopped.stopped}
-        onOpen={() => onNavigate({ kind: 'devices', store: store.id })}
-      />
-      <KeyList
-        keys={keys}
-        loading={loading}
-        failed={failed}
-        stopped={stopped}
-        server={serverName(snapshot, store)}
-      />
-      <SectionLabel>{serverName(snapshot, store)}</SectionLabel>
       <Inset className="settings-inset wide">
         <InsetRow
           label="Username"
@@ -666,7 +573,7 @@ function AccountPanel({
           <b>{username ?? 'Identity unavailable'}</b>
         </InsetRow>
         <InsetRow
-          label="Local alias"
+          label="Shown as"
           action={
             <Button
               size="sm"
@@ -682,317 +589,94 @@ function AccountPanel({
           {localAliasOf(snapshot, store)}
         </InsetRow>
         <InsetRow
-          label="Passphrase"
+          label="Server"
           action={
             <Button
               size="sm"
               onClick={() =>
                 onNavigate({
                   kind: 'settings',
-                  section: 'credentials',
+                  section: 'servers',
+                  profile: store.server,
                   store: store.id,
                 })
               }
             >
-              Settings › Account
-            </Button>
-          }
-        ></InsetRow>
-      </Inset>
-      <SectionLabel>Actions on this account</SectionLabel>
-      <Inset className="settings-inset wide">
-        <InsetRow
-          label="Organization sign-in"
-          action={
-            <Button size="sm" onClick={() => onSheet('sso')}>
-              Sign in…
+              Settings › Servers
             </Button>
           }
         >
-          Sign in through your organization’s identity provider.
+          {stopped.stopped
+            ? `${serverName(snapshot, store)} · ${storeDescription(snapshot, store)}`
+            : server?.trust.status === 'verified'
+              ? `${serverName(snapshot, store)} · verified`
+              : serverName(snapshot, store)}
         </InsetRow>
         <InsetRow
-          label="Bot accounts"
+          label="Devices"
           action={
-            <Button size="sm" onClick={() => onSheet('bot')}>
-              Manage…
+            <Button
+              size="sm"
+              disabled={stopped.stopped}
+              title={reason}
+              onClick={() => onNavigate({ kind: 'devices', store: store.id })}
+            >
+              Devices ›
             </Button>
           }
         >
-          Device credentials for automation on this account.
-        </InsetRow>
-        <InsetRow
-          label="Web admin"
-          action={
-            <Button size="sm" onClick={() => onSheet('admin')}>
-              Open…
-            </Button>
-          }
-        >
-          Opens the host’s administration panel in a private window.
+          {stopped.stopped
+            ? 'Not listed while access is stopped'
+            : loading
+              ? 'Reading this account’s keys…'
+              : failed
+                ? 'Devices and keys could not be read.'
+                : plural(deviceCount, 'device and key', 'devices and keys')}
         </InsetRow>
         <InsetRow
           label="Teams"
           action={
-            <Button size="sm" onClick={() => onSheet('join')}>
-              Join a team…
+            <Button
+              size="sm"
+              onClick={() => onNavigate({ kind: 'teams', store: store.id })}
+            >
+              Teams ›
             </Button>
           }
         >
-          Request membership with an invitation from an administrator.
+          {teams.length ? teams.map((team) => team.name).join(', ') : 'None'}
         </InsetRow>
       </Inset>
+      <p className="fn">
+        More:{' '}
+        <Button
+          variant="plain"
+          size="sm"
+          className="lnk"
+          onClick={() => onSheet('bot')}
+        >
+          Bot accounts
+        </Button>
+        {' · '}
+        <Button
+          variant="plain"
+          size="sm"
+          className="lnk"
+          onClick={() => onSheet('admin')}
+        >
+          Manage via web
+        </Button>
+        {' · '}
+        <Button
+          variant="plain"
+          size="sm"
+          className="lnk"
+          onClick={() => onSheet('sso')}
+        >
+          Organization sign-in
+        </Button>
+      </p>
     </>
-  );
-}
-
-/**
- * The groups this account belongs to, as the catalog holds them. The page does
- * not manage a group: every row opens the group's own page, where it is
- * managed, and the section's action opens Teams.
- */
-function TeamsOnAccount({
-  snapshot,
-  store,
-  onNavigate,
-}: {
-  snapshot: AgentSnapshot;
-  store: AccountStore;
-  onNavigate: (location: Location) => void;
-}): ReactNode {
-  const teams = storeNavigationOrder(snapshot).filter(
-    (candidate): candidate is TeamStore =>
-      candidate.kind === 'team' &&
-      candidate.server === store.server &&
-      candidate.account === store.account,
-  );
-  return (
-    <div
-      className="settings-section"
-      role="region"
-      aria-labelledby="people-teams-label"
-    >
-      <SectionLabel
-        id="people-teams-label"
-        action={
-          <Button
-            size="sm"
-            onClick={() => onNavigate({ kind: 'teams', store: store.id })}
-          >
-            All teams
-          </Button>
-        }
-      >
-        Teams you’re in
-      </SectionLabel>
-      <Inset className="settings-inset middle wide">
-        {teams.length ? (
-          teams.map((team) => {
-            const mine = partiesOf(snapshot, team.id).find(
-              (party) => party.label === 'you',
-            );
-            const role = mine ? parseRole(mine.destination_role) : null;
-            const description = storeDescription(snapshot, team);
-            const abnormal = storeAttentionState(snapshot, team) !== 'normal';
-            return (
-              <InsetRow
-                key={team.id}
-                className="devrow"
-                action={
-                  <>
-                    {/* An abnormal state is a chip at the end of the row; the
-                        roster summary takes its place when nothing is wrong. */}
-                    {abnormal ? <Chip tone="warn">{description}</Chip> : null}
-                    {role ? <Chip>{roleName(role)}</Chip> : null}
-                    <Button
-                      size="sm"
-                      // Named for the row it ends, and distinct from the
-                      // attention card that may route to the same group.
-                      aria-label={`Open ${team.name} in Teams`}
-                      onClick={() =>
-                        onNavigate({
-                          kind: 'group-settings',
-                          ref: team.id,
-                          tab: 'people',
-                        })
-                      }
-                    >
-                      Open
-                    </Button>
-                  </>
-                }
-              >
-                <GroupMark store={team} size="sm" />
-                <span className="t">
-                  <b>{team.name}</b>
-                  <small>
-                    {/* The band above names the server this account is on, so
-                        the caption under a group on it does not repeat it. */}
-                    {teamCaption(snapshot, team, { server: false })}
-                    {abnormal ? '' : ` · ${description}`}
-                  </small>
-                </span>
-              </InsetRow>
-            );
-          })
-        ) : (
-          <InsetRow label="None">
-            This account is not in any team on this device.
-          </InsetRow>
-        )}
-      </Inset>
-    </div>
-  );
-}
-
-/** What this account holds, counted, with the page that manages it. */
-function DeviceSummary({
-  keys,
-  loading,
-  failed,
-  stopped,
-  onOpen,
-}: {
-  keys: readonly DeviceEntry[];
-  loading: boolean;
-  failed: boolean;
-  stopped: boolean;
-  onOpen: () => void;
-}): ReactNode {
-  return (
-    <div
-      className="settings-section"
-      role="region"
-      aria-labelledby="people-devices-label"
-    >
-      <SectionLabel
-        id="people-devices-label"
-        action={
-          <Button size="sm" disabled={stopped} onClick={onOpen}>
-            Manage devices
-          </Button>
-        }
-      >
-        Devices
-      </SectionLabel>
-      <Inset className="settings-inset middle wide">
-        <InsetRow className="devrow">
-          <span className="ic" aria-hidden="true">
-            <Icon name="laptop" />
-          </span>
-          <span className="t">
-            <b>
-              {stopped
-                ? 'Not listed while access is stopped'
-                : loading
-                  ? 'Reading this account’s keys…'
-                  : failed
-                    ? 'Devices and keys could not be read.'
-                    : plural(keys.length, 'device and key', 'devices and keys')}
-            </b>
-            <small>
-              {stopped
-                ? 'Devices and keys are listed again once the server is checked.'
-                : loading
-                  ? 'Loading devices, paper keys, and security keys…'
-                  : failed
-                    ? 'Could not retrieve keys from the background service. Please retry or check service status.'
-                    : keys.length
-                      ? keys.map((entry) => entry.name).join(' · ')
-                      : 'Nothing is listed for this account on this device.'}
-            </small>
-          </span>
-        </InsetRow>
-      </Inset>
-    </div>
-  );
-}
-
-/**
- * The keys themselves: a shortened id per key, what it belongs to, and a check
- * on the one this Mac is authenticated with. Nothing here is revoked: a key is
- * acted on from its own page under Devices.
- */
-function KeyList({
-  keys,
-  loading,
-  failed,
-  stopped,
-  server,
-}: {
-  keys: readonly DeviceEntry[];
-  loading: boolean;
-  failed: boolean;
-  stopped: { stopped: boolean; reason: string };
-  server: string;
-}): ReactNode {
-  return (
-    <div
-      className="settings-section"
-      role="region"
-      aria-labelledby="people-keys-label"
-    >
-      <SectionLabel id="people-keys-label">Keys</SectionLabel>
-      <Inset className="settings-inset middle wide">
-        {stopped.stopped ? (
-          <InsetRow label="None">
-            Keys are unavailable until {server} is checked.
-          </InsetRow>
-        ) : loading ? (
-          <InsetRow label="None">Reading this account’s keys…</InsetRow>
-        ) : failed ? (
-          <InsetRow label="Unavailable">
-            Keys could not be read.
-            <small>
-              Could not retrieve keys from the background service. Open Devices
-              to retry or check service status.
-            </small>
-          </InsetRow>
-        ) : keys.length ? (
-          keys.map((entry) => (
-            <InsetRow
-              key={entry.address}
-              className="devrow"
-              action={
-                entry.current ? (
-                  // The only verification this page can state: the agent is
-                  // authenticated with this key here, now.
-                  <span
-                    className="verified"
-                    role="img"
-                    aria-label="Authenticated on this device"
-                  >
-                    <Icon name="check" />
-                  </span>
-                ) : null
-              }
-            >
-              <span className="ic" aria-hidden="true">
-                <Icon name={entry.icon} />
-              </span>
-              {/* The id leads, as it does on a proof row; what it belongs to
-                  follows it on the same line. */}
-              <span className="t keyline">
-                <b className="mono" title={entry.keyId}>
-                  {entry.keyId ? shortId(entry.keyId, 10) : entry.name}
-                </b>
-                <small>
-                  {/* An enrollment is the server's, so its row says the
-                      server; every other row says what the key belongs to. */}
-                  {entry.scope === 'profile'
-                    ? `${entry.kind} · on ${server}`
-                    : `${entry.name} · ${entry.kind}`}
-                </small>
-              </span>
-            </InsetRow>
-          ))
-        ) : (
-          <InsetRow label="None">
-            No keys are listed for this account on this device.
-          </InsetRow>
-        )}
-      </Inset>
-    </div>
   );
 }
 

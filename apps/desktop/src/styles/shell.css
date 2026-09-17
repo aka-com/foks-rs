@@ -245,11 +245,6 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .btn.icon.on{background:var(--accent-wash-2);border-color:var(--accent-border);color:var(--accent-ink)}
 .btn.cap{height:24px;padding:0 9px;font-size:12px;border-radius:var(--radius-pill);background:var(--chip-bg);border-color:transparent;box-shadow:none;color:var(--ink-2)}
 .btn.cap:hover{background:rgba(0,0,0,.1)}.btn.cap .ic{font-size:13px}
-.split{display:inline-flex;position:relative}
-.toolbar .split .btn{height:30px}
-.toolbar .split .btn:first-child{padding:0 10px;gap:4px}
-.toolbar .split .btn:last-child{padding:0 5px}
-.split .btn:first-child{border-radius:var(--radius-md) 0 0 9px}.split .btn:last-child{border-radius:0 9px 9px 0;padding:0 7px;margin-left:-1px}
 .seg{display:inline-flex;background:var(--chip-bg);border-radius:var(--radius-md);padding:2px}
 .seg button{width:32px;height:28px;border-radius:var(--radius-sm);display:grid;place-items:center;color:var(--muted);font-size:16px}
 .seg button.on{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(15,20,45,.12)}
@@ -264,6 +259,9 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 /* Icon column placeholder */
 .menu:not(.rail-account-menu):has(>button>.ic) button:not(:has(>.ic))::before{content:"";width:18px;flex:none}
 .menu button.on{background:var(--accent-wash);color:var(--accent-ink);font-weight:600}
+/* Multi-line menu choice */
+.menu button .menu-choice{display:flex;flex-direction:column;gap:1px;min-width:0}
+.menu button .menu-choice small{font-weight:400;color:var(--muted);white-space:normal}
 .toolbar .sortwrap>.btn{padding:0 6px 0 9px;gap:2px}
 .toolbar .sortwrap>.btn>.ic{font-size:16px}
 .toolbar .sortwrap>.btn>.chevron{font-size:13px;color:var(--muted)}
@@ -333,29 +331,8 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .notice h2{font-size:17px;font-weight:650;letter-spacing:-.01em;margin-bottom:8px}
 .notice p{color:var(--ink-3);margin-bottom:10px}.notice p:last-of-type{margin-bottom:0}.notice .fn{font-size:12.5px;color:var(--muted);margin-top:10px}
 .notice .acts2{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:14px}
-/* The "needs attention" card at the top of Accounts (screens/people-screen).
-   One amber card holding the count in its head and one row per thing to
-   attend to: what the reader loses, where it is, and the button that clears
-   it. The card sits inside `.settings-main`, which already holds the page's
-   margins, so it carries none of its own horizontally. */
-.people-attention .attn-card{margin:4px 0 14px;border:1px solid var(--amber-border);border-radius:var(--radius-lg);background:var(--amber-wash);overflow:hidden}
-.attn-head{display:flex;align-items:center;gap:8px;padding:10px 14px;font-weight:600}
-.attn-head .ic{font-size:16px;flex:none;color:var(--warning-dot)}
-.attn-head .grow{flex:1}
-.attn-head .n{flex:none;font-size:12px;font-weight:600;color:var(--amber-ink);background:rgba(255,190,50,.28);border-radius:var(--radius-pill);padding:1px 8px}
-.attn-row{display:flex;align-items:flex-start;gap:11px;padding:11px 14px;border-top:1px solid var(--amber-border)}
-.attn-row .mk{width:26px;height:26px;flex:none;border-radius:var(--radius-sm);display:grid;place-items:center;background:rgba(255,190,50,.3);color:var(--amber-ink)}
-.attn-row .mk .ic{font-size:15px}
-.attn-row .t{flex:1;min-width:0}
-.attn-row .t b{display:block;font-weight:600}
-.attn-row .t small{display:block;margin-top:1px;font-size:12.5px;line-height:1.4;color:var(--muted-2)}
-/* The place the action opens, named as the reader would read it aloud. */
-.attn-row .t .go{display:inline-block;margin-top:4px;padding:0;font-size:12px;color:var(--accent-ink)}
-.attn-row .t .go:hover{text-decoration:underline}
-.attn-row .attn-acts{display:flex;align-items:center;gap:6px;flex:none}
-/* Nothing to attend to: one green line, not an empty card. */
-.people-attention .allclear{display:flex;align-items:center;gap:8px;margin:4px 0 14px;padding:10px 14px;border-radius:var(--radius-lg);background:var(--ok-wash);color:var(--ok-ink);font-weight:500}
-.people-attention .allclear .ic{font-size:16px;flex:none}
+/* Account attention band */
+.people-attention .band{margin:2px 0 4px}
 .notice .acts2 .btn{line-height:1}
 .notice.info{border-color:var(--line);background:var(--surface)}
 .notice.info .who{color:var(--muted)}
@@ -723,17 +700,7 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 /* Name chip */
 .namechip{display:flex;align-items:center;gap:6px;min-width:0}
 
-/* The check a key row carries when this Mac is authenticated with that key.
-   `Icon` puts `.ic` on the glyph itself, so the check inside a device row is
-   named more specifically than that row's own 28px mark. */
-.verified{width:20px;height:20px;border-radius:50%;background:var(--ok-solid);color:#fff;display:grid;place-items:center;flex:none}
-.verified .ic,.devrow .verified .ic{width:13px;height:13px;font-size:13px;color:#fff;background:none;border-radius:0}
-
-/* Rows whose label is a phrase — "Organization sign-in", "Recover an
-   account" — get the wider first column the narrow one would wrap. Every
-   section of People, Devices and Settings carries it, so the value column
-   starts at the same x down each page; the width is the widest label those
-   pages hold, "Verify imported accounts". */
+/* Wide label column */
 .settings-inset.wide .fr .k{width:156px}
 
 /* A device, paper key or security key row: mark, name, role, key id. */
@@ -745,11 +712,6 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 /* Disabled action explanation */
 .devrow .t small.why{color:var(--amber-ink)}
 .devrow .kid{display:block;font:12px var(--mono);color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-/* A key row reads as the mock's proof rows: the id leads, in mono, and what
-   it belongs to follows it on the same line. */
-.devrow .t.keyline{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
-.devrow .t.keyline b.mono{display:inline;font:12.5px var(--mono);font-weight:500;color:var(--accent-ink);overflow-wrap:anywhere}
-.devrow .t.keyline small{display:inline}
 
 /* Settings section */
 .settings-section{scroll-margin-top:8px;outline:none}
@@ -790,14 +752,7 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 .side.rail.is-narrow .nav{justify-content:center;padding-left:0;padding-right:0;gap:0;border-right:3px solid transparent}
 .side.rail.is-narrow .attn{left:32px}
 .phead>.t{flex:1}
-.account-dropdown{margin-left:auto;flex:none;max-width:220px}
-.account-dropdown-trigger{display:flex;align-items:center;gap:8px;border:1px solid var(--line-soft);border-radius:8px;padding:6px 9px;text-align:left;color:var(--ink-2);background:var(--surface)}
-.account-dropdown-trigger:hover{background:var(--hover)}
-.account-dropdown-trigger .avatar{display:none}
-.account-dropdown-trigger .t{min-width:0}
-.account-dropdown-trigger .t b{display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.account-dropdown-trigger .t small{display:none}
-.account-dropdown-trigger .chev{display:flex;flex:none}
+.account-switch{flex:none}
 
 .side.rail.is-narrow .who .avatar{transform:translateY(2px)}
 .side.rail .traffic{position:relative}

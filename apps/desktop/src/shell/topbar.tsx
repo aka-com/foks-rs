@@ -18,26 +18,23 @@ import { useSidebarInbox } from '../chat/inbox-provider';
 import { channelTitle } from '../chat/presentation';
 import { storeOf } from '../model';
 import type { AgentSnapshot, DeviceLabel } from '../model';
-import { parentLocation, railTabOf } from '../location';
+import {
+  DEFAULT_SETTINGS_SECTION,
+  SETTINGS_SECTION_LABEL,
+  parentLocation,
+  railTabOf,
+} from '../location';
 import type { Location, RailTab } from '../location';
 import { filesFolderCrumb } from '../screens/scope';
 
 /** The word each tab is called, as the rail labels it. */
 const TAB_LABEL: Readonly<Record<RailTab, string>> = {
-  people: 'Accounts',
+  people: 'Account',
   chat: 'Chat',
   files: 'Files',
   teams: 'Teams',
   devices: 'Devices',
   settings: 'Settings',
-};
-
-/** The words the Settings page uses for the sections an address can name. */
-const SETTINGS_SECTION_LABEL: Readonly<Record<string, string>> = {
-  servers: 'Servers',
-  credentials: 'Account',
-  notifications: 'Notifications',
-  about: 'About',
 };
 
 /**
@@ -97,15 +94,18 @@ export function crumbTrail(
         );
       }
       break;
-    case 'settings':
-      if (location.section)
-        trail.push(SETTINGS_SECTION_LABEL[location.section]);
-      if (location.section === 'servers' && location.profile)
+    case 'settings': {
+      // The sub-navigation always has one page open, so the crumb always
+      // names one — the address's own section, or the page it defaults to.
+      const section = location.section ?? DEFAULT_SETTINGS_SECTION;
+      trail.push(SETTINGS_SECTION_LABEL[section]);
+      if (section === 'servers' && location.profile)
         trail.push(
           snapshot?.servers.find((entry) => entry.id === location.profile)
             ?.name ?? location.profile,
         );
       break;
+    }
     default:
       break;
   }

@@ -87,10 +87,11 @@ export function roleName(role: Role): string {
 
 /**
  * The role as a member row's chip reads it. The visibility band rides inside
- * the chip — "Member (0)" — so a row stays one line of role.
+ * the chip, spelled out — "Member · sees level 0" — so a row stays one line
+ * of role and the band reads as what it is rather than a parenthesized count.
  */
 export function roleChipLabel(role: Role): string {
   return role.kind === 'member'
-    ? `Member (${visibilityOf(role)})`
+    ? `Member · sees level ${visibilityOf(role)}`
     : formatRole(role);
 }

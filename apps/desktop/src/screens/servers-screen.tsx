@@ -880,7 +880,7 @@ function ServerBody({
   onForget: () => void;
   onCopy: (text: string) => void;
   onOpenGroup: (store: TeamStore) => void;
-  /** The account on this server, on Accounts, where an account is managed. */
+  /** The account on this server, on Account, where an account is managed. */
   onOpenAccount: (store: StoreRef) => void;
 }): ReactNode {
   const state = resolveServerUiState(agentSnapshot, server);
@@ -1019,7 +1019,7 @@ function ServerBody({
             className="devrow"
             action={
               <Button size="sm" onClick={() => onOpenAccount(account.store)}>
-                Accounts
+                Account
               </Button>
             }
           >

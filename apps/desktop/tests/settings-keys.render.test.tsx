@@ -389,7 +389,7 @@ test('a Mac with no account says so instead of listing an empty page', async () 
     ),
   );
   await ui.act(async () => {
-    ui.fireEvent.click(rendered.getByRole('button', { name: 'Open Accounts' }));
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Open Account' }));
   });
   assert.deepEqual(chosen.at(-1), { kind: 'people' });
 });

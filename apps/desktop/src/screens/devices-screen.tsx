@@ -533,8 +533,8 @@ export function DevicesScreen({
       </>
     );
 
-  // Devices is per account, so a Mac with none has nothing to list; the
-  // account is made on Accounts, where accounts are.
+  // Devices are scoped by account. If no accounts exist locally, no devices
+  // are displayed; new accounts must be added via the Account tab.
   if (!selected)
     return (
       <>
@@ -548,7 +548,7 @@ export function DevicesScreen({
                   variant="primary"
                   onClick={() => onNavigate({ kind: 'people' })}
                 >
-                  Open Accounts
+                  Open Account
                 </Button>
               }
             >

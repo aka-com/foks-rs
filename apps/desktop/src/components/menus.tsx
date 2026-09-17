@@ -1,8 +1,7 @@
 /**
  * Dropdown action menu buttons built on shared overlay primitives.
  *
- * `MenuButton` opens a dropdown menu. `SplitButton` combines a primary action
- * with an attached dropdown menu.
+ * `MenuButton` opens a dropdown menu next to the control that owns it.
  */
 
 import { useId, useRef, useState } from 'react';
@@ -186,69 +185,6 @@ export function MenuButton({
           label={menuLabel}
           align={align}
           close={close}
-        >
-          {children}
-        </AnchoredMenu>
-      ) : null}
-    </span>
-  );
-}
-
-export interface SplitButtonProps {
-  /** The primary action's label. */
-  label: ReactNode;
-  icon?: FoksIconName;
-  /** What the chevron's menu chooses between. */
-  menuLabel: string;
-  /** The primary action itself. Omit it and the whole control opens the menu. */
-  onClick?: () => void;
-  /** The menu's items, given a closer to call when one is taken. */
-  children: MenuContent;
-}
-
-export function SplitButton({
-  label,
-  icon,
-  menuLabel,
-  onClick,
-  children,
-}: SplitButtonProps): ReactNode {
-  const anchorRef = useRef<HTMLButtonElement>(null);
-  const [open, setOpen] = useState(false);
-  const toggle = (): void => {
-    setOpen((was) => !was);
-  };
-  return (
-    <span className="menuwrap">
-      <span className="split">
-        <Button
-          ref={anchorRef}
-          variant="primary"
-          icon={icon}
-          aria-haspopup={onClick ? undefined : 'menu'}
-          aria-expanded={onClick ? undefined : open}
-          onClick={onClick ?? toggle}
-        >
-          {label}
-        </Button>
-        <Button
-          variant="primary"
-          aria-haspopup="menu"
-          aria-expanded={open}
-          aria-label={menuLabel}
-          onClick={toggle}
-        >
-          <Icon name="chev" className="chevron" />
-        </Button>
-      </span>
-      {open ? (
-        <AnchoredMenu
-          anchorRef={anchorRef}
-          label={menuLabel}
-          align="start"
-          close={() => {
-            setOpen(false);
-          }}
         >
           {children}
         </AnchoredMenu>

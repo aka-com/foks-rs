@@ -328,7 +328,7 @@ const RAW: AgentSnapshot = {
       scoped_host_id_hex: '9f31c2aa07',
       source_role: { role: 'Owner' },
       destination_role: { role: 'Member', visibility: 0 },
-      note: 'Federated team: manage permissions in Engineering under Members › Teams on other servers.',
+      note: 'Federated team: manage permissions in Engineering under Members.',
     },
     // A service account is a user like any other.
     {

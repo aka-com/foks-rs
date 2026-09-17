@@ -1,16 +1,18 @@
 import { localAliasOf } from '../model';
 /**
- * The Settings tab: one scrolling page, with no sub-navigation.
+ * The Settings tab: a sub-navigation of six pages, held on screen beside
+ * whichever one is open.
  *
- * What is left once Accounts holds the accounts, Devices holds the keys and
+ * What is left once Account holds the accounts, Devices holds the keys and
  * Teams holds the groups: the servers this Mac talks to, the credentials you
- * type, what this application and its agent are, and the one reset that acts
- * on this Mac. A `section=` address scrolls to and focuses its section, and
- * `profile=` opens that server's page.
+ * type, the card credentials those servers hold, what this application and
+ * its agent are, and the one reset that acts on this Mac. A `section=`
+ * address opens its page; `profile=` opens a server's own page, which is the
+ * Servers page's, so it carries `section: 'servers'` with it.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ReactNode, RefObject } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
 import { enqueueProfileWork, normalizeCommandError } from '../bridge';
 import type { AppInfo, Bridge, ResetPreview } from '../bridge';
@@ -22,8 +24,16 @@ import {
   InsetRow,
   SectionLabel,
   SheetDialog,
+  Tabs,
+  tabId,
+  tabPanelId,
 } from '../components';
-import type { Location, SettingsSection } from '../location';
+import {
+  DEFAULT_SETTINGS_SECTION,
+  SETTINGS_SECTIONS,
+  SETTINGS_SECTION_LABEL,
+} from '../location';
+import type { Location, NavigateOptions, SettingsSection } from '../location';
 import { useSheetGuard } from '../navigation-guard';
 import {
   accountStopped,
@@ -50,7 +60,7 @@ export interface SettingsScreenProps {
   bridge: Bridge;
   location: Extract<Location, { kind: 'settings' }>;
   scene: string;
-  onNavigate: (location: Location) => void;
+  onNavigate: (location: Location, options?: NavigateOptions) => void;
   onRefresh: (message: string) => Promise<void>;
   onRefreshSnapshot: () => Promise<AgentSnapshot>;
   onError: (error: unknown) => void;
@@ -63,6 +73,9 @@ export interface SettingsScreenProps {
 /** A sheet this page owns. Add a server and the per-server reset are the
  *  Servers section's own. */
 type Sheet = 'passphrase' | 'reset-mac' | null;
+
+/** The base the sub-navigation's tab and panel ids are derived from. */
+const SETTINGS_TABS = 'settings-sections';
 
 export function SettingsScreen({
   snapshot,
@@ -126,25 +139,7 @@ export function SettingsScreen({
     };
   }, [bridge, onError]);
 
-  // A `section=` address scrolls to its section and puts the keyboard there.
-  const anchors = {
-    servers: useRef<HTMLDivElement>(null),
-    credentials: useRef<HTMLDivElement>(null),
-    about: useRef<HTMLDivElement>(null),
-    notifications: useRef<HTMLDivElement>(null),
-  } satisfies Record<SettingsSection, unknown>;
-  const requestedSection = location.section;
-  const openProfile = location.profile;
-  useEffect(() => {
-    if (!requestedSection || openProfile) return;
-    const anchor = anchors[requestedSection]?.current;
-    if (!anchor) return;
-    if (typeof anchor.scrollIntoView === 'function')
-      anchor.scrollIntoView({ block: 'start' });
-    anchor.focus({ preventScroll: true });
-    // The anchors are stable refs; the address is what moves the page.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requestedSection, openProfile]);
+  const section: SettingsSection = location.section ?? DEFAULT_SETTINGS_SECTION;
 
   const serversSection = (
     <ServersSection
@@ -159,194 +154,159 @@ export function SettingsScreen({
     />
   );
 
-  // A server's own page is a page, not a section of this one.
-  if (location.profile)
-    return (
-      <>
-        <PageHeader ruled title="Settings" subtitle="Servers" />
-        <div className="body">
-          <div className="settings-main">{serversSection}</div>
-        </div>
-      </>
+  const openSecurityKeys = (profile: string): void =>
+    onNavigate({ kind: 'settings', section: 'servers', profile });
+
+  const page: ReactNode =
+    section === 'servers' ? (
+      serversSection
+    ) : section === 'credentials' ? (
+      <Inset className="settings-inset middle wide">
+        {stores.length ? (
+          stores.map((store) => {
+            const stopped = accountStopped(snapshot, store);
+            return (
+              <InsetRow
+                key={store.id}
+                className="devrow"
+                action={
+                  <>
+                    {(['set', 'change', 'verify'] as const).map((mode) => (
+                      <Button
+                        key={mode}
+                        size="sm"
+                        disabled={stopped.stopped}
+                        title={stopped.stopped ? stopped.reason : undefined}
+                        onClick={() => {
+                          setPassphrase({ store, mode });
+                          setSheet('passphrase');
+                        }}
+                      >
+                        {mode === 'set'
+                          ? 'Set…'
+                          : mode === 'change'
+                            ? 'Change…'
+                            : 'Verify…'}
+                      </Button>
+                    ))}
+                  </>
+                }
+              >
+                <AccountMark
+                  name={usernameOf(snapshot, store) ?? store.account}
+                />
+                <span className="t">
+                  <b>{usernameOf(snapshot, store) ?? store.account}</b>
+                  <small>
+                    {localAliasOf(snapshot, store)} ·{' '}
+                    {serverName(snapshot, store)}
+                  </small>
+                  {/* Why the three actions are off, on the row and not only in
+                      each button's title. */}
+                  {stopped.stopped ? (
+                    <small className="why">{stopped.reason}</small>
+                  ) : null}
+                </span>
+              </InsetRow>
+            );
+          })
+        ) : (
+          <InsetRow label="None">No accounts on this device.</InsetRow>
+        )}
+      </Inset>
+    ) : section === 'security-keys' ? (
+      unavailable ? (
+        <UnavailableAccount
+          stores={stores}
+          snapshot={snapshot}
+          onSelect={(store) => onNavigate({ ...location, store: store.id })}
+          onRefresh={() => void onRefreshSnapshot().catch(onError)}
+        />
+      ) : (
+        <Inset>
+          {snapshot.servers.length ? (
+            snapshot.servers.map((server) => (
+              <InsetRow
+                key={server.id}
+                label={
+                  server.label
+                    ? `${serverDisplayName(server)} · ${server.name}`
+                    : serverDisplayName(server)
+                }
+                action={
+                  <Button onClick={() => openSecurityKeys(server.id)}>
+                    Open security keys
+                  </Button>
+                }
+              >
+                Manage enrollments and card credentials for all accounts on this
+                server.
+              </InsetRow>
+            ))
+          ) : (
+            <InsetRow label="None">No servers on this device yet.</InsetRow>
+          )}
+        </Inset>
+      )
+    ) : section === 'notifications' ? (
+      <NotificationSettings />
+    ) : section === 'device' ? (
+      <ThisDeviceSection
+        bridge={bridge}
+        agentLifecycle={agentLifecycle}
+        serversCount={snapshot.servers.length}
+        onError={onError}
+        onReset={() => setSheet('reset-mac')}
+      />
+    ) : (
+      <AboutSection
+        snapshot={snapshot}
+        bridge={bridge}
+        appInfo={appInfo}
+        onError={onError}
+        onMessage={(text: string) => toasts.show(text)}
+        onLock={onLock}
+        agentLifecycle={agentLifecycle}
+        onRetryAgent={onRetryAgent}
+      />
     );
 
   return (
-    <>
-      <PageHeader
-        ruled
-        title="Settings"
-        subtitle="Servers, account credentials and this device"
-      />
-      <div className="body">
-        <div className="settings-main">
-          <div
-            className="settings-section"
-            ref={anchors.servers}
-            tabIndex={-1}
-            role="region"
-            // This section's first label names a group of servers ("Needs
-            // attention", "Ready"), not the section, so it is named here.
-            aria-label="Servers"
-          >
-            {serversSection}
-          </div>
-          <div
-            className="settings-section"
-            ref={anchors.credentials}
-            tabIndex={-1}
-            role="region"
-            aria-labelledby="settings-account-label"
-          >
-            <SectionLabel id="settings-account-label">Account</SectionLabel>
-            <Inset className="settings-inset middle wide">
-              {stores.length ? (
-                stores.map((store) => {
-                  const stopped = accountStopped(snapshot, store);
-                  return (
-                    <InsetRow
-                      key={store.id}
-                      className="devrow"
-                      action={
-                        <>
-                          {(['set', 'change', 'verify'] as const).map(
-                            (mode) => (
-                              <Button
-                                key={mode}
-                                size="sm"
-                                disabled={stopped.stopped}
-                                title={
-                                  stopped.stopped ? stopped.reason : undefined
-                                }
-                                onClick={() => {
-                                  setPassphrase({ store, mode });
-                                  setSheet('passphrase');
-                                }}
-                              >
-                                {mode === 'set'
-                                  ? 'Set…'
-                                  : mode === 'change'
-                                    ? 'Change…'
-                                    : 'Verify…'}
-                              </Button>
-                            ),
-                          )}
-                        </>
-                      }
-                    >
-                      <AccountMark
-                        name={usernameOf(snapshot, store) ?? store.account}
-                      />
-                      <span className="t">
-                        <b>{usernameOf(snapshot, store) ?? store.account}</b>
-                        <small>
-                          {localAliasOf(snapshot, store)} ·{' '}
-                          {serverName(snapshot, store)}
-                        </small>
-                        {/* Why the three actions are off, on the row and not
-                            only in each button's title. */}
-                        {stopped.stopped ? (
-                          <small className="why">{stopped.reason}</small>
-                        ) : null}
-                      </span>
-                    </InsetRow>
-                  );
-                })
-              ) : (
-                <InsetRow label="None">No accounts on this device.</InsetRow>
-              )}
-            </Inset>
-            <SectionLabel id="settings-card-label">Security keys</SectionLabel>
-            {unavailable ? (
-              <UnavailableAccount
-                stores={stores}
-                snapshot={snapshot}
-                onSelect={(store) =>
-                  onNavigate({ ...location, store: store.id })
-                }
-                onRefresh={() => void onRefreshSnapshot().catch(onError)}
-              />
-            ) : (
-              <Inset>
-                {snapshot.servers.map((server) => (
-                  <InsetRow
-                    key={server.id}
-                    label={
-                      server.label
-                        ? `${serverDisplayName(server)} · ${server.name}`
-                        : serverDisplayName(server)
-                    }
-                    action={
-                      <Button
-                        onClick={() =>
-                          onNavigate({
-                            kind: 'settings',
-                            section: 'servers',
-                            profile: server.id,
-                          })
-                        }
-                      >
-                        Open security keys
-                      </Button>
-                    }
-                  >
-                    Manage enrollments and card credentials for all accounts on
-                    this server.
-                  </InsetRow>
-                ))}
-              </Inset>
-            )}
-          </div>
-          <div
-            ref={anchors.notifications}
-            role="region"
-            aria-labelledby="settings-notifications-label"
-            tabIndex={-1}
-          >
-            <SectionLabel id="settings-notifications-label">
-              Notifications
-            </SectionLabel>
-            <NotificationSettings />
-          </div>
-          <AboutSection
-            snapshot={snapshot}
-            bridge={bridge}
-            appInfo={appInfo}
-            anchor={anchors.about}
-            onError={onError}
-            onMessage={(text: string) => toasts.show(text)}
-            onLock={onLock}
-            agentLifecycle={agentLifecycle}
-            onRetryAgent={onRetryAgent}
-          />
-          <SectionLabel className="danger-title">Danger zone</SectionLabel>
-          <Inset className="settings-inset middle wide danger-box">
-            <InsetRow
-              className="dangerrow"
-              label="Reset this device"
-              action={
-                <Button
-                  size="sm"
-                  variant="danger"
-                  disabled={!snapshot.servers.length}
-                  title={
-                    snapshot.servers.length
-                      ? undefined
-                      : 'No server is configured on this device'
-                  }
-                  onClick={() => setSheet('reset-mac')}
-                >
-                  Reset this device…
-                </Button>
-              }
-            >
-              <small>
-                Removes the local account keys, trust history, cache and
-                unfinished operations this device holds for every server. Your
-                accounts keep existing on their servers and other devices are
-                untouched.
-              </small>
-            </InsetRow>
-          </Inset>
+    <div className="settingslayout">
+      <nav className="side subnav-side" aria-label="Settings sections">
+        <Tabs
+          label="Settings sections"
+          idBase={SETTINGS_TABS}
+          value={section}
+          onChange={(next) => {
+            // Settings sections are sibling views within this tab and replace
+            // current content without adding history entries. Selecting a
+            // section opens its root view without a server profile.
+            onNavigate(
+              {
+                kind: 'settings',
+                ...(location.store ? { store: location.store } : {}),
+                section: next,
+              },
+              { replace: true },
+            );
+          }}
+          items={SETTINGS_SECTIONS.map((id) => ({
+            id,
+            label: SETTINGS_SECTION_LABEL[id],
+          }))}
+        />
+      </nav>
+      <div className="subnav-page">
+        <PageHeader ruled title={SETTINGS_SECTION_LABEL[section]} />
+        {/* Fixed IDs associate each tab button with its tabpanel. */}
+        <div
+          className="body"
+          role="tabpanel"
+          id={tabPanelId(SETTINGS_TABS, section)}
+          aria-labelledby={tabId(SETTINGS_TABS, section)}
+        >
+          <div className="settings-main">{page}</div>
         </div>
       </div>
       {sheet === 'passphrase' && passphrase ? (
@@ -382,7 +342,7 @@ export function SettingsScreen({
           onError={(error) => void onMutationError(error)}
         />
       ) : null}
-    </>
+    </div>
   );
 }
 
@@ -459,16 +419,11 @@ function AgentSection({
   );
 }
 
-/**
- * About and This Mac: two sections, so two regions. What the application is
- * and what this Mac's copy of it can be moved to are different subjects, and
- * one region named About would name half of what it encloses.
- */
+/** About: what the application and its agent are. */
 function AboutSection({
   snapshot,
   bridge,
   appInfo,
-  anchor,
   onError,
   onMessage,
   onLock,
@@ -478,143 +433,176 @@ function AboutSection({
   snapshot: AgentSnapshot;
   bridge: Bridge;
   appInfo: AppInfo | null;
-  /** The `section=about` address lands on the first of the two. */
-  anchor: RefObject<HTMLDivElement | null>;
   onError: (error: unknown) => void;
   onMessage: (message: string) => void;
   onLock: () => Promise<boolean>;
   agentLifecycle: AgentLifecycle;
   onRetryAgent: () => Promise<void>;
 }): ReactNode {
+  return (
+    <Inset className="settings-inset middle wide">
+      <InsetRow label="Version">
+        FOKS Desktop {appInfo?.version ?? '…'}
+        <small>Installed application version.</small>
+      </InsetRow>
+      <AgentSection
+        snapshot={snapshot}
+        bridge={bridge}
+        appInfo={appInfo}
+        onError={onError}
+        onMessage={onMessage}
+        agentLifecycle={agentLifecycle}
+        onRetryAgent={onRetryAgent}
+      />
+      <InsetRow
+        label="Lock application"
+        action={
+          <Button
+            size="sm"
+            icon="shield"
+            onClick={() => {
+              void onLock().then(
+                (locked) => {
+                  if (!locked)
+                    onMessage(
+                      'Application lock is not available on this system.',
+                    );
+                },
+                (error) => onError(error),
+              );
+            }}
+          >
+            Lock now
+          </Button>
+        }
+      >
+        Require your operating-system credentials before FOKS can read vault
+        data again.
+      </InsetRow>
+    </Inset>
+  );
+}
+
+/**
+ * This device: the local maintenance operations, and the one reset that acts
+ * on this Mac rather than on an account. The reset stays visually marked as
+ * destructive, in its own danger zone at the foot of this page rather than of
+ * everything Settings holds.
+ */
+function ThisDeviceSection({
+  bridge,
+  agentLifecycle,
+  serversCount,
+  onError,
+  onReset,
+}: {
+  bridge: Bridge;
+  agentLifecycle: AgentLifecycle;
+  serversCount: number;
+  onError: (error: unknown) => void;
+  onReset: () => void;
+}): ReactNode {
   const maintenanceUnavailable = agentLifecycle.state !== 'ready';
   return (
     <>
-      <div
-        className="settings-section"
-        ref={anchor}
-        tabIndex={-1}
-        role="region"
-        aria-labelledby="settings-about-label"
-      >
-        <SectionLabel id="settings-about-label">About</SectionLabel>
-        <Inset className="settings-inset middle wide">
-          <InsetRow label="Version">
-            FOKS Desktop {appInfo?.version ?? '…'}
-            <small>Installed application version.</small>
-          </InsetRow>
-          <AgentSection
-            snapshot={snapshot}
-            bridge={bridge}
-            appInfo={appInfo}
-            onError={onError}
-            onMessage={onMessage}
-            agentLifecycle={agentLifecycle}
-            onRetryAgent={onRetryAgent}
-          />
-          <InsetRow
-            label="Lock application"
-            action={
-              <Button
-                size="sm"
-                icon="shield"
-                onClick={() => {
-                  void onLock().then(
-                    (locked) => {
-                      if (!locked)
-                        onMessage(
-                          'Application lock is not available on this system.',
-                        );
-                    },
-                    (error) => onError(error),
-                  );
-                }}
-              >
-                Lock now
-              </Button>
-            }
-          >
-            Require your operating-system credentials before FOKS can read vault
-            data again.
-          </InsetRow>
-        </Inset>
-      </div>
-      <div
-        className="settings-section"
-        role="region"
-        aria-labelledby="settings-this-mac-label"
-      >
-        <SectionLabel id="settings-this-mac-label">This device</SectionLabel>
-        <Inset className="settings-inset wide">
-          <InsetRow
-            label="Transfer FOKS state"
-            action={
-              <>
-                <Button
-                  size="sm"
-                  disabled={maintenanceUnavailable}
-                  onClick={() => {
-                    void bridge.maintainClientState('export').catch(onError);
-                  }}
-                >
-                  Export…
-                </Button>
-                <Button
-                  size="sm"
-                  disabled={maintenanceUnavailable}
-                  onClick={() => {
-                    void bridge.maintainClientState('import').catch(onError);
-                  }}
-                >
-                  Import…
-                </Button>
-              </>
-            }
-          >
-            <small>
-              Encrypted backups copy device credentials. Use a new device for
-              independent revocation.
-            </small>
-          </InsetRow>
-          <InsetRow
-            label="Verify imported accounts"
-            action={
+      <Inset className="settings-inset wide">
+        <InsetRow
+          label="Transfer FOKS state"
+          action={
+            <>
               <Button
                 size="sm"
                 disabled={maintenanceUnavailable}
                 onClick={() => {
-                  void bridge.maintainClientState('verify').catch(onError);
+                  void bridge.maintainClientState('export').catch(onError);
                 }}
               >
-                Verify online
+                Export…
               </Button>
-            }
-          >
-            <small>
-              Check current account and device authority before enabling
-              imported state.
-            </small>
-          </InsetRow>
-          <InsetRow
-            label="Move FOKS data"
-            action={
               <Button
                 size="sm"
                 disabled={maintenanceUnavailable}
                 onClick={() => {
-                  void bridge.relocateClientState().catch(onError);
+                  void bridge.maintainClientState('import').catch(onError);
                 }}
               >
-                Choose folder…
+                Import…
               </Button>
-            }
-          >
-            <small>
-              Move every profile and its credentials to another folder on this
-              disk. FOKS verifies the move and restarts.
-            </small>
-          </InsetRow>
-        </Inset>
-      </div>
+            </>
+          }
+        >
+          <small>
+            Encrypted backups copy device credentials. Use a new device for
+            independent revocation.
+          </small>
+        </InsetRow>
+        <InsetRow
+          label="Verify imported accounts"
+          action={
+            <Button
+              size="sm"
+              disabled={maintenanceUnavailable}
+              onClick={() => {
+                void bridge.maintainClientState('verify').catch(onError);
+              }}
+            >
+              Verify online
+            </Button>
+          }
+        >
+          <small>
+            Check current account and device authority before enabling imported
+            state.
+          </small>
+        </InsetRow>
+        <InsetRow
+          label="Move FOKS data"
+          action={
+            <Button
+              size="sm"
+              disabled={maintenanceUnavailable}
+              onClick={() => {
+                void bridge.relocateClientState().catch(onError);
+              }}
+            >
+              Choose folder…
+            </Button>
+          }
+        >
+          <small>
+            Move every profile and its credentials to another folder on this
+            disk. FOKS verifies the move and restarts.
+          </small>
+        </InsetRow>
+      </Inset>
+      <SectionLabel className="danger-title">Danger zone</SectionLabel>
+      <Inset className="settings-inset middle wide danger-box">
+        <InsetRow
+          className="dangerrow"
+          label="Reset this device"
+          action={
+            <Button
+              size="sm"
+              variant="danger"
+              disabled={!serversCount}
+              title={
+                serversCount
+                  ? undefined
+                  : 'No server is configured on this device'
+              }
+              onClick={onReset}
+            >
+              Reset this device…
+            </Button>
+          }
+        >
+          <small>
+            Removes the local account keys, trust history, cache and unfinished
+            operations this device holds for every server. Your accounts keep
+            existing on their servers and other devices are untouched.
+          </small>
+        </InsetRow>
+      </Inset>
     </>
   );
 }

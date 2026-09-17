@@ -12,13 +12,44 @@ import type { AccountStore, LeaseState, Store, StoreRef } from './model/types';
 /* ------------------------------------------------------------- location -- */
 
 /**
- * Which section of the Settings page an address points at. Settings is one
- * scrolling page now, so a section is where the page opens, not a pane that
- * hides the rest. `credentials` is the Account section: the passphrase and
- * card credentials People and Devices send the reader here for.
+ * Which page of Settings' sub-navigation an address points at. Each section is
+ * a page of its own, with the sub-navigation staying on screen while any one
+ * of them is open. `credentials` is the Account page: the passphrase People
+ * and Devices send the reader here for. `security-keys` is the card
+ * credentials, one row per server; `device` is This device, where the local
+ * maintenance operations and the Mac-wide reset live.
  */
 export type SettingsSection =
-  'servers' | 'about' | 'credentials' | 'notifications';
+  | 'servers'
+  | 'credentials'
+  | 'security-keys'
+  | 'notifications'
+  | 'device'
+  | 'about';
+
+/** The order the sub-navigation lists Settings' pages in. */
+export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
+  'servers',
+  'credentials',
+  'security-keys',
+  'notifications',
+  'device',
+  'about',
+];
+
+/** The page an address with no `section=` opens: the sub-navigation's first. */
+export const DEFAULT_SETTINGS_SECTION: SettingsSection = SETTINGS_SECTIONS[0];
+
+/** The words the sub-navigation and the topbar's crumb use for each page. */
+export const SETTINGS_SECTION_LABEL: Readonly<Record<SettingsSection, string>> =
+  {
+    servers: 'Servers',
+    credentials: 'Account',
+    'security-keys': 'Security keys',
+    notifications: 'Notifications',
+    device: 'This device',
+    about: 'About',
+  };
 
 /** Which pane of the Devices tab is open. */
 export type DevicesSection = 'macs' | 'keys';
@@ -26,15 +57,18 @@ export type DevicesSection = 'macs' | 'keys';
 /**
  * Which tab of a group's page an address points at. `people` is the Members
  * roster, `channels` the group's chat channels, `files` the group's vault
- * view, and `settings` the group's settings.
+ * view, `requests` its pending invitations and join requests, and `settings`
+ * the group's settings.
  */
-export type GroupSettingsTab = 'people' | 'channels' | 'files' | 'settings';
+export type GroupSettingsTab =
+  'people' | 'channels' | 'files' | 'requests' | 'settings';
 
 /** The tabs in the order the group page's strip draws them. */
 export const GROUP_SETTINGS_TABS: readonly GroupSettingsTab[] = [
   'people',
   'channels',
   'files',
+  'requests',
   'settings',
 ];
 
@@ -50,7 +84,7 @@ export type Location =
   | { kind: 'all' }
   | { kind: 'store'; ref: StoreRef }
   | { kind: 'group-settings'; ref: StoreRef; tab?: GroupSettingsTab }
-  /** People: the attention list, then the accounts on this Mac. */
+  /** People: the Account tab, one account's profile at a time. */
   | { kind: 'people'; store?: StoreRef }
   /**
    * Chat. `ref` is the team whose inbox is mounted and `channel` the open
@@ -623,12 +657,6 @@ export function encodeLocation(location: Location): {
   }
 }
 
-const SETTINGS_SECTIONS: readonly SettingsSection[] = [
-  'notifications',
-  'servers',
-  'about',
-  'credentials',
-];
 const DEVICES_SECTIONS: readonly DevicesSection[] = ['macs', 'keys'];
 
 /**

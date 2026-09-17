@@ -31,6 +31,7 @@ export function InvitationPanel({
   presentation,
   recover = false,
   onComplete,
+  onRowsChange,
 }: {
   bridge: Bridge;
   profile: string;
@@ -44,6 +45,12 @@ export function InvitationPanel({
   presentation?: PanelPresentation;
   recover?: boolean;
   onComplete: () => Promise<void> | void;
+  /**
+   * The team side is mounted whether or not its tab is open, so a Requests
+   * tab elsewhere on the page can show a live count. Called with the current
+   * membership request count whenever it changes.
+   */
+  onRowsChange?: (count: number) => void;
 }) {
   const devices = useDeviceCache();
   const queries = useQueryRepository(bridge, devices?.repository);
@@ -125,6 +132,32 @@ export function InvitationPanel({
       live = false;
     };
   }, [bridge, profile, account, teamAlias, teamId, recover]);
+  // The team side has no modal presentation and is mounted for the life of
+  // the team page, not just while its tab is open, so its own request list
+  // is loaded once up front instead of waiting for a manual Refresh requests.
+  useEffect(() => {
+    if (presentation || !teamAlias) return;
+    let live = true;
+    void bridge
+      .invitation(
+        profile,
+        account,
+        { action: 'inbox', team_alias: teamAlias },
+        null,
+      )
+      .then((value) => {
+        if (live && !Array.isArray(value) && value.rows) setRows(value.rows);
+      })
+      .catch(() => {
+        // A silent background load; Refresh requests surfaces its own error.
+      });
+    return () => {
+      live = false;
+    };
+  }, [bridge, profile, account, teamAlias, presentation]);
+  useEffect(() => {
+    onRowsChange?.(rows.length);
+  }, [rows, onRowsChange]);
   const nativeRole = (value: string): InvitationRole =>
     value === 'member'
       ? { member: { visibility: 0 } }

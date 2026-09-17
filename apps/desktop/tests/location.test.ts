@@ -245,6 +245,10 @@ const ROUND_TRIP: Location[] = [
   { kind: 'settings', section: 'servers' },
   { kind: 'settings', section: 'servers', profile: 'acme' },
   { kind: 'settings' },
+  { kind: 'settings', section: 'credentials' },
+  { kind: 'settings', section: 'security-keys' },
+  { kind: 'settings', section: 'notifications' },
+  { kind: 'settings', section: 'device' },
   { kind: 'settings', section: 'about' },
   { kind: 'first-run', step: 'who' },
 ];
@@ -393,6 +397,32 @@ test('the sections that became tabs keep their deep links', () => {
   // Accounts became People, and the address says so.
   assert.deepEqual(decodeLocation('?state=settings&section=account'), {
     kind: 'people',
+  });
+});
+
+test('the sub-navigation’s two new pages deep-link, and an address for a section that no longer exists lands on the tab', () => {
+  assert.deepEqual(decodeLocation('?state=settings&section=security-keys'), {
+    kind: 'settings',
+    section: 'security-keys',
+  });
+  assert.deepEqual(decodeLocation('?state=settings&section=device'), {
+    kind: 'settings',
+    section: 'device',
+  });
+  // Written back out, each is the same address.
+  for (const location of [
+    { kind: 'settings', section: 'security-keys' },
+    { kind: 'settings', section: 'device' },
+  ] as const) {
+    const href = locationHref('http://localhost/?state=all', location);
+    assert.deepEqual(decodeLocation(new URL(href).search), location, href);
+  }
+  // A `section=` naming nothing this build has — never valid, or since
+  // retired for a reason not in `RETIRED_SETTINGS_SECTIONS` — drops the
+  // section rather than refusing the address; the tab opens on its default
+  // page instead of erroring.
+  assert.deepEqual(decodeLocation('?state=settings&section=display'), {
+    kind: 'settings',
   });
 });
 

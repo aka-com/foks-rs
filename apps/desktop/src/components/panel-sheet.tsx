@@ -1,5 +1,5 @@
 /**
- * Sheet presentation for the account panels reached from Settings → Accounts.
+ * Sheet presentation for the account panels reached from the Account tab.
  *
  * Each panel keeps its own bridge state machine and renders its form in the
  * sheet body and its actions in the sheet footer. The header carries the

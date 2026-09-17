@@ -409,11 +409,13 @@ async function groupWalk(context, origin) {
       .waitFor();
 
     await page.goto(`${origin}/?state=federation`, { waitUntil: 'load' });
-    const inactive = page.locator('.rt.fed .prow', { hasText: 'Inactive' });
+    // Admitted teams are drawn in the same list as people now, not a
+    // separately classed table.
+    const inactive = page.locator('.rt.bare .prow', { hasText: 'Inactive' });
     await inactive.getByRole('button', { name: 'Restore access' }).click();
     await toast(page, 'Group access restored');
     // Verify the table row displays active status.
-    await page.locator('.rt.fed .prow', { hasText: 'Active' }).waitFor();
+    await page.locator('.rt.bare .prow', { hasText: 'Active' }).waitFor();
     if (await inactive.count())
       failures.push('the restored group is still Inactive');
 
@@ -422,12 +424,15 @@ async function groupWalk(context, origin) {
       .getByRole('button', { name: 'Group settings', exact: true })
       .click();
     await page.locator('.ghero', { hasText: 'Household' }).waitFor();
-    // The subtitle is the server and the bare role this account holds, in
-    // that order and with nothing else in it.
-    await page.locator('.ghero .sub', { hasText: 'Owner' }).waitFor();
+    // The header chip is the server and the member count; the bare role
+    // this account holds reads on its own row under Members instead.
     const subtitle = (await page.locator('.ghero .sub').innerText()).trim();
-    if (subtitle !== 'Personal server · Owner')
+    if (subtitle !== 'Personal server · 2 members')
       failures.push(`the group header subtitle read "${subtitle}"`);
+    await page
+      .locator('.rt.bare .prow', { hasText: 'you' })
+      .filter({ hasText: 'Owner' })
+      .waitFor();
 
     await page.goto(`${origin}/?state=party-remove`, { waitUntil: 'load' });
     const remove = page.getByRole('button', {

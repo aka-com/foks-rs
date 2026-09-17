@@ -198,7 +198,7 @@ test('every tab draws a glyph, so all six survive the collapsed rail', async () 
   const tabs = [...document.querySelectorAll('.side.rail .rail-tabs .nav')];
   assert.deepEqual(
     tabs.map((tab) => tab.querySelector('.t')?.textContent),
-    ['Files', 'Chat', 'Teams', 'Devices', 'Accounts', 'Settings'],
+    ['Files', 'Chat', 'Teams', 'Devices', 'Account', 'Settings'],
   );
   for (const tab of tabs)
     assert.ok(tab.querySelector('.ic'), `${tab.textContent} has a glyph`);

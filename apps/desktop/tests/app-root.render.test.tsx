@@ -66,7 +66,7 @@ test('the rail draws the six tabs, the unread badge and the attention dot', () =
   ];
   assert.deepEqual(
     tabs.map((tab) => tab.querySelector('.t')?.textContent),
-    ['Files', 'Chat', 'Teams', 'Devices', 'Accounts', 'Settings'],
+    ['Files', 'Chat', 'Teams', 'Devices', 'Account', 'Settings'],
   );
   // The fixture's two open notifications light the dot on the avatar, which is
   // the only place attention is advertised.
@@ -325,14 +325,15 @@ test('Accounts, Devices and Settings draw no StoreRef', async () => {
       ),
     ].join(' ');
 
-  for (const [name, settled] of [
-    ['Accounts', 'Actions on this account'],
-    ['Devices', 'paper-backup'],
-    ['Settings', 'Danger zone'],
+  for (const [name, heading, settled] of [
+    ['Account', 'Account', 'Switch account'],
+    ['Devices', 'Devices', 'paper-backup'],
+    // Settings' sub-navigation opens on Servers, its landing page.
+    ['Settings', 'Servers', 'foks.example.net'],
   ] as const) {
     testingLibrary.fireEvent.click(tab(name));
     const main = await testingLibrary.waitFor(() => {
-      assert.equal(document.querySelector('.loc h1')?.textContent, name);
+      assert.equal(document.querySelector('.loc h1')?.textContent, heading);
       const node = document.querySelector('main.main');
       assert.ok(node);
       // Wait for the page's own reads: a loading pane draws none of the rows

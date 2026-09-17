@@ -161,5 +161,9 @@ test('local certificate operations stay local while a remote inbox profile is se
   ui.fireEvent.click(r.getByText('Create invitation'));
   await ui.waitFor(() => assert.ok(r.getByText('Submit')));
   ui.fireEvent.click(r.getByText('Submit'));
-  await ui.waitFor(() => assert.deepEqual(actions, ['create', 'attempt']));
+  // The team side loads its own request list up front, so mounting is
+  // itself an "inbox" read before the person under test does anything.
+  await ui.waitFor(() =>
+    assert.deepEqual(actions, ['inbox', 'create', 'attempt']),
+  );
 });

@@ -1,12 +1,12 @@
 /**
  * The group page's Members tab.
  *
- * The roster is drawn as three sub-sections — people, machines and the groups
- * admitted from other servers — one line of role each: the visibility band
- * rides inside the role chip and the party generation is not shown. What a row
- * cannot do stays in its menu, inert and still reachable, with the reason in
- * its title, and an alert that carries one action puts it at the right end of
- * the alert.
+ * The roster is drawn as one Members list — people and the teams admitted
+ * from other servers together, with Machines its own sub-section below —
+ * one line of role each: the visibility band rides inside the role chip and
+ * the party generation is not shown. What a row cannot do stays in its menu,
+ * inert and still reachable, with the reason in its title, and an alert that
+ * carries one action puts it at the right end of the alert.
  */
 
 import assert from 'node:assert/strict';
@@ -125,12 +125,38 @@ function sectionLabels(): string[] {
   );
 }
 
+/**
+ * The header's Add people menu item with this bold label — "A person" or "A
+ * team from another server" — once the menu is open.
+ */
+function addPeopleItem(label: string): HTMLButtonElement {
+  const node = [
+    ...document.querySelectorAll<HTMLButtonElement>('.menu button'),
+  ].find(
+    (candidate) =>
+      candidate.querySelector('.menu-choice b')?.textContent === label,
+  );
+  assert.ok(node, `no Add people choice labelled ${label}`);
+  return node;
+}
+
+/** Opens the header's Add people menu and picks this choice. */
+function addPeopleChoice(
+  rendered: ReturnType<typeof ui.render>,
+  label: string,
+): void {
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add people' }));
+  ui.fireEvent.click(addPeopleItem(label));
+}
+
 test('the roster is split into people, machines and admitted groups', async () => {
   await group(await fixture());
+  // The invitation panel is mounted for the life of the page, so its own
+  // "Membership requests" heading is present — hidden — alongside Members.
   assert.deepEqual(sectionLabels(), [
-    'People— 4 people',
+    'Members— 6 members',
     'Machines— 1 connected',
-    'Teams on other servers',
+    'Membership requests',
   ]);
   // A machine is an ordinary party; its line says only what kind it is.
   assert.equal(
@@ -171,9 +197,7 @@ test('Members exposes invitation creation, requests and approval recovery for th
   });
   await ui.act(async () => {});
   calls.length = 0;
-  ui.fireEvent.click(
-    r.getByRole('button', { name: 'Invitations and requests' }),
-  );
+  ui.fireEvent.click(r.getByRole('tab', { name: /^Requests/ }));
   for (const label of [
     'Create invitation',
     'Refresh requests',
@@ -217,7 +241,7 @@ test('Members exposes invitation creation, requests and approval recovery for th
 
 test('Members does not expose invitation administration to an ordinary member', async () => {
   const snapshot = await fixture();
-  await group({
+  const rendered = await group({
     ...snapshot,
     parties: snapshot.parties.map((party) =>
       party.store === 'team:eng' && party.label === 'you'
@@ -226,13 +250,54 @@ test('Members does not expose invitation administration to an ordinary member', 
     ),
   });
   assert.equal(ui.screen.queryByText('Invitations and requests'), null);
+  // There is nothing to request review of from here, so the tab itself is
+  // not offered — the same as it was never a Toggle a Member could open.
+  assert.equal(
+    [...document.querySelectorAll('[role="tab"]')].some(
+      (node) => node.getAttribute('data-tab') === 'requests',
+    ),
+    false,
+  );
+  // Add people stays reachable, but neither choice applies to a Member.
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add people' }));
+  assert.equal(inert(addPeopleItem('A person')), true);
+  assert.equal(inert(addPeopleItem('A team from another server')), true);
+});
+
+test('the Requests tab count matches what the panel lists, and none when nothing is pending', async () => {
+  const rendered = await group(await fixture());
+  const requestsTab = [
+    ...document.querySelectorAll<HTMLElement>('[role="tab"]'),
+  ].find((node) => node.getAttribute('data-tab') === 'requests');
+  assert.ok(requestsTab);
+  // The fixture bridge seeds two join requests the first time they are read;
+  // the panel is mounted for the life of the page, so the tab already knows.
+  assert.equal(requestsTab.querySelector('.n')?.textContent, '2');
+  ui.fireEvent.click(requestsTab);
+  const rows = [...document.querySelectorAll('.op')];
+  assert.equal(rows.length, 2);
+  assert.deepEqual(
+    rows.map((row) => row.querySelector('p')?.textContent),
+    ['fixture-joiner · local', 'fixture-second-joiner · local'],
+  );
+  rendered.unmount();
+
+  const empty = await group(await fixture(), {
+    invitation: async (_profile, _account, action) =>
+      action.action === 'inbox' ? { rows: [] } : { state: 'complete' },
+  });
+  const emptyTab = [
+    ...empty.container.querySelectorAll<HTMLElement>('[role="tab"]'),
+  ].find((node) => node.getAttribute('data-tab') === 'requests');
+  assert.ok(emptyTab);
+  assert.equal(emptyTab.querySelector('.n'), null);
 });
 
 test('a role is one chip, with the visibility band inside it', async () => {
   await group(await fixture());
   assert.equal(
     memberRow('dana.okafor').querySelector('.rolecell .chip')?.textContent,
-    'Member (0)',
+    'Member · sees level 0',
   );
   // Owner and Admin have no band, so their chip carries none.
   assert.equal(
@@ -291,7 +356,7 @@ test('an admitted group is one row: role, admission state and its own actions', 
   const chips = [...row.querySelectorAll('.chip')].map(
     (chip) => chip.textContent,
   );
-  assert.deepEqual(chips, ['Member (0)', 'Inactive']);
+  assert.deepEqual(chips, ['Member · sees level 0', 'Inactive']);
   assert.ok(rendered.getByRole('button', { name: 'Restore access' }));
   ui.fireEvent.click(
     rendered.getByRole('button', { name: 'Actions for homelab' }),
@@ -339,20 +404,15 @@ test('a single-action alert puts its action at the right end of the alert', asyn
   const refresh = rendered.getByRole('button', { name: 'Refresh' });
   assert.equal(refresh.closest('.band .a') !== null, true);
   assert.equal(alert.lastElementChild?.className, 'a');
-  // Federation still loaded, so its section is drawn as usual.
-  assert.ok(sectionLabels().includes('Teams on other servers'));
-  // The add-actions belong to the rows that failed to load, so they go with
-  // them: the only one left is what admits another group.
-  const actions = [...document.querySelectorAll('.roster-actions')];
-  assert.equal(actions.length, 1);
-  assert.equal(
-    (actions[0].querySelector('button')?.textContent ?? '').trim(),
-    'Add a team…',
-  );
-  assert.equal(
-    rendered.queryByRole('button', { name: 'Invite to team…' }),
-    null,
-  );
+  // No count is drawn while the roster could not be read: it would either
+  // repeat the failed read or state a number that may be wrong.
+  assert.equal(sectionLabels()[0], 'Members');
+  // Determining who may add to the roster is itself a roster read, so a
+  // roster that failed to load leaves both Add people choices unable to
+  // say whether they apply, and they say so rather than disappearing.
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add people' }));
+  assert.equal(inert(addPeopleItem('A person')), true);
+  assert.equal(inert(addPeopleItem('A team from another server')), true);
 });
 
 test('a federation failure replaces its rows and keeps its own Refresh', async () => {
@@ -426,11 +486,14 @@ test('a roster party with no admission record is listed, not dropped', async () 
     row.querySelector('.kico.round')?.getAttribute('aria-hidden'),
     'true',
   );
-  assert.equal(row.querySelector('small')?.textContent, 'on foks.example.net');
+  assert.equal(
+    row.querySelector('small')?.textContent,
+    'team on foks.example.net',
+  );
   const chips = [...row.querySelectorAll('.chip')].map(
     (chip) => chip.textContent,
   );
-  assert.deepEqual(chips, ['Member (0)', 'No admission record']);
+  assert.deepEqual(chips, ['Member · sees level 0', 'No admission record']);
   // It is still a member of this group, so it is still counted.
   const members = [...document.querySelectorAll('[role="tab"]')].find((tab) =>
     tab.textContent?.startsWith('Members'),
@@ -457,11 +520,16 @@ test('an ambiguous admission record is one row, counted once', async () => {
   const row = memberRow('homelab');
   assert.deepEqual(
     [...row.querySelectorAll('.chip')].map((chip) => chip.textContent),
-    ['Member (0)', 'Ambiguous admission'],
+    ['Member · sees level 0', 'Ambiguous admission'],
   );
   // The records it matches are left to that one row rather than listed beside
   // it, so the group appears once.
-  assert.equal(document.querySelectorAll('.rt.fed .prow').length, 1);
+  assert.equal(
+    [...document.querySelectorAll('.rt.bare .prow')].filter((node) =>
+      node.textContent?.includes('homelab'),
+    ).length,
+    1,
+  );
   const members = [...document.querySelectorAll('[role="tab"]')].find((tab) =>
     tab.textContent?.startsWith('Members'),
   );
@@ -474,13 +542,13 @@ test('the group sections are a tablist the arrow keys walk', async () => {
   assert.ok(tabs);
   assert.equal(tabs.getAttribute('aria-label'), 'Team sections');
   const strip = [...tabs.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
-  // Four tabs, in the order the page's addresses name them.
+  // Five tabs, in the order the page's addresses name them.
   assert.deepEqual(
     strip.map((tab) => tab.getAttribute('data-tab')),
-    ['people', 'channels', 'files', 'settings'],
+    ['people', 'channels', 'files', 'requests', 'settings'],
   );
   const [members, channels] = strip;
-  const settings = strip[3];
+  const settings = strip[4];
   // The open tab is the one in the page's tab order; the arrows reach the rest.
   assert.equal(members.getAttribute('aria-selected'), 'true');
   assert.equal(members.tabIndex, 0);
@@ -525,33 +593,23 @@ test('a member cannot act on their own row', async () => {
   );
 });
 
-test('each action follows the rows it adds to', async () => {
+test('Add people offers a person or a team from another server, each in its own words', async () => {
   const rendered = await group(await fixture());
-  const actions = [...document.querySelectorAll('.roster-actions')];
-  assert.equal(actions.length, 2);
-  // People and machines first, then what adds to them.
-  assert.deepEqual(
-    [...actions[0].querySelectorAll('button')].map((node) =>
-      (node.textContent ?? '').trim(),
-    ),
-    ['Add someone on Acme…', 'Invite to team…'],
-  );
-  // Then the admitted groups, then what admits another one.
-  const federation = document.querySelector('.rt.fed');
-  assert.ok(federation);
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add people' }));
+  const person = addPeopleItem('A person');
+  const team = addPeopleItem('A team from another server');
   assert.equal(
-    federation.compareDocumentPosition(actions[1]) &
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    Node.DOCUMENT_POSITION_FOLLOWING,
+    person.querySelector('.menu-choice small')?.textContent,
+    'By username on Acme.',
   );
   assert.equal(
-    (actions[1].querySelector('button')?.textContent ?? '').trim(),
-    'Add a team…',
+    team.querySelector('.menu-choice small')?.textContent,
+    'Everyone in it gets one role here.',
   );
   // And the sheet it opens says what it will do, in its own words, naming
   // the group it was given rather than "group".
   await ui.act(async () => {
-    ui.fireEvent.click(rendered.getByRole('button', { name: 'Add a team…' }));
+    ui.fireEvent.click(team);
   });
   assert.ok(rendered.getByRole('button', { name: 'Add household' }));
   assert.equal(
@@ -576,7 +634,7 @@ test('an active ad-hoc share says its membership is fixed', async () => {
     team_id_hex:
       '0399c2aa07b45e18d0c73a9f2e5b6417ac8d0192f3e4b5c6d7089a1b2c3d4e5f31',
   };
-  await group(
+  const rendered = await group(
     {
       ...snapshot,
       stores: [...snapshot.stores, share],
@@ -604,8 +662,15 @@ test('an active ad-hoc share says its membership is fixed', async () => {
   // The page always draws this one, so it names itself rather than speaking.
   assert.equal(band.getAttribute('role'), 'group');
   assert.match(band.textContent ?? '', /Memberships can’t be changed\./);
-  // A fixed membership has nothing to add to, so no action is offered.
+  // A fixed membership has nothing to add to, so no action is offered, in
+  // the roster or in the header.
   assert.equal(document.querySelector('.roster-actions'), null);
+  assert.equal(rendered.queryByRole('button', { name: 'Add people' }), null);
+  // The header chip still names the server and the fixed member count.
+  assert.equal(
+    document.querySelector('.ghero .sub .chip')?.textContent,
+    'Personal server · 2 members',
+  );
 });
 
 test('the Settings tab states the name, the join policy and why leaving is not offered', async () => {
@@ -644,7 +709,8 @@ test('Members invite action opens the group invitation workflow', async () => {
   });
   await ui.act(async () => {});
   calls.length = 0;
-  ui.fireEvent.click(r.getByRole('button', { name: 'Invite to team…' }));
+  addPeopleChoice(r, 'A person');
+  ui.fireEvent.click(r.getByRole('button', { name: 'Invite them to Acme…' }));
   const dialog = r.getByRole('dialog');
   ui.fireEvent.click(
     ui.within(dialog).getByRole('button', { name: 'Create invitation' }),
@@ -682,7 +748,10 @@ test('an invitation prepared after unmount is recovered from the group banner', 
     return row;
   };
   const first = await group(snapshot, { invitation });
-  ui.fireEvent.click(first.getByRole('button', { name: 'Invite to team…' }));
+  addPeopleChoice(first, 'A person');
+  ui.fireEvent.click(
+    first.getByRole('button', { name: 'Invite them to Acme…' }),
+  );
   ui.fireEvent.click(
     ui
       .within(first.getByRole('dialog'))

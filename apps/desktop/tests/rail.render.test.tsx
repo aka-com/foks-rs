@@ -126,7 +126,7 @@ test('the rail draws six tabs and marks the one that owns the location', async (
   await rail({ kind: 'group-settings', ref: 'team:eng' });
   assert.deepEqual(
     tabs().map((tab) => tab.querySelector('.t')?.textContent),
-    ['Files', 'Chat', 'Teams', 'Devices', 'Accounts', 'Settings'],
+    ['Files', 'Chat', 'Teams', 'Devices', 'Account', 'Settings'],
   );
   // A group's settings page belongs to Teams.
   assert.equal(tabs()[2].getAttribute('aria-current'), 'page');
@@ -216,7 +216,7 @@ test('a tab is titled only where its label is hidden', async () => {
   await rail({ kind: 'files' }, '0', 0, true);
   assert.deepEqual(
     tabs().map((tab) => tab.getAttribute('title')),
-    ['Files', 'Chat', 'Teams', 'Devices', 'Accounts', 'Settings'],
+    ['Files', 'Chat', 'Teams', 'Devices', 'Account', 'Settings'],
   );
 });
 
@@ -408,5 +408,27 @@ test('device crumbs use the name resolved for the exact account and address', as
   assert.deepEqual(
     crumbTrail(location, undefined, undefined, { ...label, address: 'other' }),
     ['Devices', 'Key'],
+  );
+});
+
+test('the settings crumb always names the sub-navigation’s open page', async () => {
+  const { crumbTrail } = (await vite.ssrLoadModule(
+    '/src/shell/topbar.tsx',
+  )) as typeof import('../src/shell/topbar');
+  // An address with no `section=` still opens a page — Servers, the
+  // sub-navigation's first — so the crumb names it rather than stopping at
+  // the tab.
+  assert.deepEqual(crumbTrail({ kind: 'settings' }), ['Settings', 'Servers']);
+  assert.deepEqual(crumbTrail({ kind: 'settings', section: 'device' }), [
+    'Settings',
+    'This device',
+  ]);
+  // A server's own page reads three deep: the tab, the Servers page it
+  // belongs to, and the server itself.
+  assert.deepEqual(
+    crumbTrail({ kind: 'settings', section: 'servers', profile: 'acme' }, {
+      servers: [{ id: 'acme', name: 'Acme' }],
+    } as unknown as Parameters<typeof crumbTrail>[1]),
+    ['Settings', 'Servers', 'Acme'],
   );
 });

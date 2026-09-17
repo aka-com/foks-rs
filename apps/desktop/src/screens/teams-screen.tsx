@@ -350,7 +350,6 @@ export function TeamsScreen({
    * reasons the team's own page gives.
    */
   const rowMenu = (store: TeamStore): ReactNode => {
-    const serverName = displayServerName(snapshot, store);
     const rosterReason = manageReason(snapshot, store, 'roster');
     const federationReason = manageReason(snapshot, store, 'federation');
     return (
@@ -376,25 +375,24 @@ export function TeamsScreen({
                   Finish setup…
                 </MenuItem>
               ) : null}
+              {/* The team page asks this as one question, so the list does
+                  too: the sheet's own switch chooses between a person and a
+                  team on another server. It is inert only when neither way in
+                  is open; when one is, the sheet states the other's reason. */}
               <MenuItem
                 icon="plus"
-                reason={rosterReason}
+                reason={
+                  rosterReason && federationReason ? rosterReason : undefined
+                }
                 onClick={() => {
                   close();
-                  setSheet({ kind: 'add', store });
+                  setSheet({
+                    kind: rosterReason ? 'admit' : 'add',
+                    store,
+                  });
                 }}
               >
-                Add someone on {serverName}…
-              </MenuItem>
-              <MenuItem
-                icon="people"
-                reason={federationReason}
-                onClick={() => {
-                  close();
-                  setSheet({ kind: 'admit', store });
-                }}
-              >
-                Add a team…
+                Add people…
               </MenuItem>
               <hr />
               <MenuItem

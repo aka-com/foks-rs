@@ -65,7 +65,7 @@ try {
     try {
       await page.goto(`${site.origin}/?state=people`);
       await page
-        .getByRole('heading', { name: 'Accounts', exact: true })
+        .getByRole('heading', { name: 'Account', exact: true })
         .waitFor();
       await activate(page.locator('.rail .who'));
       await activate(

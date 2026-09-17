@@ -1,7 +1,9 @@
 /**
- * The People tab, which is where Settings → Accounts went: the attention list
- * with an action on every card, the account switcher, and the account panel
- * whose rows open the same workflows the Accounts pane opened.
+ * The Account tab: one account's profile at a time, the account the rail
+ * header names. A "Switch account" button opens the same menu the rail
+ * header's avatar opens, and the account's facts are rows with their action
+ * at the right — the same workflows Settings › Accounts used to hold, behind
+ * the same panels.
  */
 
 import assert from 'node:assert/strict';
@@ -119,14 +121,17 @@ async function renderPeople(
 test('the account panel keeps every workflow row from the accounts pane', async () => {
   const { rendered } = await renderPeople(await fixture());
 
-  // One account is shown at a time now, so each workflow appears once.
+  // One account is shown at a time now, so each fact and each workflow
+  // appears once: the five facts' own actions, and the three quieter links
+  // below them.
   for (const name of [
     'Change…',
-    'Sign in…',
-    'Manage…',
-    'Open…',
-    'Join a team…',
-    'Settings › Account',
+    'Settings › Servers',
+    'Devices ›',
+    'Teams ›',
+    'Bot accounts',
+    'Manage via web',
+    'Organization sign-in',
   ])
     assert.equal(
       rendered.getAllByRole('button', { name }).length,
@@ -135,19 +140,12 @@ test('the account panel keeps every workflow row from the accounts pane', async 
     );
   // The row names the account by the label this Mac gave it. The StoreRef the
   // address resolves against is opaque and is not drawn anywhere on the page.
-  const aliasRow = rendered.getByText('Local alias').parentElement;
+  const aliasRow = rendered.getByText('Shown as').parentElement;
   assert.ok(aliasRow?.textContent?.includes('personal'));
   assert.equal(rendered.queryByText('acct:personal'), null);
-  // The device facts are the two sections above these rows; a third row
-  // repeating one of them was removed, and Devices is reached from the
-  // section that lists them.
-  assert.equal(rendered.queryByRole('button', { name: 'Open Devices' }), null);
-  assert.equal(
-    rendered.getAllByRole('button', { name: 'Manage devices' }).length,
-    1,
-  );
-  // The row is named for the panel behind it, which is SsoPanel's own title.
-  assert.ok(rendered.getByText('Organization sign-in'));
+  // The Join a team row is gone; Teams already offers its own join flow, so
+  // this page does not repeat it.
+  assert.equal(rendered.queryByRole('button', { name: 'Join a team…' }), null);
   assert.equal(
     rendered.queryByText(/Changing a username is a signed operation/),
     null,
@@ -155,7 +153,7 @@ test('the account panel keeps every workflow row from the accounts pane', async 
   assert.equal(rendered.queryByText('Check-in not required'), null);
 });
 
-test('the profile lists the account’s teams, its devices and its keys', async () => {
+test('the profile’s Teams and Devices facts summarize the account and link to where they are managed', async () => {
   const chosen: Location[] = [];
   const { rendered } = await renderPeople(
     await fixture(),
@@ -163,68 +161,35 @@ test('the profile lists the account’s teams, its devices and its keys', async 
     (location) => chosen.push(location),
   );
 
-  const teams = rendered.getByRole('region', { name: 'Teams you’re in' });
-  assert.ok(ui.within(teams).getByText('Household'));
-  // The role is bare, and a group that is not set up says so as a chip at the
-  // end of its row.
-  assert.ok(ui.within(teams).getByText('Owner'));
-  assert.ok(ui.within(teams).getByText('Setup incomplete'));
-  // The caption says what the object is, as it does on Teams and on a
-  // server's page — without the server, which the band above already names.
-  assert.ok(ui.within(teams).getByText(/^Named team · /));
-  assert.equal(ui.within(teams).queryByText(/Named team · foks/), null);
+  // Teams: the names this account belongs to, not a row per team — each
+  // team's own state is Teams' to show.
+  const teamsButton = rendered.getByRole('button', { name: 'Teams ›' });
+  const teamsRow = teamsButton.closest('.fr');
+  assert.ok(teamsRow);
+  assert.match(teamsRow?.textContent ?? '', /Household/);
   await ui.act(async () => {
-    ui.fireEvent.click(
-      ui.within(teams).getByRole('button', { name: 'Open Homelab in Teams' }),
-    );
-  });
-  assert.deepEqual(chosen.at(-1), {
-    kind: 'group-settings',
-    ref: 'team:homelab',
-    tab: 'people',
-  });
-  await ui.act(async () => {
-    ui.fireEvent.click(
-      ui.within(teams).getByRole('button', { name: 'All teams' }),
-    );
+    ui.fireEvent.click(teamsButton);
   });
   assert.deepEqual(chosen.at(-1), { kind: 'teams', store: 'acct:personal' });
 
-  // Two Macs, a key on a card, a paper key and an enrollment, counted and
-  // named.
-  const devices = rendered.getByRole('region', { name: 'Devices' });
-  assert.ok(ui.within(devices).getByText('5 devices and keys'));
-  assert.ok(ui.within(devices).getByText(/MacBook Pro · Travel Mac/));
+  // Devices: a count, not the list — Devices already lists every key.
+  const devicesButton = rendered.getByRole('button', { name: 'Devices ›' });
+  const devicesRow = devicesButton.closest('.fr');
+  assert.ok(devicesRow);
+  assert.ok(
+    ui.within(devicesRow as HTMLElement).getByText('5 devices and keys'),
+  );
   await ui.act(async () => {
-    ui.fireEvent.click(
-      ui.within(devices).getByRole('button', { name: 'Manage devices' }),
-    );
+    ui.fireEvent.click(devicesButton);
   });
   assert.deepEqual(chosen.at(-1), { kind: 'devices', store: 'acct:personal' });
 
-  const keys = rendered.getByRole('region', { name: 'Keys' });
-  assert.ok(ui.within(keys).getByText('MacBook Pro · Computer'));
-  assert.ok(ui.within(keys).getByText('paper-backup · Paper key'));
-  // The id leads the row; what it belongs to follows it.
-  const rows = keys.querySelectorAll('.keyline');
-  assert.match(
-    rows[0].querySelector('b')?.textContent ?? '',
-    /^04a779c406…/,
-    'the shortened key id is the row’s first text',
-  );
-  // An enrollment is answered for the server profile, not for this account,
-  // and its row says where it is enrolled rather than naming an account.
-  assert.ok(ui.within(keys).getByText('Enrollment · on Personal server'));
-  // The only verification this page can state is this Mac's own key.
-  assert.equal(
-    ui
-      .within(keys)
-      .getAllByRole('img', { name: 'Authenticated on this device' }).length,
-    1,
-  );
+  // The Keys section is gone from this page.
+  assert.equal(rendered.queryByText('MacBook Pro · Computer'), null);
+  assert.equal(rendered.queryByText('paper-backup · Paper key'), null);
 });
 
-test('a group whose roster could not be read draws the chip, not the caption', async () => {
+test('a group whose roster could not be read still names the team on the Teams fact', async () => {
   const snapshot = await fixture();
   const { rendered } = await renderPeople({
     ...snapshot,
@@ -244,18 +209,10 @@ test('a group whose roster could not be read draws the chip, not the caption', a
     ],
   });
 
-  const teams = rendered.getByRole('region', { name: 'Teams you’re in' });
-  const row = [...teams.querySelectorAll('.fr.devrow')].find((entry) =>
-    entry.textContent?.includes('Household'),
-  );
-  assert.ok(row, 'the account still lists the group');
-  // The state is a chip at the end of the row; the caption says only what the
-  // object is, because the summary it would carry could not be read.
-  assert.equal(
-    [...row.querySelectorAll('.chip')].map((chip) => chip.textContent)[0],
-    'Roster unavailable',
-  );
-  assert.equal(row.querySelector('small')?.textContent, 'Named team');
+  // The Teams fact is a plain list of names; whether a team's own roster
+  // could be read is Teams' own state to show, not repeated here.
+  const teamsButton = rendered.getByRole('button', { name: 'Teams ›' });
+  assert.match(teamsButton.closest('.fr')?.textContent ?? '', /Household/);
 });
 
 test('People lists no connected card, so it never drives the reader', async () => {
@@ -270,12 +227,13 @@ test('People lists no connected card, so it never drives the reader', async () =
     }),
   });
 
-  // The page lists this account's keys, and asking which card is in the port
-  // drives the card reader; nothing on this page reports one.
+  // The page counts this account's keys for the Devices fact, and asking
+  // which card is in the port drives the card reader; nothing on this page
+  // reports one.
   assert.equal(probes, 0);
 });
 
-test('a failed key read says so rather than reporting no keys', async () => {
+test('a failed key read says so on the Devices fact rather than reporting no keys', async () => {
   const failure = new Error('the agent did not answer');
   const { rendered, reported } = await renderPeople(
     await fixture(),
@@ -292,28 +250,18 @@ test('a failed key read says so rather than reporting no keys', async () => {
     },
   );
 
-  const keys = rendered.getByRole('region', { name: 'Keys' });
-  assert.ok(ui.within(keys).getByText('Keys could not be read.'));
-  assert.ok(ui.within(keys).getByText('Unavailable'));
+  const devicesButton = rendered.getByRole('button', { name: 'Devices ›' });
+  const devicesRow = devicesButton.closest('.fr') as HTMLElement;
   assert.ok(
-    ui
-      .within(keys)
-      .getByText(
-        'Could not retrieve keys from the background service. Open Devices to retry or check service status.',
-      ),
+    ui.within(devicesRow).getByText('Devices and keys could not be read.'),
   );
   assert.equal(
-    ui
-      .within(keys)
-      .queryByText('No keys are listed for this account on this device.'),
+    ui.within(devicesRow).queryByText('5 devices and keys'),
     null,
     'a read that failed is not an account with no keys',
   );
-  const devices = rendered.getByRole('region', { name: 'Devices' });
-  assert.ok(
-    ui.within(devices).getByText('Devices and keys could not be read.'),
-  );
-  // The failure itself is the shell's to report.
+  // The failure itself is the shell's to report; Devices is where the read
+  // is retried, so the detail is not repeated here.
   assert.deepEqual(reported, [failure]);
 });
 
@@ -345,8 +293,12 @@ test('a catalog replaced mid-read is recovered, and the keys arrive', async () =
   // The shell's own refresh is what recovers it, and the read is tried again.
   assert.ok(refreshed.includes('snapshot'));
   assert.equal(attempts, 2);
-  const keys = rendered.getByRole('region', { name: 'Keys' });
-  assert.ok(ui.within(keys).getByText('MacBook Pro · Computer'));
+  const devicesButton = rendered.getByRole('button', { name: 'Devices ›' });
+  assert.ok(
+    ui
+      .within(devicesButton.closest('.fr') as HTMLElement)
+      .getByText('5 devices and keys'),
+  );
 });
 
 test('a read answering after the account changed is dropped', async () => {
@@ -370,6 +322,16 @@ test('a read answering after the account changed is dropped', async () => {
   );
 
   await showAccount('acct:work');
+  const devicesRow = (): HTMLElement =>
+    rendered
+      .getByRole('button', { name: 'Devices ›' })
+      .closest('.fr') as HTMLElement;
+  // Wait for acct:work's own read to settle before taking the baseline, so
+  // the comparison below is not measuring its own loading state.
+  await ui.waitFor(() => {
+    assert.doesNotMatch(devicesRow().textContent ?? '', /Reading this account/);
+  });
+  const before = devicesRow().textContent;
   await ui.act(async () => {
     release?.();
     await held;
@@ -377,14 +339,11 @@ test('a read answering after the account changed is dropped', async () => {
   });
 
   // The first account's keys answered late, and the page is about another
-  // account now, so they are not listed under it.
-  const keys = rendered.getByRole('region', { name: 'Keys' });
-  assert.equal(ui.within(keys).queryByText('Travel Mac · Computer'), null);
-  assert.equal(ui.within(keys).queryByText('paper-backup · Paper key'), null);
-  assert.ok(ui.within(keys).getByText('Enrollment · on Acme'));
+  // account now, so the late answer does not change what is shown.
+  assert.equal(devicesRow().textContent, before);
 });
 
-test('a stopped account lists no keys and says what is unavailable', async () => {
+test('a stopped account displays an unavailable notice on the Devices field and disables the link', async () => {
   const { applyLease } = (await vite.ssrLoadModule(
     '/src/model/index.ts',
   )) as typeof import('../src/model');
@@ -393,19 +352,13 @@ test('a stopped account lists no keys and says what is unavailable', async () =>
     'acct:work',
   );
 
-  const keys = rendered.getByRole('region', { name: 'Keys' });
+  const devicesButton = rendered.getByRole('button', { name: 'Devices ›' });
   assert.ok(
-    ui.within(keys).getByText('Keys are unavailable until Acme is checked.'),
-  );
-  const devices = rendered.getByRole('region', { name: 'Devices' });
-  assert.ok(ui.within(devices).getByText('Not listed while access is stopped'));
-  assert.equal(
     ui
-      .within(devices)
-      .getByRole('button', { name: 'Manage devices' })
-      .hasAttribute('disabled'),
-    true,
+      .within(devicesButton.closest('.fr') as HTMLElement)
+      .getByText('Not listed while access is stopped'),
   );
+  assert.equal(devicesButton.hasAttribute('disabled'), true);
 });
 
 test('the username row opens a sheet titled for the workflow, not the account', async () => {
@@ -432,10 +385,11 @@ test('the switcher lists every account and switching navigates by StoreRef', asy
     (location) => chosen.push(location),
   );
 
-  const trigger = rendered.container.querySelector<HTMLButtonElement>(
-    '.phead .account-dropdown-trigger',
+  const trigger = rendered.getByRole('button', { name: 'Switch account' });
+  assert.ok(
+    trigger.closest('.phead'),
+    'the switcher sits beside the account header',
   );
-  assert.ok(trigger, 'the selector sits beside the account header');
   await ui.act(async () => ui.fireEvent.click(trigger));
   const menu = rendered.getByRole('menu', { name: 'Accounts on this device' });
   assert.equal(menu.querySelectorAll('.acct').length, 2);
@@ -449,73 +403,30 @@ test('the switcher lists every account and switching navigates by StoreRef', asy
   assert.deepEqual(chosen.at(-1), { kind: 'people', store: 'acct:work' });
 });
 
-test('an attention card carries the route to where it is resolved', async () => {
+test('a notice this page can route elsewhere is not repeated here', async () => {
   const { applyLease } = (await vite.ssrLoadModule(
     '/src/model/index.ts',
   )) as typeof import('../src/model');
-  const chosen: Location[] = [];
   const lapsed = applyLease(await fixture(), 'lapsed');
-  const { rendered } = await renderPeople(lapsed, 'acct:personal', (location) =>
-    chosen.push(location),
-  );
+  const { rendered } = await renderPeople(lapsed, 'acct:personal');
 
-  assert.ok(rendered.getByText('Acme is locked'));
-  await ui.act(async () => {
-    ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Open the server' }),
-    );
-  });
-  assert.deepEqual(chosen.at(-1), {
-    kind: 'settings',
-    section: 'servers',
-    profile: 'acme',
-  });
-  // A `team-` note routes to the group it names.
-  assert.equal(
-    rendered.getAllByRole('button', { name: 'Open Homelab' }).length,
-    1,
-  );
-  // A `fed-` note is Homelab's admission into Engineering, and Engineering is
-  // where it is restored.
-  assert.ok(rendered.getByRole('button', { name: 'Open Engineering' }));
-  await ui.act(async () => {
-    ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Open Engineering' }),
-    );
-  });
-  assert.deepEqual(chosen.at(-1), {
-    kind: 'group-settings',
-    ref: 'team:eng',
-    tab: 'people',
-  });
-  // A row that leads somewhere names the place, rather than repeating the
-  // agent's word for the action.
-  assert.ok(
-    rendered.getByRole('button', { name: 'Teams › Engineering › Members' }),
-  );
-  assert.equal(rendered.queryByText(/^Required action/), null);
-  // The place the row names is the place its action button opens.
-  await ui.act(async () => {
-    ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Settings › Servers › Acme' }),
-    );
-  });
-  assert.deepEqual(chosen.at(-1), {
-    kind: 'settings',
-    section: 'servers',
-    profile: 'acme',
-  });
+  // The fixture's three notes each resolve to a place of their own — Acme's
+  // server page, Homelab's own page, and Engineering's admissions list — so
+  // none of them are drawn on this page; it would be a second copy of a
+  // state the reader can already see where it is acted on.
+  assert.equal(rendered.container.querySelector('.people-attention'), null);
+  assert.equal(rendered.queryByText('Acme is locked'), null);
+  assert.equal(rendered.queryByText('Homelab is inactive'), null);
+  assert.equal(rendered.queryByText('Homelab cannot access Engineering'), null);
 });
 
-test('with nothing needing attention the alert is hidden', async () => {
+test('with nothing needing attention the band is hidden', async () => {
   const snapshot = await fixture();
   const { rendered } = await renderPeople({ ...snapshot, notifications: [] });
 
-  assert.equal(rendered.queryByText('Nothing needs attention.'), null);
   assert.equal(rendered.container.querySelector('.people-attention'), null);
-  assert.equal(rendered.queryByText('Needs attention'), null);
   assert.equal(
-    rendered.container.querySelector('.people-attention .attn-card'),
+    rendered.queryByRole('region', { name: /^Needs attention/ }),
     null,
   );
 });
@@ -662,13 +573,13 @@ test('a stopped account disables username changes while recovery remains enabled
   assert.ok(rendered.getByText('Account access is stopped'));
   await ui.act(async () =>
     ui.fireEvent.click(
-      rendered.container.querySelector('.account-dropdown-trigger')!,
+      rendered.getByRole('button', { name: 'Switch account' }),
     ),
   );
   const menu = rendered.getByRole('menu', { name: 'Accounts on this device' });
   assert.ok(ui.within(menu).getByText('Verification failed'));
   await ui.act(async () => ui.fireEvent.keyDown(menu, { key: 'Escape' }));
-  for (const name of ['Sign in…', 'Manage…', 'Open…'])
+  for (const name of ['Bot accounts', 'Manage via web', 'Organization sign-in'])
     assert.equal(
       rendered.getByRole('button', { name }).hasAttribute('disabled'),
       false,
@@ -697,7 +608,9 @@ test('a stale address says the account is no longer available', async () => {
 test('organization sign-in survives browser focus and can finish the same flow', async () => {
   const { rendered } = await renderPeople(await fixture());
   await ui.act(async () => {
-    ui.fireEvent.click(rendered.getByRole('button', { name: 'Sign in…' }));
+    ui.fireEvent.click(
+      rendered.getByRole('button', { name: 'Organization sign-in' }),
+    );
   });
   await ui.act(async () => {
     ui.fireEvent.click(rendered.getByRole('button', { name: 'Sign in' }));
@@ -780,9 +693,7 @@ test('local alias appears in account controls while commands keep the original a
     }),
   });
   assert.ok(rendered.getAllByText('Private account').length >= 2);
-  ui.fireEvent.click(
-    rendered.container.querySelector('.account-dropdown-trigger')!,
-  );
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Switch account' }));
   assert.ok(ui.within(rendered.getByRole('menu')).getByText('Private account'));
   ui.fireEvent.keyDown(rendered.getByRole('menu'), { key: 'Escape' });
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Change…' }));

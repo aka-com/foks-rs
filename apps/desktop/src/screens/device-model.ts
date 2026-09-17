@@ -4,7 +4,7 @@
  * The agent answers with four unrelated lists, and they are not all about the
  * same thing: the authenticated devices and the local backup enrollments are
  * answered per account, while the card enrollments and the card in the port
- * are answered per server profile, for every account on it. Both Accounts and
+ * are answered per server profile, for every account on it. Both Account and
  * Devices present them as one set of keys, so the reading and the row model
  * are here rather than written twice, and every row says which of the two it
  * came from.

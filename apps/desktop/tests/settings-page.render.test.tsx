@@ -1,7 +1,8 @@
 /**
- * The Settings tab as one scrolling page: its sections, the `section=` address
- * that lands on one of them, the `profile=` address that opens a server, and
- * the Mac-wide reset that composes the per-server one.
+ * The Settings tab as a sub-navigation of six pages: the `section=` address
+ * that opens one of them, the `profile=` address that opens a server on the
+ * Servers page without hiding the sub-navigation, and the Mac-wide reset that
+ * composes the per-server one, now on the This device page.
  */
 
 import assert from 'node:assert/strict';
@@ -124,53 +125,85 @@ async function renderSettings(
   return rendered;
 }
 
-test('the page holds servers, credentials, about, this device and the danger zone', async () => {
+test('the sub-navigation lists every section, and Servers opens first', async () => {
   const rendered = await renderSettings(await fixture());
 
-  for (const label of [
+  const nav = rendered.getByRole('navigation', { name: 'Settings sections' });
+  const tabs = ui
+    .within(nav)
+    .getAllByRole('tab')
+    .map((tab) => tab.textContent);
+  assert.deepEqual(tabs, [
+    'Servers',
     'Account',
     'Security keys',
-    'About',
+    'Notifications',
     'This device',
-    'Danger zone',
-  ])
-    assert.ok(rendered.getAllByText(label).length, `${label} is on the page`);
-  // The servers list, with its own state chips and Add a server….
+    'About',
+  ]);
+  assert.equal(
+    ui
+      .within(nav)
+      .getByRole('tab', { name: 'Servers' })
+      .getAttribute('aria-selected'),
+    'true',
+  );
+  // Servers is the sub-navigation's landing page: its list, with its own
+  // state chips and Add a server…, not a section scrolled past on the way to
+  // it.
+  assert.ok(rendered.getByRole('heading', { level: 1, name: 'Servers' }));
   assert.ok(rendered.getByText('foks.example.net'));
   assert.ok(rendered.getByRole('button', { name: 'Add a server…' }));
   assert.ok(rendered.getAllByText('Checked').length);
   assert.ok(rendered.getByText('Not verified'));
-  // One passphrase row per account, with all three actions.
-  assert.equal(rendered.getAllByRole('button', { name: 'Set…' }).length, 2);
-  assert.equal(rendered.getAllByRole('button', { name: 'Change…' }).length, 2);
-  assert.equal(rendered.getAllByRole('button', { name: 'Verify…' }).length, 2);
-  assert.ok(rendered.getByRole('button', { name: 'Lock now' }));
-  assert.ok(rendered.getByRole('button', { name: 'Choose folder…' }));
-  // No sub-navigation: the sections are the page.
-  assert.equal(rendered.queryByRole('navigation'), null);
+  // Only one page is mounted at a time: the other five sections' own content
+  // is not drawn behind Servers.
+  assert.equal(rendered.queryByRole('button', { name: 'Set…' }), null);
+  assert.equal(rendered.queryByRole('button', { name: 'Lock now' }), null);
+  assert.equal(rendered.queryByText('Danger zone'), null);
 });
 
-test('a section address puts the page and the keyboard on that section', async () => {
+test('choosing a sub-navigation section replaces the page, dropping any open server', async () => {
+  const chosen: Location[] = [];
   const rendered = await renderSettings(await fixture(), {
-    where: { section: 'credentials' },
+    where: { profile: 'personal' },
+    onNavigate: (location) => chosen.push(location),
   });
 
-  // The section is a labelled region, named by the label the reader sees.
-  await ui.waitFor(() => {
-    assert.equal(
-      document.activeElement,
-      rendered.getByRole('region', { name: 'Account' }),
-      'the Account section takes focus',
+  ui.fireEvent.click(rendered.getByRole('tab', { name: 'This device' }));
+  assert.deepEqual(chosen.at(-1), { kind: 'settings', section: 'device' });
+});
+
+test('a section address opens that page, each with the sub-navigation beside it', async () => {
+  for (const [section, heading] of [
+    ['credentials', 'Account'],
+    ['security-keys', 'Security keys'],
+    ['notifications', 'Notifications'],
+    ['device', 'This device'],
+    ['about', 'About'],
+  ] as const) {
+    ui.cleanup();
+    const rendered = await renderSettings(await fixture(), {
+      where: { section },
+    });
+    assert.ok(
+      rendered.getByRole('heading', { level: 1, name: heading }),
+      `${section} opens on its own page`,
     );
-  });
-  // The card credentials name the account they act on.
-  assert.ok(rendered.getByText('Security keys'));
+    assert.equal(
+      rendered
+        .getByRole('navigation', { name: 'Settings sections' })
+        .querySelector('.tab.on')?.textContent,
+      heading,
+      `${section}'s own tab reads on`,
+    );
+  }
 });
 
 test('Settings links to profile-scoped security key management', async () => {
   const chosen: Location[] = [];
   const rendered = await renderSettings(await fixture(), {
-    where: { section: 'credentials' },
+    where: { section: 'security-keys' },
     onNavigate: (location) => chosen.push(location),
   });
   ui.fireEvent.click(
@@ -184,9 +217,9 @@ test('Settings links to profile-scoped security key management', async () => {
   assert.equal(rendered.queryByRole('button', { name: 'Change PIN…' }), null);
 });
 
-test('an address naming an account this device lost does not claim facts about it', async () => {
+test('an address naming an account this device lost does not claim facts about its keys', async () => {
   const rendered = await renderSettings(await fixture(), {
-    where: { section: 'credentials', store: 'acct:nope' },
+    where: { section: 'security-keys', store: 'acct:nope' },
   });
 
   assert.ok(rendered.getByText('Account no longer available'));
@@ -196,8 +229,38 @@ test('an address naming an account this device lost does not claim facts about i
   );
 });
 
+test('a server address keeps the sub-navigation on screen, Servers still selected', async () => {
+  const rendered = await renderSettings(await fixture(), {
+    where: { profile: 'personal' },
+  });
+
+  const nav = rendered.getByRole('navigation', { name: 'Settings sections' });
+  assert.equal(
+    ui
+      .within(nav)
+      .getByRole('tab', { name: 'Servers' })
+      .getAttribute('aria-selected'),
+    'true',
+  );
+  // The other five sections are still one click away, not hidden behind the
+  // server the reader opened.
+  assert.ok(ui.within(nav).getByRole('tab', { name: 'This device' }));
+});
+
+test('a Security keys address with no servers on this device says so', async () => {
+  const snapshot = await fixture();
+  const rendered = await renderSettings(
+    { ...snapshot, servers: [] },
+    { where: { section: 'security-keys' } },
+  );
+
+  assert.ok(rendered.getByText('No servers on this device yet.'));
+});
+
 test('the passphrase sheet opens in the mode its row names, Verify included', async () => {
-  const rendered = await renderSettings(await fixture());
+  const rendered = await renderSettings(await fixture(), {
+    where: { section: 'credentials' },
+  });
 
   await ui.act(async () => {
     ui.fireEvent.click(rendered.getAllByRole('button', { name: 'Verify…' })[0]);
@@ -237,9 +300,14 @@ test('a profile address opens that server instead of the page', async () => {
   // danger zone keeps two rows.
   assert.ok(rendered.getByRole('button', { name: 'Remove local data…' }));
   assert.ok(rendered.getByRole('button', { name: 'Erase and reset…' }));
-  // The page's own sections are not drawn behind a server: the danger zone
-  // here is this server's, and the Mac-wide reset is not on it.
-  assert.equal(rendered.queryByText('This device'), null);
+  // The sub-navigation stays on screen — "This device" is one of its labels
+  // now — but that page's own content is not drawn behind a server: the
+  // danger zone here is this server's, and the Mac-wide reset is not on it.
+  assert.ok(
+    ui
+      .within(rendered.getByRole('navigation', { name: 'Settings sections' }))
+      .getByRole('tab', { name: 'This device' }),
+  );
   assert.equal(
     rendered.queryByRole('button', { name: 'Reset this device…' }),
     null,
@@ -437,7 +505,9 @@ test('a lapsed server can be checked from its row in the list', async () => {
 });
 
 test('Reset this device asks for one typed profile name per server', async () => {
-  const rendered = await renderSettings(await fixture());
+  const rendered = await renderSettings(await fixture(), {
+    where: { section: 'device' },
+  });
 
   await ui.act(async () => {
     ui.fireEvent.click(
@@ -469,6 +539,7 @@ test('the reset consumes each profile’s single-use confirmation token', async 
   const issued = new Map<string, string>();
   const spent: [string, string, string][] = [];
   const rendered = await renderSettings(await fixture(), {
+    where: { section: 'device' },
     decorate: (bridge) => ({
       ...bridge,
       describeReset: async (profile) => {
@@ -518,6 +589,7 @@ test('a reset that fails part way reloads every preview', async () => {
   let previews = 0;
   const reported: unknown[] = [];
   const rendered = await renderSettings(await fixture(), {
+    where: { section: 'device' },
     decorate: (bridge) => ({
       ...bridge,
       describeReset: async (profile) => {
@@ -583,10 +655,9 @@ test('device notification preferences are reachable without a channel and recove
       },
     }),
   });
-  assert.equal(
-    document.activeElement,
-    rendered.getByRole('region', { name: 'Notifications' }),
-  );
+  // Notifications is the sub-navigation's own page now, not an anchor
+  // scrolled to inside a longer one, so nothing forces focus onto it.
+  assert.ok(rendered.getByRole('tabpanel', { name: 'Notifications' }));
   const enable = rendered.getByRole('checkbox', {
     name: 'Enable desktop alerts on this device',
   }) as HTMLInputElement;

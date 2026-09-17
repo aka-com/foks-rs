@@ -114,6 +114,22 @@ function channelRows(): HTMLElement[] {
   return [...document.querySelectorAll<HTMLElement>('.roster .rt.bare .prow')];
 }
 
+/** Opens the header's Add people menu and picks this choice. */
+function addPeopleChoice(
+  rendered: ReturnType<typeof ui.render>,
+  label: string,
+): void {
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add people' }));
+  const node = [
+    ...document.querySelectorAll<HTMLButtonElement>('.menu button'),
+  ].find(
+    (candidate) =>
+      candidate.querySelector('.menu-choice b')?.textContent === label,
+  );
+  assert.ok(node, `no Add people choice labelled ${label}`);
+  ui.fireEvent.click(node);
+}
+
 test('the Channels tab says why a group on a chatless server has none', async () => {
   // Chat is not enabled for Engineering's server, Acme.
   const rendered = await group('team:eng', 'channels');
@@ -328,13 +344,7 @@ test('the Files tab links to the group vault and displays its item count', async
 
 test('the add sheet switches between a person and another server’s group', async () => {
   const rendered = await group('team:eng', 'people');
-  await ui.act(async () => {
-    ui.fireEvent.click(
-      rendered.getByRole('button', {
-        name: 'Add someone on Acme…',
-      }),
-    );
-  });
+  addPeopleChoice(rendered, 'A person');
   const seg = document.querySelector(
     '[role="group"][aria-label="What to add"]',
   );
@@ -446,13 +456,7 @@ test('the add sheet clears the agent’s refusal when the username changes', asy
       },
     }),
   });
-  await ui.act(async () => {
-    ui.fireEvent.click(
-      rendered.getByRole('button', {
-        name: 'Add someone on Acme…',
-      }),
-    );
-  });
+  addPeopleChoice(rendered, 'A person');
   const field = rendered.getByLabelText('Username');
   await ui.act(async () => {
     ui.fireEvent.change(field, { target: { value: 'nobody.one' } });
@@ -476,13 +480,7 @@ test('the add sheet clears the agent’s refusal when the username changes', asy
 
 test('add member dialog rejects usernames already present in roster', async () => {
   const rendered = await group('team:eng', 'people');
-  await ui.act(async () => {
-    ui.fireEvent.click(
-      rendered.getByRole('button', {
-        name: 'Add someone on Acme…',
-      }),
-    );
-  });
+  addPeopleChoice(rendered, 'A person');
   await ui.act(async () => {
     ui.fireEvent.change(rendered.getByLabelText('Username'), {
       target: { value: 'dana.okafor' },

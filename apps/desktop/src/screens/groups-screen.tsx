@@ -35,10 +35,9 @@ import {
   parseRole,
   partiesOf,
   partyName,
-  peopleLabel,
+  plural,
   readersOf,
   roleChipLabel,
-  roleName,
   roleRank,
   serverDisplayName,
   serverName as displayServerName,
@@ -78,7 +77,7 @@ import {
   itemCountOf,
 } from './group-tabs';
 import { GroupMark } from './group-mark';
-import { inviteUnavailableTitle, manageReason } from './group-model';
+import { manageReason } from './group-model';
 import { StoreAccessTakeover } from './store-access';
 import { useToast } from '/kit/toasts';
 
@@ -158,7 +157,7 @@ function roleText(party: Party): string {
   return fmtRole(party.destination_role);
 }
 
-/** One notation for a role everywhere on this page: "Owner", "Member (0)". */
+/** One notation for a role everywhere on this page: "Owner", "Member · sees level 0". */
 function fmtRole(role: Item['read']): string {
   const parsed = parseRole(role);
   return parsed
@@ -229,8 +228,9 @@ function useCopyText(
 
 /**
  * What a member row's second line says: the kind of party, and nothing else.
- * Only people and machines are drawn as member rows; a party that stands for
- * another team belongs to "Teams on other servers".
+ * Only people and machines are drawn with `PartyRow`; a party that stands for
+ * another team is drawn with `FederationEntryRow` or `TeamPartyRow` instead,
+ * in the same Members list, each with its own "team on …" caption.
  */
 function partySubtitle(party: Party): string {
   return isMachine(party) ? 'machine' : 'person';
@@ -501,7 +501,7 @@ function TeamPartyRow({
           <b>
             <span>{name}</span>
           </b>
-          <small>on {teamPartyHost(party)}</small>
+          <small>team on {teamPartyHost(party)}</small>
         </span>
       </span>
       <span className="rowtail">
@@ -515,163 +515,133 @@ function TeamPartyRow({
 }
 
 /**
- * The groups admitted from other servers. They keep their own facts — the
- * admission state, the host id and the operation id — because restoring access
- * needs the operation id.
+ * One team admitted from another server, drawn as a member row: it keeps its
+ * own facts — the admission state, the host id and the operation id, because
+ * restoring access needs the operation id — but its caption says what it is,
+ * so it is never mistaken for a person.
  */
-function FederationRows({
+function FederationEntryRow({
   snapshot,
-  store,
+  entry,
   onRerun,
   onRemove,
   manageable,
 }: {
   snapshot: AgentSnapshot;
-  store: Store;
+  entry: FederationEntry;
   onRerun: (operationId: string) => void;
   onRemove: (entry: FederationEntry) => void;
   manageable: boolean;
 }): ReactNode {
-  const { entries, unmatched, ambiguous } = admittedGroups(snapshot, store);
-  if (!entries.length && !unmatched.length && !ambiguous.length)
-    return (
-      <div className="callout">
+  const remoteServer = snapshot.servers.find(
+    (server) => server.id === entry.remote_profile,
+  );
+  const remoteName = remoteServer
+    ? serverDisplayName(remoteServer)
+    : entry.remote_profile;
+  const memberReason =
+    'Every member of an admitted team holds the role shown on its row. They are managed on their own server and cannot be changed or removed one by one.';
+  return (
+    <div
+      className="prow"
+      key={`${entry.remote_host_id_hex}|${entry.remote_team_id_hex}`}
+    >
+      <span className="who2">
         <span
-          className="kico"
-          style={{ background: 'var(--chip-bg)', color: 'var(--muted)' }}
+          className="kico round"
+          style={{ background: hue(entry.remote_team_alias) }}
+          aria-hidden="true"
         >
-          <Icon name="people" />
+          {entry.remote_team_alias.slice(0, 1).toUpperCase()}
         </span>
         <span className="t">
-          <b>No teams from other servers.</b>
+          <b>
+            <span>{entry.remote_team_alias}</span>
+          </b>
+          <small>
+            team on {remoteName} · host <code>{entry.remote_host_id_hex}</code>
+            {entry.operation_id_hex ? (
+              <>
+                {' '}
+                · operation <code>{entry.operation_id_hex}</code>
+              </>
+            ) : null}
+          </small>
         </span>
-      </div>
-    );
-  return (
-    <div className="rt bare fed">
-      {entries.map((entry) => {
-        const remoteServer = snapshot.servers.find(
-          (server) => server.id === entry.remote_profile,
-        );
-        const remoteName = remoteServer
-          ? serverDisplayName(remoteServer)
-          : entry.remote_profile;
-        const memberReason =
-          'Every member of an admitted team holds the role shown on its row. They are managed on their own server and cannot be changed or removed one by one.';
-        return (
-          <div
-            className="prow"
-            key={`${entry.remote_host_id_hex}|${entry.remote_team_id_hex}`}
+      </span>
+      <span className="rowtail">
+        <RoleChip role={entry.destination} />
+        <Chip tone={entry.active ? 'ok' : 'warn'}>
+          {entry.active ? 'Active' : 'Inactive'}
+        </Chip>
+        {!entry.active && entry.operation_id_hex ? (
+          <Button
+            size="sm"
+            icon="again"
+            disabled={!manageable}
+            title={
+              manageable
+                ? undefined
+                : 'Only an Admin or an Owner can restore this admission.'
+            }
+            onClick={() => onRerun(entry.operation_id_hex!)}
           >
-            <span className="who2">
-              <span
-                className="kico round"
-                style={{ background: hue(entry.remote_team_alias) }}
-                aria-hidden="true"
-              >
-                {entry.remote_team_alias.slice(0, 1).toUpperCase()}
-              </span>
-              <span className="t">
-                <b>
-                  <span>{entry.remote_team_alias}</span>
-                </b>
-                <small>
-                  on {remoteName} · host <code>{entry.remote_host_id_hex}</code>
-                  {entry.operation_id_hex ? (
-                    <>
-                      {' '}
-                      · operation <code>{entry.operation_id_hex}</code>
-                    </>
-                  ) : null}
-                </small>
-              </span>
-            </span>
-            <span className="rowtail">
-              <RoleChip role={entry.destination} />
-              <Chip tone={entry.active ? 'ok' : 'warn'}>
-                {entry.active ? 'Active' : 'Inactive'}
-              </Chip>
-              {!entry.active && entry.operation_id_hex ? (
-                <Button
-                  size="sm"
-                  icon="again"
-                  disabled={!manageable}
-                  title={
-                    manageable
+            Restore access
+          </Button>
+        ) : null}
+        <MenuButton
+          variant="quiet"
+          icon="more"
+          trailingIcon={null}
+          label=""
+          menuLabel={`Actions for ${entry.remote_team_alias}`}
+          aria-label={`Actions for ${entry.remote_team_alias}`}
+        >
+          {(close) => (
+            <>
+              <MenuItem reason={memberReason}>Lower role…</MenuItem>
+              <MenuItem reason={memberReason}>Remove a member…</MenuItem>
+              <hr />
+              <MenuItem
+                danger
+                reason={
+                  !manageable
+                    ? 'Only an Admin or an Owner can remove this admission.'
+                    : entry.active
                       ? undefined
-                      : 'Only an Admin or an Owner can restore this admission.'
-                  }
-                  onClick={() => onRerun(entry.operation_id_hex!)}
-                >
-                  Restore access
-                </Button>
-              ) : null}
-              <MenuButton
-                variant="quiet"
-                icon="more"
-                trailingIcon={null}
-                label=""
-                menuLabel={`Actions for ${entry.remote_team_alias}`}
-                aria-label={`Actions for ${entry.remote_team_alias}`}
+                      : 'Restore access before removing this admission.'
+                }
+                title="Removes the whole admission and rotates this team’s key."
+                onClick={() => {
+                  close();
+                  onRemove(entry);
+                }}
               >
-                {(close) => (
-                  <>
-                    <MenuItem reason={memberReason}>Lower role…</MenuItem>
-                    <MenuItem reason={memberReason}>Remove a member…</MenuItem>
-                    <hr />
-                    <MenuItem
-                      danger
-                      reason={
-                        !manageable
-                          ? 'Only an Admin or an Owner can remove this admission.'
-                          : entry.active
-                            ? undefined
-                            : 'Restore access before removing this admission.'
-                      }
-                      title="Removes the whole admission and rotates this team’s key."
-                      onClick={() => {
-                        close();
-                        onRemove(entry);
-                      }}
-                    >
-                      Remove admission…
-                    </MenuItem>
-                  </>
-                )}
-              </MenuButton>
-            </span>
-          </div>
-        );
-      })}
-      {unmatched.map((party) => (
-        <TeamPartyRow
-          key={party.party_id_hex}
-          party={party}
-          chip="No admission record"
-          chipTitle="The roster lists this team as a member, but no admission record on this device matches it."
-        />
-      ))}
-      {ambiguous.map((party) => (
-        <TeamPartyRow
-          key={party.party_id_hex}
-          party={party}
-          chip="Ambiguous admission"
-          chipTitle="The roster lists this team once, but several admission records on this device match it, so none of them can be acted on."
-        />
-      ))}
+                Remove admission…
+              </MenuItem>
+            </>
+          )}
+        </MenuButton>
+      </span>
     </div>
   );
 }
 
 /**
- * The Members tab: the roster split into the people, the machines and the
- * groups admitted from other servers, then the actions that add to it.
+ * The Members tab: people, machines and the teams admitted from other
+ * servers in one roster. People and admitted teams share one "Members"
+ * heading and one list — a team's row keeps a "team on …" caption naming its
+ * server, so it reads as a team rather than a person. (How many people it
+ * brings is not drawn: this device holds no roster for a team on another
+ * server, and a guessed count would be worse than none.) Machines keep their
+ * own heading below, unchanged. What adds to the list — a person on this
+ * server, or a team from another server — lives in the page header now, as
+ * one "Add people" control.
  */
 function MembersTab({
   snapshot,
   store,
   onSheet,
-  onInvite,
   rosterReason,
   federationReason,
   menuParty,
@@ -685,11 +655,9 @@ function MembersTab({
   snapshot: AgentSnapshot;
   store: Store;
   onSheet: (sheet: Sheet, party?: Party) => void;
-  /** Absent when this Mac holds no account on the group's own server. */
-  onInvite?: () => void;
   /**
    * Why the roster cannot be added to, and why no group can be admitted —
-   * each button states its own reason, because the two are decided
+   * each row's own menu states its own reason, because the two are decided
    * separately and one can apply while the other does not.
    */
   rosterReason?: string;
@@ -709,9 +677,6 @@ function MembersTab({
     (party) => party.party_kind === 'user' && !isMachine(party),
   );
   const machines = parties.filter((party) => isMachine(party));
-  const named = store.kind === 'team' && store.team_kind === 'named';
-  const serverName = displayServerName(snapshot, store);
-  const readable = storeReadable(snapshot, store.id);
   const row = (party: Party): ReactNode => (
     <PartyRow
       key={party.party_id_hex}
@@ -723,9 +688,21 @@ function MembersTab({
       onSheet={onSheet}
     />
   );
+  const { entries, unmatched, ambiguous } = federationFailure
+    ? { entries: [], unmatched: [], ambiguous: [] }
+    : admittedGroups(snapshot, store);
+  const teamCount = entries.length + unmatched.length + ambiguous.length;
   return (
     <div className="roster">
       <SituationBand store={store} tab="people" />
+      <SectionLabel>
+        Members
+        {!failure && !federationFailure ? (
+          <span className="count">
+            — {plural(memberCountOf(snapshot, store), 'member')}
+          </span>
+        ) : null}
+      </SectionLabel>
       {failure ? (
         <Band
           label="Roster unavailable"
@@ -737,71 +714,49 @@ function MembersTab({
         >
           {failure.message}
         </Band>
+      ) : people.length || teamCount ? (
+        <div className="rt bare">
+          {people.map(row)}
+          {entries.map((entry) => (
+            <FederationEntryRow
+              key={`${entry.remote_host_id_hex}|${entry.remote_team_id_hex}`}
+              snapshot={snapshot}
+              entry={entry}
+              onRerun={onRerun}
+              onRemove={onRemoveAdmission}
+              manageable={federationManageable}
+            />
+          ))}
+          {unmatched.map((party) => (
+            <TeamPartyRow
+              key={party.party_id_hex}
+              party={party}
+              chip="No admission record"
+              chipTitle="The roster lists this team as a member, but no admission record on this device matches it."
+            />
+          ))}
+          {ambiguous.map((party) => (
+            <TeamPartyRow
+              key={party.party_id_hex}
+              party={party}
+              chip="Ambiguous admission"
+              chipTitle="The roster lists this team once, but several admission records on this device match it, so none of them can be acted on."
+            />
+          ))}
+        </div>
       ) : (
-        <>
-          <MemberSection title="People" count={peopleLabel(people.length)}>
-            {people.length ? (
-              people.map(row)
-            ) : (
-              <div className="callout">
-                <span
-                  className="kico"
-                  style={{
-                    background: 'var(--chip-bg)',
-                    color: 'var(--muted)',
-                  }}
-                >
-                  <Icon name="people" />
-                </span>
-                <span className="t">
-                  <b>No people yet.</b>
-                </span>
-              </div>
-            )}
-          </MemberSection>
-          {machines.length ? (
-            <MemberSection
-              title="Machines"
-              count={`${machines.length} connected`}
-            >
-              {machines.map(row)}
-            </MemberSection>
-          ) : null}
-          {/* The people and machine actions follow the rows they add to, so a
-              roster that failed to load offers neither: there are no rows to
-              add to, and the invitation names a server this Mac cannot read. */}
-          {named ? (
-            <div className="roster-actions">
-              <Button
-                variant="primary"
-                icon="plus"
-                disabled={!manageable}
-                title={
-                  rosterReason ??
-                  'Add someone who already has an account on this server'
-                }
-                onClick={() => onSheet('add')}
-              >
-                Add someone on {serverName}…
-              </Button>
-              <Button
-                disabled={!manageable || !onInvite}
-                title={
-                  !onInvite
-                    ? `No account on this device signs in to ${serverName}.`
-                    : readable
-                      ? undefined
-                      : inviteUnavailableTitle(serverName)
-                }
-                onClick={onInvite}
-              >
-                Invite to team…
-              </Button>
-            </div>
-          ) : null}
-        </>
+        <div className="callout">
+          <span
+            className="kico"
+            style={{ background: 'var(--chip-bg)', color: 'var(--muted)' }}
+          >
+            <Icon name="people" />
+          </span>
+          <span className="t">
+            <b>No members yet.</b>
+          </span>
+        </div>
       )}
-      <SectionLabel>Teams on other servers</SectionLabel>
       {federationFailure ? (
         <Band
           label="Federation unavailable"
@@ -813,30 +768,11 @@ function MembersTab({
         >
           {federationFailure.message}
         </Band>
-      ) : (
-        <FederationRows
-          snapshot={snapshot}
-          store={store}
-          onRerun={onRerun}
-          onRemove={onRemoveAdmission}
-          manageable={federationManageable}
-        />
-      )}
-      {/* And the admission action follows the admissions. */}
-      {named ? (
-        <div className="roster-actions">
-          <Button
-            icon="people"
-            disabled={!federationManageable}
-            title={
-              federationReason ??
-              'Give every member of another team a role here'
-            }
-            onClick={() => onSheet('admit')}
-          >
-            Add a team…
-          </Button>
-        </div>
+      ) : null}
+      {machines.length ? (
+        <MemberSection title="Machines" count={`${machines.length} connected`}>
+          {machines.map(row)}
+        </MemberSection>
       ) : null}
     </div>
   );
@@ -1935,6 +1871,14 @@ export function GroupSettingsScreen({
   const [removalTarget, setRemovalTarget] = useState<FederationEntry | null>(
     null,
   );
+  // The Requests tab's own count: reported by the invitation panel, which is
+  // mounted for the life of the page rather than only while that tab is
+  // open, so the count shows before the reader ever switches to it.
+  // `undefined` until the panel has loaded once — no count is drawn then,
+  // the same as a team with nothing pending.
+  const [requestCount, setRequestCount] = useState<number | undefined>(
+    undefined,
+  );
   // An interrupted member addition or role change leaves durable local state
   // that blocks every later membership mutation until it is resumed. Read the
   // account's pending operations for this group so the UI can finish it.
@@ -2037,6 +1981,7 @@ export function GroupSettingsScreen({
       setRemovalTarget(null);
       setRekeyArmed(false);
       setInviting(false);
+      setRequestCount(undefined);
       // A channel preparation the agent may already hold is the exception:
       // it is settled where it was made, so the sheet stays until it is.
       if (!channelUnresolved.current) setAddingChannel(false);
@@ -2088,12 +2033,21 @@ export function GroupSettingsScreen({
   const access = storeDescriptionState(snapshot, store);
   const unavailable = access !== 'normal' && access !== 'setup-incomplete';
   const inactive = store.active === false;
-  const callerParty = partiesOf(snapshot, store.id).find(
-    (candidate) => candidate.label === 'you',
-  );
   const rosterReason = manageReason(snapshot, store, 'roster');
   const federationReason = manageReason(snapshot, store, 'federation');
   const canManageRoster = rosterReason === undefined;
+  const named = store.team_kind === 'named';
+  const serverName = displayServerName(snapshot, store);
+  // The header's own chip: server, then the member count, each dropped
+  // rather than guessed when it is not known. The count is silent while the
+  // roster or the admitted teams could not be read, the same as the Members
+  // tab's own count.
+  const headerChip = [
+    serverName,
+    rosterFailure || federationFailure ? null : plural(memberCount, 'member'),
+  ]
+    .filter(Boolean)
+    .join(' · ');
   // The channels this group's inbox entry holds, or `undefined` while the
   // service has not answered for it. A hidden conversation is listed on the
   // tab but not counted on the strip, the way New chat counts.
@@ -2154,22 +2108,57 @@ export function GroupSettingsScreen({
             <span>{store.name}</span>
             {inactive ? <Chip tone="warn">Inactive</Chip> : null}
           </h1>
-          {/* The server, then the bare role this account holds here. */}
+          {/* The role this account holds here is not repeated in the header;
+              it already reads on this account's own row under Members. */}
           <div className="sub">
-            {[
-              displayServerName(snapshot, store),
-              callerParty
-                ? (() => {
-                    const parsed = parseRole(callerParty.destination_role);
-                    return parsed ? roleName(parsed) : null;
-                  })()
-                : null,
-            ]
-              .filter(Boolean)
-              .join(' · ')}
+            {headerChip ? <Chip>{headerChip}</Chip> : null}
           </div>
         </div>
         <div className="header-action">
+          {/* A person by username here, or a team from another server: one
+              control, two choices, each stating its own reason when it does
+              not apply, rather than three separate buttons for what is really
+              one decision. Ad-hoc teams have a fixed membership and get
+              neither. */}
+          {named && !unavailable && !inactive ? (
+            <MenuButton
+              variant="primary"
+              icon="plus"
+              label="Add people"
+              menuLabel="Add people"
+            >
+              {(close) => (
+                <>
+                  <MenuItem
+                    icon="person"
+                    reason={rosterReason}
+                    onClick={() => {
+                      close();
+                      openSheet('add');
+                    }}
+                  >
+                    <span className="menu-choice">
+                      <b>A person</b>
+                      <small>By username on {serverName}.</small>
+                    </span>
+                  </MenuItem>
+                  <MenuItem
+                    icon="people"
+                    reason={federationReason}
+                    onClick={() => {
+                      close();
+                      openSheet('admit');
+                    }}
+                  >
+                    <span className="menu-choice">
+                      <b>A team from another server</b>
+                      <small>Everyone in it gets one role here.</small>
+                    </span>
+                  </MenuItem>
+                </>
+              )}
+            </MenuButton>
+          ) : null}
           {/* The group ID and the vault are local facts, so the menu stays even
               while the server is out of reach; only what needs the server is
               disabled, with the reason in the item. */}
@@ -2304,7 +2293,9 @@ export function GroupSettingsScreen({
                 { replace: true },
               );
             }}
-            items={GROUP_SETTINGS_TABS.map((id) =>
+            items={GROUP_SETTINGS_TABS.filter(
+              (id) => id !== 'requests' || canManageRoster,
+            ).map((id) =>
               id === 'people'
                 ? {
                     id,
@@ -2329,7 +2320,16 @@ export function GroupSettingsScreen({
                         label: 'Files',
                         count: itemCountOf(snapshot, store),
                       }
-                    : { id, label: 'Settings' },
+                    : id === 'requests'
+                      ? {
+                          id,
+                          label: 'Requests',
+                          // No pending request reads as no count, not zero:
+                          // the tab is drawn the same as Channels and Files
+                          // before their own counts are known.
+                          ...(requestCount ? { count: requestCount } : {}),
+                        }
+                      : { id, label: 'Settings' },
             )}
           />
           {/* Fixed IDs associate each tab button with its tabpanel. */}
@@ -2345,9 +2345,6 @@ export function GroupSettingsScreen({
                   snapshot={snapshot}
                   store={store}
                   onSheet={openSheet}
-                  {...(groupAccount
-                    ? { onInvite: () => setInviting(true) }
-                    : {})}
                   {...(rosterReason ? { rosterReason } : {})}
                   {...(federationReason ? { federationReason } : {})}
                   menuParty={menuParty}
@@ -2379,7 +2376,7 @@ export function GroupSettingsScreen({
                   store={store}
                   onNavigate={onNavigate}
                 />
-              ) : (
+              ) : tab === 'settings' ? (
                 <SettingsTab
                   snapshot={snapshot}
                   store={store}
@@ -2389,9 +2386,13 @@ export function GroupSettingsScreen({
                   manageable={canManageRoster}
                   rekeyOpen={rekeyArmed}
                 />
-              )}
-              {tab === 'people' && canManageRoster ? (
-                <Toggle label="Invitations and requests">
+              ) : null}
+              {/* Mounted for the life of the page, not just while the
+                  Requests tab is open, so its count is known before the
+                  reader ever switches to it; only its visibility follows the
+                  tab. */}
+              {canManageRoster ? (
+                <div hidden={tab !== 'requests'}>
                   <InvitationPanel
                     key={store.id}
                     bridge={bridge}
@@ -2399,8 +2400,9 @@ export function GroupSettingsScreen({
                     account={store.account}
                     teamAlias={store.alias}
                     onComplete={() => onApplied('Team requests updated')}
+                    onRowsChange={setRequestCount}
                   />
-                </Toggle>
+                </div>
               ) : null}
               {/* The raw response belongs to the two tabs it is the response
                   for: the roster under Members, the store under Settings. */}

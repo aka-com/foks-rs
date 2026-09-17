@@ -1,7 +1,7 @@
 /**
  * The navigation rail.
  *
- * Six fixed tabs — Files, Chat, Teams, Devices, Accounts, Settings — under an
+ * Six fixed tabs — Files, Chat, Teams, Devices, Account, Settings — under an
  * account header that names the active account and opens the account menu, and
  * over the agent light at the foot. The rail's top is the window's traffic-light
  * strip: there is no title bar above it. The rail does not enumerate stores;
@@ -57,7 +57,7 @@ const RAIL_TABS: readonly RailTabSpec[] = [
   },
   {
     id: 'people',
-    label: 'Accounts',
+    label: 'Account',
     icon: 'person',
     location: { kind: 'people' },
   },
@@ -249,8 +249,10 @@ export interface SidebarProps {
 /**
  * The rail's account header and its menu: the accounts on this Mac grouped by
  * server, then the two commands that are not a place — adding an account and
- * locking the app. The attention dot rides the avatar and opens the Accounts
- * tab, which is where the list of things to attend to lives.
+ * locking the app. The attention dot rides the avatar and opens the Account
+ * tab. `compact`, used by the Account tab's own "Switch account" button, opens
+ * the same menu from a plain button rather than the avatar — it is the same
+ * component so there is exactly one switcher, not a second one repeating it.
  */
 export function AccountHeader({
   snapshot,
@@ -285,7 +287,7 @@ export function AccountHeader({
   const username = active ? usernameOf(active) : 'No account';
   const server = active ? serverName(snapshot, active) : 'None on this device';
   // Preserve account-scoped locations when selecting an account; otherwise,
-  // open Accounts.
+  // open Account.
   const selectAccount = (store: AccountStore): void => {
     if (location.kind === 'devices') {
       onNavigate({
@@ -312,28 +314,45 @@ export function AccountHeader({
   const hues = storeHues(storeNavigationOrder(snapshot));
   const close = (): void => setOpen(false);
   return (
-    <div className={compact ? 'account-dropdown' : 'rail-head'}>
-      <button
-        type="button"
-        ref={anchorRef}
-        className={compact ? 'account-dropdown-trigger' : 'who'}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label={`${username} · ${server}`}
-        title={`${username} · ${server}`}
-        onClick={() => setOpen(!open)}
-      >
-        <span className="avatar" aria-hidden="true">
-          {username.slice(0, 1).toUpperCase()}
-        </span>
-        <span className="t">
-          <b>{username}</b>
-          <small>{server}</small>
-        </span>
-        <span className="chev">
+    <div className={compact ? 'account-switch' : 'rail-head'}>
+      {compact ? (
+        // The Account tab already names the account in its own heading, so
+        // this trigger's job is only to say what it opens — not to repeat the
+        // identity the rail header states.
+        <button
+          type="button"
+          ref={anchorRef}
+          className="btn"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+        >
+          Switch account
           <Icon name="chev" />
-        </span>
-      </button>
+        </button>
+      ) : (
+        <button
+          type="button"
+          ref={anchorRef}
+          className="who"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label={`${username} · ${server}`}
+          title={`${username} · ${server}`}
+          onClick={() => setOpen(!open)}
+        >
+          <span className="avatar" aria-hidden="true">
+            {username.slice(0, 1).toUpperCase()}
+          </span>
+          <span className="t">
+            <b>{username}</b>
+            <small>{server}</small>
+          </span>
+          <span className="chev">
+            <Icon name="chev" />
+          </span>
+        </button>
+      )}
       {attention > 0 ? (
         <button
           type="button"

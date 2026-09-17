@@ -294,13 +294,12 @@ test('a Teams row menu says why an action does not apply', async () => {
   await teams();
   // This account is an Admin of Engineering, so the roster actions apply.
   openRowMenu('Engineering');
-  assert.equal(inert(menuItem('Engineering', 'Add someone on Acme…')), false);
-  assert.equal(inert(menuItem('Engineering', 'Add a team…')), false);
+  assert.equal(inert(menuItem('Engineering', 'Add people…')), false);
   assert.equal(ui.screen.queryByRole('menuitem', { name: 'Leave…' }), null);
 
   // An ad-hoc share has no membership to change, and its setup is unfinished.
   openRowMenu('Homelab');
-  const add = menuItem('Homelab', 'Add someone on Personal server…');
+  const add = menuItem('Homelab', 'Add people…');
   assert.equal(inert(add), true);
   assert.equal(
     add.getAttribute('title'),
@@ -339,14 +338,13 @@ test('a roster failure gives the Teams row menu its own reasons', async () => {
   );
   const unread = 'The roster could not be read. Refresh before making changes.';
   openRowMenu('Engineering');
-  const add = menuItem('Engineering', 'Add someone on Acme…');
+  // Adding a person and admitting a team are one item now. Both are refused
+  // for the same reason — the role that would permit either is a roster fact,
+  // so an unread roster settles nothing about them — and with neither way in
+  // open, the item itself is inert and states it.
+  const add = menuItem('Engineering', 'Add people…');
   assert.equal(inert(add), true);
   assert.equal(add.getAttribute('title'), unread);
-  // Admitting a team is refused for the same reason: the role that would
-  // permit it is a roster fact, so an unread roster settles nothing about it.
-  const admit = menuItem('Engineering', 'Add a team…');
-  assert.equal(inert(admit), true);
-  assert.equal(admit.getAttribute('title'), unread);
 });
 
 test('an unavailable account explains why discovery is disabled', async () => {

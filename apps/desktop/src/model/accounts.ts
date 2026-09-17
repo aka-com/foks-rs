@@ -1,7 +1,7 @@
 /**
  * What the catalog says about the accounts on this Mac.
  *
- * Accounts and Devices are both per account, and both address one by its exact
+ * Account and Devices are both per account, and both address one by its exact
  * StoreRef, so the facts a row and a sheet title need are read here rather
  * than re-derived on each screen.
  */
