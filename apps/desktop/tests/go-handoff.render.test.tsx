@@ -751,16 +751,14 @@ test('first-run account navigation, server edits, and connection errors stay sco
   );
   assert.deepEqual(titles, [
     'Recover with your backup phrase',
-    'Copy this Mac’s CLI device',
+    'Import this Mac’s FOKS CLI credentials',
     'Use the CLI to approve this as a new device',
   ]);
-  ui.fireEvent.click(
-    view.getByRole('button', { name: 'Copy existing device' }),
-  );
+  ui.fireEvent.click(view.getByRole('button', { name: 'Import credentials' }));
   const copyError = await view.findByText('Copy failed');
   assert.equal(
     copyError.closest('.pcard')?.querySelector('h3')?.textContent,
-    'Copy this Mac’s CLI device',
+    'Import this Mac’s FOKS CLI credentials',
   );
   ui.fireEvent.change(view.getByLabelText('Backup phrase'), {
     target: { value: 'one two three' },
@@ -771,18 +769,22 @@ test('first-run account navigation, server edits, and connection errors stay sco
     recoverError.closest('.pcard')?.querySelector('h3')?.textContent,
     'Recover with your backup phrase',
   );
-  ui.fireEvent.click(
-    view.getByRole('button', { name: 'Create a new account' }),
-  );
+  // Both choices live on Set up your account: switching the radio swaps what is
+  // drawn under it without leaving the page.
+  ui.fireEvent.click(view.getByRole('radio', { name: /Create a new account/ }));
   assert.ok(view.getByPlaceholderText('yourname'));
   assert.ok(view.getByPlaceholderText('Your Mac'));
-  ui.fireEvent.click(view.getByRole('button', { name: 'Back' }));
-  assert.ok(view.getByText('Add this Mac to your account'));
+  assert.equal(view.queryByText('Recover with your backup phrase'), null);
+  ui.fireEvent.click(
+    view.getByRole('radio', { name: /Sign in to an existing account/ }),
+  );
+  assert.ok(view.getByText('Recover with your backup phrase'));
+  assert.ok(view.getByRole('heading', { name: 'Set up your account' }));
   ui.fireEvent.click(view.getByRole('button', { name: 'Resume pairing' }));
   await view.findByRole('heading', { name: 'Check account setup' });
   assert.equal(view.queryByRole('button', { name: 'Recover' }), null);
   assert.equal(
-    view.queryByRole('button', { name: 'Copy existing device' }),
+    view.queryByRole('button', { name: 'Import credentials' }),
     null,
   );
   ui.fireEvent.click(view.getByRole('button', { name: 'Finish later' }));
@@ -843,4 +845,103 @@ test('personal recovery puts backup first and completes without creating a group
   assert.equal(checkpoint.state, 'checklist-own');
   assert.equal(checkpoint.group, undefined);
   window.history.replaceState(null, '', '/');
+});
+
+test('resumed sign-in step rediscovers the CLI profile for the verified server', async () => {
+  const { FirstRunExperience } = (await vite.ssrLoadModule(
+    '/src/screens/first-run-screen.tsx',
+  )) as typeof import('../src/screens/first-run-screen');
+  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
+    '/kit/toasts.tsx',
+  )) as typeof import('../kit/toasts');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const {
+    initialFirstRun,
+    transitionFirstRun,
+    encodeFirstRunCheckpoint,
+    FIRST_RUN_CHECKPOINT_KEY,
+  } = (await vite.ssrLoadModule(
+    '/src/first-run-state.ts',
+  )) as typeof import('../src/first-run-state');
+  // A checkpoint saved after server verification, restarted at the sign-in
+  // step without passing through the joining step's CLI chooser.
+  const chosen = transitionFirstRun(initialFirstRun('own'), {
+    type: 'choose',
+    path: 'own',
+    returning: true,
+  });
+  const checked = transitionFirstRun(chosen, {
+    type: 'profile-checked',
+    address: 'foks.app:4430',
+    profile: {
+      profile: 'setup-foks-app-4430',
+      acceptance: 'inserted',
+      lookupName: 'foks.app:4430',
+      canonicalName: 'foks.app',
+      hostId: candidate.hostId,
+      chain: 1,
+      epoch: 1,
+    },
+  });
+  window.localStorage.setItem(
+    FIRST_RUN_CHECKPOINT_KEY,
+    encodeFirstRunCheckpoint(
+      transitionFirstRun(checked, { type: 'go', state: 'existing' }),
+    ),
+  );
+  const world = { ...FIXTURE, profileInventoryStatus: 'unavailable' as const };
+  let scans = 0;
+  const bridge: Bridge = {
+    ...mockBridge(),
+    native: true,
+    firstRunFixture: undefined,
+    discoverGoProfiles: async () => {
+      scans++;
+      return {
+        installed: true,
+        candidates: [
+          candidate,
+          // Another server's profile must not be selected.
+          {
+            ...candidate,
+            candidateId: 'elsewhere',
+            username: 'other-owner',
+            hostId: '02' + '99'.repeat(32),
+          },
+        ],
+      };
+    },
+  };
+  const rendered = ui.render(
+    createElement(
+      StrictMode,
+      null,
+      createElement(ToastProvider, {
+        controller: new ToastController(),
+        children: createElement(FirstRunExperience, {
+          bridge,
+          world,
+          location: { kind: 'first-run', path: 'own', step: 'existing' },
+          onNavigate: () => {},
+          onRefreshWorld: async () => world,
+          concealSignal: 0,
+          agentReady: true,
+        }),
+      }),
+    ),
+  );
+  await rendered.findByText('Recover with your backup phrase');
+  await rendered.findByText('Import this Mac’s FOKS CLI credentials');
+  rendered.getByText('Use the CLI to approve this as a new device');
+  assert.equal(scans, 1);
+  assert.equal(
+    (rendered.getByLabelText('Copied account alias') as HTMLInputElement).value,
+    'cli-owner',
+    'the CLI username is suggested as the local alias, as the chooser does',
+  );
 });

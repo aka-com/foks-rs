@@ -22,6 +22,7 @@ export interface SegmentedControlProps<T extends string> {
   variant?: 'text' | 'icon';
   /** What the group is choosing, for the screen reader. */
   label: string;
+  disabled?: boolean;
 }
 
 export function SegmentedControl<T extends string>({
@@ -30,6 +31,7 @@ export function SegmentedControl<T extends string>({
   onChange,
   variant = 'text',
   label,
+  disabled = false,
 }: SegmentedControlProps<T>): ReactNode {
   return (
     <span
@@ -44,6 +46,7 @@ export function SegmentedControl<T extends string>({
           className={item.id === value ? 'on' : ''}
           aria-pressed={item.id === value}
           title={item.title}
+          disabled={disabled}
           onClick={() => {
             onChange(item.id);
           }}

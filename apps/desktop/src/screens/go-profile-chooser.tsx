@@ -1,7 +1,6 @@
 import { useId } from 'react';
 import type { ReactNode } from 'react';
 import type { GoProfileCandidate } from '../bridge';
-import { Chip } from '../components';
 
 interface Props {
   candidates: GoProfileCandidate[];
@@ -26,15 +25,6 @@ export function GoProfileChooser({
     >
       {candidates.map((candidate) => {
         const unavailable = !candidate.pairable && !candidate.copyable;
-        const status = candidate.provisional
-          ? 'Incomplete'
-          : candidate.hidden
-            ? 'Hidden'
-            : candidate.copyable
-              ? 'Pair or import'
-              : candidate.pairable
-                ? 'Pair'
-                : 'Unavailable';
         return (
           <label className="go-account-option" key={candidate.candidateId}>
             <input
@@ -46,14 +36,12 @@ export function GoProfileChooser({
               onChange={() => onSelect(candidate)}
             />
             <span className="go-account-name">
-              {candidate.username ??
-                `Unnamed account (${shortId(candidate.userId)})`}
+              {candidate.username ?? 'Unknown account'}
             </span>
             <span className="go-account-detail">
               <span>
                 {candidate.serverHint ??
-                  `Server (${shortId(candidate.hostId)})`}{' '}
-                <Chip>{status}</Chip>
+                  `Server (${shortId(candidate.hostId)})`}
               </span>
               <small>
                 {candidate.role.toLowerCase() === 'owner'

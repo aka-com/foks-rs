@@ -98,7 +98,6 @@ function accessCopy(
 export interface StoreAccessTakeoverProps {
   world: World;
   store: Store;
-  lead?: ReactNode;
   onOpenServer: (profile: string) => void;
   onFinishSetup: () => void;
   headerAction?: ReactNode;
@@ -108,7 +107,6 @@ export interface StoreAccessTakeoverProps {
 export function StoreAccessTakeover({
   world,
   store,
-  lead,
   onOpenServer,
   onFinishSetup,
   headerAction,
@@ -135,7 +133,6 @@ export function StoreAccessTakeover({
         <PageHeader
           title={store.name}
           subtitle={storeHeadingDescription(world, store)}
-          lead={lead}
           action={
             <>
               {state === 'setup-incomplete' ? null : action}

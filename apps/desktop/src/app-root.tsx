@@ -544,7 +544,8 @@ export function App({ world, bridge, store, leaseClock }: AppProps): ReactNode {
       );
     }
     return (
-      <div className="app-loading">
+      <div className="app-loading" role="status">
+        <span className="spin" aria-hidden="true" />
         {agentLifecycle.state === 'checking'
           ? 'Connecting to the local agent…'
           : `${agentLifecycleLabel(agentLifecycle)}…`}

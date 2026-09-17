@@ -292,8 +292,22 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             install_macos_menu(app)?;
             commands::chat_local::platform::install(app.handle());
-            // Verify agent reachability before handling requests; exit with a dialog if unreachable.
-            startup::require_agent(app, &agent);
+            // Verify agent reachability before handling agent requests; exit
+            // with a dialog if unreachable. This runs off the main thread so
+            // the window paints its loading state instead of staying blank
+            // while the agent starts. Ordinary commands block on the gate
+            // until the check finishes, so the frontend's boot sequence
+            // resumes by itself.
+            agent.hold_commands_for_startup();
+            let startup_app = app.handle().clone();
+            let startup_agent = Arc::clone(&agent);
+            std::thread::Builder::new()
+                .name("foks-startup".into())
+                .spawn(move || {
+                    startup::require_agent(&startup_app, &startup_agent);
+                    startup_agent.release_startup();
+                })
+                .expect("failed to spawn the startup thread");
             if let Some(window) = app.get_webview_window(MAIN) {
                 dragdrop::observe(&window);
                 window_state::observe(&window);

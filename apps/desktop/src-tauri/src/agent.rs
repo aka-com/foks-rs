@@ -5,7 +5,7 @@ use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
 
 use foks_agent_client::AgentClient;
@@ -585,6 +585,12 @@ pub struct AgentHandle {
     pending_stop_pid: Mutex<Option<u32>>,
     maintenance_process: Arc<dyn MaintenanceProcess>,
     maintenance_readiness: Arc<dyn Fn(&Path, &[PathBuf]) -> SafeRootDisposition + Send + Sync>,
+    /// Closed while the desktop's startup check runs on a background thread
+    /// (see `startup::require_agent`). Ordinary commands wait on it so the
+    /// frontend cannot reach an agent that has not been verified, started, or
+    /// taken over yet. Open by default so tests and the smoke test are
+    /// unaffected.
+    startup_gate: (Mutex<bool>, Condvar),
     #[cfg(test)]
     managed_endpoint_override: bool,
 }
@@ -615,8 +621,39 @@ impl AgentHandle {
             pending_stop_pid: Mutex::new(None),
             maintenance_process: Arc::new(NativeMaintenanceProcess),
             maintenance_readiness: Arc::new(safe_selected_root),
+            startup_gate: (Mutex::new(true), Condvar::new()),
             #[cfg(test)]
             managed_endpoint_override: false,
+        }
+    }
+
+    /// Holds ordinary commands until `release_startup` runs. Call before the
+    /// webview can issue its first command.
+    pub fn hold_commands_for_startup(&self) {
+        let (open, _) = &self.startup_gate;
+        *open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
+    }
+
+    /// Opens the startup gate and wakes every command waiting on it.
+    pub fn release_startup(&self) {
+        let (open, ready) = &self.startup_gate;
+        *open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+        ready.notify_all();
+    }
+
+    fn wait_for_startup(&self) {
+        let (open, ready) = &self.startup_gate;
+        let mut guard = open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while !*guard {
+            guard = ready
+                .wait(guard)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 
@@ -637,6 +674,40 @@ impl AgentHandle {
         &self.socket
     }
 
+    /// Recovery is limited to a missing, desktop-managed endpoint with a usable
+    /// replacement binary. External launcher paths must never become delete targets.
+    pub fn startup_reset_directory(&self) -> Option<PathBuf> {
+        self.require_managed_endpoint().ok()?;
+        if self.socket.exists() {
+            return None;
+        }
+        validate_agent_binary(&managed_agent_binary(&self.socket)?).ok()?;
+        let root = self.socket.parent()?;
+        root.join("client-state.toml")
+            .exists()
+            .then(|| root.to_owned())
+    }
+
+    pub fn reset_startup_state(&self, confirmed_root: &Path) -> Result<(), AgentError> {
+        let root = self.startup_reset_directory().ok_or_else(|| {
+            AgentError::new(
+                "agent-reset",
+                "This agent state cannot be reset from startup.",
+                false,
+            )
+        })?;
+        if root != confirmed_root {
+            return Err(AgentError::new(
+                "agent-reset",
+                "The selected state directory changed. Relaunch FOKS to review the reset again.",
+                false,
+            ));
+        }
+        foks_client_app::portability::reset_unreadable_state(&root)
+            .map_err(|error| AgentError::new("agent-reset", error.to_string(), false))?;
+        prepare_managed_crash_directory(&root.join("crashes"))
+    }
+
     pub fn transport(&self) -> Arc<dyn AgentTransport> {
         self.transport.clone()
     }
@@ -651,6 +722,7 @@ impl AgentHandle {
     }
 
     pub fn call_blocking(&self, operation: Operation) -> Result<Response, AgentError> {
+        self.wait_for_startup();
         let _use = self
             .transport
             .reserve_use()

@@ -882,8 +882,7 @@ export function mockBridge(world: World = FIXTURE): Bridge {
           : probe === firstRunFixture.own.server
             ? firstRunFixture.own
             : undefined;
-      if (!path)
-        throw failure('io', `${probe} did not answer, so nothing was saved.`);
+      if (!path) throw failure('io', `No response from ${probe}`);
       return { ...path.report, profile: profileName };
     },
     checkAndAddGoProfile: async (_candidateId, hostId, profileName, probe) => {

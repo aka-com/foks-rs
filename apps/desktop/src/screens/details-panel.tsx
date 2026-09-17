@@ -6,7 +6,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '/kit/toasts';
 import type { ReactNode } from 'react';
 import {
-  Avatar,
   Button,
   Chip,
   Field,
@@ -76,8 +75,7 @@ function readOnce(
     new WeakMap<object, Map<string, Promise<ReadItemResponse>>>();
   readFlights.set(bridge, sessions);
   const flights =
-    sessions.get(accessSession) ??
-    new Map<string, Promise<ReadItemResponse>>();
+    sessions.get(accessSession) ?? new Map<string, Promise<ReadItemResponse>>();
   sessions.set(accessSession, flights);
   const current = flights.get(key);
   if (current) return current;
@@ -169,7 +167,6 @@ function PartyRow({
   ].filter(Boolean);
   return (
     <div className="party">
-      <Avatar party={party} className="pav" />
       <span className="t">
         {partyName(party)}
         {party.label ? (
@@ -273,9 +270,9 @@ export function DetailsPanel({
     const currentStore = item ? storeOf(world, item.store) : undefined;
     return Boolean(
       currentStore &&
-        storeAvailability(world, currentStore, {
-          nowSeconds: accessNow(),
-        }).available,
+      storeAvailability(world, currentStore, {
+        nowSeconds: accessNow(),
+      }).available,
     );
   }, [accessNow, item, world]);
 

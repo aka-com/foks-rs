@@ -379,9 +379,129 @@ fn require_no_locator(base: &Path, root: &Path) -> Result<()> {
     }
 }
 
+/// Delete local state files without parsing a potentially unsupported schema.
+/// Native credential-store entries are deliberately left alone: an unreadable
+/// envelope cannot authorize deleting an external credential namespace.
+/// Call only after explicit destructive confirmation. A failed deletion may be partial.
+pub fn reset_unreadable_state(root: &Path) -> Result<()> {
+    let mut guard = ClientStateMaintenanceGuard::acquire(&[root.to_owned()])?;
+    let root = guard.paths[0].clone();
+    require_no_locator(&guard.base, &root)?;
+    let identity = DirectoryIdentity::read(&root)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if fs::symlink_metadata(&root)?.uid() != rustix::process::getuid().as_raw() {
+            return Err(Error::InvalidConfig("state root is not owned by this user"));
+        }
+    }
+    // Also exclude older agents and launchers that predate the external lease.
+    // Keep these inodes in place so waiting processes cannot lock a deleted inode.
+    let locks = [
+        ".foks-rs.lock",
+        "foks-rs.desktop-agent.lock",
+        ".profiles.lock",
+    ];
+    for name in locks {
+        guard.reserve_local_lock(&root.join(name))?;
+    }
+    if fs::symlink_metadata(root.join("foks-rs.sock")).is_ok() {
+        return Err(Error::StateBusy);
+    }
+    if DirectoryIdentity::read(&root)? != identity {
+        return Err(Error::StatePathChanged);
+    }
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        if locks.iter().any(|name| entry.file_name() == *name) {
+            continue;
+        }
+        // Do not follow symlinks into another directory.
+        if entry.file_type()?.is_dir() {
+            fs::remove_dir_all(entry.path())?;
+        } else {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    File::open(&root)?.sync_all()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_reset_removes_legacy_state_and_can_initialize_again() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = crate::prepare_private_directory(&temporary.path().join("state")).unwrap();
+        fs::write(root.join(crate::STATE_CONFIG_FILE), "version = 0\n").unwrap();
+        fs::create_dir(root.join("profiles")).unwrap();
+        fs::write(root.join("profiles/secret"), "old local key").unwrap();
+        let outside = temporary.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("keep"), "unrelated").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, root.join("linked")).unwrap();
+
+        reset_unreadable_state(&root).unwrap();
+        assert!(!root.join(crate::STATE_CONFIG_FILE).exists());
+        assert!(!root.join("profiles").exists());
+        assert!(outside.join("keep").exists());
+        let credentials =
+            crate::ClientCredentials::initialize(&root, crate::CredentialBackend::PrivateFile)
+                .unwrap();
+        credentials.master_key().unwrap();
+    }
+
+    #[test]
+    fn startup_reset_refuses_active_clients_and_legacy_agent_locks() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let lease = ClientStatePathLease::acquire(&root).unwrap();
+        let marker = root.join("keep");
+        fs::write(&marker, "state").unwrap();
+        assert!(matches!(
+            reset_unreadable_state(&root),
+            Err(Error::StateBusy)
+        ));
+        drop(lease);
+        let lock = private_lock(&root.join(".foks-rs.lock")).unwrap();
+        try_lock(&lock, true).unwrap();
+        assert!(matches!(
+            reset_unreadable_state(&root),
+            Err(Error::StateBusy)
+        ));
+        assert!(marker.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn startup_reset_refuses_socket_symlink_root_and_relocation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = crate::prepare_private_directory(&temporary.path().join("state")).unwrap();
+        let marker = root.join("keep");
+        fs::write(&marker, "state").unwrap();
+        let socket = root.join("foks-rs.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        assert!(matches!(
+            reset_unreadable_state(&root),
+            Err(Error::StateBusy)
+        ));
+        drop(listener);
+        fs::remove_file(socket).unwrap();
+        let alias = temporary.path().join("alias");
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        assert!(reset_unreadable_state(&alias).is_err());
+        let guard = ClientStateMaintenanceGuard::acquire(std::slice::from_ref(&root)).unwrap();
+        let locator = locator_path(&guard.base, &root);
+        crate::create_private_config(&locator, b"pending relocation").unwrap();
+        drop(guard);
+        let result = reset_unreadable_state(&root);
+        fs::remove_file(locator).unwrap();
+        assert!(matches!(result, Err(Error::StateRecoveryRequired)));
+        assert!(marker.exists());
+    }
 
     #[test]
     fn path_only_lease_ignores_credential_schema_and_excludes_maintenance() {

@@ -112,16 +112,7 @@ test('clicking a group navigates the shell to it', async () => {
   );
   assert.ok(engineering, 'the Engineering row is in the sidebar');
   const icon = engineering.querySelector('.ic');
-  const stack = engineering.querySelector('.stack');
   assert.ok(icon, 'group icon is present');
-  assert.ok(stack, 'roster stack element is present');
-  assert.equal(
-    Boolean(
-      icon.compareDocumentPosition(stack) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ),
-    true,
-    'group icon precedes roster avatars in DOM order',
-  );
 
   testingLibrary.fireEvent.click(engineering);
   await testingLibrary.waitFor(() => {

@@ -6,10 +6,7 @@ import { SsoPanel } from '../components/sso-panel';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
-import {
-  enqueueProfileWork,
-  normalizeCommandError,
-} from '../bridge';
+import { enqueueProfileWork, normalizeCommandError } from '../bridge';
 import type {
   AccountDevice,
   AppInfo,
@@ -31,12 +28,10 @@ import {
   SectionLabel,
   SegmentedControl,
   SheetDialog,
-  Stack,
 } from '../components';
 import type { Location, SettingsSection } from '../location';
 import {
   canCreateInStore,
-  partiesOf,
   serverAvailability,
   serverOf,
   storeDescription,
@@ -227,7 +222,6 @@ function GroupsSection({
                   }
                 >
                   <span className="who2">
-                    <Stack parties={partiesOf(world, store.id)} size="lg" />
                     <span className="t">
                       <b>{store.name}</b>
                       <small>
@@ -454,7 +448,8 @@ export function SettingsScreen({
     return !server || !serverAvailability(world, server).available;
   };
   const selectedStopped = selected
-    ? !storeAvailability(world, selected).available || accessStopped(selected.server)
+    ? !storeAvailability(world, selected).available ||
+      accessStopped(selected.server)
     : true;
   useEffect(() => {
     let alive = true;
@@ -512,13 +507,7 @@ export function SettingsScreen({
     return () => {
       alive = false;
     };
-  }, [
-    bridge,
-    onError,
-    recoverCatalog,
-    selected,
-    selectedStopped,
-  ]);
+  }, [bridge, onError, recoverCatalog, selected, selectedStopped]);
 
   useEffect(() => {
     let alive = true;
@@ -593,13 +582,7 @@ export function SettingsScreen({
     return () => {
       alive = false;
     };
-  }, [
-    bridge,
-    onError,
-    recoverCatalog,
-    section,
-    world,
-  ]);
+  }, [bridge, onError, recoverCatalog, section, world]);
 
   useEffect(() => {
     if (selectedStopped) setSheet(null);
@@ -637,16 +620,10 @@ export function SettingsScreen({
     ? world.servers.find((entry) => entry.id === selected.server)
     : undefined;
   const macsLoading = Boolean(
-    selected &&
-    !unavailable &&
-    !selectedStopped &&
-    !macsLoaded,
+    selected && !unavailable && !selectedStopped && !macsLoaded,
   );
   const keysLoading = Boolean(
-    selected &&
-    !unavailable &&
-    !selectedStopped &&
-    !keysLoaded,
+    selected && !unavailable && !selectedStopped && !keysLoaded,
   );
   const createContext = stores[0];
   const invitedStore = stores.find((store) => store.id === inviteStore);

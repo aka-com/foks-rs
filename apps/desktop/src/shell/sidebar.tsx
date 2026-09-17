@@ -8,9 +8,8 @@ import { teamUnread } from '../chat/unread';
  */
 
 import { Fragment, useEffect, type ReactNode } from 'react';
-import { Badge, Icon, SectionLabel, Stack } from '../components';
+import { Badge, Icon, SectionLabel } from '../components';
 import {
-  partiesOf,
   serverChatAvailable,
   storeReadable,
   storeDescription,
@@ -205,11 +204,6 @@ export function Sidebar({
         name={store.name}
         caption={storeDescription(world, store)}
         dimmed={connectionError}
-        tail={
-          store.kind === 'team' ? (
-            <Stack parties={partiesOf(world, store.id)} />
-          ) : undefined
-        }
         onSelect={() => {
           // Clicking the currently active store preserves the existing selection.
           onNavigate({ kind: 'store', ref: store.id });

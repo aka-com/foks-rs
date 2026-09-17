@@ -26,6 +26,8 @@
   --warning-dot: #d59600;
   --ok-ink: #248a3d;
   --ok-solid: #34c759;
+  --ok-wash: rgba(52, 199, 89, 0.14);
+  --ok-border: rgba(52, 199, 89, 0.38);
 
   /* surfaces */
   --panel: #fbfbfd;

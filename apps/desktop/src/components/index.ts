@@ -2,7 +2,6 @@
  * Shared UI component exports for the FOKS shell.
  */
 
-export * from './avatar';
 export * from './button';
 export * from './card-select';
 export * from './chips';

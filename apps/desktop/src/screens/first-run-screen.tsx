@@ -32,6 +32,8 @@ import {
   InsetRow,
   KindIcon,
   Notice,
+  RadioCard,
+  RadioGroup,
   SectionLabel,
   SheetDialog,
   Toggle,
@@ -102,6 +104,21 @@ const DEFINITIVE_IDENTITY_PROBLEMS: readonly IdentityProblem[] = [
   'profile-missing',
   'host-mismatch',
 ];
+
+const MISSING_SERVER_EXPLANATION =
+  'The account you were creating could not be found on the server. This may happen because of a restart, server reset, or other error.';
+
+function MissingServerWarning({ action }: { action: ReactNode }): ReactNode {
+  return (
+    <div className="alt-path warning" role="alert">
+      <div className="t">
+        <b>The server saved for this account is missing</b>
+        <span>{MISSING_SERVER_EXPLANATION}</span>
+      </div>
+      {action}
+    </div>
+  );
+}
 
 const stepOf = (state: FirstRunStateName): number => {
   if (state === 'boot') return 0;
@@ -819,6 +836,10 @@ export function FirstRunExperience({
   );
   const [email, setEmail] = useState('');
   const [invite, setInvite] = useState('');
+  const [showSso, setShowSso] = useState(() => Boolean(checkpoint.sso));
+  const [ssoPrimarySlot, setSsoPrimarySlot] = useState<HTMLElement | null>(
+    null,
+  );
   const [passphrase, setPassphrase] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [recoveryPhrase, setRecoveryPhrase] = useState('');
@@ -864,6 +885,8 @@ export function FirstRunExperience({
   const [identityProblem, setIdentityProblem] =
     useState<IdentityProblem | null>(null);
   const [operationStatus, setOperationStatus] = useState<string | null>(null);
+  const [operationProblem, setOperationProblem] =
+    useState<IdentityProblem | null>(null);
   const [operationResumable, setOperationResumable] = useState(false);
   const [operationChecked, setOperationChecked] = useState(false);
   const [operationRunning, setOperationRunning] = useState(false);
@@ -935,14 +958,18 @@ export function FirstRunExperience({
     };
   }, [bridge, checkpoint.account?.deviceName, facts?.deviceName]);
 
+  // CLI profiles are discovered on the joining step for the chooser, and again
+  // on the account steps when no result is loaded: a resumed checkpoint skips
+  // the joining step, and the CLI import and pairing cards depend on a
+  // candidate that is not persisted.
+  const accountStep =
+    checkpoint.state === 'account' || checkpoint.state === 'existing';
+  const discoveryWanted =
+    checkpoint.state === 'who'
+      ? !goChooserDismissed
+      : accountStep && goDiscovery === null;
   useEffect(() => {
-    if (
-      !agentReady ||
-      checkpoint.state !== 'who' ||
-      !bridge.native ||
-      goChooserDismissed
-    )
-      return;
+    if (!agentReady || !bridge.native || !discoveryWanted) return;
     let alive = true;
     setGoScanError(null);
     void sharedSetupRead(bridge, 'cli-discovery', () =>
@@ -967,6 +994,7 @@ export function FirstRunExperience({
     agentReady,
     bridge,
     checkpoint.state,
+    discoveryWanted,
     goChooserDismissed,
     goScanAttempt,
     onAgentReadinessFailure,
@@ -996,10 +1024,48 @@ export function FirstRunExperience({
     accountAliasFor(username);
   const usernameAliasInvalid = username.trim().length > 0 && !accountAlias;
   const recoveryTargetAlias = recoveryAlias.trim() || accountAlias;
-  const goCandidates =
-    goDiscovery?.candidates.filter(
-      (candidate) => candidate.pairable || candidate.copyable,
-    ) ?? [];
+  const goCandidates = useMemo(
+    () =>
+      goDiscovery?.candidates.filter(
+        (candidate) => candidate.pairable || candidate.copyable,
+      ) ?? [],
+    [goDiscovery],
+  );
+  // On the account steps, select the CLI profile for the verified server when
+  // none was chosen: the alias match wins, otherwise a single profile on that
+  // host. Several unrelated profiles on the same host stay unselected rather
+  // than importing or pairing the wrong account.
+  const profileHostId = profile?.hostId;
+  useEffect(() => {
+    if (!accountStep || goCandidate || !profileHostId) return;
+    const onHost = goCandidates.filter(
+      (candidate) => candidate.hostId === profileHostId,
+    );
+    const byAlias = onHost.filter(
+      (candidate) =>
+        candidate.username !== undefined &&
+        accountAliasFor(candidate.username) === recoveryTargetAlias,
+    );
+    const match =
+      byAlias.length === 1
+        ? byAlias[0]
+        : onHost.length === 1
+          ? onHost[0]
+          : undefined;
+    if (!match) return;
+    setGoCandidate(match);
+    // Mirror the chooser: suggest the CLI username as the local alias.
+    if (match.username)
+      setRecoveryAlias(
+        (current) => current || accountAliasFor(match.username ?? ''),
+      );
+  }, [
+    accountStep,
+    goCandidate,
+    goCandidates,
+    profileHostId,
+    recoveryTargetAlias,
+  ]);
   const admin = facts?.admin ?? 'group administrator';
   const adminShort = facts?.admin
     ? facts.admin.split('.')[0]
@@ -1434,6 +1500,7 @@ export function FirstRunExperience({
     if (!intent || !saved.profile || !agentReady || identityLoading) return;
     const profileName = saved.profile.profile;
     autoProbedKey.current = `operation:${intent.id}`;
+    setOperationProblem(null);
     if (provisioningInFlight(bridge, intent.id)) {
       setOperationRunning(true);
       setOperationStatus(
@@ -1527,6 +1594,7 @@ export function FirstRunExperience({
         return;
       const problem = provisionedIdentityProblem(refreshed, probe);
       if (problem && problem !== 'account-missing') {
+        setOperationProblem(problem);
         setOperationStatus(withReceipt(identityProblemText[problem]));
         return;
       }
@@ -1608,6 +1676,7 @@ export function FirstRunExperience({
   const intentId = checkpoint.provisioning?.id;
   useEffect(() => {
     setOperationChecked(false);
+    setOperationProblem(null);
     setOperationRunning(false);
     setExistingAccountAdoptable(false);
   }, [intentId]);
@@ -1667,6 +1736,7 @@ export function FirstRunExperience({
       }),
     );
     setOperationStatus(null);
+    setOperationProblem(null);
     setOperationResumable(false);
     setMessage(null);
     setConnectionErrors({ copy: null, recover: null, pair: null });
@@ -2423,6 +2493,180 @@ export function FirstRunExperience({
       Review server settings
     </Button>
   );
+  /* The ways into an account that already exists: recovery by backup phrase,
+     and, with an eligible FOKS CLI profile, credential import or pairing.
+     Drawn under the "Sign in to an existing account" choice on Select an
+     account, and on the managed-local path's own page. */
+  const recoverButton = (
+    <Button
+      variant="primary"
+      disabled={
+        busy ||
+        !recoveryTargetAlias ||
+        !recoveryPhrase.trim() ||
+        !deviceName.trim()
+      }
+      onClick={() => void recover()}
+    >
+      {pending.some(
+        (row) =>
+          row.kind === 'account-recovery' && row.alias === recoveryTargetAlias,
+      )
+        ? 'Resume recovery'
+        : 'Recover'}
+    </Button>
+  );
+  // The ways into an existing account. Recovery's primary button is
+  // `recoverButton`, drawn in the page foot; the CLI cards keep their own.
+  const existingCards = (
+    <div className="signin-methods">
+      <div className="pcard">
+        <h3>Recover with your backup phrase</h3>
+        <p>
+          Enter all 17 words from your backup phrase to restore full access on
+          this Mac.
+        </p>
+        <Inset className="recovery-fields">
+          {bridge.native ? (
+            <InsetRow label="Account alias">
+              <input
+                value={recoveryAlias}
+                onChange={(event) => setRecoveryAlias(event.target.value)}
+              />
+            </InsetRow>
+          ) : null}
+          <InsetRow label="Phrase">
+            <input
+              type="password"
+              aria-label="Backup phrase"
+              placeholder="word word word …"
+              value={recoveryPhrase}
+              onChange={(event) => setRecoveryPhrase(event.target.value)}
+            />
+          </InsetRow>
+          <InsetRow label="This Mac’s name">
+            <input
+              value={deviceName}
+              placeholder="Your Mac"
+              onChange={(event) => setDeviceName(event.target.value)}
+            />
+          </InsetRow>
+        </Inset>
+        {connectionErrors.recover ? (
+          <p className="crit" role="alert">
+            {connectionErrors.recover}
+          </p>
+        ) : null}
+      </div>
+      {goCandidate?.copyable ? (
+        <div className="pcard">
+          <h3>Import this Mac’s FOKS CLI credentials</h3>
+          <p>
+            Both apps will share the same device credentials. This may require a
+            Keychain prompt. Revoking the device in either client will disable
+            both.
+          </p>
+          <Inset className="recovery-fields">
+            <InsetRow label="Account alias">
+              <input
+                aria-label="Copied account alias"
+                value={recoveryAlias}
+                onChange={(event) => setRecoveryAlias(event.target.value)}
+              />
+            </InsetRow>
+          </Inset>
+          <Button
+            variant="primary"
+            className="copy-device"
+            disabled={busy || !recoveryTargetAlias}
+            onClick={() => void copyGoCandidate()}
+          >
+            Import credentials
+          </Button>
+          {connectionErrors.copy ? (
+            <p className="crit" role="alert">
+              {connectionErrors.copy}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+      {goCandidate?.pairable ? (
+        <div className="pcard">
+          <h3>Use the CLI to approve this as a new device</h3>
+          <p>
+            In Terminal, switch the official FOKS CLI to this account, then run:
+          </p>
+          <CopyBox
+            text="foks --simple-ui key assist"
+            onCopy={(value) =>
+              void bridge
+                .copyText(value)
+                .then(() => toasts.show('Command copied.'))
+            }
+          >
+            <code>foks --simple-ui key assist</code>
+          </CopyBox>
+          <p>
+            Select the account in the CLI, enter the pairing code below, and
+            follow the terminal prompts to complete pairing.
+          </p>
+          <Inset className="recovery-fields">
+            <InsetRow label="Account alias">
+              <input
+                aria-label="Pairing account alias"
+                value={recoveryAlias}
+                onChange={(event) => setRecoveryAlias(event.target.value)}
+              />
+            </InsetRow>
+            <InsetRow label="This Mac’s name">
+              <input
+                aria-label="Pairing device name"
+                value={deviceName}
+                placeholder="Your Mac"
+                onChange={(event) => setDeviceName(event.target.value)}
+              />
+            </InsetRow>
+            <InsetRow label="Pairing phrase">
+              <input
+                type="password"
+                aria-label="Pairing phrase"
+                placeholder="Enter pairing phrase"
+                value={pairingPhrase}
+                onChange={(event) => setPairingPhrase(event.target.value)}
+              />
+            </InsetRow>
+          </Inset>
+          <div className="btns">
+            <Button
+              disabled={
+                busy ||
+                !recoveryTargetAlias ||
+                !deviceName.trim() ||
+                !pairingPhrase.trim()
+              }
+              onClick={() => void acceptPairing(false)}
+            >
+              Accept pairing
+            </Button>
+            <Button
+              disabled={busy || !recoveryTargetAlias || !deviceName.trim()}
+              onClick={() => void acceptPairing(true)}
+            >
+              Resume pairing
+            </Button>
+          </div>
+          {connectionErrors.pair ? (
+            <p className="crit" role="alert">
+              {connectionErrors.pair}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+  /* Where the account page's Back goes; signing in shares it. */
+  const accountBackTarget =
+    accountBack ?? (checkpoint.managedLocal ? 'local' : 'checked');
   if (state === 'operation-pending') {
     const intent = checkpoint.provisioning;
     const settled =
@@ -2447,7 +2691,17 @@ export function FirstRunExperience({
             ? 'Account setup is running. You can finish later while it completes.'
             : 'We couldn’t confirm whether account setup finished. Check its status to continue.'}
         </p>
-        {operationStatus ? (
+        {operationProblem === 'profile-missing' && operationStatus ? (
+          <MissingServerWarning
+            action={
+              abortable ? (
+                <Button variant="danger" onClick={discardProvisioning}>
+                  Start over
+                </Button>
+              ) : null
+            }
+          />
+        ) : operationStatus ? (
           <p className="status" role="status">
             {operationStatus}
           </p>
@@ -2511,7 +2765,7 @@ export function FirstRunExperience({
             onComplete={() => void checkOperationStatus()}
           />
         ) : null}
-        {abortable ? (
+        {abortable && operationProblem !== 'profile-missing' ? (
           <div className="alt-path">
             <div className="t">
               <b>Abort account setup</b>
@@ -2536,7 +2790,15 @@ export function FirstRunExperience({
           Your account is connected. Try again to load its details, or finish
           setup later.
         </p>
-        {identityError ? (
+        {identityProblem === 'profile-missing' ? (
+          <MissingServerWarning
+            action={
+              <Button onClick={discardProvisionedAccount}>
+                Set up a different account
+              </Button>
+            }
+          />
+        ) : identityError ? (
           <p className="crit" role="alert">
             {identityError}
           </p>
@@ -2555,6 +2817,7 @@ export function FirstRunExperience({
           {reviewServerSettings}
         </div>
         {identityProblem &&
+        identityProblem !== 'profile-missing' &&
         DEFINITIVE_IDENTITY_PROBLEMS.includes(identityProblem) &&
         !identityLoading ? (
           <div className="alt-path">
@@ -2828,12 +3091,6 @@ export function FirstRunExperience({
         >
           Use the official FOKS server
         </Button>
-        {checkpoint.returning ? (
-          <p className="hint">
-            <b>You already have an account on this server.</b> This Mac will be
-            added to your existing account without creating a new one.
-          </p>
-        ) : null}
         {state === 'error' && !addressInvalid ? (
           <div className="crit">
             <b>
@@ -2845,7 +3102,7 @@ export function FirstRunExperience({
             </b>
             <p>
               {serverCheckPresentation?.detail ??
-                'Review the reported error and server address before retrying.'}
+                'Confirm the address is correct, then retry.'}
             </p>
           </div>
         ) : null}
@@ -2926,11 +3183,14 @@ export function FirstRunExperience({
             />
           </InsetRow>
         </Inset>
-        <div className="pcard">
+        <div className="pcard ok">
           <h3>
             <Icon name="server" /> {profile?.canonicalName} verified{' '}
           </h3>
-
+          <p>
+            The server certificate was verified on first connection, and its
+            host ID is now pinned for future connections.
+          </p>
           <Toggle label="Details" defaultOpen={state === 'compare'}>
             <div className="dbody">
               <div className="facts">
@@ -2955,10 +3215,6 @@ export function FirstRunExperience({
                   </span>
                 </div>
               </div>
-              <p className="hint">
-                The server certificate was verified on first connection, and its
-                host ID is now pinned for future connections.
-              </p>
               <Toggle label="Inspect response">
                 <pre>{JSON.stringify(profile, null, 1)}</pre>
               </Toggle>
@@ -3075,90 +3331,259 @@ export function FirstRunExperience({
         </button>
       </Pane>
     );
-  else if (state === 'account')
+  else if (
+    state === 'account' ||
+    (state === 'existing' && !checkpoint.managedLocal)
+  ) {
+    // Both choices render on this one page. `existing` is the same page with
+    // "Sign in to an existing account" selected and its cards under the radios.
+    const signingIn = state === 'existing';
+    // Organization sign-up is a third choice in the same radio group. It is
+    // offered only while the server is known and no account exists yet, and
+    // its own panel carries the primary action.
+    const ssoAvailable = Boolean(profile) && !checkpoint.account;
+    const ssoSelected = !signingIn && ssoAvailable && showSso;
+    // Both ways of creating an account need the same two fields.
+    const accountFields = (
+      <Inset className="account-form">
+        <InsetRow label="Username">
+          <input
+            value={username}
+            placeholder="yourname"
+            onChange={(event) => editUsername(event.target.value)}
+          />
+        </InsetRow>
+        <InsetRow label="This Mac’s name">
+          <input
+            value={deviceName}
+            placeholder="Your Mac"
+            onChange={(event) => setDeviceName(event.target.value)}
+          />
+        </InsetRow>
+      </Inset>
+    );
     content = (
       <Pane
         title="Your account"
         header={false}
-        scope="Keys are generated securely on your device."
+        scope={
+          signingIn
+            ? 'Device authorization required'
+            : 'Keys are generated securely on your device.'
+        }
         wide
         foot={
           <Foot
             back={() =>
-              go(accountBack ?? (checkpoint.managedLocal ? 'local' : 'checked'))
+              go(
+                signingIn
+                  ? checkpoint.account
+                    ? 'protect'
+                    : existingBack
+                  : accountBackTarget,
+              )
             }
           >
-            <Button
-              variant="primary"
-              disabled={
-                busy ||
-                usernameAliasInvalid ||
-                (!checkpoint.account &&
-                  (!username.trim() || !deviceName.trim()))
-              }
-              // If the account was already created when returning from Protect, proceed to protection.
-              onClick={() =>
-                checkpoint.account ? go('protect') : void createAccount()
-              }
-            >
-              {checkpoint.account
-                ? 'Continue'
-                : pending.some(
-                      (row) =>
-                        row.kind === 'account-signup' &&
-                        row.alias === accountAlias,
-                    )
-                  ? 'Resume account setup'
-                  : 'Create my account'}
-            </Button>
+            {signingIn ? (
+              checkpoint.account ? (
+                <Button onClick={() => go('protect')}>Resume protection</Button>
+              ) : (
+                recoverButton
+              )
+            ) : ssoSelected ? (
+              <span className="foot-slot" ref={setSsoPrimarySlot} />
+            ) : (
+              <Button
+                variant="primary"
+                disabled={
+                  busy ||
+                  usernameAliasInvalid ||
+                  (!checkpoint.account &&
+                    (!username.trim() || !deviceName.trim()))
+                }
+                // If the account was already created when returning from Protect, proceed to protection.
+                onClick={() =>
+                  checkpoint.account ? go('protect') : void createAccount()
+                }
+              >
+                {checkpoint.account
+                  ? 'Continue'
+                  : pending.some(
+                        (row) =>
+                          row.kind === 'account-signup' &&
+                          row.alias === accountAlias,
+                      )
+                    ? 'Resume account setup'
+                    : 'Create my account'}
+              </Button>
+            )}
           </Foot>
         }
       >
-        <h1>Create an account</h1>
+        <h1>Set up your account</h1>
         <p className="lead">
-          FOKS creates your account keys on this Mac and registers only the
-          public keys with the server.
+          {signingIn ? (
+            <>
+              Your account already exists on {profile?.canonicalName}. Recover
+              it with your backup phrase
+              {goCandidate ? ' or connect using the official FOKS CLI' : ''}.
+            </>
+          ) : (
+            'Your account keys are generated on this Mac; only the public keys are sent to the server.'
+          )}
         </p>
-        <div className="two account-form">
-          <div>
-            <SectionLabel>You</SectionLabel>
-            <Inset>
-              <InsetRow label="Username">
-                <input
-                  value={username}
-                  placeholder="yourname"
-                  onChange={(event) => editUsername(event.target.value)}
+        <Inset>
+          <RadioGroup label="Account setup">
+            <div className="choice">
+              <RadioCard
+                title="Create a new account"
+                detail="Set up a new FOKS account on this Mac."
+                selected={!signingIn && !ssoSelected}
+                disabled={Boolean(checkpoint.sso)}
+                onSelect={() => {
+                  setShowSso(false);
+                  if (!signingIn) return;
+                  setAccountBack(existingBack);
+                  go('account');
+                }}
+              />
+              {!signingIn && !ssoSelected ? (
+                <div className="choice-body">
+                  {accountFields}
+                  <Toggle
+                    label="Email or invite code"
+                    defaultOpen={Boolean(email || invite)}
+                  >
+                    <Inset className="account-form">
+                      <InsetRow label="Email">
+                        <input
+                          value={email}
+                          placeholder="you@example.net"
+                          onChange={(event) => setEmail(event.target.value)}
+                        />
+                      </InsetRow>
+                      <InsetRow label="Invite code">
+                        <input
+                          value={invite}
+                          onChange={(event) => setInvite(event.target.value)}
+                        />
+                      </InsetRow>
+                    </Inset>
+                  </Toggle>
+                </div>
+              ) : null}
+            </div>
+            {ssoAvailable && profile ? (
+              <div className="choice">
+                <RadioCard
+                  title="Sign up with your organization"
+                  detail="Create the account through your organization’s identity provider."
+                  selected={ssoSelected}
+                  onSelect={() => {
+                    setShowSso(true);
+                    if (!signingIn) return;
+                    setAccountBack(existingBack);
+                    go('account');
+                  }}
                 />
-              </InsetRow>
-              <InsetRow label="This Mac’s name">
-                <input
-                  value={deviceName}
-                  placeholder="Your Mac"
-                  onChange={(event) => setDeviceName(event.target.value)}
-                />
-              </InsetRow>
-            </Inset>
-          </div>
-          <div>
-            <SectionLabel>Optional</SectionLabel>
-            <Inset>
-              <InsetRow label="Email (optional)">
-                <input
-                  value={email}
-                  placeholder="you@example.net"
-                  onChange={(event) => setEmail(event.target.value)}
-                />
-              </InsetRow>
-              <InsetRow label="Invite (optional)">
-                <input
-                  value={invite}
-                  onChange={(event) => setInvite(event.target.value)}
-                />
-              </InsetRow>
-            </Inset>
-          </div>
-        </div>
-        {profile && !checkpoint.account && (
+                {ssoSelected ? (
+                  <div className="choice-body">
+                    {accountFields}
+                    <Toggle label="Invite code" defaultOpen={Boolean(invite)}>
+                      <Inset className="account-form">
+                        <InsetRow label="Invite code">
+                          <input
+                            value={invite}
+                            onChange={(event) => setInvite(event.target.value)}
+                          />
+                        </InsetRow>
+                      </Inset>
+                    </Toggle>
+                    <SsoPanel
+                      key={`${profile.profile}/${accountAlias}`}
+                      embedded
+                      primarySlot={ssoPrimarySlot}
+                      bridge={bridge}
+                      profile={profile.profile}
+                      account={accountAlias}
+                      login={false}
+                      deviceName={deviceName}
+                      invite={invite}
+                      disabled={busy}
+                      initialOperationId={
+                        checkpoint.sso?.alias === accountAlias
+                          ? checkpoint.sso.operationId
+                          : undefined
+                      }
+                      initialHardware={checkpoint.sso?.hardware}
+                      executeSignup={executeSsoSignup}
+                      onProgress={(progress, hardware) => {
+                        if (
+                          progress.operationId &&
+                          !checkpointRef.current.provisioning &&
+                          !checkpointRef.current.provisionedAccount
+                        )
+                          commit({
+                            ...checkpointRef.current,
+                            sso: {
+                              operationId: progress.operationId,
+                              alias: accountAlias,
+                              hardware,
+                            },
+                          });
+                      }}
+                      onComplete={() => {
+                        setInvite('');
+                        accountProvisioned(accountAlias);
+                      }}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            <div className="choice">
+              <RadioCard
+                title="Sign in to an existing account"
+                detail="Add this Mac to an account you already have."
+                selected={signingIn}
+                onSelect={() => {
+                  if (signingIn) return;
+                  openExisting(accountBackTarget);
+                }}
+              />
+              {signingIn ? (
+                <div className="choice-body">{existingCards}</div>
+              ) : null}
+            </div>
+          </RadioGroup>
+        </Inset>
+        {signingIn ? null : (
+          <>
+            {usernameAliasInvalid ? (
+              <p className="crit">
+                Username must contain at least one letter or number.
+              </p>
+            ) : null}
+            {message ? <p className="crit">{message}</p> : null}
+            {duplicateAlias && !busy && !identityLoading ? (
+              <div className="band info" role="status">
+                <span className="t">
+                  “{duplicateAlias.alias}” is already set up on this Mac for
+                  this server. Use that account, or choose a different username.
+                </span>
+                <span className="a">
+                  <Button
+                    variant="primary"
+                    onClick={() => void adoptDuplicateAccount()}
+                  >
+                    Use existing account
+                  </Button>
+                </span>
+              </div>
+            ) : null}
+          </>
+        )}
+        {profile && !checkpoint.account && showSso && (
           <SsoPanel
             key={`${profile.profile}/${accountAlias}`}
             bridge={bridge}
@@ -3219,14 +3644,11 @@ export function FirstRunExperience({
             </span>
           </div>
         ) : null}
-        <button
-          className="lnk account-recover-link"
-          onClick={() => openExisting('account')}
-        >
-          Sign in to an existing account
-        </button>
       </Pane>
     );
+  }
+  // Only the managed-local path keeps a separate page for an existing account;
+  // its Create your account pane has no radios to draw the cards under.
   else if (state === 'existing')
     content = (
       <Pane
@@ -3239,14 +3661,17 @@ export function FirstRunExperience({
             {checkpoint.account ? (
               <Button onClick={() => go('protect')}>Resume protection</Button>
             ) : (
-              <Button
-                onClick={() => {
-                  setAccountBack('existing');
-                  go('account');
-                }}
-              >
-                Create a new account
-              </Button>
+              <>
+                <Button
+                  onClick={() => {
+                    setAccountBack('existing');
+                    go('account');
+                  }}
+                >
+                  Create a new account
+                </Button>
+                {recoverButton}
+              </>
             )}
           </Foot>
         }
@@ -3257,173 +3682,7 @@ export function FirstRunExperience({
           with your backup phrase
           {goCandidate ? ' or connect using the official FOKS CLI' : ''}.
         </p>
-        <div className="two">
-          <div className="pcard">
-            <h3>Recover with your backup phrase</h3>
-            <p>
-              Enter all 17 words from your backup phrase to restore full access
-              on this Mac.
-            </p>
-            <Inset className="recovery-fields">
-              {bridge.native ? (
-                <InsetRow label="Account alias">
-                  <input
-                    value={recoveryAlias}
-                    onChange={(event) => setRecoveryAlias(event.target.value)}
-                  />
-                </InsetRow>
-              ) : null}
-              <InsetRow label="Phrase">
-                <input
-                  type="password"
-                  aria-label="Backup phrase"
-                  placeholder="word word word …"
-                  value={recoveryPhrase}
-                  onChange={(event) => setRecoveryPhrase(event.target.value)}
-                />
-              </InsetRow>
-              <InsetRow label="This Mac’s name">
-                <input
-                  value={deviceName}
-                  placeholder="Your Mac"
-                  onChange={(event) => setDeviceName(event.target.value)}
-                />
-              </InsetRow>
-            </Inset>
-            <div className="btns">
-              <Button
-                variant="primary"
-                disabled={
-                  busy ||
-                  !recoveryTargetAlias ||
-                  !recoveryPhrase.trim() ||
-                  !deviceName.trim()
-                }
-                onClick={() => void recover()}
-              >
-                {pending.some(
-                  (row) =>
-                    row.kind === 'account-recovery' &&
-                    row.alias === recoveryTargetAlias,
-                )
-                  ? 'Resume recovery'
-                  : 'Recover'}
-              </Button>
-            </div>
-            {connectionErrors.recover ? (
-              <p className="crit" role="alert">
-                {connectionErrors.recover}
-              </p>
-            ) : null}
-          </div>
-          {goCandidate?.copyable ? (
-            <div className="pcard">
-              <h3>Copy this Mac’s CLI device</h3>
-              <p>
-                Advanced: both apps will share the same device credentials.
-                macOS may request Keychain access. Revoking the device in either
-                client will disable both, and changing your CLI passphrase will
-                not update this desktop copy.
-              </p>
-              <Inset className="recovery-fields">
-                <InsetRow label="Account alias">
-                  <input
-                    aria-label="Copied account alias"
-                    value={recoveryAlias}
-                    onChange={(event) => setRecoveryAlias(event.target.value)}
-                  />
-                </InsetRow>
-              </Inset>
-              <Button
-                variant="primary"
-                className="copy-device"
-                disabled={busy || !recoveryTargetAlias}
-                onClick={() => void copyGoCandidate()}
-              >
-                Copy existing device
-              </Button>
-              {connectionErrors.copy ? (
-                <p className="crit" role="alert">
-                  {connectionErrors.copy}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-          {goCandidate?.pairable ? (
-            <div className="pcard">
-              <h3>Use the CLI to approve this as a new device</h3>
-              <p>
-                In Terminal, switch the official FOKS CLI to this account, then
-                run:
-              </p>
-              <CopyBox
-                text="foks --simple-ui key assist"
-                onCopy={(value) =>
-                  void bridge
-                    .copyText(value)
-                    .then(() => toasts.show('Command copied.'))
-                }
-              >
-                <code>foks --simple-ui key assist</code>
-              </CopyBox>
-              <p>
-                Select the account in the CLI, enter the pairing code below, and
-                follow the terminal prompts to complete pairing.
-              </p>
-              <Inset className="recovery-fields">
-                <InsetRow label="Account alias">
-                  <input
-                    aria-label="Pairing account alias"
-                    value={recoveryAlias}
-                    onChange={(event) => setRecoveryAlias(event.target.value)}
-                  />
-                </InsetRow>
-                <InsetRow label="This Mac’s name">
-                  <input
-                    aria-label="Pairing device name"
-                    value={deviceName}
-                    placeholder="Your Mac"
-                    onChange={(event) => setDeviceName(event.target.value)}
-                  />
-                </InsetRow>
-                <InsetRow label="Pairing phrase">
-                  <input
-                    type="password"
-                    aria-label="Pairing phrase"
-                    placeholder="Enter pairing phrase"
-                    value={pairingPhrase}
-                    onChange={(event) => setPairingPhrase(event.target.value)}
-                  />
-                </InsetRow>
-              </Inset>
-              <div className="btns">
-                <Button
-                  disabled={
-                    busy ||
-                    !recoveryTargetAlias ||
-                    !deviceName.trim() ||
-                    !pairingPhrase.trim()
-                  }
-                  onClick={() => void acceptPairing(false)}
-                >
-                  Accept pairing
-                </Button>
-                <Button
-                  disabled={busy || !recoveryTargetAlias || !deviceName.trim()}
-                  onClick={() => void acceptPairing(true)}
-                >
-                  Resume pairing
-                </Button>
-              </div>
-              {connectionErrors.pair ? (
-                <p className="crit" role="alert">
-                  {connectionErrors.pair}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-        <p className="hint">This Mac will be added to your account.</p>
+        {existingCards}
       </Pane>
     );
   else if (
@@ -3630,9 +3889,9 @@ export function FirstRunExperience({
       >
         <h1>Save recovery phrase</h1>
         <p className="lead">
-          Only this Mac can recover {checkpoint.account?.username}. Add at least
-          one recovery method now. You can manage recovery methods later in
-          Settings.
+          The keys controlling this account are only saved on this device. Add
+          at least one recovery method now. You can manage recovery methods
+          later in Settings.
         </p>
         <div className="two">
           <div className="pcard">
@@ -3682,8 +3941,7 @@ export function FirstRunExperience({
             dismissible={!mutationBusy}
             onClose={() => go('protect')}
             glyph={<Icon name="key" />}
-            title="Write these 17 words down"
-            subtitle="Keep them somewhere other than this Mac"
+            title="Save your recovery phrase"
             footer={
               <>
                 <Button disabled={mutationBusy} onClick={() => go('protect')}>
@@ -3718,12 +3976,12 @@ export function FirstRunExperience({
               )}
               <button
                 type="button"
-                aria-label="I have written these 17 words down"
+                aria-label="I have written this down"
                 className={`check${phraseWritten ? ' on' : ''}`}
                 onClick={() => setPhraseWritten((value) => !value)}
               >
                 <span className="bx">{phraseWritten ? '✓' : ''}</span>I have
-                written these 17 words down
+                written this down
               </button>
             </>
           </SheetDialog>
@@ -3916,38 +4174,24 @@ export function FirstRunExperience({
         </div>
       </Pane>
     );
-  else if (state === 'checklist-invited' || state === 'checklist-own')
+  else if (state === 'checklist-invited' || state === 'checklist-own') {
+    const stepsDone = completedFirstRunSteps(checkpoint);
+    const stepsTotal = firstRunStepCount(checkpoint);
+    const recoverySet = Boolean(
+      checkpoint.passphraseSet || checkpoint.backupCommitted,
+    );
+    // Completed checklist items display one summary line; server connection
+    // details are available in Settings. If recovery setup was skipped, the
+    // warning banner explains that unbacked accounts cannot be recovered.
     content = (
       <Pane
         title="Get started"
-        subtitle={`${completedFirstRunSteps(checkpoint)} of ${firstRunStepCount(checkpoint)} steps completed`}
-        wide
-        foot={
-          <Foot>
-            {!accountStore ? (
-              <Button disabled={personalRefreshing} onClick={retryPersonal}>
-                {personalRefreshing
-                  ? 'Loading Personal vault…'
-                  : 'Retry loading Personal vault'}
-              </Button>
-            ) : null}
-            <Button
-              variant="primary"
-              disabled={!accountStore}
-              onClick={() => {
-                if (accountStore)
-                  onNavigate({ kind: 'store', ref: accountStore });
-              }}
-            >
-              Open Personal
-            </Button>
-          </Foot>
-        }
+        subtitle={`${stepsDone} of ${stepsTotal} steps completed`}
       >
         <p className="lead">
-          {completedFirstRunSteps(checkpoint) === firstRunStepCount(checkpoint)
+          {stepsDone === stepsTotal
             ? 'Your account is ready. Start using your Personal vault.'
-            : 'Completed steps are saved. You can finish account recovery below or start using your Personal vault.'}
+            : 'Completed steps are saved. Finish account recovery below, or start using your Personal vault.'}
         </p>
         {personalRefreshError ? (
           <p className="crit" role="alert">
@@ -3958,51 +4202,43 @@ export function FirstRunExperience({
           <InsetRow label="✓">
             <b>{checkpoint.path === 'invited' ? 'Their server' : 'A server'}</b>
             <span className="hint">
-              <code>{profile?.canonicalName}</code> · host ID{' '}
-              <code>{profile?.hostId.slice(0, 10)}…</code> · checked and pinned
-              on this Mac.
+              <code>{profile?.canonicalName}</code>
             </span>
           </InsetRow>
           <InsetRow label="✓">
             <b>Your account</b>
             <span className="hint">
-              <code>{checkpoint.account?.username}</code> on{' '}
-              {profile?.canonicalName} · Device name:{' '}
-              <b>{checkpoint.account?.deviceName}</b>.
+              <code>{checkpoint.account?.username}</code> ·{' '}
+              {checkpoint.account?.deviceName}
             </span>
           </InsetRow>
           <InsetRow
-            label={
-              !(checkpoint.passphraseSet || checkpoint.backupCommitted)
-                ? '!'
-                : '✓'
-            }
+            className={recoverySet ? undefined : 'skipped'}
+            label={recoverySet ? '✓' : '!'}
             action={
-              <Button
-                size="sm"
-                variant={
-                  !(checkpoint.passphraseSet || checkpoint.backupCommitted)
-                    ? 'primary'
-                    : undefined
-                }
-                onClick={() => go('protect')}
-              >
-                {!(checkpoint.passphraseSet || checkpoint.backupCommitted)
-                  ? 'Protect now'
-                  : 'Review'}
-              </Button>
+              recoverySet ? (
+                <Button size="sm" onClick={() => go('protect')}>
+                  Review
+                </Button>
+              ) : undefined
             }
           >
             <b>Save recovery phrase</b>
             <span className="hint">
-              {!(checkpoint.passphraseSet || checkpoint.backupCommitted)
-                ? `Skipped. If this Mac is lost, you will need a backup phrase, passphrase, or security key to recover your account.`
-                : 'Passphrase set · backup phrase saved · security keys can be configured in Settings'}
+              {recoverySet
+                ? [
+                    checkpoint.backupCommitted ? 'Backup phrase saved' : null,
+                    checkpoint.passphraseSet ? 'Passphrase set' : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')
+                : 'Skipped — backup method not configured'}
             </span>
           </InsetRow>
           {checkpoint.path === 'invited' ? (
             <InsetRow
-              label={checkpoint.added ? '✓' : '5'}
+              className={checkpoint.added ? undefined : 'pending'}
+              label={checkpoint.added ? '✓' : '4'}
               action={
                 <span className="checklist-actions">
                   <Button
@@ -4034,19 +4270,47 @@ export function FirstRunExperience({
             </InsetRow>
           ) : null}
         </Inset>
-        {!(checkpoint.passphraseSet || checkpoint.backupCommitted) ? (
+        {recoverySet ? null : (
           <div className="checklist-notice">
-            <Notice
-              title={`Only this Mac can recover ${checkpoint.account?.username}`}
+            <Band
+              label={`Only this Mac can recover ${checkpoint.account?.username}.`}
+              action={
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={() => go('protect')}
+                >
+                  Set up recovery
+                </Button>
+              }
             >
-              Without a backup method, your account cannot be recovered if this
-              Mac is lost. You can set up recovery now or continue with setup.
-            </Notice>
+              Without a backup method, this account can’t be recovered if this
+              Mac is lost.
+            </Band>
           </div>
-        ) : null}
+        )}
+        <div className="checklist-cta">
+          {!accountStore ? (
+            <Button disabled={personalRefreshing} onClick={retryPersonal}>
+              {personalRefreshing
+                ? 'Loading Personal vault…'
+                : 'Retry loading Personal vault'}
+            </Button>
+          ) : null}
+          <Button
+            variant="primary"
+            disabled={!accountStore}
+            onClick={() => {
+              if (accountStore)
+                onNavigate({ kind: 'store', ref: accountStore });
+            }}
+          >
+            Open Personal
+          </Button>
+        </div>
       </Pane>
     );
-  else
+  } else
     content = (
       <Pane title={group} subtitle={`Group on ${profile?.canonicalName}`} wide>
         <Notice
@@ -4096,7 +4360,6 @@ export function FirstRunExperience({
           <span>Name</span>
           <span>Access</span>
           <span>Version</span>
-          <span />
         </div>
         {world.items
           .filter((item) => item.store === addedStore)
@@ -4112,7 +4375,6 @@ export function FirstRunExperience({
                 <Chip>{readableBy(world, item).label}</Chip>
               </span>
               <span className="n">v{item.version}</span>
-              <span />
             </div>
           ))}
       </Pane>

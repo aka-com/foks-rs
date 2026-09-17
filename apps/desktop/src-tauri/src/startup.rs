@@ -8,9 +8,9 @@ use crate::agent::{AgentError, AgentHandle};
 
 /// Shows a blocking dialog and exits non-zero.
 ///
-/// Invoked during setup to display a fatal error dialog before non-zero exit,
-/// avoiding an unhandled setup abort.
-pub fn fatal_startup(app: &tauri::App, title: &str, body: &str) -> ! {
+/// Invoked from the startup thread to display a fatal error dialog before a
+/// non-zero exit.
+pub fn fatal_startup(app: &tauri::AppHandle, title: &str, body: &str) -> ! {
     app.dialog()
         .message(body)
         .kind(MessageDialogKind::Error)
@@ -22,35 +22,91 @@ pub fn fatal_startup(app: &tauri::App, title: &str, body: &str) -> ! {
 /// Confirms the agent is reachable before the first request.
 ///
 /// Verifies that the agent socket exists and the agent responds to requests.
-pub fn require_agent(app: &tauri::App, agent: &AgentHandle) {
+/// Runs on a background thread so the main thread can paint the webview while
+/// the agent starts; its blocking dialogs are dispatched to the main thread by
+/// the dialog plugin. The caller holds ordinary agent commands until this
+/// returns (see `AgentHandle::hold_commands_for_startup`).
+pub fn require_agent(app: &tauri::AppHandle, agent: &AgentHandle) {
     let socket = agent.socket();
-    if let Err(error) = agent.ensure_started_with_confirmation(&|target| {
-        app.dialog()
-            .message(takeover_message(
-                &target.socket,
-                target.pid,
-                &target.executable,
-            ))
-            .kind(MessageDialogKind::Warning)
-            .title("Replace Existing FOKS Agent?")
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                "Terminate and Take Over".into(),
-                "Cancel".into(),
-            ))
-            .blocking_show()
-    }) {
-        if error.code == "agent-takeover-declined" {
-            std::process::exit(0);
+    loop {
+        if let Err(error) = agent.ensure_started_with_confirmation(&|target| {
+            app.dialog()
+                .message(takeover_message(
+                    &target.socket,
+                    target.pid,
+                    &target.executable,
+                ))
+                .kind(MessageDialogKind::Warning)
+                .title("Replace Existing FOKS Agent?")
+                .buttons(MessageDialogButtons::OkCancelCustom(
+                    "Terminate and Take Over".into(),
+                    "Cancel".into(),
+                ))
+                .blocking_show()
+        }) {
+            if error.code == "agent-takeover-declined" {
+                std::process::exit(0);
+            }
+            let body = if !socket.exists() {
+                missing_socket(socket, &error)
+            } else {
+                unreachable_agent(socket, &error)
+            };
+            if let Some(root) = agent.startup_reset_directory() {
+                let reset = app
+                    .dialog()
+                    .message(format!(
+                        "{body}\n\nYou can delete this device's local FOKS state and start again."
+                    ))
+                    .kind(MessageDialogKind::Error)
+                    .title("Agent Connection Failed")
+                    .buttons(MessageDialogButtons::OkCancelCustom(
+                        "Review Reset…".into(),
+                        "Quit".into(),
+                    ))
+                    .blocking_show();
+                if !reset {
+                    std::process::exit(1);
+                }
+                let confirmed = app
+                    .dialog()
+                    .message(reset_warning(&root))
+                    .kind(MessageDialogKind::Warning)
+                    .title("Delete Local FOKS State?")
+                    .buttons(MessageDialogButtons::OkCancelCustom(
+                        "Delete Local State and Continue".into(),
+                        "Cancel".into(),
+                    ))
+                    .blocking_show();
+                if !confirmed {
+                    std::process::exit(1);
+                }
+                if let Err(error) = agent.reset_startup_state(&root) {
+                    let body = format!(
+                        "Could not finish deleting local state at {}.\n\n{}\n\n\
+                         Deletion may be incomplete. Close other FOKS clients and agents before trying again.",
+                        root.display(), error.message,
+                    );
+                    fatal_startup(app, "Local State Reset Failed", &body);
+                }
+                continue;
+            }
+            fatal_startup(app, "Agent Connection Failed", &body);
         }
-        let body = if !socket.exists() {
-            missing_socket(socket, &error)
-        } else {
-            unreachable_agent(socket, &error)
-        };
-        fatal_startup(app, "Agent Connection Failed", &body);
+        break;
     }
     // AgentStatus already completed a version-checked round trip. Do not add
     // a second startup gate that bypasses takeover recovery if the owner changes.
+}
+
+fn reset_warning(root: &Path) -> String {
+    format!(
+        "Permanently delete all local FOKS state in {}?\n\n\
+         This deletes local account keys, profiles, trust history, cached data, and unfinished operations for every server on this device.\n\n\
+         Server data is not deleted. You can permanently lose access to your accounts without another enrolled device, a recovery phrase for an enrolled backup, or a usable external backup. Your account passphrase alone cannot restore deleted keys.\n\n\
+         This cannot be undone. FOKS will restart its background service and open setup. Old system credential-store entries may remain; they will not be reused by the new state.",
+        root.display(),
+    )
 }
 
 fn takeover_message(socket: &Path, pid: u32, executable: &Path) -> String {
@@ -93,7 +149,7 @@ fn unreachable_agent(socket: &Path, error: &AgentError) -> String {
 
 /// Displays an error dialog when on-disk state fails integrity verification.
 #[allow(dead_code)]
-pub fn fatal_state_tampered(app: &tauri::App, file: &Path) -> ! {
+pub fn fatal_state_tampered(app: &tauri::AppHandle, file: &Path) -> ! {
     fatal_startup(
         app,
         "FOKS state has been altered",
@@ -109,6 +165,22 @@ pub fn fatal_state_tampered(app: &tauri::App, file: &Path) -> ! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reset_warning_explains_scope_loss_and_continuation() {
+        let warning = reset_warning(Path::new("/private/foks-state"));
+        for text in [
+            "/private/foks-state",
+            "every server",
+            "permanently lose access",
+            "passphrase alone cannot restore",
+            "cannot be undone",
+            "open setup",
+            "Server data is not deleted",
+        ] {
+            assert!(warning.contains(text), "missing warning: {text}");
+        }
+    }
 
     #[test]
     fn takeover_prompt_identifies_the_target_and_explains_continuation() {

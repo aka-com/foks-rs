@@ -6,7 +6,7 @@ import { Fragment, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
 import { virtualListWindow } from '/kit/virtual-list';
-import { Band, Button, Icon, KindGlyph, KindIcon, Stack } from '../components';
+import { Band, Button, Icon, KindGlyph, KindIcon } from '../components';
 import type { FilterKind } from '../components';
 import type { FoksIconName } from '../icons';
 import { PageHeader, headerFor } from '../shell/page-header';
@@ -20,10 +20,8 @@ import {
   kindOf,
   nameOf,
   partiesOf,
-  partyName,
   peopleGroups,
   prefixOf,
-  readersOf,
   serverOf,
   storeDescriptionState,
   storeDisplayOrder,
@@ -36,13 +34,7 @@ import type { LocationStore, LocationState } from '../location';
 import { normalizeCommandError } from '../bridge';
 import type { Bridge, ItemRequest } from '../bridge';
 import type { NewKind } from './write-workflows';
-import {
-  folderAt,
-  folderTree,
-  readableBy,
-  scopedItems,
-  whereOf,
-} from './scope';
+import { folderAt, folderTree, scopedItems, whereOf } from './scope';
 import type { FolderNode } from './scope';
 import { StoreAccessTakeover, storeAccessBands } from './store-access';
 
@@ -59,21 +51,6 @@ function PathChip({ path }: { path: string }): ReactNode {
       {prefix}
     </span>
   ) : null;
-}
-
-function ReaderStack({ world, item }: { world: World; item: Item }): ReactNode {
-  const readers = readersOf(world, item);
-  if (!readers?.length || (readers.length === 1 && readers[0]?.label === 'you'))
-    return null;
-  const names = readers.map(partyName).join(', ');
-  return (
-    <span className="shared" title={`Readable by ${names}`}>
-      <Stack parties={readers} size="xs" />
-      {readers.length > 2 ? (
-        <span className="more">+{readers.length - 2}</span>
-      ) : null}
-    </span>
-  );
 }
 
 interface RowProps {
@@ -200,13 +177,11 @@ function Row({
         </span>
         {sub ? <small>{sub}</small> : null}
       </span>
-      <ReaderStack world={world} item={item} />
     </div>
   );
 }
 
 function Tile({
-  world,
   item,
   selected,
   onSelect,
@@ -216,11 +191,8 @@ function Tile({
   onOpen,
   onDelete,
   deleteDisabled,
-}: Omit<RowProps, 'searching'> & ItemActionProps): ReactNode {
-  const store = storeOf(world, item.store);
+}: Omit<RowProps, 'searching' | 'world'> & ItemActionProps): ReactNode {
   const kind = kindOf(item);
-  const parties = store?.kind === 'team' ? partiesOf(world, store.id) : [];
-  const readers = readableBy(world, item);
   return (
     <div
       className={selected ? 'tile sel' : 'tile'}
@@ -236,13 +208,6 @@ function Tile({
     >
       <div className="glyph">
         <KindGlyph item={item} size="big" />
-        {parties.length ? (
-          <Stack
-            parties={parties}
-            size="xs"
-            title={`In ${store?.name ?? ''} · readable by ${readers.label} (${parties.length} total members)`}
-          />
-        ) : null}
         <span className="qa">
           <ItemActions
             {...{
@@ -289,7 +254,6 @@ function TileSection({
   if (store.kind === 'team') {
     return (
       <div className="gsec">
-        <Stack parties={partiesOf(world, store.id)} />
         <span>{store.name}</span>
         <span className="n">· {peopleGroups(partiesOf(world, store.id))}</span>
       </div>
@@ -331,13 +295,11 @@ function FolderRow({
   icon,
   name,
   count,
-  shared,
   onSelect,
 }: {
   icon: 'folder' | 'vault' | 'people';
   name: string;
   count: number;
-  shared?: ReactNode;
   onSelect: () => void;
 }): ReactNode {
   return (
@@ -363,7 +325,6 @@ function FolderRow({
           </span>
         </span>
       </span>
-      <span className="shared">{shared}</span>
     </div>
   );
 }
@@ -506,11 +467,6 @@ function FolderBrowser({
           icon={tree.store.kind === 'team' ? 'people' : 'vault'}
           name={tree.store.name}
           count={tree.root.count}
-          shared={
-            tree.store.kind === 'team' ? (
-              <Stack parties={partiesOf(world, tree.store.id)} size="xs" />
-            ) : undefined
-          }
           onSelect={() => selectFolder(tree.store, '/')}
         />
       ))
@@ -597,7 +553,6 @@ function FolderBrowser({
             <div className="hdr">
               <span />
               <span>Name</span>
-              <span>Shared</span>
             </div>
             <div className="virtual-rows">{paneRows}</div>
           </div>
@@ -696,11 +651,6 @@ export function ItemsScreen({
       <StoreAccessTakeover
         world={world}
         store={store}
-        lead={
-          store.kind === 'team' ? (
-            <Stack parties={partiesOf(world, store.id)} />
-          ) : undefined
-        }
         onOpenServer={(profile) =>
           locations.navigate({ kind: 'settings', section: 'servers', profile })
         }
@@ -757,9 +707,9 @@ export function ItemsScreen({
     const candidate = storeOf(world, storeId);
     return Boolean(
       candidate &&
-        storeAvailability(world, candidate, {
-          nowSeconds: accessNow(),
-        }).available,
+      storeAvailability(world, candidate, {
+        nowSeconds: accessNow(),
+      }).available,
     );
   };
   const accessAvailable = (item: Item): boolean =>
@@ -949,7 +899,6 @@ export function ItemsScreen({
                 >
                   Name{state.sort === 'name' ? ' ↓' : ''}
                 </button>
-                <span>Shared</span>
               </div>
               {location.kind === 'all' &&
               state.sort === 'group' &&
@@ -1032,7 +981,6 @@ export function ItemsScreen({
                     {section.map((item) => (
                       <Tile
                         key={`${item.store}|${item.path}`}
-                        world={world}
                         item={item}
                         selected={
                           state.selection?.store === item.store &&
@@ -1061,7 +1009,6 @@ export function ItemsScreen({
                 {gridItems.map((item) => (
                   <Tile
                     key={`${item.store}|${item.path}`}
-                    world={world}
                     item={item}
                     selected={
                       state.selection?.store === item.store &&

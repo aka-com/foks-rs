@@ -659,6 +659,9 @@ for (const method of ['recovery', 'sso'] as const) {
         target: { value: 'personal' },
       });
       ui.fireEvent.click(
+        rendered.view.getByText('Sign up with your organization'),
+      );
+      ui.fireEvent.click(
         rendered.view.getByRole('button', {
           name: 'Continue with organization',
         }),
@@ -749,7 +752,7 @@ for (const method of ['copy', 'pair', 'resume-pair'] as const) {
     ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Continue' }));
     if (method === 'copy')
       ui.fireEvent.click(
-        rendered.view.getByRole('button', { name: 'Copy existing device' }),
+        rendered.view.getByRole('button', { name: 'Import credentials' }),
       );
     else {
       ui.fireEvent.change(rendered.view.getByLabelText('Pairing device name'), {
@@ -914,6 +917,44 @@ test('allows starting over when unconfirmed setup has no resume path', async () 
   assert.equal(mutations, 0);
 });
 
+test('shows a missing-server warning with the start-over action for an unconfirmed operation', async () => {
+  const h = await harness();
+  const missingProfile = {
+    ...h.complete,
+    servers: h.complete.servers.filter((row) => row.id !== 'personal'),
+  };
+  const rendered = h.render(
+    pendingOperation(h.checkpoint, 'copy', 'copy-missing-server'),
+    {
+      world: missingProfile,
+      onRefreshWorld: async () => missingProfile,
+      bridge: {
+        ...h.bridge,
+        firstRunOperationStatus: async () => 'unknown' as const,
+      },
+    },
+  );
+  const warning = await rendered.view.findByRole('alert');
+  assert.ok(warning.classList.contains('warning'));
+  assert.ok(
+    ui
+      .within(warning)
+      .getByText('The server saved for this account is missing'),
+  );
+  assert.ok(
+    ui
+      .within(warning)
+      .getByText(
+        'The account you were creating could not be found on the server. This may happen because of a restart, server reset, or other error.',
+      ),
+  );
+  assert.ok(ui.within(warning).getByRole('button', { name: 'Start over' }));
+  assert.equal(
+    rendered.view.getAllByRole('button', { name: 'Start over' }).length,
+    1,
+  );
+});
+
 test('an unreadable receipt still probes pending operations and reports the receipt failure', async () => {
   const h = await harness();
   const absent = {
@@ -1057,6 +1098,47 @@ test('shows option to set up a different account when identity is missing', asyn
       name: 'Set up a different account',
     }),
     null,
+  );
+});
+
+test('shows a missing-server warning with the different-account action for acknowledged setup', async () => {
+  const h = await harness();
+  const missingProfile = {
+    ...h.complete,
+    servers: h.complete.servers.filter((row) => row.id !== 'personal'),
+  };
+  const pending = h.transitionFirstRun(
+    { ...h.checkpoint, account: undefined, state: 'account' },
+    { type: 'account-provisioned', alias: 'personal', deviceName: 'Mac' },
+  );
+  const rendered = h.render(pending, {
+    world: missingProfile,
+    onRefreshWorld: async () => missingProfile,
+  });
+  const warning = await rendered.view.findByRole('alert');
+  assert.ok(warning.classList.contains('warning'));
+  assert.ok(
+    ui
+      .within(warning)
+      .getByText('The server saved for this account is missing'),
+  );
+  assert.ok(
+    ui
+      .within(warning)
+      .getByText(
+        'The account you were creating could not be found on the server. This may happen because of a restart, server reset, or other error.',
+      ),
+  );
+  assert.ok(
+    ui
+      .within(warning)
+      .getByRole('button', { name: 'Set up a different account' }),
+  );
+  assert.equal(
+    rendered.view.getAllByRole('button', {
+      name: 'Set up a different account',
+    }).length,
+    1,
   );
 });
 

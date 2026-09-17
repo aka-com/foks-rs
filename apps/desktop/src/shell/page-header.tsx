@@ -1,24 +1,23 @@
 /**
- * Page header displaying title, subtitle, member avatars, and search input.
+ * Page header displaying title, subtitle, and search input.
  *
  * Search input state is controlled by the active location. When searching is
  * unsupported for the current view, omitting the query handlers hides the input.
  */
 
 import type { ReactNode } from 'react';
-import { SearchField, Stack } from '../components';
-import { partiesOf, storeHeadingDescription, storeOf } from '../model';
+import { SearchField } from '../components';
+import { storeHeadingDescription, storeOf } from '../model';
 import type { World } from '../model';
 import type { Location } from '../location';
 
 export interface HeaderParts {
   title: string;
   subtitle: string;
-  lead?: ReactNode;
   tail?: ReactNode;
 }
 
-/** The title, subtitle, and optional leading or trailing elements for an item list. */
+/** The title, subtitle, and optional trailing element for an item list. */
 export function headerFor(world: World, location: Location): HeaderParts {
   if (location.kind === 'all') {
     return { title: 'All items', subtitle: '' };
@@ -29,17 +28,9 @@ export function headerFor(world: World, location: Location): HeaderParts {
   const store = storeOf(world, location.ref);
   if (!store) return { title: 'Unknown vault', subtitle: '' };
   const description = storeHeadingDescription(world, store);
-  if (store.kind === 'account') {
-    return {
-      title: store.name,
-      subtitle: description,
-    };
-  }
-  const parties = partiesOf(world, store.id);
   return {
     title: store.name,
     subtitle: description,
-    tail: <Stack parties={parties} />,
   };
 }
 
@@ -61,7 +52,6 @@ export interface PageHeaderProps extends HeaderParts {
 export function PageHeader({
   title,
   subtitle,
-  lead,
   tail,
   action,
   query,
@@ -69,8 +59,7 @@ export function PageHeader({
 }: PageHeaderProps): ReactNode {
   return (
     <div className="path">
-      <div className={`loc${lead ? '' : ' text-only'}`}>
-        {lead}
+      <div className="loc">
         <div className="loc-copy">
           <h1>{title}</h1>
           {subtitle ? <small>{subtitle}</small> : null}

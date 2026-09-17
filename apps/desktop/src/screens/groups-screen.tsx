@@ -2,7 +2,6 @@ import { InvitationPanel } from '../components/invitation-panel';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import {
-  Avatar,
   Band,
   Button,
   Chip,
@@ -330,7 +329,6 @@ function PartyRow({
       onKeyDown={(event) => activateRow(event, onSelect)}
     >
       <span className="who2">
-        <Avatar party={party} className="pav" />
         <span className="t">
           <b>
             <span>{partyShortName(party)}</span>
@@ -563,7 +561,6 @@ function PartyPanel({
   return (
     <aside className="details">
       <div className="dh">
-        <Avatar party={party} className="pav" />
         <span className="t">
           <h2>
             {partyShortName(party)}
@@ -758,16 +755,6 @@ function FederationSection({
                     key={`${entry.remote_host_id_hex}|${entry.remote_team_id_hex}`}
                   >
                     <span className="who2">
-                      {party ? (
-                        <Avatar party={party} className="pav" />
-                      ) : (
-                        <span
-                          className="pav team"
-                          style={{ background: 'var(--c-team)' }}
-                        >
-                          <Icon name="people" />
-                        </span>
-                      )}
                       <span className="t">
                         <b>
                           <span>{entry.remote_team_alias}</span>
@@ -1059,7 +1046,6 @@ function SettingsTab({
                       onSheet('remove', party);
                     }}
                   >
-                    <Avatar party={party} className="pav" />
                     <span className="t">
                       <b>{partyShortName(party)}</b>
                       <small>
@@ -2113,10 +2099,7 @@ export function GroupSettingsScreen({
       ) : (
         <>
           {membershipPending.length ? (
-            <Notice
-              severity="warn"
-              title="Finish a pending membership change"
-            >
+            <Notice severity="warn" title="Finish a pending membership change">
               <p>
                 FOKS stopped partway through changing this group’s members.
                 Finish the pending change before adding, removing, or changing

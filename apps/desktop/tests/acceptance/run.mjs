@@ -650,8 +650,8 @@ async function firstRunWalk(context, origin) {
     await page.locator('.pane', { hasText: 'verified' }).waitFor();
     await reloadAt('verified');
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
-    await page.locator('.pane', { hasText: 'Create an account' }).waitFor();
-    await reloadAt('Create an account');
+    await page.locator('.pane', { hasText: 'Set up your account' }).waitFor();
+    await reloadAt('Set up your account');
     await page
       .getByRole('button', { name: 'Create my account', exact: true })
       .click();

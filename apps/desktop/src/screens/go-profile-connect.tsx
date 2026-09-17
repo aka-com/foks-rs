@@ -242,7 +242,7 @@ export function GoProfileConnectSheet({
               disabled={busy || !selected?.copyable || !alias.trim()}
               onClick={() => void copy()}
             >
-              Copy existing device
+              Import credentials
             </Button>
           ) : null}
         </>
@@ -322,7 +322,7 @@ export function GoProfileConnectSheet({
               disabled={busy || !selected.copyable}
               onClick={() => setMethod('copy')}
             >
-              Copy this Mac’s CLI device
+              Import this Mac’s FOKS CLI credentials
             </Button>
             <p>Share existing credentials with the FOKS CLI</p>
           </Inset>

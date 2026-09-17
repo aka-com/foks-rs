@@ -44,7 +44,7 @@ test('the shared tokens come from the kit and are not re-declared here', async (
 
   const kitTokens = rootTokens(kit);
   const shellTokens = rootTokens(shell);
-  assert.equal(kitTokens.size, 35, 'expected exactly 35 shared kit tokens');
+  assert.equal(kitTokens.size, 37, 'expected exactly 37 shared kit tokens');
 
   for (const name of shellTokens.keys()) {
     assert.equal(
@@ -55,7 +55,7 @@ test('the shared tokens come from the kit and are not re-declared here', async (
   }
 });
 
-test('declares the 19 expected FOKS design tokens', async () => {
+test('declares the 18 expected FOKS design tokens', async () => {
   const shell = await readSource(SHELL, import.meta.url);
   const tokens = rootTokens(shell);
 
@@ -70,7 +70,6 @@ test('declares the 19 expected FOKS design tokens', async () => {
     '--hover',
     '--main-surface',
     '--mono',
-    '--ok-wash',
     '--radius-lg',
     '--radius-md',
     '--radius-pill',
@@ -108,9 +107,6 @@ test('shell stylesheet contains required grid and flexbox layout rules', async (
     shell,
     /\.app\.with-details\{grid-template-columns:224px 1fr 300px\}/,
   );
-  // Position avatar stacks on the trailing edge of navigation rows.
-  assert.match(shell, /\.nav \.stack\{margin-left:auto\}/);
-  assert.match(shell, /\.nav \.stack \.av:only-child\{right:0\}/);
   // Allow main column flex shrinking to prevent horizontal window overflow.
   assert.match(shell, /\.main\{[^}]*min-width:0[^}]*\}/);
   assert.match(
