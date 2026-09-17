@@ -876,7 +876,7 @@ fn check_precondition(
         let stored = reader
             .kv_directory(&authority.party, &directory.id)
             .map_err(|_| RpcStatus::TransactionRetry)?
-            .ok_or_else(|| RpcStatus::NotFound("cached directory".to_owned()))?;
+            .ok_or_else(|| RpcStatus::NotFound("cached directory not found".to_owned()))?;
         let stored = foks_proto::KvDirectory::decode(&stored.exact)
             .map_err(|_| RpcStatus::TransactionRetry)?;
         authority.require_read_key(stored.key)?;
@@ -884,7 +884,7 @@ fn check_precondition(
     let root = reader
         .kv_root(&authority.party)
         .map_err(|_| RpcStatus::TransactionRetry)?
-        .ok_or_else(|| RpcStatus::NotFound("cached root".to_owned()))?;
+        .ok_or_else(|| RpcStatus::NotFound("cached root not found".to_owned()))?;
     let root = foks_proto::KvRoot::decode(&root.exact).map_err(|_| RpcStatus::TransactionRetry)?;
     authority.require_read_key(root.key)?;
     match reader
@@ -899,7 +899,7 @@ fn check_precondition(
             return Err(bad_arguments("KV cache version is ahead of the server"));
         }
         foks_server_db::KvVersionCheck::Missing => {
-            return Err(RpcStatus::NotFound("cached KV object".to_owned()));
+            return Err(RpcStatus::NotFound("cached KV object not found".to_owned()));
         }
     }
     Ok(())

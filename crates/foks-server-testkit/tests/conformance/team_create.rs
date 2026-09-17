@@ -111,14 +111,135 @@ pub(crate) fn public_client_creates_and_loads_named_and_adhoc_teams() {
             &mut owner_protected,
         )
         .unwrap();
-    let team_tree = owner_kv.ensure_root(member_role, Role::OWNER).unwrap();
+    let team_tree = owner_kv
+        .ensure_root(Role::member(-0x4000), Role::OWNER)
+        .unwrap();
     let team_root = team_tree[0].root_directory_id;
     let member_root = owner_kv
         .mkdir(team_root, "member-area", member_options)
         .unwrap()
         .node_id
         .object_id();
+    let owner_options = KvWriteOptions {
+        read_role: Role::OWNER,
+        write_role: Role::OWNER,
+        ..member_options
+    };
+    let secret_small = owner_kv
+        .put_file(
+            team_root,
+            "owner-small",
+            &mut Cursor::new(b"secret"),
+            owner_options,
+        )
+        .unwrap();
+    owner_kv
+        .put_file(
+            team_root,
+            "owner-large",
+            &mut Cursor::new(vec![0x42; 4096]),
+            owner_options,
+        )
+        .unwrap();
+    owner_kv
+        .put_symlink(team_root, "owner-link", "owner-small", owner_options)
+        .unwrap();
+    let secret_directory = owner_kv
+        .mkdir(team_root, "owner-directory", owner_options)
+        .unwrap()
+        .node_id
+        .object_id();
+    owner_kv
+        .put_file(
+            secret_directory,
+            "nested-secret",
+            &mut Cursor::new(b"nested"),
+            owner_options,
+        )
+        .unwrap();
     drop(owner_kv);
+
+    // The same party cache may have been populated by a more privileged actor.
+    // Refresh must discard that actor's inaccessible bodies and descendants.
+    let owner_tree = fixture
+        .client
+        .foks()
+        .sync_team_kv(
+            fixture.host(),
+            &account.credential,
+            &added.authenticated,
+            target_client.soft_state_path(),
+        )
+        .unwrap();
+    assert_eq!(owner_tree.len(), 3);
+    for content in [false, true] {
+        let tree = if content {
+            target_client.foks().sync_team_kv(
+                &target_host.pinned,
+                &target.credential,
+                &target_view,
+                target_client.soft_state_path(),
+            )
+        } else {
+            target_client.foks().list_team_kv_metadata(
+                &target_host.pinned,
+                &target.credential,
+                &target_view,
+                target_client.soft_state_path(),
+            )
+        }
+        .unwrap();
+        assert_eq!(tree.len(), 2);
+        let root = tree
+            .iter()
+            .find(|directory| directory.directory_id == team_root)
+            .unwrap();
+        assert_eq!(
+            root.entries.iter().filter(|entry| !entry.readable).count(),
+            4
+        );
+        assert!(root
+            .entries
+            .iter()
+            .filter(|entry| !entry.readable)
+            .all(|entry| entry.node_bytes.is_none()
+                && entry.content.is_none()
+                && entry.symlink.is_none()
+                && entry.large_file_size.is_none()));
+        let cache = foks_client_db::SoftStateStore::open(target_client.soft_state_path()).unwrap();
+        assert!(cache
+            .directory(
+                fixture.host().host_id().as_bytes(),
+                created_named.team.as_bytes(),
+                &secret_directory
+            )
+            .unwrap()
+            .is_none());
+    }
+    let owner_reaccess = fixture
+        .client
+        .foks()
+        .sync_team_kv(
+            fixture.host(),
+            &account.credential,
+            &added.authenticated,
+            target_client.soft_state_path(),
+        )
+        .unwrap();
+    assert_eq!(owner_reaccess.len(), 3);
+    assert!(owner_reaccess
+        .iter()
+        .flat_map(|directory| &directory.entries)
+        .all(|entry| entry.readable));
+    assert!(target_client
+        .foks()
+        .read_team_kv_node(
+            &target_host.pinned,
+            &target.credential,
+            &target_view,
+            secret_small.node_id
+        )
+        .is_err());
     let mut target_protected = target_client.open_protected_store().unwrap();
     let mut target_kv = target_client
         .foks()
@@ -130,7 +251,7 @@ pub(crate) fn public_client_creates_and_loads_named_and_adhoc_teams() {
             &mut target_protected,
         )
         .unwrap();
-    target_kv
+    let shared = target_kv
         .put_file(
             member_root,
             "member.txt",
@@ -158,6 +279,19 @@ pub(crate) fn public_client_creates_and_loads_named_and_adhoc_teams() {
         1
     );
     drop(target_kv);
+    match target_client
+        .foks()
+        .read_team_kv_node(
+            &target_host.pinned,
+            &target.credential,
+            &target_view,
+            shared.node_id,
+        )
+        .unwrap()
+    {
+        KvFetchedNode::SmallFile(content) => assert_eq!(content, b"member team content"),
+        _ => panic!("unexpected shared node type"),
+    }
 
     let rotated_min = SecretSeed::new([0x72; 32]);
     let rotated_member = SecretSeed::new([0x73; 32]);
@@ -200,7 +334,7 @@ pub(crate) fn public_client_creates_and_loads_named_and_adhoc_teams() {
     .unwrap();
     let removal_request = foks_rpc::encode_call(
         foks_rpc::TEAM_LOADER_PROTOCOL_ID,
-        5, // TeamLoader.loadRemovalForMember in v0.1.9.
+        5, // Member removal role.
         &removal_argument,
         0,
     )

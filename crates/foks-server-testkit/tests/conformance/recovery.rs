@@ -75,7 +75,7 @@ pub(crate) fn recovery_success() {
 
     // Recovery credentials remain active recipients after provisioning. A
     // subsequent revoke must rotate the PUK to both the recovered software
-    // device and the enrolled backup key, exactly as Go's box gameplan does.
+    // device and the enrolled backup key.
     let original = derive_device_public(&SecretSeed::new([0x21; 32])).unwrap();
     let mut protected = fixture.client.open_protected_store().unwrap();
     let revoked = fixture

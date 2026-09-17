@@ -62,9 +62,9 @@ grant call after rotation.
 Profiles that stay offline past expiry require explicit recovery; a remote
 PTK-generation or roster change is detected as a failed reconciliation and
 still requires the complete FOKS PTK-rotation workflow.
-Roster mutation never treats an admitted team as a local user: un-admit remains
-absent, and promotion remains the existing remove-and-re-add sequence rather
-than an atomic operation.
+Roster mutation never treats an admitted team as a local user: removing an admitted
+team is handled through separate federation revocation, and role promotion requires
+a remove-and-re-add sequence.
 
 Most provisioning and recovery inputs that contain long-lived secrets stay in
 the direct application/CLI boundary. Software and YubiKey signup, hardware

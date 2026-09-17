@@ -165,14 +165,14 @@ fn read_validated_backup_artifacts(
     let backup = foks_server_db::ReadDatabase::open(&artifacts.database, database_config)?;
     if !backup.integrity_check()? {
         return Err(crate::Error::Database(foks_server_db::Error::Invalid(
-            "backup integrity check",
+            "backup integrity check failed",
         )));
     }
     let stored =
         backup
             .host_bootstrap()?
             .ok_or(crate::Error::Database(foks_server_db::Error::Invalid(
-                "backup host bootstrap",
+                "missing backup host bootstrap record",
             )))?;
     if stored.key_manifest != manifest {
         return Err(crate::Error::Key("backup key manifest mismatch"));

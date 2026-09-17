@@ -426,12 +426,14 @@ impl FoksClient {
         })?;
         let mut saga = store
             .federation_saga(&operation_id)?
-            .ok_or(Error::OperationBinding("federation saga disappeared"))?;
+            .ok_or(Error::OperationBinding(
+                "federation saga record was not found",
+            ))?;
         if saga.state == FederationSagaState::Rejected {
-            // Best-effort sweep: a terminally-Rejected saga never resubmits, so any
-            // remaining encrypted remote-addition material is dead. This collects
-            // rows rejected before this cleanup existed, or by a prior call that
-            // committed the Rejected transition but did not reach its erase.
+            // Best-effort sweep: a terminally rejected saga is never resubmitted, so
+            // any remaining encrypted remote-addition material can be pruned. This
+            // cleans up rows rejected before this cleanup existed, or where a prior
+            // call committed the Rejected transition but failed before erasure.
             if let Some(mutation_id) = saga.local_mutation_id {
                 match protected_store
                     .remove(&crate::team::remote_addition_material_key(&mutation_id))

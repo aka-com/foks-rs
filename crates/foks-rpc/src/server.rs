@@ -76,7 +76,7 @@ pub fn decode_message(content: &[u8]) -> Result<InboundMessage> {
         _ => {
             return Err(Error::Envelope {
                 expected: "fixarray RPC message envelope",
-                found: "another MessagePack value",
+                found: "unexpected MessagePack value type",
             })
         }
     };
@@ -185,7 +185,7 @@ fn decode_wrapped_argument(payload: &[u8]) -> Result<Vec<u8>> {
     if text(wrapped.value()?)? != b"Data" {
         return Err(Error::Envelope {
             expected: "canonical Data field",
-            found: "another field",
+            found: "unexpected field key",
         });
     }
     let argument = wrapped.value()?.to_vec();

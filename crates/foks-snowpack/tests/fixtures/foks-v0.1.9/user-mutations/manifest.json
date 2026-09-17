@@ -299,8 +299,8 @@
     },
     {
       "file": "backup-phrase.json",
-      "bytes": 117,
-      "sha256": "4ff8a76b0f5bb2e86590568792a6cd79655851b74f67a25330f70fdcd5ed1ab3"
+      "bytes": 118,
+      "sha256": "e2906e05cdbc84676797094c8bbf241c23a734e277822c3d7281b90c49915698"
     },
     {
       "file": "backup-recover-device-name-commitment-key.bin",

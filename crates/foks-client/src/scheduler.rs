@@ -214,7 +214,9 @@ fn validate_config(config: SchedulerConfig) -> Result<()> {
         || config.jitter_percent > 100
         || config.claim_limit == 0
     {
-        return Err(Error::Scheduler("scheduler bounds are inconsistent"));
+        return Err(Error::Scheduler(
+            "invalid scheduler configuration: parameters must be non-zero and base backoff must not exceed max backoff",
+        ));
     }
     Ok(())
 }

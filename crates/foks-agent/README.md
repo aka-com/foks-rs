@@ -11,9 +11,9 @@ closes its local connection because its durable outcome can be ambiguous, and
 any surviving blocking work retains its worker permit until it exits.
 
 KV reads require the catalog version and large-file chunks echo the store,
-path, version, and offset they answer. Account-store creates and edits require
-explicit create/exact-version preconditions; existing native read/write roles
-are preserved on edit. A large upload holds mutation single-flight while a
+path, version, and offset they answer. Creating or updating account-store entries
+requires explicit create or exact-version preconditions; existing native
+read/write roles are preserved on edit. A large upload holds mutation single-flight while a
 four-frame in-memory channel feeds the existing FOKS writer, never a plaintext
 staging file. Socket loss before the final local commit frame prevents the
 namespace mutation; post-commit uncertainty keeps the mutation permit with the
@@ -70,8 +70,8 @@ the local protocol does not invent team rename or closure semantics.
 foks-agent --state-dir /private/client
 ```
 
-macOS and Linux are supported. Windows is currently refused because an
-authenticated named-pipe implementation and ACL validation have not landed.
+macOS and Linux are supported. Windows is currently unsupported because
+authenticated named-pipe transport and ACL validation are not yet implemented.
 Use `foks-rs` directly on Windows until that boundary exists.
 
 On Unix, the socket authenticates the operating-system user ID. It is not a

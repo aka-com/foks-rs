@@ -1,4 +1,0 @@
-exports_files([
-    "macos/Info.plist",
-    "macos/entitlements.plist",
-])

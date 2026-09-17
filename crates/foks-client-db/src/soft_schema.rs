@@ -1,7 +1,7 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464b_5653; // `FKVS`
-pub(crate) const VERSION: u32 = 4;
+pub(crate) const VERSION: u32 = 5;
 
-pub(crate) const V3_TO_V4: &str = r#"
+pub(crate) const KNOWN_STORES_SCHEMA: &str = r#"
 CREATE TABLE known_stores (
     kind INTEGER NOT NULL CHECK (kind IN (1, 2)),
     account_alias TEXT NOT NULL CHECK (length(account_alias) BETWEEN 1 AND 255),
@@ -22,7 +22,7 @@ CREATE TABLE known_stores (
 ) STRICT, WITHOUT ROWID;
 "#;
 
-pub(crate) const V3_SCHEMA: &str = r#"
+pub(crate) const KV_SCHEMA: &str = r#"
 CREATE TABLE kv_parties (
     host_id BLOB NOT NULL CHECK (length(host_id) = 33),
     party_id BLOB NOT NULL CHECK (length(party_id) = 33),
@@ -60,11 +60,23 @@ CREATE TABLE kv_entries (
     content BLOB,
     symlink BLOB,
     large_file_id INTEGER,
+    readable INTEGER NOT NULL CHECK (readable IN (0, 1)),
     PRIMARY KEY (host_id, party_id, parent_dir_id, dirent_id),
     UNIQUE (host_id, party_id, parent_dir_id, name),
     FOREIGN KEY (host_id, party_id, parent_dir_id)
         REFERENCES kv_directories(host_id, party_id, dir_id) ON DELETE CASCADE,
     FOREIGN KEY (large_file_id) REFERENCES kv_large_files(id)
+) STRICT, WITHOUT ROWID;
+
+-- Ciphertext-only rollback anchors survive permission-driven cache pruning.
+CREATE TABLE kv_directory_history (
+    host_id BLOB NOT NULL,
+    party_id BLOB NOT NULL,
+    dir_id BLOB NOT NULL CHECK (length(dir_id) = 16),
+    version INTEGER NOT NULL CHECK (version > 0),
+    dir_bytes BLOB NOT NULL CHECK (length(dir_bytes) > 0),
+    PRIMARY KEY (host_id, party_id, dir_id),
+    FOREIGN KEY (host_id, party_id) REFERENCES kv_parties(host_id, party_id) ON DELETE CASCADE
 ) STRICT, WITHOUT ROWID;
 
 CREATE TABLE kv_entry_history (
@@ -76,8 +88,7 @@ CREATE TABLE kv_entry_history (
     dirent_bytes BLOB NOT NULL CHECK (length(dirent_bytes) > 0),
     present INTEGER NOT NULL CHECK (present IN (0, 1)),
     PRIMARY KEY (host_id, party_id, parent_dir_id, dirent_id),
-    FOREIGN KEY (host_id, party_id, parent_dir_id)
-        REFERENCES kv_directories(host_id, party_id, dir_id) ON DELETE CASCADE
+    FOREIGN KEY (host_id, party_id) REFERENCES kv_parties(host_id, party_id) ON DELETE CASCADE
 ) STRICT, WITHOUT ROWID;
 
 CREATE TABLE kv_large_files (

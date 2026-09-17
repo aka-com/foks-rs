@@ -1,7 +1,7 @@
 //! Canonical Snowpack encoding for FOKS v0.1.9.
 //!
-//! Snowpack uses a deliberately small MessagePack subset. Structs are
-//! positional arrays and variants are fixed maps with at most one short-string
+//! Snowpack uses a restricted MessagePack subset. Structs are represented
+//! exclusively as positional arrays (`toarray`), and variants are fixed maps with at most one short-string
 //! key. This crate owns only that generic wire layer; FOKS protocol schemas and
 //! cryptographic verification belong in higher-level crates.
 

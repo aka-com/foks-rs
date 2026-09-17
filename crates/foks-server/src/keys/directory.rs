@@ -101,7 +101,7 @@ impl DirectoryKeyProvider {
             write_new_secret(&temporary, &encoded)?;
             let verified = load_wrapping_key(&temporary, &new_root_key)?;
             if *verified != *wrapping_key {
-                return Err(Error::Key("operator root rotation verification"));
+                return Err(Error::Key("operator root rotation verification failed"));
             }
             std::fs::rename(&temporary, &path)?;
             sync_directory(directory)?;
@@ -136,8 +136,8 @@ impl DirectoryKeyProvider {
         let mut file = secure_open_read(path)?;
         validate_file_permissions(&file)?;
         let maximum = MAGIC.len() + GENERATION_BYTES + NONCE_BYTES + 32 + 16;
-        let length =
-            usize::try_from(file.metadata()?.len()).map_err(|_| Error::Key("key file size"))?;
+        let length = usize::try_from(file.metadata()?.len())
+            .map_err(|_| Error::Key("key file size is empty or exceeds limit"))?;
         if length != maximum {
             return Err(Error::Key("invalid key file length"));
         }
@@ -175,7 +175,8 @@ impl DirectoryKeyProvider {
 
     fn create(&self, path: &Path, purpose: KeyPurpose) -> Result<SecretKey> {
         let mut generation = [0; GENERATION_BYTES];
-        getrandom::fill(&mut generation).map_err(|_| Error::Key("operating-system entropy"))?;
+        getrandom::fill(&mut generation)
+            .map_err(|_| Error::Key("failed to acquire operating-system entropy"))?;
         match self.create_with_generation(path, purpose, KeyGenerationId::from_bytes(generation)) {
             Ok(key) => Ok(key),
             Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -192,9 +193,11 @@ impl DirectoryKeyProvider {
         generation: KeyGenerationId,
     ) -> Result<SecretKey> {
         let mut key = Zeroizing::new([0; 32]);
-        getrandom::fill(&mut *key).map_err(|_| Error::Key("operating-system entropy"))?;
+        getrandom::fill(&mut *key)
+            .map_err(|_| Error::Key("failed to acquire operating-system entropy"))?;
         let mut nonce = [0; NONCE_BYTES];
-        getrandom::fill(&mut nonce).map_err(|_| Error::Key("operating-system entropy"))?;
+        getrandom::fill(&mut nonce)
+            .map_err(|_| Error::Key("failed to acquire operating-system entropy"))?;
         let generation = generation.as_bytes();
         let aad = associated_data(purpose, &generation);
         let cipher = XChaCha20Poly1305::new((&*self.wrapping_key).into());
@@ -249,7 +252,9 @@ fn load_wrapping_key(path: &Path, root_key: &[u8; 32]) -> Result<Zeroizing<[u8; 
     let mut file = secure_open_read(path)?;
     validate_file_permissions(&file)?;
     let expected = WRAPPING_MAGIC.len() + NONCE_BYTES + 32 + 16;
-    if usize::try_from(file.metadata()?.len()).map_err(|_| Error::Key("key file size"))? != expected
+    if usize::try_from(file.metadata()?.len())
+        .map_err(|_| Error::Key("secret file size is empty or exceeds limit"))?
+        != expected
     {
         return Err(Error::Key("invalid key-encryption file length"));
     }
@@ -284,7 +289,8 @@ fn create_wrapping_key(
     root_key: &[u8; 32],
 ) -> Result<Zeroizing<[u8; 32]>> {
     let mut wrapping_key = Zeroizing::new([0; 32]);
-    getrandom::fill(&mut *wrapping_key).map_err(|_| Error::Key("operating-system entropy"))?;
+    getrandom::fill(&mut *wrapping_key)
+        .map_err(|_| Error::Key("failed to acquire operating-system entropy"))?;
     let encoded = encode_wrapping_key(&wrapping_key, root_key)?;
     let temporary = temporary_path(directory, "key-encryption")?;
     let result = (|| {
@@ -306,7 +312,8 @@ fn create_wrapping_key(
 
 fn encode_wrapping_key(key: &[u8; 32], root_key: &[u8; 32]) -> Result<Vec<u8>> {
     let mut nonce = [0; NONCE_BYTES];
-    getrandom::fill(&mut nonce).map_err(|_| Error::Key("operating-system entropy"))?;
+    getrandom::fill(&mut nonce)
+        .map_err(|_| Error::Key("failed to acquire operating-system entropy"))?;
     let cipher = XChaCha20Poly1305::new(root_key.into());
     let ciphertext = cipher
         .encrypt(
@@ -326,7 +333,8 @@ fn encode_wrapping_key(key: &[u8; 32], root_key: &[u8; 32]) -> Result<Vec<u8>> {
 
 fn temporary_path(directory: &Path, label: &str) -> Result<PathBuf> {
     let mut suffix = [0; 8];
-    getrandom::fill(&mut suffix).map_err(|_| Error::Key("operating-system entropy"))?;
+    getrandom::fill(&mut suffix)
+        .map_err(|_| Error::Key("failed to acquire operating-system entropy"))?;
     Ok(directory.join(format!(".{label}.{}.tmp", u64::from_be_bytes(suffix))))
 }
 
@@ -395,7 +403,8 @@ impl HostKeyProvider for DirectoryKeyProvider {
         // an existing generation whose secret the caller did not create.
         for _ in 0..8 {
             let mut generation = [0; GENERATION_BYTES];
-            getrandom::fill(&mut generation).map_err(|_| Error::Key("operating-system entropy"))?;
+            getrandom::fill(&mut generation)
+                .map_err(|_| Error::Key("failed to acquire operating-system entropy"))?;
             let generation = KeyGenerationId::from_bytes(generation);
             let path = self.generation_path(purpose, generation);
             match self.create_with_generation(&path, purpose, generation) {

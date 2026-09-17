@@ -107,9 +107,8 @@ impl YubiProvider for HardwareYubiProvider {
     ) -> Result<()> {
         let _guard = self.lock();
         let mut yubikey = Self::open_card(card)?;
-        // Recovery deliberately reissues SET PIN RETRIES rather than guessing
-        // whether an earlier 3/3 result was the old or new policy. Refuse to
-        // do that canonical reset if any key appeared since preflight.
+        // Re-execute SET PIN RETRIES during recovery to guarantee the intended
+        // policy, provided no new keys have been written since preflight.
         ensure_all_piv_slots_empty(&mut yubikey)?;
         let management_key =
             MgmKey::from_bytes(ManagementKey::default_piv().expose()).map_err(map_error)?;

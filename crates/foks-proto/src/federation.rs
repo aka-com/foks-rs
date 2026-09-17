@@ -13,8 +13,8 @@ const TEAM_RSVP_REMOTE_TAG: u8 = 56;
 
 /// A v0.1.9 remote-view bearer token.
 ///
-/// This value is authority, not an identifier. Diagnostics deliberately do
-/// not expose it and the backing bytes are cleared on drop.
+/// Bearer token representing access authority. Omitted from debug output and
+/// zeroized on drop.
 #[derive(Clone, Eq, PartialEq)]
 pub struct PermissionToken([u8; 17]);
 

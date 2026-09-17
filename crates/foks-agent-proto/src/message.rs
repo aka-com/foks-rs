@@ -319,8 +319,7 @@ pub struct KvUploadHeader {
     pub read_role: KvRole,
     pub write_role: KvRole,
     pub precondition: KvPrecondition,
-    /// Creates the parent directories the path names but the store does not
-    /// have yet, the way upstream `foks kv put --mkdir-p` does.
+    /// Creates intermediate parent directories along the path if they do not exist.
     #[serde(default)]
     pub mkdir_p: bool,
 }

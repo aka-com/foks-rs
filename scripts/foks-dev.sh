@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-state_root="${FOKS_DEV_ROOT:-${TMPDIR:-/tmp}/aka-foks-dev-${UID}}"
+state_root="${FOKS_DEV_ROOT:-${TMPDIR:-/tmp}/foks-dev-${UID}}"
 server_pid=""
 agent_pid=""
 
@@ -14,7 +14,7 @@ Build and run a local FOKS server, agent, and desktop application.
 
 Environment:
   FOKS_DEV_ROOT  Persistent server and client state directory.
-                 Defaults to $TMPDIR/aka-foks-dev-$UID.
+                 Defaults to $TMPDIR/foks-dev-$UID.
 EOF
 }
 
@@ -91,7 +91,7 @@ fi
 
 require_command cargo
 require_command curl
-require_command pnpm
+require_command npm
 
 umask 077
 mkdir -p "$state_root"
@@ -164,4 +164,4 @@ wait_for_agent "$agent_socket" "$agent_log"
 
 echo "Starting the FOKS desktop application. State is stored in $state_root"
 echo "Agent diagnostics are written to $agent_log"
-FOKS_AGENT_SOCKET="$agent_socket" FOKS_MANAGED_PROFILE=local pnpm run foks:dev:tauri
+FOKS_AGENT_SOCKET="$agent_socket" FOKS_MANAGED_PROFILE=local npm run dev:tauri

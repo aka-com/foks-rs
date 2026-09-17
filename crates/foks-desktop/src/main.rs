@@ -1,8 +1,6 @@
 //! Scriptable backend shell for the Tauri desktop's typed agent boundary.
 //!
-//! This intentionally remains a non-shipping companion to the Tauri command
-//! layer: it makes protocol transcripts testable without initializing a native
-//! window or linking presentation concerns into FOKS core crates.
+//! Test harness CLI for the Tauri desktop command layer and agent protocol transcripts.
 
 #![forbid(unsafe_code)]
 
@@ -509,7 +507,7 @@ enum BackendCall {
 fn operation_for_command(command: Command) -> Result<Operation, Box<dyn std::error::Error>> {
     match backend_call_for_command(command)? {
         BackendCall::Operation(operation) => Ok(operation),
-        BackendCall::Upload { .. } => Err("file uploads use the streaming backend boundary".into()),
+        BackendCall::Upload { .. } => Err("file uploads require streaming transfer".into()),
     }
 }
 
@@ -897,7 +895,9 @@ fn backend_call_for_command(command: Command) -> Result<BackendCall, Box<dyn std
             )? {
                 KvAccountMutation::Inline(operation) => operation,
                 KvAccountMutation::Stream { .. } => {
-                    return Err("text value exceeds the inline backend boundary".into());
+                    return Err(
+                        "Text value exceeds maximum supported size for inline storage".into(),
+                    );
                 }
             }
         }
@@ -933,7 +933,9 @@ fn backend_call_for_command(command: Command) -> Result<BackendCall, Box<dyn std
             match foks_desktop::edit_kv_file_mutation(&item, std::mem::take(&mut *content))? {
                 KvAccountMutation::Inline(operation) => operation,
                 KvAccountMutation::Stream { .. } => {
-                    return Err("text value exceeds the inline backend boundary".into());
+                    return Err(
+                        "Text value exceeds maximum supported size for inline storage".into(),
+                    );
                 }
             }
         }
@@ -1087,7 +1089,9 @@ impl KvStoreArguments {
             (Some(team_alias), Some(team_id)) => {
                 let team_alias = checked_local_name(team_alias, "team alias")?;
                 if !valid_team_id_hex(&team_id) {
-                    return Err("team id must be a lowercase named/ad-hoc entity id".into());
+                    return Err(
+                        "Group ID must be a valid lowercase hexadecimal group identifier".into(),
+                    );
                 }
                 Ok(KvStoreRef::Team(TeamStoreRef {
                     profile,
@@ -1096,7 +1100,7 @@ impl KvStoreArguments {
                     team_id,
                 }))
             }
-            _ => Err("team store selection requires both --team-alias and --team-id".into()),
+            _ => Err("both --team-alias and --team-id are required to select a team store".into()),
         }
     }
 
@@ -1126,14 +1130,12 @@ impl ProfileTrustArguments {
             || metadata.len() == 0
             || metadata.len() > 1024 * 1024
         {
-            return Err(
-                "certificate DER must be one nonempty regular file of at most 1 MiB".into(),
-            );
+            return Err("Certificate file must be a non-empty regular DER file under 1 MiB".into());
         }
         let path = std::fs::canonicalize(path)?;
         let path = path
             .to_str()
-            .ok_or("certificate DER path must be valid UTF-8")?
+            .ok_or("certificate DER path is not valid UTF-8")?
             .to_owned();
         Ok(ProfileTrust::CertificateDer { path })
     }
@@ -1156,7 +1158,10 @@ fn checked_local_name(value: String, label: &str) -> Result<String, Box<dyn std:
     {
         Ok(value)
     } else {
-        Err(format!("{label} must be 1-64 ASCII letters, digits, hyphens, or underscores").into())
+        Err(format!(
+            "{label} must be between 1 and 64 alphanumeric characters, hyphens, or underscores"
+        )
+        .into())
     }
 }
 
@@ -1172,7 +1177,7 @@ fn checked_kv_path(path: String) -> Result<String, Box<dyn std::error::Error>> {
     if path.starts_with('/') && path != "/" && !path.contains(['\0', '\r', '\n']) {
         Ok(path)
     } else {
-        Err("item path must be an absolute single line below the store root".into())
+        Err("item path must start with '/' and cannot be empty or contain newlines".into())
     }
 }
 
@@ -1218,11 +1223,12 @@ fn read_private_bytes(
     use std::io::Read as _;
 
     let (mut file, length) = open_private_file(path, Some(maximum), "value")?;
-    let capacity = usize::try_from(length).map_err(|_| "value file is too large")?;
+    let capacity =
+        usize::try_from(length).map_err(|_| "value file size exceeds system address space")?;
     let mut value = zeroize::Zeroizing::new(Vec::with_capacity(capacity));
     file.read_to_end(&mut value)?;
     if value.len() != capacity {
-        return Err("value file changed while it was being read".into());
+        return Err("value file was modified concurrently while being read".into());
     }
     Ok(value)
 }
@@ -1246,7 +1252,9 @@ fn open_private_file(
     let file = options.open(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() || maximum.is_some_and(|maximum| metadata.len() > maximum) {
-        return Err(format!("{label} is not a bounded regular file").into());
+        return Err(
+            format!("{label} is not a valid regular file within supported size limits").into(),
+        );
     }
     #[cfg(unix)]
     {
@@ -1267,20 +1275,20 @@ fn checked_user_party_id(party_id_hex: String) -> Result<String, &'static str> {
     {
         Ok(party_id_hex)
     } else {
-        Err("member changes require an authenticated lowercase user party id")
+        Err("party ID must be a 66-character lowercase hex string starting with 01")
     }
 }
 
 fn positive_device_serial() -> Result<u64, Box<dyn std::error::Error>> {
     for _ in 0..4 {
         let mut bytes = [0u8; 8];
-        getrandom::fill(&mut bytes).map_err(|_| "OS randomness unavailable")?;
+        getrandom::fill(&mut bytes).map_err(|_| "system entropy source unavailable")?;
         let serial = u64::from_le_bytes(bytes);
         if serial != 0 {
             return Ok(serial);
         }
     }
-    Err("OS randomness did not produce a positive device serial".into())
+    Err("failed to generate non-zero random device serial".into())
 }
 
 fn validate_yubi_configuration(
@@ -1295,7 +1303,7 @@ fn validate_yubi_configuration(
         return Err("YubiKey card serial must be positive".into());
     }
     if signing_slot == pq_slot || !retired(signing_slot) || !retired(pq_slot) {
-        return Err("YubiKey slots must be distinct retired PIV slots".into());
+        return Err("YubiKey key slots must be distinct valid PIV key slots (0x82-0x95)".into());
     }
     if pin_attempts == 0 || puk_attempts == 0 {
         return Err("YubiKey retry counts must be positive".into());
@@ -1605,7 +1613,7 @@ mod tests {
     }
 
     #[test]
-    fn sol_first_run_has_a_process_safe_command_and_resume_for_every_step() {
+    fn first_run_has_a_process_safe_command_and_resume_for_every_step() {
         let directory = tempfile::tempdir().unwrap();
         let phrase = directory.path().join("recovery-phrase");
         std::fs::write(
@@ -1707,7 +1715,7 @@ mod tests {
     }
 
     #[test]
-    fn phase_six_backend_maps_status_devices_pairing_and_one_use_reset() {
+    fn backend_maps_status_devices_pairing_and_one_use_reset() {
         let directory = tempfile::tempdir().unwrap();
         let secret = directory.path().join("secret");
         std::fs::write(&secret, "one-use-token\n").unwrap();
@@ -1804,7 +1812,7 @@ mod tests {
     }
 
     #[test]
-    fn ade_security_key_transcript_uses_private_files_and_generated_device_serials() {
+    fn security_key_transcript_uses_private_files_and_generated_device_serials() {
         let directory = tempfile::tempdir().unwrap();
         let pin = directory.path().join("pin");
         let puk = directory.path().join("puk");

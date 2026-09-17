@@ -19,8 +19,8 @@ pub enum ErrorKind {
     InvalidVariantTag,
     EmptyArray,
     NonMinimal(&'static str),
-    /// A form the general codec accepts but a signable (signed, verified, or
-    /// hashed) encoding forbids, to match go-foks's stricter canonical rules.
+    /// An encoding permitted in general contexts but forbidden in signable
+    /// objects under strict canonicalization rules.
     NonCanonicalSignable(&'static str),
     NonNegativeSignedInteger,
     LengthOverflow,

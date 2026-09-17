@@ -2176,7 +2176,7 @@ fn validate_pending_yubi_preparation(preparation: &PendingYubiPreparation) -> Re
 fn validate_stored_yubi(stored: &StoredYubiAccount, alias: &str) -> Result<()> {
     if stored.version != YUBI_RECORD_VERSION || stored.alias != alias {
         return Err(Error::InvalidAccount(
-            "Yubi record version or alias changed",
+            "stored Yubi record version or alias does not match",
         ));
     }
     validate_name(alias)?;
@@ -2186,7 +2186,9 @@ fn validate_stored_yubi(stored: &StoredYubiAccount, alias: &str) -> Result<()> {
     EntityId::from_bytes(stored.uid.clone())?.require_type(ENTITY_USER)?;
     EntityId::from_bytes(stored.subkey_id.clone())?.require_type(foks_proto::ENTITY_SUBKEY)?;
     if derive_subkey_id(&SecretSeed::new(stored.subkey_seed))?.as_bytes() != stored.subkey_id {
-        return Err(Error::InvalidAccount("Yubi subkey binding changed"));
+        return Err(Error::InvalidAccount(
+            "stored Yubi subkey seed does not match subkey ID",
+        ));
     }
     validate_certificates(&stored.certificate_chain)?;
     validate_locator(&stored.locator)?;

@@ -272,6 +272,7 @@ func writeBackupFixtures(w *writer, userDir string, chain *rem.UserChain) error 
 	if err != nil {
 		return err
 	}
+	phraseJSON = append(phraseJSON, '\n')
 	for _, rawFixture := range []struct {
 		name string
 		data []byte

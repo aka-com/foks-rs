@@ -147,7 +147,9 @@ impl Database {
                     viewer_host_id,
                     Some(now),
                 )?
-                .ok_or(Error::Invalid("renewed federation permission disappeared"))?;
+                .ok_or(Error::Invalid(
+                    "failed to load renewed federation permission",
+                ))?;
                 transaction.commit()?;
                 return Ok(RemoteUserViewPermissionOutcome::Renewed(renewed));
             }
@@ -219,7 +221,9 @@ impl Database {
             viewer_host_id,
             Some(now),
         )?
-        .ok_or(Error::Invalid("inserted federation permission disappeared"))?;
+        .ok_or(Error::Invalid(
+            "failed to load inserted federation permission",
+        ))?;
         transaction.commit()?;
         Ok(RemoteUserViewPermissionOutcome::Inserted(permission))
     }
@@ -350,7 +354,7 @@ impl Database {
                     Some(now),
                 )?
                 .ok_or(Error::Invalid(
-                    "renewed federation team permission disappeared",
+                    "failed to load renewed federation team permission",
                 ))?;
                 transaction.commit()?;
                 return Ok(RemoteTeamViewPermissionOutcome::Renewed(renewed));
@@ -422,7 +426,7 @@ impl Database {
             Some(now),
         )?
         .ok_or(Error::Invalid(
-            "inserted federation team permission disappeared",
+            "failed to load inserted federation team permission",
         ))?;
         transaction.commit()?;
         Ok(RemoteTeamViewPermissionOutcome::Inserted(permission))

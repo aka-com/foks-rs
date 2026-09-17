@@ -48,7 +48,7 @@ impl InstallationConfig {
             .into_iter()
             .any(|path| !path.is_absolute())
         {
-            return Err(crate::Error::Config("invalid installation configuration"));
+            return Err(crate::Error::Config("installation paths must be absolute"));
         }
         let listeners = [
             self.probe_address,
@@ -215,7 +215,9 @@ pub fn client_bootstrap(config: &InstallationConfig) -> crate::Result<ClientBoot
     if verified.snapshot.host_id() != stored.host_id
         || verified.snapshot.canonical_name() != config.canonical_name
     {
-        return Err(crate::Error::Config("stored client bootstrap binding"));
+        return Err(crate::Error::Config(
+            "stored client bootstrap binding does not match configuration",
+        ));
     }
     Ok(ClientBootstrap {
         version: INSTALLATION_VERSION,

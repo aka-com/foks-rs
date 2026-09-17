@@ -15,7 +15,7 @@ mod tree;
 pub use commit::{apply_commit, Commit, LeafChange};
 pub use error::{Error, Result};
 pub use history::{
-    back_pointer_hash, back_pointer_sequence, collect_roots, GO_V019_FIRST_UNMINTABLE_EPOCH,
+    back_pointer_hash, back_pointer_sequence, collect_roots, MAX_CANONICAL_MERKLE_EPOCH,
 };
 pub use key::{chain_key, username_key, username_leaf};
 pub use memory::MemoryStore;

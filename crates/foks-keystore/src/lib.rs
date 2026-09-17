@@ -1,10 +1,9 @@
 //! Small encrypted record store for standalone FOKS application credentials.
 //!
-//! The record store deliberately does not decide how its 32-byte master key is
-//! protected. Production applications should obtain that key from the native
-//! platform credential service. [`create_master_key_file`] exists for tests,
-//! development installations, and headless systems with an independently
-//! protected filesystem.
+//! The record store accepts an externally managed 32-byte master key, typically
+//! provided by a native platform credential service. [`create_master_key_file`]
+//! is provided for tests, development environments, and headless deployments with
+//! protected filesystems.
 
 #![forbid(unsafe_code)]
 
@@ -238,7 +237,7 @@ mod native {
     }
 }
 
-/// In-memory implementation for isolated tests and deliberately ephemeral use.
+/// In-memory implementation for testing and transient storage.
 #[derive(Default)]
 pub struct MemorySecretStore {
     records: BTreeMap<String, Zeroizing<Vec<u8>>>,

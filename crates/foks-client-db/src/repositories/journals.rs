@@ -673,7 +673,7 @@ impl HardStateStore {
             ],
         )?;
         let stored = team_mutation_from_connection(&transaction, &operation.operation_id)?.ok_or(
-            Error::InvalidTeamMutation("submitted operation disappeared"),
+            Error::InvalidTeamMutation("submitted operation record was not found"),
         )?;
         if stored.kind != operation.kind
             || stored.host_id != operation.host_id
@@ -684,7 +684,7 @@ impl HardStateStore {
             || stored.request_hash != operation.request_hash
         {
             return Err(Error::InvalidTeamMutation(
-                "operation ID was reused for another binding",
+                "operation ID was reused for a different binding",
             ));
         }
         if stored.state == TeamMutationState::Prepared {

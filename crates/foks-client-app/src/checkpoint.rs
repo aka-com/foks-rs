@@ -815,10 +815,9 @@ impl ClientCredentials {
         self.erase_profile_state(session, Some(expected_digest))
     }
 
-    /// Erases the same artifacts a reset does, without binding the work to a
-    /// preview. Only profile removal uses this: a forget's endpoint does not
-    /// depend on what the state was, so a change since it was described is not
-    /// a conflict worth reporting back.
+    /// Erases the same artifacts as a reset without checking against a preview.
+    /// Used during profile removal, where intermediate state changes do not
+    /// constitute a conflict.
     pub(super) fn erase_profile_state_for_removal(&self, session: &ProfileSession) -> Result<()> {
         self.erase_profile_state(session, None)
     }
@@ -1246,10 +1245,9 @@ fn remove_reset_artifact(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Removes a profile's own directory once its artifacts are gone. Every level
-/// refuses a symlink, so a link planted inside the profile root cannot
-/// redirect the removal outside it. Callers must have released the operation
-/// and scheduler locks first: both lock files live in this directory.
+/// Removes a profile directory once its artifacts have been deleted. Symlinks
+/// are rejected at each directory level to prevent traversal outside the root.
+/// Callers must release operation and scheduler locks before calling.
 pub(super) fn remove_profile_directory(directory: &Path) -> Result<()> {
     let parent = directory
         .parent()

@@ -106,7 +106,7 @@ pub(crate) fn commit_for_entity(
     )
     .map_err(bad_arguments)?;
     if next_commitment != decoded.next_location_commitment {
-        return Err(bad_arguments("generic-link location commitment"));
+        return Err(bad_arguments("generic-link location commitment mismatch"));
     }
     let (chain_type, passphrase_info) = match &decoded.payload {
         GenericLinkPayload::UserSettings(info) => (

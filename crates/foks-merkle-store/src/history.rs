@@ -4,13 +4,11 @@ use std::collections::BTreeSet;
 
 use crate::{prefixed_hash_signable, Result};
 
-/// The first Merkle epoch that go-foks v0.1.9 cannot mint or verify.
+/// Maximum Merkle epoch supported under canonical array encoding constraints.
 ///
-/// Its skip list has 16 entries. go-codec encodes that list with `array16`,
-/// while v0.1.9's signable validator rejects `array16` lengths that could have
-/// used a fixarray. A v0.1.9-compatible tree therefore cannot advance past
-/// epoch 65,535 without an upstream wire/canonicality fix.
-pub const GO_V019_FIRST_UNMINTABLE_EPOCH: u64 = 65_536;
+/// Epochs at or beyond this threshold require 16 back-pointers, which cannot be
+/// encoded in a 15-element fixarray.
+pub const MAX_CANONICAL_MERKLE_EPOCH: u64 = 65_536;
 
 pub fn back_pointer_sequence(epoch: u64) -> Vec<u64> {
     match epoch {
@@ -33,11 +31,10 @@ pub fn back_pointer_sequence(epoch: u64) -> Vec<u64> {
 }
 
 pub fn back_pointer_hash(epoch: u64, pointers: &[(u64, [u8; 32])]) -> Result<[u8; 32]> {
-    // Do not attempt an alternate encoding here: that would produce a root
-    // go-foks v0.1.9 cannot verify. Surface the compatibility ceiling as a
-    // stable, actionable error before the lower-level Snowpack failure.
+    // Reject back-pointer arrays that fall within the non-canonical array16 range
+    // (16..=31) before serialization.
     if (16..=31).contains(&pointers.len()) {
-        return Err(crate::Error::GoV019EpochCliff {
+        return Err(crate::Error::EpochLimitExceeded {
             epoch,
             pointer_count: pointers.len(),
         });

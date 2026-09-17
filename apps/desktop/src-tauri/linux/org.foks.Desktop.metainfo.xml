@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The Tauri app's canonical AppStream metadata.
+
+  AppStream metadata for the FOKS desktop application.
+-->
+<component type="desktop-application">
+  <id>org.foks.Desktop</id>
+  <name>FOKS</name>
+  <summary>Standalone client for FOKS identity, teams, and encrypted KV</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <launchable type="desktop-id">foks-desktop.desktop</launchable>
+  <developer_name>FOKS contributors</developer_name>
+</component>

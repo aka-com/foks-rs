@@ -154,9 +154,7 @@ impl Database {
         })
     }
 
-    /// Opens an already-initialized writer database without creating a new
-    /// file. Offline administration commands use this to avoid leaving a
-    /// blank installation behind after a mistyped or premature invocation.
+    /// Opens an already-initialized writer database without creating a new file.
     pub fn open_existing(path: impl AsRef<Path>, config: Config) -> Result<Self> {
         let identity = DatabasePathIdentity::existing(path.as_ref())?;
         identity.recheck()?;

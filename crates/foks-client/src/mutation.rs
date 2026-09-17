@@ -492,7 +492,7 @@ mod tests {
                 == Some(b"application-owned retry material".as_slice())
         };
 
-        // Finalizing a merely-`Submitting` mutation is rejected by the state
+        // Finalizing a mutation in the `Submitting` state is rejected by the state
         // machine and leaves the protected record in place.
         MutationCoordinator::new(&database, &mut protected)
             .begin_submission(&operation.operation_id)

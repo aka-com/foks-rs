@@ -290,10 +290,10 @@ fn expect_account_error(
 
 /// A kept-alive connection that outlives the server's idle timeout must be
 /// replaced before it is reused, not handed out to fail on its first write.
-/// Operations that pause between calls -- a hardware credential waiting on a
-/// person, above all -- would otherwise fail on their first call after the
-/// pause, and the failed request could not be retried safely because the
-/// server may already have processed it.
+/// Operations with long intervals between calls (such as hardware credential
+/// user prompts) would otherwise fail on their first call after the pause,
+/// and the failed request could not be retried safely because the server
+/// may already have processed it.
 #[test]
 fn a_pooled_connection_closed_while_idle_is_replaced_before_reuse() {
     let environment = TestEnvironment::new().unwrap();

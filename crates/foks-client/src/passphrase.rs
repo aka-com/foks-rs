@@ -561,8 +561,8 @@ impl FoksClient {
                 "passphrase has no owner-PUK recovery box",
             ))?
             .puk_generation;
-        let settings = settings.ok_or(Error::AccountRequest(
-            "legacy passphrase state needs one successful passphrase verification before background refresh",
+        let settings = settings.ok_or(Error::CredentialBinding(
+            "passphrase verification required before background refresh of legacy settings",
         ))?;
         if settings.generation != parcel.generation
             || settings.salt != Some(parcel.salt)
@@ -676,8 +676,8 @@ impl FoksClient {
                 "passphrase has no owner-PUK recovery box",
             ))?
             .puk_generation;
-        let settings = settings.ok_or(Error::AccountRequest(
-            "legacy passphrase state needs one successful passphrase verification before background refresh",
+        let settings = settings.ok_or(Error::CredentialBinding(
+            "passphrase verification required before background refresh of legacy settings",
         ))?;
         if settings.generation != parcel.generation
             || settings.salt != Some(parcel.salt)

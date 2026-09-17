@@ -217,7 +217,7 @@ pub fn resequence_call(request: &[u8], sequence: u64, maximum: usize) -> Result<
     if unsigned(cursor.value()?)? != METHOD_CALL_V2 {
         return Err(Error::Envelope {
             expected: "RPC call method",
-            found: "another RPC method",
+            found: "unexpected RPC method",
         });
     }
     let _old_sequence = unsigned(cursor.value()?)?;
@@ -2141,7 +2141,7 @@ fn check_status(bytes: &[u8]) -> Result<()> {
     if !(1..=2).contains(&fields) {
         return Err(Error::Envelope {
             expected: "one- or two-field FOKS status",
-            found: "another map length",
+            found: "unexpected map length",
         });
     }
     let mut code = None;

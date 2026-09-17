@@ -208,8 +208,8 @@ pub struct PassphraseLoginResult {
 /// Server-stored PPE material carried by `User.setPassphrase`,
 /// `User.changePassphrase`, and the optional signup passphrase field.
 ///
-/// The obsolete user-chain fields on the v0.1.9 set request are deliberately
-/// not represented. Encoding emits their canonical zero values.
+/// Obsolete user-chain fields from the legacy schema are omitted here; canonical
+/// zero values are emitted during serialization.
 #[derive(Clone, Eq, PartialEq)]
 pub struct PassphraseUpdateArgument {
     pub verify_key: EntityId,

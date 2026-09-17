@@ -1,0 +1,3 @@
+# Native build output and generated Tauri permission schemas.
+/target
+/gen/schemas

@@ -112,24 +112,24 @@ fn fix_device_name(name: &str) -> String {
 
 fn random_bytes<const N: usize>() -> Result<[u8; N]> {
     let mut bytes = [0; N];
-    getrandom::fill(&mut bytes).map_err(|_| Error::KvResponse("OS randomness unavailable"))?;
+    getrandom::fill(&mut bytes).map_err(|_| Error::Crypto(foks_crypto::Error::Entropy))?;
     Ok(bytes)
 }
 
 fn now_microseconds() -> Result<u64> {
     let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|_| Error::KvResponse("system clock precedes Unix epoch"))?;
+        .map_err(|_| Error::Transport("system clock precedes Unix epoch"))?;
     u64::try_from(elapsed.as_micros())
-        .map_err(|_| Error::KvResponse("system clock timestamp overflow"))
+        .map_err(|_| Error::Transport("system clock timestamp overflow"))
 }
 
 fn now_milliseconds() -> Result<u64> {
     let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|_| Error::KvResponse("system clock precedes Unix epoch"))?;
+        .map_err(|_| Error::Transport("system clock precedes Unix epoch"))?;
     u64::try_from(elapsed.as_millis())
-        .map_err(|_| Error::KvResponse("system clock timestamp overflow"))
+        .map_err(|_| Error::Transport("system clock timestamp overflow"))
 }
 
 fn user_key_for_seed<'a>(

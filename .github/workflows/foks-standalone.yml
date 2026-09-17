@@ -5,6 +5,7 @@ on:
     paths:
       - "Cargo.lock"
       - "Cargo.toml"
+      - "rust-toolchain.toml"
       - "crates/foks-*/**"
       - "packaging/**"
       - "tools/foks-client/**"
@@ -33,10 +34,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - name: Install stable Rust components
-        run: |
-          rustup toolchain install stable --profile minimal --component clippy,rustfmt
-          rustup default stable
+      - name: Install repository Rust toolchain
+        run: rustup show active-toolchain
       - name: Fetch the locked dependency graph
         run: cargo fetch --locked
       - name: Install isolated Linux Secret Service
@@ -66,10 +65,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - name: Install stable Rust components
-        run: |
-          rustup toolchain install stable --profile minimal --component clippy,rustfmt
-          rustup default stable
+      - name: Install repository Rust toolchain
+        run: rustup show active-toolchain
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26.x"

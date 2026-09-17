@@ -1,4 +1,4 @@
-//! Sealed test-only composition for a process-equivalent isolated server.
+//! Test fixtures and harness for running isolated FOKS test servers.
 
 #![forbid(unsafe_code)]
 

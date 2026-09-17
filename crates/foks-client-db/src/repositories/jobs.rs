@@ -135,7 +135,9 @@ impl HardStateStore {
         limit: u64,
     ) -> Result<Vec<ScheduledJob>> {
         if limit == 0 || lease_until <= now {
-            return Err(Error::InvalidScheduledJob("invalid claim bounds"));
+            return Err(Error::InvalidScheduledJob(
+                "claim limit must be non-zero and lease expiration must be in the future",
+            ));
         }
         let transaction = self.write_transaction()?;
         let now_sql = sqlite_integer("scheduled claim time", now)?;
@@ -206,7 +208,9 @@ impl HardStateStore {
         error: &str,
     ) -> Result<()> {
         if error.is_empty() || error.len() > 1024 {
-            return Err(Error::InvalidScheduledJob("invalid scheduled job error"));
+            return Err(Error::InvalidScheduledJob(
+                "job error message must be non-empty and at most 1024 bytes",
+            ));
         }
         let changed = self.connection.execute(
             "UPDATE scheduled_jobs SET

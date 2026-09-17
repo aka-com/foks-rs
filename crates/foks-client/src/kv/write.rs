@@ -166,7 +166,7 @@ impl KvWriteSession<'_> {
                 if next_offset > Self::MAX_UPLOAD_BYTES
                     || (next_offset == Self::MAX_UPLOAD_BYTES && !final_chunk)
                 {
-                    return Err(Error::KvResponse("upload exceeds FOKS file size limit"));
+                    return Err(Error::KvRequest("upload exceeds FOKS file size limit"));
                 }
                 chunk = seal_kv_chunk(
                     &file_seed,
@@ -335,7 +335,7 @@ impl KvWriteSession<'_> {
         validate_kv_component(source_name.as_bytes())?;
         validate_kv_component(destination_name.as_bytes())?;
         if source_parent == destination_parent && source_name == destination_name {
-            return Err(Error::KvResponse("source and destination are identical"));
+            return Err(Error::KvRequest("source and destination are identical"));
         }
         let tree = self.sync()?;
         let (dirents, tree) = self.mutate_namespace(tree, |session, tree| {
@@ -357,7 +357,7 @@ impl KvWriteSession<'_> {
             if source.value.node_type()? == KvNodeType::Directory
                 && kv_directory_reaches(tree, source.value.object_id(), destination_parent)?
             {
-                return Err(Error::KvResponse("cannot move a directory into itself"));
+                return Err(Error::KvRequest("cannot move a directory into itself"));
             }
             let source_tombstone = session.prepare_dirent(
                 tree,

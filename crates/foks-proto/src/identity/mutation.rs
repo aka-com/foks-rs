@@ -330,9 +330,8 @@ impl InviteCode {
         Ok(code)
     }
 
-    /// Parses the user-facing v0.1.9 representation. Standard one-use codes
-    /// use the `s.` prefix and Keybase's base-62 copy/paste rules; other input
-    /// is a case-insensitive multi-use code.
+    /// Parses invite codes from user input. Single-use codes use the `s.` prefix
+    /// followed by base-62 characters; multi-use codes are case-insensitive.
     pub fn from_user_input(input: &str, empty_allowed: bool) -> Result<Self> {
         if input.is_empty() {
             return if empty_allowed {
@@ -1208,9 +1207,8 @@ pub struct HostConfig {
 
 /// Public registration policy returned by `Reg.getServerConfig`.
 ///
-/// The standalone server does not implement SSO, but retaining the exact
-/// optional field bytes makes this type safe to use when decoding a future
-/// compatible server configuration as well as when emitting the local one.
+/// Preserves optional raw SSO bytes to ensure round-trip fidelity across
+/// different server configurations.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RegServerConfig {
     pub sso: Option<Vec<u8>>,

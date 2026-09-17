@@ -530,6 +530,6 @@ fn require_one(changed: usize) -> Result<()> {
     if changed == 1 {
         Ok(())
     } else {
-        Err(Error::Invalid("host key rotation ledger transition"))
+        Err(Error::Invalid("host key rotation state transition"))
     }
 }

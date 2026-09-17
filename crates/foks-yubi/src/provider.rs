@@ -64,7 +64,7 @@ pub enum PivPolicy {
     Always,
 }
 
-/// PIN text is deliberately non-cloneable and always zeroized on drop.
+/// Sensitive PIN text that is zeroized on drop.
 pub struct Pin(String);
 
 impl Drop for Pin {
@@ -195,9 +195,8 @@ pub trait YubiProvider: Send + Sync {
         all_slots_empty: bool,
     ) -> Result<()>;
 
-    /// Applies PIV retry counts and leaves both credentials at their factory
-    /// defaults. This operation is deliberately safe to repeat after an
-    /// interrupted or ambiguously reported command.
+    /// Applies PIV retry counts and resets PIN and PUK to factory defaults.
+    /// This operation is idempotent and safe to retry if interrupted.
     fn prepare_reset_retries(
         &self,
         card: &CardId,

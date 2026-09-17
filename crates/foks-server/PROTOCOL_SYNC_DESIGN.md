@@ -103,8 +103,8 @@ generated merge product rather than an independent input. The existing
 It also compares both with the policy/upstream merge, preserving the current
 enforcement while removing duplicate manual upstream numbers.
 
-Generated Rust is checked in. `cargo build`, Bazel builds, normal tests, and the
-released server therefore need only Rust and the checked artifacts. Go and
+Generated Rust is checked in. `cargo build`, normal tests, and the released
+server therefore need only Rust and the checked artifacts. Go and
 network access are limited to explicit regeneration/drift jobs under `tools/`.
 
 ## Pinned generation flow
@@ -172,7 +172,7 @@ Go audit, and states whether ordinary upstream clients can still interoperate.
 - Mutation tests alter one ID, position, status, source hash, and additive method
   and assert the expected drift class.
 - Offline regeneration works with a prefilled module cache and no network.
-- Normal Cargo/Bazel dependency graphs contain no Go tool, upstream source, or
+- Normal Cargo dependency graphs contain no Go tool, upstream source, or
   `foks-protocol-sync` runtime edge.
 - The existing `protocol-v1.toml`/route-table exact comparison and route-coverage
   tests remain mandatory.

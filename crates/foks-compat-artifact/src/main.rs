@@ -169,7 +169,7 @@ fn allocate_generation(
     run_attempt: u64,
 ) -> Result<u64, Box<dyn std::error::Error>> {
     if run_number == 0 || run_attempt == 0 || run_attempt >= 1000 {
-        return Err("run number and attempt must use GitHub's positive attempt allocation".into());
+        return Err("run_number must be non-zero and run_attempt must be between 1 and 999".into());
     }
     let current = match previous {
         Some(previous) => {
@@ -205,7 +205,7 @@ fn read_bounded_artifact(path: &Path) -> Result<Vec<u8>, Box<dyn std::error::Err
     let file = options.open(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.len() > MAXIMUM_ARTIFACT_BYTES {
-        return Err("artifact is not a bounded regular file".into());
+        return Err("artifact exceeds maximum file size limit or is not a regular file".into());
     }
     let mut bytes = Vec::with_capacity(usize::try_from(metadata.len())?);
     file.take(MAXIMUM_ARTIFACT_BYTES + 1)

@@ -80,8 +80,8 @@ fn partial_slow_frame_times_out_without_monopolizing_other_workers() {
     slow.flush().unwrap();
 
     // Exercise the same listener, not merely a separate listener task. With
-    // the former worker-per-connection model and one configured worker, this
-    // response could not arrive until the slow frame timed out.
+    // one worker thread, this verifies that a slow connection does not block
+    // concurrent requests from completing before the slow frame times out.
     let started = std::time::Instant::now();
     let mut parallel = connect_without_client_certificate(
         server.addresses().public_services,

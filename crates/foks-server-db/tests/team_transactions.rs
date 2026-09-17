@@ -418,7 +418,7 @@ fn every_team_publication_boundary_is_atomic() {
                 1
             ),
             Err(foks_server_db::Error::Invalid(
-                "team-admin token activation transition"
+                "team-admin token already activated or invalid"
             ))
         ));
         let activation: Option<Vec<u8>> = connection

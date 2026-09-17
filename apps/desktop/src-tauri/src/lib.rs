@@ -1,0 +1,456 @@
+//! The FOKS desktop application.
+//!
+//! FOKS communicates with a local agent over a private Unix socket and runs
+//! without a remote backend server.
+//!
+//! Configures native file drop routing via `dragDropEnabled` (see [`dragdrop`])
+//! and disables `withGlobalTauri` to prevent exposing global IPC objects in webviews.
+
+mod agent;
+mod applock;
+mod clipboard;
+mod commands;
+mod dragdrop;
+mod navigation;
+mod startup;
+mod window_state;
+
+use std::sync::Arc;
+
+use tauri::Manager as _;
+use tauri_plugin_dialog::{DialogExt as _, MessageDialogKind};
+
+use agent::AgentHandle;
+use commands::{AppState, MAIN};
+
+pub fn run() {
+    if std::env::args_os().nth(1).as_deref()
+        == Some(std::ffi::OsStr::new("--smoke-test-packaged-startup"))
+    {
+        match agent::smoke_test_packaged_startup() {
+            Ok(()) => println!("Packaged production agent startup passed"),
+            Err(error) => {
+                eprintln!("Packaged startup failed: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    // Use `args_os` to preserve non-UTF-8 arguments safely when inspecting flags.
+    let endpoint = agent::resolve_endpoint(
+        std::env::args_os().skip(1),
+        std::env::var_os(agent::SOCKET_ENV).map(std::path::PathBuf::from),
+    );
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "foks_desktop_app=info".into()),
+        )
+        .init();
+
+    if let Some(directory) = endpoint
+        .as_ref()
+        .and_then(|endpoint| endpoint.managed_crash_directory.clone())
+    {
+        if let Err(error) = agent::prepare_managed_crash_directory(&directory) {
+            tracing::error!(reason = %error.message, "Failed to initialize crash storage directory");
+            std::process::exit(1);
+        }
+        foks_desktop::install_crash_reporter(directory);
+    }
+
+    let Some(endpoint) = endpoint else {
+        // Exit if agent socket path cannot be determined.
+        tracing::error!(
+            "Could not determine agent socket path; pass {} or set {}",
+            agent::SOCKET_ARG,
+            agent::SOCKET_ENV
+        );
+        std::process::exit(1);
+    };
+    let socket = endpoint.socket;
+    tracing::info!(socket = %socket.display(), "Using agent socket");
+    let agent = Arc::new(AgentHandle::new(socket));
+
+    tauri::Builder::default()
+        // Register single-instance plugin first so duplicate processes hand off
+        // and exit before competing for the agent socket.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window(MAIN) {
+                let _ = window.set_focus();
+                return;
+            }
+            app.dialog()
+                .message("FOKS is already running.")
+                .kind(MessageDialogKind::Info)
+                .title("FOKS")
+                .show(|_| {});
+        }))
+        // Before every other plugin's hook and before the config-declared
+        // webview loads its first page: the window may only ever be on FOKS's
+        // own origin. See navigation.rs.
+        .plugin(navigation::policy())
+        .plugin(tauri_plugin_dialog::init())
+        // Registered for Rust-side clipboard access with auto-clearing.
+        // The webview has no direct clipboard permissions.
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .manage(AppState::new(Arc::clone(&agent)))
+        .manage(Arc::new(applock::AppLock::new()))
+        .invoke_handler(tauri::generate_handler![
+            commands::application::agent_status,
+            commands::application::retry_agent_connection,
+            commands::enrollment::initialize_client_state,
+            commands::enrollment::discover_go_profiles,
+            commands::servers::check_and_add_profile,
+            commands::enrollment::check_and_add_go_profile,
+            commands::servers::add_server,
+            commands::servers::forget_server,
+            commands::servers::describe_server_status,
+            commands::servers::check_server,
+            commands::enrollment::list_pending_operations,
+            commands::enrollment::create_first_run_account,
+            commands::enrollment::resume_first_run_account,
+            commands::enrollment::set_first_run_passphrase,
+            commands::accounts::prepare_owner_backup,
+            commands::accounts::commit_owner_backup,
+            commands::enrollment::recover_owner_account,
+            commands::enrollment::resume_owner_recovery,
+            commands::groups::discover_groups,
+            commands::accounts::list_account_devices,
+            commands::accounts::remove_account_device,
+            commands::accounts::list_backup_enrollments,
+            commands::accounts::revoke_owner_backup,
+            commands::yubikey::list_yubi_cards,
+            commands::yubikey::list_yubi_accounts,
+            commands::yubikey::create_yubi_account,
+            commands::yubikey::resume_yubi_account,
+            commands::yubikey::provision_yubi_device,
+            commands::yubikey::sync_yubi_account,
+            commands::yubikey::yubi_pin_status,
+            commands::yubikey::change_yubi_pin,
+            commands::yubikey::set_yubi_passphrase,
+            commands::yubikey::change_yubi_passphrase,
+            commands::yubikey::verify_yubi_passphrase,
+            commands::yubikey::change_yubi_puk,
+            commands::yubikey::unblock_yubi_pin,
+            commands::yubikey::rotate_yubi_management_key,
+            commands::yubikey::resume_yubi_management_key,
+            commands::yubikey::recover_yubi_management_key,
+            commands::yubikey::recover_yubi_subkey,
+            commands::yubikey::revoke_yubi_device,
+            commands::enrollment::start_device_pairing,
+            commands::enrollment::resume_device_pairing_offer,
+            commands::enrollment::finish_device_pairing,
+            commands::enrollment::accept_device_pairing,
+            commands::enrollment::accept_go_profile_pairing,
+            commands::enrollment::resume_device_pairing_acceptance,
+            commands::enrollment::resume_go_profile_pairing,
+            commands::enrollment::copy_go_profile_device,
+            commands::accounts::set_account_passphrase,
+            commands::accounts::change_account_passphrase,
+            commands::accounts::verify_account_passphrase,
+            commands::servers::describe_reset,
+            commands::servers::reset_server,
+            commands::application::app_info,
+            window_state::get_window_state,
+            commands::vault::list_stores,
+            commands::vault::list_catalog,
+            commands::servers::list_servers,
+            commands::accounts::list_accounts,
+            commands::groups::list_group_details,
+            commands::groups::list_parties,
+            commands::groups::list_federation,
+            commands::vault::read_item,
+            commands::vault::copy_item_value,
+            commands::vault::copy_item_path,
+            commands::vault::copy_text,
+            commands::vault::download_file,
+            commands::vault::create_text_item,
+            commands::vault::create_link,
+            commands::vault::create_folder,
+            commands::vault::edit_text_item,
+            commands::vault::remove_item,
+            commands::vault::import_dropped_file,
+            commands::vault::pick_and_import_file,
+            commands::vault::replace_dropped_file,
+            commands::vault::pick_and_replace_file,
+            commands::groups::create_group,
+            commands::groups::resume_group_creation,
+            commands::groups::add_group_member,
+            commands::groups::resume_group_member_addition,
+            commands::groups::demote_group_member,
+            commands::groups::remove_group_member,
+            commands::groups::resume_group_member_edit,
+            commands::groups::admit_group,
+            commands::groups::rerun_group_admission,
+            commands::groups::expel_federated_group,
+            commands::application::take_agent_connection_loss,
+            applock::app_lock_state,
+            applock::lock_app,
+            applock::unlock_app,
+        ])
+        .setup(move |app| {
+            // Verify agent reachability before handling requests; exit with a dialog if unreachable.
+            startup::require_agent(app, &agent);
+            if let Some(window) = app.get_webview_window(MAIN) {
+                dragdrop::observe(&window);
+                window_state::observe(&window);
+            } else {
+                tracing::error!("{MAIN} window configuration not found in tauri.conf.json");
+            }
+            Ok(())
+        })
+        .build(tauri::generate_context!())
+        .expect("failed to start application")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+                agent::terminate_managed_agent();
+                clipboard::defer_exit_cleanup(app, code, &api);
+            }
+        });
+}
+
+#[cfg(test)]
+mod tests {
+    /// Ensures that only a single window is configured, matching the expected security boundary.
+    #[test]
+    fn the_configuration_declares_exactly_one_window_and_it_is_main() {
+        let configuration: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json"))
+                .expect("tauri.conf.json is valid JSON");
+        let windows = configuration["app"]["windows"]
+            .as_array()
+            .expect("tauri.conf.json declares windows");
+        assert_eq!(windows.len(), 1);
+        assert_eq!(
+            windows[0]["label"],
+            super::MAIN,
+            "primary window label must match MAIN constant"
+        );
+        assert_eq!(windows[0]["dragDropEnabled"], true);
+        assert_eq!(configuration["app"]["withGlobalTauri"], false);
+    }
+
+    /// The exact renderer capability, in the order the file lists it.
+    ///
+    /// The webview capability is limited to three permissions: the drag-drop
+    /// event listener and unlistener (`dragdrop.rs`), and the window drag command
+    /// used by Tauri's `data-tauri-drag-region` for custom title bar movement.
+    /// All other Tauri core, window, and plugin APIs are omitted.
+    const RENDERER_PERMISSIONS: [&str; 3] = [
+        "core:event:allow-listen",
+        "core:event:allow-unlisten",
+        "core:window:allow-start-dragging",
+    ];
+
+    /// The command identifiers the resolved capability grants, as
+    /// `<manifest>|<command>`. This represents the entire default Tauri IPC
+    /// surface accessible to scripts outside application-defined commands.
+    const RENDERER_COMMANDS: [&str; 3] = [
+        "core:event|listen",
+        "core:event|unlisten",
+        "core:window|start_dragging",
+    ];
+
+    /// Asserts that capabilities match the explicitly permitted set without additions or reordering.
+    #[test]
+    fn the_capability_grants_exactly_the_three_renderer_permissions() {
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json"))
+                .expect("capabilities/default.json is valid JSON");
+        assert_eq!(capability["identifier"], "default");
+        assert_eq!(capability["windows"].as_array().map(Vec::len), Some(1));
+        assert_eq!(capability["windows"][0], super::MAIN);
+
+        let permissions: Vec<&str> = capability["permissions"]
+            .as_array()
+            .expect("the capability lists permissions")
+            .iter()
+            .map(|permission| permission.as_str().expect("permissions are strings"))
+            .collect();
+        assert_eq!(permissions, RENDERER_PERMISSIONS);
+        assert_eq!(
+            permissions
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            permissions.len(),
+            "duplicate permission found in capability"
+        );
+
+        // Explicitly check for disallowed sensitive permissions.
+        for forbidden in [
+            "core:default",
+            "core:event:default",
+            "core:image:default",
+            "core:image:allow-from-path",
+            "core:menu:default",
+            "core:tray:default",
+            "core:path:default",
+            "core:webview:default",
+            "core:app:default",
+            "core:window:default",
+            "core:event:allow-emit",
+            "core:event:allow-emit-to",
+        ] {
+            assert!(
+                !permissions.contains(&forbidden),
+                "forbidden permission present in capability: {forbidden}"
+            );
+        }
+        for permission in &permissions {
+            assert!(
+                permission.starts_with("core:"),
+                "{permission} is a plugin permission; FOKS drives its plugins from Rust"
+            );
+        }
+    }
+
+    /// Verifies the expanded command set resolved from the renderer capability.
+    ///
+    /// Resolves capability permissions through generated ACL manifests to verify the
+    /// concrete command set exposed to the webview.
+    #[test]
+    fn the_resolved_capability_reaches_only_those_three_commands() {
+        let manifests = acl_manifests();
+        let capabilities: serde_json::Value =
+            serde_json::from_str(&read_generated("capabilities.json"))
+                .expect("gen/schemas/capabilities.json is valid JSON");
+        let capability = &capabilities["default"];
+        assert_eq!(capability["windows"][0], super::MAIN);
+        assert_eq!(capability["local"], true);
+
+        let mut commands = std::collections::BTreeSet::new();
+        for permission in capability["permissions"]
+            .as_array()
+            .expect("the generated capability lists permissions")
+        {
+            resolve(
+                &manifests,
+                permission.as_str().expect("permissions are strings"),
+                "core",
+                &mut std::collections::BTreeSet::new(),
+                &mut commands,
+            );
+        }
+
+        assert_eq!(
+            commands,
+            RENDERER_COMMANDS
+                .iter()
+                .map(|command| (*command).to_owned())
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+
+        // Verify that sensitive commands remain inaccessible to the webview.
+        for forbidden in [
+            "core:image|from_path",
+            "core:image|rgba",
+            "core:image|new",
+            "core:menu|new",
+            "core:tray|new",
+            "core:path|resolve",
+            "core:path|resolve_directory",
+            "core:webview|internal_toggle_devtools",
+            "core:window|internal_toggle_maximize",
+            "core:event|emit",
+            "core:event|emit_to",
+        ] {
+            assert!(
+                !commands.contains(forbidden),
+                "forbidden command reachable from webview: {forbidden}"
+            );
+        }
+    }
+
+    /// `tauri-build` generates these files during build (excluded via
+    /// `.gitignore`). They project Tauri's internal ACL rather than crate
+    /// source. Read them from disk so the desktop build need not stage `gen/`.
+    fn read_generated(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("gen/schemas")
+            .join(name);
+        std::fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!("{} is generated by tauri-build: {error}", path.display())
+        })
+    }
+
+    fn acl_manifests() -> serde_json::Value {
+        serde_json::from_str(&read_generated("acl-manifests.json"))
+            .expect("gen/schemas/acl-manifests.json is valid JSON")
+    }
+
+    /// Split `core:event:allow-listen` into the manifest it lives in and the
+    /// permission inside it. A bare `allow-listen` inside a set belongs to the
+    /// manifest that listed it, which is what `context` carries.
+    fn manifest_of<'a>(permission: &'a str, context: &str) -> (String, &'a str) {
+        if let Some(rest) = permission.strip_prefix("core:") {
+            return match rest.split_once(':') {
+                Some((module, identifier)) => (format!("core:{module}"), identifier),
+                None => ("core".to_owned(), rest),
+            };
+        }
+        match permission.split_once(':') {
+            Some((plugin, identifier)) => (plugin.to_owned(), identifier),
+            None => (context.to_owned(), permission),
+        }
+    }
+
+    /// Expand one capability entry into the commands it allows.
+    ///
+    /// Sets and defaults nest, so this recurses and remembers what it has
+    /// already expanded. Only `allow` is collected: this asks what a webview
+    /// can reach, and a `deny` entry cannot widen that.
+    fn resolve(
+        manifests: &serde_json::Value,
+        permission: &str,
+        context: &str,
+        seen: &mut std::collections::BTreeSet<String>,
+        commands: &mut std::collections::BTreeSet<String>,
+    ) {
+        let (manifest_name, identifier) = manifest_of(permission, context);
+        if !seen.insert(format!("{manifest_name}:{identifier}")) {
+            return;
+        }
+        let manifest = manifests
+            .get(&manifest_name)
+            .unwrap_or_else(|| panic!("{manifest_name} is a known ACL manifest"));
+
+        let nested = if identifier == "default" {
+            Some(&manifest["default_permission"]["permissions"])
+        } else {
+            manifest["permission_sets"]
+                .get(identifier)
+                .map(|set| &set["permissions"])
+        };
+        if let Some(nested) = nested {
+            for entry in nested
+                .as_array()
+                .unwrap_or_else(|| panic!("{manifest_name}:{identifier} lists permissions"))
+            {
+                resolve(
+                    manifests,
+                    entry.as_str().expect("permissions are strings"),
+                    &manifest_name,
+                    seen,
+                    commands,
+                );
+            }
+            return;
+        }
+
+        let permission = manifest["permissions"]
+            .get(identifier)
+            .unwrap_or_else(|| panic!("{manifest_name}:{identifier} is a known permission"));
+        for command in permission["commands"]["allow"]
+            .as_array()
+            .expect("a permission lists the commands it allows")
+        {
+            commands.insert(format!(
+                "{manifest_name}|{}",
+                command.as_str().expect("command names are strings")
+            ));
+        }
+    }
+}

@@ -50,7 +50,7 @@ fn log_send_uploads_accept_go_uncompressed_length_and_bound_actual_bytes() {
             log_send_id: &id,
             file_id: 9,
             filename: "client.log",
-            // go-foks leaves this as the uncompressed size while sending
+            // Client reports uncompressed content length while sending
             // gzip-compressed blocks.
             content_length: 10 * 1024 * 1024,
             block_count: 2,

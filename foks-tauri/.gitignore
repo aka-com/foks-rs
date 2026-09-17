@@ -1,3 +1,0 @@
-# Mirrors the root .gitignore's src-tauri entries for this second Tauri app.
-/target
-/gen/schemas

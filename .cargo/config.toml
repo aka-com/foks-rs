@@ -1,0 +1,30 @@
+# Depending on how `cc` is provided on a given macOS box, its default library
+# search path may not include libiconv's stub — several crates' build scripts
+# (ring, aws-lc-sys, objc2-exception-helper, …) link `-liconv` directly and
+# then fail with "ld: library not found for -liconv". (A clang wrapper from a
+# package manager rather than the Command Line Tools is the usual way to end
+# up here.)
+# Point the linker at the Command Line Tools SDK, which ships libiconv.tbd
+# at a fixed, standard path present whenever Xcode CLT is installed
+# (`xcode-select --install`), independent of where/whether full Xcode.app
+# also is.
+[target.aarch64-apple-darwin]
+rustflags = ["-L", "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-L", "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib"]
+
+# getrandom 0.4 requires an explicit backend selection for bare wasm.
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]
+
+[env]
+# macOS's default $TMPDIR (/var/folders/xx/…/T/) is long enough to overflow
+# a Unix domain socket's 104-byte sun_path once a test's generated socket
+# filename is appended, failing with "path must be shorter than SUN_LEN"
+# Unsetting TMPDIR does not help: std::env::temp_dir() falls
+# back to querying the same long path via confstr() when it's unset, only
+# an explicit short value is honored. Cargo has no built-in override, so it
+# needs stating here explicitly. Force the short path because Cargo
+# otherwise preserves macOS's already-set TMPDIR instead of overriding it.
+TMPDIR = { value = "/tmp", force = true }

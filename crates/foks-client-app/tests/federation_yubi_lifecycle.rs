@@ -1,8 +1,7 @@
-//! Application-level coverage for the hardware-backed federated security
-//! responder. The scenario is the one the responder exists for: a federated
-//! binding is admitted while a software administrator still exists, that
-//! software device then disappears, and only a YubiKey is left to keep the
-//! remote team's material free of revoked member keys.
+//! Integration tests for the hardware-backed federated security responder.
+//! Verifies that when a software administrator device is revoked, a hardware
+//! YubiKey administrator can rekey and maintain member keys for the federated
+//! team.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

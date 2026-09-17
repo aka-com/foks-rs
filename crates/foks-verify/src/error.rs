@@ -40,9 +40,9 @@ pub enum Error {
     MerkleHostchainMismatch,
     #[error("invalid canonical probe service address")]
     InvalidProbeAddress,
-    #[error("this verifier currently accepts exactly one eldest user-chain link")]
+    #[error("unsupported user chain: expected single eldest link")]
     UnsupportedUserChain,
-    #[error("user-chain identity, host, or eldest invariants do not match")]
+    #[error("user-chain identity, host, or eldest binding mismatch")]
     UserBinding,
     #[error("user-chain username or device-name disclosure is invalid")]
     UserDisclosure,
@@ -73,7 +73,7 @@ pub enum Error {
     },
     #[error("persisted user evidence does not reproduce its stored projection")]
     PersistedUserEvidence,
-    #[error("team-chain identity, host, eldest, or transition invariants do not match")]
+    #[error("team-chain identity, host, eldest, or transition binding mismatch")]
     TeamBinding,
     #[error("team-chain name disclosure is invalid")]
     TeamDisclosure,

@@ -278,8 +278,8 @@ impl VerifiedUserState {
     }
 
     /// Authenticated presentation name committed by the device's provisioning
-    /// link. Non-self Go chain loads intentionally omit these openings, so a
-    /// verified device can truthfully have no display name.
+    /// link. This field is None when verifying non-self chains that omit device-name
+    /// openings.
     pub fn device_display_name(&self, device: &EntityId) -> Option<&str> {
         self.device_display_names
             .get(device.as_bytes())
@@ -583,9 +583,8 @@ pub fn verify_user_chain(
     )
 }
 
-/// Verifies a non-self user-chain response, for which go-foks deliberately
-/// omits device-name openings. If the server supplies openings anyway, they
-/// are still required to match every authenticated commitment exactly.
+/// Verifies a non-self user-chain response, where device-name openings may be
+/// omitted. If openings are present, they are verified against their commitments.
 pub fn verify_non_self_user_chain(
     chain_bytes: &[u8],
     expected_uid: &EntityId,
@@ -992,9 +991,8 @@ fn verify_user_chain_increment_at_root(
     })
 }
 
-/// Replays persisted user-chain evidence and refuses any projection that is
-/// not reproduced byte-for-byte. This is the only supported path from
-/// untrusted SQLite rows back to a sealed user state.
+/// Restores verified user state by replaying persisted chain evidence and
+/// confirming the projected state matches byte-for-byte.
 pub fn restore_verified_user(
     persisted: VerifiedUserSnapshotParts<'_>,
     authenticated_roots: &AuthenticatedMerkleRoots,

@@ -1004,7 +1004,9 @@ impl CheckedProfileSession<'_> {
             &self.paths.soft_database,
             &mut mutations,
         )?;
-        let tree = session.ensure_root(Role::OWNER, Role::OWNER)?;
+        // Both team kinds provision this low-visibility Member PTK.
+        // Share root discovery while retaining Owner-only root writes.
+        let tree = session.ensure_root(Role::member(-0x4000), Role::OWNER)?;
         Ok(TeamSyncReport::new(team_alias, &authenticated, &tree))
     }
 }
@@ -1050,7 +1052,9 @@ fn discovery_alias(vault: &mut AccountVault<'_>, identity: &StoredTeam) -> Resul
         let suffix = &id[..suffix_bytes * 2];
         let keep = 64usize
             .checked_sub(suffix.len() + 1)
-            .ok_or(Error::InvalidAccount("discovered team alias is excessive"))?;
+            .ok_or(Error::InvalidAccount(
+                "discovered team alias exceeds maximum length",
+            ))?;
         let base = &identity.alias[..identity.alias.len().min(keep)];
         let candidate = format!("{base}_{suffix}");
         if !occupied.contains(&candidate) {
@@ -1596,7 +1600,9 @@ impl Drop for StoredTeamRekey {
 impl StoredTeam {
     pub(super) fn random_named(alias: &str, account_alias: &str, name: &str) -> Result<Self> {
         if name.trim().is_empty() || name.len() > 256 {
-            return Err(Error::InvalidAccount("team name is missing or excessive"));
+            return Err(Error::InvalidAccount(
+                "team name is empty or exceeds 256 bytes",
+            ));
         }
         let mut stored = Self::random(alias, account_alias, StoredTeamKind::Named)?;
         stored.name = Some(name.to_owned());
@@ -2287,6 +2293,75 @@ mod tests {
         assert!(validate_stored_team_rekey(&pending, "remote-team-rekey").is_err());
         pending.changes[1].verify_key = entity(foks_proto::ENTITY_PUK_VERIFY, 33, 0x3b);
         assert!(validate_stored_team_rekey(&pending, "remote-team-rekey").is_err());
+    }
+
+    #[test]
+    fn new_team_roots_share_discovery_without_sharing_root_writes() {
+        let environment = TestEnvironment::new().unwrap();
+        let _server = environment.start_server().unwrap();
+        let addresses = environment.addresses().unwrap();
+        let state = environment
+            .client_path("shared-root-policy", "state")
+            .unwrap();
+        let root = environment
+            .client_path("shared-root-policy", "probe-root.der")
+            .unwrap();
+        environment.write_probe_root(&root).unwrap();
+        crate::ClientCredentials::initialize(&state, crate::CredentialBackend::PrivateFile)
+            .unwrap();
+        let mut registry = crate::ProfileRegistry::open(&state).unwrap();
+        registry
+            .add(crate::Profile {
+                name: "local".to_owned(),
+                probe: format!("localhost:{}", addresses.probe.port()),
+                protocol: crate::ProtocolPolicy::V019,
+                trust: crate::TrustRoot::CertificateDer { path: root },
+            })
+            .unwrap();
+        let profile = crate::ProfileSession::open(&registry, "local").unwrap();
+        let credentials = crate::ClientCredentials::open(&state).unwrap();
+        let master = credentials.master_key().unwrap();
+        credentials
+            .with_checked_session(&profile, |session| {
+                session.probe_and_pin()?;
+                let mut store = EncryptedFileSecretStore::open(
+                    &session.paths().credential_store,
+                    crate::derive_vault_key(&master),
+                )?;
+                let mut vault = AccountVault::new(&mut store);
+                session.create_account(
+                    "owner",
+                    "rootpolicyowner",
+                    "laptop",
+                    "owner@example.test",
+                    "",
+                    None,
+                    &mut vault,
+                    &master,
+                )?;
+                session.create_named_team(
+                    "owner",
+                    "named",
+                    "shared-root-policy",
+                    &mut vault,
+                    &master,
+                )?;
+                session.create_adhoc_team("owner", "adhoc", &mut vault, &master)?;
+                let host = session.pinned_host()?;
+                let cache = foks_client_db::SoftStateStore::open(&session.paths().soft_database)?;
+                for alias in ["named", "adhoc"] {
+                    let team = vault.team(alias)?;
+                    let tree = cache.tree(host.host_id().as_bytes(), &team.team_id)?;
+                    assert_eq!(tree.len(), 1);
+                    let root = foks_proto::KvRoot::decode(&tree[0].root_bytes)?;
+                    let directory = foks_proto::KvDirectoryPair::decode(&tree[0].directory_bytes)?;
+                    assert_eq!(root.key.role, Role::member(-0x4000));
+                    assert_eq!(directory.active.key.role, Role::member(-0x4000));
+                    assert_eq!(directory.active.write_role, Role::OWNER);
+                }
+                Ok::<_, crate::Error>(())
+            })
+            .unwrap();
     }
 
     #[test]

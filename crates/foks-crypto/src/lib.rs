@@ -98,6 +98,8 @@ pub enum Error {
     Passphrase,
     #[error("FOKS passphrase stretching failed")]
     PassphraseStretch,
+    #[error("OS randomness is unavailable")]
+    Entropy,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -253,13 +255,10 @@ impl KvKeySet {
 
     /// Seals a v0.1.9 small-file or symlink payload.
     ///
-    /// `id.object_id()` supplies the protocol's deterministic Secretbox nonce
-    /// suffix and must be freshly generated for every distinct plaintext under
-    /// this key, including across the file and symlink variants. The official
-    /// Go and Rust client write paths enforce that invariant. The server's
-    /// full-node-ID immutability additionally prevents same-type overwrites,
-    /// but callers constructing IDs directly must preserve cross-type
-    /// object-ID uniqueness themselves.
+    /// `id.object_id()` supplies the deterministic Secretbox nonce suffix and
+    /// must be freshly generated for every distinct plaintext under this key.
+    /// Callers constructing IDs directly must ensure object ID uniqueness
+    /// across file and symlink variants.
     pub fn seal_small_file(
         &self,
         id: KvNodeId,
@@ -427,10 +426,8 @@ pub fn open_kv_dirent_name(directory_seed: &SecretSeed, dirent: &KvDirent) -> Re
 
 /// Opens the large-file chunk at `requested_offset`.
 ///
-/// The returned offset is authenticated only indirectly through the nonce, so
-/// require it to match the requested database key before attempting to open
-/// the ciphertext. This keeps a remote peer from changing which authenticated
-/// chunk range the caller accepts.
+/// Verifies the decrypted chunk offset against `requested_offset` before
+/// returning plaintext to prevent chunk substitution by a malicious peer.
 pub fn open_kv_chunk(
     file_seed: &SecretSeed,
     file_id: KvNodeId,
@@ -615,8 +612,8 @@ fn decode_with_redacted_trailing_seed(plaintext: &[u8]) -> Result<(Value, Secret
 /// SHA-512/256 over the 8-byte big-endian type ID and arbitrary bytes.
 ///
 /// This primitive does not validate that `object` is a signable Snowpack
-/// encoding. Protocol objects must use [`prefixed_hash_signable`] so hashes
-/// cannot cross the Go/Rust canonicalization boundary.
+/// encoding. Protocol objects must use [`prefixed_hash_signable`] to ensure
+/// canonical wire representation before hashing.
 pub fn prefixed_hash(type_id: u64, object: &[u8]) -> [u8; 32] {
     let mut hash = Sha512_256::new();
     hash.update(type_id.to_be_bytes());
@@ -626,9 +623,8 @@ pub fn prefixed_hash(type_id: u64, object: &[u8]) -> [u8; 32] {
 
 /// SHA-512/256 over a typed, signable Snowpack object.
 ///
-/// go-foks rejects `array16` values of length 16 through 31 before hashing.
-/// Apply the same recursive check here so a protocol object cannot acquire a
-/// Rust-only hash identity.
+/// Enforces canonical signable Snowpack rules before hashing to ensure
+/// cross-implementation digest consistency.
 pub fn prefixed_hash_signable(type_id: u64, canonical_object: &[u8]) -> Result<[u8; 32]> {
     foks_snowpack::validate_signable(canonical_object)?;
     Ok(prefixed_hash(type_id, canonical_object))
@@ -4159,10 +4155,8 @@ pub fn verify_typed(
     type_id: u64,
     canonical_object: &[u8],
 ) -> Result<()> {
-    // go-foks Verify2 rejects a signature whose signed object is not canonical
-    // before checking the signature itself, so a peer cannot present a
-    // non-canonical encoding (e.g. array16 with 16..=31 elements) that one
-    // implementation would accept and another reject.
+    // Verify that the signed object conforms to canonical signable encoding
+    // before evaluating the signature.
     foks_snowpack::validate_signable(canonical_object)?;
     let mut message = Vec::with_capacity(8 + canonical_object.len());
     message.extend(type_id.to_be_bytes());
@@ -4177,16 +4171,10 @@ pub fn verify_typed(
         Signature::Ecdsa(signature) if signer.entity_type() == foks_proto::ENTITY_YUBI => {
             let key = P256VerifyingKey::from_sec1_bytes(&signer.p256_key()?)
                 .map_err(|_| Error::PublicKey)?;
-            // ECDSA (P-256) signatures are malleable: this accepts both low-S and
-            // high-S forms. Rejecting high-S here is deliberately NOT done because
-            // YubiKey PIV hardware emits non-normalized (frequently high-S)
-            // signatures, so a strict check would fail real hardware and the
-            // v0.1.9 compatibility oracle. Exact signature bytes do contribute
-            // to link and receipt identity, but every mutation atomically binds
-            // its expected sequence, chain tail, and Merkle root. Alternate
-            // high-S/low-S forms are therefore competing proposals: only one
-            // can commit, and the other fails as stale rather than replaying the
-            // transition. Ed25519 uses verify_strict above.
+            // Accepts both low-S and high-S ECDSA signatures to accommodate
+            // YubiKey PIV hardware, which does not normalize S values. Mutation
+            // replay protection relies on chain sequence, previous hash, and
+            // Merkle root bindings rather than signature malleability resistance.
             let signature = P256Signature::from_der(signature).map_err(|_| Error::Verification)?;
             let digest = prefixed_hash_without_type(&message);
             key.verify_prehash(&digest, &signature)

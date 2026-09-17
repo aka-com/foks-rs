@@ -1,4 +1,4 @@
-//! v0.1.9 passphrase stretching and passphrase-encryption (PPE) ceremonies.
+//! Passphrase key stretching and passphrase-protected encryption (PPE) routines.
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use foks_proto::{
@@ -133,9 +133,9 @@ struct StretchedPassphrase {
     public: super::DevicePublicMaterial,
 }
 
-/// One stretched login credential reused for both challenge signing and PPE
-/// decryption. Keeping it across the RPC avoids running production Argon2id
-/// twice for one verification ceremony.
+/// Stretched login credential used for both challenge signing and PPE
+/// decryption, avoiding redundant Argon2id derivations within the same
+/// verification flow.
 pub struct PassphraseLoginCredential(StretchedPassphrase);
 
 impl std::fmt::Debug for PassphraseLoginCredential {
@@ -261,8 +261,8 @@ pub fn change_passphrase_with_puk(
     )
 }
 
-/// Reboxes PPE during an owner-PUK rotation without asking for the raw
-/// passphrase. This is the v0.1.9 revoke/rotation annex operation.
+/// Re-encrypts the PPE during owner PUK rotation without requiring the
+/// plaintext passphrase.
 pub fn rotate_passphrase_for_puk(
     uid: &EntityId,
     host: &EntityId,
@@ -285,7 +285,7 @@ pub fn rotate_passphrase_for_puk(
     )
 }
 
-/// Proves that the stored PPE recovery parcel is authenticated to the given
+/// Validates that the stored PPE recovery parcel is authenticated to the given
 /// owner PUK and that its encrypted SKMWK history is internally consistent.
 pub fn verify_passphrase_puk_recovery(
     uid: &EntityId,

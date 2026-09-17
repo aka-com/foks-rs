@@ -269,8 +269,9 @@ impl FoksClient {
         )
     }
 
-    /// Verifies and projects the complete reachable team KV tree under the
-    /// short-lived bearer token and PTKs returned by `load_and_pin_team`.
+    /// Verifies and projects the readable team KV tree under the short-lived
+    /// bearer token and PTKs returned by `load_and_pin_team`. Explicitly denied
+    /// children retain their authenticated dirents but no cached node payload.
     pub fn sync_team_kv(
         &self,
         host: &PinnedHost,
@@ -635,6 +636,7 @@ impl FoksClient {
                 let mut combined = BTreeMap::new();
                 let mut large_files: Vec<KvLargeFileStage> = Vec::new();
                 let mut visited = BTreeSet::new();
+                let mut inaccessible_directories = BTreeSet::new();
                 let mut projections = Vec::new();
                 let mut total_entries = 0usize;
                 // Large files stream directly into SQLite and therefore do
@@ -647,7 +649,15 @@ impl FoksClient {
                     if visited.len() > MAXIMUM_KV_DIRECTORIES {
                         return Err(Error::KvResponse("directory traversal limit exceeded"));
                     }
-                    let directory_bytes = fetch(auth, &KvRequest::Directory(directory_id))?;
+                    let directory_bytes = match fetch(auth, &KvRequest::Directory(directory_id)) {
+                        Err(error)
+                            if directory_id != root.root && is_kv_permission_denied(&error) =>
+                        {
+                            inaccessible_directories.insert(directory_id);
+                            continue;
+                        }
+                        result => result?,
+                    };
                     let directory = KvDirectoryPair::decode(&directory_bytes)?;
                     if directory.active.id != directory_id
                         || directory.active.status != KvDirectoryStatus::Active
@@ -751,6 +761,7 @@ impl FoksClient {
                                 continue;
                             }
                             let mut projected = KvProjectedEntry {
+                                readable: true,
                                 dirent_id: entry.id,
                                 node_id: entry.value.0,
                                 version: entry.version,
@@ -776,7 +787,17 @@ impl FoksClient {
                                     let (boxed, exact) = match extended.remove(&position) {
                                         Some(boxed) => (boxed, None),
                                         None => {
-                                            let bytes = fetch(auth, &KvRequest::Node(entry.value))?;
+                                            let bytes =
+                                                match fetch(auth, &KvRequest::Node(entry.value)) {
+                                                    Err(error)
+                                                        if is_kv_permission_denied(&error) =>
+                                                    {
+                                                        projected.readable = false;
+                                                        entries.push(projected);
+                                                        continue;
+                                                    }
+                                                    result => result?,
+                                                };
                                             let KvNode::SmallFile(boxed) = KvNode::decode(&bytes)?
                                             else {
                                                 return Err(Error::KvResponse(
@@ -813,7 +834,14 @@ impl FoksClient {
                                     }
                                 }
                                 KvNodeType::Symlink => {
-                                    let bytes = fetch(auth, &KvRequest::Node(entry.value))?;
+                                    let bytes = match fetch(auth, &KvRequest::Node(entry.value)) {
+                                        Err(error) if is_kv_permission_denied(&error) => {
+                                            projected.readable = false;
+                                            entries.push(projected);
+                                            continue;
+                                        }
+                                        result => result?,
+                                    };
                                     let KvNode::Symlink(boxed) = KvNode::decode(&bytes)? else {
                                         return Err(Error::KvResponse(
                                             "symlink node type mismatch",
@@ -840,7 +868,14 @@ impl FoksClient {
                                     }
                                 }
                                 KvNodeType::File => {
-                                    let bytes = fetch(auth, &KvRequest::Node(entry.value))?;
+                                    let bytes = match fetch(auth, &KvRequest::Node(entry.value)) {
+                                        Err(error) if is_kv_permission_denied(&error) => {
+                                            projected.readable = false;
+                                            entries.push(projected);
+                                            continue;
+                                        }
+                                        result => result?,
+                                    };
                                     let KvNode::File(metadata) = KvNode::decode(&bytes)? else {
                                         return Err(Error::KvResponse(
                                             "large-file node type mismatch",
@@ -957,8 +992,20 @@ impl FoksClient {
                         directory_bytes,
                         entries,
                     };
-                    combined.insert(directory_id, projection.clone());
                     projections.push(projection);
+                }
+                // Keep every authenticated dirent in version/name checks, including
+                // boundaries whose node bodies this actor cannot read.
+                for projection in &mut projections {
+                    for entry in &mut projection.entries {
+                        if entry.node_id[0] == KvNodeType::Directory as u8
+                            && inaccessible_directories
+                                .contains(&KvNodeId(entry.node_id).object_id())
+                        {
+                            entry.readable = false;
+                        }
+                    }
+                    combined.insert(projection.directory_id, projection.clone());
                 }
                 let combined = reachable_kv_tree(root.root, combined)?;
                 let final_versions = kv_version_vector(root.version, &combined);
@@ -979,6 +1026,15 @@ impl FoksClient {
             "KV cache changed during three synchronization attempts",
         ))
     }
+}
+
+// Only explicit authorization refusal is an inaccessible child. Integrity,
+// decoding, missing-key, transport, and not-found errors still fail closed.
+fn is_kv_permission_denied(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1013, .. })
+    )
 }
 
 pub(crate) fn read_kv_node_with_fetch<F>(
@@ -1190,5 +1246,45 @@ mod capacity_tests {
             validate_large_file_append(u64::MAX, 1),
             Err(Error::KvResponse("file size overflow"))
         ));
+    }
+}
+
+#[cfg(test)]
+mod permission_tests {
+    use super::*;
+
+    #[test]
+    fn only_explicit_permission_denials_are_inaccessible_children() {
+        for (status, denied) in [
+            (
+                foks_rpc::RpcStatus::PermissionDenied("restricted".to_owned()),
+                true,
+            ),
+            (foks_rpc::RpcStatus::KvNoEnt, false),
+            (
+                foks_rpc::RpcStatus::KvPermission {
+                    operation: 1,
+                    resource: 1,
+                },
+                false,
+            ),
+        ] {
+            let frame = foks_rpc::encode_status_response_at(&status, 1).unwrap();
+            let error = Error::Rpc(
+                foks_rpc::read_response(
+                    &mut std::io::Cursor::new(frame),
+                    foks_rpc::DEFAULT_MAX_FRAME_LENGTH,
+                    1,
+                )
+                .unwrap_err(),
+            );
+            assert_eq!(is_kv_permission_denied(&error), denied);
+        }
+        assert!(!is_kv_permission_denied(&Error::KvResponse(
+            "missing or duplicate PUK/PTK generation"
+        )));
+        assert!(!is_kv_permission_denied(&Error::KvResponse(
+            "malformed node"
+        )));
     }
 }

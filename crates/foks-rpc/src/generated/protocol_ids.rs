@@ -112,7 +112,7 @@ pub const LOG_SEND_INIT_METHOD_POSITION: u64 = 1;
 pub const LOG_SEND_INIT_FILE_METHOD_POSITION: u64 = 2;
 pub const LOG_SEND_UPLOAD_BLOCK_METHOD_POSITION: u64 = 3;
 
-/// Reports whether go-foks sends this protocol without its argument header.
+/// Reports whether this protocol omits its argument header.
 pub const fn is_headerless_argument_protocol(protocol_id: u64) -> bool {
     matches!(
         protocol_id,
@@ -120,7 +120,7 @@ pub const fn is_headerless_argument_protocol(protocol_id: u64) -> bool {
     )
 }
 
-/// Reports whether go-foks sends this protocol without its result header.
+/// Reports whether this protocol omits its result header.
 pub const fn is_headerless_result_protocol(protocol_id: u64) -> bool {
     matches!(
         protocol_id,

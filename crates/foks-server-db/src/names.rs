@@ -133,8 +133,8 @@ fn self_token_matches(
     uid: &[u8],
     self_token: &[u8; 17],
 ) -> Result<bool> {
-    // Go retains self-view tokens after revocation so the revoked device can
-    // still reload and verify the public chain that revoked it.
+    // Retain self-view tokens after revocation so a revoked device can
+    // reload and verify the chain link that revoked it.
     Ok(connection
         .query_row(
             "SELECT 1 FROM devices WHERE uid = ?1 AND self_token = ?2",

@@ -57,7 +57,7 @@ namespace/root mutations use a generic hard-state write-ahead journal. Exact
 retry material is committed first through the caller's `ProtectedMutationStore`
 and is fingerprint-bound to the public SQLite row. `Prepared` is the only state
 that may submit; once an operation becomes `Submitting`, recovery only compares
-authenticated server state and never blindly replays an ambiguous request.
+authenticated server state and does not replay an ambiguous request.
 `EncryptedFileMutationStore` is the production local adapter: the standalone
 application supplies its 32-byte master key from Keychain or Secret Service,
 while the adapter atomically stores individually authenticated
@@ -139,7 +139,7 @@ response in-process by reading the stored parcel back and requiring an exact
 match. They do not yet journal the intended PPE update in protected durable
 client state: if the client process terminates after the server commit, the user must
 inspect or verify the active passphrase before deciding whether to rotate it
-again rather than blindly repeating a change.
+again rather than repeating a change unverified.
 
 `rotate_software_puks` performs the corresponding membership-preserving
 operation. Its input must be a complete ordered role prefix through the
@@ -238,7 +238,7 @@ This standalone workflow is deliberately operator-mediated: one operator must
 hold credentials for both profiles, the remote team's source role is pinned to
 `ADMIN`, and the client constructs the join RSVP needed by the server-side
 tuple. It is **not** Go v0.1.9's three-party invite/RSVP/inbox consent flow and
-must not be presented as wire-compatible implementation of that flow.
+must not be presented as a wire-compatible implementation of that flow.
 
 The hash domain `0x45cf32f37d38a811` is used only for one-way local
 storage/journal identity of the federation permission bearer. It is a

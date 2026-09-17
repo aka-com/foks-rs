@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
+<!--
+  The polkit action behind the FOKS desktop app lock.
+
+  Installs to /usr/share/polkit-1/actions/org.foks.desktop.policy. If not
+  registered, polkit denies authorization requests and the app reports
+  app lock as unavailable.
+
+  Requires system installation permissions outside $HOME.
+
+  allow_active is set to auth_self to authenticate the current active console
+  user without requiring administrator privileges. allow_inactive and allow_any
+  are disallowed for non-active sessions.
+-->
+<policyconfig>
+  <vendor>FOKS</vendor>
+  <action id="org.foks.desktop.unlock">
+    <description>Unlock FOKS</description>
+    <message>Authenticate to unlock FOKS and access your vault.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_self</allow_active>
+    </defaults>
+  </action>
+</policyconfig>

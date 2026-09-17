@@ -17,6 +17,14 @@ use foks_agent_proto::{
 
 const TEAM_ID: &str = "140000000000000000000000000000000000000000000000000000000000000000";
 
+/// Process deadline for backend transcript runs, generous enough to accommodate
+/// unoptimized debug-build stream decoding under test execution.
+const BACKEND_DEADLINE: Duration = Duration::from_secs(180);
+
+/// Per-frame socket timeout applied to individual frame transfers to detect
+/// unresponsive peer connections quickly.
+const FRAME_TIMEOUT: Duration = Duration::from_secs(30);
+
 fn backend() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_foks-desktop-backend"))
 }
@@ -42,7 +50,21 @@ fn run_backend(socket: &Path, arguments: &[OsString]) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(15);
+    // Drain stdout and stderr concurrently with child execution to prevent
+    // pipe buffer exhaustion stalls before the deadline expires.
+    let mut child_stdout = child.stdout.take().unwrap();
+    let mut child_stderr = child.stderr.take().unwrap();
+    let drain_stdout = std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+        child_stdout.read_to_end(&mut buffer).unwrap();
+        buffer
+    });
+    let drain_stderr = std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+        child_stderr.read_to_end(&mut buffer).unwrap();
+        buffer
+    });
+    let deadline = Instant::now() + BACKEND_DEADLINE;
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
@@ -50,38 +72,23 @@ fn run_backend(socket: &Path, arguments: &[OsString]) -> Output {
         if Instant::now() >= deadline {
             child.kill().unwrap();
             let _ = child.wait();
-            panic!("backend transcript exceeded its 15 second deadline");
+            panic!(
+                "backend transcript exceeded its {} second deadline",
+                BACKEND_DEADLINE.as_secs()
+            );
         }
         std::thread::sleep(Duration::from_millis(2));
     };
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    child
-        .stdout
-        .take()
-        .unwrap()
-        .read_to_end(&mut stdout)
-        .unwrap();
-    child
-        .stderr
-        .take()
-        .unwrap()
-        .read_to_end(&mut stderr)
-        .unwrap();
     Output {
         status,
-        stdout,
-        stderr,
+        stdout: drain_stdout.join().unwrap(),
+        stderr: drain_stderr.join().unwrap(),
     }
 }
 
 fn read_frame(stream: &mut UnixStream) -> Vec<u8> {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(15)))
-        .unwrap();
-    stream
-        .set_write_timeout(Some(Duration::from_secs(15)))
-        .unwrap();
+    stream.set_read_timeout(Some(FRAME_TIMEOUT)).unwrap();
+    stream.set_write_timeout(Some(FRAME_TIMEOUT)).unwrap();
     let mut prefix = [0u8; 4];
     stream.read_exact(&mut prefix).unwrap();
     let length = u32::from_be_bytes(prefix) as usize;
@@ -93,7 +100,7 @@ fn read_frame(stream: &mut UnixStream) -> Vec<u8> {
 
 fn accept_bounded(listener: &UnixListener) -> UnixStream {
     listener.set_nonblocking(true).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + FRAME_TIMEOUT;
     loop {
         match listener.accept() {
             Ok((stream, _)) => {
@@ -103,7 +110,8 @@ fn accept_bounded(listener: &UnixListener) -> UnixStream {
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 assert!(
                     Instant::now() < deadline,
-                    "backend did not connect within 15 seconds"
+                    "backend did not connect within {} seconds",
+                    FRAME_TIMEOUT.as_secs()
                 );
                 std::thread::sleep(Duration::from_millis(2));
             }
