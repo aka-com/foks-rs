@@ -313,16 +313,12 @@ function PreferencesSection({
       {/* The passphrase sheet defaults to Change and provides Set and Verify
           through the same segmented control. */}
       <p className="fn">
-        Set, change or verify an account's passphrase with its server.
+        Set, change or verify an account's passphrase on its server.
       </p>
       <SectionLabel>Desktop alerts</SectionLabel>
       <NotificationSettings />
       <SectionLabel>Appearance</SectionLabel>
       <RailColorPicker />
-      <p className="fn">
-        The navigation rail colour. This preference stays on this Mac and does
-        not sync.
-      </p>
     </>
   );
 }
@@ -456,9 +452,11 @@ function ThisMacSection({
               ? 'Starting the FOKS agent'
               : agentLifecycleLabel(agentLifecycle)}
           </span>
-          <small>
-            The local background agent must be connected to use FOKS.
-          </small>
+          {ready ? null : (
+            <small>
+              The local background agent must be connected to use FOKS.
+            </small>
+          )}
         </InsetRow>
         <InsetRow
           className="line"

@@ -126,7 +126,7 @@ test('the account panel keeps every workflow row from the accounts pane', async 
   // below them.
   for (const name of [
     'Change…',
-    'Settings › Servers',
+    'Settings › Servers ›',
     'Devices ›',
     'Teams ›',
     'Bot accounts',
@@ -139,7 +139,7 @@ test('the account panel keeps every workflow row from the accounts pane', async 
       1,
       `expected one "${name}" button`,
     );
-  for (const name of ['Settings › Servers', 'Devices ›', 'Teams ›'])
+  for (const name of ['Settings › Servers ›', 'Devices ›', 'Teams ›'])
     assert.ok(
       rendered
         .getByRole('button', { name })
@@ -746,7 +746,8 @@ test('local alias appears in account controls while commands keep the original a
       },
     }),
   });
-  assert.ok(rendered.getAllByText('Private account').length >= 2);
+  // The header no longer carries the alias as a chip; the Shown as row does.
+  assert.ok(rendered.getAllByText('Private account').length >= 1);
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Switch account' }));
   assert.ok(ui.within(rendered.getByRole('menu')).getByText('Private account'));
   ui.fireEvent.keyDown(rendered.getByRole('menu'), { key: 'Escape' });

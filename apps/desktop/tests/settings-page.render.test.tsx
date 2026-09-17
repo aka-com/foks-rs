@@ -229,7 +229,7 @@ test('Preferences holds one passphrase row per account, the desktop alert prefer
   }
   assert.ok(
     rendered.getByText(
-      "Set, change or verify an account's passphrase with its server.",
+      "Set, change or verify an account's passphrase on its server.",
     ),
   );
   assert.ok(
@@ -571,11 +571,11 @@ test('This Mac displays application, agent, and data sections above local reset'
   assert.ok(
     rendered.getByText(/To reset one server, select it in the Servers list/),
   );
-  // The Status row is a value over a sentence: its label reads against the
-  // first line, which a `.middle` inset would centre away from.
+  // While disconnected, the Status row is multi-line and top-aligned. When
+  // connected, it contains only the status value.
   const status = rendered.getByText('Status').closest('.fr');
   assert.ok(status);
-  assert.ok(status.querySelector('.v small'));
+  assert.equal(status.querySelector('.v small'), null);
   const agentInset = status.closest('.settings-inset');
   assert.ok(agentInset);
   assert.equal(agentInset.classList.contains('middle'), false);

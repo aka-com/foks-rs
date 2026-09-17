@@ -404,13 +404,9 @@ export function PeopleScreen({
   }, [selected?.id, setSheet]);
 
   // The page's header is the account the page is about: its mark, its username
-  // as the title, and the server, the server's trust state and the local alias
-  // on the line under it. The branches that name no account — an address
+  // as the title, and the server on the line under it. The branches that name no account — an address
   // naming one this Mac no longer holds, or no account at all — have no
   // identity to state, so they keep the tab's own name as the title.
-  const headerServer = selected
-    ? snapshot.servers.find((entry) => entry.id === selected.server)
-    : undefined;
   const headerUsername = selected ? usernameOf(snapshot, selected) : undefined;
   const identity = selected
     ? {
@@ -420,13 +416,7 @@ export function PeopleScreen({
         ),
         sub: (
           <>
-            {/* The trust state qualifies the server, so it reads on the same
-                run of text rather than as a chip of its own. */}
-            <span>
-              on {serverName(snapshot, selected)}
-              {headerServer?.trust.status === 'verified' ? ' · verified' : ''}
-            </span>
-            <Chip>{localAliasOf(snapshot, selected)}</Chip>
+            <span>{serverName(snapshot, selected)}</span>
             {stopped.stopped ? (
               <Chip tone="warn">{storeDescription(snapshot, selected)}</Chip>
             ) : null}
@@ -719,7 +709,7 @@ function AccountPanel({
                 })
               }
             >
-              Settings › Servers
+              Settings › Servers ›
             </Button>
           }
         >

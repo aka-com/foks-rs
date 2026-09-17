@@ -55,6 +55,11 @@ function stateChip(node: HTMLElement): string | null {
   return node.querySelector('.tail .chip.warn')?.textContent ?? null;
 }
 
+/** The chip naming this account's role in a Teams row's team. */
+function roleChip(node: HTMLElement): string | null {
+  return node.querySelector('.tail .chip.role')?.textContent ?? null;
+}
+
 /** The Chat/Share pill naming a Teams row's kind. */
 function kindChip(node: HTMLElement): string | null {
   return node.querySelector('.tail .chip.kind')?.textContent ?? null;
@@ -195,17 +200,20 @@ test('a Teams row says how many requests are waiting on it', async () => {
 test('a Teams row displays the server, member count, and user role', async () => {
   await teams();
   const eng = row('Engineering');
-  // The caption is built only from catalog facts: the server, the roster the
-  // team's own details call loaded on refresh (every party, the way the team
-  // page's own summary counts them), and the role this account holds.
+  // The caption is built only from catalog facts: the server and the roster
+  // the team's own details call loaded on refresh (every party, the way the
+  // team page's own summary counts them). The role this account holds is a
+  // chip at the row's end.
   assert.equal(
     eng.querySelector('.name small')?.textContent,
-    'Acme · 6 members · Admin',
+    'Acme · 6 members',
   );
+  assert.equal(roleChip(eng), 'Admin');
   assert.equal(
     row('Household').querySelector('.name small')?.textContent,
-    'Personal server · 2 members · Owner',
+    'Personal server · 2 members',
   );
+  assert.equal(roleChip(row('Household')), 'Owner');
   // No item-readability count is drawn on the list.
   assert.equal(document.body.textContent?.includes('items readable'), false);
 });
@@ -304,8 +312,8 @@ function menuItem(owner: string, label: string): HTMLButtonElement {
 }
 
 /**
- * One of the two Add people choices in a row's open menu, found by its bold
- * label, since the item's text runs on into the line that explains it.
+ * One of the two Add people choices in a row's open menu, found by its label,
+ * since the item's text runs on into the line that explains it.
  */
 function choiceItem(owner: string, label: string): HTMLButtonElement {
   const menu = document.querySelector(
@@ -314,7 +322,7 @@ function choiceItem(owner: string, label: string): HTMLButtonElement {
   assert.ok(menu, `no open menu for ${owner}`);
   const node = [...menu.querySelectorAll<HTMLButtonElement>('button')].find(
     (candidate) =>
-      candidate.querySelector('.menu-choice b')?.textContent === label,
+      candidate.querySelector('.menu-choice > span')?.textContent === label,
   );
   assert.ok(node, `no Add people choice labelled ${label} for ${owner}`);
   return node;
@@ -350,7 +358,10 @@ test('a Teams row menu says why an action does not apply', async () => {
     user.querySelector('.menu-choice small')?.textContent,
     'Invite by their username',
   );
-  const federated = choiceItem('Engineering', 'Add a team from another server…');
+  const federated = choiceItem(
+    'Engineering',
+    'Add a team from another server…',
+  );
   assert.equal(inert(federated), false);
   assert.equal(
     federated.querySelector('.menu-choice small')?.textContent,
@@ -474,8 +485,9 @@ test('an unavailable account explains why discovery is disabled', async () => {
   assert.equal(kindChip(eng), 'Chat');
   assert.equal(
     eng.querySelector('.name small')?.textContent,
-    'Acme · 6 members · Admin',
+    'Acme · 6 members',
   );
+  assert.equal(roleChip(eng), 'Admin');
   const trigger = rendered.getByRole('button', { name: 'Find teams' });
   assert.equal(trigger.getAttribute('aria-expanded'), 'false');
   ui.fireEvent.click(trigger);

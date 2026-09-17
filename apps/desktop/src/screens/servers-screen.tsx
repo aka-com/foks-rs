@@ -633,7 +633,7 @@ function ServerRow({
             </Button>
           ) : null}
           <Button size="sm" onClick={() => onOpen(server.id)}>
-            Open
+            Manage
           </Button>
         </>
       }
@@ -893,10 +893,18 @@ function ServerBody({
   const account = agentSnapshot.accounts.find(
     (item) => item.server === server.id,
   );
-  const groups = agentSnapshot.stores.filter(
-    (store): store is TeamStore =>
-      store.kind === 'team' && store.server === server.id,
-  );
+  // Teams that need attention — setup incomplete, and the like — list after
+  // the ones in a normal state, so the working teams read first.
+  const groups = agentSnapshot.stores
+    .filter(
+      (store): store is TeamStore =>
+        store.kind === 'team' && store.server === server.id,
+    )
+    .sort(
+      (a, b) =>
+        Number(storeAttentionState(agentSnapshot, a) !== 'normal') -
+        Number(storeAttentionState(agentSnapshot, b) !== 'normal'),
+    );
   const subtitle = `Profile ${server.id}${account && !locked ? ` · signed in as ${account.username}` : ''}`;
   const hasHost = Boolean(host) && state !== 'unavailable';
 
@@ -912,7 +920,10 @@ function ServerBody({
           <b>{serverDisplayName(server)}</b>
           <small>{subtitle}</small>
         </span>
-        <StatusChip state={state} />
+        {/* The page's own mark already reads as a healthy server; only an
+            abnormal state is worth a chip beside it. The list row keeps its
+            Checked chip, where the mark is smaller. */}
+        {state === 'checked' ? null : <StatusChip state={state} />}
         <Button size="sm" onClick={onRename}>
           Rename…
         </Button>
@@ -953,12 +964,8 @@ function ServerBody({
               {checked
                 ? 'Last checked: now. Trust history unchanged.'
                 : 'Identity pinned on this device.'}
-              <small>History is checked before every operation.</small>
             </InsetRow>
-            <InsetRow label="Expires">
-              {expires(expiry)}
-              <small>Automatically renewed in the background.</small>
-            </InsetRow>
+            <InsetRow label="Expires">{expires(expiry)}</InsetRow>
           </>
         ) : state === 'pending' ? (
           <InsetRow label="Status">Verifying server status…</InsetRow>
@@ -969,7 +976,6 @@ function ServerBody({
         ) : state === 'lapsed' ? (
           <InsetRow label="Expired">
             <b className="danger-title">{expires(expiry)}</b>
-            <small>Automatically renewed in the background.</small>
           </InsetRow>
         ) : state === 'unavailable' ? (
           <InsetRow label="Expires">
@@ -1028,10 +1034,6 @@ function ServerBody({
               <span className="namechip">
                 <b>{account.username}</b> <Chip>{account.alias}</Chip>
               </span>
-              <small>
-                Your account on this server. The local alias is never sent to
-                it.
-              </small>
             </span>
           </InsetRow>
         ) : (

@@ -215,7 +215,6 @@ function TeamRow({
   const caption = [
     displayServerName(snapshot, store),
     rosterKnown ? plural(partiesOf(snapshot, store.id).length, 'member') : null,
-    role ? roleName(role) : null,
   ]
     .filter((part): part is string => Boolean(part))
     .join(' · ');
@@ -236,6 +235,8 @@ function TeamRow({
           <small>{caption}</small>
         </span>
         <span className="tail">
+          {/* This Mac's role in the team, a chip at the end of the row. */}
+          {role ? <Chip className="role">{roleName(role)}</Chip> : null}
           {abnormal ? <Chip tone="warn">{description}</Chip> : null}
           {/* The band above the list names the team; the row says it too,
               so on a long list the reader need not match the two by name. */}
@@ -430,7 +431,7 @@ export function TeamsScreen({
                 }}
               >
                 <span className="menu-choice">
-                  <b>Add a user…</b>
+                  <span>Add a user…</span>
                   <small>Invite by their username</small>
                 </span>
               </MenuItem>
@@ -443,7 +444,7 @@ export function TeamsScreen({
                 }}
               >
                 <span className="menu-choice">
-                  <b>Add a team from another server…</b>
+                  <span>Add a team from another server…</span>
                   <small>Add a remote team via federation</small>
                 </span>
               </MenuItem>

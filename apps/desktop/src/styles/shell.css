@@ -220,6 +220,8 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 /* Page header */
 .path{display:flex;align-items:center;gap:10px;padding:14px 20px 10px;background:#fff}
 .path.ruled{border-bottom:1px solid var(--line-soft)}
+/* Two-line header padding */
+.path.ruled:has(.loc-copy>.sub){padding:12px 20px}
 .header-action{display:flex;align-items:center;gap:6px;margin-left:auto;flex:none}
 .header-action .btn.cap{height:28px;font-size:13px;flex:none}
 /* Header title layout */
@@ -275,8 +277,12 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 /* Multi-line menu choice */
 .menu button .menu-choice{display:flex;flex-direction:column;gap:1px;min-width:0}
 .menu button .menu-choice small{font-weight:400;color:var(--muted);white-space:normal}
+/* Scoped search */
 .toolbar .search{width:160px;flex:0 1 160px}
-.toolbar .search input{display:block}
+.toolbar .search input{display:block;padding-left:34px;border-color:transparent;font-size:13px;color:var(--ink);transition:background .12s ease,border-color .12s ease}
+.toolbar .search input::placeholder{color:var(--muted)}
+.toolbar .search input:hover:not(:focus){background:var(--btn-hover);border-color:var(--line-mid)}
+.toolbar .search input:focus{border-color:var(--accent-border)}
 .menu .mark{color:var(--muted);font-size:15px;margin-right:2px}
 .menu button.on .mark{color:inherit}
 .menu .cap{font-size:12px;color:var(--muted);padding:6px 9px 4px}

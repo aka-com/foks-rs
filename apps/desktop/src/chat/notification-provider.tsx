@@ -266,10 +266,6 @@ export function NotificationSettings({
           </select>
         </label>
       )}
-      <p>
-        While unlocked and running. Muted and hidden channels stay silent.
-        Settings do not sync.
-      </p>
       {error && <p role="alert">{error}</p>}
     </div>
   );
