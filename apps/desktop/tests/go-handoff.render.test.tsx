@@ -185,9 +185,7 @@ for (const notifyGlobally of [false, true]) {
       await ui.act(async () => {
         releaseCatalog?.();
       });
-      await ui.waitFor(() =>
-        assert.ok(rendered.getByText('How would you like to start?')),
-      );
+      await ui.waitFor(() => assert.ok(rendered.getByText('Set up FOKS')));
       assert.equal(discoveries, 2);
       assert.equal(initializations, 1);
       assert.equal(notifications, notifyGlobally ? 1 : 0);
@@ -344,9 +342,7 @@ test('discovers Go CLI profile in StrictMode and passes profile credentials to s
       }),
     ),
   );
-  await ui.waitFor(() =>
-    assert.ok(rendered.getByText('How would you like to start?')),
-  );
+  await ui.waitFor(() => assert.ok(rendered.getByText('Set up FOKS')));
   assert.equal(
     scans,
     1,
@@ -416,11 +412,12 @@ test('the start fork nests the CLI account list under the existing-account radio
       }),
     }),
   );
-  await view.findByRole('heading', { name: 'How would you like to start?' });
-  assert.ok(view.getByText(/already has FOKS accounts in the official CLI/));
+  await view.findByRole('heading', { name: 'Set up FOKS' });
+  // The lead is the same sentence however many candidates were found.
+  assert.ok(view.getByText(/A FOKS CLI account was found on this Mac/));
   const fork = view.getByRole('radiogroup', { name: 'How to start' });
   const existing = ui.within(fork).getByRole('radio', {
-    name: /^Continue with an existing account/,
+    name: /^Use an existing account/,
   });
   const fresh = ui.within(fork).getByRole('radio', {
     name: /^Create a new account/,
@@ -435,6 +432,14 @@ test('the start fork nests the CLI account list under the existing-account radio
   assert.ok(fork.contains(accounts), 'the list is nested in the fork');
   assert.ok(accounts.classList.contains('nested'));
   assert.equal(ui.within(accounts).getAllByRole('radio').length, 2);
+  // Each row is a two-line entry: the name, then server, role and storage.
+  const texts = [...accounts.querySelectorAll('.go-account-text')];
+  assert.equal(texts.length, 2);
+  assert.match(texts[0].querySelector('b')?.textContent ?? '', /^cli-/);
+  assert.match(
+    texts[0].querySelector('small')?.textContent ?? '',
+    /· (Account owner|Member) · (Keychain|Local) storage$/,
+  );
   assert.equal(primary().disabled, true);
   assert.equal(
     view.queryByRole('button', { name: 'Create a new account' }),
@@ -458,10 +463,7 @@ test('the start fork nests the CLI account list under the existing-account radio
   ui.fireEvent.click(primary());
   // Continue with the chosen account leaves for the server step.
   assert.ok(view.getByRole('button', { name: 'Use the official FOKS server' }));
-  assert.equal(
-    view.queryByRole('heading', { name: 'How would you like to start?' }),
-    null,
-  );
+  assert.equal(view.queryByRole('heading', { name: 'Set up FOKS' }), null);
 });
 
 test('disables account selection and dialog dismissal while server verification is pending', async () => {
@@ -830,11 +832,9 @@ test('first-run account navigation, server edits, and connection errors stay sco
   assert.ok(view.queryByText(/Already using FOKS/) === null);
   assert.ok(view.queryByText(/You’ll need/) === null);
   ui.fireEvent.click(view.getByRole('button', { name: 'Back' }));
-  assert.ok(
-    view.getByRole('heading', { name: 'How would you like to start?' }),
-  );
+  assert.ok(view.getByRole('heading', { name: 'Set up FOKS' }));
   ui.fireEvent.click(
-    view.getByRole('radio', { name: /^Continue with an existing account/ }),
+    view.getByRole('radio', { name: /^Use an existing account/ }),
   );
   ui.fireEvent.click(view.getByRole('radio', { name: /cli-owner/ }));
   ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));

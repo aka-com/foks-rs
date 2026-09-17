@@ -41,15 +41,22 @@ export function GoProfileChooser({
               disabled={unavailable}
               onChange={() => onSelect(candidate)}
             />
-            <span className="go-account-name">
-              {candidate.username ?? 'Unknown account'}
-            </span>
-            <span className="go-account-detail">
-              <span>
-                {candidate.serverHint ??
-                  `Server (${shortId(candidate.hostId)})`}
-              </span>
+            {/* Two-line row layout matching radio card title and detail:
+                account name followed by server, role, and storage type.
+                Profiles without a username display the account ID in the
+                primary line. */}
+            <span className="go-account-text">
+              <b>
+                {candidate.username ?? (
+                  <>
+                    Account <code>{shortId(candidate.userId)}</code>
+                  </>
+                )}
+              </b>
               <small>
+                {candidate.serverHint ??
+                  `Server (${shortId(candidate.hostId)})`}{' '}
+                ·{' '}
                 {candidate.role.toLowerCase() === 'owner'
                   ? 'Account owner'
                   : 'Member'}{' '}

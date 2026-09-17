@@ -543,9 +543,9 @@ function FirstRunSession({
   );
   const goCandidateExplicit = useRef(false);
   const [goChooserDismissed, setGoChooserDismissed] = useState(false);
-  // The fork on "How would you like to start?": continue with a CLI account
-  // or create a new one. The page exists only when candidates were found, so
-  // the existing account is the default.
+  // The fork on "Set up FOKS": use a CLI account or create a new one. The
+  // page exists only when candidates were found, so the existing account is
+  // the default.
   const [goStart, setGoStart] = useState<'existing' | 'new'>('existing');
   const [goScanError, setGoScanError] = useState<string | null>(null);
   const [goScanAttempt, setGoScanAttempt] = useState(0);
@@ -742,7 +742,7 @@ function FirstRunSession({
       ) ?? [],
     [goDiscovery],
   );
-  // On "How would you like to start?", a single usable candidate is selected
+  // On "Set up FOKS", a single usable candidate is selected
   // without a click. `goCandidateExplicit` is set when the user picks a
   // candidate or continues with the preselected one.
   const goChooserOpen =
@@ -2799,20 +2799,18 @@ function FirstRunSession({
     );
   else if (goChooserOpen)
     content = (
-      <Pane title="How would you like to start?" header={false} wide>
-        <h1>How would you like to start?</h1>
+      <Pane title="Set up FOKS" header={false} wide>
+        <h1>Set up FOKS</h1>
         <p className="lead">
-          This Mac already has{' '}
-          {goCandidates.length > 1 ? 'FOKS accounts' : 'a FOKS account'} in the
-          official CLI. You can bring {goCandidates.length > 1 ? 'one' : 'it'}{' '}
-          into this app, or set up a new one.
+          A FOKS CLI account was found on this Mac. You can use it here or set
+          up a new one.
         </p>
         <Inset>
           <RadioGroup label="How to start">
             <div className="choice">
               <RadioCard
-                title="Continue with an existing account"
-                detail="Found in the FOKS CLI on this Mac. This app becomes a new device on the account, or copies the CLI’s device."
+                title="Use an existing account"
+                detail="Continue with an account already active in the CLI."
                 selected={goStart === 'existing'}
                 onSelect={() => setGoStart('existing')}
               />
@@ -2834,7 +2832,7 @@ function FirstRunSession({
             <div className="choice">
               <RadioCard
                 title="Create a new account"
-                detail="Set up a new FOKS account on this device."
+                detail="Generate a new cryptographic identity and vault account."
                 selected={goStart === 'new'}
                 onSelect={() => setGoStart('new')}
               />

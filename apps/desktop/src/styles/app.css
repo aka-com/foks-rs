@@ -1907,27 +1907,34 @@ body {
   flex: none;
   accent-color: var(--accent);
 }
-.go-account-name {
+/* Account option row text */
+.go-account-text {
   flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
+  line-height: 1.35;
 }
-.go-account-detail {
-  flex: 2;
-  min-width: 0;
-  overflow-wrap: anywhere;
+.go-account-text b {
+  display: block;
+  font-weight: 600;
 }
-.go-account-detail small {
+.go-account-text code {
+  font: 12.5px var(--mono);
+}
+.go-account-text small {
   display: block;
   color: var(--muted);
-  margin-top: 4px;
+  font-size: 12px;
+  margin-top: 1px;
 }
-/* Under a selected radio card the list is already framed by the inset, so it
-   keeps only its row separators. */
+/* Nested account options */
 .go-account-options.nested {
   border: 0;
   border-radius: 0;
   overflow: visible;
+}
+.first-run-main .choice-body:has(> .go-account-options.nested) {
+  padding-bottom: 0;
 }
 .go-account-options.nested .go-account-option {
   gap: 10px;
@@ -1942,10 +1949,6 @@ body {
 }
 .go-account-options.nested .go-account-option + .go-account-option {
   border-top-color: var(--line-soft);
-}
-.go-account-options.nested .go-account-detail small {
-  font-size: 12px;
-  margin-top: 1px;
 }
 .first-run-main .official-server {
   margin-top: 16px;
