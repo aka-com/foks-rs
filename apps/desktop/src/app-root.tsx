@@ -1387,7 +1387,9 @@ function VaultShell({
       if (snapshot.operation.status === 'failed')
         commandError(snapshot.operation.error);
       else if (snapshot.operation.status === 'completed')
-        toasts.show(maintenanceOutcomeMessage(snapshot.operation));
+        toasts.show(
+          maintenanceOutcomeMessage(snapshot.operation, snapshot.kind),
+        );
       if (snapshot.disposition.status === 'restoration-failed')
         commandError(snapshot.disposition.error);
       if (snapshot.disposition.status === 'continue-current-root')

@@ -138,6 +138,46 @@ pub fn app_info(
     })
 }
 
+/// The process answering on the agent socket: Settings › This Mac shows it
+/// before offering to stop it.
+#[tauri::command]
+pub fn agent_process_info(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+) -> Result<crate::agent::AgentProcessInfo, AgentError> {
+    require_main_window(&webview)?;
+    Ok(state.agent.process_info())
+}
+
+/// Stops the local agent and starts it again. `takeover` claims an agent this
+/// app did not start, which the reader has confirmed in the sheet that asks.
+#[tauri::command]
+pub async fn restart_agent(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    takeover: bool,
+) -> Result<crate::agent::MaintenanceSnapshot, AgentError> {
+    require_main_window(&webview)?;
+    let app = webview.app_handle().clone();
+    let generation = crate::applock::unlocked_generation(&app)?;
+    let agent = state.agent.clone();
+    let worker_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let app = worker_app;
+        let state = app.state::<AppState>();
+        crate::applock::require_unlocked_generation(&app, generation)?;
+        let _mutation = state.begin_mutation()?;
+        agent.restart_agent(takeover, &|snapshot| {
+            if matches!(snapshot, crate::agent::MaintenanceSnapshot::Complete { .. }) {
+                state.invalidate_catalog();
+            }
+            let _ = app.emit(crate::agent::MAINTENANCE_EVENT, snapshot);
+        })
+    })
+    .await
+    .map_err(|_| AgentError::unknown("Agent restart worker interrupted."))?
+}
+
 #[tauri::command]
 pub fn take_agent_connection_loss(
     webview: tauri::Webview,

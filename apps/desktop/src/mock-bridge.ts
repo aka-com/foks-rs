@@ -420,6 +420,15 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       generation: 0,
       revision: 0,
     }),
+    agentProcessInfo: async () => ({
+      pid: 50350,
+      executable: '/Applications/FOKS.app/Contents/MacOS/foks-agent',
+      startedAt: Math.floor(Date.now() / 1000) - 5 * 3600,
+      owned: true,
+    }),
+    restartAgent: async () => {
+      throw new Error('Restarting the agent requires the native application.');
+    },
     relocateClientState: async () => {
       throw new Error('State maintenance requires the native application.');
     },

@@ -77,7 +77,8 @@ export interface CommandError {
   };
 }
 
-export type MaintenanceKind = 'export' | 'import' | 'verify' | 'relocate';
+export type MaintenanceKind =
+  'export' | 'import' | 'verify' | 'relocate' | 'restart';
 export type MaintenancePhase =
   'selecting' | 'confirming' | 'quiescing' | 'running' | 'restoring';
 export type MaintenanceOperationOutcome =
@@ -431,6 +432,43 @@ export interface ServerLabelResponse {
   changed: boolean;
 }
 
+/** The process answering on the agent socket, as Settings › This Mac shows it. */
+export interface AgentProcessInfo {
+  pid: number | null;
+  executable: string | null;
+  /** Seconds since the Unix epoch. */
+  startedAt: number | null;
+  /** Whether this app launched or adopted it, so it can stop it. */
+  owned: boolean;
+}
+export function decodeAgentProcessInfo(value: unknown): AgentProcessInfo {
+  const item = record(value, 'agent_process_info response');
+  const pid = item.pid;
+  const executable = item.executable;
+  const startedAt = item.startedAt;
+  if (
+    !(pid === null || pid === undefined || typeof pid === 'number') ||
+    !(
+      executable === null ||
+      executable === undefined ||
+      typeof executable === 'string'
+    ) ||
+    !(
+      startedAt === null ||
+      startedAt === undefined ||
+      typeof startedAt === 'number'
+    ) ||
+    typeof item.owned !== 'boolean'
+  )
+    throw new Error('Invalid agent process info');
+  return {
+    pid: pid ?? null,
+    executable: executable ?? null,
+    startedAt: startedAt ?? null,
+    owned: item.owned,
+  };
+}
+
 export interface AppInfo {
   version: string;
   agentSocket: string;
@@ -683,6 +721,13 @@ export interface Bridge {
     action: 'export' | 'import' | 'verify',
   ): Promise<MaintenanceSnapshot>;
   clientStateMaintenanceStatus(): Promise<MaintenanceSnapshot>;
+  /** The process on the agent socket. */
+  agentProcessInfo(): Promise<AgentProcessInfo>;
+  /**
+   * Stops the local agent and starts it again. `takeover` claims an agent
+   * this app did not start, once the reader has confirmed that.
+   */
+  restartAgent(takeover: boolean): Promise<MaintenanceSnapshot>;
   configureWebAdmin(
     profile: string,
     accountAlias: string,
@@ -1341,7 +1386,7 @@ export function decodeMaintenanceSnapshot(value: unknown): MaintenanceSnapshot {
   if (revision < 0) throw new Error(`${at}.revision must be nonnegative`);
   if (state === 'idle') return { state, generation, revision };
   const kind = string(item.kind, `${at}.kind`);
-  if (!['export', 'import', 'verify', 'relocate'].includes(kind))
+  if (!['export', 'import', 'verify', 'relocate', 'restart'].includes(kind))
     throw new Error(`${at}.kind is invalid`);
   const typedKind = kind as MaintenanceKind;
   if (state === 'active') {
@@ -2518,6 +2563,10 @@ export const tauriBridge: Bridge = {
       undefined,
       decodeMaintenanceSnapshot,
     ),
+  agentProcessInfo: () =>
+    checked('agent_process_info', undefined, decodeAgentProcessInfo),
+  restartAgent: (takeover) =>
+    checked('restart_agent', { takeover }, decodeMaintenanceSnapshot),
   configureWebAdmin: (profile, accountAlias, destination) =>
     checked(
       'configure_web_admin',

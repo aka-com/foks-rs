@@ -792,3 +792,125 @@ test('server security-key actions name the selected enrollment across accounts',
     },
   });
 });
+
+test('This Mac offers to restart the agent, and names the process it would stop', async () => {
+  const snapshot = await fixture();
+  const calls: boolean[] = [];
+  const rendered = await renderSettings(snapshot, {
+    where: { section: 'mac' },
+    decorate: (bridge) => ({
+      ...bridge,
+      restartAgent: async (takeover) => {
+        calls.push(takeover);
+        return { state: 'idle', generation: 1, revision: 0 };
+      },
+    }),
+  });
+  const row = rendered.getByText('Restart').closest('.fr');
+  assert.ok(row);
+  assert.equal(
+    row.querySelector('.v small')?.textContent,
+    'Stop the local agent and start it again.',
+  );
+  // An agent this app started says nothing more on its Status row.
+  const status = rendered.getByText('Status').closest('.fr');
+  assert.ok(status);
+  assert.equal(status.querySelector('.v small'), null);
+
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(row).getByRole('button', { name: 'Restart…' }),
+    );
+  });
+  const sheet = document.querySelector('.sheet');
+  assert.ok(sheet);
+  assert.equal(sheet.querySelector('h2')?.textContent, 'Restart the agent?');
+  assert.match(
+    sheet.textContent ?? '',
+    /FOKS will stop the local agent and start it again\. This will take a few seconds\./,
+  );
+  await ui.waitFor(() =>
+    assert.match(sheet.textContent ?? '', /foks-agent \(PID 50350\) · Started/),
+  );
+  assert.match(sheet.textContent ?? '', /Nothing in progress\./);
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(sheet).getByRole('button', { name: 'Restart agent' }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  assert.equal(document.querySelector('.sheet'), null);
+  // An agent we own needs no takeover.
+  assert.deepEqual(calls, [false]);
+});
+
+test('a maintenance action refused for a foreign agent asks to restart it, then runs', async () => {
+  const snapshot = await fixture();
+  const log: string[] = [];
+  let refused = true;
+  const rendered = await renderSettings(snapshot, {
+    where: { section: 'mac' },
+    decorate: (bridge) => ({
+      ...bridge,
+      agentProcessInfo: async () => ({
+        pid: 4242,
+        executable: '/opt/foks/foks-agent',
+        startedAt: Math.floor(Date.now() / 1000) - 86_400,
+        owned: false,
+      }),
+      maintainClientState: async (action) => {
+        log.push(`maintain:${action}`);
+        // The shape the native bridge delivers for a refused maintenance.
+        if (refused)
+          throw {
+            code: 'external-agent',
+            message: 'The running foks-agent was not started by this app.',
+            retryable: false,
+            ambiguous: false,
+            fatal: false,
+          };
+        return { state: 'idle', generation: 2, revision: 0 };
+      },
+      restartAgent: async (takeover) => {
+        log.push(`restart:${takeover}`);
+        refused = false;
+        return { state: 'idle', generation: 1, revision: 0 };
+      },
+    }),
+  });
+  await ui.waitFor(() =>
+    assert.match(
+      rendered.getByText('Status').closest('.fr')?.textContent ?? '',
+      /Not started by this app\. Transfer and move restart it first\./,
+    ),
+  );
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Export…' }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  const sheet = document.querySelector('.sheet');
+  assert.ok(sheet);
+  assert.equal(
+    sheet.querySelector('h2')?.textContent,
+    'Restart the agent to export?',
+  );
+  assert.match(
+    sheet.textContent ?? '',
+    /The running foks-agent was not started by this app\. Stop it, and start a new agent, to enable export\?/,
+  );
+  assert.match(
+    sheet.textContent ?? '',
+    /foks-agent \(PID 4242\) · Started yesterday/,
+  );
+  assert.match(sheet.textContent ?? '', /\/opt\/foks\/foks-agent/);
+  // No "Interrupts" row when the restart serves an action.
+  assert.doesNotMatch(sheet.textContent ?? '', /Nothing in progress/);
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(sheet).getByRole('button', { name: 'Restart agent' }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  assert.deepEqual(log, ['maintain:export', 'restart:true', 'maintain:export']);
+  assert.equal(document.querySelector('.sheet'), null);
+});

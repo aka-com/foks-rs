@@ -270,6 +270,21 @@ pub enum MaintenanceKind {
     Import,
     Verify,
     Relocate,
+    /// Stop the agent and start it again, with no operation in between.
+    Restart,
+}
+
+/// What Settings shows about the process answering on the socket.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProcessInfo {
+    pub pid: Option<u32>,
+    pub executable: Option<String>,
+    /// Seconds since the Unix epoch.
+    pub started_at: Option<u64>,
+    /// Whether this app launched — or adopted — the process, so maintenance
+    /// can stop it and quitting terminates it.
+    pub owned: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -821,6 +836,7 @@ impl AgentHandle {
         match self.call_unreserved(Operation::AgentStatus) {
             Ok(response) => {
                 self.clear_connection_failure();
+                self.adopt_orphaned_agent();
                 return Ok(response);
             }
             Err(_) => {}
@@ -853,6 +869,7 @@ impl AgentHandle {
             match self.call_unreserved(Operation::AgentStatus) {
                 Ok(response) => {
                     self.clear_connection_failure();
+                    self.adopt_orphaned_agent();
                     return Ok(response);
                 }
                 #[cfg(unix)]
@@ -1259,7 +1276,7 @@ impl AgentHandle {
         let Some(owned) = owned else {
             return Err(AgentError::new(
                 "external-agent",
-                "State maintenance can only stop the agent launched by this application.",
+                "The running foks-agent was not started by this FOKS. Quit this app, stop foks-agent, and relaunch to continue.",
                 false,
             ));
         };
@@ -1283,12 +1300,132 @@ impl AgentHandle {
             if peer != owned {
                 return Err(AgentError::new(
                     "external-agent",
-                    "The configured endpoint is not owned by the agent launched by this application.",
+                    "The socket is now answered by a foks-agent this FOKS did not start. Quit this app, stop foks-agent, and relaunch to continue.",
                     false,
                 ));
             }
         }
         Ok(())
+    }
+
+    /// Takes ownership of a compatible agent already answering on the socket
+    /// when it is this bundle's own `foks-agent`, left running by a launch of
+    /// this app that did not exit cleanly. Its parent is gone — it has been
+    /// reparented to init — so no other desktop supervises it, and adopting it
+    /// restores what a clean launch would have: maintenance can stop it, and
+    /// quitting terminates it. An agent that is another binary, or still has
+    /// a live parent, stays external. Best effort: any failure to inspect the
+    /// process leaves ownership as it was.
+    fn adopt_orphaned_agent(&self) {
+        #[cfg(unix)]
+        {
+            if MANAGED_AGENT_PID
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+            {
+                return;
+            }
+            let Some(binary) = managed_agent_binary(&self.socket) else {
+                return;
+            };
+            let Ok(Some(target)) = inspect_takeover_target(&self.socket) else {
+                return;
+            };
+            if !same_file(&target.executable, &binary) || !process_is_orphaned(target.pid) {
+                return;
+            }
+            adopt_pid(target.pid);
+        }
+    }
+
+    /// The process answering on the socket, for Settings to describe.
+    pub fn process_info(&self) -> AgentProcessInfo {
+        #[cfg(unix)]
+        {
+            let Ok(stream) = std::os::unix::net::UnixStream::connect(&self.socket) else {
+                return AgentProcessInfo::default();
+            };
+            let Ok(pid) = unix_peer_pid(&stream) else {
+                return AgentProcessInfo::default();
+            };
+            drop(stream);
+            let owned = *MANAGED_AGENT_PID
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                == Some(pid);
+            AgentProcessInfo {
+                pid: Some(pid),
+                executable: process_executable_path(pid)
+                    .ok()
+                    .map(|path| path.display().to_string()),
+                started_at: process_start_time(pid).ok(),
+                owned,
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            AgentProcessInfo::default()
+        }
+    }
+
+    /// Takes ownership of a foks-agent this app did not start, on the reader's
+    /// say-so, so that a restart can stop it. Refused when the socket's owner
+    /// is not a foks-agent at all.
+    fn claim_external_agent(&self) -> Result<(), AgentError> {
+        #[cfg(unix)]
+        {
+            if MANAGED_AGENT_PID
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+            {
+                return Ok(());
+            }
+            let target = inspect_takeover_target(&self.socket)
+                .map_err(|error| {
+                    AgentError::new(
+                        "external-agent",
+                        if error.fatal {
+                            "The process on the agent socket is not a foks-agent, so FOKS cannot stop it.".to_owned()
+                        } else {
+                            error.message
+                        },
+                        false,
+                    )
+                })?
+                .ok_or_else(|| {
+                    AgentError::new(
+                        "agent-lost",
+                        "No agent is answering on the socket.",
+                        true,
+                    )
+                })?;
+            adopt_pid(target.pid);
+        }
+        Ok(())
+    }
+
+    /// Stops the agent and starts it again. With `takeover`, an agent this app
+    /// did not start is claimed first; without it, such an agent is refused as
+    /// every other maintenance refuses it.
+    pub fn restart_agent(
+        &self,
+        takeover: bool,
+        notify: &dyn Fn(&MaintenanceSnapshot),
+    ) -> Result<MaintenanceSnapshot, AgentError> {
+        if takeover {
+            self.claim_external_agent()?;
+        }
+        self.run_maintenance(MaintenanceKind::Restart, notify, |worker| {
+            match worker.stop_owned_agent() {
+                Ok(()) => MaintenanceCompletion::Continue,
+                Err(error) => MaintenanceCompletion::Failed {
+                    error,
+                    affected_roots: Vec::new(),
+                },
+            }
+        })
     }
 
     fn require_maintenance_stop_settled(&self) -> Result<(), AgentError> {
@@ -1661,6 +1798,35 @@ fn launch_agent(binary: &Path, state_dir: &Path, socket: &Path) -> Result<(), Ag
 
 static MANAGED_AGENT_PID: Mutex<Option<u32>> = Mutex::new(None);
 
+/// Records `pid` as the managed agent and watches for its exit. The process
+/// is not this one's child, so it cannot be waited on: a thread polls it and
+/// clears the record when it is gone.
+#[cfg(unix)]
+fn adopt_pid(pid: u32) {
+    {
+        let mut guard = MANAGED_AGENT_PID
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if guard.is_some() {
+            return;
+        }
+        *guard = Some(pid);
+    }
+    let _ = std::thread::Builder::new()
+        .name("foks-agent-adopted-reaper".to_owned())
+        .spawn(move || {
+            while !process_has_exited(pid) {
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            let mut guard = MANAGED_AGENT_PID
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if *guard == Some(pid) {
+                *guard = None;
+            }
+        });
+}
+
 pub fn terminate_managed_agent() {
     if let Some(pid) = MANAGED_AGENT_PID
         .lock()
@@ -1839,6 +2005,124 @@ fn terminate_takeover_target(target: &AgentTakeover) -> Result<(), AgentError> {
 fn process_has_exited(pid: u32) -> bool {
     let alive = unsafe { libc::kill(pid as i32, 0) };
     alive != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
+/// Whether two paths name the same file, by device and inode, so a bundle
+/// reached through a symlink or a different prefix still matches its agent.
+#[cfg(unix)]
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    }
+}
+
+/// Whether `pid` has been reparented to init: the process that launched it
+/// has exited, so nothing else supervises it.
+#[cfg(unix)]
+fn process_is_orphaned(pid: u32) -> bool {
+    process_parent_pid(pid).is_ok_and(|parent| parent == 1)
+}
+
+/// When `pid` started, in seconds since the Unix epoch.
+#[cfg(unix)]
+fn process_start_time(pid: u32) -> std::io::Result<u64> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        let written = unsafe {
+            libc::proc_pidinfo(
+                pid as libc::c_int,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                (&raw mut info).cast(),
+                size,
+            )
+        };
+        if written != size {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(info.pbi_start_tvsec)
+    }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        // Field 22 of `/proc/<pid>/stat` is the start time in clock ticks
+        // since boot; `/proc/stat`'s `btime` is the boot time.
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+        let rest = stat
+            .rsplit_once(')')
+            .map(|(_, rest)| rest)
+            .ok_or_else(|| std::io::Error::other("malformed /proc stat"))?;
+        let ticks: u64 = rest
+            .split_whitespace()
+            .nth(19)
+            .and_then(|field| field.parse().ok())
+            .ok_or_else(|| std::io::Error::other("malformed /proc stat"))?;
+        let boot: u64 = std::fs::read_to_string("/proc/stat")?
+            .lines()
+            .find_map(|line| line.strip_prefix("btime "))
+            .and_then(|value| value.trim().parse().ok())
+            .ok_or_else(|| std::io::Error::other("no btime in /proc/stat"))?;
+        let hertz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+        if hertz <= 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(boot + ticks / hertz as u64)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
+    {
+        let _ = pid;
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "agent start time is unavailable on this platform",
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn process_parent_pid(pid: u32) -> std::io::Result<u32> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        let written = unsafe {
+            libc::proc_pidinfo(
+                pid as libc::c_int,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                (&raw mut info).cast(),
+                size,
+            )
+        };
+        if written != size {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(info.pbi_ppid)
+    }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        // `/proc/<pid>/stat`: the parent pid is the field after the
+        // parenthesised command name, which may itself contain spaces.
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+        let rest = stat
+            .rsplit_once(')')
+            .map(|(_, rest)| rest)
+            .ok_or_else(|| std::io::Error::other("malformed /proc stat"))?;
+        rest.split_whitespace()
+            .nth(1)
+            .and_then(|field| field.parse().ok())
+            .ok_or_else(|| std::io::Error::other("malformed /proc stat"))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
+    {
+        let _ = pid;
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "agent parent pid is unavailable on this platform",
+        ))
+    }
 }
 
 #[cfg(unix)]
@@ -2684,6 +2968,39 @@ mod tests {
         assert_eq!(unix_peer_pid(&stream).unwrap(), std::process::id());
         drop(stream);
         server.join().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parent_pid_and_orphan_detection_read_the_process_table() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("5")
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        assert_eq!(process_parent_pid(pid).unwrap(), std::process::id());
+        // A live child is supervised by this process, not reparented to init.
+        assert!(!process_is_orphaned(pid));
+        assert!(!process_is_orphaned(std::process::id()));
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(process_parent_pid(pid).is_err() || process_has_exited(pid));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn same_file_compares_by_identity_not_path() {
+        let temporary = tempfile::tempdir().unwrap();
+        let file = temporary.path().join("foks-agent");
+        std::fs::write(&file, b"").unwrap();
+        let link = temporary.path().join("link");
+        std::os::unix::fs::symlink(&file, &link).unwrap();
+        assert!(same_file(&file, &link));
+        let other = temporary.path().join("other");
+        std::fs::write(&other, b"").unwrap();
+        assert!(!same_file(&file, &other));
+        assert!(!same_file(&file, &temporary.path().join("missing")));
     }
 
     #[cfg(unix)]

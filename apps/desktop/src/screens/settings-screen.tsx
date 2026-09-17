@@ -18,7 +18,12 @@ import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
 import { enqueueProfileWork, normalizeCommandError } from '../bridge';
-import type { AppInfo, Bridge, ResetPreview } from '../bridge';
+import type {
+  AgentProcessInfo,
+  AppInfo,
+  Bridge,
+  ResetPreview,
+} from '../bridge';
 import {
   Band,
   Button,
@@ -391,8 +396,50 @@ function ThisMacSection({
   const ready =
     snapshot.agent.state === 'ready' && agentLifecycle.state === 'ready';
   const maintenanceUnavailable = agentLifecycle.state !== 'ready';
+  // The process on the socket: who started it decides whether maintenance can
+  // stop it, and Status says so. Re-read whenever the agent's state settles.
+  const [process, setProcess] = useState<AgentProcessInfo | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setProcess(null);
+    if (!ready) return;
+    void bridge
+      .agentProcessInfo()
+      .then((info) => {
+        if (alive) setProcess(info);
+      })
+      .catch(() => {
+        // Descriptive only: a failed read leaves the row without its detail.
+      });
+    return () => {
+      alive = false;
+    };
+  }, [bridge, ready, agentLifecycle.state]);
+  const foreign = process !== null && process.pid !== null && !process.owned;
+  // The restart sheet: opened by the Restart row, or by a maintenance action
+  // that the agent's ownership refused, in which case it carries the action
+  // to run once the agent is ours.
+  const [restart, setRestart] = useState<RestartRequest | null>(null);
+  const maintain = (
+    purpose: RestartPurpose,
+    run: () => Promise<unknown>,
+  ): void => {
+    void run().catch((error: unknown) => {
+      if (isExternalAgent(error)) setRestart({ purpose, then: run });
+      else onError(error);
+    });
+  };
   return (
     <>
+      {restart ? (
+        <RestartAgentSheet
+          bridge={bridge}
+          request={restart}
+          process={process}
+          onClose={() => setRestart(null)}
+          onError={onError}
+        />
+      ) : null}
       <SectionLabel>Application</SectionLabel>
       <Inset className="settings-inset middle wide">
         <InsetRow label="Version">
@@ -457,6 +504,11 @@ function ThisMacSection({
               The local background agent must be connected to use FOKS.
             </small>
           )}
+          {foreign ? (
+            <small>
+              Not started by this app. Transfer and move restart it first.
+            </small>
+          ) : null}
         </InsetRow>
         <InsetRow
           className="line"
@@ -480,6 +532,20 @@ function ThisMacSection({
         >
           {appInfo?.agentSocket ?? 'Reading app info…'}
         </InsetRow>
+        <InsetRow
+          label="Restart"
+          action={
+            <Button
+              size="sm"
+              disabled={maintenanceUnavailable}
+              onClick={() => setRestart({ purpose: 'restart' })}
+            >
+              Restart…
+            </Button>
+          }
+        >
+          <small>Stop the local agent and start it again.</small>
+        </InsetRow>
       </Inset>
       <SectionLabel>FOKS data</SectionLabel>
       <Inset className="settings-inset wide">
@@ -490,18 +556,18 @@ function ThisMacSection({
               <Button
                 size="sm"
                 disabled={maintenanceUnavailable}
-                onClick={() => {
-                  void bridge.maintainClientState('export').catch(onError);
-                }}
+                onClick={() =>
+                  maintain('export', () => bridge.maintainClientState('export'))
+                }
               >
                 Export…
               </Button>
               <Button
                 size="sm"
                 disabled={maintenanceUnavailable}
-                onClick={() => {
-                  void bridge.maintainClientState('import').catch(onError);
-                }}
+                onClick={() =>
+                  maintain('import', () => bridge.maintainClientState('import'))
+                }
               >
                 Import…
               </Button>
@@ -519,9 +585,9 @@ function ThisMacSection({
             <Button
               size="sm"
               disabled={maintenanceUnavailable}
-              onClick={() => {
-                void bridge.maintainClientState('verify').catch(onError);
-              }}
+              onClick={() =>
+                maintain('verify', () => bridge.maintainClientState('verify'))
+              }
             >
               Verify online
             </Button>
@@ -538,9 +604,9 @@ function ThisMacSection({
             <Button
               size="sm"
               disabled={maintenanceUnavailable}
-              onClick={() => {
-                void bridge.relocateClientState().catch(onError);
-              }}
+              onClick={() =>
+                maintain('relocate', () => bridge.relocateClientState())
+              }
             >
               Choose folder…
             </Button>
@@ -582,6 +648,156 @@ function ThisMacSection({
         </InsetRow>
       </Inset>
     </>
+  );
+}
+
+/** Why the agent is being restarted: for its own sake, or to enable a
+ *  maintenance action the agent's ownership refused. */
+type RestartPurpose = 'restart' | 'export' | 'import' | 'verify' | 'relocate';
+
+interface RestartRequest {
+  purpose: RestartPurpose;
+  /** The refused action, run again once the agent is this app's. */
+  then?: () => Promise<unknown>;
+}
+
+const RESTART_COPY: Readonly<
+  Record<Exclude<RestartPurpose, 'restart'>, { title: string; enable: string }>
+> = {
+  export: { title: 'Restart the agent to export?', enable: 'export' },
+  import: { title: 'Restart the agent to import?', enable: 'import' },
+  verify: {
+    title: 'Restart the agent to verify?',
+    enable: 'verification',
+  },
+  relocate: {
+    title: 'Restart the agent to move FOKS data?',
+    enable: 'the move',
+  },
+};
+
+function isExternalAgent(error: unknown): boolean {
+  return normalizeCommandError(error).code === 'external-agent';
+}
+
+/** "Started today, 16:26" / "Started yesterday, 16:26" / "Started Sep 16, 16:26". */
+function startedLabel(startedAt: number, now = Date.now()): string {
+  const started = new Date(startedAt * 1000);
+  const time = started.toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const day = (date: Date): number =>
+    new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const days = Math.round((day(new Date(now)) - day(started)) / 86_400_000);
+  const when =
+    days === 0
+      ? 'today'
+      : days === 1
+        ? 'yesterday'
+        : started.toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric',
+          });
+  return `Started ${when}, ${time}`;
+}
+
+/**
+ * Restart the agent: stop the process on the socket and start this app's
+ * own. A plain restart asks once; a restart in service of a maintenance
+ * action says which, and runs that action once the new agent is up.
+ */
+function RestartAgentSheet({
+  bridge,
+  request,
+  process,
+  onClose,
+  onError,
+}: {
+  bridge: Bridge;
+  request: RestartRequest;
+  process: AgentProcessInfo | null;
+  onClose: () => void;
+  onError: (error: unknown) => void;
+}): ReactNode {
+  const [busy, setBusy] = useState(false);
+  const copy =
+    request.purpose === 'restart' ? null : RESTART_COPY[request.purpose];
+  const plain = copy === null;
+  const running =
+    process?.pid !== null && process?.pid !== undefined
+      ? `foks-agent (PID ${process.pid})` +
+        (process.startedAt !== null
+          ? ` · ${startedLabel(process.startedAt)}`
+          : '')
+      : 'No agent is answering on the socket.';
+  return (
+    <SheetDialog
+      width="wide"
+      dismissible={!busy}
+      onClose={() => {
+        if (!busy) onClose();
+      }}
+      title={copy ? copy.title : 'Restart the agent?'}
+      glyph={
+        <span className="server-mark">
+          <Icon name="again" />
+        </span>
+      }
+      footer={
+        <>
+          <Button disabled={busy} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            busy={busy}
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              void (async () => {
+                try {
+                  // A plain restart of an agent we own needs no takeover; a
+                  // foreign one does, and so does any restart made to enable
+                  // an action the ownership check refused.
+                  await bridge.restartAgent(
+                    !plain || Boolean(process && !process.owned),
+                  );
+                  // The shell toasts the restart's outcome from the
+                  // maintenance event; only the follow-on action is this
+                  // sheet's to run.
+                  onClose();
+                  if (request.then) await request.then();
+                } catch (error) {
+                  onError(error);
+                  onClose();
+                }
+              })();
+            }}
+          >
+            {busy ? 'Restarting…' : 'Restart agent'}
+          </Button>
+        </>
+      }
+    >
+      <p>
+        {copy
+          ? `The running foks-agent was not started by this app. Stop it, and start a new agent, to enable ${copy.enable}?`
+          : 'FOKS will stop the local agent and start it again. This will take a few seconds.'}
+      </p>
+      <Inset>
+        <InsetRow label="Running agent">{running}</InsetRow>
+        {process?.executable ? (
+          <InsetRow label="Launched from" valueClass="mono">
+            {process.executable}
+          </InsetRow>
+        ) : null}
+        {plain ? (
+          <InsetRow label="Interrupts">Nothing in progress.</InsetRow>
+        ) : null}
+      </Inset>
+    </SheetDialog>
   );
 }
 

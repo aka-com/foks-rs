@@ -79,17 +79,25 @@ export function isAgentReady(lifecycle: AgentLifecycle): boolean {
   return lifecycle.state === 'ready';
 }
 
-/** Report the operation separately from whether its agent could be restored. */
+/**
+ * Report the operation separately from whether its agent could be restored.
+ * A restart is the one kind with no operation of its own, so it is named
+ * rather than called maintenance.
+ */
 export function maintenanceOutcomeMessage(
   outcome: MaintenanceOperationOutcome,
+  kind?: MaintenanceKind,
 ): string {
+  const what = kind === 'restart' ? 'The agent restart' : 'State maintenance';
   switch (outcome.status) {
     case 'completed':
-      return 'State maintenance completed.';
+      return kind === 'restart'
+        ? 'The agent was restarted.'
+        : 'State maintenance completed.';
     case 'cancelled':
-      return 'State maintenance was cancelled.';
+      return `${what} was cancelled.`;
     case 'failed':
-      return `State maintenance failed: ${outcome.error.message}`;
+      return `${what} failed: ${outcome.error.message}`;
   }
 }
 
