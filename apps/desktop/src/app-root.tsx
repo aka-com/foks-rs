@@ -308,6 +308,72 @@ function AgentStopNotice({
   );
 }
 
+function AgentLostDialog({
+  message,
+  bridge,
+  onRetryAgent,
+}: {
+  message?: string;
+  bridge: Bridge;
+  onRetryAgent: () => Promise<void>;
+}): ReactNode {
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  return (
+    <Dialog
+      className="stopwrap"
+      role="alertdialog"
+      aria-label="Connection to background service lost"
+    >
+      <div className="notice stop">
+        <h2>Connection to background service lost</h2>
+        <p>
+          The background service stopped responding. Click Retry to reconnect.
+        </p>
+        {message ? <p className="fn">{message}</p> : null}
+        {failure ? (
+          <p className="fn" role="alert">
+            {failure}
+          </p>
+        ) : null}
+        <div className="acts2">
+          <Button
+            variant="primary"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setFailure(null);
+              void (async () => {
+                try {
+                  await onRetryAgent();
+                } catch (error) {
+                  setFailure(normalizeCommandError(error).message);
+                } finally {
+                  setBusy(false);
+                }
+              })();
+            }}
+          >
+            Retry
+          </Button>
+          <Button
+            disabled={busy}
+            onClick={() => {
+              void bridge
+                .quitApp()
+                .catch((error) =>
+                  setFailure(normalizeCommandError(error).message),
+                );
+            }}
+          >
+            Quit FOKS
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
 /**
  * The shell's frame with nothing in it: the rail and the topbar, dimmed and
  * inert, around whatever a blocking state puts in the content area. Starting,
@@ -1082,6 +1148,17 @@ function VaultShell({
     agentController.snapshot().state === 'ready' &&
     agentCatalogReady;
 
+  const disconnectAgent = useCallback(
+    (message: string): void => {
+      if (!agentController.disconnect(message)) return;
+      foregroundRefreshAllowed.current = false;
+      catalogCoordinator.reset();
+      setAgentCatalogReady(false);
+      setConcealSignal((value) => value + 1);
+    },
+    [agentController, catalogCoordinator],
+  );
+
   const recoverAgentReadiness = useCallback(
     async (reconnect: boolean): Promise<void> => {
       try {
@@ -1090,13 +1167,20 @@ function VaultShell({
         // Native restoration success publishes its maintenance transition
         // before retryAgentConnection resolves. That newer transition makes
         // this establish attempt stale; its event handler owns the follow-up
-        // establish and catalog refresh. Real retry failures publish failure.
-        if (reconnect && agentController.snapshot().state !== 'failure') return;
+        // establish and catalog refresh. Retry failures remain disconnected.
+        const state = agentController.snapshot().state;
+        if (reconnect && state !== 'failure' && state !== 'disconnected')
+          return;
         throw error;
       }
       // Readiness and catalog availability are separate. A catalog failure
       // leaves the connected agent ready and is reported by the caller.
-      await refreshSnapshot(true);
+      try {
+        await refreshSnapshot(true);
+      } catch (error) {
+        if (!reconnect) throw error;
+        commandErrorRef.current(error);
+      }
     },
     [agentController, refreshSnapshot],
   );
@@ -1105,10 +1189,12 @@ function VaultShell({
     (error: unknown, item?: Item, draft = ''): void => {
       const typed = normalizeCommandError(error);
       if (typed.code === 'catalog-read-retired') return;
+      if (typed.code === 'agent-lost') {
+        disconnectAgent(typed.message);
+        return;
+      }
       const routed = workflowForError(error, item, draft);
       if (routed) {
-        if (routed.kind === 'agent-lost')
-          setConcealSignal((value) => value + 1);
         setWorkflow(routed);
         return;
       }
@@ -1118,7 +1204,7 @@ function VaultShell({
         typed.code === 'catalog-required' ? undefined : { tone: 'warning' },
       );
     },
-    [toasts, setWorkflow],
+    [disconnectAgent, toasts, setWorkflow],
   );
   commandErrorRef.current = commandError;
 
@@ -1298,15 +1384,13 @@ function VaultShell({
       // checked() reports before rejecting with this same normalized object.
       // A component forwarding that rejection must not invalidate recovery twice.
       handledReadinessErrors.current.add(error);
+      if (error.code === 'agent-lost') {
+        disconnectAgent(error.message);
+        return;
+      }
       foregroundRefreshAllowed.current = false;
       catalogCoordinator.reset();
       setAgentCatalogReady(false);
-      if (error.code === 'agent-lost') {
-        agentController.disconnect(error.message);
-        setConcealSignal((value) => value + 1);
-        setWorkflow({ kind: 'agent-lost', message: error.message });
-        return;
-      }
       if (error.code === 'version-mismatch') {
         agentController.fail(error);
         commandError(error);
@@ -1323,9 +1407,9 @@ function VaultShell({
       agentController,
       catalogCoordinator,
       commandError,
+      disconnectAgent,
       recoverAgentReadiness,
       state.location.kind,
-      setWorkflow,
     ],
   );
 
@@ -1342,14 +1426,7 @@ function VaultShell({
       pending = true;
       try {
         const message = await bridge.takeAgentConnectionLoss();
-        if (alive && message) {
-          foregroundRefreshAllowed.current = false;
-          catalogCoordinator.reset();
-          setAgentCatalogReady(false);
-          agentController.disconnect(message);
-          setConcealSignal((value) => value + 1);
-          setWorkflow({ kind: 'agent-lost', message });
-        }
+        if (alive && message) disconnectAgent(message);
       } catch (error) {
         if (alive && normalizeCommandError(error).code === 'agent-lost')
           commandError(error);
@@ -1363,7 +1440,7 @@ function VaultShell({
       alive = false;
       window.clearInterval(timer);
     };
-  }, [agentController, bridge, catalogCoordinator, commandError, setWorkflow]);
+  }, [bridge, commandError, disconnectAgent]);
 
   const appRef = useRef<HTMLDivElement>(null);
   const portalRoot = useMemo(
@@ -1657,7 +1734,7 @@ function VaultShell({
   // interactive while the grid is inert. The adjacent rail and topbar use the
   // same disabled styling as `BlockedShell`.
   const stop = agentStop(agentLifecycle);
-  const takeover = stop !== null || workflow?.kind === 'agent-lost';
+  const takeover = stop !== null || agentLifecycle.state === 'disconnected';
   const shell = (
     <div
       className={[
@@ -1682,132 +1759,127 @@ function VaultShell({
           .join(' ')}
         ref={appRef}
       >
-        {here.kind === 'first-run' ? (
-          <FirstRunExperience
-            snapshot={shown}
-            bridge={bridge}
-            location={here}
-            onNavigate={(location) => locations.navigate(location)}
-            onRefreshSnapshot={refreshSnapshot}
-            concealSignal={concealSignal}
-            agentReady={
-              shown.agent.state === 'ready' &&
-              agentLifecycle.state === 'ready' &&
-              agentCatalogReady
-            }
-            onRetryAgent={() =>
-              recoverAgentReadiness(agentLifecycle.state === 'disconnected')
-            }
-            onAgentReadinessFailure={handleAgentReadinessFailure}
-            automaticEntry={automaticFirstRun}
-            managedProfile={managedProfile ?? undefined}
-            agent={railAgentState(agentLifecycle.state, shown.agent.state)}
-            collapsed={sideCollapsed}
-            onToggleCollapsed={toggleSidebar}
-            devicesAlert={devicesAlertSummary(shown, deviceAlerts)}
-          />
-        ) : (
-          <>
-            <Sidebar
+        <ChatInboxProvider
+          key={`inbox:${concealSignal}`}
+          bridge={bridge}
+          snapshot={shown}
+          onNavigate={navigateFromNotification}
+          clock={chatClock}
+          accessNow={accessNow}
+        >
+          {here.kind === 'first-run' ? (
+            <FirstRunExperience
               snapshot={shown}
+              bridge={bridge}
               location={here}
-              folder={state.folder}
-              account={locations.getAccount()}
-              attention={unroutedNotices(shown).length}
-              teamRequests={teamRequestsBadge(shown, teamRequestCounts)}
-              devicesAlert={devicesAlertSummary(shown, deviceAlerts)}
-              settingsAlert={settingsAlertSummary(shown)}
-              onTabNavigate={(tab) => locations.navigateTab(tab)}
-              onNavigate={(location) => {
-                locations.navigate(location);
-              }}
-              onSetFolder={(folder) => locations.setFolder(folder)}
-              onLock={lockFromMenu}
-              status={
-                pendingFirstRun ? (
-                  <FirstRunChecklistStatus
-                    checkpoint={pendingFirstRun}
-                    onNavigate={(location) => locations.navigate(location)}
-                  />
-                ) : undefined
+              onNavigate={(location) => locations.navigate(location)}
+              onRefreshSnapshot={refreshSnapshot}
+              concealSignal={concealSignal}
+              agentReady={
+                shown.agent.state === 'ready' &&
+                agentLifecycle.state === 'ready' &&
+                agentCatalogReady
               }
-              onToggleCollapsed={toggleSidebar}
+              onRetryAgent={() =>
+                recoverAgentReadiness(agentLifecycle.state === 'disconnected')
+              }
+              onAgentReadinessFailure={handleAgentReadinessFailure}
+              automaticEntry={automaticFirstRun}
+              managedProfile={managedProfile ?? undefined}
+              agent={railAgentState(agentLifecycle.state, shown.agent.state)}
               collapsed={sideCollapsed}
-              // The lost-connection dialog is the rail's own statement that
-              // the agent is gone, whichever path raised it.
-              agent={
-                workflow?.kind === 'agent-lost'
-                  ? 'stopped'
-                  : railAgentState(agentLifecycle.state, shown.agent.state)
-              }
-              nativeChrome={bridge.native}
-              blocked={takeover}
+              onToggleCollapsed={toggleSidebar}
+              devicesAlert={devicesAlertSummary(shown, deviceAlerts)}
             />
-            <main className="main">
-              <Topbar
-                blocked={takeover}
-                deviceLabel={deviceLabel}
+          ) : (
+            <>
+              <Sidebar
                 snapshot={shown}
                 location={here}
                 folder={state.folder}
-                onNavigate={(location) => locations.navigate(location)}
+                account={locations.getAccount()}
+                attention={unroutedNotices(shown).length}
+                teamRequests={teamRequestsBadge(shown, teamRequestCounts)}
+                devicesAlert={devicesAlertSummary(shown, deviceAlerts)}
+                settingsAlert={settingsAlertSummary(shown)}
+                onTabNavigate={(tab) => locations.navigateTab(tab)}
+                onNavigate={(location) => {
+                  locations.navigate(location);
+                }}
                 onSetFolder={(folder) => locations.setFolder(folder)}
-                onSearch={() => setSearchOpen(true)}
+                onLock={lockFromMenu}
+                status={
+                  pendingFirstRun ? (
+                    <FirstRunChecklistStatus
+                      checkpoint={pendingFirstRun}
+                      onNavigate={(location) => locations.navigate(location)}
+                    />
+                  ) : undefined
+                }
+                onToggleCollapsed={toggleSidebar}
                 collapsed={sideCollapsed}
-                refreshing={refreshingSnapshot}
-                onRefresh={refreshAll}
+                // The lifecycle is the rail's own authority for whether the
+                // agent is gone, whichever path raised the disconnect.
+                agent={railAgentState(agentLifecycle.state, shown.agent.state)}
+                nativeChrome={bridge.native}
+                blocked={takeover}
               />
-              {screen}
-            </main>
-          </>
-        )}
-        {here.kind !== 'first-run' && detailsShown ? (
-          <DetailsPanel
+              <main className="main">
+                <Topbar
+                  blocked={takeover}
+                  deviceLabel={deviceLabel}
+                  snapshot={shown}
+                  location={here}
+                  folder={state.folder}
+                  onNavigate={(location) => locations.navigate(location)}
+                  onSetFolder={(folder) => locations.setFolder(folder)}
+                  onSearch={() => setSearchOpen(true)}
+                  collapsed={sideCollapsed}
+                  refreshing={refreshingSnapshot}
+                  onRefresh={refreshAll}
+                />
+                {screen}
+              </main>
+            </>
+          )}
+          {here.kind !== 'first-run' && detailsShown ? (
+            <DetailsPanel
+              snapshot={shown}
+              bridge={bridge}
+              revealRequest={revealRequest}
+              onRevealHandled={() => setRevealRequest(null)}
+              selection={state.selection}
+              onClose={() => {
+                locations.setDetails(false);
+              }}
+              onDelete={(item) => setWorkflow({ kind: 'delete', item })}
+              onConflict={(item, draft) =>
+                setWorkflow({ kind: 'conflict', item, draft })
+              }
+              onApplied={refresh}
+              onCommandError={commandError}
+              onMutationError={mutationError}
+              concealSignal={concealSignal}
+              accessGeneration={selectedAccessGeneration}
+              accessNow={accessNow}
+              accessSession={accessSession}
+              resumeDraft={resumeDraft}
+            />
+          ) : null}
+          <ShellSearch
             snapshot={shown}
-            bridge={bridge}
-            revealRequest={revealRequest}
-            onRevealHandled={() => setRevealRequest(null)}
-            selection={state.selection}
-            onClose={() => {
-              locations.setDetails(false);
-            }}
-            onDelete={(item) => setWorkflow({ kind: 'delete', item })}
-            onConflict={(item, draft) =>
-              setWorkflow({ kind: 'conflict', item, draft })
+            open={searchOpen}
+            onClose={() => setSearchOpen(false)}
+            onNavigate={(location) => locations.navigate(location)}
+            onOpenItem={(storeId, path) =>
+              locations.navigateAndSelect(
+                { kind: 'store', ref: storeId },
+                { store: storeId, path },
+              )
             }
-            onApplied={refresh}
-            onCommandError={commandError}
-            onMutationError={mutationError}
-            concealSignal={concealSignal}
-            accessGeneration={selectedAccessGeneration}
-            accessNow={accessNow}
-            accessSession={accessSession}
-            resumeDraft={resumeDraft}
           />
-        ) : null}
+        </ChatInboxProvider>
       </div>
-      {stop ? (
-        <AgentStopNotice
-          lifecycle={stop}
-          bridge={bridge}
-          placement="shell"
-          onRetryRestoration={() => {
-            void recoverAgentReadiness(true).catch(commandError);
-          }}
-        />
-      ) : null}
-      <ShellSearch
-        snapshot={shown}
-        open={searchOpen}
-        onClose={() => setSearchOpen(false)}
-        onNavigate={(location) => locations.navigate(location)}
-        onOpenItem={(storeId, path) =>
-          locations.navigateAndSelect(
-            { kind: 'store', ref: storeId },
-            { store: storeId, path },
-          )
-        }
-      />
       <WriteOverlay
         snapshot={shown}
         accessNow={accessNow}
@@ -1817,7 +1889,6 @@ function VaultShell({
         onApplied={refresh}
         onError={commandError}
         onMutationError={mutationError}
-        onRetryAgent={() => recoverAgentReadiness(true)}
         onRefreshConflict={async (item, draft) => {
           await refreshSnapshot();
           setResumeDraft({
@@ -1860,6 +1931,23 @@ function VaultShell({
           onCancel={() => settlePrompt(false)}
         />
       ) : null}
+      {stop ? (
+        <AgentStopNotice
+          lifecycle={stop}
+          bridge={bridge}
+          placement="shell"
+          onRetryRestoration={() => {
+            void recoverAgentReadiness(true).catch(commandError);
+          }}
+        />
+      ) : null}
+      {agentLifecycle.state === 'disconnected' ? (
+        <AgentLostDialog
+          message={agentLifecycle.error}
+          bridge={bridge}
+          onRetryAgent={() => recoverAgentReadiness(true)}
+        />
+      ) : null}
     </div>
   );
 
@@ -1900,22 +1988,13 @@ function VaultShell({
 
   const withToasts = (
     <ToastProvider controller={toasts} portalRoot={portalRoot}>
-      <ChatInboxProvider
-        key={`inbox:${concealSignal}`}
-        bridge={bridge}
-        snapshot={shown}
-        onNavigate={navigateFromNotification}
-        clock={chatClock}
-        accessNow={accessNow}
-      >
-        <NavigationGuardProvider store={locations}>
-          <QueryRepositoryContext.Provider value={deviceCache.repository}>
-            <DeviceCacheContext.Provider value={deviceCache}>
-              {shell}
-            </DeviceCacheContext.Provider>
-          </QueryRepositoryContext.Provider>
-        </NavigationGuardProvider>
-      </ChatInboxProvider>
+      <NavigationGuardProvider store={locations}>
+        <QueryRepositoryContext.Provider value={deviceCache.repository}>
+          <DeviceCacheContext.Provider value={deviceCache}>
+            {shell}
+          </DeviceCacheContext.Provider>
+        </QueryRepositoryContext.Provider>
+      </NavigationGuardProvider>
     </ToastProvider>
   );
   if (!portalRoot) return withToasts;

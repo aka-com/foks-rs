@@ -120,9 +120,18 @@ export class AgentLifecycleController {
     return () => this.#listeners.delete(listener);
   }
 
-  disconnect(message?: string): void {
+  disconnect(message?: string): boolean {
+    if (
+      this.#state.state === 'disconnected' ||
+      this.#state.state === 'maintenance' ||
+      this.#state.state === 'restart-required' ||
+      this.#state.state === 'recovery-required' ||
+      this.#state.state === 'restoration-failed'
+    )
+      return false;
     this.#generation++;
     this.#publish({ state: 'disconnected', error: message });
+    return true;
   }
 
   requireBootstrap(step: string): void {
@@ -210,15 +219,18 @@ export class AgentLifecycleController {
   }
 
   #run(reconnect: boolean, generation: number): Promise<AgentStatus> {
+    const disconnected =
+      reconnect && this.#state.state === 'disconnected' ? this.#state : null;
     return (async () => {
       this.#requireCurrent(generation);
-      this.#publish({ state: 'checking' });
+      if (!disconnected) this.#publish({ state: 'checking' });
       let status = reconnect
         ? await this.#bridge.retryAgentConnection()
         : await this.#bridge.agentStatus();
       this.#requireCurrent(generation);
       if (status.state === 'bootstrap') {
-        this.#publish({ state: 'initializing', step: status.step });
+        if (!disconnected)
+          this.#publish({ state: 'initializing', step: status.step });
         status = await this.#bridge.initializeClientState();
         this.#requireCurrent(generation);
       }
@@ -240,7 +252,7 @@ export class AgentLifecycleController {
         !(error instanceof StaleAgentLifecycle) &&
         generation === this.#generation
       )
-        this.#publish({ state: 'failure', error });
+        this.#publish(disconnected ?? { state: 'failure', error });
       throw error;
     });
   }

@@ -40,6 +40,11 @@ export type AppLifecycleRequest = 'restart' | 'quit';
 export const mockAppLifecycleRequests: AppLifecycleRequest[] = [];
 
 export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
+  let connectionLoss =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('state') === 'agent-lost'
+      ? 'The agent socket closed while reading the catalog.'
+      : null;
   const ssoModes = new Map<string, import('./sso-contract').SsoPurpose>();
   const stores: Store[] = snapshot.stores.map((store) => ({ ...store }));
   const servers = snapshot.servers.map((server) => ({ ...server }));
@@ -641,7 +646,11 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       stores.splice(index, 1);
       return { applied: true };
     },
-    takeAgentConnectionLoss: async () => null,
+    takeAgentConnectionLoss: async () => {
+      const pending = connectionLoss;
+      connectionLoss = null;
+      return pending;
+    },
     retryAgentConnection: async () => ({ ...snapshot.agent }),
     createGroup: async ({ accountStoreId, teamAlias, name, kind }) => {
       const account = stores.find(

@@ -9,6 +9,20 @@ import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';
 import type { AgentStatus } from '../src/model';
 
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((accept, decline) => {
+    resolve = accept;
+    reject = decline;
+  });
+  return { promise, resolve, reject };
+}
+
 test('maintenance operation outcomes remain distinct from service restoration', () => {
   assert.equal(
     maintenanceOutcomeMessage({ status: 'completed' }),
@@ -96,6 +110,104 @@ test('late status from a disconnected generation cannot restore ready', async ()
   release({ state: 'ready' });
   await assert.rejects(first);
   assert.equal(controller.snapshot().state, 'disconnected');
+});
+
+test('duplicate disconnect does not stale a pending reconnect', async () => {
+  const retry = deferred<AgentStatus>();
+  const controller = new AgentLifecycleController({
+    ...mockBridge(FIXTURE),
+    retryAgentConnection: () => retry.promise,
+  });
+  assert.equal(controller.disconnect('socket closed'), true);
+  const pending = controller.establish(true);
+  assert.equal(controller.disconnect('duplicate socket event'), false);
+  retry.resolve({ state: 'ready' });
+  assert.deepEqual(await pending, { state: 'ready' });
+  assert.equal(controller.snapshot().state, 'ready');
+});
+
+test('reconnect remains disconnected through retry and initialization', async () => {
+  const retry = deferred<AgentStatus>();
+  const initialization = deferred<AgentStatus>();
+  const initializationEntered = deferred<void>();
+  const controller = new AgentLifecycleController({
+    ...mockBridge(FIXTURE),
+    retryAgentConnection: () => retry.promise,
+    initializeClientState: () => {
+      initializationEntered.resolve(undefined);
+      return initialization.promise;
+    },
+  });
+  controller.disconnect('socket closed');
+  const pending = controller.establish(true);
+  assert.equal(controller.snapshot().state, 'disconnected');
+  retry.resolve({ state: 'bootstrap', step: 'initialize-state' });
+  await initializationEntered.promise;
+  assert.equal(controller.snapshot().state, 'disconnected');
+  initialization.resolve({ state: 'ready' });
+  assert.deepEqual(await pending, { state: 'ready' });
+  assert.equal(controller.snapshot().state, 'ready');
+});
+
+test('failed reconnect restores disconnected and rejects', async () => {
+  const failure = new Error('service did not restart');
+  const controller = new AgentLifecycleController({
+    ...mockBridge(FIXTURE),
+    retryAgentConnection: async () => {
+      throw failure;
+    },
+  });
+  controller.disconnect('socket closed');
+  await assert.rejects(controller.establish(true), failure);
+  assert.deepEqual(controller.snapshot(), {
+    state: 'disconnected',
+    error: 'socket closed',
+  });
+});
+
+test('maintenance arriving during reconnect remains authoritative', async () => {
+  const retry = deferred<AgentStatus>();
+  const controller = new AgentLifecycleController({
+    ...mockBridge(FIXTURE),
+    retryAgentConnection: () => retry.promise,
+  });
+  controller.disconnect('socket closed');
+  const pending = controller.establish(true);
+  controller.applyMaintenance({
+    state: 'active',
+    generation: 1,
+    revision: 1,
+    kind: 'verify',
+    phase: 'running',
+  });
+  retry.resolve({ state: 'ready' });
+  await assert.rejects(pending);
+  assert.deepEqual(controller.snapshot(), {
+    state: 'maintenance',
+    generation: 1,
+    kind: 'verify',
+    phase: 'running',
+  });
+});
+
+test('disconnect arriving during maintenance is ignored', () => {
+  const controller = new AgentLifecycleController(mockBridge(FIXTURE), {
+    state: 'ready',
+  });
+  controller.applyMaintenance({
+    state: 'active',
+    generation: 1,
+    revision: 1,
+    kind: 'export',
+    phase: 'quiescing',
+  });
+  assert.equal(controller.disconnect('late socket event'), false);
+  assert.deepEqual(controller.snapshot(), {
+    state: 'maintenance',
+    generation: 1,
+    kind: 'export',
+    phase: 'quiescing',
+  });
 });
 
 test('queued recovery is generation-bound across multiple invalidations', async () => {

@@ -119,7 +119,6 @@ export type WriteWorkflow =
     }
   | { kind: 'delete'; item: Item }
   | { kind: 'conflict'; item: Item; draft: string }
-  | { kind: 'agent-lost'; message?: string }
   | null;
 
 /** What the Path field shows while it is empty. */
@@ -184,7 +183,6 @@ export function initialWriteWorkflow(
       path: PATH_HINT.Password,
     };
   }
-  if (state === 'agent-lost') return { kind: 'agent-lost' };
   if (state === 'conflict' && snapshot) {
     const item = snapshot.items.find((candidate) => isLogin(candidate));
     if (item)
@@ -206,8 +204,6 @@ export function workflowForError(
   draft = '',
 ): WriteWorkflow | null {
   const typed = normalizeCommandError(error);
-  if (typed.code === 'agent-lost')
-    return { kind: 'agent-lost', message: typed.message };
   if (typed.code === 'conflict' && item)
     return { kind: 'conflict', item, draft };
   return null;
@@ -898,75 +894,6 @@ function ExistsSheet({
   );
 }
 
-function AgentLostDialog({
-  message,
-  bridge,
-  onRetryAgent,
-  onReconnected,
-}: {
-  message?: string;
-  bridge: Bridge;
-  onRetryAgent: () => Promise<void>;
-  onReconnected: () => void;
-}): ReactNode {
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
-  return (
-    <Dialog
-      className="stopwrap"
-      role="alertdialog"
-      aria-label="Connection to background service lost"
-    >
-      <div className="notice stop">
-        <h2>Connection to background service lost</h2>
-        <p>
-          The background service stopped responding. Click Retry to reconnect.
-        </p>
-        {message ? <p className="fn">{message}</p> : null}
-        {failure ? (
-          <p className="fn" role="alert">
-            {failure}
-          </p>
-        ) : null}
-        <div className="acts2">
-          <Button
-            variant="primary"
-            disabled={busy}
-            onClick={() => {
-              setBusy(true);
-              setFailure(null);
-              void (async () => {
-                try {
-                  await onRetryAgent();
-                  onReconnected();
-                } catch (error) {
-                  setFailure(normalizeCommandError(error).message);
-                } finally {
-                  setBusy(false);
-                }
-              })();
-            }}
-          >
-            Retry
-          </Button>
-          <Button
-            disabled={busy}
-            onClick={() => {
-              void bridge
-                .quitApp()
-                .catch((error) =>
-                  setFailure(normalizeCommandError(error).message),
-                );
-            }}
-          >
-            Quit FOKS
-          </Button>
-        </div>
-      </div>
-    </Dialog>
-  );
-}
-
 export function WriteOverlay({
   snapshot,
   bridge,
@@ -975,7 +902,6 @@ export function WriteOverlay({
   onApplied,
   onError,
   onMutationError,
-  onRetryAgent,
   onRefreshConflict,
   onDiscardConflict,
   onOpenExisting,
@@ -988,7 +914,6 @@ export function WriteOverlay({
   onApplied: (message: string) => Promise<void>;
   onError: (error: unknown, item?: Item) => void;
   onMutationError: MutationFailureHandler;
-  onRetryAgent: () => Promise<void>;
   onRefreshConflict: (item: Item, draft: string) => Promise<void>;
   onDiscardConflict: () => void;
   onOpenExisting: (
@@ -997,15 +922,6 @@ export function WriteOverlay({
   accessNow?: () => number;
 }): ReactNode {
   if (!workflow) return null;
-  if (workflow.kind === 'agent-lost')
-    return (
-      <AgentLostDialog
-        message={workflow.message}
-        bridge={bridge}
-        onRetryAgent={onRetryAgent}
-        onReconnected={() => setWorkflow(null)}
-      />
-    );
   // The sheet supplies its own dialog: Escape and the backdrop are decided by
   // the draft it holds, the same state its navigation guard answers from.
   if (workflow.kind === 'new')
