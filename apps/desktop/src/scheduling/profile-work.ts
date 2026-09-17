@@ -30,6 +30,15 @@ type Queue = {
   last?: string;
   draining: boolean;
 };
+const MAX_QUEUE_WAIT = 60_000;
+const MAX_QUEUED = 256;
+const queueBusy = (message: string) =>
+  Object.assign(new Error(message), {
+    code: 'profile-busy',
+    retryable: true,
+    fatal: false,
+    ambiguous: false,
+  });
 const owners = new WeakMap<object, Map<string, Queue>>();
 const observers = new WeakMap<object, Set<Observer>>();
 const cancellation = () =>
@@ -89,6 +98,10 @@ export function scheduleProfileWork<T>(
         }),
       );
   }
+  if (queue.foreground.length + queue.background.length >= MAX_QUEUED)
+    return Promise.reject(
+      queueBusy('Profile queue full; request did not start.'),
+    );
   const queued = performance.now();
   let resolve!: (value: T | PromiseLike<T>) => void,
     reject!: (cause: unknown) => void;
@@ -123,6 +136,7 @@ export function scheduleProfileWork<T>(
   };
   const finish = () => {
     settled = true;
+    clearTimeout(admissionTimer);
     background?.signal.removeEventListener('abort', entry.cancel);
   };
   const entry: Work = {
@@ -146,6 +160,7 @@ export function scheduleProfileWork<T>(
       }
     },
     async run() {
+      clearTimeout(admissionTimer);
       const started = performance.now();
       let outcome: WorkTiming['outcome'] = 'success',
         busy = false;
@@ -155,6 +170,10 @@ export function scheduleProfileWork<T>(
           (background && (background.signal.aborted || !background.current()))
         )
           throw cancellation();
+        if (started - queued >= MAX_QUEUE_WAIT)
+          throw queueBusy(
+            'Profile queue deadline exceeded; request did not start.',
+          );
         const value = await work();
         if (
           cancelled ||
@@ -174,6 +193,17 @@ export function scheduleProfileWork<T>(
     },
   };
   (background ? queue.background : queue.foreground).push(entry);
+  const admissionTimer = setTimeout(() => {
+    if (settled || queue.active === entry) return;
+    const waiting = background ? queue.background : queue.foreground;
+    const index = waiting.indexOf(entry);
+    if (index >= 0) waiting.splice(index, 1);
+    finish();
+    reject(
+      queueBusy('Profile queue deadline exceeded; request did not start.'),
+    );
+    report(performance.now(), 'error', true);
+  }, MAX_QUEUE_WAIT);
   background?.signal.addEventListener('abort', entry.cancel, { once: true });
   const drain = async () => {
     if (queue.draining) return;

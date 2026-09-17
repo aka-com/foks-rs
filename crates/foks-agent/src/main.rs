@@ -86,8 +86,25 @@ static RESET_TICKETS: OnceLock<Mutex<BTreeMap<[u8; 32], ResetTicket>>> = OnceLoc
 struct ConnectionCapacity {
     recovery: Arc<Semaphore>,
     blocking: Arc<Semaphore>,
+    local: Arc<Semaphore>,
     chat_polling: Arc<Semaphore>,
     active_chat_polls: Arc<Mutex<std::collections::HashSet<ChatPollKey>>>,
+}
+
+impl ConnectionCapacity {
+    fn worker_pool(&self, operation: &Operation) -> Arc<Semaphore> {
+        match operation {
+            Operation::SetLocalAccountAlias { .. }
+            | Operation::ListProfiles
+            | Operation::Ping
+            | Operation::AgentStatus
+            | Operation::RetentionStatus => self.local.clone(),
+            Operation::DataWriteStatus { .. } | Operation::PendingDataWrites { .. } => {
+                self.recovery.clone()
+            }
+            _ => self.blocking.clone(),
+        }
+    }
 }
 
 #[derive(clap::Parser)]
@@ -207,6 +224,7 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     let active = Arc::new(Semaphore::new(arguments.maximum_connections));
     let recovery = Arc::new(Semaphore::new(1));
     let blocking = Arc::new(Semaphore::new(arguments.blocking_workers));
+    let local = Arc::new(Semaphore::new(1));
     let chat_polling = Arc::new(Semaphore::new(arguments.chat_poll_workers));
     let active_chat_polls = Arc::new(Mutex::new(std::collections::HashSet::new()));
     let retention_gate = Arc::new(Semaphore::new(1));
@@ -263,6 +281,7 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                 let capacity = ConnectionCapacity {
                     recovery: recovery.clone(),
                     blocking: blocking.clone(),
+                    local: local.clone(),
                     chat_polling: chat_polling.clone(),
                     active_chat_polls: active_chat_polls.clone(),
                 };
@@ -398,7 +417,7 @@ async fn run_scheduled_batches(
         // root admission, but rejoin its fair queue after every completed job.
         let started = Instant::now();
         let admission = profile_work::coordinator()
-            .acquire(state_dir, profile_work::Scope::Root, timeout)
+            .acquire(state_dir, profile_work::Scope::SecurityRoot, timeout)
             .await
             .map_err(|error| error.to_string())?;
         let permit = tokio::time::timeout(
@@ -773,16 +792,7 @@ async fn handle_connection(
             }
         };
         let remaining = timeout.saturating_sub(admitted_at.elapsed());
-        let worker_pool = if matches!(
-            request.operation,
-            Operation::DataWriteStatus { .. }
-                | Operation::PendingDataWrites { .. }
-                | Operation::RetentionStatus
-        ) {
-            capacity.recovery.clone()
-        } else {
-            capacity.blocking.clone()
-        };
+        let worker_pool = capacity.worker_pool(&request.operation);
         let permit = match tokio::time::timeout(remaining, worker_pool.acquire_owned()).await {
             Ok(Ok(permit)) => permit,
             Ok(Err(_)) => return Err("agent worker pool closed".into()),
@@ -6164,6 +6174,34 @@ mod tests {
             .unwrap()
             .require_at(foks_client_app::Capability::Kv, now)
             .is_err());
+    }
+
+    #[test]
+    fn local_worker_capacity_is_reserved_from_remote_and_recovery_work() {
+        let capacity = ConnectionCapacity {
+            recovery: Arc::new(Semaphore::new(1)),
+            blocking: Arc::new(Semaphore::new(1)),
+            local: Arc::new(Semaphore::new(1)),
+            chat_polling: Arc::new(Semaphore::new(1)),
+            active_chat_polls: Arc::new(Mutex::new(Default::default())),
+        };
+        let _remote = capacity.blocking.clone().try_acquire_owned().unwrap();
+        let _recovery = capacity.recovery.clone().try_acquire_owned().unwrap();
+        let alias = Operation::SetLocalAccountAlias {
+            profile: "local".into(),
+            account_alias: "owner".into(),
+            label: "Personal".into(),
+        };
+        let local = capacity.worker_pool(&alias).try_acquire_owned().unwrap();
+        assert!(capacity
+            .worker_pool(&Operation::ListProfiles)
+            .try_acquire_owned()
+            .is_err());
+        drop(local);
+        assert!(capacity
+            .worker_pool(&Operation::ListProfiles)
+            .try_acquire_owned()
+            .is_ok());
     }
 
     #[tokio::test(flavor = "current_thread")]

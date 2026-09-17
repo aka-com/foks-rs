@@ -18,6 +18,8 @@ const CONTROL_POLL: Duration = Duration::from_millis(20);
 pub(super) enum Scope {
     None,
     Profiles(Vec<String>),
+    LocalMetadata(String),
+    SecurityRoot,
     // Snapshot reads share admission with profile work and other readers, but
     // remain ordered against root-wide registry changes and state maintenance.
     // ProfileRegistry::open still takes the cross-process registry lock.
@@ -34,8 +36,11 @@ impl Scope {
         match (self, other) {
             (Self::None, _) | (_, Self::None) => false,
             (Self::Root, _) | (_, Self::Root) => true,
-            (Self::Profiles(a), Self::Profiles(b)) => a.iter().any(|p| b.contains(p)),
+            (Self::LocalMetadata(a), Self::LocalMetadata(b)) => a == b,
+            (Self::LocalMetadata(_), _) | (_, Self::LocalMetadata(_)) => false,
             (Self::RegistryRead, _) | (_, Self::RegistryRead) => false,
+            (Self::SecurityRoot, _) | (_, Self::SecurityRoot) => true,
+            (Self::Profiles(a), Self::Profiles(b)) => a.iter().any(|p| b.contains(p)),
         }
     }
 }
@@ -60,8 +65,8 @@ pub(super) fn operation_scope(operation: &Operation) -> Scope {
         | RemoveProfile { .. }
         | SetProfileLabel { .. }
         | ResetHardState { .. }
-        | RefreshLease { .. }
-        | DemoteTeamMember { .. }
+        | RefreshLease { .. } => Scope::Root,
+        DemoteTeamMember { .. }
         | RemoveTeamMember { .. }
         | ResumeTeamMemberEdit { .. }
         | ExpelFederatedTeam { .. }
@@ -70,7 +75,7 @@ pub(super) fn operation_scope(operation: &Operation) -> Scope {
         | SyncYubiAccount {
             with_federation: true,
             ..
-        } => Scope::Root,
+        } => Scope::SecurityRoot,
         AdmitFederatedTeam {
             local_profile,
             remote_profile,
@@ -110,8 +115,8 @@ pub(super) fn operation_scope(operation: &Operation) -> Scope {
             Some(submission) => Scope::profile(&submission.scope.profile),
             None => kv_scope(&header.store),
         },
-        SetLocalAccountAlias { profile, .. }
-        | WebAdmin { profile, .. }
+        SetLocalAccountAlias { profile, .. } => Scope::LocalMetadata(profile.clone()),
+        WebAdmin { profile, .. }
         | BotAccount { profile, .. }
         | ListAccountRenames { profile, .. }
         | RenameAccount { profile, .. }
@@ -704,6 +709,53 @@ mod tests {
     }
 
     #[test]
+    fn local_metadata_proceeds_during_remote_work_but_serializes_with_itself_and_reset() {
+        let coordinator = Arc::new(Coordinator::default());
+        let root = Path::new("/local-metadata-test");
+        let alias = Operation::SetLocalAccountAlias {
+            profile: "a".into(),
+            account_alias: "owner".into(),
+            label: "Personal".into(),
+        };
+        for operation in [
+            Operation::SyncAccount {
+                profile: "a".into(),
+                alias: "owner".into(),
+            },
+            Operation::RunDueJobs {
+                profile: "a".into(),
+            },
+        ] {
+            let remote = coordinator
+                .try_acquire(root, operation_scope(&operation))
+                .unwrap()
+                .unwrap();
+            let local = coordinator
+                .try_acquire(root, operation_scope(&alias))
+                .unwrap()
+                .expect("local aliases must not wait for server work");
+            assert!(coordinator
+                .try_acquire(root, operation_scope(&alias))
+                .unwrap()
+                .is_none());
+            assert!(coordinator
+                .try_acquire(
+                    root,
+                    operation_scope(&Operation::RemoveProfile { name: "a".into() })
+                )
+                .unwrap()
+                .is_none());
+            drop((local, remote));
+        }
+        let reset = coordinator.try_acquire(root, Scope::Root).unwrap().unwrap();
+        assert!(coordinator
+            .try_acquire(root, operation_scope(&alias))
+            .unwrap()
+            .is_none());
+        drop(reset);
+    }
+
+    #[test]
     fn operation_scopes_cover_pairs_cascades_and_metadata_reads() {
         assert_eq!(
             operation_scope(&Operation::ListDevices {
@@ -727,7 +779,7 @@ mod tests {
             operation_scope(&Operation::RunDueJobs {
                 profile: "a".into()
             }),
-            Scope::Root
+            Scope::SecurityRoot
         );
     }
 }

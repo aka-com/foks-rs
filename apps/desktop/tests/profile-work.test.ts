@@ -16,6 +16,53 @@ function deferred<T = void>() {
 const flush = async () => {
   for (let i = 0; i < 10; i++) await Promise.resolve();
 };
+test('queued foreground work expires without running or releasing active work', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const owner = {},
+    gate = deferred();
+  const active = scheduleProfileWork(owner, 'p', () => gate.promise);
+  await flush();
+  const queued = scheduleProfileWork(owner, 'p', async () =>
+    assert.fail('expired work ran'),
+  );
+  const rejected = assert.rejects(queued, {
+    code: 'profile-busy',
+    ambiguous: false,
+  });
+  t.mock.timers.tick(60_001);
+  await rejected;
+  let started = false;
+  const next = scheduleProfileWork(owner, 'p', async () => {
+    started = true;
+  });
+  await flush();
+  assert.equal(started, false);
+  await scheduleProfileWork(owner, 'other', async () => {});
+  gate.resolve();
+  await Promise.all([active, next]);
+  assert.equal(started, true);
+});
+
+test('foreground capacity is bounded without blocking independent profiles', async () => {
+  const owner = {},
+    gate = deferred();
+  const active = scheduleProfileWork(owner, 'p', () => gate.promise);
+  await flush();
+  const waiting = Array.from({ length: 256 }, (_, i) =>
+    scheduleProfileWork(owner, 'p', async () => i),
+  );
+  await assert.rejects(
+    scheduleProfileWork(owner, 'p', async () =>
+      assert.fail('excess request ran'),
+    ),
+    { code: 'profile-busy', ambiguous: false },
+  );
+  await scheduleProfileWork(owner, 'other', async () => {});
+  gate.resolve();
+  await active;
+  assert.equal((await Promise.all(waiting)).length, 256);
+});
+
 test('default work is asynchronous FIFO per profile and independent across profiles and owners', async () => {
   const owner = {},
     other = {},
