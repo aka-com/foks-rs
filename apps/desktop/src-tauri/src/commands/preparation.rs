@@ -29,8 +29,15 @@ pub(super) async fn ensure_catalog_for_mutation(
     let Some((generation, token)) = state.begin_missing_catalog_for_mutation(permit)? else {
         return Ok(());
     };
+    let profile = state.mutation_profile().map(str::to_owned);
     let snapshot = tauri::async_runtime::spawn_blocking(move || {
-        foks_desktop::load_catalog_cancellable(transport, token).map_err(AgentError::from_desktop)
+        match profile {
+            Some(profile) => {
+                foks_desktop::load_profile_catalog_cancellable(transport, profile, token)
+            }
+            None => foks_desktop::load_catalog_cancellable(transport, token),
+        }
+        .map_err(AgentError::from_desktop)
     })
     .await
     .map_err(|error| {

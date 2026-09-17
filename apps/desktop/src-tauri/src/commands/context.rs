@@ -22,41 +22,180 @@ use std::sync::{Arc, Mutex, Weak};
 
 pub const MAIN: &str = "main";
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum MutationScope {
+    Root,
+    Profile(String),
+    LocalAliases,
+}
+
+#[derive(Default)]
+struct MutationScopeState {
+    in_flight: Arc<AtomicBool>,
+    requires_refresh: Arc<AtomicBool>,
+    generation: Arc<AtomicU64>,
+    load_generation: Arc<AtomicU64>,
+    load: Arc<Mutex<Option<CatalogLoadToken>>>,
+}
+
+#[derive(Clone)]
 pub struct AppState {
     pub agent: Arc<AgentHandle>,
-    pub(super) chat_views: Mutex<HashMap<String, Weak<AtomicBool>>>,
-    catalog_load: Mutex<Option<CatalogLoadToken>>,
-    catalog_coordination: Mutex<()>,
-    pub(super) catalog_generation: AtomicU64,
-    catalog_load_generation: AtomicU64,
-    pub(super) catalog: Mutex<Option<CatalogSnapshot>>,
+    pub(super) chat_views: Arc<Mutex<HashMap<String, Weak<AtomicBool>>>>,
+    catalog_load: Arc<Mutex<Option<CatalogLoadToken>>>,
+    catalog_coordination: Arc<Mutex<()>>,
+    next_catalog_generation: Arc<AtomicU64>,
+    pub(super) catalog_generation: Arc<AtomicU64>,
+    catalog_load_generation: Arc<AtomicU64>,
+    pub(super) catalog: Arc<Mutex<Option<CatalogSnapshot>>>,
     mutation_in_flight: Arc<AtomicBool>,
     pub(super) mutation_requires_refresh: Arc<AtomicBool>,
-    pending_drop_paths: Mutex<HashMap<String, PathBuf>>,
-    pub(super) accounts: Mutex<HashMap<String, AccountDto>>,
-    pub(super) devices: Mutex<HashMap<String, Vec<DeviceDto>>>,
-    pub(super) rosters: Mutex<HashMap<String, Vec<PartyDto>>>,
-    pub(super) federations: Mutex<HashMap<String, Vec<FederationEntryDto>>>,
+    scope: MutationScope,
+    scope_state: Arc<MutationScopeState>,
+    root: Arc<MutationScopeState>,
+    scopes: Arc<Mutex<HashMap<MutationScope, Arc<MutationScopeState>>>>,
+    pending_drop_paths: Arc<Mutex<HashMap<String, PathBuf>>>,
+    local_accounts: Arc<Mutex<HashMap<String, foks_agent_proto::AccountStoreRef>>>,
+    pub(super) accounts: Arc<Mutex<HashMap<String, AccountDto>>>,
+    pub(super) devices: Arc<Mutex<HashMap<String, Vec<DeviceDto>>>>,
+    pub(super) rosters: Arc<Mutex<HashMap<String, Vec<PartyDto>>>>,
+    pub(super) federations: Arc<Mutex<HashMap<String, Vec<FederationEntryDto>>>>,
 }
 
 impl AppState {
     pub fn new(agent: Arc<AgentHandle>) -> Self {
+        let root = Arc::new(MutationScopeState::default());
         Self {
             agent,
-            chat_views: Mutex::new(HashMap::new()),
-            catalog_load: Mutex::new(None),
-            catalog_coordination: Mutex::new(()),
-            catalog_generation: AtomicU64::new(0),
-            catalog_load_generation: AtomicU64::new(0),
-            catalog: Mutex::new(None),
-            mutation_in_flight: Arc::new(AtomicBool::new(false)),
-            mutation_requires_refresh: Arc::new(AtomicBool::new(false)),
-            pending_drop_paths: Mutex::new(HashMap::new()),
-            accounts: Mutex::new(HashMap::new()),
-            devices: Mutex::new(HashMap::new()),
-            rosters: Mutex::new(HashMap::new()),
-            federations: Mutex::new(HashMap::new()),
+            chat_views: Arc::default(),
+            catalog_load: Arc::clone(&root.load),
+            catalog_coordination: Arc::default(),
+            next_catalog_generation: Arc::default(),
+            catalog_generation: Arc::clone(&root.generation),
+            catalog_load_generation: Arc::clone(&root.load_generation),
+            catalog: Arc::default(),
+            mutation_in_flight: Arc::clone(&root.in_flight),
+            mutation_requires_refresh: Arc::clone(&root.requires_refresh),
+            scope: MutationScope::Root,
+            scope_state: Arc::clone(&root),
+            root,
+            scopes: Arc::new(Mutex::new(HashMap::from([(
+                MutationScope::LocalAliases,
+                Arc::new(MutationScopeState::default()),
+            )]))),
+            pending_drop_paths: Arc::default(),
+            local_accounts: Arc::default(),
+            accounts: Arc::default(),
+            devices: Arc::default(),
+            rosters: Arc::default(),
+            federations: Arc::default(),
         }
+    }
+
+    fn scoped(&self, scope: MutationScope) -> Result<Self, AgentError> {
+        let _coordination = self
+            .catalog_coordination
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut scopes = self
+            .scopes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !scopes.contains_key(&scope) && scopes.len() >= 257 {
+            scopes.retain(|scope, state| {
+                *scope == MutationScope::LocalAliases
+                    || Arc::strong_count(state) > 1
+                    || state.in_flight.load(Ordering::Acquire)
+                    || state.requires_refresh.load(Ordering::Acquire)
+            });
+            if scopes.len() >= 257 {
+                return Err(AgentError::new(
+                    "busy",
+                    "Too many unreconciled mutation scopes. Refresh the vault before continuing.",
+                    false,
+                ));
+            }
+        }
+        let state = scopes
+            .entry(scope.clone())
+            .or_insert_with(|| {
+                let state = MutationScopeState::default();
+                let generation = self.root.generation.load(Ordering::Acquire);
+                state.generation.store(generation, Ordering::Release);
+                state.load_generation.store(generation, Ordering::Release);
+                Arc::new(state)
+            })
+            .clone();
+        let mut view = self.clone();
+        view.scope = scope;
+        view.catalog_load = Arc::clone(&state.load);
+        view.catalog_generation = Arc::clone(&state.generation);
+        view.catalog_load_generation = Arc::clone(&state.load_generation);
+        view.mutation_in_flight = Arc::clone(&state.in_flight);
+        view.mutation_requires_refresh = Arc::clone(&state.requires_refresh);
+        view.scope_state = state;
+        Ok(view)
+    }
+
+    pub(super) fn for_profile(&self, profile: &str) -> Result<Self, AgentError> {
+        if !crate::commands::validation::valid_response_text(profile, 256) {
+            return Err(invalid_request("Provide a valid server profile name."));
+        }
+        self.scoped(MutationScope::Profile(profile.to_owned()))
+    }
+
+    pub(super) fn for_store(&self, store: &str) -> Result<Self, AgentError> {
+        if store.len() > 2048 {
+            return Err(invalid_request("Select a valid vault store."));
+        }
+        let value: serde_json::Value = serde_json::from_str(store)
+            .map_err(|_| invalid_request("Select a valid vault store."))?;
+        let profile = value
+            .get("profile")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| invalid_request("Select a valid vault store."))?;
+        self.for_profile(profile)
+    }
+
+    pub(super) fn for_local_aliases(&self) -> Result<Self, AgentError> {
+        self.scoped(MutationScope::LocalAliases)
+    }
+
+    pub(super) fn mutation_profile(&self) -> Option<&str> {
+        match &self.scope {
+            MutationScope::Profile(profile) => Some(profile),
+            _ => None,
+        }
+    }
+
+    fn clear_profile_facts(&self, profile: &str) {
+        self.accounts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|_, account| account.profile != profile);
+        let belongs = |store: &String| {
+            serde_json::from_str::<serde_json::Value>(store)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("profile")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                })
+                .is_some_and(|value| value == profile)
+        };
+        self.devices
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|store, _| !belongs(store));
+        self.rosters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|store, _| !belongs(store));
+        self.federations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|store, _| !belongs(store));
     }
 
     fn clear_group_facts(&self) {
@@ -256,7 +395,9 @@ impl AppState {
         }
         // Loading is not publication. Keep the accepted snapshot and its
         // dependent facts usable until a replacement has been validated.
-        let generation = self.catalog_load_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let generation = self.next_generation();
+        self.catalog_load_generation
+            .store(generation, Ordering::Release);
         (generation, token)
     }
 
@@ -271,6 +412,96 @@ impl AppState {
         if self.catalog_load_generation.load(Ordering::Acquire) != generation {
             return false;
         }
+        if let Some(profile) = self.mutation_profile() {
+            if catalog.profiles != [profile]
+                || catalog
+                    .full_item_reads
+                    .iter()
+                    .flatten()
+                    .any(|candidate| candidate != profile)
+                || catalog
+                    .stores
+                    .iter()
+                    .any(|store| store.profile() != profile)
+                || catalog
+                    .known_stores
+                    .iter()
+                    .any(|store| store.profile() != profile)
+                || catalog
+                    .items
+                    .iter()
+                    .any(|item| item.store.profile() != profile)
+                || catalog
+                    .inventory
+                    .iter()
+                    .any(|inventory| inventory.profile != profile)
+                || catalog
+                    .profile_overviews
+                    .iter()
+                    .any(|overview| overview.profile != profile)
+                || catalog
+                    .blocked_profiles
+                    .iter()
+                    .any(|blocked| blocked != profile)
+                || catalog
+                    .failures
+                    .iter()
+                    .any(|failure| failure_profile(failure) != profile)
+            {
+                return false;
+            }
+            let complete = profile_catalog_complete(&catalog, profile);
+            self.reconcile_local_accounts(&catalog);
+            let mut retained = self
+                .catalog
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let retained = retained.get_or_insert_with(CatalogSnapshot::default);
+            remove_profile_catalog(retained, profile);
+            if !retained.profiles.iter().any(|existing| existing == profile) {
+                retained.profiles.push(profile.to_owned());
+            }
+            retained.stores.extend(catalog.stores);
+            retained.known_stores.extend(catalog.known_stores);
+            retained.items.extend(catalog.items);
+            if let Some(full_item_reads) = &mut retained.full_item_reads {
+                full_item_reads.extend(catalog.full_item_reads.into_iter().flatten());
+            }
+            retained.inventory.extend(catalog.inventory);
+            retained.profile_overviews.extend(catalog.profile_overviews);
+            retained.failures.extend(catalog.failures);
+            retained.blocked_profiles.extend(catalog.blocked_profiles);
+            self.clear_profile_facts(profile);
+            self.catalog_generation.store(generation, Ordering::Release);
+            self.advance_root_generation();
+            if complete {
+                self.mutation_requires_refresh
+                    .store(false, Ordering::Release);
+            }
+            return true;
+        }
+        if self.scope != MutationScope::Root {
+            return false;
+        }
+        let scopes = self
+            .scopes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for (scope, state) in scopes.iter() {
+            if let MutationScope::Profile(profile) = scope {
+                if profile_catalog_complete(&catalog, profile) {
+                    state.requires_refresh.store(false, Ordering::Release);
+                }
+            }
+        }
+        let complete = catalog.full_item_reads.is_some()
+            && catalog.failures.is_empty()
+            && catalog.blocked_profiles.is_empty()
+            && catalog
+                .profiles
+                .iter()
+                .all(|profile| profile_catalog_complete(&catalog, profile));
+        self.reconcile_local_accounts(&catalog);
         // Facts describe the previously accepted catalog. Retire them only
         // when its replacement is published, under the same coordination
         // lock used by retain_* so an old read cannot restore them afterward.
@@ -282,9 +513,15 @@ impl AppState {
         // Some reads capture the generation before selecting their target.
         // Publish it last: an old generation with a new target is rejected by
         // retain_*, but a new generation must never identify the old catalog.
+        for state in scopes.values() {
+            state.generation.store(generation, Ordering::Release);
+            state.load_generation.store(generation, Ordering::Release);
+        }
         self.catalog_generation.store(generation, Ordering::Release);
-        self.mutation_requires_refresh
-            .store(false, Ordering::Release);
+        if complete {
+            self.mutation_requires_refresh
+                .store(false, Ordering::Release);
+        }
         true
     }
 
@@ -313,11 +550,97 @@ impl AppState {
         ))
     }
 
+    fn reconcile_local_accounts(&self, catalog: &CatalogSnapshot) {
+        self.local_accounts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|_, account| {
+                (self.scope != MutationScope::Root || catalog.profiles.contains(&account.profile))
+                    && !catalog.inventory.iter().any(|inventory| {
+                        inventory.profile == account.profile && inventory.accounts_complete
+                    })
+            });
+    }
+
+    pub(super) fn invalidate_alias_metadata(&self, profile: &str) {
+        let _coordination = self
+            .catalog_coordination
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(catalog) = self
+            .catalog
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+        {
+            catalog
+                .profile_overviews
+                .retain(|overview| overview.profile != profile);
+        }
+    }
+
+    fn next_generation(&self) -> u64 {
+        self.next_catalog_generation.fetch_add(1, Ordering::AcqRel) + 1
+    }
+
+    fn advance_root_generation(&self) {
+        let generation = self.next_generation();
+        self.root
+            .load_generation
+            .store(generation, Ordering::Release);
+        self.root.generation.store(generation, Ordering::Release);
+    }
+
     pub(super) fn invalidate_catalog(&self) {
         let _coordination = self
             .catalog_coordination
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.scope == MutationScope::LocalAliases {
+            return;
+        }
+        if let Some(profile) = self.mutation_profile() {
+            self.retire_catalog_load();
+            if let Some(catalog) = self
+                .catalog
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_mut()
+            {
+                let mut local_accounts = self
+                    .local_accounts
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                for store in &catalog.stores {
+                    if let CatalogStoreSummary::Account { store } = store {
+                        if store.profile == profile {
+                            local_accounts.insert(
+                                store_id(&CatalogStoreRef::Account(store.clone())),
+                                store.clone(),
+                            );
+                        }
+                    }
+                }
+                catalog.stores.retain(|store| store.profile() != profile);
+                catalog.items.retain(|item| item.store.profile() != profile);
+                if let Some(full_item_reads) = &mut catalog.full_item_reads {
+                    full_item_reads.retain(|candidate| candidate != profile);
+                }
+                catalog
+                    .inventory
+                    .retain(|inventory| inventory.profile != profile);
+                catalog
+                    .profile_overviews
+                    .retain(|overview| overview.profile != profile);
+            }
+            self.clear_profile_facts(profile);
+            let generation = self.next_generation();
+            self.catalog_load_generation
+                .store(generation, Ordering::Release);
+            self.catalog_generation.store(generation, Ordering::Release);
+            self.advance_root_generation();
+            return;
+        }
         if let Some(token) = self
             .catalog_load
             .lock()
@@ -326,12 +649,35 @@ impl AppState {
         {
             token.cancel();
         }
-        let generation = self.catalog_load_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let generation = self.next_generation();
+        self.catalog_load_generation
+            .store(generation, Ordering::Release);
         *self
             .catalog
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         self.clear_group_facts();
+        self.local_accounts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        for state in self
+            .scopes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+        {
+            state.generation.store(generation, Ordering::Release);
+            state.load_generation.store(generation, Ordering::Release);
+            if let Some(token) = state
+                .load
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+            {
+                token.cancel();
+            }
+        }
         // As with publication, a read must not attach the new generation to
         // a target or fact selected from the retired catalog.
         self.catalog_generation.store(generation, Ordering::Release);
@@ -342,7 +688,17 @@ impl AppState {
             .catalog_coordination
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self.mutation_in_flight.load(Ordering::Acquire) {
+        if self.root.in_flight.load(Ordering::Acquire)
+            || self
+                .scopes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .any(|(scope, state)| {
+                    (self.scope == MutationScope::Root || *scope == self.scope)
+                        && state.in_flight.load(Ordering::Acquire)
+                })
+        {
             return Err(AgentError::new(
                 "mutation-in-flight",
                 "Wait for the current operation to finish before refreshing.",
@@ -373,7 +729,15 @@ impl AppState {
             .catalog
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_some()
+            .as_ref()
+            .is_some_and(|catalog| {
+                self.mutation_profile().is_none_or(|profile| {
+                    catalog
+                        .inventory
+                        .iter()
+                        .any(|inventory| inventory.profile == profile)
+                })
+            })
         {
             return Ok(None);
         }
@@ -391,7 +755,8 @@ impl AppState {
         {
             token.cancel();
         }
-        self.catalog_load_generation.fetch_add(1, Ordering::AcqRel);
+        self.catalog_load_generation
+            .store(self.next_generation(), Ordering::Release);
     }
 
     pub(super) fn selected_item(
@@ -484,7 +849,14 @@ impl AppState {
         &self,
         id: &str,
     ) -> Result<foks_agent_proto::AccountStoreRef, AgentError> {
-        self.selected_account_inner(id, false)
+        self.selected_account_inner(id, false).or_else(|error| {
+            self.local_accounts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(id)
+                .cloned()
+                .ok_or(error)
+        })
     }
 
     fn selected_account_inner(
@@ -1023,11 +1395,24 @@ impl AppState {
     /// Acquire this guard before any mutation. Refusal is immediate:
     /// a second write cannot proceed until the prior operation reconciles.
     pub fn begin_mutation(&self) -> Result<MutationGuard, AgentError> {
+        self.reserve_mutation(false)
+    }
+
+    fn reserve_mutation(&self, initialize: bool) -> Result<MutationGuard, AgentError> {
         let _coordination = self
             .catalog_coordination
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self.mutation_requires_refresh.load(Ordering::Acquire) {
+        let scopes = self
+            .scopes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let blocked = (!initialize && self.root.requires_refresh.load(Ordering::Acquire))
+            || scopes.iter().any(|(scope, state)| {
+                (self.scope == MutationScope::Root || *scope == self.scope)
+                    && state.requires_refresh.load(Ordering::Acquire)
+            });
+        if blocked {
             let mut error = AgentError::new(
                 "ambiguous",
                 "Refresh the vault to verify the previous change before making another one.",
@@ -1036,16 +1421,51 @@ impl AppState {
             error.ambiguous = true;
             return Err(error);
         }
-        self.mutation_in_flight
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| {
-                AgentError::new(
-                    "mutation-in-flight",
-            "Another change is currently in progress. Wait for it to complete before trying again.",
-                    false,
-                )
-            })?;
-        self.retire_catalog_load();
+        if self.root.in_flight.load(Ordering::Acquire)
+            || scopes.iter().any(|(scope, state)| {
+                (self.scope == MutationScope::Root || *scope == self.scope)
+                    && state.in_flight.load(Ordering::Acquire)
+            })
+        {
+            return Err(AgentError::new(
+                "mutation-in-flight",
+                "Another change is currently in progress. Wait for it to complete before trying again.",
+                false,
+            ));
+        }
+        self.mutation_in_flight.store(true, Ordering::Release);
+        if self.scope == MutationScope::Root {
+            for state in scopes.values() {
+                if let Some(token) = state
+                    .load
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                {
+                    token.cancel();
+                }
+                state
+                    .load_generation
+                    .store(self.next_generation(), Ordering::Release);
+            }
+        }
+        if self.scope != MutationScope::LocalAliases {
+            self.retire_catalog_load();
+        }
+        if self.scope != MutationScope::Root {
+            if let Some(token) = self
+                .root
+                .load
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+            {
+                token.cancel();
+            }
+            self.root
+                .load_generation
+                .store(self.next_generation(), Ordering::Release);
+        }
         Ok(MutationGuard(Arc::clone(&self.mutation_in_flight)))
     }
 
@@ -1053,22 +1473,69 @@ impl AppState {
     /// bootstrap repair after an uncertain response. Initialization does not clear
     /// `mutation_requires_refresh`; a successful catalog reconciliation clears it.
     pub fn begin_initialization(&self) -> Result<MutationGuard, AgentError> {
-        let _coordination = self
-            .catalog_coordination
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.mutation_in_flight
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| {
-                AgentError::new(
-                    "mutation-in-flight",
-                    "Another change is currently in progress. Wait for it to complete before trying again.",
-                    false,
-                )
-            })?;
-        self.retire_catalog_load();
-        Ok(MutationGuard(Arc::clone(&self.mutation_in_flight)))
+        if self.scope != MutationScope::Root {
+            return Err(invalid_request(
+                "Initialization requires a root reservation.",
+            ));
+        }
+        self.reserve_mutation(true)
     }
+}
+
+fn failure_profile(failure: &foks_desktop::CatalogFailure) -> &str {
+    match &failure.scope {
+        foks_desktop::CatalogFailureScope::Profile { profile, .. } => profile,
+        foks_desktop::CatalogFailureScope::Store(store) => store.profile(),
+    }
+}
+
+fn profile_catalog_complete(catalog: &CatalogSnapshot, profile: &str) -> bool {
+    catalog
+        .full_item_reads
+        .as_ref()
+        .is_some_and(|profiles| profiles.iter().any(|candidate| candidate == profile))
+        && catalog
+            .profiles
+            .iter()
+            .any(|candidate| candidate == profile)
+        && catalog.inventory.iter().any(|inventory| {
+            inventory.profile == profile && inventory.accounts_complete && inventory.teams_complete
+        })
+        && !catalog.profile_blocked(profile)
+        && !catalog
+            .failures
+            .iter()
+            .any(|failure| failure_profile(failure) == profile)
+        && !catalog.profile_overviews.iter().any(|overview| {
+            overview.profile == profile
+                && matches!(
+                    overview.server_status,
+                    foks_agent_proto::ResponseResult::Error { .. }
+                )
+        })
+}
+
+fn remove_profile_catalog(catalog: &mut CatalogSnapshot, profile: &str) {
+    if let Some(full_item_reads) = &mut catalog.full_item_reads {
+        full_item_reads.retain(|candidate| candidate != profile);
+    }
+    catalog.stores.retain(|store| store.profile() != profile);
+    catalog
+        .known_stores
+        .retain(|store| store.profile() != profile);
+    catalog.items.retain(|item| item.store.profile() != profile);
+    catalog
+        .inventory
+        .retain(|inventory| inventory.profile != profile);
+    catalog
+        .profile_overviews
+        .retain(|overview| overview.profile != profile);
+    catalog
+        .failures
+        .retain(|failure| failure_profile(failure) != profile);
+    catalog
+        .blocked_profiles
+        .retain(|blocked| blocked != profile);
 }
 
 #[derive(Debug)]

@@ -133,6 +133,11 @@ pub async fn invitation_request(
     {
         return Err(invalid_request("Invalid invitation action."));
     }
+    let state = if action.remote_profile().is_some() {
+        state.inner().clone()
+    } else {
+        state.for_profile(&profile)?
+    };
     let changes_catalog = action.changes_catalog();
     let _mutation = state.begin_catalog_action(changes_catalog)?;
     let transport = state.agent.transport();
@@ -152,7 +157,23 @@ pub async fn invitation_request(
         decode(value)
     })
     .await
-    .map_err(|_| invalid_request("Invitation interrupted; check its original operation."))??;
+    .map_err(|_| {
+        if changes_catalog {
+            super::execution::ambiguous_worker_failure(
+                &state,
+                "Invitation interrupted; check its original operation.",
+            )
+        } else {
+            invalid_request("Invitation interrupted; check its original operation.")
+        }
+    })?
+    .map_err(|error| {
+        if changes_catalog {
+            super::execution::observe_mutation_error(&state, error)
+        } else {
+            error
+        }
+    })?;
     crate::applock::require_unlocked_generation(webview.app_handle(), generation)?;
     if changes_catalog {
         state.invalidate_catalog();

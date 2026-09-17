@@ -457,6 +457,7 @@ pub struct CatalogSnapshot {
     pub inventory: Vec<CatalogInventoryState>,
     pub profile_overviews: Vec<ProfileOverview>,
     pub items: Vec<CatalogItem>,
+    pub full_item_reads: Option<Vec<String>>,
     pub failures: Vec<CatalogFailure>,
     pub blocked_profiles: Vec<String>,
 }
@@ -497,6 +498,30 @@ pub fn load_catalog_cancellable(
     load_catalog_with_token(transport, true, token)
 }
 
+pub fn load_profile_catalog_cancellable(
+    transport: Arc<dyn AgentTransport>,
+    profile: String,
+    token: CatalogLoadToken,
+) -> Result<CatalogSnapshot, AgentError> {
+    token.check()?;
+    let profiles: Vec<ProfileSummary> =
+        decode_agent_value(transport.call(Operation::ListProfiles)?)?;
+    token.check()?;
+    if profiles
+        .iter()
+        .filter(|candidate| candidate.name == profile)
+        .count()
+        != 1
+    {
+        return Err(AgentError::Transport(
+            "profile is missing or duplicated in the configured profiles".to_owned(),
+        ));
+    }
+    let mut snapshot = load_profile_catalog(transport.as_ref(), profile.clone(), true, token)?;
+    snapshot.profiles.push(profile);
+    Ok(snapshot)
+}
+
 pub fn load_stores_cancellable(
     transport: Arc<dyn AgentTransport>,
     token: CatalogLoadToken,
@@ -522,6 +547,7 @@ fn load_catalog_with_token(
     });
     let mut snapshot = CatalogSnapshot {
         profiles,
+        full_item_reads: include_items.then(Vec::new),
         ..CatalogSnapshot::default()
     };
     for loaded in loaded {
@@ -531,6 +557,9 @@ fn load_catalog_with_token(
         snapshot.inventory.extend(loaded.inventory);
         snapshot.profile_overviews.extend(loaded.profile_overviews);
         snapshot.items.extend(loaded.items);
+        if let Some(full_item_reads) = &mut snapshot.full_item_reads {
+            full_item_reads.extend(loaded.full_item_reads.into_iter().flatten());
+        }
         snapshot.failures.extend(loaded.failures);
         snapshot.blocked_profiles.extend(loaded.blocked_profiles);
     }
@@ -555,6 +584,7 @@ fn load_catalog_with_token(
     });
     snapshot.blocked_profiles.sort();
     snapshot.blocked_profiles.dedup();
+    token.check()?;
     Ok(snapshot)
 }
 
@@ -790,6 +820,10 @@ fn load_profile_catalog(
                 }
             }
         }
+    }
+    token.check()?;
+    if accounts_complete && teams_complete && snapshot.failures.is_empty() {
+        snapshot.full_item_reads = Some(vec![profile]);
     }
     Ok(snapshot)
 }
@@ -2589,8 +2623,59 @@ mod tests {
     }
 
     #[test]
+    fn profile_catalog_loading_never_contacts_unrelated_profiles() {
+        struct IsolatedCatalogTransport(Mutex<Vec<Operation>>);
+        impl AgentTransport for IsolatedCatalogTransport {
+            fn call(&self, operation: Operation) -> Result<Value, AgentError> {
+                self.0.lock().unwrap().push(operation.clone());
+                if matches!(operation, Operation::ListProfiles) {
+                    return Ok(serde_json::json!([{"name":"local"}, {"name":"unavailable"}]));
+                }
+                match &operation {
+                    Operation::ListKnownStores { profile }
+                    | Operation::ListProfileOverview { profile } => assert_eq!(profile, "local"),
+                    Operation::ListKv { store, .. } => assert_eq!(store.profile, "local"),
+                    Operation::ListTeamKv { store, .. } => assert_eq!(store.profile, "local"),
+                    _ => panic!("unexpected catalog operation"),
+                }
+                CatalogTransport.call(operation)
+            }
+        }
+        let transport = Arc::new(IsolatedCatalogTransport(Mutex::default()));
+        let catalog = load_profile_catalog_cancellable(
+            transport.clone(),
+            "local".into(),
+            CatalogLoadToken::default(),
+        )
+        .unwrap();
+        assert_eq!(catalog.profiles, ["local"]);
+        assert_eq!(catalog.stores.len(), 2);
+        assert_eq!(catalog.blocked_profiles, ["local"]);
+        transport.0.lock().unwrap().clear();
+        assert!(load_profile_catalog_cancellable(
+            transport.clone(),
+            "missing".into(),
+            CatalogLoadToken::default()
+        )
+        .is_err());
+        assert!(matches!(
+            transport.0.lock().unwrap().as_slice(),
+            [Operation::ListProfiles]
+        ));
+        transport.0.lock().unwrap().clear();
+        let token = CatalogLoadToken::default();
+        token.cancel();
+        assert!(matches!(
+            load_profile_catalog_cancellable(transport.clone(), "local".into(), token),
+            Err(AgentError::Cancelled)
+        ));
+        assert!(transport.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn kv_capability_failure_blocks_every_store_in_the_profile() {
         let catalog = load_catalog(Arc::new(CatalogTransport)).unwrap();
+        assert_eq!(catalog.full_item_reads, Some(vec![]));
         assert_eq!(catalog.stores.len(), 2);
         assert!(catalog.items.is_empty());
         assert_eq!(catalog.blocked_profiles, ["local"]);
@@ -2638,6 +2723,7 @@ mod tests {
     #[test]
     fn partial_catalog_replaces_only_successful_known_store_sources() {
         let catalog = load_catalog(Arc::new(PartialCatalogTransport)).unwrap();
+        assert_eq!(catalog.full_item_reads, Some(vec![]));
         assert!(catalog.stores.is_empty());
         assert!(matches!(
             catalog.known_stores.as_slice(),
@@ -2698,6 +2784,7 @@ mod tests {
     #[test]
     fn unified_catalog_pages_account_items_on_one_profile_queue() {
         let catalog = load_catalog(Arc::new(AccountCatalogTransport)).unwrap();
+        assert_eq!(catalog.full_item_reads, Some(vec!["local".into()]));
         assert_eq!(catalog.items.len(), 2);
         assert_eq!(catalog.items[0].metadata.path, "/first");
         assert_eq!(catalog.items[1].metadata.path, "/second");
@@ -2799,8 +2886,60 @@ mod tests {
     }
 
     #[test]
+    fn empty_full_reads_have_explicit_root_and_profile_evidence() {
+        struct EmptyCatalogTransport(bool);
+        impl AgentTransport for EmptyCatalogTransport {
+            fn call(&self, operation: Operation) -> Result<Value, AgentError> {
+                match operation {
+                    Operation::ListProfiles => Ok(if self.0 {
+                        serde_json::json!([{"name":"local"}])
+                    } else {
+                        serde_json::json!([])
+                    }),
+                    Operation::ListKnownStores { .. } => Ok(serde_json::json!([])),
+                    Operation::ListProfileOverview { profile } => Ok(profile_overview(
+                        &profile,
+                        success(serde_json::json!([])),
+                        success(serde_json::json!([])),
+                    )),
+                    operation => panic!("unexpected empty catalog operation: {operation:?}"),
+                }
+            }
+        }
+        assert_eq!(CatalogSnapshot::default().full_item_reads, None);
+        assert_eq!(
+            load_stores(Arc::new(EmptyCatalogTransport(false)))
+                .unwrap()
+                .full_item_reads,
+            None
+        );
+        assert_eq!(
+            load_catalog(Arc::new(EmptyCatalogTransport(false)))
+                .unwrap()
+                .full_item_reads,
+            Some(vec![])
+        );
+        assert_eq!(
+            load_stores(Arc::new(EmptyCatalogTransport(true)))
+                .unwrap()
+                .full_item_reads,
+            None
+        );
+        let profile = load_profile_catalog_cancellable(
+            Arc::new(EmptyCatalogTransport(true)),
+            "local".into(),
+            CatalogLoadToken::default(),
+        )
+        .unwrap();
+        assert_eq!(profile.full_item_reads, Some(vec!["local".into()]));
+        assert!(profile.items.is_empty());
+        assert!(profile.failures.is_empty());
+    }
+
+    #[test]
     fn stores_discovery_never_walks_a_kv_tree() {
         let catalog = load_stores(Arc::new(AccountCatalogTransport)).unwrap();
+        assert_eq!(catalog.full_item_reads, None);
         assert_eq!(catalog.stores.len(), 1);
         assert!(catalog.items.is_empty());
         assert!(catalog.failures.is_empty());

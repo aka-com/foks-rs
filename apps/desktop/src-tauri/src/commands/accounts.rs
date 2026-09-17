@@ -569,6 +569,7 @@ pub async fn revoke_owner_backup(
 ) -> Result<BackupRevocationDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_store(&account_store_id)?;
     let _mutation = state.begin_mutation()?;
     let account = state.selected_account(&account_store_id)?;
     let backup_alias = bounded_local_name(&backup_alias, "Provide a valid backup alias.")?;
@@ -608,6 +609,7 @@ pub async fn remove_account_device(
 ) -> Result<DeviceRemovalDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_store(&account_store_id)?;
     let _mutation = state.begin_mutation()?;
     let account = state.selected_device_target(&account_store_id, &device_id)?;
     let expected = device_id.clone();
@@ -637,6 +639,7 @@ pub async fn prepare_owner_backup(
 ) -> Result<BackupPhraseDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let account_alias = bounded_local_name(&account_alias, "Choose a valid account alias.")?;
@@ -663,6 +666,7 @@ pub async fn commit_owner_backup(
 ) -> Result<MutationDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let account_alias = bounded_local_name(&account_alias, "Choose a valid account alias.")?;
@@ -723,6 +727,7 @@ pub async fn set_account_passphrase(
 ) -> Result<PassphraseReportDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_store(&account_store_id)?;
     let _mutation = state.begin_mutation()?;
     let account = state.selected_account(&account_store_id)?;
     let passphrase = confirmed_passphrase(passphrase, confirmation)?;
@@ -740,6 +745,7 @@ pub async fn change_account_passphrase(
 ) -> Result<PassphraseReportDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_store(&account_store_id)?;
     let _mutation = state.begin_mutation()?;
     let account = state.selected_account(&account_store_id)?;
     let passphrase = confirmed_passphrase(passphrase, confirmation)?;

@@ -962,6 +962,7 @@ pub async fn create_text_item(
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
+    let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
     let store = state.selected_create_store(&store_id)?;
     let (read_role, write_role) =
@@ -987,6 +988,7 @@ pub async fn create_link(
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
+    let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
     let store = state.selected_create_store(&store_id)?;
     let (read_role, write_role) =
@@ -1011,6 +1013,7 @@ pub async fn create_folder(
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
+    let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
     let store = state.selected_create_store(&store_id)?;
     let (read_role, write_role) =
@@ -1034,6 +1037,7 @@ pub async fn edit_text_item(
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
+    let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
     let item = state.selected_mutation_item(&store_id, &path, version)?;
     require_text_item(&item)?;
@@ -1054,6 +1058,7 @@ pub async fn remove_item(
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
+    let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
     let item = state.selected_mutation_item(&store_id, &path, version)?;
     let operation = remove_item_operation(&item)?;
@@ -1075,6 +1080,7 @@ pub async fn import_dropped_file(
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
+    let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
     let store = state.selected_create_store(&store_id)?;
     // Validate the destination file header before consuming the staged drop path.
@@ -1103,6 +1109,7 @@ pub async fn pick_and_import_file(
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
+    let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
     let store = state.selected_create_store(&store_id)?;
     let header = file_create_header(
@@ -1140,6 +1147,7 @@ pub async fn replace_dropped_file(
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
+    let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
     let item = state.selected_mutation_item(&store_id, &path, version)?;
     require_file_item(&item)?;
@@ -1161,6 +1169,7 @@ pub async fn pick_and_replace_file(
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
+    let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
     let item = state.selected_mutation_item(&store_id, &path, version)?;
     require_file_item(&item)?;

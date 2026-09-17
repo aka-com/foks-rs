@@ -643,6 +643,7 @@ pub async fn discover_groups(
 ) -> Result<GroupDiscoveryDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let account_alias = bounded_local_name(&account_alias, "Choose a valid account alias.")?;
@@ -809,6 +810,7 @@ pub async fn create_group(
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
+    let state = state.for_store(&account_store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
     let account = state.selected_account(&account_store_id)?;
     let operation = create_group_operation(account, &team_alias, &name, kind)?;
@@ -827,6 +829,7 @@ pub async fn add_group_member(
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
+    let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
     let team = state.selected_active_team_for_mutation(&store_id)?;
     let operation = add_group_member_operation(team, &username, destination)?;
@@ -844,6 +847,7 @@ pub async fn resume_group_member_addition(
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
+    let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
     let team = state.selected_active_team_for_mutation(&store_id)?;
     let operation = Operation::ResumeTeamMemberAddition {
@@ -1009,6 +1013,7 @@ pub async fn resume_group_creation(
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
+    let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
     let (store, active) = state.selected_store(&store_id)?;
     let CatalogStoreRef::Team(store) = store else {
@@ -1040,6 +1045,7 @@ pub async fn abandon_group_creation(
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
+    let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
     let (store, active) = state.selected_store(&store_id)?;
     let CatalogStoreRef::Team(store) = store else {

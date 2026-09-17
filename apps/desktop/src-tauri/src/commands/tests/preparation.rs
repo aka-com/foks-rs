@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 struct PreparationTransport {
     calls: Mutex<Vec<Operation>>,
     fail_catalog: bool,
+    fail_items: bool,
     fail_members: bool,
     federated: bool,
     version: u64,
@@ -32,6 +33,7 @@ impl PreparationTransport {
         Self {
             calls: Mutex::new(vec![]),
             fail_catalog: false,
+            fail_items: false,
             fail_members: false,
             federated: false,
             version,
@@ -62,6 +64,7 @@ impl AgentTransport for PreparationTransport {
                 teams: success(serde_json::json!([])),
                 server_status: success(serde_json::Value::Null),
             }).unwrap()),
+            Operation::ListKv { .. } if self.fail_items => Err(foks_desktop::AgentError::Transport("items unavailable".into())),
             Operation::ListKv { .. } => Ok(serde_json::to_value(KvPage {
                 snapshot_version: 1,
                 entries: vec![KvEntryMetadata {
@@ -142,6 +145,75 @@ fn prepared_edit(
 }
 
 #[test]
+fn ambiguity_reconciliation_requires_full_item_reads_for_root_and_profile() {
+    for profile_only in [false, true] {
+        let root = empty_state();
+        let profile = root.for_profile("work.example").unwrap();
+        let state = if profile_only {
+            profile.clone()
+        } else {
+            root.clone()
+        };
+        profile
+            .mutation_requires_refresh
+            .store(true, Ordering::Release);
+        state
+            .mutation_requires_refresh
+            .store(true, Ordering::Release);
+        let stores = Arc::new(PreparationTransport::new(7));
+        let catalog = foks_desktop::load_stores(stores.clone()).unwrap();
+        assert!(catalog
+            .inventory
+            .iter()
+            .all(|inventory| inventory.accounts_complete && inventory.teams_complete));
+        assert!(catalog.failures.is_empty());
+        assert!(!stores
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|call| matches!(call, Operation::ListKv { .. })));
+        let (generation, _) = state.begin_catalog_load_checked().unwrap();
+        assert!(state.accept_catalog(generation, catalog));
+        assert!(state.mutation_requires_refresh.load(Ordering::Acquire));
+        assert!(profile.mutation_requires_refresh.load(Ordering::Acquire));
+        for fail_items in [true, false] {
+            let mut transport = PreparationTransport::new(7);
+            transport.fail_items = fail_items;
+            let transport = Arc::new(transport);
+            let (generation, token) = state.begin_catalog_load_checked().unwrap();
+            let catalog = if profile_only {
+                foks_desktop::load_profile_catalog_cancellable(
+                    transport.clone(),
+                    "work.example".into(),
+                    token,
+                )
+            } else {
+                foks_desktop::load_catalog_cancellable(transport.clone(), token)
+            }
+            .unwrap();
+            assert!(transport
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|call| matches!(call, Operation::ListKv { .. })));
+            assert_eq!(catalog.failures.is_empty(), !fail_items);
+            assert!(state.accept_catalog(generation, catalog));
+            assert_eq!(
+                state.mutation_requires_refresh.load(Ordering::Acquire),
+                fail_items
+            );
+            assert_eq!(
+                profile.mutation_requires_refresh.load(Ordering::Acquire),
+                fail_items
+            );
+        }
+        assert!(root.begin_mutation().is_ok());
+    }
+}
+
+#[test]
 fn absent_catalog_is_loaded_before_exactly_one_version_bound_write() {
     let state = empty_state();
     let transport = Arc::new(PreparationTransport::new(7));
@@ -157,6 +229,94 @@ fn absent_catalog_is_loaded_before_exactly_one_version_bound_write() {
         1
     );
     assert!(state.begin_mutation().is_ok());
+}
+
+#[test]
+fn missing_target_profile_catalog_never_joins_an_in_flight_or_ambiguous_profile() {
+    struct IsolatedTransport {
+        inner: PreparationTransport,
+    }
+    impl AgentTransport for IsolatedTransport {
+        fn call(
+            &self,
+            operation: Operation,
+        ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+            if matches!(operation, Operation::ListProfiles) {
+                self.inner.calls.lock().unwrap().push(operation);
+                return Ok(serde_json::json!([
+                    test_profile_value("work.example"),
+                    test_profile_value("blocked.example")
+                ]));
+            }
+            match &operation {
+                Operation::ListKnownStores { profile }
+                | Operation::ListProfileOverview { profile } => {
+                    assert_eq!(profile, "work.example", "must not load the blocked profile");
+                }
+                _ => {}
+            }
+            self.inner.call(operation)
+        }
+    }
+    let state = empty_state();
+    let a = state.for_profile("blocked.example").unwrap();
+    let b = state
+        .for_store(&store_id(&CatalogStoreRef::Account(account_ref(
+            "work.example",
+            "personal",
+        ))))
+        .unwrap();
+    let a_permit = a.begin_mutation().unwrap();
+    let transport = Arc::new(IsolatedTransport {
+        inner: PreparationTransport::new(7),
+    });
+    for ambiguous in [false, true] {
+        if ambiguous {
+            crate::commands::execution::ambiguous_worker_failure(&a, "unknown remote outcome");
+        }
+        tauri::async_runtime::block_on(async {
+            let permit = b.begin_mutation().unwrap();
+            ensure_catalog_for_mutation(&b, &permit, transport.clone())
+                .await
+                .unwrap();
+            let target = store_id(&CatalogStoreRef::Account(account_ref(
+                "work.example",
+                "personal",
+            )));
+            let item = b.selected_mutation_item(&target, "/note", 7).unwrap();
+            let mutation = foks_desktop::edit_kv_file_mutation(&item, b"changed".to_vec()).unwrap();
+            b.invalidate_catalog();
+            execute_kv_mutation(transport.as_ref(), mutation, MutationKind::Guarded).unwrap();
+        });
+    }
+    drop(a_permit);
+    assert_eq!(a.begin_mutation().unwrap_err().code, "ambiguous");
+    assert_eq!(
+        transport
+            .inner
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|call| matches!(call, Operation::PutKv { .. }))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn scoped_preparation_rejects_a_permit_from_another_profile() {
+    let state = empty_state();
+    let a = state.for_profile("work.example").unwrap();
+    let b = state.for_profile("home.example").unwrap();
+    let permit = a.begin_mutation().unwrap();
+    let error = tauri::async_runtime::block_on(ensure_catalog_for_mutation(
+        &b,
+        &permit,
+        Arc::new(PreparationTransport::new(7)),
+    ))
+    .unwrap_err();
+    assert_eq!(error.code, "invalid-request");
 }
 
 #[test]

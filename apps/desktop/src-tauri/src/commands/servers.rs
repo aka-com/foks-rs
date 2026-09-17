@@ -1109,6 +1109,7 @@ pub async fn check_server(
 ) -> Result<CheckedServerDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let expected = profile.clone();

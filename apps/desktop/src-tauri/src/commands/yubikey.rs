@@ -559,6 +559,7 @@ pub async fn create_yubi_account(
 ) -> Result<YubiAccountDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Enter a valid local security-key alias.")?;
@@ -637,6 +638,7 @@ pub async fn resume_yubi_account(
 ) -> Result<YubiAccountDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid pending security-key alias.")?;
@@ -680,6 +682,7 @@ pub async fn provision_yubi_device(
 ) -> Result<YubiAccountDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_store(&account_store_id)?;
     let _mutation = state.begin_mutation()?;
     let account_dto = state.selected_account_dto(&account_store_id)?;
     let account = foks_agent_proto::AccountStoreRef {
@@ -754,6 +757,11 @@ pub async fn sync_yubi_account(
 ) -> Result<YubiSyncDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = if with_federation {
+        state.inner().clone()
+    } else {
+        state.for_profile(&profile)?
+    };
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid security-key alias.")?;
@@ -810,6 +818,7 @@ pub async fn change_yubi_pin(
 ) -> Result<YubiPinStatusDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid security-key alias.")?;
@@ -890,6 +899,7 @@ pub async fn set_yubi_passphrase(
 ) -> Result<PassphraseReportDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid security-key alias.")?;
@@ -912,6 +922,7 @@ pub async fn change_yubi_passphrase(
 ) -> Result<PassphraseReportDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid security-key alias.")?;
@@ -932,6 +943,7 @@ pub async fn verify_yubi_passphrase(
 ) -> Result<PassphraseReportDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid security-key alias.")?;
@@ -956,6 +968,7 @@ pub async fn change_yubi_puk(
 ) -> Result<YubiChangedDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid security-key alias.")?;
@@ -995,6 +1008,7 @@ pub async fn unblock_yubi_pin(
 ) -> Result<YubiPinStatusDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid security-key alias.")?;
@@ -1045,6 +1059,7 @@ pub async fn rotate_yubi_management_key(
 ) -> Result<YubiLifecycleDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid security-key alias.")?;
@@ -1074,6 +1089,7 @@ pub async fn resume_yubi_management_key(
 ) -> Result<YubiLifecycleDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid security-key alias.")?;
@@ -1104,6 +1120,7 @@ pub async fn recover_yubi_management_key(
 ) -> Result<YubiLifecycleDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_store(&account_store_id)?;
     let _mutation = state.begin_mutation()?;
     let account = state.selected_account(&account_store_id)?;
     let yubi_alias = bounded_local_name(&yubi_alias, "Choose a valid security-key alias.")?;
@@ -1127,6 +1144,7 @@ pub async fn recover_yubi_subkey(
 ) -> Result<YubiSubkeyRecoveryDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid security-key alias.")?;
@@ -1159,6 +1177,7 @@ pub async fn revoke_yubi_device(
 ) -> Result<YubiRevocationDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_store(&account_store_id)?;
     let _mutation = state.begin_mutation()?;
     let account = state.selected_account(&account_store_id)?;
     let yubi_alias = bounded_local_name(&yubi_alias, "Choose a valid security-key alias.")?;

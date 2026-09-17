@@ -114,6 +114,7 @@ pub async fn bot_account_request(
     if !valid_local_name(&profile) || !valid_local_name(&account_alias) {
         return Err(invalid_request("Invalid bot account."));
     }
+    let state = state.for_profile(&profile)?;
     let changes_catalog = !matches!(action, Action::List);
     let _mutation = if changes_catalog {
         Some(state.begin_mutation()?)
@@ -320,7 +321,23 @@ pub async fn bot_account_request(
         })
     })
     .await
-    .map_err(|_| invalid_request("Bot request interrupted; recover the original enrollment."))??;
+    .map_err(|_| {
+        if changes_catalog {
+            super::execution::ambiguous_worker_failure(
+                &state,
+                "Bot request interrupted; recover the original enrollment.",
+            )
+        } else {
+            invalid_request("Bot request interrupted; recover the original enrollment.")
+        }
+    })?
+    .map_err(|error| {
+        if changes_catalog {
+            super::execution::observe_mutation_error(&state, error)
+        } else {
+            error
+        }
+    })?;
     crate::applock::require_unlocked_generation(&app, generation)?;
     if changes_catalog {
         state.invalidate_catalog();

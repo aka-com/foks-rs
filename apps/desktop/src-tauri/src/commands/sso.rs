@@ -85,6 +85,7 @@ pub async fn sso_request(
     if !valid_local_name(&profile) || !valid_local_name(&account_alias) || !action.validate() {
         return Err(invalid_request("Invalid account authentication request."));
     }
+    let state = state.for_profile(&profile)?;
     let inspecting = matches!(
         action,
         SsoAction::Status { .. } | SsoAction::AccountStatus { .. }
@@ -132,7 +133,23 @@ pub async fn sso_request(
         Ok::<_, AgentError>(p)
     })
     .await
-    .map_err(|_| invalid_request("Authentication interrupted; resume its existing flow."))??;
+    .map_err(|_| {
+        if !inspecting {
+            super::execution::ambiguous_worker_failure(
+                &state,
+                "Authentication interrupted; resume its existing flow.",
+            )
+        } else {
+            invalid_request("Authentication interrupted; resume its existing flow.")
+        }
+    })?
+    .map_err(|error| {
+        if !inspecting {
+            super::execution::observe_mutation_error(&state, error)
+        } else {
+            error
+        }
+    })?;
     crate::applock::require_unlocked_generation(webview.app_handle(), generation)?;
     if changes_account {
         state.invalidate_catalog();

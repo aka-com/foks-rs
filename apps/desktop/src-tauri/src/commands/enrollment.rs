@@ -600,6 +600,7 @@ pub async fn create_first_run_account(
 ) -> Result<MutationDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Enter a valid local account alias.")?;
@@ -637,6 +638,7 @@ pub async fn resume_first_run_account(
 ) -> Result<MutationDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid pending account alias.")?;
@@ -668,6 +670,7 @@ pub async fn set_first_run_passphrase(
 ) -> Result<MutationDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Choose a valid account alias.")?;
@@ -694,6 +697,7 @@ pub async fn recover_owner_account(
 ) -> Result<MutationDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let target_alias = bounded_local_name(&target_alias, "Enter a valid local account alias.")?;
@@ -726,6 +730,7 @@ pub async fn resume_owner_recovery(
 ) -> Result<MutationDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let target_alias = bounded_local_name(&target_alias, "Choose a valid pending recovery alias.")?;
@@ -795,6 +800,7 @@ pub async fn start_device_pairing(
 ) -> Result<PairingOfferDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_store(&account_store_id)?;
     let _mutation = state.begin_mutation()?;
     let account = state.selected_account(&account_store_id)?;
     pairing_offer_operation(&state, account, false).await
@@ -809,6 +815,7 @@ pub async fn resume_device_pairing_offer(
 ) -> Result<PairingOfferDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_store(&account_store_id)?;
     let _mutation = state.begin_mutation()?;
     let account = state.selected_account(&account_store_id)?;
     pairing_offer_operation(&state, account, true).await
@@ -823,6 +830,7 @@ pub async fn finish_device_pairing(
 ) -> Result<DeviceProvisionDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_store(&account_store_id)?;
     let _mutation = state.begin_mutation()?;
     let account = state.selected_account(&account_store_id)?;
     let expected = account.account_alias.clone();
@@ -855,6 +863,7 @@ pub async fn accept_device_pairing(
 ) -> Result<DeviceProvisionDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let target_alias = bounded_local_name(&target_alias, "Enter a valid local account alias.")?;
@@ -891,6 +900,7 @@ pub async fn accept_go_profile_pairing(
         phrase,
     } = request;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     if !valid_go_candidate_id(&candidate_id) {
         return Err(invalid_request("Select a valid profile to import."));
@@ -925,6 +935,7 @@ pub async fn resume_device_pairing_acceptance(
 ) -> Result<DeviceProvisionDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let target_alias = bounded_local_name(
@@ -960,6 +971,7 @@ pub async fn resume_go_profile_pairing(
 ) -> Result<DeviceProvisionDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     if !valid_go_candidate_id(&candidate_id) {
         return Err(invalid_request("Select a valid profile to import."));
@@ -999,6 +1011,7 @@ pub async fn copy_go_profile_device(
 ) -> Result<DeviceProvisionDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
     if !valid_go_candidate_id(&candidate_id) {
         return Err(invalid_request("Select a valid profile to import."));

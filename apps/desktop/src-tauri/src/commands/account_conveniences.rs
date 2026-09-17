@@ -25,6 +25,7 @@ pub async fn rename_account_request(
     {
         return Err(invalid_request("Invalid account rename request."));
     }
+    let state = state.for_profile(&profile)?;
     let changed = action.is_some();
     let _mutation = if changed {
         Some(state.begin_mutation()?)
@@ -59,7 +60,23 @@ pub async fn rename_account_request(
         decode_progress(value, changed, &expected, expected_id.as_deref())
     })
     .await
-    .map_err(|_| invalid_request("Rename interrupted; refresh its original operation."))??;
+    .map_err(|_| {
+        if changed {
+            super::execution::ambiguous_worker_failure(
+                &state,
+                "Rename interrupted; refresh its original operation.",
+            )
+        } else {
+            invalid_request("Rename interrupted; refresh its original operation.")
+        }
+    })?
+    .map_err(|error| {
+        if changed {
+            super::execution::observe_mutation_error(&state, error)
+        } else {
+            error
+        }
+    })?;
     crate::applock::require_unlocked_generation(webview.app_handle(), generation)?;
     if changed {
         state.invalidate_catalog();
@@ -155,10 +172,12 @@ pub async fn set_local_account_alias(
     require_main_window(&webview)?;
     let generation = crate::applock::unlocked_generation(webview.app_handle())?;
     foks_client_app::validate_local_alias(&label).map_err(|_| invalid_request("Enter a local alias of 1–64 UTF-8 bytes without surrounding whitespace or control characters."))?;
+    let state = state.for_local_aliases()?;
     let _mutation = state.begin_mutation()?;
     let account = state.local_account(&account_store_id)?;
+    let profile = account.profile.clone();
     let transport = state.agent.transport();
-    state.invalidate_catalog();
+    state.invalidate_alias_metadata(&profile);
     let result = tauri::async_runtime::spawn_blocking(move || {
         let value = transport
             .call(Operation::SetLocalAccountAlias {
@@ -173,7 +192,7 @@ pub async fn set_local_account_alias(
     .map_err(|_| {
         invalid_request("Local alias update interrupted. Refresh the account before trying again.")
     })?;
-    state.invalidate_catalog();
+    state.invalidate_alias_metadata(&profile);
     crate::applock::require_unlocked_generation(webview.app_handle(), generation)?;
     result
 }

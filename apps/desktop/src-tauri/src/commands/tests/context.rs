@@ -47,7 +47,302 @@ fn ambiguous_mutations_require_a_fresh_catalog_before_another_write() {
     assert!(state.mutation_requires_refresh.load(Ordering::Acquire));
     let (generation, _) = state.begin_catalog_load_checked().unwrap();
     assert!(state.accept_catalog(generation, CatalogSnapshot::default()));
+    assert_eq!(state.begin_mutation().unwrap_err().code, "ambiguous");
+    let empty = Arc::new(ProfileListTransport {
+        value: serde_json::json!([]),
+    });
+    let (generation, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.accept_catalog(
+        generation,
+        foks_desktop::load_stores(empty.clone()).unwrap()
+    ));
+    assert_eq!(state.begin_mutation().unwrap_err().code, "ambiguous");
+    let (generation, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.accept_catalog(generation, foks_desktop::load_catalog(empty).unwrap()));
     assert!(state.begin_mutation().is_ok());
+}
+
+#[test]
+fn incomplete_catalog_does_not_release_an_ambiguous_mutation() {
+    let state = phase_four_state(vec![]);
+    state
+        .mutation_requires_refresh
+        .store(true, Ordering::Release);
+    let (generation, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.accept_catalog(
+        generation,
+        CatalogSnapshot {
+            profiles: vec!["work.example".into()],
+            inventory: vec![foks_desktop::CatalogInventoryState {
+                profile: "work.example".into(),
+                accounts_complete: false,
+                teams_complete: true,
+            }],
+            ..CatalogSnapshot::default()
+        }
+    ));
+    assert_eq!(state.begin_mutation().unwrap_err().code, "ambiguous");
+}
+
+#[test]
+fn profile_mutations_and_local_aliases_are_independent_but_root_is_exclusive() {
+    let state = phase_four_state(vec![]);
+    let a = state.for_profile("work.example").unwrap();
+    let b = state.for_profile("home.example").unwrap();
+    let aliases = state.for_local_aliases().unwrap();
+    let first = a.begin_mutation().unwrap();
+    assert_eq!(a.begin_mutation().unwrap_err().code, "mutation-in-flight");
+    let second = b.begin_mutation().unwrap();
+    let local = aliases.begin_mutation().unwrap();
+    assert_eq!(
+        aliases.begin_mutation().unwrap_err().code,
+        "mutation-in-flight"
+    );
+    assert_eq!(
+        state.begin_mutation().unwrap_err().code,
+        "mutation-in-flight"
+    );
+    assert_eq!(
+        state.begin_initialization().unwrap_err().code,
+        "mutation-in-flight"
+    );
+    drop((first, second, local));
+    let root = state.begin_mutation().unwrap();
+    assert_eq!(a.begin_mutation().unwrap_err().code, "mutation-in-flight");
+    assert_eq!(
+        aliases.begin_mutation().unwrap_err().code,
+        "mutation-in-flight"
+    );
+    drop(root);
+    crate::commands::execution::ambiguous_worker_failure(&a, "unknown remote outcome");
+    assert_eq!(a.begin_mutation().unwrap_err().code, "ambiguous");
+    assert_eq!(state.begin_mutation().unwrap_err().code, "ambiguous");
+    assert_eq!(state.begin_initialization().unwrap_err().code, "ambiguous");
+    assert!(b.begin_mutation().is_ok());
+    assert!(aliases.begin_mutation().is_ok());
+    assert!(a.mutation_requires_refresh.load(Ordering::Acquire));
+}
+
+#[test]
+fn profile_catalog_changes_preserve_other_profiles_and_local_account_binding() {
+    let state = phase_four_state(vec![]);
+    let a = state.for_profile("work.example").unwrap();
+    let b = state.for_profile("home.example").unwrap();
+    let b_store = store_id(&CatalogStoreRef::Account(account_ref(
+        "home.example",
+        "personal",
+    )));
+    let a_store = store_id(&CatalogStoreRef::Account(account_ref(
+        "work.example",
+        "personal",
+    )));
+    state
+        .catalog
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .stores
+        .push(CatalogStoreSummary::Account {
+            store: account_ref("home.example", "personal"),
+        });
+    state
+        .catalog
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .full_item_reads = Some(vec!["work.example".into(), "home.example".into()]);
+    let before = b.catalog_at(None).unwrap().0;
+    let permit = a.begin_mutation().unwrap();
+    a.invalidate_catalog();
+    assert_eq!(
+        state.catalog_at(None).unwrap().1.unwrap().full_item_reads,
+        Some(vec!["home.example".into()])
+    );
+    assert!(a.selected_store(&a_store).is_err());
+    assert!(state.local_account(&a_store).is_ok());
+    assert!(b.selected_store(&b_store).is_ok());
+    assert!(b.catalog_at(Some(before)).is_ok());
+    assert!(b.retain_roster(before, b_store.clone(), &[]).is_ok());
+    drop(permit);
+    let (generation, _) = a.begin_catalog_load_checked().unwrap();
+    assert!(a.accept_catalog(generation, complete_profile_catalog("work.example")));
+    assert!(b.selected_store(&b_store).is_ok());
+    assert!(b.catalog_at(Some(before)).is_ok());
+    assert!(b.rosters.lock().unwrap().contains_key(&b_store));
+    assert_eq!(
+        state.catalog_at(None).unwrap().1.unwrap().full_item_reads,
+        Some(vec!["home.example".into(), "work.example".into()])
+    );
+    let (generation, _) = a.begin_catalog_load_checked().unwrap();
+    assert!(a.accept_catalog(
+        generation,
+        CatalogSnapshot {
+            full_item_reads: None,
+            ..complete_profile_catalog("work.example")
+        }
+    ));
+    assert_eq!(
+        state.catalog_at(None).unwrap().1.unwrap().full_item_reads,
+        Some(vec!["home.example".into()])
+    );
+    assert!(b.catalog_at(Some(before)).is_ok());
+}
+
+fn complete_profile_catalog(profile: &str) -> CatalogSnapshot {
+    CatalogSnapshot {
+        profiles: vec![profile.into()],
+        full_item_reads: Some(vec![profile.into()]),
+        inventory: vec![foks_desktop::CatalogInventoryState {
+            profile: profile.into(),
+            accounts_complete: true,
+            teams_complete: true,
+        }],
+        ..CatalogSnapshot::default()
+    }
+}
+
+#[test]
+fn ambiguity_is_released_only_by_complete_catalog_for_that_profile() {
+    let state = phase_four_state(vec![]);
+    let a = state.for_profile("work.example").unwrap();
+    let b = state.for_profile("home.example").unwrap();
+    crate::commands::execution::ambiguous_worker_failure(&a, "unknown remote outcome");
+    let (generation, _) = b.begin_catalog_load_checked().unwrap();
+    assert!(b.accept_catalog(generation, complete_profile_catalog("home.example")));
+    assert_eq!(a.begin_mutation().unwrap_err().code, "ambiguous");
+    for incomplete in [
+        CatalogSnapshot::default(),
+        CatalogSnapshot {
+            profiles: vec!["work.example".into()],
+            ..CatalogSnapshot::default()
+        },
+        CatalogSnapshot {
+            blocked_profiles: vec!["work.example".into()],
+            ..complete_profile_catalog("work.example")
+        },
+        CatalogSnapshot {
+            profile_overviews: vec![foks_agent_proto::ProfileOverview {
+                profile: "work.example".into(),
+                accounts: foks_agent_proto::ResponseResult::Success {
+                    value: serde_json::json!([]),
+                },
+                teams: foks_agent_proto::ResponseResult::Success {
+                    value: serde_json::json!([]),
+                },
+                server_status: foks_agent_proto::ResponseResult::Error {
+                    code: foks_agent_proto::ErrorCode::Busy,
+                    message: "status unavailable".into(),
+                    fields: Default::default(),
+                },
+            }],
+            ..complete_profile_catalog("work.example")
+        },
+        CatalogSnapshot {
+            failures: vec![foks_desktop::CatalogFailure {
+                scope: foks_desktop::CatalogFailureScope::Store(CatalogStoreRef::Account(
+                    account_ref("work.example", "personal"),
+                )),
+                error: foks_desktop::AgentError::Transport("KV unavailable".into()),
+            }],
+            ..complete_profile_catalog("work.example")
+        },
+    ] {
+        let (generation, _) = state.begin_catalog_load_checked().unwrap();
+        assert!(state.accept_catalog(generation, incomplete));
+        assert_eq!(a.begin_mutation().unwrap_err().code, "ambiguous");
+    }
+    let (generation, _) = a.begin_catalog_load_checked().unwrap();
+    assert!(!a.accept_catalog(generation, complete_profile_catalog("home.example")));
+    assert!(!a.accept_catalog(
+        generation,
+        CatalogSnapshot {
+            full_item_reads: Some(vec!["home.example".into()]),
+            ..complete_profile_catalog("work.example")
+        }
+    ));
+    assert_eq!(a.begin_mutation().unwrap_err().code, "ambiguous");
+    assert!(a.accept_catalog(generation, complete_profile_catalog("work.example")));
+    assert!(a.begin_mutation().is_ok());
+    assert!(state.begin_mutation().is_ok());
+}
+
+#[test]
+fn retired_account_bindings_only_authorize_local_aliases_until_root_invalidation() {
+    let state = phase_four_state(vec![]);
+    let a = state.for_profile("work.example").unwrap();
+    let account = store_id(&CatalogStoreRef::Account(account_ref(
+        "work.example",
+        "personal",
+    )));
+    a.invalidate_catalog();
+    let (generation, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.accept_catalog(
+        generation,
+        CatalogSnapshot {
+            profiles: vec!["work.example".into()],
+            ..CatalogSnapshot::default()
+        }
+    ));
+    assert!(state.local_account(&account).is_ok());
+    assert!(state.selected_account(&account).is_err());
+    state.invalidate_catalog();
+    assert!(state.local_account(&account).is_err());
+}
+
+#[test]
+fn root_publication_never_reuses_a_profile_fact_generation() {
+    let state = phase_four_state(vec![]);
+    let a = state.for_profile("work.example").unwrap();
+    let permit = a.begin_mutation().unwrap();
+    a.invalidate_catalog();
+    let old = a.catalog_at(None).unwrap().0;
+    drop(permit);
+    let (generation, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.accept_catalog(generation, complete_profile_catalog("work.example")));
+    assert!(a.retain_roster(old, "stale".into(), &[]).is_err());
+    assert!(a.catalog_at(Some(old)).is_err());
+}
+
+#[test]
+fn root_reservation_retires_private_profile_refreshes() {
+    let state = phase_four_state(vec![]);
+    let a = state.for_profile("work.example").unwrap();
+    let (generation, _) = a.begin_catalog_load_checked().unwrap();
+    let _permit = state.begin_mutation().unwrap();
+    assert!(!a.accept_catalog(generation, complete_profile_catalog("work.example")));
+}
+
+#[test]
+fn mutation_scope_bookkeeping_is_bounded_without_evicting_ambiguity() {
+    let state = phase_four_state(vec![]);
+    let a = state.for_profile("uncertain").unwrap();
+    crate::commands::execution::ambiguous_worker_failure(&a, "unknown remote outcome");
+    drop(a);
+    let views: Vec<_> = (0..255)
+        .map(|index| state.for_profile(&format!("profile-{index}")).unwrap())
+        .collect();
+    assert!(state.for_profile("overflow").is_err());
+    assert!(state.for_local_aliases().unwrap().begin_mutation().is_ok());
+    drop(views);
+    for index in 255..600 {
+        assert!(state
+            .for_profile(&format!("profile-{index}"))
+            .unwrap()
+            .begin_mutation()
+            .is_ok());
+    }
+    assert_eq!(
+        state
+            .for_profile("uncertain")
+            .unwrap()
+            .begin_mutation()
+            .unwrap_err()
+            .code,
+        "ambiguous"
+    );
+    assert_eq!(state.begin_initialization().unwrap_err().code, "ambiguous");
 }
 
 #[test]

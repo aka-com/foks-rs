@@ -39,6 +39,18 @@ pub(super) fn ambiguous_worker_failure(state: &AppState, message: impl Into<Stri
     error
 }
 
+pub(super) fn observe_mutation_error(state: &AppState, error: AgentError) -> AgentError {
+    if error.code == "invalid-response" {
+        return ambiguous_mutation_response(state, error.message);
+    }
+    if error.ambiguous {
+        state
+            .mutation_requires_refresh
+            .store(true, Ordering::Release);
+    }
+    error
+}
+
 pub(super) fn map_mutation_error(
     error: foks_desktop::AgentError,
     kind: MutationKind,
@@ -110,8 +122,16 @@ pub(super) async fn apply_kv_mutation(
     mutation: KvAccountMutation,
     kind: MutationKind,
 ) -> Result<MutationDto, AgentError> {
+    apply_kv_mutation_with_transport(state, mutation, kind, state.agent.transport()).await
+}
+
+pub(super) async fn apply_kv_mutation_with_transport(
+    state: &AppState,
+    mutation: KvAccountMutation,
+    kind: MutationKind,
+    transport: std::sync::Arc<dyn foks_desktop::AgentTransport>,
+) -> Result<MutationDto, AgentError> {
     state.invalidate_catalog();
-    let transport = state.agent.transport();
     let result = tauri::async_runtime::spawn_blocking(move || {
         execute_kv_mutation(transport.as_ref(), mutation, kind)
     })
