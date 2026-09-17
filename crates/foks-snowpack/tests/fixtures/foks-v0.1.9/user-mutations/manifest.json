@@ -209,8 +209,8 @@
     },
     {
       "file": "add-member-request.frame",
-      "bytes": 7459,
-      "sha256": "6a4a7c2f72a5d2785dbb1a68ddf50502ab171d426096bde9d2c80c2aa6cbf6e3"
+      "bytes": 7432,
+      "sha256": "8dd9b1c9c7ac8db24cf10e315d21702c920ca217f2a99cb19656d25aa80ea213"
     },
     {
       "file": "add-member-target-puk-seed.bin",
@@ -219,8 +219,8 @@
     },
     {
       "file": "adhoc-create-request.frame",
-      "bytes": 11811,
-      "sha256": "2fe15f352c90cf4c26884a3b5de2f8783b585a96c0294d8964d946cd755dbfc0"
+      "bytes": 11784,
+      "sha256": "1b17bab2546b29e6ba71de3342cf947453eb5588217494ab51a5d5fa8eb829d2"
     },
     {
       "file": "adhoc-membership-next-tree-location.bin",
@@ -349,8 +349,8 @@
     },
     {
       "file": "named-create-request.frame",
-      "bytes": 14913,
-      "sha256": "ae89a23bba6395d4e81cdc69e021cb774a956c1248475d8cca7e01ddb48d410b"
+      "bytes": 14886,
+      "sha256": "bd5862b96909a5a72a6dbdd60b0491b5eed7680a0715bd42d143801e201f9b1c"
     },
     {
       "file": "named-membership-next-tree-location.bin",
@@ -369,8 +369,8 @@
     },
     {
       "file": "named-reserve-request.frame",
-      "bytes": 48,
-      "sha256": "a5ba8cd1ff1c97d495febaae6e6060f00be9a2a67c24ba38394c85717663f074"
+      "bytes": 21,
+      "sha256": "fe2cbd5c2ea9cb77fa3e88ff05e17533eb44862ad053b1c8dc7c9e90a64082e8"
     },
     {
       "file": "named-subchain-tree-location.bin",
@@ -404,8 +404,8 @@
     },
     {
       "file": "remove-member-request.frame",
-      "bytes": 6565,
-      "sha256": "eff3c9e9c871c122acf5add1b75150f16e8d6b49987c75259ac79b854f70b6f8"
+      "bytes": 6538,
+      "sha256": "cee92aa7014cc3f4d7be4c040cd354b684e7ce83dc68d1ba69b4ce74857aa0ea"
     },
     {
       "file": "revoke-request.frame",
@@ -434,18 +434,18 @@
     },
     {
       "file": "team-bearer-activate-request.frame",
-      "bytes": 250,
-      "sha256": "dab176dc28a5eb80e80c977714af343ae87f7476bc8261e894ee8c1c790081b1"
+      "bytes": 223,
+      "sha256": "99c0edca2de7787d5a00110303535f741a8a8929c68c55b4d057e847d9b5970d"
     },
     {
       "file": "team-bearer-make-request.frame",
-      "bytes": 77,
-      "sha256": "2fc8a05ca9582402cf7697e7027af75bb3ac05be4d8a91a94e18b04e43ada624"
+      "bytes": 50,
+      "sha256": "9f7980db389e0b86b8cd7d1972924f560a2aafeb13ed459098d4e80866f3531f"
     },
     {
       "file": "team-removal-key-load-request.frame",
-      "bytes": 131,
-      "sha256": "630461760a6c56e1f8b9f3beaec1b35eacecbdf2060806236d6f76bb819efd4f"
+      "bytes": 103,
+      "sha256": "a574d19f080652decf0b9449187523546cdf89409019cdb49f919eb95ac83843"
     }
   ]
 }

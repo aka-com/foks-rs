@@ -24,6 +24,7 @@ pub(super) fn response(
         ProbeProbe
         | MerkleQueryGetHistoricalRoots
         | MerkleQueryGetCurrentRoot
+        | MerkleQueryGetCurrentRootSigned
         | MerkleQuerySelectVHost
         | RegSelectVHost
         | KvStoreSelectVHost => probe::response(data, call),

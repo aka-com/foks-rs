@@ -144,7 +144,8 @@ impl ServerData {
         let reader = self.read_database()?;
         let exact_link = decoded.link().encoded().map_err(bad_arguments)?;
         let idempotency_key =
-            foks_crypto::prefixed_hash(foks_proto::LINK_OUTER_TYPE_ID, &exact_link);
+            foks_crypto::prefixed_hash_signable(foks_proto::LINK_OUTER_TYPE_ID, &exact_link)
+                .map_err(bad_arguments)?;
         let request_hash = foks_crypto::prefixed_hash(foks_proto::LINK_OUTER_TYPE_ID, argument);
         let receipt_now = self
             .clock
@@ -229,15 +230,14 @@ impl ServerData {
             };
             let exact_root = root.encoded()?;
             let root_hash =
-                foks_crypto::prefixed_hash(foks_proto::MERKLE_ROOT_TYPE_ID, &exact_root);
-            let root_blob = foks_snowpack::encode(&Value::Binary(exact_root.clone()))?;
+                foks_crypto::prefixed_hash_signable(foks_proto::MERKLE_ROOT_TYPE_ID, &exact_root)?;
             let merkle_key = keys.load_or_create(KeyPurpose::Merkle)?;
             let exact_signed_root = SignedBlob {
                 inner: exact_root.clone(),
-                signature: foks_crypto::sign_ed25519_typed(
+                signature: foks_crypto::sign_ed25519_blob(
                     merkle_key.expose(),
                     foks_proto::MERKLE_ROOT_BLOB_TYPE_ID,
-                    &root_blob,
+                    &exact_root,
                 )?,
             }
             .encoded()?;
@@ -527,15 +527,14 @@ impl ServerData {
             };
             let exact_root = root.encoded()?;
             let root_hash =
-                foks_crypto::prefixed_hash(foks_proto::MERKLE_ROOT_TYPE_ID, &exact_root);
+                foks_crypto::prefixed_hash_signable(foks_proto::MERKLE_ROOT_TYPE_ID, &exact_root)?;
             let merkle_key = keys.load_or_create(KeyPurpose::Merkle)?;
-            let root_blob = foks_snowpack::encode(&Value::Binary(exact_root.clone()))?;
             let exact_signed_root = SignedBlob {
                 inner: exact_root.clone(),
-                signature: foks_crypto::sign_ed25519_typed(
+                signature: foks_crypto::sign_ed25519_blob(
                     merkle_key.expose(),
                     foks_proto::MERKLE_ROOT_BLOB_TYPE_ID,
-                    &root_blob,
+                    &exact_root,
                 )?,
             }
             .encoded()?;
@@ -715,10 +714,32 @@ impl ServerData {
         EntityId::from_bytes(self.host_id.clone()).map_err(bad_arguments)
     }
 
+    /// getCurrentRoot @2 returns the bare unsigned MerkleRoot, matching the
+    /// v0.1.9 wire contract. The authenticated advance path must instead use
+    /// getCurrentRootSigned @5 (below) so it can verify the signature.
     fn current_root(&self) -> std::result::Result<Vec<u8>, RpcStatus> {
+        if self.read_database.is_none() {
+            let signed =
+                SignedBlob::decode(&self.current_root).map_err(|_| RpcStatus::TransactionRetry)?;
+            return Ok(signed.inner);
+        }
+        let root = self.validated_current_root()?;
+        Ok(root.exact_root)
+    }
+
+    /// getCurrentRootSigned @5 returns the delegated Merkle-signer SignedBlob so
+    /// the client can authenticate the current root before accepting it.
+    fn current_root_signed(&self) -> std::result::Result<Vec<u8>, RpcStatus> {
         if self.read_database.is_none() {
             return Ok(self.current_root.clone());
         }
+        let root = self.validated_current_root()?;
+        Ok(root.exact_signed_root)
+    }
+
+    fn validated_current_root(
+        &self,
+    ) -> std::result::Result<foks_server_db::RootSnapshot, RpcStatus> {
         let database = self.read_database()?;
         let root = database
             .current_root()
@@ -730,7 +751,7 @@ impl ServerData {
         if signed.inner != root.exact_root {
             return Err(RpcStatus::TransactionRetry);
         }
-        Ok(root.exact_signed_root)
+        Ok(root)
     }
 
     fn current_probe_response(&self) -> std::result::Result<Vec<u8>, RpcStatus> {
@@ -796,26 +817,18 @@ impl ServerData {
     }
 
     fn validate_host_argument(&self, argument: &[u8]) -> std::result::Result<(), RpcStatus> {
-        let Value::Array(fields) = decode(argument).map_err(bad_arguments)? else {
-            return Err(bad_arguments("host argument is not a struct"));
-        };
-        let [host] = fields.as_slice() else {
-            return Err(bad_arguments("host argument has the wrong shape"));
-        };
-        self.validate_host_value(host)
+        validate_host_argument_against(argument, &self.host_id, false)
+    }
+
+    fn validate_optional_host_argument(
+        &self,
+        argument: &[u8],
+    ) -> std::result::Result<(), RpcStatus> {
+        validate_host_argument_against(argument, &self.host_id, true)
     }
 
     fn validate_host_value(&self, host: &Value) -> std::result::Result<(), RpcStatus> {
-        let Value::Binary(host) = host else {
-            return Err(bad_arguments("host argument is not binary"));
-        };
-        if host.len() != 33 || host.first() != Some(&foks_proto::ENTITY_HOST) {
-            return Err(bad_arguments("host argument is not a HostID"));
-        }
-        if host != &self.host_id {
-            return Err(RpcStatus::NotFound("host not found".to_owned()));
-        }
-        Ok(())
+        validate_host_value_against(host, &self.host_id)
     }
 
     fn validate_probe(&self, argument: &[u8]) -> std::result::Result<(), RpcStatus> {
@@ -848,6 +861,39 @@ impl ServerData {
     }
 }
 
+fn validate_host_argument_against(
+    argument: &[u8],
+    expected_host: &[u8],
+    allow_omitted: bool,
+) -> std::result::Result<(), RpcStatus> {
+    let Value::Array(fields) = decode(argument).map_err(bad_arguments)? else {
+        return Err(bad_arguments("host argument is not a struct"));
+    };
+    let [host] = fields.as_slice() else {
+        return Err(bad_arguments("host argument has the wrong shape"));
+    };
+    if allow_omitted && matches!(host, Value::Null) {
+        return Ok(());
+    }
+    validate_host_value_against(host, expected_host)
+}
+
+fn validate_host_value_against(
+    host: &Value,
+    expected_host: &[u8],
+) -> std::result::Result<(), RpcStatus> {
+    let Value::Binary(host) = host else {
+        return Err(bad_arguments("host argument is not binary"));
+    };
+    if host.len() != 33 || host.first() != Some(&foks_proto::ENTITY_HOST) {
+        return Err(bad_arguments("host argument is not a HostID"));
+    }
+    if host.as_slice() != expected_host {
+        return Err(RpcStatus::NotFound("host not found".to_owned()));
+    }
+    Ok(())
+}
+
 fn validated_root(
     root: &foks_server_db::RootSnapshot,
 ) -> std::result::Result<MerkleRoot, RpcStatus> {
@@ -856,7 +902,8 @@ fn validated_root(
 
 fn decode_stored_root(root: &foks_server_db::RootSnapshot) -> Result<MerkleRoot> {
     let decoded = MerkleRoot::decode(&root.exact_root)?;
-    let hash = foks_crypto::prefixed_hash(foks_proto::MERKLE_ROOT_TYPE_ID, &root.exact_root);
+    let hash =
+        foks_crypto::prefixed_hash_signable(foks_proto::MERKLE_ROOT_TYPE_ID, &root.exact_root)?;
     if decoded.epoch != root.epoch || decoded.root_node != root.root_node || hash != root.root_hash
     {
         return Err(crate::Error::Signup("stored Merkle root binding mismatch"));
@@ -974,7 +1021,17 @@ pub(crate) async fn serve(
             }
             Ok(Err(error)) => return Err(error.into()),
         };
-        let (call, request_memory) = call;
+        let (message, request_memory) = call;
+        let call = match message {
+            foks_rpc::InboundMessage::Call(call) => call,
+            // NOTIFY and CANCEL control messages are never answered by
+            // go-snowpack-rpc. Discard the frame and keep the connection open
+            // instead of treating the unexpected method type as fatal.
+            foks_rpc::InboundMessage::Control => {
+                drop(request_memory);
+                continue;
+            }
+        };
         service_data.metrics.request_started();
         let _request_timer = crate::ServerMetrics::request_timer(Arc::clone(&service_data.metrics));
         let sequence = call.sequence();
@@ -1197,7 +1254,7 @@ async fn read_call_body_async<R: AsyncRead + Unpin>(
     length: usize,
     maximum: usize,
     request_memory: Arc<Semaphore>,
-) -> foks_rpc::Result<(foks_rpc::DecodedCall, OwnedSemaphorePermit)> {
+) -> foks_rpc::Result<(foks_rpc::InboundMessage, OwnedSemaphorePermit)> {
     let reserved = length
         .checked_mul(2)
         .ok_or(foks_rpc::Error::FrameTooLarge {
@@ -1219,7 +1276,7 @@ async fn read_call_body_async<R: AsyncRead + Unpin>(
         })?;
     let mut content = vec![0; length];
     reader.read_exact(&mut content).await?;
-    Ok((foks_rpc::decode_call(&content)?, permit))
+    Ok((foks_rpc::decode_message(&content)?, permit))
 }
 
 async fn read_byte_async<R: AsyncRead + Unpin>(reader: &mut R) -> std::io::Result<u8> {
@@ -1301,6 +1358,31 @@ fn endpoint_host(endpoint: &str) -> Option<&str> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn current_root_host_may_be_omitted_but_vhost_selection_remains_strict() {
+        let mut host = vec![0x41; 33];
+        host[0] = foks_proto::ENTITY_HOST;
+        let omitted = foks_snowpack::encode(&Value::Array(vec![Value::Null])).unwrap();
+        let explicit =
+            foks_snowpack::encode(&Value::Array(vec![Value::Binary(host.clone())])).unwrap();
+        let mut other_host = host.clone();
+        other_host[1] ^= 1;
+        let mismatched =
+            foks_snowpack::encode(&Value::Array(vec![Value::Binary(other_host)])).unwrap();
+
+        validate_host_argument_against(&omitted, &host, true).unwrap();
+        validate_host_argument_against(&explicit, &host, true).unwrap();
+        validate_host_argument_against(&explicit, &host, false).unwrap();
+        assert!(matches!(
+            validate_host_argument_against(&mismatched, &host, true),
+            Err(RpcStatus::NotFound(_))
+        ));
+        assert!(matches!(
+            validate_host_argument_against(&omitted, &host, false),
+            Err(RpcStatus::BadArguments(_))
+        ));
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn timed_out_execution_remains_bounded_until_work_finishes() {
         let execution = Arc::new(Semaphore::new(1));
@@ -1374,7 +1456,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(first.0.argument(), argument);
+        match &first.0 {
+            foks_rpc::InboundMessage::Call(call) => assert_eq!(call.argument(), argument),
+            foks_rpc::InboundMessage::Control => panic!("expected a CALL_V2 request"),
+        }
         assert_eq!(budget.available_permits(), 0);
 
         let second_length =
@@ -1397,6 +1482,9 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(second.0.argument(), argument);
+        match &second.0 {
+            foks_rpc::InboundMessage::Call(call) => assert_eq!(call.argument(), argument),
+            foks_rpc::InboundMessage::Control => panic!("expected a CALL_V2 request"),
+        }
     }
 }

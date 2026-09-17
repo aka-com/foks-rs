@@ -80,7 +80,7 @@ fn verify_merkle_path_with(
                     ])),
                 ))),
             ]);
-            prefixed_hash(MERKLE_NODE_TYPE_ID, &encode(&wire)?)
+            prefixed_hash(MERKLE_NODE_TYPE_ID, &encode(&wire)?)?
         }
         MerkleTerminal::PrefixMiss {
             prefix_bit_start,
@@ -110,7 +110,7 @@ fn verify_merkle_path_with(
                     ])),
                 ))),
             ]);
-            prefixed_hash(MERKLE_NODE_TYPE_ID, &encode(&wire)?)
+            prefixed_hash(MERKLE_NODE_TYPE_ID, &encode(&wire)?)?
         }
     };
     for (start, count, prefix, branch, sibling) in interiors.into_iter().rev() {
@@ -134,7 +134,7 @@ fn verify_merkle_path_with(
                 ])),
             ))),
         ]);
-        current = prefixed_hash(MERKLE_NODE_TYPE_ID, &encode(&node)?);
+        current = prefixed_hash(MERKLE_NODE_TYPE_ID, &encode(&node)?)?;
     }
     if &current == expected_root_node {
         Ok(())

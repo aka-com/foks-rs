@@ -45,3 +45,12 @@ fn early_and_power_of_two_sequences_match_v019() {
     assert_eq!(back_pointer_sequence(8), [7, 6, 4]);
     assert_eq!(back_pointer_sequence(16), [15, 14, 12, 8]);
 }
+
+#[test]
+fn go_rejected_array16_back_pointer_lists_are_not_hashed() {
+    let pointers = (0..16).map(|epoch| (epoch, [0; 32])).collect::<Vec<_>>();
+    assert!(matches!(
+        back_pointer_hash(&pointers),
+        Err(foks_merkle_store::Error::Snowpack(_))
+    ));
+}

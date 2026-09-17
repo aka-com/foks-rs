@@ -29,7 +29,9 @@ mod server;
 
 pub use generated::*;
 pub use response::{encode_status_response_at, encode_void_success_response_at, RpcStatus};
-pub use server::{decode_call, read_call, DecodedCall};
+pub use server::{
+    decode_call, decode_message, read_call, read_message, DecodedCall, InboundMessage,
+};
 
 pub const CURRENT_COMPATIBILITY_VERSION: u64 = 1;
 pub const DEFAULT_MAX_FRAME_LENGTH: usize = 16 * 1024 * 1024;
@@ -39,6 +41,36 @@ const METHOD_RESPONSE: u64 = 1;
 const RESPONSE_HEADER: &[u8] = &[
     0x82, 0xa1, b'V', 0x01, 0xa2, b'f', b'1', 0x81, 0xa4, b'V', b'e', b'r', b's', 0x01,
 ];
+
+// go-foks routes TeamGuest and Kex are not otherwise handled by this
+// implementation, but both place their arguments and results bare on the wire,
+// so they are classified here to keep `is_headerless_protocol` a faithful
+// description of the whole v0.1.9 protocol set (proto/rem/kex.go, and the
+// TeamGuest protocol in proto/rem/team.go).
+const TEAM_GUEST_PROTOCOL_ID: u64 = 0xf6d7585c;
+const KEX_PROTOCOL_ID: u64 = 0xae4df828;
+
+/// Reports whether a protocol carries its call argument and its result bare on
+/// the wire, without the `{Data, Header}` DataWrap envelope.
+///
+/// go-foks wraps most protocols (Probe, MerkleQuery, Reg, User, KVStore,
+/// Beacon, LogSend, RealTime) in `rpc.DataWrap[Header, T]`, but emits the team
+/// protocols (TeamLoader, TeamAdmin, TeamMember, TeamGuest) and Kex as the bare
+/// `,toarray` struct with no header. This is decided per protocol, never per
+/// method, so it is a pure function of the protocol id. See go-foks v0.1.9
+/// proto/rem/team.go and kex.go, whose generated server handlers decode a bare
+/// argument struct and return a bare result, versus proto/rem/reg.go et al.
+/// whose handlers decode and return `rpc.DataWrap`.
+pub fn is_headerless_protocol(protocol_id: u64) -> bool {
+    matches!(
+        protocol_id,
+        TEAM_LOADER_PROTOCOL_ID
+            | TEAM_ADMIN_PROTOCOL_ID
+            | TEAM_MEMBER_PROTOCOL_ID
+            | TEAM_GUEST_PROTOCOL_ID
+            | KEX_PROTOCOL_ID
+    )
+}
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -237,6 +269,32 @@ pub fn resequence_call(request: &[u8], sequence: u64, maximum: usize) -> Result<
     frame(&rewritten, maximum)
 }
 
+/// Extracts the protocol id from one framed RPC call without copying its
+/// argument. The client uses this to select the wrapped or bare response
+/// decoder for the protocol it is about to invoke.
+pub fn call_protocol_id(framed_call: &[u8], maximum: usize) -> Result<u64> {
+    let mut framed = std::io::Cursor::new(framed_call);
+    let content = read_frame(&mut framed, maximum)?;
+    let mut cursor = Cursor::new(&content);
+    match cursor.byte()? {
+        0x95 | 0x96 => {}
+        _ => {
+            return Err(Error::Envelope {
+                expected: "five- or six-element RPC call array",
+                found: "another MessagePack value",
+            })
+        }
+    }
+    if unsigned(cursor.value()?)? != METHOD_CALL_V2 {
+        return Err(Error::Envelope {
+            expected: "RPC call method",
+            found: "another RPC method",
+        });
+    }
+    let _sequence = unsigned(cursor.value()?)?;
+    unsigned(cursor.value()?)
+}
+
 fn encode_call_with_validated_argument(
     protocol_id: u64,
     method_position: u64,
@@ -249,11 +307,17 @@ fn encode_call_with_validated_argument(
     encode_unsigned(sequence, &mut content);
     encode_unsigned(protocol_id, &mut content);
     encode_unsigned(method_position, &mut content);
-    content.push(0x82); // rpc.DataWrap map, canonically ordered by key
-    encode_text(b"Data", &mut content);
-    content.extend_from_slice(argument);
-    encode_text(b"Header", &mut content);
-    content.extend_from_slice(RESPONSE_HEADER);
+    if is_headerless_protocol(protocol_id) {
+        // Team and Kex protocols carry the bare argument struct with no
+        // DataWrap envelope and no header (go-foks proto/rem/team.go, kex.go).
+        content.extend_from_slice(argument);
+    } else {
+        content.push(0x82); // rpc.DataWrap map, canonically ordered by key
+        encode_text(b"Data", &mut content);
+        content.extend_from_slice(argument);
+        encode_text(b"Header", &mut content);
+        content.extend_from_slice(RESPONSE_HEADER);
+    }
 
     frame(&content, DEFAULT_MAX_FRAME_LENGTH)
 }
@@ -811,6 +875,23 @@ pub fn encode_get_current_merkle_root_request(host: &EntityId, sequence: u64) ->
     )
 }
 
+/// Requests the signed current Merkle root (getCurrentRootSigned @5). The v0.1.9
+/// getCurrentRoot @2 route returns a bare unsigned root; the authenticated
+/// advance path must use the signed form so it can verify the delegated
+/// Merkle-signer signature before accepting the root.
+pub fn encode_get_current_merkle_root_signed_request(
+    host: &EntityId,
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    let argument = encode(&Value::Array(vec![Value::Binary(host.as_bytes().to_vec())]))?;
+    encode_call(
+        MERKLE_QUERY_PROTOCOL_ID,
+        MERKLE_GET_CURRENT_ROOT_SIGNED_METHOD_POSITION,
+        &argument,
+        sequence,
+    )
+}
+
 pub fn encode_get_historical_merkle_roots_request(
     host: &EntityId,
     full_epochs: &[u64],
@@ -846,10 +927,11 @@ pub fn encode_merkle_select_vhost_request(host: &EntityId) -> Result<Vec<u8>> {
 }
 
 pub fn encode_team_view_challenge_request(request: &TeamViewRequest) -> Result<Vec<u8>> {
+    let argument = encode(&Value::Array(vec![request.to_value()]))?;
     encode_call(
         TEAM_LOADER_PROTOCOL_ID,
         TEAM_GET_VIEW_CHALLENGE_METHOD_POSITION,
-        &request.encoded()?,
+        &argument,
         0,
     )
 }
@@ -1338,6 +1420,28 @@ pub fn read_void_response<R: Read>(
     decode_void_response(&content, expected_sequence)
 }
 
+/// Reads a response from a headerless (team or Kex) protocol, whose result is
+/// the bare protocol struct with no DataWrap envelope.
+pub fn read_bare_response<R: Read>(
+    reader: &mut R,
+    maximum: usize,
+    expected_sequence: u64,
+) -> Result<Vec<u8>> {
+    let content = read_frame(reader, maximum)?;
+    decode_bare_response(&content, expected_sequence)
+}
+
+/// Reads a headerless (team or Kex) response for a method with no return value,
+/// whose result slot is a bare nil.
+pub fn read_bare_void_response<R: Read>(
+    reader: &mut R,
+    maximum: usize,
+    expected_sequence: u64,
+) -> Result<()> {
+    let content = read_frame(reader, maximum)?;
+    decode_bare_void_response(&content, expected_sequence)
+}
+
 /// Reads one MessagePack-length-prefixed RPC frame.
 pub fn read_frame<R: Read>(reader: &mut R, maximum: usize) -> Result<Vec<u8>> {
     let length = read_frame_length(reader)?;
@@ -1450,6 +1554,55 @@ pub fn decode_void_response(content: &[u8], expected_sequence: u64) -> Result<()
     Ok(())
 }
 
+/// Decodes a response from a headerless (team or Kex) protocol and returns its
+/// exact result bytes. Unlike [`decode_response`], the result slot is the bare
+/// protocol struct rather than a `{Data, Header}` DataWrap.
+pub fn decode_bare_response(content: &[u8], expected_sequence: u64) -> Result<Vec<u8>> {
+    let mut cursor = Cursor::new(content);
+    if cursor.byte()? != 0x94 {
+        return Err(Error::Envelope {
+            expected: "four-element RPC response array",
+            found: "another MessagePack value",
+        });
+    }
+    if unsigned(cursor.value()?)? != METHOD_RESPONSE {
+        return Err(Error::Envelope {
+            expected: "RPC response method",
+            found: "another RPC method",
+        });
+    }
+    let sequence = unsigned(cursor.value()?)?;
+    if sequence != expected_sequence {
+        return Err(Error::Sequence {
+            expected: expected_sequence,
+            received: sequence,
+        });
+    }
+    check_status(cursor.value()?)?;
+    let result = cursor.value()?.to_vec();
+    if !cursor.done() {
+        return Err(Error::Envelope {
+            expected: "end of RPC response",
+            found: "trailing data",
+        });
+    }
+    Ok(result)
+}
+
+/// Decodes a headerless (team or Kex) response for a method with no return
+/// value. go-foks void handlers return a nil result, so the result slot is a
+/// bare nil rather than a DataWrap carrying only a header.
+pub fn decode_bare_void_response(content: &[u8], expected_sequence: u64) -> Result<()> {
+    let result = decode_bare_response(content, expected_sequence)?;
+    if result != [0xc0] {
+        return Err(Error::Envelope {
+            expected: "nil void response result",
+            found: "another response value",
+        });
+    }
+    Ok(())
+}
+
 /// Encodes a successful response for protocol fixtures and local test servers.
 #[doc(hidden)]
 pub fn encode_probe_success_response(probe_response: &[u8]) -> Result<Vec<u8>> {
@@ -1472,6 +1625,34 @@ pub fn encode_success_response_at(response: &[u8], sequence: u64) -> Result<Vec<
     content.extend_from_slice(response);
     encode_text(b"Header", &mut content);
     content.extend_from_slice(RESPONSE_HEADER);
+    frame(&content, DEFAULT_MAX_FRAME_LENGTH)
+}
+
+/// Encodes a successful response for a headerless (team or Kex) protocol, whose
+/// result is the bare protocol struct with no DataWrap envelope.
+pub fn encode_bare_success_response_at(response: &[u8], sequence: u64) -> Result<Vec<u8>> {
+    foks_snowpack::validate(response)?;
+    let mut content = Vec::with_capacity(response.len() + 8);
+    content.push(0x94);
+    encode_unsigned(METHOD_RESPONSE, &mut content);
+    encode_unsigned(sequence, &mut content);
+    // Nil error pointer on success.
+    content.push(0xc0);
+    content.extend_from_slice(response);
+    frame(&content, DEFAULT_MAX_FRAME_LENGTH)
+}
+
+/// Encodes a successful headerless (team or Kex) response for a method with no
+/// return value. go-foks void handlers return a nil result, so the result slot
+/// is a bare nil.
+pub fn encode_bare_void_success_response_at(sequence: u64) -> Result<Vec<u8>> {
+    let mut content = Vec::with_capacity(8);
+    content.push(0x94);
+    encode_unsigned(METHOD_RESPONSE, &mut content);
+    encode_unsigned(sequence, &mut content);
+    // Nil error pointer, then a bare nil result.
+    content.push(0xc0);
+    content.push(0xc0);
     frame(&content, DEFAULT_MAX_FRAME_LENGTH)
 }
 
@@ -1623,6 +1804,21 @@ fn check_positional_status(bytes: &[u8]) -> Result<()> {
     if code == 0 && fields[1] == Value::Variant(None) {
         return Ok(());
     }
+    if code == 8012 {
+        let Value::Variant(Some((tag, value))) = &fields[1] else {
+            return Err(Error::Envelope {
+                expected: "KV stale-cache status payload",
+                found: "missing status payload",
+            });
+        };
+        if tag.as_slice() != b"b" {
+            return Err(Error::Envelope {
+                expected: "KV stale-cache status variant b",
+                found: "another status variant",
+            });
+        }
+        return Err(Error::KvStaleCache(positional_path_version_vector(value)?));
+    }
     let detail = match &fields[1] {
         Value::Variant(Some((_, value))) => match value.as_ref() {
             Value::Text(bytes) => String::from_utf8(bytes.clone()).ok(),
@@ -1633,6 +1829,147 @@ fn check_positional_status(bytes: &[u8]) -> Result<()> {
     Err(Error::RemoteStatus {
         code,
         detail: StatusDetail(detail),
+    })
+}
+
+/// Decodes go-foks' positional `PathVersionVector` (`[Root, Path]`) carried in a
+/// stale-cache status, applying the same directory/dirent bounds as the cached
+/// projection so a hostile server cannot force an unbounded allocation.
+fn positional_path_version_vector(value: &Value) -> Result<KvPathVersionVector> {
+    let Value::Array(fields) = value else {
+        return Err(Error::Envelope {
+            expected: "positional PathVersionVector",
+            found: value.kind(),
+        });
+    };
+    if fields.len() != 2 {
+        return Err(Error::Envelope {
+            expected: "two-field PathVersionVector",
+            found: "another array length",
+        });
+    }
+    let Value::Unsigned(root_version) = fields[0] else {
+        return Err(Error::Envelope {
+            expected: "unsigned PathVersionVector Root",
+            found: fields[0].kind(),
+        });
+    };
+    let directories = match &fields[1] {
+        Value::Null => Vec::new(),
+        Value::Array(entries) => {
+            if entries.len() > foks_proto::MAXIMUM_KV_DIRECTORIES {
+                return Err(Error::CollectionTooLarge {
+                    kind: "cached directory",
+                    received: entries.len(),
+                    maximum: foks_proto::MAXIMUM_KV_DIRECTORIES,
+                });
+            }
+            let mut total_dirents = 0usize;
+            let mut output = Vec::with_capacity(entries.len());
+            for entry in entries {
+                output.push(positional_directory_version(entry, &mut total_dirents)?);
+            }
+            output
+        }
+        other => {
+            return Err(Error::Envelope {
+                expected: "PathVersionVector Path array or null",
+                found: other.kind(),
+            })
+        }
+    };
+    Ok(KvPathVersionVector {
+        root_version,
+        directories,
+    })
+}
+
+fn positional_directory_version(
+    value: &Value,
+    total_dirents: &mut usize,
+) -> Result<foks_proto::KvDirectoryVersion> {
+    let Value::Array(fields) = value else {
+        return Err(Error::Envelope {
+            expected: "positional DirVersion",
+            found: value.kind(),
+        });
+    };
+    if fields.len() != 3 {
+        return Err(Error::Envelope {
+            expected: "three-field DirVersion",
+            found: "another array length",
+        });
+    }
+    let id = positional_kv_id(&fields[0])?;
+    let Value::Unsigned(version) = fields[1] else {
+        return Err(Error::Envelope {
+            expected: "unsigned DirVersion Vers",
+            found: fields[1].kind(),
+        });
+    };
+    let entries = match &fields[2] {
+        Value::Null => Vec::new(),
+        Value::Array(items) => {
+            *total_dirents = total_dirents.saturating_add(items.len());
+            if *total_dirents > foks_proto::MAXIMUM_KV_DIRENTS {
+                return Err(Error::CollectionTooLarge {
+                    kind: "cached dirent",
+                    received: *total_dirents,
+                    maximum: foks_proto::MAXIMUM_KV_DIRENTS,
+                });
+            }
+            items
+                .iter()
+                .map(positional_dirent_version)
+                .collect::<Result<Vec<_>>>()?
+        }
+        other => {
+            return Err(Error::Envelope {
+                expected: "DirVersion De array or null",
+                found: other.kind(),
+            })
+        }
+    };
+    Ok(foks_proto::KvDirectoryVersion {
+        id,
+        version,
+        entries,
+    })
+}
+
+fn positional_dirent_version(value: &Value) -> Result<foks_proto::KvDirentVersion> {
+    let Value::Array(fields) = value else {
+        return Err(Error::Envelope {
+            expected: "positional DirentVersion",
+            found: value.kind(),
+        });
+    };
+    if fields.len() != 2 {
+        return Err(Error::Envelope {
+            expected: "two-field DirentVersion",
+            found: "another array length",
+        });
+    }
+    let id = positional_kv_id(&fields[0])?;
+    let Value::Unsigned(version) = fields[1] else {
+        return Err(Error::Envelope {
+            expected: "unsigned DirentVersion Vers",
+            found: fields[1].kind(),
+        });
+    };
+    Ok(foks_proto::KvDirentVersion { id, version })
+}
+
+fn positional_kv_id(value: &Value) -> Result<[u8; 16]> {
+    let Value::Binary(bytes) = value else {
+        return Err(Error::Envelope {
+            expected: "16-byte KV id",
+            found: value.kind(),
+        });
+    };
+    <[u8; 16]>::try_from(bytes.as_slice()).map_err(|_| Error::Envelope {
+        expected: "16-byte KV id",
+        found: "another length",
     })
 }
 
@@ -2157,9 +2494,105 @@ impl ValueKind for Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        check_status, encode_call, read_frame, resequence_call, unsigned, Cursor, Error,
-        METHOD_CALL_V2,
+        check_status, decode_call, encode_call, encode_call_with_validated_argument,
+        encode_status_response_at, read_frame, read_response, resequence_call, unsigned, Cursor,
+        Error, RpcStatus, DEFAULT_MAX_FRAME_LENGTH, METHOD_CALL_V2,
     };
+    use foks_proto::{KvDirectoryVersion, KvDirentVersion, KvPathVersionVector};
+
+    #[test]
+    fn status_responses_round_trip_in_the_positional_go_shape() {
+        // No-payload status: [Sc, {}].
+        let framed = encode_status_response_at(&RpcStatus::RateLimited, 9).unwrap();
+        let error = read_response(
+            &mut std::io::Cursor::new(&framed),
+            DEFAULT_MAX_FRAME_LENGTH,
+            9,
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::RemoteStatus { code: 1012, .. }));
+
+        // Detail-string status: [Sc, {"1": <text>}].
+        let framed =
+            encode_status_response_at(&RpcStatus::BadArguments("bad".to_owned()), 9).unwrap();
+        let error = read_response(
+            &mut std::io::Cursor::new(&framed),
+            DEFAULT_MAX_FRAME_LENGTH,
+            9,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&error, Error::RemoteStatus { code: 1030, detail } if detail.0.as_deref() == Some("bad"))
+        );
+
+        // Stale-cache status: [8012, {"b": [Root, [ [Id, Vers, [[Id, Vers]]] ]]}].
+        let pvv = KvPathVersionVector {
+            root_version: 7,
+            directories: vec![KvDirectoryVersion {
+                id: [1; 16],
+                version: 3,
+                entries: vec![KvDirentVersion {
+                    id: [2; 16],
+                    version: 4,
+                }],
+            }],
+        };
+        let framed = encode_status_response_at(&RpcStatus::StaleCache(pvv.clone()), 10).unwrap();
+        let error = read_response(
+            &mut std::io::Cursor::new(&framed),
+            DEFAULT_MAX_FRAME_LENGTH,
+            10,
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::KvStaleCache(v) if v == pvv));
+    }
+
+    #[test]
+    fn decode_call_accepts_optional_log_tags_element() {
+        let argument =
+            foks_snowpack::encode(&foks_snowpack::Value::Binary(b"payload".to_vec())).unwrap();
+        let framed = encode_call(17, 23, &argument, 42).unwrap();
+        let content = read_frame(&mut std::io::Cursor::new(&framed), 4096).unwrap();
+        assert_eq!(content[0], 0x95);
+
+        // go-snowpack-rpc emits a six-element call with a trailing log-tags
+        // element (here an empty map); the server must accept and ignore it.
+        let mut tagged = content.clone();
+        tagged[0] = 0x96;
+        tagged.push(0x80);
+        let decoded = decode_call(&tagged).unwrap();
+        assert_eq!(decoded.protocol_id(), 17);
+        assert_eq!(decoded.method_position(), 23);
+        assert_eq!(decoded.sequence(), 42);
+        assert_eq!(decoded.argument(), argument.as_slice());
+
+        // The plain five-element call still decodes; a stray seventh element does not.
+        assert!(decode_call(&content).is_ok());
+        let mut over = tagged;
+        over.push(0x80);
+        assert!(matches!(decode_call(&over), Err(Error::Envelope { .. })));
+    }
+
+    #[test]
+    fn decode_call_accepts_empty_array_niladic_argument() {
+        // Go encodes a niladic argument as an empty array (0x90); the server must
+        // accept it for any method (here User.getSalt @3), not just getHostConfig.
+        // Build the call directly since encode_call's canonical validator (rightly)
+        // forbids empty arrays in general Rust-emitted encodings.
+        let framed = encode_call_with_validated_argument(0x823f_0899, 3, &[0x90], 7).unwrap();
+        let content = read_frame(&mut std::io::Cursor::new(&framed), 4096).unwrap();
+        let decoded = decode_call(&content).unwrap();
+        assert_eq!(decoded.protocol_id(), 0x823f_0899);
+        assert_eq!(decoded.method_position(), 3);
+        assert_eq!(decoded.argument(), [0x90]);
+        super::arguments::decode_void(decoded.argument()).unwrap();
+
+        // A malformed (truncated) argument is still rejected by the
+        // canonical validator, so the empty-array carve-out does not weaken it.
+        let bad = encode_call_with_validated_argument(0x823f_0899, 3, &[0x91], 7).unwrap();
+        let bad_content = read_frame(&mut std::io::Cursor::new(&bad), 4096).unwrap();
+        assert!(decode_call(&bad_content).is_err());
+    }
 
     #[test]
     fn successful_named_status_must_not_hide_a_payload() {

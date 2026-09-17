@@ -223,7 +223,10 @@ pub(crate) fn validate(
         signer: verified.change.signer.as_bytes().to_vec(),
         sequence: expected_sequence,
         expected_tail_hash: authority.chain_tail_hash,
-        link_hash: foks_crypto::prefixed_hash(foks_proto::LINK_OUTER_TYPE_ID, &exact_link),
+        link_hash: foks_crypto::prefixed_hash_signable(
+            foks_proto::LINK_OUTER_TYPE_ID,
+            &exact_link,
+        )?,
         exact_link,
         next_tree_location,
         added,

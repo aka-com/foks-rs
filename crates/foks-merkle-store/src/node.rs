@@ -1,8 +1,7 @@
-use foks_crypto::prefixed_hash;
 use foks_proto::MERKLE_NODE_TYPE_ID;
 use foks_snowpack::{decode, encode, Value};
 
-use crate::{Error, Result};
+use crate::{prefixed_hash_signable, Error, Result};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Node {
@@ -116,7 +115,7 @@ fn valid_prefix(start: u64, count: u64, prefix: &[u8]) -> bool {
 }
 
 pub fn hash_node(node: &Node) -> Result<[u8; 32]> {
-    Ok(prefixed_hash(MERKLE_NODE_TYPE_ID, &node.encoded()?))
+    prefixed_hash_signable(MERKLE_NODE_TYPE_ID, &node.encoded()?)
 }
 
 fn fixed_32(bytes: &[u8]) -> Result<[u8; 32]> {

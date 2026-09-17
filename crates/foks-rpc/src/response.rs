@@ -2,7 +2,7 @@ use foks_proto::KvPathVersionVector;
 use foks_snowpack::{encode, Value};
 
 use super::{
-    encode_text, encode_unsigned, frame, Error, Result, DEFAULT_MAX_FRAME_LENGTH, METHOD_RESPONSE,
+    encode_text, encode_unsigned, frame, Result, DEFAULT_MAX_FRAME_LENGTH, METHOD_RESPONSE,
     RESPONSE_HEADER, STATUS_BAD_PASSPHRASE_ERROR, STATUS_PASSPHRASE_NOT_FOUND_ERROR,
 };
 
@@ -101,34 +101,30 @@ pub fn encode_status_response_at(status: &RpcStatus, sequence: u64) -> Result<Ve
     encode_unsigned(METHOD_RESPONSE, &mut content);
     encode_unsigned(sequence, &mut content);
     encode_status(status, &mut content)?;
-    // Go omits Data on an error and retains only the compatibility header.
-    content.push(0x81);
-    encode_text(b"Header", &mut content);
-    content.extend_from_slice(RESPONSE_HEADER);
+    // go-foks returns a nil result alongside an error status (its handlers return
+    // a nil result value on error), so the response's result slot is bare nil.
+    content.push(0xc0);
     frame(&content, DEFAULT_MAX_FRAME_LENGTH)
 }
 
 fn encode_status(status: &RpcStatus, output: &mut Vec<u8>) -> Result<()> {
-    let has_payload = matches!(
-        status,
-        RpcStatus::BadArguments(_)
-            | RpcStatus::NotFound(_)
-            | RpcStatus::PermissionDenied(_)
-            | RpcStatus::TeamError(_)
-            | RpcStatus::TeamRace(_)
-            | RpcStatus::TeamBearerTokenStale(_)
-            | RpcStatus::TeamCertificate(_)
-            | RpcStatus::TeamRoster(_)
-            | RpcStatus::TeamKey(_)
-            | RpcStatus::TeamRemovalKey(_)
-            | RpcStatus::TeamExplore(_)
-            | RpcStatus::TeamAdHocInvalidChange(_)
-            | RpcStatus::KvPermission { .. }
-            | RpcStatus::StaleCache(_)
-    );
-    output.push(if has_payload { 0x82 } else { 0x81 });
-    encode_text(b"Sc", output);
-    encode_unsigned(status.code(), output);
+    // go-foks encodes a Status as the positional array [Sc, Switch] (a
+    // `,toarray` struct), where Switch is a single-arm union. go-codec writes a
+    // set union arm as a one-entry map keyed by the field's codec tag character
+    // ("1" for a detail string, "a" for KV permission, "b" for the stale-cache
+    // path version vector) and an unset union as an empty map — which Snowpack
+    // represents as a variant. Building the value through Snowpack therefore
+    // reproduces the go-foks bytes exactly, including [Sc, {}] for no payload.
+    let status_value = Value::Array(vec![
+        Value::Unsigned(status.code()),
+        status_switch_variant(status),
+    ]);
+    output.extend_from_slice(&encode(&status_value)?);
+    Ok(())
+}
+
+fn status_switch_variant(status: &RpcStatus) -> Value {
+    let arm = |tag: &[u8], value: Value| Value::Variant(Some((tag.to_vec(), Box::new(value))));
     match status {
         RpcStatus::BadArguments(message)
         | RpcStatus::NotFound(message)
@@ -142,77 +138,64 @@ fn encode_status(status: &RpcStatus, output: &mut Vec<u8>) -> Result<()> {
         | RpcStatus::TeamRemovalKey(message)
         | RpcStatus::TeamExplore(message)
         | RpcStatus::TeamAdHocInvalidChange(message) => {
-            encode_text(b"f1", output);
-            encode_text(message.as_bytes(), output);
+            arm(b"1", Value::Text(message.as_bytes().to_vec()))
         }
-        RpcStatus::StaleCache(versions) => {
-            encode_text(b"f11", output);
-            encode_named_path_version_vector(versions, output)?;
-        }
+        // go-foks KV_NOENT carries the missing path as its detail string; this
+        // slice has no path to report, so emit an empty string to keep the union
+        // arm present (a Go client's GetSc requires it).
+        RpcStatus::KvNoEnt => arm(b"1", Value::Text(Vec::new())),
         RpcStatus::KvPermission {
             operation,
             resource,
-        } => {
-            encode_text(b"f10", output);
-            output.push(0x92);
-            encode_unsigned(*operation, output);
-            encode_unsigned(*resource, output);
-        }
-        _ => {}
+        } => arm(
+            b"a",
+            Value::Array(vec![
+                Value::Unsigned(*operation),
+                Value::Unsigned(*resource),
+            ]),
+        ),
+        RpcStatus::StaleCache(versions) => arm(b"b", positional_path_version_vector(versions)),
+        _ => Value::Variant(None),
     }
-    Ok(())
 }
 
-fn encode_named_path_version_vector(
-    versions: &KvPathVersionVector,
-    output: &mut Vec<u8>,
-) -> Result<()> {
-    output.push(0x82);
-    encode_text(b"Path", output);
-    encode_optional_array_len(versions.directories.len(), output)?;
-    for directory in &versions.directories {
-        output.push(0x83);
-        encode_text(b"De", output);
-        encode_optional_array_len(directory.entries.len(), output)?;
-        for entry in &directory.entries {
-            output.push(0x82);
-            encode_text(b"Id", output);
-            output.extend_from_slice(&encode(&Value::Binary(entry.id.to_vec()))?);
-            encode_text(b"Vers", output);
-            encode_unsigned(entry.version, output);
-        }
-        encode_text(b"Id", output);
-        output.extend_from_slice(&encode(&Value::Binary(directory.id.to_vec()))?);
-        encode_text(b"Vers", output);
-        encode_unsigned(directory.version, output);
-    }
-    encode_text(b"Root", output);
-    encode_unsigned(versions.root_version, output);
-    Ok(())
-}
-
-fn encode_optional_array_len(length: usize, output: &mut Vec<u8>) -> Result<()> {
-    if length == 0 {
-        output.push(0xc0);
-        Ok(())
+fn positional_path_version_vector(versions: &KvPathVersionVector) -> Value {
+    // PathVersionVector = [Root, Path]; Path is null when empty, else an array of
+    // DirVersion = [Id (16-byte bin), Vers, De]; De is null when empty, else an
+    // array of DirentVersion = [Id (16-byte bin), Vers]. Matches go-foks' toarray
+    // layout and its nil-when-empty slice pointers.
+    let path = if versions.directories.is_empty() {
+        Value::Null
     } else {
-        encode_array_len(length, output)
-    }
-}
-
-fn encode_array_len(length: usize, output: &mut Vec<u8>) -> Result<()> {
-    if length <= 15 {
-        output.push(0x90 | length as u8);
-    } else if let Ok(length) = u16::try_from(length) {
-        output.push(0xdc);
-        output.extend_from_slice(&length.to_be_bytes());
-    } else {
-        let length = u32::try_from(length).map_err(|_| Error::FrameTooLarge {
-            received: length,
-            maximum: u32::MAX as usize,
-        })?;
-        output.push(0xdd);
-        output.extend_from_slice(&length.to_be_bytes());
-    }
-    Ok(())
+        Value::Array(
+            versions
+                .directories
+                .iter()
+                .map(|directory| {
+                    let entries = if directory.entries.is_empty() {
+                        Value::Null
+                    } else {
+                        Value::Array(
+                            directory
+                                .entries
+                                .iter()
+                                .map(|entry| {
+                                    Value::Array(vec![
+                                        Value::Binary(entry.id.to_vec()),
+                                        Value::Unsigned(entry.version),
+                                    ])
+                                })
+                                .collect(),
+                        )
+                    };
+                    Value::Array(vec![
+                        Value::Binary(directory.id.to_vec()),
+                        Value::Unsigned(directory.version),
+                        entries,
+                    ])
+                })
+                .collect(),
+        )
+    };
+    Value::Array(vec![Value::Unsigned(versions.root_version), path])
 }

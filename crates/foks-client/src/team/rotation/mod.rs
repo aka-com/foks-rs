@@ -42,6 +42,15 @@ struct RotationBinding {
     introduced: Vec<(Role, u64, EntityId)>,
 }
 
+/// The three distinguishable states of a pending PTK rotation when its
+/// submission response was lost: our rotation committed, a conflicting
+/// transition took the seqno, or the position is not yet observable.
+pub(super) enum RotationOutcome {
+    Committed(Box<AuthenticatedTeamOutcome>),
+    Conflict,
+    Unresolved,
+}
+
 struct Receiver<'a> {
     member: VerifiedTeamMemberState,
     key: &'a VerifiedSharedKey,
@@ -462,7 +471,10 @@ impl FoksClient {
         let (_, merkle) = self.advance_merkle_root(host)?;
         let root = TreeRoot {
             epoch: merkle.root().epoch,
-            hash: prefixed_hash(MERKLE_ROOT_TYPE_ID, &merkle.root().encoded()?),
+            hash: foks_crypto::prefixed_hash_signable(
+                MERKLE_ROOT_TYPE_ID,
+                &merkle.root().encoded()?,
+            )?,
         };
         let time = now_microseconds()?;
         let next_tree_location = random_bytes()?;
@@ -630,14 +642,47 @@ impl FoksClient {
             Ok(value) => value,
             Err(_) if post_error.is_some() => {
                 if is_definite_rejection {
+                    // STATUS_TEAM_RACE_ERROR is never committed; already Rejected.
                     return Err(post_error.expect("checked above"));
                 }
-                let _ = hard_store.advance_team_mutation(
-                    &operation_id,
-                    TeamMutationState::Rejected,
-                    now_microseconds()?,
-                );
-                return Err(post_error.expect("checked above"));
+                // Ambiguous failure: the rotation may have committed even though
+                // the response was lost. Reconcile once before deciding, so we
+                // neither falsely reject a committed rotation nor wedge the seqno.
+                match self.authenticated_rotation_outcome(
+                    host,
+                    uid,
+                    auth_seed,
+                    certificate_chain,
+                    actor_user,
+                    &actor_puk.seed,
+                    team,
+                    &binding,
+                    supplied_rotations,
+                ) {
+                    // The pending rotation is confirmed on-chain: finalize it.
+                    Ok(RotationOutcome::Committed(authenticated)) => *authenticated,
+                    // A different transition occupies the reserved sequence number:
+                    // release it as Rejected.
+                    Ok(RotationOutcome::Conflict) => {
+                        hard_store.advance_team_mutation(
+                            &operation_id,
+                            TeamMutationState::Rejected,
+                            now_microseconds()?,
+                        )?;
+                        return Err(post_error.expect("checked above"));
+                    }
+                    // Not yet observable (never-arrived or Merkle-lagged): release
+                    // the seqno to avoid wedging a sole client, accepting a rare
+                    // false-reject of a committed-but-lagged rotation.
+                    Ok(RotationOutcome::Unresolved) | Err(_) => {
+                        let _ = hard_store.advance_team_mutation(
+                            &operation_id,
+                            TeamMutationState::Rejected,
+                            now_microseconds()?,
+                        );
+                        return Err(post_error.expect("checked above"));
+                    }
+                }
             }
             Err(error) => return Err(error),
         };

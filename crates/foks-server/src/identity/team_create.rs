@@ -311,8 +311,8 @@ fn validate_removal_boxes(
 }
 
 fn location_commitment(location: &[u8; 32]) -> Result<[u8; 32]> {
-    Ok(foks_crypto::prefixed_hash(
+    Ok(foks_crypto::prefixed_hash_signable(
         foks_proto::TREE_LOCATION_TYPE_ID,
         &foks_snowpack::encode(&Value::Binary(location.to_vec()))?,
-    ))
+    )?)
 }

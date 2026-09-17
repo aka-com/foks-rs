@@ -343,7 +343,10 @@ impl FoksClient {
         let (_, merkle) = self.advance_merkle_root(host)?;
         let root = TreeRoot {
             epoch: merkle.root().epoch,
-            hash: prefixed_hash(MERKLE_ROOT_TYPE_ID, &merkle.root().encoded()?),
+            hash: foks_crypto::prefixed_hash_signable(
+                MERKLE_ROOT_TYPE_ID,
+                &merkle.root().encoded()?,
+            )?,
         };
         let target_public = SharedPublicMaterial {
             verify_key: target.verify_key.clone(),
@@ -795,7 +798,10 @@ impl FoksClient {
         let (_, merkle) = self.advance_merkle_root(host)?;
         let root = TreeRoot {
             epoch: merkle.root().epoch,
-            hash: prefixed_hash(MERKLE_ROOT_TYPE_ID, &merkle.root().encoded()?),
+            hash: foks_crypto::prefixed_hash_signable(
+                MERKLE_ROOT_TYPE_ID,
+                &merkle.root().encoded()?,
+            )?,
         };
         let target_public = SharedPublicMaterial {
             verify_key: target.verify_key.clone(),
@@ -1012,24 +1018,54 @@ impl FoksClient {
         ) {
             Ok(value) => value,
             Err(_) if post_error.is_some() => {
-                // If the server definitely rejected and reconciliation shows
-                // no conflicting transition, release the reservation. For
-                // ambiguous SubmissionUnknown, the Rejected transition is
-                // now allowed (lib.rs) so a sole client can be unblocked
-                // without hard-state reset after confirming no commit.
                 if is_definite_rejection {
-                    // Already Rejected above; just surface the error.
+                    // STATUS_TEAM_RACE_ERROR is never committed; already Rejected
+                    // above, so just surface the error.
                     return Err(post_error.expect("checked above"));
                 }
-                // For ambiguous errors where wait failed, attempt to mark
-                // Rejected if no conflicting head was observed. The caller
-                // retains the original error for diagnostics.
-                let _ = hard_store.advance_team_mutation(
-                    &operation_id,
-                    TeamMutationState::Rejected,
-                    now_microseconds()?,
-                );
-                return Err(post_error.expect("checked above"));
+                // Ambiguous failure (network timeout / lost acknowledgement): the
+                // server may have committed the addition even though we never saw
+                // the response. Reconcile once against authenticated state before
+                // deciding, so we neither falsely reject a committed mutation nor
+                // wedge the reserved chain position.
+                match self.authenticated_addition_outcome(
+                    host,
+                    uid,
+                    auth_seed,
+                    certificate_chain,
+                    actor_user,
+                    actor_puk_seed,
+                    team,
+                    binding,
+                ) {
+                    // The pending addition is confirmed on-chain: finalize it rather than
+                    // rejecting a mutation the server actually committed.
+                    Ok(AdditionOutcome::Committed(authenticated)) => *authenticated,
+                    // A different transition occupies the reserved sequence number:
+                    // the mutation was superseded, so release it as Rejected.
+                    Ok(AdditionOutcome::Conflict) => {
+                        hard_store.advance_team_mutation(
+                            &operation_id,
+                            TeamMutationState::Rejected,
+                            now_microseconds()?,
+                        )?;
+                        return Err(post_error.expect("checked above"));
+                    }
+                    // Not yet observable — the request may never have arrived, or a
+                    // real commit may still be lagging behind the Merkle root. A
+                    // read cannot distinguish these, so release the seqno (as before
+                    // this change) to avoid wedging a sole client, accepting a rare
+                    // false-reject of a committed-but-lagged op that a fresh retry
+                    // recovers once the chain advances.
+                    Ok(AdditionOutcome::Unresolved) | Err(_) => {
+                        let _ = hard_store.advance_team_mutation(
+                            &operation_id,
+                            TeamMutationState::Rejected,
+                            now_microseconds()?,
+                        );
+                        return Err(post_error.expect("checked above"));
+                    }
+                }
             }
             Err(error) => return Err(error),
         };
@@ -1163,6 +1199,50 @@ impl FoksClient {
             Err(error) => Err(error),
         }
     }
+
+    /// One authoritative reconciliation of a pending addition against the current
+    /// authenticated team chain, distinguishing the three cases the ambiguous
+    /// submission path must handle: our addition committed, a conflicting
+    /// transition took the seqno, or the position is not yet observable.
+    #[allow(clippy::too_many_arguments)]
+    fn authenticated_addition_outcome(
+        &self,
+        host: &PinnedHost,
+        uid: &EntityId,
+        auth_seed: &SecretSeed,
+        certificate_chain: &[Vec<u8>],
+        actor_user: &AuthenticatedUserOutcome,
+        actor_puk_seed: &SecretSeed,
+        team: &EntityId,
+        binding: &AdditionBinding<'_>,
+    ) -> Result<AdditionOutcome> {
+        let authenticated = self.load_and_pin_team_with_material(
+            host,
+            uid,
+            auth_seed,
+            certificate_chain,
+            &actor_user.verified,
+            actor_puk_seed,
+            team,
+        )?;
+        if authenticated.verified.chain_seqno() < binding.expected_seqno {
+            return Ok(AdditionOutcome::Unresolved);
+        }
+        match validate_addition_transition(&authenticated.verified, binding) {
+            Ok(()) => Ok(AdditionOutcome::Committed(Box::new(authenticated))),
+            Err(Error::OperationBinding(_)) => Ok(AdditionOutcome::Conflict),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+/// The three distinguishable states of a pending addition when its submission
+/// response was lost. `Committed` carries the authenticated team so the caller
+/// can finalize without re-loading.
+enum AdditionOutcome {
+    Committed(Box<AuthenticatedTeamOutcome>),
+    Conflict,
+    Unresolved,
 }
 
 fn validate_target_user(

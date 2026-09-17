@@ -16,7 +16,7 @@ mod user_transition;
 
 use std::collections::{BTreeMap, HashSet};
 
-use foks_crypto::{commitment, prefixed_hash, verify_blob, verify_typed};
+use foks_crypto::{commitment, verify_blob, verify_typed};
 use foks_proto::{
     ChangeMetadata, EntityId, Hepk, HistoricalMerkleRoots, HostchainLink, HostchainTail,
     MerklePathCompressed, MerkleRoot, MerkleTerminal, ProbeResponse, PublicZone, Role, RoleType,
@@ -43,6 +43,13 @@ pub(crate) use proof::{verify_merkle_path, verify_merkle_path_present};
 pub use team::*;
 pub use user::*;
 pub use user_transition::{verify_user_transition, VerifiedUserTransition};
+
+fn prefixed_hash(type_id: u64, canonical_object: &[u8]) -> Result<[u8; 32]> {
+    Ok(foks_crypto::prefixed_hash_signable(
+        type_id,
+        canonical_object,
+    )?)
+}
 
 #[cfg(test)]
 mod tests {
@@ -1053,7 +1060,8 @@ mod tests {
         let added_host = entity_id(ENTITY_HOST, &added);
 
         let mut genesis = link(1, None, &host, &host, Value::Null, vec![&original]);
-        let genesis_hash = prefixed_hash(HOSTCHAIN_LINK_OUTER_TYPE_ID, &genesis.encoded().unwrap());
+        let genesis_hash =
+            prefixed_hash(HOSTCHAIN_LINK_OUTER_TYPE_ID, &genesis.encoded().unwrap()).unwrap();
         let add_change = Value::Array(vec![Value::Array(vec![
             Value::Unsigned(2),
             Value::Variant(Some((
@@ -1071,7 +1079,7 @@ mod tests {
         );
 
         let extension_hash =
-            prefixed_hash(HOSTCHAIN_LINK_OUTER_TYPE_ID, &extension.encoded().unwrap());
+            prefixed_hash(HOSTCHAIN_LINK_OUTER_TYPE_ID, &extension.encoded().unwrap()).unwrap();
         let revoke_change = Value::Array(vec![Value::Array(vec![
             Value::Unsigned(1),
             Value::Variant(Some((

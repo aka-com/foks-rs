@@ -573,7 +573,9 @@ fn device_name_commitment(
 fn validate_root(root: &foks_server_db::RootSnapshot) -> Result<(), RpcStatus> {
     let decoded = foks_proto::MerkleRoot::decode(&root.exact_root)
         .map_err(|_| RpcStatus::TransactionRetry)?;
-    let hash = foks_crypto::prefixed_hash(foks_proto::MERKLE_ROOT_TYPE_ID, &root.exact_root);
+    let hash =
+        foks_crypto::prefixed_hash_signable(foks_proto::MERKLE_ROOT_TYPE_ID, &root.exact_root)
+            .map_err(|_| RpcStatus::TransactionRetry)?;
     if decoded.epoch != root.epoch || decoded.root_node != root.root_node || hash != root.root_hash
     {
         return Err(RpcStatus::TransactionRetry);

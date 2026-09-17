@@ -110,6 +110,41 @@ mod tests {
     }
 
     #[test]
+    fn public_zone_decode_tolerates_evolved_service_arrays() {
+        let zone = |endpoints: &[&str]| {
+            encode(&Value::Array(vec![
+                Value::Unsigned(60),
+                Value::Array(
+                    endpoints
+                        .iter()
+                        .map(|endpoint| Value::Text(endpoint.as_bytes().to_vec()))
+                        .collect(),
+                ),
+            ]))
+            .unwrap()
+        };
+        // A real pre-`realtime` v0.1.9 vhost serves five services; `realtime`
+        // defaults empty rather than the whole probe failing verification.
+        let five = PublicZone::decode(&zone(&[
+            "probe.example",
+            "reg.example",
+            "user.example",
+            "merkle.example",
+            "kv.example",
+        ]))
+        .unwrap();
+        assert_eq!(five.services.probe, "probe.example");
+        assert_eq!(five.services.kv_store, "kv.example");
+        assert_eq!(five.services.realtime, "");
+        // A future appended service is ignored; the six known ones still decode.
+        let seven =
+            PublicZone::decode(&zone(&["p", "r", "u", "m", "k", "rt", "future.service"])).unwrap();
+        assert_eq!(seven.services.realtime, "rt");
+        // Fewer than the five load-bearing endpoints is still rejected.
+        assert!(PublicZone::decode(&zone(&["p", "r", "u", "m"])).is_err());
+    }
+
+    #[test]
     fn official_probe_decodes_into_exact_schema_types() {
         let probe = ProbeResponse::decode(FIXTURE).unwrap();
         assert_eq!(probe.hostchain.len(), 1);

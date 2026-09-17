@@ -17,12 +17,7 @@ pub fn decode(input: &[u8]) -> Result<Value, Error> {
 /// of bytes consumed. FOKS uses this for authenticated plaintexts whose
 /// canonical Snowpack value is followed by zero padding.
 pub fn decode_prefix(input: &[u8]) -> Result<(Value, usize), Error> {
-    let mut decoder = Decoder {
-        input,
-        offset: 0,
-        path: Vec::new(),
-        values: 0,
-    };
+    let mut decoder = Decoder::new(input, false);
     let value = decoder.value()?;
     Ok((value, decoder.offset))
 }
@@ -31,11 +26,42 @@ pub fn validate(input: &[u8]) -> Result<(), Error> {
     decode(input).map(|_| ())
 }
 
+/// Validates one canonical value under the stricter rules go-foks applies to
+/// signed, verified, and hashed objects (`AssertCanonicalMsgpack`). The only
+/// form the general codec accepts but a signable encoding forbids is `array16`
+/// with 16 to 31 elements: go's canonical checker rejects every `array16`
+/// whose length is `<= 0x1f`, so any implementation that hashed or verified
+/// such a value would disagree with go on the signed bytes. This is applied
+/// only at sign, verify, and hash sites, never to general RPC arguments (the
+/// 16-field signup argument is a legitimate `array16(16)` on the RPC wire).
+pub fn validate_signable(input: &[u8]) -> Result<(), Error> {
+    let mut decoder = Decoder::new(input, true);
+    decoder.value()?;
+    if decoder.offset != input.len() {
+        return Err(Error::new(ErrorKind::TrailingBytes, decoder.offset, &[]));
+    }
+    Ok(())
+}
+
 struct Decoder<'a> {
     input: &'a [u8],
     offset: usize,
     path: Vec<PathSegment>,
     values: usize,
+    /// Enforce go-foks's stricter canonical rules for signable encodings.
+    signable: bool,
+}
+
+impl<'a> Decoder<'a> {
+    fn new(input: &'a [u8], signable: bool) -> Self {
+        Self {
+            input,
+            offset: 0,
+            path: Vec::new(),
+            values: 0,
+            signable,
+        }
+    }
 }
 
 impl Decoder<'_> {
@@ -202,12 +228,18 @@ impl Decoder<'_> {
             }
             0xdc => {
                 let length = usize::from(self.u16()?);
+                if length == 0 {
+                    return Err(self.error(ErrorKind::EmptyArray));
+                }
                 if length <= 15 {
-                    return Err(self.error(if length == 0 {
-                        ErrorKind::EmptyArray
-                    } else {
-                        ErrorKind::NonMinimal("array")
-                    }));
+                    return Err(self.error(ErrorKind::NonMinimal("array")));
+                }
+                // go-foks's canonical checker for signable objects rejects every
+                // array16 whose length is <= 0x1f, even 16..=31 which have no
+                // fixarray form. The general RPC codec must keep accepting them
+                // (the signup argument is array16(16)).
+                if self.signable && length <= 0x1f {
+                    return Err(self.error(ErrorKind::NonCanonicalSignable("array16")));
                 }
                 self.array(length)
             }
@@ -322,6 +354,66 @@ mod tests {
             vec![PathSegment::Index(0), PathSegment::Variant(vec![b'1'])]
         );
         assert_eq!(error.kind, ErrorKind::UnsupportedFloat);
+    }
+
+    fn array16(length: usize) -> Vec<u8> {
+        let mut bytes = vec![0xdc];
+        bytes.extend_from_slice(&u16::try_from(length).unwrap().to_be_bytes());
+        bytes.extend(std::iter::repeat_n(0xc0, length));
+        bytes
+    }
+
+    #[test]
+    fn signable_validation_rejects_array16_up_to_31_but_general_decode_accepts_it() {
+        // go-foks signs, verifies, and hashes over canonical bytes that reject
+        // every array16 with 16..=31 elements, while the general RPC codec must
+        // keep accepting them (the 16-field signup argument is array16(16)).
+        for length in [16usize, 17, 31] {
+            let bytes = array16(length);
+            assert!(
+                validate(&bytes).is_ok(),
+                "general decode rejects len {length}"
+            );
+            assert_eq!(
+                validate_signable(&bytes).unwrap_err().kind,
+                ErrorKind::NonCanonicalSignable("array16"),
+                "signable accepts len {length}"
+            );
+        }
+        // 32 and above have no shorter form and are canonical for both.
+        for length in [32usize, 40] {
+            let bytes = array16(length);
+            assert!(validate(&bytes).is_ok());
+            assert!(
+                validate_signable(&bytes).is_ok(),
+                "signable rejects len {length}"
+            );
+        }
+        // A fixarray is canonical under both.
+        let fixarray = vec![0x93, 0xc0, 0xc0, 0xc0];
+        assert!(validate(&fixarray).is_ok());
+        assert!(validate_signable(&fixarray).is_ok());
+    }
+
+    #[test]
+    fn signable_validation_recurses_into_nested_array16() {
+        let mut nested = vec![0x91];
+        nested.extend(array16(16));
+        assert!(validate(&nested).is_ok());
+        assert_eq!(
+            validate_signable(&nested).unwrap_err().kind,
+            ErrorKind::NonCanonicalSignable("array16")
+        );
+    }
+
+    #[test]
+    fn signable_validation_requires_full_consumption() {
+        let mut trailing = vec![0x93, 0xc0, 0xc0, 0xc0];
+        trailing.push(0xc0);
+        assert_eq!(
+            validate_signable(&trailing).unwrap_err().kind,
+            ErrorKind::TrailingBytes
+        );
     }
 
     #[test]

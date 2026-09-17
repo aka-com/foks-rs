@@ -2,7 +2,7 @@
 
 use super::{
     authenticate_historical_roots_from_latest, decode, derive_device_public, derive_subkey_id,
-    encode_get_client_cert_chain_request_at, encode_get_current_merkle_root_request,
+    encode_get_client_cert_chain_request_at, encode_get_current_merkle_root_signed_request,
     encode_get_historical_merkle_roots_request, encode_get_puk_for_role_request,
     encode_load_user_chain_request_from, encode_merkle_select_vhost_request,
     encode_registration_select_vhost_request, merkle_history_requirements,
@@ -277,7 +277,7 @@ impl FoksClient {
             pinned,
             &pinned.merkle_query,
             &encode_merkle_select_vhost_request(pinned.host_id())?,
-            &encode_get_current_merkle_root_request(pinned.host_id(), 1)?,
+            &encode_get_current_merkle_root_signed_request(pinned.host_id(), 1)?,
         )?;
         let signed = foks_proto::SignedBlob::decode(&latest_bytes)
             .map_err(|_| Error::HostBinding("current Merkle root is not signed"))?;

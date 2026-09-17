@@ -282,7 +282,7 @@ pub fn verify_public_host(lookup_name: &str, probe_bytes: &[u8]) -> Result<Verif
     let merkle_root = MerkleRoot::decode(&probe.merkle_root.inner)?;
     verify_merkle_binding(&chain, &merkle_root)?;
 
-    let root_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &merkle_root.encoded()?);
+    let root_hash = prefixed_hash(MERKLE_ROOT_TYPE_ID, &merkle_root.encoded()?)?;
     let services = public_zone_services(&public_zone)?;
     let canonical_name = canonical_host(&public_zone.services.probe)?.to_owned();
     let host_id = host.into_bytes();
@@ -377,7 +377,7 @@ pub(crate) fn verify_hostchain_link(
         }
     }
 
-    let link_hash = prefixed_hash(HOSTCHAIN_LINK_OUTER_TYPE_ID, &link.encoded()?);
+    let link_hash = prefixed_hash(HOSTCHAIN_LINK_OUTER_TYPE_ID, &link.encoded()?)?;
     let mut candidate = prior.clone();
     candidate.seqno = change.chainer.seqno;
     candidate.host = Some(change.host.clone());

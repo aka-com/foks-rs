@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/foks-proj/go-foks/lib/core"
@@ -204,17 +206,140 @@ func rpcRequestFrame[D any](protocol rpc.ProtocolUniqueID, position rpc.Position
 	return rpcRequestFrameAt(protocol, position, data, 0)
 }
 
+// Each descriptor stub embeds the generated service interface so it satisfies
+// all of the handler methods without implementing handlers that introspection
+// never calls. ErrorWrapper is the one method the generated descriptor calls
+// eagerly while constructing its method table, so override it with a harmless
+// implementation.
+func fixtureErrorWrapper() func(error) proto.Status {
+	return func(error) proto.Status { return proto.Status{} }
+}
+
+type beaconDescriptorStub struct{ rem.BeaconInterface }
+
+func (beaconDescriptorStub) ErrorWrapper() func(error) proto.Status { return fixtureErrorWrapper() }
+
+type kexDescriptorStub struct{ rem.KexInterface }
+
+func (kexDescriptorStub) ErrorWrapper() func(error) proto.Status { return fixtureErrorWrapper() }
+
+type kvStoreDescriptorStub struct{ rem.KVStoreInterface }
+
+func (kvStoreDescriptorStub) ErrorWrapper() func(error) proto.Status { return fixtureErrorWrapper() }
+
+type merkleQueryDescriptorStub struct{ rem.MerkleQueryInterface }
+
+func (merkleQueryDescriptorStub) ErrorWrapper() func(error) proto.Status {
+	return fixtureErrorWrapper()
+}
+
+type probeDescriptorStub struct{ rem.ProbeInterface }
+
+func (probeDescriptorStub) ErrorWrapper() func(error) proto.Status { return fixtureErrorWrapper() }
+
+type regDescriptorStub struct{ rem.RegInterface }
+
+func (regDescriptorStub) ErrorWrapper() func(error) proto.Status { return fixtureErrorWrapper() }
+
+type teamAdminDescriptorStub struct{ rem.TeamAdminInterface }
+
+func (teamAdminDescriptorStub) ErrorWrapper() func(error) proto.Status { return fixtureErrorWrapper() }
+
+type teamGuestDescriptorStub struct{ rem.TeamGuestInterface }
+
+func (teamGuestDescriptorStub) ErrorWrapper() func(error) proto.Status { return fixtureErrorWrapper() }
+
+type teamLoaderDescriptorStub struct{ rem.TeamLoaderInterface }
+
+func (teamLoaderDescriptorStub) ErrorWrapper() func(error) proto.Status { return fixtureErrorWrapper() }
+
+type teamMemberDescriptorStub struct{ rem.TeamMemberInterface }
+
+func (teamMemberDescriptorStub) ErrorWrapper() func(error) proto.Status { return fixtureErrorWrapper() }
+
+type userDescriptorStub struct{ rem.UserInterface }
+
+func (userDescriptorStub) ErrorWrapper() func(error) proto.Status { return fixtureErrorWrapper() }
+
+func generatedProtocol(protocol rpc.ProtocolUniqueID) (rpc.ProtocolV2, error) {
+	switch protocol {
+	case rem.BeaconProtocolID:
+		return rem.BeaconProtocol(beaconDescriptorStub{}), nil
+	case rem.KexProtocolID:
+		return rem.KexProtocol(kexDescriptorStub{}), nil
+	case rem.KVStoreProtocolID:
+		return rem.KVStoreProtocol(kvStoreDescriptorStub{}), nil
+	case rem.MerkleQueryProtocolID:
+		return rem.MerkleQueryProtocol(merkleQueryDescriptorStub{}), nil
+	case rem.ProbeProtocolID:
+		return rem.ProbeProtocol(probeDescriptorStub{}), nil
+	case rem.RegProtocolID:
+		return rem.RegProtocol(regDescriptorStub{}), nil
+	case rem.TeamAdminProtocolID:
+		return rem.TeamAdminProtocol(teamAdminDescriptorStub{}), nil
+	case rem.TeamGuestProtocolID:
+		return rem.TeamGuestProtocol(teamGuestDescriptorStub{}), nil
+	case rem.TeamLoaderProtocolID:
+		return rem.TeamLoaderProtocol(teamLoaderDescriptorStub{}), nil
+	case rem.TeamMemberProtocolID:
+		return rem.TeamMemberProtocol(teamMemberDescriptorStub{}), nil
+	case rem.UserProtocolID:
+		return rem.UserProtocol(userDescriptorStub{}), nil
+	default:
+		return rpc.ProtocolV2{}, fmt.Errorf("unsupported fixture protocol 0x%x", protocol)
+	}
+}
+
+// generatedWireArgument derives the exact argument envelope from go-foks's
+// generated server descriptor. This keeps fixtures from teaching Rust a
+// hand-maintained assumption about which protocols use rpc.DataWrap.
+func generatedWireArgument[D any](protocol rpc.ProtocolUniqueID, position rpc.Position, data D) (interface{}, error) {
+	definition, err := generatedProtocol(protocol)
+	if err != nil {
+		return nil, err
+	}
+	method, ok := definition.Methods[position]
+	if !ok {
+		return nil, fmt.Errorf("protocol %s has no method at position %d", definition.Name, position)
+	}
+	want := method.MakeArg()
+	wantValue := reflect.ValueOf(want)
+	dataValue := reflect.ValueOf(data)
+	if !wantValue.IsValid() || wantValue.Kind() != reflect.Pointer || !dataValue.IsValid() {
+		return nil, fmt.Errorf("protocol %s method %s has an invalid generated argument", definition.Name, method.Name)
+	}
+	if dataValue.Type().AssignableTo(wantValue.Type()) {
+		return data, nil
+	}
+	wrapper := wantValue.Elem()
+	dataWrapType := reflect.TypeOf(rpc.DataWrap[proto.Header, interface{}]{})
+	if wrapper.Kind() != reflect.Struct || wrapper.Type().PkgPath() != dataWrapType.PkgPath() ||
+		!strings.HasPrefix(wrapper.Type().Name(), "DataWrap[") {
+		return nil, fmt.Errorf("protocol %s method %s argument is %T, not %T", definition.Name, method.Name, want, data)
+	}
+	dataField := wrapper.FieldByName("Data")
+	headerField := wrapper.FieldByName("Header")
+	header := reflect.ValueOf(core.MakeProtoHeader())
+	if !dataField.IsValid() || !dataField.CanSet() || !dataValue.Type().AssignableTo(dataField.Type()) ||
+		!headerField.IsValid() || !headerField.CanSet() || !header.Type().AssignableTo(headerField.Type()) {
+		return nil, fmt.Errorf("protocol %s method %s generated argument %T does not wrap %T", definition.Name, method.Name, want, data)
+	}
+	dataField.Set(dataValue)
+	headerField.Set(header)
+	return want, nil
+}
+
 func rpcRequestFrameAt[D any](protocol rpc.ProtocolUniqueID, position rpc.Position, data D, sequence rpc.SeqNumber) ([]byte, error) {
-	warg := &rpc.DataWrap[proto.Header, D]{
-		Header: core.MakeProtoHeader(),
-		Data:   data,
+	arg, err := generatedWireArgument(protocol, position, data)
+	if err != nil {
+		return nil, err
 	}
 	frame := []interface{}{
 		rpc.MethodCallV2,
 		sequence,
 		protocol,
 		position,
-		warg,
+		arg,
 	}
 	handle := core.Codec()
 	var content []byte
@@ -244,8 +369,13 @@ func rpcVoidResponseFrame(sequence rpc.SeqNumber) ([]byte, error) {
 }
 
 func rpcErrorResponseFrame(sequence rpc.SeqNumber, status proto.Status) ([]byte, error) {
-	wrapped := &rpc.DataWrap[proto.Header, interface{}]{Header: core.MakeProtoHeader()}
-	frame := []interface{}{rpc.MethodResponse, sequence, &status, wrapped}
+	// Mirror the real server's error reply exactly: WrapError places
+	// status.Export() (the `,toarray` StatusInternal__, i.e. the positional
+	// [Sc, Switch] form) in the error slot, and the generated handlers return a
+	// nil result on error, so the result slot is bare nil. (The previous code
+	// encoded &status and a {Header} DataWrap, which is the exported named form
+	// the wire never carries.)
+	frame := []interface{}{rpc.MethodResponse, sequence, status.Export(), nil}
 	handle := core.Codec()
 	var content []byte
 	if err := codec.NewEncoderBytes(&content, handle).Encode(frame); err != nil {
@@ -753,7 +883,11 @@ func writeUserFixtures(output string, address proto.TCPAddr, hostID proto.HostID
 		SrcRole: owner,
 		Gen:     proto.FirstGeneration + 1,
 	}
-	viewChallengeFrame, err := rpcRequestFrame(rem.TeamLoaderProtocolID, 0, viewReq.Export())
+	viewChallengeFrame, err := rpcRequestFrame(
+		rem.TeamLoaderProtocolID,
+		0,
+		(&rem.GetTeamVOBearerTokenChallengeArg{Req: viewReq}).Export(),
+	)
 	if err != nil {
 		return err
 	}

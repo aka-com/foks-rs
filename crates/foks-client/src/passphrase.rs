@@ -5,15 +5,13 @@ use foks_crypto::{
     change_passphrase_with_puk, create_passphrase_enrollment, prepare_passphrase_login,
 };
 use foks_proto::{
-    decode_generation, decode_stretch_version, PassphraseLoginResult, PpeParcel,
-    RegistrationChallenge, StretchVersion,
+    decode_stretch_version, PassphraseLoginResult, PpeParcel, RegistrationChallenge, StretchVersion,
 };
 use foks_rpc::{
     encode_change_passphrase_request, encode_get_login_challenge_request,
-    encode_get_ppe_parcel_request, encode_next_passphrase_generation_request,
-    encode_passphrase_login_request, encode_registration_select_vhost_request,
-    encode_registration_stretch_version_request, encode_set_passphrase_request,
-    encode_user_stretch_version_request,
+    encode_get_ppe_parcel_request, encode_passphrase_login_request,
+    encode_registration_select_vhost_request, encode_registration_stretch_version_request,
+    encode_set_passphrase_request, encode_user_stretch_version_request,
 };
 
 use crate::{
@@ -42,12 +40,6 @@ impl FoksClient {
         let authenticated = self.authenticate_and_pin(host, credential)?;
         let owner = current_owner_puk(&authenticated)?;
         let stretch = self.authenticated_stretch_version(host, credential)?;
-        let next = self.next_passphrase_generation(host, credential)?;
-        if next != 1 {
-            return Err(Error::CredentialBinding(
-                "passphrase is already configured or generation is invalid",
-            ));
-        }
         let update = create_passphrase_enrollment(
             passphrase,
             &credential.uid,
@@ -57,6 +49,15 @@ impl FoksClient {
             stretch,
         )?;
         let argument = update.argument();
+        // Enrollment establishes the first passphrase (generation 1). The Go
+        // v0.1.9 server never assigns nextPassphraseGeneration, so gate on the
+        // locally derived generation rather than that RPC; the server still
+        // rejects a set when a passphrase already exists.
+        if argument.generation != 1 {
+            return Err(Error::CredentialBinding(
+                "passphrase enrollment must be generation 1",
+            ));
+        }
         let stored = self.submit_passphrase_update(
             host,
             credential,
@@ -75,12 +76,6 @@ impl FoksClient {
         let authenticated = self.authenticate_yubi_and_pin(host, credential)?;
         let owner = current_owner_puk(&authenticated)?;
         let stretch = self.authenticated_stretch_version_yubi(host, credential)?;
-        let next = self.next_passphrase_generation_yubi(host, credential)?;
-        if next != 1 {
-            return Err(Error::CredentialBinding(
-                "passphrase is already configured or generation is invalid",
-            ));
-        }
         let update = create_passphrase_enrollment(
             passphrase,
             &credential.uid,
@@ -90,6 +85,15 @@ impl FoksClient {
             stretch,
         )?;
         let argument = update.argument();
+        // Enrollment establishes the first passphrase (generation 1). The Go
+        // v0.1.9 server never assigns nextPassphraseGeneration, so gate on the
+        // locally derived generation rather than that RPC; the server still
+        // rejects a set when a passphrase already exists.
+        if argument.generation != 1 {
+            return Err(Error::CredentialBinding(
+                "passphrase enrollment must be generation 1",
+            ));
+        }
         let stored = self.submit_passphrase_update_yubi(
             host,
             credential,
@@ -108,16 +112,14 @@ impl FoksClient {
         let authenticated = self.authenticate_and_pin(host, credential)?;
         let owner = current_owner_puk(&authenticated)?;
         let current = self.fetch_ppe_parcel(host, credential)?;
-        let next = self.next_passphrase_generation(host, credential)?;
-        if current
+        // The next generation is the fetched parcel's generation plus one. The Go
+        // v0.1.9 server never assigns nextPassphraseGeneration, so derive it locally
+        // rather than calling that RPC; a concurrent change is caught by the server
+        // when this update is submitted against a now-stale generation.
+        let next = current
             .generation
             .checked_add(1)
-            .is_none_or(|expected| expected != next)
-        {
-            return Err(Error::CredentialBinding(
-                "server returned a stale passphrase generation",
-            ));
-        }
+            .ok_or(Error::CredentialBinding("passphrase generation overflow"))?;
         let update = change_passphrase_with_puk(
             new_passphrase,
             &credential.uid,
@@ -151,16 +153,14 @@ impl FoksClient {
         let authenticated = self.authenticate_yubi_and_pin(host, credential)?;
         let owner = current_owner_puk(&authenticated)?;
         let current = self.fetch_ppe_parcel_yubi(host, credential)?;
-        let next = self.next_passphrase_generation_yubi(host, credential)?;
-        if current
+        // The next generation is the fetched parcel's generation plus one. The Go
+        // v0.1.9 server never assigns nextPassphraseGeneration, so derive it locally
+        // rather than calling that RPC; a concurrent change is caught by the server
+        // when this update is submitted against a now-stale generation.
+        let next = current
             .generation
             .checked_add(1)
-            .is_none_or(|expected| expected != next)
-        {
-            return Err(Error::CredentialBinding(
-                "server returned a stale passphrase generation",
-            ));
-        }
+            .ok_or(Error::CredentialBinding("passphrase generation overflow"))?;
         let update = change_passphrase_with_puk(
             new_passphrase,
             &credential.uid,
@@ -379,35 +379,6 @@ impl FoksClient {
             return Err(submission_error.unwrap_or(binding_error));
         }
         Ok(stored)
-    }
-
-    fn next_passphrase_generation(
-        &self,
-        host: &PinnedHost,
-        credential: &DeviceCredential,
-    ) -> Result<u64> {
-        let response = self.call(
-            host,
-            &host.user,
-            &encode_next_passphrase_generation_request()?,
-            Some(credential),
-        )?;
-        Ok(decode_generation(&response)?)
-    }
-
-    fn next_passphrase_generation_yubi(
-        &self,
-        host: &PinnedHost,
-        credential: &YubiCredential<'_>,
-    ) -> Result<u64> {
-        let response = self.call_with_material(
-            host,
-            &host.user,
-            &encode_next_passphrase_generation_request()?,
-            &credential.subkey_seed,
-            &credential.certificate_chain,
-        )?;
-        Ok(decode_generation(&response)?)
     }
 
     fn authenticated_stretch_version(

@@ -31,7 +31,7 @@ use foks_proto::{
 };
 use foks_rpc::{
     encode_check_invite_code_request, encode_get_client_cert_chain_request_at,
-    encode_get_current_merkle_root_request, encode_get_historical_merkle_roots_request,
+    encode_get_current_merkle_root_signed_request, encode_get_historical_merkle_roots_request,
     encode_get_puk_for_role_request, encode_load_user_chain_request_from,
     encode_merkle_select_vhost_request, encode_provision_device_request,
     encode_registration_select_vhost_request, encode_reserve_username_request_at,

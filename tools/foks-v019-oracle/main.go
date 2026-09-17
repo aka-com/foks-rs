@@ -19,7 +19,6 @@ import (
 	proto "github.com/foks-proj/go-foks/proto/lib"
 	"github.com/foks-proj/go-foks/proto/rem"
 	"github.com/foks-proj/go-snowpack-rpc/rpc"
-	"github.com/keybase/go-codec/codec"
 	"go.uber.org/zap"
 )
 
@@ -104,27 +103,7 @@ func probeRequestFrame(address proto.TCPAddr) ([]byte, error) {
 		Hostname:           address.Hostname().Normalize(),
 		HostchainLastSeqno: 0,
 	}
-	warg := &rpc.DataWrap[proto.Header, *rem.ProbeArgInternal__]{
-		Header: core.MakeProtoHeader(),
-		Data:   arg.Export(),
-	}
-	frame := []interface{}{
-		rpc.MethodCallV2,
-		rpc.SeqNumber(0),
-		rem.ProbeProtocolID,
-		rpc.Position(1),
-		warg,
-	}
-	handle := core.Codec()
-	var content []byte
-	if err := codec.NewEncoderBytes(&content, handle).Encode(frame); err != nil {
-		return nil, err
-	}
-	var length []byte
-	if err := codec.NewEncoderBytes(&length, handle).Encode(len(content)); err != nil {
-		return nil, err
-	}
-	return append(length, content...), nil
+	return rpcRequestFrame(rem.ProbeProtocolID, 1, arg.Export())
 }
 
 func (w *writer) object(name string, object core.Encodeable) error {

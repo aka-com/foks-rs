@@ -871,6 +871,20 @@ position = 2
 listeners = ["public_services"]
 authentication = "delegated_tls"
 request = "CurrentMerkleRootArgument"
+result = "MerkleRoot"
+statuses = ["ok", "bad_args", "not_found"]
+max_request_bytes = 4096
+supported = true
+coverage = ["probe_and_pin"]
+
+[[route]]
+protocol = "MerkleQuery"
+protocol_id = 0xc0412aa6
+method = "getCurrentRootSigned"
+position = 5
+listeners = ["public_services"]
+authentication = "delegated_tls"
+request = "CurrentMerkleRootArgument"
 result = "SignedBlob"
 statuses = ["ok", "bad_args", "not_found"]
 max_request_bytes = 4096

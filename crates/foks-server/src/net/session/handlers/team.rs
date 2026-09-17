@@ -1,4 +1,4 @@
-use foks_rpc::{encode_success_response_at, encode_void_success_response_at, RpcStatus};
+use foks_rpc::{encode_bare_success_response_at, encode_bare_void_success_response_at, RpcStatus};
 
 use crate::auth::Principal;
 use crate::rpc::{RouteId, RoutedCall};
@@ -279,10 +279,13 @@ pub(super) fn response(
         )?),
         _ => return Err(RpcStatus::Unsupported),
     };
+    // Team protocols place their result bare on the wire with no DataWrap
+    // envelope (go-foks proto/rem/team.go), matching how the client and
+    // `foks_rpc::decode_call` treat every headerless protocol.
     match data {
         Some(data) => {
-            encode_success_response_at(&data, sequence).map_err(|_| RpcStatus::Unsupported)
+            encode_bare_success_response_at(&data, sequence).map_err(|_| RpcStatus::Unsupported)
         }
-        None => encode_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported),
+        None => encode_bare_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported),
     }
 }

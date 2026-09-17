@@ -236,4 +236,17 @@ fn official_go_v019_user_manifest_hashes_remain_exact() {
             assert_eq!(encode(&value).unwrap(), bytes);
         }
     }
+    let disk_names = fs::read_dir(directory)
+        .unwrap()
+        .filter_map(|entry| {
+            let entry = entry.unwrap();
+            entry
+                .file_type()
+                .unwrap()
+                .is_file()
+                .then(|| entry.file_name().into_string().unwrap())
+        })
+        .filter(|name| name != "manifest.json" && name != "kv-manifest.json")
+        .collect::<BTreeSet<_>>();
+    assert_eq!(disk_names, names, "user fixture manifest is incomplete");
 }

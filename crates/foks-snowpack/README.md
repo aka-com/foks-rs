@@ -13,9 +13,10 @@ The codec accepts:
 
 It rejects floats, extensions, arbitrary maps, empty arrays, non-minimal
 encodings, trailing bytes, excessive nesting, truncated values, and reserved
-markers. To remain compatible with the exact v0.1.9 canonicalizer, arrays of
-length 16 through 31 are not representable: FOKS rejects `array16` headers up
-to and including length 31 even though base MessagePack would allow them.
+markers. The general codec accepts `array16` values of length 16 through 31
+because deployed RPC arguments use them. Signed, verified, and protocol-hashed
+objects pass the additional recursive `validate_signable` check, which rejects
+those lengths to match the exact v0.1.9 Go canonicalizer.
 
 Text and variant tags are retained as bytes. Schema-generated protocol types
 are responsible for applying UTF-8 and known-tag constraints.

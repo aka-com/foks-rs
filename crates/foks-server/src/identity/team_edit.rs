@@ -74,11 +74,14 @@ pub(crate) fn validate(
         .last()
         .and_then(|link| link.sequence.checked_add(1))
         .ok_or(Error::Signup("team head missing"))?;
-    let expected_tail_hash = team
+    let expected_tail = team
         .links
         .last()
-        .map(|link| foks_crypto::prefixed_hash(foks_proto::LINK_OUTER_TYPE_ID, &link.exact_link))
         .ok_or(Error::Signup("team head missing"))?;
+    let expected_tail_hash = foks_crypto::prefixed_hash_signable(
+        foks_proto::LINK_OUTER_TYPE_ID,
+        &expected_tail.exact_link,
+    )?;
     let verified = foks_verify::verify_team_transition(
         &argument.link,
         &argument.hepks,
