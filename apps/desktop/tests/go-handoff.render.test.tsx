@@ -186,7 +186,7 @@ for (const notifyGlobally of [false, true]) {
         releaseCatalog?.();
       });
       await ui.waitFor(() =>
-        assert.ok(rendered.getByText('Select an FOKS account')),
+        assert.ok(rendered.getByText('How would you like to start?')),
       );
       assert.equal(discoveries, 2);
       assert.equal(initializations, 1);
@@ -345,14 +345,21 @@ test('discovers Go CLI profile in StrictMode and passes profile credentials to s
     ),
   );
   await ui.waitFor(() =>
-    assert.ok(rendered.getByText('Select an FOKS account')),
+    assert.ok(rendered.getByText('How would you like to start?')),
   );
   assert.equal(
     scans,
     1,
     'Strict Mode shares discovery rather than issuing a duplicate read',
   );
-  ui.fireEvent.click(rendered.getByRole('radio', { name: /cli-owner/ }));
+  // A lone usable candidate is preselected under the default radio.
+  await ui.waitFor(() =>
+    assert.equal(
+      (rendered.getByRole('radio', { name: /cli-owner/ }) as HTMLInputElement)
+        .checked,
+      true,
+    ),
+  );
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Continue' }));
   ui.fireEvent.click(
     rendered.getByRole('button', { name: 'Use the official FOKS server' }),
@@ -366,6 +373,95 @@ test('discovers Go CLI profile in StrictMode and passes profile credentials to s
   assert.equal(checks[0][0], candidate.candidateId);
   assert.equal(checks[0][1], candidate.hostId);
   assert.equal(checks[0][3], 'foks.app:4430');
+});
+
+test('the start fork nests the CLI account list under the existing-account radio', async () => {
+  const { FirstRunExperience } = (await vite.ssrLoadModule(
+    '/src/screens/first-run-screen.tsx',
+  )) as typeof import('../src/screens/first-run-screen');
+  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
+    '/kit/toasts.tsx',
+  )) as typeof import('../kit/toasts');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const second: GoProfileCandidate = {
+    ...candidate,
+    candidateId: 'second',
+    username: 'cli-second',
+    deviceId: '03' + '12'.repeat(32),
+  };
+  const bridge: Bridge = {
+    ...mockBridge(),
+    native: true,
+    discoverGoProfiles: async () => ({
+      installed: true,
+      candidates: [candidate, second],
+    }),
+  };
+  const view = ui.render(
+    createElement(ToastProvider, {
+      controller: new ToastController(),
+      children: createElement(FirstRunExperience, {
+        bridge,
+        snapshot: FIXTURE,
+        location: { kind: 'first-run', path: 'own', step: 'who' },
+        onNavigate: () => {},
+        onRefreshSnapshot: async () => FIXTURE,
+        concealSignal: 0,
+        agentReady: true,
+      }),
+    }),
+  );
+  await view.findByRole('heading', { name: 'How would you like to start?' });
+  assert.ok(view.getByText(/already has FOKS accounts in the official CLI/));
+  const fork = view.getByRole('radiogroup', { name: 'How to start' });
+  const existing = ui.within(fork).getByRole('radio', {
+    name: /^Continue with an existing account/,
+  });
+  const fresh = ui.within(fork).getByRole('radio', {
+    name: /^Create a new account/,
+  });
+  const primary = () =>
+    view.getByRole('button', { name: 'Continue' }) as HTMLButtonElement;
+  // The existing account is the default; with two candidates none is chosen
+  // yet, so Continue waits.
+  assert.equal(existing.getAttribute('aria-checked'), 'true');
+  assert.equal(fresh.getAttribute('aria-checked'), 'false');
+  const accounts = view.getByRole('radiogroup', { name: 'FOKS accounts' });
+  assert.ok(fork.contains(accounts), 'the list is nested in the fork');
+  assert.ok(accounts.classList.contains('nested'));
+  assert.equal(ui.within(accounts).getAllByRole('radio').length, 2);
+  assert.equal(primary().disabled, true);
+  assert.equal(
+    view.queryByRole('button', { name: 'Create a new account' }),
+    null,
+  );
+  // The new-account radio hides the list and is enough on its own.
+  ui.fireEvent.click(fresh);
+  assert.equal(fresh.getAttribute('aria-checked'), 'true');
+  assert.equal(view.queryByRole('radiogroup', { name: 'FOKS accounts' }), null);
+  assert.equal(primary().disabled, false);
+  // Back to the existing account: the list returns, still unchosen.
+  ui.fireEvent.click(existing);
+  assert.equal(primary().disabled, true);
+  ui.fireEvent.click(view.getByRole('radio', { name: /cli-second/ }));
+  assert.equal(primary().disabled, false);
+  assert.equal(
+    (view.getByRole('radio', { name: /cli-second/ }) as HTMLInputElement)
+      .checked,
+    true,
+  );
+  ui.fireEvent.click(primary());
+  // Continue with the chosen account leaves for the server step.
+  assert.ok(view.getByRole('button', { name: 'Use the official FOKS server' }));
+  assert.equal(
+    view.queryByRole('heading', { name: 'How would you like to start?' }),
+    null,
+  );
 });
 
 test('disables account selection and dialog dismissal while server verification is pending', async () => {
@@ -724,12 +820,21 @@ test('first-run account navigation, server edits, and connection errors stay sco
     }),
   );
   await view.findByRole('radio', { name: /cli-owner/ });
-  ui.fireEvent.click(
-    view.getByRole('button', { name: 'Create a new account' }),
-  );
+  // The "Create a new account" radio hides the account list; Continue then
+  // leads to "How are you joining?", whose Back returns to the fork.
+  ui.fireEvent.click(view.getByRole('radio', { name: /Create a new account/ }));
+  assert.equal(view.queryByRole('radio', { name: /cli-owner/ }), null);
+  ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));
+  assert.ok(view.getByRole('heading', { name: 'How are you joining?' }));
   assert.ok(view.queryByText(/Already using FOKS/) === null);
   assert.ok(view.queryByText(/You’ll need/) === null);
   ui.fireEvent.click(view.getByRole('button', { name: 'Back' }));
+  assert.ok(
+    view.getByRole('heading', { name: 'How would you like to start?' }),
+  );
+  ui.fireEvent.click(
+    view.getByRole('radio', { name: /^Continue with an existing account/ }),
+  );
   ui.fireEvent.click(view.getByRole('radio', { name: /cli-owner/ }));
   ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));
   ui.fireEvent.click(

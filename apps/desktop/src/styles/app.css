@@ -1902,6 +1902,31 @@ body {
   color: var(--muted);
   margin-top: 4px;
 }
+/* Under a selected radio card the list is already framed by the inset, so it
+   keeps only its row separators. */
+.go-account-options.nested {
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
+}
+.go-account-options.nested .go-account-option {
+  gap: 10px;
+  padding: 8px 0;
+  font-size: 13px;
+}
+.go-account-options.nested .go-account-option:has(input:checked) {
+  background: none;
+}
+.go-account-options.nested .go-account-option:first-child {
+  border-top: 1px solid var(--line-soft);
+}
+.go-account-options.nested .go-account-option + .go-account-option {
+  border-top-color: var(--line-soft);
+}
+.go-account-options.nested .go-account-detail small {
+  font-size: 12px;
+  margin-top: 1px;
+}
 .first-run-main .official-server {
   margin-top: 16px;
 }

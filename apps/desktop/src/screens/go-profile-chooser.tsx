@@ -6,6 +6,11 @@ interface Props {
   candidates: GoProfileCandidate[];
   selected: string | null;
   onSelect: (candidate: GoProfileCandidate) => void;
+  /**
+   * Whether the chooser is embedded within a radio card. When true, renders
+   * without container borders or corner radii and with reduced row padding.
+   */
+  nested?: boolean;
 }
 
 const shortId = (value: string): string =>
@@ -15,11 +20,12 @@ export function GoProfileChooser({
   candidates,
   selected,
   onSelect,
+  nested = false,
 }: Props): ReactNode {
   const group = useId();
   return (
     <div
-      className="go-account-options"
+      className={nested ? 'go-account-options nested' : 'go-account-options'}
       role="radiogroup"
       aria-label="FOKS accounts"
     >

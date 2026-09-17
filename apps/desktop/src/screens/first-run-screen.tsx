@@ -516,6 +516,10 @@ function FirstRunSession({
   );
   const goCandidateExplicit = useRef(false);
   const [goChooserDismissed, setGoChooserDismissed] = useState(false);
+  // The fork on "How would you like to start?": continue with a CLI account
+  // or create a new one. The page exists only when candidates were found, so
+  // the existing account is the default.
+  const [goStart, setGoStart] = useState<'existing' | 'new'>('existing');
   const [goScanError, setGoScanError] = useState<string | null>(null);
   const [goScanAttempt, setGoScanAttempt] = useState(0);
   const [backupPhrase, setBackupPhrase] = useState<string | null>(null);
@@ -704,6 +708,15 @@ function FirstRunSession({
       ) ?? [],
     [goDiscovery],
   );
+  // On "How would you like to start?", a single usable candidate is selected
+  // without a click. `goCandidateExplicit` is set when the user picks a
+  // candidate or continues with the preselected one.
+  const goChooserOpen =
+    state === 'who' && !goChooserDismissed && goCandidates.length > 0;
+  useEffect(() => {
+    if (!goChooserOpen || goCandidate || goCandidates.length !== 1) return;
+    setGoCandidate(goCandidates[0]);
+  }, [goChooserOpen, goCandidate, goCandidates]);
   // On the account steps, select the CLI profile for the verified server when
   // none was chosen: the alias match wins, otherwise a single profile on that
   // host. Several unrelated profiles on the same host stay unselected rather
@@ -2708,29 +2721,65 @@ function FirstRunSession({
         </div>
       </Pane>
     );
-  else if (state === 'who' && !goChooserDismissed && goCandidates.length > 0)
+  else if (goChooserOpen)
     content = (
-      <Pane title="Select an FOKS account" header={false} wide>
-        <h1>Select an FOKS account</h1>
+      <Pane title="How would you like to start?" header={false} wide>
+        <h1>How would you like to start?</h1>
         <p className="lead">
-          Choose an account from the official FOKS CLI. In the next step, you
-          can connect this app as a new device or copy your existing device
-          credentials.
+          This Mac already has{' '}
+          {goCandidates.length > 1 ? 'FOKS accounts' : 'a FOKS account'} in the
+          official CLI. You can bring {goCandidates.length > 1 ? 'one' : 'it'}{' '}
+          into this app, or set up a new one.
         </p>
-        <GoProfileChooser
-          candidates={goCandidates}
-          selected={goCandidate?.candidateId ?? null}
-          onSelect={(candidate) => {
-            goCandidateExplicit.current = true;
-            setGoCandidate(candidate);
-          }}
-        />
+        <Inset>
+          <RadioGroup label="How to start">
+            <div className="choice">
+              <RadioCard
+                title="Continue with an existing account"
+                detail="Found in the FOKS CLI on this Mac. This app becomes a new device on the account, or copies the CLI’s device."
+                selected={goStart === 'existing'}
+                onSelect={() => setGoStart('existing')}
+              />
+              {goStart === 'existing' ? (
+                <div className="choice-body">
+                  <GoProfileChooser
+                    nested
+                    candidates={goCandidates}
+                    selected={goCandidate?.candidateId ?? null}
+                    onSelect={(candidate) => {
+                      goCandidateExplicit.current = true;
+                      setGoCandidate(candidate);
+                      setGoStart('existing');
+                    }}
+                  />
+                </div>
+              ) : null}
+            </div>
+            <div className="choice">
+              <RadioCard
+                title="Create a new account"
+                detail="Set up a new FOKS account on this device."
+                selected={goStart === 'new'}
+                onSelect={() => setGoStart('new')}
+              />
+            </div>
+          </RadioGroup>
+        </Inset>
         <div className="actions">
           <Button
             variant="primary"
-            disabled={!goCandidate}
+            disabled={goStart === 'existing' && !goCandidate}
             onClick={() => {
+              if (goStart === 'new') {
+                goCandidateExplicit.current = false;
+                setGoCandidate(null);
+                setGoChooserDismissed(true);
+                return;
+              }
               if (!goCandidate) return;
+              // Continuing confirms a preselected candidate as well, so the
+              // server step keeps it when the address is edited.
+              goCandidateExplicit.current = true;
               setAddress(goCandidate.serverHint ?? '');
               setUsername(
                 goCandidate.username
@@ -2741,15 +2790,6 @@ function FirstRunSession({
             }}
           >
             Continue
-          </Button>
-          <Button
-            onClick={() => {
-              goCandidateExplicit.current = false;
-              setGoCandidate(null);
-              setGoChooserDismissed(true);
-            }}
-          >
-            Create a new account
           </Button>
         </div>
       </Pane>

@@ -737,7 +737,7 @@ for (const method of ['copy', 'pair', 'resume-pair'] as const) {
         return h.unknown;
       },
     });
-    await rendered.view.findByText('Select an FOKS account');
+    await rendered.view.findByText('How would you like to start?');
     ui.fireEvent.click(rendered.view.getByRole('radio', { name: /personal/ }));
     ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Continue' }));
     ui.fireEvent.click(
