@@ -122,7 +122,7 @@ test('the account panel keeps every workflow row from the accounts pane', async 
   const { rendered } = await renderPeople(await fixture());
 
   // One account is shown at a time now, so each fact and each workflow
-  // appears once: the five facts' own actions, and the three quieter links
+  // appears once: the five facts' own actions, and the four quieter links
   // below them.
   for (const name of [
     'Change…',
@@ -130,8 +130,9 @@ test('the account panel keeps every workflow row from the accounts pane', async 
     'Devices ›',
     'Teams ›',
     'Bot accounts',
-    'Manage via web',
-    'Organization sign-in',
+    'Open web admin panel',
+    'Sign in via SSO',
+    'Import from FOKS CLI',
   ])
     assert.equal(
       rendered.getAllByRole('button', { name }).length,
@@ -627,7 +628,12 @@ test('a stopped account disables username changes while recovery remains enabled
   const menu = rendered.getByRole('menu', { name: 'Accounts on this device' });
   assert.ok(ui.within(menu).getByText('Verification failed'));
   await ui.act(async () => ui.fireEvent.keyDown(menu, { key: 'Escape' }));
-  for (const name of ['Bot accounts', 'Manage via web', 'Organization sign-in'])
+  for (const name of [
+    'Bot accounts',
+    'Open web admin panel',
+    'Sign in via SSO',
+    'Import from FOKS CLI',
+  ])
     assert.equal(
       rendered.getByRole('button', { name }).hasAttribute('disabled'),
       false,
@@ -657,7 +663,7 @@ test('organization sign-in survives browser focus and can finish the same flow',
   const { rendered } = await renderPeople(await fixture());
   await ui.act(async () => {
     ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Organization sign-in' }),
+      rendered.getByRole('button', { name: 'Sign in via SSO' }),
     );
   });
   await ui.act(async () => {

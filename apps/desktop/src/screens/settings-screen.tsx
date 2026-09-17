@@ -1,14 +1,17 @@
 import { localAliasOf } from '../model';
 /**
- * The Settings tab: a sub-navigation of six pages, held on screen beside
+ * The Settings tab: a sub-navigation of three pages, held on screen beside
  * whichever one is open.
  *
  * What is left once Account holds the accounts, Devices holds the keys and
- * Teams holds the groups: the servers this Mac talks to, the credentials you
- * type, the card credentials those servers hold, what this application and
- * its agent are, and the one reset that acts on this Mac. A `section=`
- * address opens its page; `profile=` opens a server's own page, which is the
- * Servers page's, so it carries `section: 'servers'` with it.
+ * Teams holds the groups, in three pages. Servers: the servers this Mac talks
+ * to, each with its own page, where its security keys are managed.
+ * Preferences contains account passphrases and local desktop alert settings.
+ * This Mac contains the application version and lock, the agent and its socket,
+ * local FOKS data operations, and the device-wide reset. A `section=` address
+ * opens its
+ * page; `profile=` opens a server's own page, which is the Servers page's, so
+ * it carries `section: 'servers'` with it.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -50,7 +53,6 @@ import { agentLifecycleLabel, type AgentLifecycle } from '../agent-lifecycle';
 import { NotificationSettings } from '../chat/notification-provider';
 import { ServersSection } from './servers-screen';
 import { AccountMark } from './account-switcher';
-import { UnavailableAccount } from './people-screen';
 import { PassphraseSheet } from './device-sheets';
 import type { PassphraseMode } from './device-sheets';
 
@@ -93,13 +95,6 @@ export function SettingsScreen({
   const [enteredScene] = useState(scene);
   const toasts = useToast();
   const stores = accountStores(snapshot);
-  const addressed = location.store
-    ? stores.find((store) => store.id === location.store)
-    : stores[0];
-  // An address naming an account this Mac no longer holds: the card rows act
-  // on nothing, and saying "No security key is enrolled" would be a claim
-  // about an account that is not here.
-  const unavailable = location.store !== undefined && addressed === undefined;
   const [sheet, setSheet] = useState<Sheet>(null);
   const [passphrase, setPassphrase] = useState<{
     store: AccountStore;
@@ -153,112 +148,20 @@ export function SettingsScreen({
     />
   );
 
-  const openSecurityKeys = (profile: string): void =>
-    onNavigate({ kind: 'settings', section: 'servers', profile });
-
   const page: ReactNode =
     section === 'servers' ? (
       serversSection
-    ) : section === 'credentials' ? (
-      <Inset className="settings-inset middle wide">
-        {stores.length ? (
-          stores.map((store) => {
-            const stopped = accountStopped(snapshot, store);
-            return (
-              <InsetRow
-                key={store.id}
-                className="devrow"
-                action={
-                  <>
-                    {(['set', 'change', 'verify'] as const).map((mode) => (
-                      <Button
-                        key={mode}
-                        size="sm"
-                        disabled={stopped.stopped}
-                        title={stopped.stopped ? stopped.reason : undefined}
-                        onClick={() => {
-                          setPassphrase({ store, mode });
-                          setSheet('passphrase');
-                        }}
-                      >
-                        {mode === 'set'
-                          ? 'Set…'
-                          : mode === 'change'
-                            ? 'Change…'
-                            : 'Verify…'}
-                      </Button>
-                    ))}
-                  </>
-                }
-              >
-                <AccountMark
-                  name={usernameOf(snapshot, store) ?? store.account}
-                />
-                <span className="t">
-                  <b>{usernameOf(snapshot, store) ?? store.account}</b>
-                  <small>
-                    {localAliasOf(snapshot, store)} ·{' '}
-                    {serverName(snapshot, store)}
-                  </small>
-                  {/* Why the three actions are off, on the row and not only in
-                      each button's title. */}
-                  {stopped.stopped ? (
-                    <small className="why">{stopped.reason}</small>
-                  ) : null}
-                </span>
-              </InsetRow>
-            );
-          })
-        ) : (
-          <InsetRow label="None">No accounts on this device.</InsetRow>
-        )}
-      </Inset>
-    ) : section === 'security-keys' ? (
-      unavailable ? (
-        <UnavailableAccount
-          stores={stores}
-          snapshot={snapshot}
-          onSelect={(store) => onNavigate({ ...location, store: store.id })}
-          onRefresh={() => void onRefreshSnapshot().catch(onError)}
-        />
-      ) : (
-        <Inset>
-          {snapshot.servers.length ? (
-            snapshot.servers.map((server) => (
-              <InsetRow
-                key={server.id}
-                label={
-                  server.label
-                    ? `${serverDisplayName(server)} · ${server.name}`
-                    : serverDisplayName(server)
-                }
-                action={
-                  <Button onClick={() => openSecurityKeys(server.id)}>
-                    Open security keys
-                  </Button>
-                }
-              >
-                Manage enrollments and card credentials for all accounts on this
-                server.
-              </InsetRow>
-            ))
-          ) : (
-            <InsetRow label="None">No servers on this device yet.</InsetRow>
-          )}
-        </Inset>
-      )
-    ) : section === 'notifications' ? (
-      <NotificationSettings />
-    ) : section === 'device' ? (
-      <ThisDeviceSection
-        bridge={bridge}
-        agentLifecycle={agentLifecycle}
-        serversCount={snapshot.servers.length}
-        onError={onError}
-        onReset={() => setSheet('reset-mac')}
+    ) : section === 'preferences' ? (
+      <PreferencesSection
+        snapshot={snapshot}
+        stores={stores}
+        onPassphrase={(store) => {
+          setPassphrase({ store, mode: 'change' });
+          setSheet('passphrase');
+        }}
       />
     ) : (
-      <AboutSection
+      <ThisMacSection
         snapshot={snapshot}
         bridge={bridge}
         appInfo={appInfo}
@@ -267,6 +170,8 @@ export function SettingsScreen({
         onLock={onLock}
         agentLifecycle={agentLifecycle}
         onRetryAgent={onRetryAgent}
+        serversCount={snapshot.servers.length}
+        onReset={() => setSheet('reset-mac')}
       />
     );
 
@@ -345,81 +250,78 @@ export function SettingsScreen({
   );
 }
 
-function AgentSection({
+/** Account passphrases and locally stored desktop alert preferences. */
+function PreferencesSection({
   snapshot,
-  bridge,
-  appInfo,
-  onError,
-  onMessage,
-  agentLifecycle,
-  onRetryAgent,
+  stores,
+  onPassphrase,
 }: {
   snapshot: AgentSnapshot;
-  bridge: Bridge;
-  appInfo: AppInfo | null;
-  onError: (error: unknown) => void;
-  onMessage: (message: string) => void;
-  agentLifecycle: AgentLifecycle;
-  onRetryAgent: () => Promise<void>;
+  stores: readonly AccountStore[];
+  onPassphrase: (store: AccountStore) => void;
 }): ReactNode {
-  const ready =
-    snapshot.agent.state === 'ready' && agentLifecycle.state === 'ready';
   return (
     <>
-      <InsetRow
-        label="Agent"
-        action={
-          ready ? undefined : (
-            <Button
-              size="sm"
-              variant="primary"
-              onClick={() =>
-                void onRetryAgent()
-                  .then(() => onMessage('Connected to local agent.'))
-                  .catch(onError)
-              }
-            >
-              Retry connection
-            </Button>
-          )
-        }
-      >
-        <span className={ready ? 'agent' : 'agent warn'}>
-          <i />
-          {snapshot.agent.state === 'bootstrap'
-            ? 'Starting the FOKS agent'
-            : agentLifecycleLabel(agentLifecycle)}
-        </span>
-        <small>The local background agent must be connected to use FOKS.</small>
-      </InsetRow>
-      <InsetRow
-        label="Socket"
-        valueClass="mono"
-        action={
-          appInfo ? (
-            <Button
-              size="sm"
-              onClick={() =>
-                void bridge
-                  .copyText(appInfo.agentSocket)
-                  .then(() => onMessage('Socket path copied'))
-                  .catch(onError)
-              }
-            >
-              Copy
-            </Button>
-          ) : undefined
-        }
-      >
-        {appInfo?.agentSocket ?? 'Reading app info…'}
-        <small>Local connection used by this desktop app.</small>
-      </InsetRow>
+      <SectionLabel>Passphrase</SectionLabel>
+      <Inset className="settings-inset middle wide">
+        {stores.length ? (
+          stores.map((store) => {
+            const stopped = accountStopped(snapshot, store);
+            return (
+              <InsetRow
+                key={store.id}
+                className="devrow"
+                action={
+                  <Button
+                    size="sm"
+                    disabled={stopped.stopped}
+                    title={stopped.stopped ? stopped.reason : undefined}
+                    onClick={() => onPassphrase(store)}
+                  >
+                    Change passphrase…
+                  </Button>
+                }
+              >
+                <AccountMark
+                  name={usernameOf(snapshot, store) ?? store.account}
+                />
+                <span className="t">
+                  <b>{usernameOf(snapshot, store) ?? store.account}</b>
+                  <small>
+                    {localAliasOf(snapshot, store)} ·{' '}
+                    {serverName(snapshot, store)}
+                  </small>
+                  {/* Why the action is off, on the row and not only in the
+                      button's title. */}
+                  {stopped.stopped ? (
+                    <small className="why">{stopped.reason}</small>
+                  ) : null}
+                </span>
+              </InsetRow>
+            );
+          })
+        ) : (
+          <InsetRow label="None">No accounts on this device.</InsetRow>
+        )}
+      </Inset>
+      {/* The passphrase sheet defaults to Change and provides Set and Verify
+          through the same segmented control. */}
+      <p className="fn">
+        Set, change or verify an account's passphrase with its server.
+      </p>
+      <SectionLabel>Desktop alerts</SectionLabel>
+      <NotificationSettings />
     </>
   );
 }
 
-/** About: what the application and its agent are. */
-function AboutSection({
+/**
+ * This Mac: what the application and its agent are, the local FOKS data
+ * operations, and the one reset that acts on this Mac rather than on an
+ * account. The reset stays visually marked as destructive, in its own danger
+ * zone at the foot of this page rather than of everything Settings holds.
+ */
+function ThisMacSection({
   snapshot,
   bridge,
   appInfo,
@@ -428,6 +330,8 @@ function AboutSection({
   onLock,
   agentLifecycle,
   onRetryAgent,
+  serversCount,
+  onReset,
 }: {
   snapshot: AgentSnapshot;
   bridge: Bridge;
@@ -437,76 +341,104 @@ function AboutSection({
   onLock: () => Promise<boolean>;
   agentLifecycle: AgentLifecycle;
   onRetryAgent: () => Promise<void>;
-}): ReactNode {
-  return (
-    <Inset className="settings-inset middle wide">
-      <InsetRow label="Version">
-        FOKS Desktop {appInfo?.version ?? '…'}
-        <small>Installed application version.</small>
-      </InsetRow>
-      <AgentSection
-        snapshot={snapshot}
-        bridge={bridge}
-        appInfo={appInfo}
-        onError={onError}
-        onMessage={onMessage}
-        agentLifecycle={agentLifecycle}
-        onRetryAgent={onRetryAgent}
-      />
-      <InsetRow
-        label="Lock application"
-        action={
-          <Button
-            size="sm"
-            icon="shield"
-            onClick={() => {
-              void onLock().then(
-                (locked) => {
-                  if (!locked)
-                    onMessage(
-                      'Application lock is not available on this system.',
-                    );
-                },
-                (error) => onError(error),
-              );
-            }}
-          >
-            Lock now
-          </Button>
-        }
-      >
-        Require your operating-system credentials before FOKS can read vault
-        data again.
-      </InsetRow>
-    </Inset>
-  );
-}
-
-/**
- * This device: the local maintenance operations, and the one reset that acts
- * on this Mac rather than on an account. The reset stays visually marked as
- * destructive, in its own danger zone at the foot of this page rather than of
- * everything Settings holds.
- */
-function ThisDeviceSection({
-  bridge,
-  agentLifecycle,
-  serversCount,
-  onError,
-  onReset,
-}: {
-  bridge: Bridge;
-  agentLifecycle: AgentLifecycle;
   serversCount: number;
-  onError: (error: unknown) => void;
   onReset: () => void;
 }): ReactNode {
+  const ready =
+    snapshot.agent.state === 'ready' && agentLifecycle.state === 'ready';
   const maintenanceUnavailable = agentLifecycle.state !== 'ready';
   return (
     <>
+      <SectionLabel>Application</SectionLabel>
+      <Inset className="settings-inset middle wide">
+        <InsetRow label="Version">
+          FOKS Desktop {appInfo?.version ?? '…'}
+        </InsetRow>
+        <InsetRow
+          label="Lock"
+          action={
+            <Button
+              size="sm"
+              icon="shield"
+              onClick={() => {
+                void onLock().then(
+                  (locked) => {
+                    if (!locked)
+                      onMessage(
+                        'Application lock is not available on this system.',
+                      );
+                  },
+                  (error) => onError(error),
+                );
+              }}
+            >
+              Lock now
+            </Button>
+          }
+        >
+          Require your operating-system credentials before FOKS can read vault
+          data again.
+        </InsetRow>
+      </Inset>
+      <SectionLabel>Agent</SectionLabel>
+      {/* Top-align the multi-line Status row with its primary status line.
+          Single-line Socket rows use vertical centering. */}
       <Inset className="settings-inset wide">
         <InsetRow
-          label="Transfer FOKS state"
+          label="Status"
+          action={
+            ready ? undefined : (
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={() =>
+                  void onRetryAgent()
+                    .then(() => onMessage('Connected to local agent.'))
+                    .catch(onError)
+                }
+              >
+                Retry connection
+              </Button>
+            )
+          }
+        >
+          <span className={ready ? 'agent' : 'agent warn'}>
+            <i />
+            {snapshot.agent.state === 'bootstrap'
+              ? 'Starting the FOKS agent'
+              : agentLifecycleLabel(agentLifecycle)}
+          </span>
+          <small>
+            The local background agent must be connected to use FOKS.
+          </small>
+        </InsetRow>
+        <InsetRow
+          className="line"
+          label="Socket"
+          valueClass="mono"
+          action={
+            appInfo ? (
+              <Button
+                size="sm"
+                onClick={() =>
+                  void bridge
+                    .copyText(appInfo.agentSocket)
+                    .then(() => onMessage('Socket path copied'))
+                    .catch(onError)
+                }
+              >
+                Copy
+              </Button>
+            ) : undefined
+          }
+        >
+          {appInfo?.agentSocket ?? 'Reading app info…'}
+        </InsetRow>
+      </Inset>
+      <SectionLabel>FOKS data</SectionLabel>
+      <Inset className="settings-inset wide">
+        <InsetRow
+          label="Transfer"
           action={
             <>
               <Button
@@ -578,7 +510,7 @@ function ThisDeviceSection({
       <Inset className="settings-inset middle wide danger-box">
         <InsetRow
           className="dangerrow"
-          label="Reset this device"
+          label="Reset this Mac"
           action={
             <Button
               size="sm"
@@ -591,14 +523,15 @@ function ThisDeviceSection({
               }
               onClick={onReset}
             >
-              Reset this device…
+              Reset this Mac…
             </Button>
           }
         >
           <small>
-            Removes the local account keys, trust history, cache and unfinished
-            operations this device holds for every server. Your accounts keep
-            existing on their servers and other devices are untouched.
+            Removes local account keys, trust history, cached state, and pending
+            operations for all servers. Remote accounts and other enrolled
+            devices are not affected. To reset one server, select it in the
+            Servers list.
           </small>
         </InsetRow>
       </Inset>
@@ -708,7 +641,7 @@ function ResetMacSheet({
         if (busy) return;
         onClose();
       }}
-      title="Reset this device?"
+      title="Reset this Mac?"
       glyph={
         <span className="server-mark danger">
           <Icon name="trash" />
@@ -748,22 +681,22 @@ function ResetMacSheet({
               })();
             }}
           >
-            Reset this device
+            Reset this Mac
           </Button>
         </>
       }
     >
       <p>
-        Deletes this device's account keys. Your data stays on the server, but
+        Deletes this Mac's account keys. Your data stays on the server, but
         without another device or a paper key you cannot get back into the
         account. The passphrase alone is not enough.
       </p>
       <Inset>
         <InsetRow label="Unaffected">
-          Your accounts on their servers, and every other device. Only data
-          stored on this device is erased.
+          Remote accounts and all other enrolled devices remain active. Only
+          data stored locally on this Mac is erased.
         </InsetRow>
-        <InsetRow label="Accounts on this device">
+        <InsetRow label="Accounts on this Mac">
           {stores.length
             ? stores
                 .map(
@@ -831,7 +764,7 @@ function ResetMacSheet({
         );
       })}
       {servers.length ? null : (
-        <Band label="No servers on this device">
+        <Band label="No servers on this Mac">
           There is nothing for this reset to erase.
         </Band>
       )}

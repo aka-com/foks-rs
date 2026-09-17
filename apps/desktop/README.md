@@ -305,7 +305,7 @@ tabs retain that account when switching tabs. Opening a group, chat or vault
 uses the account through which that object is held. Files, Chat and Teams
 still list all accounts on this Mac. The header opens a menu of the accounts on
 this Mac grouped by server, then "Add an account or server…" (the first-run
-flow) and "Lock" (the command Settings › About also offers). The account the
+flow) and "Lock" (the command Settings › This Mac also offers). The account the
 window is acting as carries a check at the right end of its row; an account
 whose access has stopped is dimmed and carries an amber line under its caption
 with the one link that would restore it — "Check in" for a lapsed or missing
@@ -421,11 +421,10 @@ FOKS has no identity
 proofs to list. Under them the rows are:
 username with Change…, the local alias, the passphrase with a
 link to
-Settings › Account, then Organization sign-in, Bot accounts, Web admin and
-Join a group…, each opening the panel it always opened. While access is
-stopped the username change is disabled with the reason and the other four —
-Organization sign-in, Bot accounts, Web admin and Join a group — stay
-available, because each is a way to get access back. An account's mark is the
+Settings › Preferences, followed by Bot accounts, Open web admin panel, Sign in
+via SSO, and Import from FOKS CLI, each opening its corresponding panel. If
+account access is suspended, username changes are disabled with an explanatory
+reason while the remaining recovery actions stay available. An account's mark is the
 initial of the username, over a colour derived from it, on the account band
 and in the switcher: those surfaces name the account by the username the
 server knows it by, while a store elsewhere keeps its `GroupMark`. There is no
@@ -495,7 +494,7 @@ Revoke… — off, with the reason, while the enrollment is unfinished — and t
 note that the agent reports no serial for one, the serial of the card connected
 now with Provision… and PIN status — which asks the card in the port, so a
 connected card and an enrollment to name are all it needs — and the
-card PIN's link to Settings › Account). That last section is the one part of
+card PIN's link to Settings › Servers). That last section is the one part of
 the page that is not about the account above it: enrollments are listed for
 the server, and an enrollment's own page is captioned with the server rather
 than the account. The mock
@@ -549,23 +548,26 @@ within the dialog, and the target section receives focus only after the dialog
 closes. A scene is entered once: concealing a phrase remounts the tab without
 reopening the dialog that the scene opened. Navigating to an account ID that is
 no longer present locally displays an account-unavailable screen listing valid
-accounts, rather than reporting that no accounts are configured. Settings is one
-scrolling page: Servers (the list, grouped as Needs attention — which holds the
-never-checked as well as the locked, since nothing on either can be used — and
-Ready, each
-row with its state chip, a Check on the never-checked and lapsed rows, and
-Open for the server's own page), Account (set, change and verify a passphrase
-per account, the reason on the row of one whose access has stopped, and the
-card PIN and unlock code under a label naming the account they act on, with the
-same switcher under it so that account can be changed), About
-(version, agent state
-and socket, Lock now), This Mac (export, import, verify online, move the data
-folder) and a danger zone whose Reset this Mac runs the per-server reset once
-per profile, each with its own one-use preview token and typed profile name;
-the sheet states a token lifetime only once every server has reported one, and
-names the servers, not the profile ids, when they differ. Notifications holds this device's desktop-alert and message-preview preferences,
-which the desktop persists locally. Channel overrides stay in Chat's info panel,
-with a link to Settings; none of these preferences sync between devices.
+accounts, rather than reporting that no accounts are configured. Settings is a
+sub-navigation of three pages. Servers: the list, grouped as Needs attention —
+which holds the never-checked as well as the locked, since nothing on either can
+be used — and Ready, each row with its state chip, a Check on the never-checked
+and lapsed rows, and Open for the server's own page, which holds that server's
+security keys and its own reset. Preferences: a Passphrase row per account with
+one Change passphrase… button (the sheet defaults to Change and switches to Set or
+Verify in place; the row of an account whose access has stopped says why the
+button is disabled), then Desktop alerts — this device's desktop-alert and
+message-preview preferences, which the desktop persists locally; channel
+overrides stay in Chat's info panel, with a link here, and none of these
+preferences sync between devices. This Mac: Application (version, Lock now),
+Agent (status with Retry connection while it is not ready, socket with Copy),
+FOKS data (export, import, verify online, move the data folder) and a danger
+zone whose Reset this Mac runs the per-server reset once per profile, each with
+its own one-use preview token and typed profile name; the sheet states a token
+lifetime only once every server has reported one, and names the servers, not
+the profile ids, when they differ. Older `section=` addresses — `credentials`,
+`notifications`, `device`, `about`, `agent`, `security-keys` — resolve to the
+page that holds their content.
 A server's own page
 carries a Check in its header, and the band a never-checked or lapsed server
 draws offers the same check beside the reason. Under the check-in rows, one
@@ -954,59 +956,59 @@ the address bar, so every state can be reloaded and the acceptance run can
 walk them. `?state=` is the mock's own vocabulary (`01-vault.html`'s `STATES`),
 kept so deep links defined in the design specification resolve to this location.
 
-| `?state=`                                                                              | Opens                                   | What else it fixes                                                                                      |
-| -------------------------------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `all`                                                                                  | All items                               | —                                                                                                       |
-| `personal`                                                                             | Personal (`acct:personal`)              | —                                                                                                       |
-| `work` · `household` · `homelab`                                                       | that store                              | —                                                                                                       |
-| `password`                                                                             | All items                               | selects the masked GitHub login                                                                         |
-| `show`                                                                                 | All items                               | loads and reveals GitHub version 9 once                                                                 |
-| `resource`                                                                             | All items                               | selects the masked Anthropic API key                                                                    |
-| `file`                                                                                 | All items                               | selects Household's emergency PDF                                                                       |
-| `link`                                                                                 | All items                               | selects latest-key and loads its target at the exact catalog version                                    |
-| `group`                                                                                | Household (`team:household`)            | selects the Wi-Fi password                                                                              |
-| `new`                                                                                  | All items                               | Password sheet in Household with explicit group roles and computed reader preview                       |
-| `new-group`                                                                            | All items                               | Resource sheet in Engineering with explicit roles and computed reader preview                           |
-| `new-resource`                                                                         | All items                               | Resource sheet in Personal                                                                              |
-| `new-file`                                                                             | All items                               | File sheet in Household; renderer receives paths, never bytes                                           |
-| `new-link`                                                                             | All items                               | Link sheet in Personal                                                                                  |
-| `group-new-text` · `group-new-link` · `group-new-file`                                 | Engineering                             | Phase 7 group create acceptance scenes for text, Link/symlink and streamed File writes                  |
-| `exists`                                                                               | All items                               | must-not-exist refusal; Open refreshes the invalidated catalog first                                    |
-| `conflict`                                                                             | All items                               | exact-version refusal with retained draft and Refresh and review                                        |
-| `grid`                                                                                 | All items                               | `view=grid`                                                                                             |
-| `folders`                                                                              | All items                               | `view=folders`; store roots and folders are derived from catalog paths                                  |
-| `lease`                                                                                | Work (Acme)                             | `lease=lapsed` — the whole snapshot, not a place                                                        |
-| `inactive`                                                                             | Homelab                                 | group reports inactive; Resume creation uses its resumable operation                                    |
-| `alerts`                                                                               | Accounts, on its attention list           | `lease=lapsed`, so the list has its critical entry                                                      |
-| `agent-lost`                                                                           | Full window stop                        | Retry reconnects and refreshes without replay                                                           |
-| `groups`                                                                               | Teams                                   | the list, then the collapsed Check-other-servers row; `store=` names the account create/join act as     |
-| `people`                                                                               | Accounts                                  | the attention list over one account's panel; `store=` names the account                                 |
-| `group-people` · `party` · `federation`                                                | Engineering group page                  | Members tab; `party` opens a member row's menu                                                          |
-| `group-channels`                                                                       | Household group page                    | Channels tab, on the group whose server offers chat; `tab=channels` reaches it on any group             |
-| `group-files`                                                                          | Engineering group page                  | Files tab; `tab=files` reaches it on any group                                                          |
-| `danger`                                                                               | Engineering group page                  | Settings tab                                                                                            |
-| `store` · `items`                                                                      | Engineering                             | group vault                                                                                             |
-| `add` · `demote` · `remove` · `admit`                                                  | Engineering group page                  | the named Group sheet; `add` and `admit` are the two halves of one sheet                                |
-| `invite`                                                                               | Engineering group page                  | the Invite sheet, seeded to the account holding the group                                               |
-| `create`                                                                               | Teams                                   | named/ad-hoc Create group sheet on the acting account; `store=` names it, else this Mac's first         |
-| `groups-lease` · `groups-inactive`                                                     | Engineering group page or Homelab vault | distinct lease/inactive takeovers                                                                       |
-| `manage`                                                                               | Household group page                    | Members tab, without a Manage overlay                                                                   |
-| `party-remove`                                                                         | Engineering group page                  | the non-local removal refusal                                                                           |
-| `join`                                                                                 | Teams                                   | account-specific discovery and invite choices                                                           |
-| `join-invite`                                                                          | Teams                                   | invite sheet opened on the exact `acct:work` fixture store                                              |
-| `boot` · `who` · `address` · `no-address` · `checked` · `compare` · `error`            | First run, steps 0–2                    | `path=invited` or `path=own` selects the setup route                                                    |
-| `account` · `existing` · `protect` · `phrase`                                          | First run, steps 3–4                    | account creation/recovery and the one-time backup sheet                                                 |
-| `waiting` · `added`                                                                    | First run, steps 5–6                    | invited group discovery and completion                                                                  |
-| `checklist-invited` · `checklist-own`                                                  | Get started inside the ordinary shell   | resumable nonsecret progress summary                                                                    |
-| `first-run&step=<step>&path=<path>`                                                    | the resumable first-run location codec  | used after the first in-app transition and across reload                                                |
-| `servers-list` · `servers-server` · `servers-lapsed` · `servers-rollback`              | Settings › Servers                      | the list, then one server's page; `profile=` opens it                                                   |
-| `servers-reset` · `servers-add` · `servers-unprobed` · `servers-check`                 | Settings › Servers                      | typed reset, add/check and explicit result states                                                       |
-| `settings&section=servers` · `settings&section=credentials` · `settings&section=about` | Settings                                | the one page, scrolled to and focused on that section                                                   |
-| `settings-macs` · `settings-macs-work` · `settings-phrase`                             | Devices                                 | Macs, pairing and the one-time paper-key reveal; `settings-macs-work` names the exact `acct:work` store |
-| `settings-keys` · `settings-enrol`                                                     | Devices                                 | the Security key enrollments section and the YubiKey account sheet                                      |
-| `devices&store=<StoreRef>&device=<key>`                                                | Devices › one key                       | that key's own page; `device=` is the key id, or `yubi:<alias>` for an enrollment                       |
-| `settings-account`                                                                     | Accounts                                  | the account panel and its workflows                                                                     |
-| `settings-agent` · `settings-about`                                                    | Settings                                | the About section: agent status, socket, version                                                        |
+| `?state=`                                                                            | Opens                                   | What else it fixes                                                                                      |
+| ------------------------------------------------------------------------------------ | --------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `all`                                                                                | All items                               | —                                                                                                       |
+| `personal`                                                                           | Personal (`acct:personal`)              | —                                                                                                       |
+| `work` · `household` · `homelab`                                                     | that store                              | —                                                                                                       |
+| `password`                                                                           | All items                               | selects the masked GitHub login                                                                         |
+| `show`                                                                               | All items                               | loads and reveals GitHub version 9 once                                                                 |
+| `resource`                                                                           | All items                               | selects the masked Anthropic API key                                                                    |
+| `file`                                                                               | All items                               | selects Household's emergency PDF                                                                       |
+| `link`                                                                               | All items                               | selects latest-key and loads its target at the exact catalog version                                    |
+| `group`                                                                              | Household (`team:household`)            | selects the Wi-Fi password                                                                              |
+| `new`                                                                                | All items                               | Password sheet in Household with explicit group roles and computed reader preview                       |
+| `new-group`                                                                          | All items                               | Resource sheet in Engineering with explicit roles and computed reader preview                           |
+| `new-resource`                                                                       | All items                               | Resource sheet in Personal                                                                              |
+| `new-file`                                                                           | All items                               | File sheet in Household; renderer receives paths, never bytes                                           |
+| `new-link`                                                                           | All items                               | Link sheet in Personal                                                                                  |
+| `group-new-text` · `group-new-link` · `group-new-file`                               | Engineering                             | Phase 7 group create acceptance scenes for text, Link/symlink and streamed File writes                  |
+| `exists`                                                                             | All items                               | must-not-exist refusal; Open refreshes the invalidated catalog first                                    |
+| `conflict`                                                                           | All items                               | exact-version refusal with retained draft and Refresh and review                                        |
+| `grid`                                                                               | All items                               | `view=grid`                                                                                             |
+| `folders`                                                                            | All items                               | `view=folders`; store roots and folders are derived from catalog paths                                  |
+| `lease`                                                                              | Work (Acme)                             | `lease=lapsed` — the whole snapshot, not a place                                                        |
+| `inactive`                                                                           | Homelab                                 | group reports inactive; Resume creation uses its resumable operation                                    |
+| `alerts`                                                                             | Accounts, on its attention list         | `lease=lapsed`, so the list has its critical entry                                                      |
+| `agent-lost`                                                                         | Full window stop                        | Retry reconnects and refreshes without replay                                                           |
+| `groups`                                                                             | Teams                                   | the list, then the collapsed Check-other-servers row; `store=` names the account create/join act as     |
+| `people`                                                                             | Accounts                                | the attention list over one account's panel; `store=` names the account                                 |
+| `group-people` · `party` · `federation`                                              | Engineering group page                  | Members tab; `party` opens a member row's menu                                                          |
+| `group-channels`                                                                     | Household group page                    | Channels tab, on the group whose server offers chat; `tab=channels` reaches it on any group             |
+| `group-files`                                                                        | Engineering group page                  | Files tab; `tab=files` reaches it on any group                                                          |
+| `danger`                                                                             | Engineering group page                  | Settings tab                                                                                            |
+| `store` · `items`                                                                    | Engineering                             | group vault                                                                                             |
+| `add` · `demote` · `remove` · `admit`                                                | Engineering group page                  | the named Group sheet; `add` and `admit` are the two halves of one sheet                                |
+| `invite`                                                                             | Engineering group page                  | the Invite sheet, seeded to the account holding the group                                               |
+| `create`                                                                             | Teams                                   | named/ad-hoc Create group sheet on the acting account; `store=` names it, else this Mac's first         |
+| `groups-lease` · `groups-inactive`                                                   | Engineering group page or Homelab vault | distinct lease/inactive takeovers                                                                       |
+| `manage`                                                                             | Household group page                    | Members tab, without a Manage overlay                                                                   |
+| `party-remove`                                                                       | Engineering group page                  | the non-local removal refusal                                                                           |
+| `join`                                                                               | Teams                                   | account-specific discovery and invite choices                                                           |
+| `join-invite`                                                                        | Teams                                   | invite sheet opened on the exact `acct:work` fixture store                                              |
+| `boot` · `who` · `address` · `no-address` · `checked` · `compare` · `error`          | First run, steps 0–2                    | `path=invited` or `path=own` selects the setup route                                                    |
+| `account` · `existing` · `protect` · `phrase`                                        | First run, steps 3–4                    | account creation/recovery and the one-time backup sheet                                                 |
+| `waiting` · `added`                                                                  | First run, steps 5–6                    | invited group discovery and completion                                                                  |
+| `checklist-invited` · `checklist-own`                                                | Get started inside the ordinary shell   | resumable nonsecret progress summary                                                                    |
+| `first-run&step=<step>&path=<path>`                                                  | the resumable first-run location codec  | used after the first in-app transition and across reload                                                |
+| `servers-list` · `servers-server` · `servers-lapsed` · `servers-rollback`            | Settings › Servers                      | the list, then one server's page; `profile=` opens it                                                   |
+| `servers-reset` · `servers-add` · `servers-unprobed` · `servers-check`               | Settings › Servers                      | typed reset, add/check and explicit result states                                                       |
+| `settings&section=servers` · `settings&section=preferences` · `settings&section=mac` | Settings                                | the three pages of the sub-navigation; retired section names resolve to the page that holds them        |
+| `settings-macs` · `settings-macs-work` · `settings-phrase`                           | Devices                                 | Macs, pairing and the one-time paper-key reveal; `settings-macs-work` names the exact `acct:work` store |
+| `settings-keys` · `settings-enrol`                                                   | Devices                                 | the Security key enrollments section and the YubiKey account sheet                                      |
+| `devices&store=<StoreRef>&device=<key>`                                              | Devices › one key                       | that key's own page; `device=` is the key id, or `yubi:<alias>` for an enrollment                       |
+| `settings-account`                                                                   | Accounts                                | the account panel and its workflows                                                                     |
+| `settings-agent` · `settings-about`                                                  | Settings › This Mac                     | the application version and lock, the agent status and socket                                           |
 
 `decodeLocation` returns `null` for display mode, item selection, or lease
 modifiers because those properties represent presentation options or environmental

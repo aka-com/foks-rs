@@ -133,7 +133,7 @@ export function ChannelInfoPanel({
           <h3>Alerts on this device</h3>
           <Button
             onClick={() =>
-              onNavigate({ kind: 'settings', section: 'notifications' })
+              onNavigate({ kind: 'settings', section: 'preferences' })
             }
           >
             Device notification settings

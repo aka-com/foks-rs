@@ -82,8 +82,8 @@ export function AdminPanel({
       }
     >
       <p>
-        Opens the host’s web admin panel in a private window that closes when
-        FOKS locks.
+        Opens the host’s web admin panel in a private browser window. This
+        browser window closes automatically when FOKS locks.
       </p>
       <Inset className="form">
         <InsetRow label="Admin panel address">

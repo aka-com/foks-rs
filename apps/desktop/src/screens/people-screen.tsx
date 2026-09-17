@@ -8,18 +8,15 @@ import { useTabSheetState } from '../navigation-guard';
  *
  * The account is the page's header: its mark, its username as the title, and
  * the server, the server's trust state and the local alias on the line under
- * it — the shape the team page already uses for a team. "Switch account" sits
- * in the header's action slot beside Connect from FOKS CLI, and opens the same
- * menu the rail header's avatar opens; there is exactly one account switcher,
- * not a second one repeating it. The body opens on five facts, rows with their
- * action at the right:
- * Username, Shown as (the local alias), Server, Devices and Teams, each
- * linking to where it is changed or managed. Bot accounts, Manage via web
- * and Organization sign-in stay reachable from a quieter line under the
- * facts. A stray notice this page cannot route anywhere else — a catalog
- * read that only a retry can fix, or a note whose place could not be
- * resolved — is kept in a small band above the facts; every other notice
- * already has a home of its own on Settings, Teams or a team's own page.
+ * it — the shape the team page already uses for a team. "Switch account" is
+ * the header's action, and opens the same menu the rail header's avatar
+ * opens; there is exactly one account switcher, not a second one repeating
+ * it. The page body displays primary account properties with management links:
+ * Username, Shown as (the local alias), Server, Devices, and Teams. Secondary
+ * integrations (Bot accounts, web administration, SSO, and FOKS CLI import)
+ * render below the primary properties. Alerts without a navigable destination,
+ * such as catalog read failures, render above the details list; entity-specific
+ * alerts render in their corresponding Settings or Teams views.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -61,7 +58,8 @@ const ACTION_UNAVAILABLE =
   'Resolve this in Settings › Servers, or in the team’s settings.';
 
 /** The account panels reached from a row on this page. */
-type AccountSheet = 'local-alias' | 'rename' | 'bot' | 'admin' | 'sso';
+type AccountSheet =
+  'local-alias' | 'rename' | 'bot' | 'admin' | 'sso' | 'go-profile';
 
 function canRetry(note: Notification): boolean {
   return note.action === 'Retry' && note.id.startsWith('catalog-');
@@ -456,26 +454,16 @@ export function PeopleScreen({
         mark={identity?.mark}
         sub={identity?.sub}
         action={
-          <>
-            <Button
-              onClick={() => {
-                setPairingProfile(undefined);
-                setSheet('go-profile');
-              }}
-            >
-              Connect from FOKS CLI…
-            </Button>
-            {selected ? (
-              <AccountHeader
-                compact
-                snapshot={snapshot}
-                location={location}
-                account={selected.id}
-                onNavigate={onNavigate}
-                onLock={onLock}
-              />
-            ) : null}
-          </>
+          selected ? (
+            <AccountHeader
+              compact
+              snapshot={snapshot}
+              location={location}
+              account={selected.id}
+              onNavigate={onNavigate}
+              onLock={onLock}
+            />
+          ) : undefined
         }
       />
       <div className="body">
@@ -525,7 +513,12 @@ export function PeopleScreen({
               failed={keysFailed}
               stopped={stopped}
               onNavigate={onNavigate}
-              onSheet={setSheet}
+              onSheet={(next) => {
+                // The import sheet opened from the account's own line adds an
+                // account; a server row's Pair fills `pairingProfile` instead.
+                if (next === 'go-profile') setPairingProfile(undefined);
+                setSheet(next);
+              }}
             />
           ) : (
             <>
@@ -599,7 +592,7 @@ export function PeopleScreen({
           profile={selected.server}
           account={selected.account}
           presentation={{
-            title: 'Manage via web',
+            title: 'Open web admin panel',
             onClose: () => setSheet(null),
           }}
         />
@@ -611,10 +604,10 @@ export function PeopleScreen({
           account={selected.account}
           login={true}
           presentation={{
-            title: 'Organization sign-in',
+            title: 'Sign in via SSO',
             onClose: () => setSheet(null),
           }}
-          onComplete={() => onRefresh('Organization sign-in verified')}
+          onComplete={() => onRefresh('SSO sign-in verified')}
         />
       ) : null}
     </>
@@ -788,7 +781,7 @@ function AccountPanel({
           className="lnk"
           onClick={() => onSheet('admin')}
         >
-          Manage via web
+          Open web admin panel
         </Button>
         <Button
           variant="plain"
@@ -796,7 +789,15 @@ function AccountPanel({
           className="lnk"
           onClick={() => onSheet('sso')}
         >
-          Organization sign-in
+          Sign in via SSO
+        </Button>
+        <Button
+          variant="plain"
+          size="sm"
+          className="lnk"
+          onClick={() => onSheet('go-profile')}
+        >
+          Import from FOKS CLI
         </Button>
       </div>
     </>

@@ -14,28 +14,40 @@ import type { AccountStore, LeaseState, Store, StoreRef } from './model/types';
 /**
  * Which page of Settings' sub-navigation an address points at. Each section is
  * a page of its own, with the sub-navigation staying on screen while any one
- * of them is open. `credentials` is the Account page: the passphrase People
- * and Devices send the reader here for. `security-keys` is the card
- * credentials, one row per server; `device` is This device, where the local
- * maintenance operations and the Mac-wide reset live.
+ * of them is open. `servers` lists the servers this Mac talks to and holds
+ * each server's own page, security keys included. `preferences` contains
+ * account passphrases and local desktop alert settings. `mac` is This Mac: the
+ * application version and lock,
+ * the agent, the local FOKS data operations and the Mac-wide reset.
+ *
+ * Older addresses name sections that folded into these three; `decodeLocation`
+ * maps them (`SETTINGS_SECTION_ALIASES`).
  */
-export type SettingsSection =
-  | 'servers'
-  | 'credentials'
-  | 'security-keys'
-  | 'notifications'
-  | 'device'
-  | 'about';
+export type SettingsSection = 'servers' | 'preferences' | 'mac';
 
 /** The order the sub-navigation lists Settings' pages in. */
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'servers',
-  'credentials',
-  'security-keys',
-  'notifications',
-  'device',
-  'about',
+  'preferences',
+  'mac',
 ];
+
+/**
+ * Former `section=` values that are pages of one of the three sections now.
+ * `credentials` (the passphrase rows) and `notifications` are Preferences;
+ * `device`, `about` and the older `agent` are This Mac; `security-keys` was a
+ * list of links to each server's page, so it is Servers.
+ */
+export const SETTINGS_SECTION_ALIASES: Readonly<
+  Record<string, SettingsSection>
+> = {
+  credentials: 'preferences',
+  notifications: 'preferences',
+  device: 'mac',
+  about: 'mac',
+  agent: 'mac',
+  'security-keys': 'servers',
+};
 
 /** The page an address with no `section=` opens: the sub-navigation's first. */
 export const DEFAULT_SETTINGS_SECTION: SettingsSection = SETTINGS_SECTIONS[0];
@@ -44,11 +56,8 @@ export const DEFAULT_SETTINGS_SECTION: SettingsSection = SETTINGS_SECTIONS[0];
 export const SETTINGS_SECTION_LABEL: Readonly<Record<SettingsSection, string>> =
   {
     servers: 'Servers',
-    credentials: 'Account',
-    'security-keys': 'Security keys',
-    notifications: 'Notifications',
-    device: 'This device',
-    about: 'About',
+    preferences: 'Preferences',
+    mac: 'This Mac',
   };
 
 /** Which pane of the Devices tab is open. */
@@ -561,8 +570,9 @@ const STATE_ALIASES: Readonly<Record<string, Location>> = {
   'settings-keys': { kind: 'devices', section: 'keys' },
   'settings-enrol': { kind: 'devices', section: 'keys' },
   'settings-account': { kind: 'people' },
-  'settings-agent': { kind: 'settings', section: 'about' },
-  'settings-about': { kind: 'settings', section: 'about' },
+  // The agent and About content is the This Mac page.
+  'settings-agent': { kind: 'settings', section: 'mac' },
+  'settings-about': { kind: 'settings', section: 'mac' },
 };
 
 /**
@@ -779,11 +789,16 @@ export function decodeLocation(search: string): Location | null {
     // Every tab a section moved to acts on one account, so the account the
     // address named comes with it.
     if (moved) return { ...moved, ...(store ? { store } : {}) };
-    // `agent` used to be its own pane; that content now lives on About.
-    const resolved = section === 'agent' ? 'about' : section;
-    // `profile` is only the Servers section's; anywhere else it is stale.
+    // Sections that folded into one of the three pages open that page.
+    const resolved =
+      section && SETTINGS_SECTION_ALIASES[section]
+        ? SETTINGS_SECTION_ALIASES[section]
+        : section;
+    // The `profile` parameter applies only to the Servers section. Legacy
+    // `security-keys` URLs identified a server row, so they redirect to the
+    // root Servers list.
     const profile =
-      resolved === 'servers' ? (params.get('profile') ?? undefined) : undefined;
+      section === 'servers' ? (params.get('profile') ?? undefined) : undefined;
     return resolved &&
       (SETTINGS_SECTIONS as readonly string[]).includes(resolved)
       ? {

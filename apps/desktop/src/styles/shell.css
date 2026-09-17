@@ -125,10 +125,11 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side.rail .attn:hover{background:#ff8a4a}
 /* Status slot */
 .side.rail .side-bottom{padding-bottom:0}
-.side.rail .side-bottom>.nav{font-size:13px;padding:8px 18px;gap:14px}
+.side.rail .side-bottom>.nav{font-size:13px;padding:7px 18px;gap:14px}
 .side.rail .side-bottom>.nav .ic{font-size:20px;width:20px}
 .side.rail .side-bottom>.nav .badge{flex:none;padding:0 5px;font-size:12px}
-.side.rail .side-bottom>.side-collapse{margin-bottom:4px}
+/* Bottom nav spacing */
+.side.rail .side-bottom>.nav:last-of-type{margin-bottom:4px}
 .side.rail .side-note{margin:2px 14px 8px 55px;font-size:12px;line-height:1.45;color:var(--rail-ink);opacity:.85}
 .side.rail .foot{border-top:1px solid var(--rail-line);padding-top:0}
 .side.rail h6{color:rgba(255,255,255,.7);padding-left:16px}

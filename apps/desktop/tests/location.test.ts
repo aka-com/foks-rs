@@ -147,7 +147,7 @@ test('sameLocation compares full location properties', () => {
     false,
   );
   assert.equal(
-    sameLocation({ kind: 'settings' }, { kind: 'settings', section: 'about' }),
+    sameLocation({ kind: 'settings' }, { kind: 'settings', section: 'mac' }),
     false,
   );
   assert.equal(
@@ -245,11 +245,9 @@ const ROUND_TRIP: Location[] = [
   { kind: 'settings', section: 'servers' },
   { kind: 'settings', section: 'servers', profile: 'acme' },
   { kind: 'settings' },
-  { kind: 'settings', section: 'credentials' },
-  { kind: 'settings', section: 'security-keys' },
-  { kind: 'settings', section: 'notifications' },
-  { kind: 'settings', section: 'device' },
-  { kind: 'settings', section: 'about' },
+  { kind: 'settings', section: 'preferences' },
+  { kind: 'settings', section: 'preferences', store: 'acct:work' },
+  { kind: 'settings', section: 'mac' },
   { kind: 'first-run', step: 'who' },
 ];
 
@@ -361,7 +359,7 @@ test('the sections that became tabs keep their deep links', () => {
     new URL(
       locationHref('http://localhost/?state=devices&device=04a7', {
         kind: 'settings',
-        section: 'about',
+        section: 'mac',
       }),
     ).searchParams.get('device'),
     null,
@@ -371,25 +369,24 @@ test('the sections that became tabs keep their deep links', () => {
     kind: 'settings',
     section: 'servers',
   });
-  // `credentials` is the Account section People and Devices link into, and it
-  // carries the account those pages were addressed at.
-  assert.deepEqual(decodeLocation('?state=settings&section=credentials'), {
+  // Preferences carries the account the address named.
+  assert.deepEqual(decodeLocation('?state=settings&section=preferences'), {
     kind: 'settings',
-    section: 'credentials',
+    section: 'preferences',
   });
   assert.deepEqual(
-    decodeLocation('?state=settings&section=credentials&store=acct:work'),
-    { kind: 'settings', section: 'credentials', store: 'acct:work' },
+    decodeLocation('?state=settings&section=preferences&store=acct:work'),
+    { kind: 'settings', section: 'preferences', store: 'acct:work' },
   );
   // `profile` belongs to the Servers section alone, so it is dropped here.
   assert.deepEqual(
-    decodeLocation('?state=settings&section=credentials&profile=acme'),
-    { kind: 'settings', section: 'credentials' },
+    decodeLocation('?state=settings&section=preferences&profile=acme'),
+    { kind: 'settings', section: 'preferences' },
   );
   // Written back out, that address is the same address.
   for (const location of [
-    { kind: 'settings', section: 'credentials' },
-    { kind: 'settings', section: 'credentials', store: 'acct:work' },
+    { kind: 'settings', section: 'preferences' },
+    { kind: 'settings', section: 'preferences', store: 'acct:work' },
   ] as const) {
     const href = locationHref('http://localhost/?state=all', location);
     assert.deepEqual(decodeLocation(new URL(href).search), location, href);
@@ -400,20 +397,14 @@ test('the sections that became tabs keep their deep links', () => {
   });
 });
 
-test('the sub-navigation’s two new pages deep-link, and an address for a section that no longer exists lands on the tab', () => {
-  assert.deepEqual(decodeLocation('?state=settings&section=security-keys'), {
-    kind: 'settings',
-    section: 'security-keys',
-  });
-  assert.deepEqual(decodeLocation('?state=settings&section=device'), {
-    kind: 'settings',
-    section: 'device',
-  });
-  // Written back out, each is the same address.
-  for (const location of [
-    { kind: 'settings', section: 'security-keys' },
-    { kind: 'settings', section: 'device' },
-  ] as const) {
+test('the sub-navigation’s three pages deep-link, and an address for a section that no longer exists lands on the tab', () => {
+  for (const section of ['servers', 'preferences', 'mac'] as const) {
+    assert.deepEqual(decodeLocation(`?state=settings&section=${section}`), {
+      kind: 'settings',
+      section,
+    });
+    // Written back out, each is the same address.
+    const location = { kind: 'settings', section } as const;
     const href = locationHref('http://localhost/?state=all', location);
     assert.deepEqual(decodeLocation(new URL(href).search), location, href);
   }
@@ -611,12 +602,48 @@ test('settings scene aliases map to specific account stores', () => {
   });
   assert.deepEqual(decodeLocation('?state=settings-agent'), {
     kind: 'settings',
-    section: 'about',
+    section: 'mac',
+  });
+  assert.deepEqual(decodeLocation('?state=settings-about'), {
+    kind: 'settings',
+    section: 'mac',
   });
   assert.deepEqual(decodeLocation('?state=settings&section=agent'), {
     kind: 'settings',
-    section: 'about',
+    section: 'mac',
   });
+});
+
+test('the six former Settings sections resolve to the three pages that hold them', () => {
+  // Account (the passphrase rows) and Notifications are both Preferences;
+  // This device and About both described this Mac; Security keys was a list
+  // of links to the server pages, so it is Servers.
+  for (const [former, section] of [
+    ['credentials', 'preferences'],
+    ['notifications', 'preferences'],
+    ['device', 'mac'],
+    ['about', 'mac'],
+    ['agent', 'mac'],
+    ['security-keys', 'servers'],
+  ] as const) {
+    assert.deepEqual(
+      decodeLocation(`?state=settings&section=${former}`),
+      { kind: 'settings', section },
+      former,
+    );
+    // The account the address named comes with it.
+    assert.deepEqual(
+      decodeLocation(`?state=settings&section=${former}&store=acct:work`),
+      { kind: 'settings', section, store: 'acct:work' },
+      former,
+    );
+  }
+  // A `security-keys` address pointed at a server row, not at a server: its
+  // `profile` opens nothing, so the address lands on the Servers list.
+  assert.deepEqual(
+    decodeLocation('?state=settings&section=security-keys&profile=acme'),
+    { kind: 'settings', section: 'servers' },
+  );
 });
 
 test('group creation scenes default to engineering vault context', () => {
@@ -803,7 +830,7 @@ test('full scene state round-trips through URL serialization', () => {
     },
     {
       ...INITIAL_SCENE,
-      location: { kind: 'settings' as const, section: 'about' as const },
+      location: { kind: 'settings' as const, section: 'mac' as const },
     },
   ];
   for (const scene of scenes) {
@@ -872,7 +899,7 @@ test('account context follows objects and persists across cross-account tabs', a
     kind: 'devices',
     store: 'acct:work',
   });
-  navigation.navigate({ kind: 'settings', section: 'notifications' });
+  navigation.navigate({ kind: 'settings', section: 'preferences' });
   assert.equal(navigation.getAccount(), 'acct:work');
   navigation.navigate({ kind: 'chat', ref: 'team:household' });
   assert.equal(navigation.getAccount(), 'acct:personal');
@@ -900,7 +927,7 @@ test('rail tabs resume folders and sections without reopening item details', asy
   navigation.search('token');
   navigation.select({ store: 'acct:work', path: '/deploy/token' });
   navigation.navigateTab('settings');
-  navigation.navigate({ kind: 'settings', section: 'notifications' });
+  navigation.navigate({ kind: 'settings', section: 'preferences' });
   navigation.navigateTab('files');
   assert.deepEqual(navigation.getSnapshot().location, {
     kind: 'store',
@@ -913,7 +940,7 @@ test('rail tabs resume folders and sections without reopening item details', asy
   navigation.navigateTab('settings');
   assert.deepEqual(navigation.getSnapshot().location, {
     kind: 'settings',
-    section: 'notifications',
+    section: 'preferences',
     store: 'acct:work',
   });
   navigation.clearTabMemory();

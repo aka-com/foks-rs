@@ -1212,6 +1212,6 @@ test('channel info keeps channel overrides and links to device notification sett
   );
   assert.deepEqual(destinations.at(-1), {
     kind: 'settings',
-    section: 'notifications',
+    section: 'preferences',
   });
 });

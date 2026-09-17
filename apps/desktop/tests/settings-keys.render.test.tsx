@@ -839,7 +839,7 @@ test('the local device detail page disables device removal', async () => {
   await ui.act(async () => {
     ui.fireEvent.click(page.getByRole('button', { name: 'Open Settings' }));
   });
-  assert.deepEqual(chosen.at(-1), { kind: 'settings', section: 'about' });
+  assert.deepEqual(chosen.at(-1), { kind: 'settings', section: 'mac' });
   // The way back to the list is the topbar's chevron, which the shell draws
   // from the location alone.
   const { parentLocation } = await import('../src/location');

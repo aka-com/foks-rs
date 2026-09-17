@@ -1,8 +1,9 @@
 /**
- * The Settings tab as a sub-navigation of six pages: the `section=` address
- * that opens one of them, the `profile=` address that opens a server on the
- * Servers page without hiding the sub-navigation, and the Mac-wide reset that
- * composes the per-server one, now on the This device page.
+ * The Settings tab as a sub-navigation of three pages — Servers, Preferences,
+ * This Mac: the `section=` address that opens one of them, the `profile=`
+ * address that opens a server on the Servers page without hiding the
+ * sub-navigation, and the Mac-wide reset that composes the per-server one, on
+ * the This Mac page.
  */
 
 import assert from 'node:assert/strict';
@@ -133,14 +134,7 @@ test('the sub-navigation lists every section, and Servers opens first', async ()
     .within(nav)
     .getAllByRole('tab')
     .map((tab) => tab.textContent);
-  assert.deepEqual(tabs, [
-    'Servers',
-    'Account',
-    'Security keys',
-    'Notifications',
-    'This device',
-    'About',
-  ]);
+  assert.deepEqual(tabs, ['Servers', 'Preferences', 'This Mac']);
   assert.equal(
     ui
       .within(nav)
@@ -156,9 +150,12 @@ test('the sub-navigation lists every section, and Servers opens first', async ()
   assert.ok(rendered.getByRole('button', { name: 'Add a server…' }));
   assert.ok(rendered.getAllByText('Checked').length);
   assert.ok(rendered.getByText('Not verified'));
-  // Only one page is mounted at a time: the other five sections' own content
+  // Only one page is mounted at a time: the other two sections' own content
   // is not drawn behind Servers.
-  assert.equal(rendered.queryByRole('button', { name: 'Set…' }), null);
+  assert.equal(
+    rendered.queryByRole('button', { name: 'Change passphrase…' }),
+    null,
+  );
   assert.equal(rendered.queryByRole('button', { name: 'Lock now' }), null);
   assert.equal(rendered.queryByText('Danger zone'), null);
 });
@@ -170,17 +167,14 @@ test('choosing a sub-navigation section replaces the page, dropping any open ser
     onNavigate: (location) => chosen.push(location),
   });
 
-  ui.fireEvent.click(rendered.getByRole('tab', { name: 'This device' }));
-  assert.deepEqual(chosen.at(-1), { kind: 'settings', section: 'device' });
+  ui.fireEvent.click(rendered.getByRole('tab', { name: 'This Mac' }));
+  assert.deepEqual(chosen.at(-1), { kind: 'settings', section: 'mac' });
 });
 
 test('a section address opens that page, each with the sub-navigation beside it', async () => {
   for (const [section, heading] of [
-    ['credentials', 'Account'],
-    ['security-keys', 'Security keys'],
-    ['notifications', 'Notifications'],
-    ['device', 'This device'],
-    ['about', 'About'],
+    ['preferences', 'Preferences'],
+    ['mac', 'This Mac'],
   ] as const) {
     ui.cleanup();
     const rendered = await renderSettings(await fixture(), {
@@ -200,31 +194,64 @@ test('a section address opens that page, each with the sub-navigation beside it'
   }
 });
 
-test('Settings links to profile-scoped security key management', async () => {
-  const chosen: Location[] = [];
-  const rendered = await renderSettings(await fixture(), {
-    where: { section: 'security-keys' },
-    onNavigate: (location) => chosen.push(location),
+test('Preferences holds one passphrase row per account and the desktop alert preferences', async () => {
+  const snapshot = await fixture();
+  const rendered = await renderSettings(snapshot, {
+    where: { section: 'preferences' },
   });
-  ui.fireEvent.click(
-    rendered.getAllByRole('button', { name: 'Open security keys' })[0],
+
+  const main = rendered.container.querySelector('.settings-main');
+  assert.ok(main);
+  // The page opens on a section label, with the first-label margin rule's
+  // hook: it is `.settings-main`'s first child.
+  assert.equal(main.firstElementChild?.className, 'sec');
+  assert.deepEqual(
+    [...main.querySelectorAll(':scope > .sec')].map(
+      (label) => label.textContent,
+    ),
+    ['Passphrase', 'Desktop alerts'],
   );
-  assert.deepEqual(chosen.at(-1), {
-    kind: 'settings',
-    section: 'servers',
-    profile: 'personal',
+  // One button per account; the sheet's own control switches its mode.
+  const accounts = snapshot.stores.filter((store) => store.kind === 'account');
+  const buttons = rendered.getAllByRole('button', {
+    name: 'Change passphrase…',
   });
-  assert.equal(rendered.queryByRole('button', { name: 'Change PIN…' }), null);
+  assert.equal(buttons.length, accounts.length);
+  assert.equal(rendered.queryByRole('button', { name: 'Set…' }), null);
+  assert.equal(rendered.queryByRole('button', { name: 'Verify…' }), null);
+  // A row with no label reserves no label column: the account mark is the
+  // row's first child.
+  const rows = [...main.querySelectorAll('.settings-inset .fr.devrow')];
+  assert.equal(rows.length, accounts.length);
+  for (const row of rows) {
+    assert.equal(row.querySelector('.k'), null);
+    assert.equal(row.firstElementChild?.className, 'v');
+  }
+  assert.ok(
+    rendered.getByText(
+      "Set, change or verify an account's passphrase with its server.",
+    ),
+  );
+  assert.ok(
+    rendered.getByRole('checkbox', {
+      name: 'Enable desktop alerts on this device',
+    }),
+  );
 });
 
-test('an address naming an account this device lost does not claim facts about its keys', async () => {
-  const rendered = await renderSettings(await fixture(), {
-    where: { section: 'security-keys', store: 'acct:nope' },
-  });
+test('a Preferences page with no accounts says so', async () => {
+  const snapshot = await fixture();
+  const rendered = await renderSettings(
+    {
+      ...snapshot,
+      stores: snapshot.stores.filter((store) => store.kind !== 'account'),
+    },
+    { where: { section: 'preferences' } },
+  );
 
-  assert.ok(rendered.getByText('Account no longer available'));
+  assert.ok(rendered.getByText('No accounts on this device.'));
   assert.equal(
-    rendered.queryByText('No security key is enrolled on this account.'),
+    rendered.queryByRole('button', { name: 'Change passphrase…' }),
     null,
   );
 });
@@ -242,28 +269,20 @@ test('a server address keeps the sub-navigation on screen, Servers still selecte
       .getAttribute('aria-selected'),
     'true',
   );
-  // The other five sections are still one click away, not hidden behind the
+  // The other two sections are still one click away, not hidden behind the
   // server the reader opened.
-  assert.ok(ui.within(nav).getByRole('tab', { name: 'This device' }));
+  assert.ok(ui.within(nav).getByRole('tab', { name: 'This Mac' }));
 });
 
-test('a Security keys address with no servers on this device says so', async () => {
-  const snapshot = await fixture();
-  const rendered = await renderSettings(
-    { ...snapshot, servers: [] },
-    { where: { section: 'security-keys' } },
-  );
-
-  assert.ok(rendered.getByText('No servers on this device yet.'));
-});
-
-test('the passphrase sheet opens in the mode its row names, Verify included', async () => {
+test('the passphrase sheet defaults to Change and provides Set and Verify', async () => {
   const rendered = await renderSettings(await fixture(), {
-    where: { section: 'credentials' },
+    where: { section: 'preferences' },
   });
 
   await ui.act(async () => {
-    ui.fireEvent.click(rendered.getAllByRole('button', { name: 'Verify…' })[0]);
+    ui.fireEvent.click(
+      rendered.getAllByRole('button', { name: 'Change passphrase…' })[0],
+    );
   });
   const dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
   assert.equal(
@@ -272,10 +291,38 @@ test('the passphrase sheet opens in the mode its row names, Verify included', as
   );
   assert.equal(dialog.querySelector('.hd small'), null);
   assert.ok(
+    ui.within(dialog).getByRole('button', { name: 'Change passphrase' }),
+  );
+  assert.ok(ui.within(dialog).getByLabelText('Confirm'));
+  // The sheet's segmented control holds the other two modes.
+  const modes = ui.within(dialog).getByRole('group', {
+    name: 'Passphrase action',
+  });
+  assert.deepEqual(
+    ui
+      .within(modes)
+      .getAllByRole('button')
+      .map((mode) => [mode.textContent, mode.getAttribute('aria-pressed')]),
+    [
+      ['Set', 'false'],
+      ['Change', 'true'],
+      ['Verify', 'false'],
+    ],
+  );
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(modes).getByRole('button', { name: 'Verify' }),
+    );
+  });
+  assert.ok(
     ui.within(dialog).getByRole('button', { name: 'Verify passphrase' }),
   );
   // Verify asks the server about one passphrase, so there is nothing to confirm.
   assert.equal(ui.within(dialog).queryByLabelText('Confirm'), null);
+  await ui.act(async () => {
+    ui.fireEvent.click(ui.within(modes).getByRole('button', { name: 'Set' }));
+  });
+  assert.ok(ui.within(dialog).getByRole('button', { name: 'Set passphrase' }));
 });
 
 test('a profile address opens that server instead of the page', async () => {
@@ -300,16 +347,16 @@ test('a profile address opens that server instead of the page', async () => {
   // danger zone keeps two rows.
   assert.ok(rendered.getByRole('button', { name: 'Remove local data…' }));
   assert.ok(rendered.getByRole('button', { name: 'Erase and reset…' }));
-  // The sub-navigation stays on screen — "This device" is one of its labels
-  // now — but that page's own content is not drawn behind a server: the
-  // danger zone here is this server's, and the Mac-wide reset is not on it.
+  // The sub-navigation stays on screen — "This Mac" is one of its labels —
+  // but that page's own content is not drawn behind a server: the danger
+  // zone here is this server's, and the Mac-wide reset is not on it.
   assert.ok(
     ui
       .within(rendered.getByRole('navigation', { name: 'Settings sections' }))
-      .getByRole('tab', { name: 'This device' }),
+      .getByRole('tab', { name: 'This Mac' }),
   );
   assert.equal(
-    rendered.queryByRole('button', { name: 'Reset this device…' }),
+    rendered.queryByRole('button', { name: 'Reset this Mac…' }),
     null,
   );
   assert.equal(rendered.queryByRole('button', { name: 'Lock now' }), null);
@@ -500,14 +547,53 @@ test('a lapsed server can be checked from its row in the list', async () => {
   assert.ok(rendered.getAllByText('Check-in expired').length);
 });
 
-test('Reset this device asks for one typed profile name per server', async () => {
+test('This Mac displays application, agent, and data sections above local reset', async () => {
   const rendered = await renderSettings(await fixture(), {
-    where: { section: 'device' },
+    where: { section: 'mac' },
+  });
+
+  const main = rendered.container.querySelector('.settings-main');
+  assert.ok(main);
+  assert.deepEqual(
+    [...main.querySelectorAll(':scope > .sec')].map(
+      (label) => label.textContent,
+    ),
+    ['Application', 'Agent', 'FOKS data', 'Danger zone'],
+  );
+  assert.ok(rendered.getByText(/^FOKS Desktop /));
+  assert.ok(rendered.getByRole('button', { name: 'Lock now' }));
+  assert.ok(rendered.getByRole('button', { name: 'Copy' }));
+  assert.ok(rendered.getByRole('button', { name: 'Export…' }));
+  assert.ok(rendered.getByRole('button', { name: 'Import…' }));
+  assert.ok(rendered.getByRole('button', { name: 'Verify online' }));
+  assert.ok(rendered.getByRole('button', { name: 'Choose folder…' }));
+  assert.ok(rendered.getByRole('button', { name: 'Reset this Mac…' }));
+  assert.ok(
+    rendered.getByText(/To reset one server, select it in the Servers list/),
+  );
+  // The Status row is a value over a sentence: its label reads against the
+  // first line, which a `.middle` inset would centre away from.
+  const status = rendered.getByText('Status').closest('.fr');
+  assert.ok(status);
+  assert.ok(status.querySelector('.v small'));
+  const agentInset = status.closest('.settings-inset');
+  assert.ok(agentInset);
+  assert.equal(agentInset.classList.contains('middle'), false);
+  // The one-line Socket row in the same inset centres itself instead.
+  const socket = rendered.getByText('Socket').closest('.fr');
+  assert.ok(socket);
+  assert.equal(socket.classList.contains('line'), true);
+  assert.equal(socket.querySelector('.v small'), null);
+});
+
+test('Reset this Mac asks for one typed profile name per server', async () => {
+  const rendered = await renderSettings(await fixture(), {
+    where: { section: 'mac' },
   });
 
   await ui.act(async () => {
     ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Reset this device…' }),
+      rendered.getByRole('button', { name: 'Reset this Mac…' }),
     );
   });
   const dialog = await ui.waitFor(() => rendered.getByRole('alertdialog'));
@@ -516,9 +602,7 @@ test('Reset this device asks for one typed profile name per server', async () =>
   });
   const confirms = ui.within(dialog).getAllByPlaceholderText(/to confirm$/);
   assert.equal(confirms.length, 3);
-  const run = ui
-    .within(dialog)
-    .getByRole('button', { name: 'Reset this device' });
+  const run = ui.within(dialog).getByRole('button', { name: 'Reset this Mac' });
   assert.equal(run.hasAttribute('disabled'), true);
 
   for (const [index, profile] of ['personal', 'acme', 'partner'].entries())
@@ -535,7 +619,7 @@ test('the reset consumes each profile’s single-use confirmation token', async 
   const issued = new Map<string, string>();
   const spent: [string, string, string][] = [];
   const rendered = await renderSettings(await fixture(), {
-    where: { section: 'device' },
+    where: { section: 'mac' },
     decorate: (bridge) => ({
       ...bridge,
       describeReset: async (profile) => {
@@ -552,7 +636,7 @@ test('the reset consumes each profile’s single-use confirmation token', async 
 
   await ui.act(async () => {
     ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Reset this device…' }),
+      rendered.getByRole('button', { name: 'Reset this Mac…' }),
     );
   });
   const dialog = await ui.waitFor(() => rendered.getByRole('alertdialog'));
@@ -566,7 +650,7 @@ test('the reset consumes each profile’s single-use confirmation token', async 
     });
   await ui.act(async () => {
     ui.fireEvent.click(
-      ui.within(dialog).getByRole('button', { name: 'Reset this device' }),
+      ui.within(dialog).getByRole('button', { name: 'Reset this Mac' }),
     );
   });
 
@@ -585,7 +669,7 @@ test('a reset that fails part way reloads every preview', async () => {
   let previews = 0;
   const reported: unknown[] = [];
   const rendered = await renderSettings(await fixture(), {
-    where: { section: 'device' },
+    where: { section: 'mac' },
     decorate: (bridge) => ({
       ...bridge,
       describeReset: async (profile) => {
@@ -603,7 +687,7 @@ test('a reset that fails part way reloads every preview', async () => {
 
   await ui.act(async () => {
     ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Reset this device…' }),
+      rendered.getByRole('button', { name: 'Reset this Mac…' }),
     );
   });
   const dialog = await ui.waitFor(() => rendered.getByRole('alertdialog'));
@@ -618,7 +702,7 @@ test('a reset that fails part way reloads every preview', async () => {
     });
   await ui.act(async () => {
     ui.fireEvent.click(
-      ui.within(dialog).getByRole('button', { name: 'Reset this device' }),
+      ui.within(dialog).getByRole('button', { name: 'Reset this Mac' }),
     );
   });
 
@@ -635,7 +719,7 @@ test('a reset that fails part way reloads every preview', async () => {
 test('device notification preferences are reachable without a channel and recover denied permission', async () => {
   let configurations = 0;
   const rendered = await renderSettings(await fixture(), {
-    where: { section: 'notifications' },
+    where: { section: 'preferences' },
     decorate: (base) => ({
       ...base,
       chatLocal: async (action) => {
@@ -651,9 +735,9 @@ test('device notification preferences are reachable without a channel and recove
       },
     }),
   });
-  // Notifications is the sub-navigation's own page now, not an anchor
+  // Desktop alerts is a section of the Preferences page, not an anchor
   // scrolled to inside a longer one, so nothing forces focus onto it.
-  assert.ok(rendered.getByRole('tabpanel', { name: 'Notifications' }));
+  assert.ok(rendered.getByRole('tabpanel', { name: 'Preferences' }));
   const enable = rendered.getByRole('checkbox', {
     name: 'Enable desktop alerts on this device',
   }) as HTMLInputElement;

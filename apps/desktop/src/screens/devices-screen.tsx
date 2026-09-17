@@ -1182,7 +1182,7 @@ function DeviceDetail({
                     <Button
                       size="sm"
                       onClick={() =>
-                        onNavigate({ kind: 'settings', section: 'about' })
+                        onNavigate({ kind: 'settings', section: 'mac' })
                       }
                     >
                       Open Settings
@@ -1190,8 +1190,9 @@ function DeviceDetail({
                   }
                 >
                   <small>
-                    Remove this device from another device. Reset this device,
-                    in Settings, erases everything it holds for every server.
+                    To remove this Mac, use another enrolled device. The Reset
+                    this Mac option in Settings erases all local data and
+                    credentials across all servers.
                   </small>
                 </InsetRow>
               ) : source.kind === 'device' ? (

@@ -243,6 +243,16 @@ body {
   overflow: auto;
 }
 
+/* Settings inset alignment */
+.settings-inset .fr.line {
+  align-items: center;
+}
+
+/* Inset footnotes */
+.settings-main .fn + .sec {
+  margin-top: 18px;
+}
+
 /* Data and roster tables */
 .roster {
   max-width: 880px;

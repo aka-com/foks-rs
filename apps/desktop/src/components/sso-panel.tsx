@@ -317,9 +317,7 @@ export function SsoPanel({
   // When the primary action renders in the footer, this row renders only when
   // secondary actions are present.
   const showActions = !primarySlot || login || progress !== null;
-  const heading = login
-    ? 'Organization sign-in'
-    : 'Sign up with your organization';
+  const heading = login ? 'Sign in via SSO' : 'Sign up with your organization';
   const linkageButton = login ? (
     <Button
       disabled={blocked}

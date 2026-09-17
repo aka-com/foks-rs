@@ -235,7 +235,7 @@ export function GoProfileConnectSheet({
     <SheetDialog
       onClose={onClose}
       dismissible={!busy}
-      title="Connect from FOKS CLI"
+      title="Import from FOKS CLI"
       footer={
         <>
           <Button disabled={busy} onClick={onClose}>
