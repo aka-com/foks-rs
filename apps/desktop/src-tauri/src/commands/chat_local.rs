@@ -24,6 +24,27 @@ pub struct Settings {
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Action {
+    LoadIntent {
+        #[serde(rename = "storeId")]
+        store_id: String,
+        scope: ChatScope,
+        channel: String,
+    },
+    SaveIntent {
+        #[serde(rename = "storeId")]
+        store_id: String,
+        scope: ChatScope,
+        channel: String,
+        submission: String,
+        text: String,
+    },
+    ClearIntent {
+        #[serde(rename = "storeId")]
+        store_id: String,
+        scope: ChatScope,
+        channel: String,
+        submission: String,
+    },
     Begin,
     End {
         epoch: String,
@@ -58,6 +79,17 @@ pub struct Session {
     pub available: bool,
     pub settings: Settings,
     pub activation: Option<Route>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intent: Option<IntentReply>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntentReply {
+    pub store_id: String,
+    pub scope: ChatScope,
+    pub channel: String,
+    #[serde(flatten)]
+    pub intent: foks_client_app::LocalChatIntent,
 }
 #[derive(Default)]
 pub struct LocalState(pub Mutex<Inner>);
@@ -70,6 +102,7 @@ pub struct Inner {
     routes: BTreeMap<String, Route>,
     pending: Option<Route>,
     pub scopes: BTreeMap<String, (ChatScope, u64)>,
+    intent_scopes: BTreeMap<String, (ChatScope, u64)>,
 }
 fn error(message: &str) -> AgentError {
     AgentError::new("chat-notification", message, false)
@@ -111,6 +144,22 @@ fn path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, AgentError> {
             .map_err(|_| error("Could not protect local settings."))?;
     }
     Ok(dir.join("notifications.json"))
+}
+fn intent_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, AgentError> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|_| error("Local chat storage path unavailable."))?
+        .join("chat-intents"))
+}
+fn intent_error(error: foks_client_app::Error) -> AgentError {
+    AgentError::new("chat-intent", error.to_string(), false)
+}
+fn intent_binding(scope: &ChatScope, channel: &str) -> Result<Vec<u8>, AgentError> {
+    if !foks_agent_proto::chat::valid_chat_id(channel) {
+        return Err(error("Invalid chat intent channel."));
+    }
+    serde_json::to_vec(&(scope, channel)).map_err(|_| error("Invalid chat intent binding."))
 }
 fn load(path: &std::path::Path) -> Result<Settings, AgentError> {
     let mut options = std::fs::OpenOptions::new();
@@ -178,6 +227,7 @@ impl Inner {
             epoch: self.epoch.clone(),
             available: platform::available(),
             activation: None,
+            intent: None,
             settings: self.settings.clone(),
         }
     }
@@ -221,7 +271,71 @@ pub async fn chat_local(
         inner.settings = load(&path(app)?)?;
         inner.loaded = true;
     }
+    if inner.epoch.is_empty() {
+        inner.epoch = epoch()?;
+    }
     match action {
+        Action::LoadIntent {
+            store_id,
+            scope,
+            channel,
+        } => {
+            verify_intent_scope(&inner, &store_id, &scope, generation)?;
+            let binding = intent_binding(&scope, &channel)?;
+            let mut store = foks_client_app::LocalChatIntentStore::open(&intent_path(app)?)
+                .map_err(intent_error)?;
+            let intent = store
+                .load(&scope.store.profile, &binding)
+                .map_err(intent_error)?;
+            crate::applock::require_unlocked_generation(app, generation)?;
+            let mut result = inner.session();
+            result.intent = intent.map(|intent| IntentReply {
+                store_id,
+                scope,
+                channel,
+                intent,
+            });
+            return Ok(result);
+        }
+        Action::SaveIntent {
+            store_id,
+            scope,
+            channel,
+            submission,
+            text,
+        } => {
+            let intent = foks_client_app::LocalChatIntent { submission, text };
+            verify_intent_scope(&inner, &store_id, &scope, generation)?;
+            let binding = intent_binding(&scope, &channel)?;
+            let mut store = foks_client_app::LocalChatIntentStore::open(&intent_path(app)?)
+                .map_err(intent_error)?;
+            store
+                .save(&scope.store.profile, &binding, &intent)
+                .map_err(intent_error)?;
+            crate::applock::require_unlocked_generation(app, generation)?;
+            let mut result = inner.session();
+            result.intent = Some(IntentReply {
+                store_id,
+                scope,
+                channel,
+                intent,
+            });
+            return Ok(result);
+        }
+        Action::ClearIntent {
+            store_id,
+            scope,
+            channel,
+            submission,
+        } => {
+            verify_intent_scope(&inner, &store_id, &scope, generation)?;
+            let binding = intent_binding(&scope, &channel)?;
+            foks_client_app::LocalChatIntentStore::open(&intent_path(app)?)
+                .map_err(intent_error)?
+                .clear(&scope.store.profile, &binding, &submission)
+                .map_err(intent_error)?;
+            crate::applock::require_unlocked_generation(app, generation)?;
+        }
         Action::Clear { epoch } => {
             if epoch == inner.epoch {
                 inner.routes.clear();
@@ -349,6 +463,38 @@ mod tests {
         assert!(alert_text(5, true).contains("could not be checked"));
     }
     #[test]
+    fn local_intents_bind_the_verified_identity_and_unlocked_lifetime_not_catalog_freshness() {
+        let scope = ChatScope {
+            host: "02".to_owned() + &"ab".repeat(32),
+            actor: "01".to_owned() + &"ab".repeat(32),
+            store: foks_agent_proto::TeamStoreRef {
+                profile: "local".into(),
+                account_alias: "owner".into(),
+                team_alias: "team".into(),
+                team_id: "03".to_owned() + &"ab".repeat(32),
+            },
+        };
+        let mut inner = Inner::default();
+        inner
+            .intent_scopes
+            .insert("store".into(), (scope.clone(), 7));
+        assert!(verify_intent_scope(&inner, "store", &scope, 7).is_ok());
+        assert!(inner.scopes.is_empty());
+        assert!(verify_intent_scope(&inner, "store", &scope, 8).is_err());
+        assert!(verify_intent_scope(&inner, "other", &scope, 7).is_err());
+        let mut replacement = scope.clone();
+        replacement.actor = "01".to_owned() + &"cd".repeat(32);
+        assert!(verify_intent_scope(&inner, "store", &replacement, 7).is_err());
+        assert_ne!(
+            intent_binding(&scope, &"ab".repeat(16)).unwrap(),
+            intent_binding(&replacement, &"ab".repeat(16)).unwrap()
+        );
+        assert!(intent_binding(&scope, "bad").is_err());
+        inner.intent_scopes.clear();
+        assert!(verify_intent_scope(&inner, "store", &scope, 7).is_err());
+    }
+
+    #[test]
     fn settings_are_bounded_private_and_survive_reopen() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("s");
@@ -371,6 +517,9 @@ mod tests {
 }
 
 pub fn remember(app: &tauri::AppHandle, id: &str, scope: &ChatScope, generation: u64) {
+    let Ok(unlocked) = crate::applock::unlocked_generation(app) else {
+        return;
+    };
     if let Some(local) = app.try_state::<LocalState>() {
         if let Ok(mut inner) = local.0.lock() {
             if inner.scopes.len() >= 4096 && !inner.scopes.contains_key(id) {
@@ -379,8 +528,27 @@ pub fn remember(app: &tauri::AppHandle, id: &str, scope: &ChatScope, generation:
             inner
                 .scopes
                 .insert(id.to_owned(), (scope.clone(), generation));
+            if inner.intent_scopes.len() >= 4096 && !inner.intent_scopes.contains_key(id) {
+                inner.intent_scopes.clear();
+            }
+            inner
+                .intent_scopes
+                .insert(id.to_owned(), (scope.clone(), unlocked));
         }
     }
+}
+fn verify_intent_scope(
+    inner: &Inner,
+    id: &str,
+    scope: &ChatScope,
+    generation: u64,
+) -> Result<(), AgentError> {
+    if inner.intent_scopes.get(id) != Some(&(scope.clone(), generation)) {
+        return Err(error(
+            "Open this chat in the current unlocked session before accessing saved messages.",
+        ));
+    }
+    Ok(())
 }
 fn verify_scope(
     state: &AppState,
@@ -412,6 +580,16 @@ pub fn forget_profile(app: &tauri::AppHandle, profile: &str) -> Result<(), Agent
     } else {
         load(&path)?
     };
+    let intents = intent_path(app)?;
+    if intents
+        .try_exists()
+        .map_err(|_| error("Could not inspect saved chat intents."))?
+    {
+        foks_client_app::LocalChatIntentStore::open(&intents)
+            .map_err(intent_error)?
+            .forget_profile(profile)
+            .map_err(intent_error)?;
+    }
     let prefix = format!("{}/", digest(&[profile]));
     settings
         .overrides
@@ -424,6 +602,9 @@ pub fn forget_profile(app: &tauri::AppHandle, profile: &str) -> Result<(), Agent
     platform::clear();
     inner
         .scopes
+        .retain(|_, (scope, _)| scope.store.profile != profile);
+    inner
+        .intent_scopes
         .retain(|_, (scope, _)| scope.store.profile != profile);
     Ok(())
 }
@@ -477,6 +658,7 @@ pub fn conceal(app: &tauri::AppHandle) {
     let local = app.state::<LocalState>();
     if let Ok(mut inner) = local.0.lock() {
         inner.generation = None;
+        inner.intent_scopes.clear();
     }
     platform::clear();
 }

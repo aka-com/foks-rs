@@ -85,6 +85,7 @@ export function ChatScreen({
     blockedChannels,
     channelRevisions,
     actor,
+    scope,
     request,
     refresh,
     refreshPending,
@@ -311,6 +312,7 @@ export function ChatScreen({
             infoOpen={infoOpen}
             infoRef={infoRef}
             actor={actor}
+            scope={scope}
             senderNames={senderNames}
             request={guardedRequest}
             refreshPending={guardedRefreshPending}

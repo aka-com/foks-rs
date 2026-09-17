@@ -1,17 +1,31 @@
-import { decodeChatScope } from '../chat-contract';
+import { CHAT_TEXT_BYTES, decodeChatScope } from '../chat-contract';
 import type { ChatScope } from '../chat-contract';
 export interface LocalSettings {
   enabled: boolean;
   previews: boolean;
   overrides: Record<string, boolean>;
 }
+export interface SavedChatIntent {
+  storeId: string;
+  scope: ChatScope;
+  channel: string;
+  submission: string;
+  text: string;
+}
 export interface LocalSession {
+  intent?: SavedChatIntent;
   epoch: string;
   available: boolean;
   settings: LocalSettings;
   activation?: { storeId: string; scope: ChatScope; channel: string };
 }
 export type LocalAction =
+  | ({ action: 'save-intent' } & SavedChatIntent)
+  | ({ action: 'load-intent' } & Pick<
+      SavedChatIntent,
+      'storeId' | 'scope' | 'channel'
+    >)
+  | ({ action: 'clear-intent' } & Omit<SavedChatIntent, 'text'>)
   | { action: 'begin' }
   | { action: 'take-activation' }
   | { action: 'clear'; epoch: string }
@@ -84,7 +98,32 @@ export function decodeLocalSession(value: unknown): LocalSession {
       channel: a.channel,
     };
   }
+  let intent: SavedChatIntent | undefined;
+  if (v.intent !== undefined && v.intent !== null) {
+    if (typeof v.intent !== 'object') return bad();
+    const i = v.intent as Record<string, unknown>;
+    if (
+      typeof i.storeId !== 'string' ||
+      i.storeId.length > 4096 ||
+      typeof i.channel !== 'string' ||
+      !/^[0-9a-f]{32}$/.test(i.channel) ||
+      typeof i.submission !== 'string' ||
+      !/^[0-9a-f]{32}$/.test(i.submission) ||
+      typeof i.text !== 'string' ||
+      !i.text.length ||
+      new TextEncoder().encode(i.text).length > CHAT_TEXT_BYTES
+    )
+      return bad();
+    intent = {
+      storeId: i.storeId,
+      scope: decodeChatScope(i.scope, i.storeId),
+      channel: i.channel,
+      submission: i.submission,
+      text: i.text,
+    };
+  }
   return {
+    ...(intent ? { intent } : {}),
     ...(activation ? { activation } : {}),
     epoch: v.epoch,
     available: v.available,

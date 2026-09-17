@@ -337,6 +337,7 @@ export function useChatConversation(
     blockedChannels: inbox?.blockedChannels ?? EMPTY_BLOCKED,
     revision: inbox?.revision ?? 0,
     channelRevisions: inbox?.channelRefreshRevisions ?? inbox?.channelRevisions,
+    scope: inbox?.scope ?? null,
     actor: inbox?.scope?.actor ?? null,
     request,
     refresh,

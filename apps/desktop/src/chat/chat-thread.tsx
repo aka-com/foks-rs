@@ -7,6 +7,7 @@ import type { ChatAction, ChatChannel, ChatReply } from '../chat-contract';
 import { plural, shortId } from '../model';
 import { failure } from './actions';
 import { useChatComposer, TEXT_LIMIT_LABEL } from './use-chat-composer';
+import { chatIntentPersistence } from './intent';
 import { useChatReadIntent } from './use-chat-read-intent';
 import { useChatViewport } from './use-chat-viewport';
 import { useChatHistory } from './use-chat-history';
@@ -24,6 +25,7 @@ export function ChatThread({
   bridge,
   storeId,
   actor,
+  scope,
   senderNames,
   request,
   refreshPending,
@@ -66,6 +68,7 @@ export function ChatThread({
   infoRef?: Ref<HTMLButtonElement>;
   pending: import('./operations').TrackedOperation[];
   actor: string | null;
+  scope: import('../chat-contract').ChatScope | null;
   senderNames: Map<string, string>;
   request: (a: ChatAction) => Promise<ChatReply>;
   refreshPending: () => Promise<void>;
@@ -102,7 +105,19 @@ export function ChatThread({
     overLimit,
     nearLimit,
     recovering,
-  } = useChatComposer(channel, request, refreshPending, load, drafts, storeId);
+    intentLoading,
+    intentLoadError,
+  } = useChatComposer(
+    channel,
+    request,
+    refreshPending,
+    load,
+    drafts,
+    storeId,
+    scope
+      ? chatIntentPersistence(bridge, storeId, scope, channel.id)
+      : undefined,
+  );
   const hintId = useId();
   const newFrom = useChatReadIntent(
     channel.id,
@@ -345,7 +360,9 @@ export function ChatThread({
                 aria-label="Message"
                 aria-describedby={hintId}
                 value={draft}
-                disabled={sending || recovering}
+                disabled={
+                  sending || recovering || intentLoading || intentLoadError
+                }
                 placeholder={`Message ${title}`}
                 rows={2}
                 onChange={(e) => setDraft(e.target.value)}
@@ -363,9 +380,11 @@ export function ChatThread({
               />
               <div className="chat-composer-row">
                 <small id={hintId}>
-                  {recovering
-                    ? 'The reply to this message was lost. Recover it to send the same text once.'
-                    : 'Enter to send · Shift+Enter for a new line'}
+                  {intentLoading
+                    ? 'Checking saved messages on this device…'
+                    : recovering
+                      ? 'Recover this saved message’s preparation before changing its text.'
+                      : 'Enter to send · Shift+Enter for a new line'}
                 </small>
                 {nearLimit && (
                   <small
@@ -379,14 +398,19 @@ export function ChatThread({
                   variant="primary"
                   type="submit"
                   disabled={
-                    sending || overLimit || (!draft.trim() && !recovering)
+                    sending ||
+                    intentLoading ||
+                    overLimit ||
+                    (!draft.trim() && !recovering && !intentLoadError)
                   }
                 >
                   {sending
                     ? 'Sending…'
-                    : recovering
-                      ? 'Recover preparation'
-                      : 'Send'}
+                    : intentLoadError
+                      ? 'Retry local recovery'
+                      : recovering
+                        ? 'Recover preparation'
+                        : 'Send'}
                 </Button>
               </div>
               {/* Only the markup the thread actually renders is advertised. */}

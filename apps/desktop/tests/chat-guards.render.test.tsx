@@ -396,6 +396,87 @@ test('a draft is dropped when its channel stops being listed', async () => {
   assert.equal(composer().value, '');
 });
 
+test('navigation still warns until local message intent is durably saved', async () => {
+  let preparations = 0;
+  const { store, refusals } = await setup({
+    override: (base) => ({
+      ...base,
+      chatLocal: async (action) => {
+        if (String(action.action) === 'save-intent')
+          return new Promise(() => {});
+        return base.chatLocal(action);
+      },
+      chat: async (storeId, action, view) => {
+        if (action.action === 'prepare-message') {
+          preparations++;
+          return new Promise<ChatReply>(() => {});
+        }
+        return base.chat(storeId, action, view);
+      },
+    }),
+  });
+  write('keep this until saved');
+  await ui.act(async () => {
+    ui.fireEvent.keyDown(composer(), { key: 'Enter' });
+    await Promise.resolve();
+  });
+  await ui.screen.findByRole('button', { name: 'Sending…' });
+  await leave(store);
+  assert.deepEqual(store.getSnapshot().location, IN_CHAT);
+  assert.deepEqual(refusals, [
+    'Wait for the message to be saved on this device.',
+  ]);
+  assert.equal(
+    preparations,
+    0,
+    'network preparation must follow local persistence',
+  );
+});
+
+test('a lost preparation reply restores the same saved submission after leaving chat', async () => {
+  const submissions: string[] = [];
+  let lost = true;
+  let attempts = 0;
+  const { store } = await setup({
+    override: (base) => ({
+      ...base,
+      chat: async (storeId, action, view) => {
+        if (action.action === 'prepare-message') {
+          submissions.push(action.submission);
+          const reply = await base.chat(storeId, action, view);
+          if (lost) {
+            lost = false;
+            throw {
+              code: 'ambiguous',
+              message: 'Preparation reply lost',
+              ambiguous: true,
+              retryable: false,
+              fatal: false,
+            };
+          }
+          return reply;
+        }
+        if (action.action === 'attempt') attempts++;
+        return base.chat(storeId, action, view);
+      },
+    }),
+  });
+  write('durable before delivery');
+  await click(ui.screen.getByRole('button', { name: 'Send' }));
+  await ui.screen.findByRole('button', { name: 'Recover preparation' });
+  await leave(store);
+  assert.equal(dialog(), null);
+  assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
+  await leave(store, IN_CHAT);
+  await ui.screen.findByRole('button', { name: 'Recover preparation' });
+  assert.equal(composer().value, 'durable before delivery');
+  await click(ui.screen.getByRole('button', { name: 'Recover preparation' }));
+  await ui.waitFor(() => assert.equal(composer().value, ''));
+  assert.equal(submissions.length, 2);
+  assert.equal(submissions[0], submissions[1]);
+  assert.equal(attempts, 1);
+});
+
 test('a message being sent is neither prompted about nor refused', async () => {
   const { store, refusals } = await setup({
     override: (base) => ({

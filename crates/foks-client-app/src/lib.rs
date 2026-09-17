@@ -6,6 +6,8 @@
 
 #![forbid(unsafe_code)]
 
+mod chat_intent;
+pub use chat_intent::{LocalChatIntent, LocalChatIntentStore};
 mod adapter_maintenance;
 pub use adapter_maintenance::{AdapterMaintenanceCursor, AdapterMaintenanceReport};
 mod adapter_clock;
