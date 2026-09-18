@@ -26,7 +26,7 @@ import { useSheetGuard } from '../navigation-guard';
 import {
   plural,
   serverAvailability,
-  serverDisplayName,
+  serverLocalAlias,
   shortId,
   storeAttentionState,
   storeDescription,
@@ -292,7 +292,7 @@ export function ServersSection({
         onReset={async () => {
           setSheet(null);
           await onRefresh(
-            `${serverDisplayName(selected)} has been reset. Verify the server before reconnecting.`,
+            `${serverLocalAlias(selected)} has been reset. Verify the server before reconnecting.`,
           );
         }}
         onError={(error) => void onMutationError(error)}
@@ -316,7 +316,7 @@ export function ServersSection({
         onForgot={async () => {
           setSheet(null);
           onNavigate(servers());
-          await onRefresh(`Removed ${serverDisplayName(selected)}`);
+          await onRefresh(`Removed ${serverLocalAlias(selected)}`);
         }}
         onError={(error) => void onMutationError(error)}
       />
@@ -507,10 +507,9 @@ function ServerRow({
       <ServerMark state={state} />
       <span className="t">
         <b>
-          <span>{serverDisplayName(server)}</span>
-          {server.label ? <em>{server.name}</em> : null}
+          <span>{serverLocalAlias(server)}</span>
         </b>
-        {server.configuredProbe !== server.name && (
+        {server.configuredProbe !== serverLocalAlias(server) && (
           <small>{server.configuredProbe}</small>
         )}
         <small>
@@ -786,7 +785,8 @@ function ServerBody({
         Number(storeAttentionState(agentSnapshot, a) !== 'normal') -
         Number(storeAttentionState(agentSnapshot, b) !== 'normal'),
     );
-  const subtitle = `Profile ${server.id}${account && !locked ? ` · signed in as ${account.username}` : ''}`;
+  const subtitle =
+    account && !locked ? `Signed in as ${account.username}` : null;
   const hasHost = Boolean(host) && state !== 'unavailable';
 
   return (
@@ -798,8 +798,8 @@ function ServerBody({
       <div className="shead">
         <ServerMark state={state} />
         <span className="t">
-          <b>{serverDisplayName(server)}</b>
-          <small>{subtitle}</small>
+          <b>{serverLocalAlias(server)}</b>
+          {subtitle ? <small>{subtitle}</small> : null}
         </span>
         {/* The page's own mark already reads as a healthy server; only an
             abnormal state is worth a chip beside it. The list row keeps its
@@ -979,7 +979,7 @@ function ServerBody({
       <SectionLabel>Identity and trust</SectionLabel>
       {hasHost && host ? (
         <Inset className="settings-inset middle">
-          <InsetRow label="Profile">{server.id}</InsetRow>
+          <InsetRow label="Internal ID">{server.id}</InsetRow>
           <InsetRow label="Address">
             {status?.configuredProbe ?? server.configuredProbe}
           </InsetRow>
@@ -1009,7 +1009,7 @@ function ServerBody({
         </Inset>
       ) : (
         <Inset className="settings-inset middle">
-          <InsetRow label="Profile">{server.id}</InsetRow>
+          <InsetRow label="Internal ID">{server.id}</InsetRow>
           <InsetRow label="Address">
             {status?.configuredProbe ?? server.configuredProbe}
           </InsetRow>
@@ -1252,7 +1252,7 @@ function ResetSheet({
   );
   return (
     <SheetFrame
-      title={`Erase local credentials for ${serverDisplayName(server)}?`}
+      title={`Erase local credentials for ${serverLocalAlias(server)}?`}
       onClose={close}
       danger
       footer={
@@ -1381,7 +1381,7 @@ function ForgetSheet({
   );
   return (
     <SheetFrame
-      title={`Remove local data for ${serverDisplayName(server)}?`}
+      title={`Remove local data for ${serverLocalAlias(server)}?`}
       onClose={onClose}
       danger
       footer={

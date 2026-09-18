@@ -236,6 +236,12 @@ export function serverDisplayName(
   return server.label ?? server.name;
 }
 
+export function serverLocalAlias(
+  server: Pick<Server, 'label'> | undefined,
+): string {
+  return server?.label?.trim() || 'Loading...';
+}
+
 export interface Account {
   /** Canonical identifier of the account store. */
   store: StoreRef;

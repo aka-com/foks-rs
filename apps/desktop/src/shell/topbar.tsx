@@ -16,7 +16,7 @@ import type { ReactNode } from 'react';
 import { Button, Icon } from '../components';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { channelTitle } from '../chat/presentation';
-import { storeOf } from '../model';
+import { serverLocalAlias, storeOf } from '../model';
 import type { AgentSnapshot, DeviceLabel } from '../model';
 import {
   DEFAULT_SETTINGS_SECTION,
@@ -101,8 +101,9 @@ export function crumbTrail(
       trail.push(SETTINGS_SECTION_LABEL[section]);
       if (section === 'servers' && location.profile)
         trail.push(
-          snapshot?.servers.find((entry) => entry.id === location.profile)
-            ?.name ?? location.profile,
+          serverLocalAlias(
+            snapshot?.servers.find((entry) => entry.id === location.profile),
+          ),
         );
       break;
     }

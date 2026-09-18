@@ -400,7 +400,7 @@ test('the account menu switches account, adds one, and locks the app', async () 
   let menu = await open();
   assert.ok(
     [...menu.querySelectorAll('.cap')].some(
-      (entry) => entry.textContent === 'Personal server foks.example.net',
+      (entry) => entry.textContent === 'Personal server',
     ),
   );
   const other = [...menu.querySelectorAll('button')].find((button) =>
@@ -544,7 +544,7 @@ test('the settings crumb always names the sub-navigation’s open page', async (
   // belongs to, and the server itself.
   assert.deepEqual(
     crumbTrail({ kind: 'settings', section: 'servers', profile: 'acme' }, {
-      servers: [{ id: 'acme', name: 'Acme' }],
+      servers: [{ id: 'acme', name: 'internal-acme-profile', label: 'Acme' }],
     } as unknown as Parameters<typeof crumbTrail>[1]),
     ['Settings', 'Servers', 'Acme'],
   );

@@ -335,7 +335,7 @@ test('a profile address opens that server instead of the page', async () => {
   assert.ok(rendered.getByText('Accounts on this server'));
   assert.ok(rendered.getByText('Teams on this server'));
   assert.ok(rendered.getByText('Identity and trust'));
-  assert.ok(rendered.getByText('Profile'));
+  assert.ok(rendered.getByText('Internal ID'));
   assert.ok(rendered.getAllByText('personal'));
   assert.ok(rendered.getByText('Address'));
   assert.ok(rendered.getAllByText('foks.example.net').length);
@@ -436,7 +436,7 @@ test('a rename failure leaves the sheet open and reports the error', async () =>
   assert.equal(rendered.getByRole('dialog'), dialog);
 });
 
-test('duplicate server labels retain visible profile-name disambiguation', async () => {
+test('duplicate server labels retain addresses without profile-name suffixes', async () => {
   const snapshot = await fixture();
   const duplicated = {
     ...snapshot,
@@ -446,6 +446,10 @@ test('duplicate server labels retain visible profile-name disambiguation', async
   };
   const rendered = await renderSettings(duplicated);
   assert.equal(rendered.getAllByText('Shared').length, 2);
+  assert.equal(
+    Boolean(rendered.container.querySelector('.srow .t > b em')),
+    false,
+  );
   assert.ok(rendered.getByText('foks.example.net'));
   assert.ok(rendered.getByText('foks.acme-corp.com'));
 });

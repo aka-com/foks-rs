@@ -20,8 +20,7 @@ import { Icon } from '../components';
 import {
   chatAvailable,
   localAliasOf,
-  serverDisplayName,
-  serverName,
+  serverLocalAlias,
   storeAvailability,
   storeDescription,
   storeDescriptionState,
@@ -305,7 +304,11 @@ export function AccountHeader({
     snapshot.accounts.find((entry) => entry.store === store.id)?.username ??
     store.account;
   const username = active ? usernameOf(active) : 'No account';
-  const server = active ? serverName(snapshot, active) : 'None on this device';
+  const server = active
+    ? serverLocalAlias(
+        snapshot.servers.find((entry) => entry.id === active.server),
+      )
+    : 'None on this device';
   // Preserve account-scoped locations when selecting an account; otherwise,
   // open Account.
   const selectAccount = (store: AccountStore): void => {
@@ -406,20 +409,12 @@ export function AccountHeader({
                     const entry = snapshot.servers.find(
                       (candidate) => candidate.id === serverId,
                     );
-                    if (!entry) return serverId;
-                    const name = serverDisplayName(entry);
+                    const name = serverLocalAlias(entry);
                     // Only the label a reader gave the server is a section
                     // heading. The host keeps its own case: uppercasing a
                     // hostname reads wrong, and it is what wrapped this caption
                     // onto a second line.
-                    return entry.label ? (
-                      <>
-                        {name}
-                        <span className="host">{` ${entry.name}`}</span>
-                      </>
-                    ) : (
-                      name
-                    );
+                    return name;
                   })()}
                 </div>
                 {accounts
