@@ -4,6 +4,9 @@ import { createElement, useRef, useState } from 'react';
 import { installDom } from './lib/dom-harness';
 import { useDesktopReconciliation } from '../src/use-desktop-reconciliation';
 import { CatalogReadGate } from '../src/catalog-read-gate';
+import { useCatalogRuntime } from '../src/app/catalog-runtime';
+import { AccessLifetime } from '../src/app/access-lifetime';
+import { ToastController } from '../kit/toasts';
 import { mockBridge } from '../src/mock-bridge';
 import { FIXTURE } from '../src/fixture';
 import type { Bridge, CatalogDto } from '../src/bridge';
@@ -16,6 +19,70 @@ test.before(async () => {
   ui = await import('@testing-library/react');
 });
 test.afterEach(() => ui.cleanup());
+test('whole-catalog runtime failures do not become failures of every profile and store', async () => {
+  const base = mockBridge(FIXTURE);
+  let failing = true;
+  const bridge: Bridge = {
+    ...base,
+    listCatalog: async () => {
+      if (failing) throw new Error('Catalog projection failed.');
+      return base.listCatalog();
+    },
+  };
+  const lifetime = new AccessLifetime();
+  const toasts = new ToastController();
+  const retireBoot = () => {};
+  const currentBootSnapshot = () => true;
+  let runtime!: ReturnType<typeof useCatalogRuntime>;
+  function CatalogHarness() {
+    runtime = useCatalogRuntime({
+      lifetime,
+      bridge,
+      agentSnapshot: FIXTURE,
+      retireBoot,
+      currentBootSnapshot,
+      toasts,
+    });
+    return null;
+  }
+  ui.render(createElement(CatalogHarness));
+  await ui.act(async () => {
+    await assert.rejects(
+      runtime.refreshSnapshot(true),
+      /Catalog projection failed/,
+    );
+  });
+  const freshness = runtime.latestRef.current.catalogFreshness!;
+  assert.ok(
+    Object.values(freshness.profiles).every(
+      (entry) => !entry.error && !entry.refreshing,
+    ),
+  );
+  assert.ok(
+    Object.values(freshness.stores).every(
+      (entry) => !entry.error && !entry.refreshing,
+    ),
+  );
+  assert.equal(freshness.attempt?.error?.message, 'Catalog projection failed.');
+  assert.strictEqual(
+    runtime.latestRef.current.notifications,
+    FIXTURE.notifications,
+  );
+  assert.strictEqual(
+    runtime.latestRef.current.storeInventory,
+    FIXTURE.storeInventory,
+  );
+  failing = false;
+  await ui.act(async () => {
+    await runtime.refreshSnapshot(true);
+  });
+  assert.equal(
+    runtime.latestRef.current.catalogFreshness?.attempt?.error,
+    undefined,
+  );
+  assert.ok(runtime.latestRef.current.catalogFreshness?.attempt?.lastSuccessAt);
+});
+
 class Clock implements ReconciliationClock {
   time = 1_000;
   id = 0;

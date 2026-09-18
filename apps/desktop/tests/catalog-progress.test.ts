@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { Channel } from '@tauri-apps/api/core';
+import { vaultCommands } from '../src/bridge/commands-vault';
 import { loadSnapshot, type Bridge, type CatalogDto } from '../src/bridge';
 import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';
@@ -17,6 +19,200 @@ function deferred<T>() {
     resolve = done;
   });
   return { promise, resolve };
+}
+
+test('valid final catalogs supersede failed partial projections and failed publication callbacks', async () => {
+  for (const publicationFailure of [false, true]) {
+    const base = mockBridge(FIXTURE);
+    const catalog = await base.listCatalog();
+    const expected = await loadSnapshot(base, FIXTURE, 1);
+    let publications = 0;
+    let emit!: (value: CatalogDto) => void;
+    const bridge: Bridge = {
+      ...base,
+      listCatalog: async (publish) => {
+        emit = publish!;
+        emit(
+          publicationFailure
+            ? catalog
+            : {
+                ...catalog,
+                inventory: [...catalog.inventory, catalog.inventory[0]],
+              },
+        );
+        await new Promise((resolve) => setImmediate(resolve));
+        emit(catalog);
+        await new Promise((resolve) => setImmediate(resolve));
+        return catalog;
+      },
+    };
+    const actual = await loadSnapshot(bridge, FIXTURE, 1, () => {
+      publications++;
+      if (publicationFailure && publications === 1)
+        throw new Error('Projection consumer failed.');
+    });
+    assert.deepEqual(actual, expected);
+    assert.equal(publications, publicationFailure ? 2 : 1);
+    emit(catalog);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(publications, publicationFailure ? 2 : 1);
+  }
+});
+
+test('a terminal partial failure cannot be hidden by a valid final catalog', async () => {
+  const base = mockBridge(FIXTURE);
+  const catalog = await base.listCatalog();
+  const failure = {
+    code: 'response-binding',
+    message: 'Wrong session.',
+    retryable: false,
+    fatal: true,
+    ambiguous: false,
+  };
+  const bridge: Bridge = {
+    ...base,
+    listCatalog: async (publish) => {
+      publish!(catalog);
+      await new Promise((resolve) => setImmediate(resolve));
+      return catalog;
+    },
+  };
+  await assert.rejects(
+    loadSnapshot(bridge, FIXTURE, 1, () => {
+      throw failure;
+    }),
+    { code: 'response-binding' },
+  );
+});
+
+test('terminal projection failures are settled before accepting an immediately returned final catalog', async () => {
+  const base = mockBridge(FIXTURE);
+  const catalog = await base.listCatalog();
+  const bridge: Bridge = {
+    ...base,
+    listCatalog: async (publish) => {
+      publish!({
+        ...catalog,
+        failures: [
+          {
+            scope: 'profile',
+            profile: catalog.profiles[0],
+            source: 'catalog',
+            error: {
+              code: 'agent-lost',
+              message: 'Disconnected.',
+              retryable: true,
+              fatal: true,
+              ambiguous: false,
+            },
+          },
+        ],
+      });
+      return catalog;
+    },
+  };
+  await assert.rejects(
+    loadSnapshot(bridge, FIXTURE, 1, () => {}),
+    { code: 'agent-lost' },
+  );
+});
+
+test('final errors take precedence over obsolete recoverable partial errors', async () => {
+  const base = mockBridge(FIXTURE);
+  const catalog = await base.listCatalog();
+  const bridge: Bridge = {
+    ...base,
+    listCatalog: async (publish) => {
+      publish!({
+        ...catalog,
+        inventory: [...catalog.inventory, catalog.inventory[0]],
+      });
+      return catalog;
+    },
+    listAccounts: async () => {
+      throw {
+        code: 'operation-failed',
+        message: 'Final read failed.',
+        retryable: true,
+        ambiguous: false,
+        fatal: false,
+      };
+    },
+  };
+  await assert.rejects(
+    loadSnapshot(bridge, FIXTURE, 1, () => {}),
+    { code: 'operation-failed' },
+  );
+});
+
+test('a final projection is not published after access retirement', async () => {
+  const base = mockBridge(FIXTURE);
+  let current = true;
+  const bridge: Bridge = {
+    ...base,
+    listAccounts: async () => {
+      current = false;
+      return base.listAccounts();
+    },
+  };
+  await assert.rejects(
+    loadSnapshot(bridge, FIXTURE, 1, undefined, () => current),
+    { code: 'catalog-read-retired' },
+  );
+});
+
+for (const terminal of [false, true]) {
+  test(`native catalog progress only retains terminal failures: ${terminal}`, async (t) => {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    const catalog: CatalogDto = {
+      profiles: [],
+      stores: [],
+      knownStores: [],
+      items: [],
+      inventory: [],
+      failures: [],
+      blockedProfiles: [],
+    };
+    let channel!: Channel<unknown>;
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: {
+        __TAURI_INTERNALS__: {
+          transformCallback: () => 1,
+          invoke: async (
+            _command: string,
+            args: { onPartial: Channel<unknown> },
+          ) => {
+            channel = args.onPartial;
+            channel.onmessage(terminal ? catalog : { invalid: true });
+            channel.onmessage(catalog);
+            return catalog;
+          },
+        },
+      },
+    });
+    t.after(() => {
+      if (previous) Object.defineProperty(globalThis, 'window', previous);
+      else delete (globalThis as { window?: Window }).window;
+    });
+    let publications = 0;
+    const pending = vaultCommands.listCatalog(() => {
+      publications++;
+      if (terminal)
+        throw {
+          code: 'protocol',
+          message: 'Invalid session.',
+          retryable: false,
+          fatal: true,
+          ambiguous: false,
+        };
+    });
+    if (terminal) await assert.rejects(pending, { code: 'protocol' });
+    else assert.deepEqual(await pending, catalog);
+    const accepted = publications;
+    channel.onmessage(catalog);
+    assert.equal(publications, accepted);
+  });
 }
 
 test('partial projection publishes healthy items without any unfinished metadata enrichment', async () => {

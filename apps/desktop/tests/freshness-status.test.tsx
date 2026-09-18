@@ -6,6 +6,10 @@ import { createServer, type ViteDevServer } from 'vite';
 import { metadataFreshness } from '../src/device-cache';
 import { DesktopReconciliation } from '../src/desktop-reconciliation';
 import { FIXTURE } from '../src/fixture';
+import {
+  failWholeCatalogRefresh,
+  markCatalogRefresh,
+} from '../src/catalog-state';
 let FreshnessCaption: typeof import('../src/components/metadata-status').FreshnessCaption;
 let summarizeSync: typeof import('../src/shell/sync-popover').summarizeSync;
 let vite: ViteDevServer;
@@ -137,6 +141,65 @@ test('the refresh summary does not call a failed observation a successful refres
       ),
     ),
   );
+  reconciliation.dispose();
+});
+
+test('whole-catalog failures have one root observation without marking healthy servers failed', () => {
+  const previous = {
+    ...FIXTURE,
+    catalogFreshness: {
+      profiles: Object.fromEntries(
+        FIXTURE.catalogProfiles.map((profile) => [
+          profile,
+          { refreshing: false, lastSuccessAt: 10 },
+        ]),
+      ),
+      stores: {},
+    },
+  };
+  const snapshot = failWholeCatalogRefresh(
+    markCatalogRefresh(previous, undefined, 20),
+    FAILURE,
+    21,
+  );
+  const reconciliation = service(snapshot);
+  const summary = summarizeSync(snapshot, reconciliation);
+  const failed = summary.servers.filter((row) => row.state === 'failed');
+  assert.equal(failed.length, 1);
+  assert.equal(failed[0].id, null);
+  assert.equal(failed[0].name, 'Catalog');
+  assert.match(failed[0].message, /Use Refresh to retry/);
+  assert.doesNotMatch(
+    failed[0].message,
+    /Retrying automatically|Automatic refresh is paused/,
+  );
+  assert.deepEqual(
+    summary.servers
+      .filter((row) => row.id !== null)
+      .map((row) => [row.id, row.state]),
+    summarizeSync(previous, reconciliation).servers.map((row) => [
+      row.id,
+      row.state,
+    ]),
+  );
+  assert.equal(
+    summary.diagnostics.filter((line) => line.includes(FAILURE.message)).length,
+    1,
+  );
+  reconciliation.dispose();
+});
+
+test('a root refresh remains observable before any server inventory is available', () => {
+  const empty = { ...FIXTURE, servers: [], stores: [], catalogProfiles: [] };
+  const pending = markCatalogRefresh(empty, undefined, 20);
+  const reconciliation = service(pending);
+  assert.equal(summarizeSync(pending, reconciliation).refreshing, true);
+  const failed = failWholeCatalogRefresh(pending, FAILURE, 21);
+  const summary = summarizeSync(failed, reconciliation);
+  assert.equal(summary.refreshing, false);
+  assert.equal(summary.failed, true);
+  assert.equal(summary.servers.length, 1);
+  assert.doesNotMatch(summary.servers[0].message, /Previously loaded data/);
   reconciliation.dispose();
 });
 

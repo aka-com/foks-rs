@@ -9,6 +9,7 @@ import {
 import type { Bridge } from './contract';
 import {
   normalizeCommandError,
+  isTerminalCommandError,
   reportReadinessError,
   type CommandError,
 } from './errors';
@@ -133,33 +134,47 @@ async function loadSnapshotOnce(
   }
   let accepting = true;
   let revision = 0;
-  let partialFailure: unknown;
+  let terminalFailure: CommandError | undefined;
+  const projections = new Set<Promise<void>>();
   try {
     const response = await bridge.listCatalog(
       onPartial
         ? (partial) => {
-            if (!accepting || !isCurrent()) return;
+            if (!accepting || !isCurrent() || terminalFailure) return;
             const current = ++revision;
-            void projectCatalog(
+            const projection = projectCatalog(
               bridge,
               partial,
               base,
               nowSeconds,
               agent,
               true,
-            ).then(
-              (snapshot) => {
-                if (accepting && isCurrent() && current === revision)
+            )
+              .then((snapshot) => {
+                if (
+                  accepting &&
+                  isCurrent() &&
+                  current === revision &&
+                  !terminalFailure
+                )
                   onPartial(snapshot);
-              },
-              (error: unknown) => {
-                partialFailure = error;
-              },
-            );
+              })
+              .catch((cause: unknown) => {
+                if (!isCurrent()) return;
+                const error = normalizeCommandError(cause);
+                if (isTerminalCommandError(error)) terminalFailure ??= error;
+              })
+              .finally(() => {
+                projections.delete(projection);
+              });
+            projections.add(projection);
           }
         : undefined,
     );
+    accepting = false;
+    await Promise.all(projections);
     if (!isCurrent()) throw new CatalogReadRetiredError();
+    if (terminalFailure) throw terminalFailure;
     const snapshot = await projectCatalog(
       bridge,
       response,
@@ -168,7 +183,7 @@ async function loadSnapshotOnce(
       agent,
       false,
     );
-    if (partialFailure) throw partialFailure;
+    if (!isCurrent()) throw new CatalogReadRetiredError();
     return snapshot;
   } finally {
     accepting = false;

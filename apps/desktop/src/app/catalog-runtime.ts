@@ -11,7 +11,7 @@ import {
   CatalogReadRetiredError,
 } from '../catalog-coordinator';
 import { CatalogReadGate } from '../catalog-read-gate';
-import { failCatalogRefresh, markCatalogRefresh } from '../catalog-state';
+import { failWholeCatalogRefresh, markCatalogRefresh } from '../catalog-state';
 import type { AgentSnapshot, Item } from '../model';
 import {
   reconcileMutationFailure,
@@ -84,9 +84,8 @@ export function useCatalogRuntime({
               );
             } catch (error) {
               if (isCurrent()) {
-                latestRef.current = failCatalogRefresh(
+                latestRef.current = failWholeCatalogRefresh(
                   latestRef.current,
-                  base.catalogProfiles,
                   normalizeCommandError(error),
                 );
                 setLatest(latestRef.current);

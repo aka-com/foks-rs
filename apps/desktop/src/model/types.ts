@@ -320,6 +320,7 @@ export interface CatalogFreshnessEntry {
 }
 
 export interface CatalogFreshness {
+  attempt?: CatalogFreshnessEntry;
   profiles: Readonly<Record<string, CatalogFreshnessEntry>>;
   stores: Readonly<Record<StoreRef, CatalogFreshnessEntry>>;
 }

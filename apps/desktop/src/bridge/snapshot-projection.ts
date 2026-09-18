@@ -755,6 +755,7 @@ export async function projectCatalog(
       response,
       partial,
       nowSeconds,
+      profileScope,
     ),
   });
   if (!bridge.native) {

@@ -1,5 +1,10 @@
 import { Channel } from '@tauri-apps/api/core';
 import type { Bridge } from './contract';
+import {
+  isTerminalCommandError,
+  normalizeCommandError,
+  type CommandError,
+} from './errors';
 import { checked, checkedMutation } from './transport';
 import {
   decodeCatalog,
@@ -31,12 +36,14 @@ export const vaultCommands: Pick<
   listCatalog: async (onPartial) => {
     if (!onPartial) return checked('list_catalog', undefined, decodeCatalog);
     const channel = new Channel<unknown>();
-    let failure: unknown;
+    let failure: CommandError | undefined;
     channel.onmessage = (value) => {
+      if (failure) return;
       try {
         onPartial(decodeCatalog(value));
-      } catch (error) {
-        failure = error;
+      } catch (cause) {
+        const error = normalizeCommandError(cause);
+        if (isTerminalCommandError(error)) failure = error;
       }
     };
     try {

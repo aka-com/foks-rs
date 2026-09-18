@@ -116,6 +116,9 @@ export function summarizeSync(
 ): SyncSummary {
   const observations = service.scheduler.observations();
   const diagnostics: string[] = [];
+  const catalogAttempt = snapshot.catalogFreshness?.attempt;
+  if (catalogAttempt)
+    diagnostics.push(`Catalog refresh: ${freshnessLine(catalogAttempt)}`);
   const servers: SyncServerSummary[] = snapshot.servers.map((server) => {
     const name = serverDisplayName(server);
     const entry = snapshot.catalogFreshness?.profiles[server.id];
@@ -189,8 +192,10 @@ export function summarizeSync(
     (observation) =>
       observation.scope === null && observation.snapshot.error !== undefined,
   );
-  if (local.length) {
-    const messages: string[] = [];
+  if (local.length || catalogAttempt?.error) {
+    const messages: string[] = catalogAttempt?.error
+      ? [catalogAttempt.error.message]
+      : [];
     let paused = false;
     for (const observation of local) {
       const error = normalizeCommandError(observation.snapshot.error);
@@ -202,19 +207,23 @@ export function summarizeSync(
     }
     servers.push({
       id: null,
-      name: 'This Mac',
+      name: local.length ? 'This Mac' : 'Catalog',
       state: 'failed',
-      message: failureSentence(messages, undefined, paused).replace(
-        ' No successful refresh yet.',
-        '',
-      ),
+      message: catalogAttempt?.error
+        ? `${messages.join('; ').replace(/\.+$/, '')}. The catalog refresh did not complete.${snapshot.stores.length ? ' Previously loaded data is retained.' : ''} Use Refresh to retry.`
+        : failureSentence(messages, undefined, paused).replace(
+            ' No successful refresh yet.',
+            '',
+          ),
       canReconnect: false,
       reconnectDisabled: true,
       reconnecting: false,
     });
   }
   return {
-    refreshing: servers.some((server) => server.state === 'refreshing'),
+    refreshing:
+      Boolean(catalogAttempt?.refreshing) ||
+      servers.some((server) => server.state === 'refreshing'),
     failed: servers.some((server) => server.state === 'failed'),
     servers,
     diagnostics,

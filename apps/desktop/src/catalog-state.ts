@@ -39,10 +39,57 @@ export function catalogStoreComplete(
 
 export function markCatalogRefresh(
   snapshot: AgentSnapshot,
-  profiles: readonly string[] = snapshot.catalogProfiles,
+  profiles?: readonly string[],
   nowSeconds = Math.floor(Date.now() / 1000),
 ): AgentSnapshot {
-  return updateAttempt(snapshot, profiles, nowSeconds);
+  const next = updateAttempt(
+    snapshot,
+    profiles ?? snapshot.catalogProfiles,
+    nowSeconds,
+    undefined,
+    profiles === undefined,
+  );
+  if (profiles !== undefined) return next;
+  return {
+    ...next,
+    catalogFreshness: {
+      ...next.catalogFreshness!,
+      attempt: {
+        ...snapshot.catalogFreshness?.attempt,
+        lastAttemptAt: nowSeconds,
+        refreshing: true,
+        error: undefined,
+      },
+    },
+  };
+}
+
+export function failWholeCatalogRefresh(
+  snapshot: AgentSnapshot,
+  error: ServerFailure,
+  nowSeconds = Math.floor(Date.now() / 1000),
+): AgentSnapshot {
+  const freshness = snapshot.catalogFreshness;
+  const settled = (entries: CatalogFreshness['profiles'] = {}) =>
+    Object.fromEntries(
+      Object.entries(entries).map(([key, entry]) => [
+        key,
+        entry.refreshing ? { ...entry, refreshing: false } : entry,
+      ]),
+    );
+  return {
+    ...snapshot,
+    catalogFreshness: {
+      attempt: {
+        ...freshness?.attempt,
+        lastAttemptAt: nowSeconds,
+        refreshing: false,
+        error,
+      },
+      profiles: settled(freshness?.profiles),
+      stores: settled(freshness?.stores),
+    },
+  };
 }
 
 export function failCatalogRefresh(
@@ -59,17 +106,19 @@ function updateAttempt(
   profiles: readonly string[],
   nowSeconds: number,
   error?: ServerFailure,
+  preserveError = false,
 ): AgentSnapshot {
   const freshness = snapshot.catalogFreshness;
   const update = (previous?: CatalogFreshnessEntry): CatalogFreshnessEntry => ({
     ...previous,
     lastAttemptAt: nowSeconds,
     refreshing: !error,
-    error,
+    error: error ?? (preserveError ? previous?.error : undefined),
   });
   return {
     ...snapshot,
     catalogFreshness: {
+      ...freshness,
       profiles: {
         ...freshness?.profiles,
         ...Object.fromEntries(
@@ -97,6 +146,7 @@ export function projectCatalogFreshness(
   response: CatalogDto,
   partial: boolean,
   nowSeconds: number,
+  profileScope?: string,
 ): CatalogFreshness {
   const previous = base?.catalogFreshness;
   const entry = (
@@ -108,7 +158,7 @@ export function projectCatalogFreshness(
     lastAttemptAt: nowSeconds,
     ...(complete && !error ? { lastSuccessAt: nowSeconds } : {}),
     refreshing: partial && !complete && !error,
-    error,
+    error: error ?? (partial && !complete ? prior?.error : undefined),
   });
   const stores = Object.fromEntries(
     snapshot.stores.map((store) => {
@@ -161,7 +211,13 @@ export function projectCatalogFreshness(
       return [profile, entry(previous?.profiles[profile], complete, error)];
     }),
   );
-  return { profiles, stores };
+  return {
+    ...(profileScope === undefined
+      ? { attempt: entry(previous?.attempt, !partial) }
+      : {}),
+    profiles,
+    stores,
+  };
 }
 
 export function mergeProfileSnapshot(
@@ -277,6 +333,7 @@ export function mergeProfileSnapshot(
       ...projected.notifications,
     ],
     catalogFreshness: {
+      ...base.catalogFreshness,
       profiles: {
         ...base.catalogFreshness?.profiles,
         ...projected.catalogFreshness?.profiles,

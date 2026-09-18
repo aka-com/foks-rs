@@ -73,6 +73,11 @@ export function commandRecovery(error: CommandError): CommandRecovery {
   return { kind: error.retryable ? 'retry' : 'refresh', scope: 'request' };
 }
 
+export function isTerminalCommandError(error: CommandError): boolean {
+  const recovery = commandRecovery(error);
+  return recovery.kind === 'quarantine' || recovery.kind === 'reconnect';
+}
+
 export function isAgentSessionError(error: CommandError): boolean {
   return commandRecovery(error).scope === 'agent';
 }
