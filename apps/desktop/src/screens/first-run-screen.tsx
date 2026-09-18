@@ -2,7 +2,6 @@ import { LocalCompleteStep } from './first-run-complete-step';
 import { ServerVerificationStep } from './first-run-server-step';
 import { RecoveryStep } from './first-run-recovery-step';
 import {
-  stepOf,
   SetupSidebar,
   FirstRunAppSidebar,
   AddedDetails,
@@ -10,27 +9,14 @@ import {
   Pane,
 } from './first-run-view';
 export { FirstRunChecklistStatus } from './first-run-view';
-import { useFirstRunController } from '../use-first-run-controller';
 import {
-  clearRetainedSetups,
-  retainSetup,
-  retainedSetups,
-  sameSetupTarget,
-  updateRetainedSetup,
-} from '../first-run-recovery';
-import { resolveSetupEntry, setupActions } from '../first-run-controller';
+  useSetupCheckpoint,
+  useSetupSession,
+} from './first-run/use-setup-session';
+import { useAccountOperations } from './first-run/use-account-operations';
+import { retainSetup, updateRetainedSetup } from '../first-run-recovery';
 import { SsoPanel } from '../components/sso-panel';
-import {
-  resolveProvisionedIdentity,
-  provisionedIdentityProblem,
-  identityProblemText,
-  type IdentityProblem,
-} from '../first-run-identity';
-import {
-  executeProvisioning,
-  provisioningInFlight,
-  persistFirstRun,
-} from '../first-run-operations';
+import { provisioningInFlight } from '../first-run-operations';
 import type { ProvisioningIntent } from '../first-run-state';
 import { sharedSetupRead, useSlowSetup } from '../first-run-loading';
 import { NavigationPrompt, useNavigationGuard } from '../navigation-guard';
@@ -77,12 +63,8 @@ import {
   sharedServerStatus,
 } from '../bridge';
 import {
-  FIRST_RUN_CHECKPOINT_KEY,
   completedFirstRunSteps,
   firstRunStepCount,
-  decodeFirstRunCheckpoint,
-  initialFirstRun,
-  isFirstRunState,
   transitionFirstRun,
   setupBackTarget,
 } from '../first-run-state';
@@ -183,26 +165,6 @@ const FIRST_RUN_SETTLED: readonly FirstRunStateName[] = [
   'checklist-own',
 ];
 
-/** Delay between automatic retries of a transient identity refresh failure. */
-const IDENTITY_RETRY_DELAY_MS = 2_000;
-/** Bounded so a mutation that never finishes still surfaces its error. */
-const IDENTITY_RETRY_LIMIT = 30;
-
-/**
- * Text to show while an identity refresh failure that clears on its own is
- * retried, or null for failures that need the user.
- */
-function transientIdentityFailure(code: string): string | null {
-  switch (code) {
-    case 'mutation-in-flight':
-      return 'Waiting for the current operation to finish…';
-    case 'catalog-required':
-      return 'The vault changed while loading. Trying again…';
-    default:
-      return null;
-  }
-}
-
 export function accountAliasFor(username: string): string {
   return username
     .toLowerCase()
@@ -220,108 +182,6 @@ function suggestedDeviceName(): string {
   if (/iPad/i.test(source)) return 'iPad';
   if (/Mac/i.test(source)) return 'Mac';
   return 'This computer';
-}
-
-function fixtureSeed(
-  bridge: Bridge,
-  path: FirstRunPath,
-  state: FirstRunStateName,
-): FirstRunCheckpoint {
-  const facts = bridge.firstRunFixture?.[path];
-  let next = initialFirstRun(path, state);
-  if (state === 'boot') return next;
-  if (state === 'error' && facts) next = { ...next, serverAddress: facts.typo };
-  if (
-    (stepOf(state) >= 2 || state === 'checked' || state === 'compare') &&
-    facts
-  ) {
-    next = { ...next, profile: facts.report, serverAddress: facts.server };
-  }
-  if (stepOf(state) >= 3 && facts) {
-    next = {
-      ...next,
-      account: {
-        alias: facts.accountAlias,
-        username: facts.username,
-        deviceName: facts.deviceName,
-      },
-    };
-  }
-  if (state === 'identity-pending' && facts)
-    next = {
-      ...next,
-      provisionedAccount: {
-        alias: facts.accountAlias,
-        deviceName: facts.deviceName,
-      },
-    };
-  if (stepOf(state) >= 4 && state !== 'phrase')
-    next = { ...next, passphraseSet: true, backupCommitted: true };
-  if (state === 'added')
-    next = {
-      ...next,
-      added: true,
-      group:
-        facts?.groupName && facts.groupAlias && facts.groupTeamIdHex
-          ? {
-              name: facts.groupName,
-              kind: 'named',
-              alias: facts.groupAlias,
-              teamIdHex: facts.groupTeamIdHex,
-            }
-          : undefined,
-    };
-  if (state === 'checklist-invited')
-    next = {
-      ...next,
-      passphraseSet: false,
-      backupCommitted: false,
-      protectSkipped: true,
-      added: false,
-    };
-  if (state === 'checklist-own')
-    next = {
-      ...next,
-      passphraseSet: false,
-      backupCommitted: false,
-      protectSkipped: true,
-      group: undefined,
-    };
-  return next;
-}
-
-function initialCheckpoint(
-  bridge: Bridge,
-  snapshot: AgentSnapshot,
-  location: Extract<Location, { kind: 'first-run' }>,
-  automaticEntry: boolean,
-): FirstRunCheckpoint {
-  const path: FirstRunPath = location.path ?? 'invited';
-  let saved: FirstRunCheckpoint | null = null;
-  try {
-    saved = decodeFirstRunCheckpoint(
-      window.localStorage.getItem(FIRST_RUN_CHECKPOINT_KEY),
-    );
-  } catch {
-    /* unavailable storage */
-  }
-  const queryState =
-    typeof window === 'undefined'
-      ? null
-      : new URLSearchParams(window.location.search).get('state');
-  const namedReviewState = isFirstRunState(queryState);
-  if (bridge.firstRunFixture && namedReviewState)
-    return fixtureSeed(bridge, path, location.step as FirstRunStateName);
-  const state =
-    location.step === 'boot' || !isFirstRunState(location.step)
-      ? 'who'
-      : location.step;
-  return resolveSetupEntry(
-    snapshot,
-    saved,
-    { state, path: location.path },
-    automaticEntry,
-  );
 }
 
 /** Setup options for the initial screen: creating a new vault or joining an existing team. */
@@ -494,10 +354,9 @@ function FirstRunSession({
 }): ReactNode {
   const toasts = useToast();
   const { checkpoint, checkpointRef, mounted, commit, send } =
-    useFirstRunController({
-      initial: () =>
-        sessionEntry ??
-        initialCheckpoint(bridge, snapshot, location, automaticEntry),
+    useSetupCheckpoint({
+      sessionEntry,
+      automaticEntry,
       snapshot,
       bridge,
       location,
@@ -573,34 +432,6 @@ function FirstRunSession({
   const [phraseOperation, setPhraseOperation] = useState<symbol | null>(null);
   const phraseOwner = useRef<symbol | null>(null);
   const busy = mutationBusy || phraseOperation !== null;
-  const [identityLoading, setIdentityLoading] = useState(false);
-  const [identityError, setIdentityError] = useState<string | null>(null);
-  // Shown while a transient identity refresh failure is retried on its own.
-  const [identityWaiting, setIdentityWaiting] = useState<string | null>(null);
-  const identityRetry = useRef<number | null>(null);
-  useEffect(
-    () => () => {
-      if (identityRetry.current !== null)
-        window.clearTimeout(identityRetry.current);
-    },
-    [],
-  );
-  const [identityProblem, setIdentityProblem] =
-    useState<IdentityProblem | null>(null);
-  const [operationStatus, setOperationStatus] = useState<string | null>(null);
-  const [operationProblem, setOperationProblem] =
-    useState<IdentityProblem | null>(null);
-  const [operationResumable, setOperationResumable] = useState(false);
-  const [operationChecked, setOperationChecked] = useState(false);
-  const [operationRunning, setOperationRunning] = useState(false);
-  const [existingAccountAdoptable, setExistingAccountAdoptable] =
-    useState(false);
-  const [duplicateAlias, setDuplicateAlias] = useState<{
-    alias: string;
-    deviceName: string;
-  } | null>(null);
-  const autoProbedKey = useRef<string | null>(null);
-  const identityGeneration = useRef(0);
   const [personalRefreshing, setPersonalRefreshing] = useState(false);
   const [personalRefreshError, setPersonalRefreshError] = useState<
     string | null
@@ -633,6 +464,39 @@ function FirstRunSession({
     key: string;
     promise: Promise<{ backupAlias: string; phrase: string }>;
   } | null>(null);
+  const accountOperations = useAccountOperations({
+    bridge,
+    agentReady,
+    onRefreshSnapshot,
+    onAgentReadinessFailure,
+    checkpoint,
+    checkpointRef,
+    mounted,
+    commit,
+    busy,
+    setBusy,
+    setMessage,
+    setConnectionErrors,
+    onReplaceSession,
+  });
+  const {
+    identityLoading,
+    identityError,
+    identityWaiting,
+    identityProblem,
+    refreshAccountIdentity,
+    operationStatus,
+    operationProblem,
+    operationResumable,
+    operationChecked,
+    operationRunning,
+    existingAccountAdoptable,
+    duplicateAlias,
+    setDuplicateAlias,
+    checkOperationStatus,
+    adoptExistingAccount,
+    adoptDuplicateAccount,
+  } = accountOperations;
 
   useEffect(() => {
     if (checkpoint.account?.deviceName || facts?.deviceName) return;
@@ -920,7 +784,7 @@ function FirstRunSession({
         });
       else send({ type: 'navigate', state: next });
     },
-    [checkpoint.backupCommitted, checkpointRef, send, state],
+    [checkpoint.backupCommitted, checkpointRef, send, setDuplicateAlias, state],
   );
   const openExisting = useCallback((): void => {
     go('existing');
@@ -967,130 +831,7 @@ function FirstRunSession({
     [bridge, onRefreshSnapshot, profile],
   );
 
-  useEffect(() => {
-    if (!agentReady) setIdentityLoading(false);
-    const generation = identityGeneration;
-    return () => {
-      generation.current++;
-    };
-  }, [agentReady]);
-
-  const refreshAccountIdentity = async (
-    saved: FirstRunCheckpoint = checkpointRef.current,
-    attempt = 0,
-  ): Promise<void> => {
-    if (!saved.provisionedAccount || !agentReady) return;
-    autoProbedKey.current = `identity:${saved.provisionedAccount.alias}`;
-    const generation = ++identityGeneration.current;
-    if (identityRetry.current !== null) {
-      window.clearTimeout(identityRetry.current);
-      identityRetry.current = null;
-    }
-    let retrying = false;
-    setIdentityLoading(true);
-    setIdentityError(null);
-    setIdentityWaiting(null);
-    setIdentityProblem(null);
-    try {
-      // Account mutations invalidate the native catalog. Do not join an
-      // in-flight read that may have started before the account was copied or
-      // created, or identity adoption can remain stuck on that stale result.
-      const refreshed = await sharedSetupRead(
-        bridge,
-        `identity:${saved.profile?.profile}:${saved.provisionedAccount.alias}`,
-        () => onRefreshSnapshot(true),
-      );
-      if (
-        generation !== identityGeneration.current ||
-        checkpointRef.current !== saved
-      )
-        return;
-      const resolved = resolveProvisionedIdentity(refreshed, saved);
-      if (resolved !== saved) commit(resolved);
-      else {
-        const problem =
-          provisionedIdentityProblem(refreshed, saved) ??
-          'inventory-unavailable';
-        setIdentityProblem(problem);
-        setIdentityError(identityProblemText[problem]);
-      }
-    } catch (error) {
-      if (
-        generation !== identityGeneration.current ||
-        checkpointRef.current !== saved
-      )
-        return;
-      const typed = normalizeCommandError(error);
-      if (isAgentReadinessError(typed)) {
-        setIdentityError(typed.message);
-        onAgentReadinessFailure?.(typed);
-        return;
-      }
-      // A native mutation still holding the catalog, or a snapshot replaced
-      // by a concurrent load, clears on its own. Wait and try again rather
-      // than presenting a vault-screen message as a setup failure.
-      const waiting = transientIdentityFailure(typed.code);
-      if (waiting && attempt < IDENTITY_RETRY_LIMIT) {
-        retrying = true;
-        setIdentityWaiting(waiting);
-        identityRetry.current = window.setTimeout(() => {
-          identityRetry.current = null;
-          if (!mounted.current || generation !== identityGeneration.current)
-            return;
-          if (checkpointRef.current !== saved) {
-            setIdentityWaiting(null);
-            setIdentityLoading(false);
-            return;
-          }
-          void refreshAccountIdentity(saved, attempt + 1);
-        }, IDENTITY_RETRY_DELAY_MS);
-        return;
-      }
-      setIdentityError(typed.message);
-    } finally {
-      if (generation === identityGeneration.current && !retrying)
-        setIdentityLoading(false);
-    }
-  };
-
-  const accountProvisioned = (alias: string): void => {
-    const saved = transitionFirstRun(checkpointRef.current, {
-      type: 'account-provisioned',
-      alias,
-      deviceName: deviceName.trim(),
-    });
-    // Persist the acknowledgement before any fallible inventory read.
-    commit(saved);
-    void refreshAccountIdentity(saved);
-  };
-
-  const confirmDuplicateAlias = async (
-    saved: FirstRunCheckpoint,
-    intent: ProvisioningIntent,
-  ): Promise<void> => {
-    if (!saved.profile) return;
-    try {
-      const refreshed = await onRefreshSnapshot(true);
-      if (!mounted.current || checkpointRef.current.provisioning) return;
-      const probe = {
-        ...saved,
-        provisioning: undefined,
-        provisionedAccount: {
-          alias: intent.alias,
-          deviceName: intent.deviceName,
-        },
-      };
-      if (provisionedIdentityProblem(refreshed, probe)) return;
-      setDuplicateAlias({
-        alias: intent.alias,
-        deviceName: intent.deviceName,
-      });
-    } catch {
-      setDuplicateAlias(null);
-    }
-  };
-
-  const runAccountOperation = async (
+  const runAccountOperation = (
     kind: ProvisioningIntent['kind'],
     alias: string,
     operation: () => Promise<unknown>,
@@ -1098,350 +839,15 @@ function FirstRunSession({
       Pick<ProvisioningIntent, 'candidateId' | 'ssoOperationId'>
     > = {},
     details: { resume?: boolean; phrase?: string } = {},
-  ): Promise<void> => {
-    const current = checkpointRef.current;
-    // A new wizard must explicitly reconcile a retained attempt on this target.
-    if (!current.provisioning) {
-      const retained = retainedSetups().find((entry) =>
-        sameSetupTarget(entry.checkpoint, {
-          ...current,
-          provisionedAccount: { alias, deviceName: deviceName.trim() },
-        }),
-      );
-      if (retained) {
-        persistFirstRun(retained.checkpoint);
-        mounted.current = false;
-        onReplaceSession(retained.checkpoint);
-        return;
-      }
-    }
-    const saved: FirstRunCheckpoint = current.provisioning
-      ? current
-      : {
-          ...current,
-          state: 'operation-pending',
-          provisioning: {
-            id: crypto.randomUUID(),
-            kind,
-            alias,
-            deviceName: deviceName.trim(),
-            back: state === 'existing' ? 'existing' : 'account',
-            ...extra,
-          },
-        };
-    setBusy(true);
-    setOperationResumable(false);
-    setOperationStatus(null);
-    setDuplicateAlias(null);
-    try {
-      // Dispatch saves the intent synchronously before calling the bridge.
-      persistFirstRun(saved);
-      const intent = saved.provisioning!;
-      const tracked =
-        bridge.runFirstRunAccountOperation && intent.kind !== 'sso'
-          ? () =>
-              bridge.runFirstRunAccountOperation!({
-                attempt: {
-                  id: intent.id,
-                  kind: intent.kind as
-                    'signup' | 'recovery' | 'copy' | 'pairing',
-                  alias: intent.alias,
-                  deviceName: intent.deviceName,
-                  ...(intent.candidateId
-                    ? { candidateId: intent.candidateId }
-                    : {}),
-                  profile: saved.profile!.profile,
-                  hostId: saved.profile!.hostId,
-                },
-                resume:
-                  Boolean(current.provisioning) || Boolean(details.resume),
-                deviceName: intent.deviceName,
-                ...(intent.kind === 'signup'
-                  ? { username: username.trim(), email, invite }
-                  : {}),
-                ...(intent.kind === 'recovery' || intent.kind === 'pairing'
-                  ? { phrase: details.phrase ?? recoveryPhrase }
-                  : {}),
-                ...(intent.candidateId
-                  ? { candidateId: intent.candidateId }
-                  : {}),
-              })
-          : operation;
-      const task = executeProvisioning(
-        bridge,
-        saved,
-        tracked,
-        Boolean(current.provisioning) || Boolean(details.resume),
-      );
-      commit(saved);
-      const result = await task;
-      if (
-        !mounted.current ||
-        (checkpointRef.current.provisioning &&
-          checkpointRef.current.provisioning.id !== saved.provisioning?.id)
-      )
-        return;
-      commit(result.checkpoint);
-      if (result.error) {
-        const typed = normalizeCommandError(result.error);
-        const detail = typed.message;
-        setOperationStatus(detail);
-        setMessage(detail);
-        setConnectionErrors({
-          copy: kind === 'copy' ? detail : null,
-          recover: kind === 'recovery' ? detail : null,
-          pair: kind === 'pairing' ? detail : null,
-        });
-        if (result.checkpoint.provisioning)
-          void checkOperationStatus(result.checkpoint);
-        else if (kind === 'signup' && typed.code === 'already-exists')
-          await confirmDuplicateAlias(result.checkpoint, intent);
-      } else void refreshAccountIdentity(result.checkpoint);
-    } catch (error) {
-      if (mounted.current) {
-        setOperationStatus(normalizeCommandError(error).message);
-        setMessage(normalizeCommandError(error).message);
-      }
-    } finally {
-      if (mounted.current) setBusy(false);
-    }
-  };
-
-  const checkOperationStatus = async (
-    saved: FirstRunCheckpoint = checkpointRef.current,
-  ): Promise<void> => {
-    const intent = saved.provisioning;
-    if (!intent || !saved.profile || !agentReady || identityLoading) return;
-    const profileName = saved.profile.profile;
-    autoProbedKey.current = `operation:${intent.id}`;
-    setOperationProblem(null);
-    if (provisioningInFlight(bridge, intent.id)) {
-      setOperationRunning(true);
-      setOperationStatus(
-        'Account setup is still running. You can finish later while it completes.',
-      );
-      return;
-    }
-    setIdentityLoading(true);
-    setOperationResumable(false);
-    setOperationRunning(false);
-    setExistingAccountAdoptable(false);
-    let receiptError: string | null = null;
-    const withReceipt = (text: string): string =>
-      receiptError ? `${text} (Details: ${receiptError})` : text;
-    try {
-      if (intent.kind !== 'sso' && bridge.firstRunOperationStatus) {
-        let outcome: 'complete' | 'rejected' | 'unknown' | 'running' =
-          'unknown';
-        try {
-          outcome = await bridge.firstRunOperationStatus({
-            id: intent.id,
-            kind: intent.kind,
-            alias: intent.alias,
-            deviceName: intent.deviceName,
-            ...(intent.candidateId ? { candidateId: intent.candidateId } : {}),
-            profile: profileName,
-            hostId: saved.profile.hostId,
-          });
-        } catch (error) {
-          const typed = normalizeCommandError(error);
-          if (isAgentReadinessError(typed)) {
-            if (mounted.current) setOperationStatus(typed.message);
-            onAgentReadinessFailure?.(typed);
-            return;
-          }
-          receiptError = typed.message;
-        }
-        if (
-          !mounted.current ||
-          checkpointRef.current.provisioning?.id !== intent.id
-        )
-          return;
-        if (outcome === 'running') {
-          setOperationRunning(true);
-          setOperationStatus(
-            'Account setup is still running. You can finish later while it completes.',
-          );
-          return;
-        }
-        if (outcome === 'complete') {
-          const acknowledged = transitionFirstRun(
-            { ...saved, provisioning: undefined },
-            {
-              type: 'account-provisioned',
-              alias: intent.alias,
-              deviceName: intent.deviceName,
-            },
-          );
-          persistFirstRun(acknowledged);
-          commit(acknowledged);
-          await refreshAccountIdentity(acknowledged);
-          return;
-        }
-        if (outcome === 'rejected') {
-          const rejected = {
-            ...saved,
-            provisioning: undefined,
-            state: intent.back,
-          };
-          persistFirstRun(rejected);
-          commit(rejected);
-          setMessage(
-            'Account setup was not accepted. Review the details and try again.',
-          );
-          return;
-        }
-      }
-      const refreshed = await onRefreshSnapshot(true);
-      const probe = {
-        ...saved,
-        provisioning: undefined,
-        provisionedAccount: {
-          alias: intent.alias,
-          deviceName: intent.deviceName,
-        },
-      };
-      if (
-        !mounted.current ||
-        checkpointRef.current.provisioning?.id !== intent.id
-      )
-        return;
-      const problem = provisionedIdentityProblem(refreshed, probe);
-      if (problem && problem !== 'account-missing') {
-        setOperationProblem(problem);
-        setOperationStatus(withReceipt(identityProblemText[problem]));
-        return;
-      }
-      if (intent.kind === 'sso' && intent.ssoOperationId) {
-        const progress = await bridge.sso(profileName, intent.alias, {
-          action: 'status',
-          operation_id: intent.ssoOperationId,
-        });
-        if (
-          !mounted.current ||
-          checkpointRef.current.provisioning?.id !== intent.id
-        )
-          return;
-        if (
-          progress.operationId === intent.ssoOperationId &&
-          progress.accountAlias === intent.alias &&
-          progress.purpose === 'signup' &&
-          ['complete', 'service-unavailable'].includes(progress.state)
-        ) {
-          const acknowledged = transitionFirstRun(
-            { ...saved, provisioning: undefined },
-            {
-              type: 'account-provisioned',
-              alias: intent.alias,
-              deviceName: intent.deviceName,
-            },
-          );
-          persistFirstRun(acknowledged);
-          commit(acknowledged);
-          await refreshAccountIdentity(acknowledged);
-          return;
-        }
-      }
-      const rows = await enqueueProfileWork(bridge, profileName, () =>
-        bridge.listPendingOperations(profileName),
-      );
-      if (
-        !mounted.current ||
-        checkpointRef.current.provisioning?.id !== intent.id
-      )
-        return;
-      const kind =
-        intent.kind === 'signup'
-          ? 'account-signup'
-          : intent.kind === 'recovery'
-            ? 'account-recovery'
-            : intent.kind === 'pairing'
-              ? 'pairing-acceptance'
-              : null;
-      const resumable =
-        kind !== null &&
-        rows.some(
-          (row) =>
-            row.kind === kind && row.alias === intent.alias && !row.target,
-        );
-      const adoptable = !resumable && !problem;
-      setOperationResumable(resumable);
-      setExistingAccountAdoptable(adoptable);
-      setOperationStatus(
-        withReceipt(
-          resumable
-            ? 'Account setup was interrupted. Resume it to continue.'
-            : adoptable
-              ? 'An account with this username already exists on this server. You can use this account, start over, or check your server settings.'
-              : 'Account setup still could not be confirmed. Check again, start over, or check your server settings.',
-        ),
-      );
-    } catch (error) {
-      if (mounted.current)
-        setOperationStatus(normalizeCommandError(error).message);
-    } finally {
-      if (mounted.current) {
-        setIdentityLoading(false);
-        setOperationChecked(true);
-      }
-    }
-  };
-
-  const intentId = checkpoint.provisioning?.id;
-  useEffect(() => {
-    setOperationChecked(false);
-    setOperationProblem(null);
-    setOperationRunning(false);
-    setExistingAccountAdoptable(false);
-  }, [intentId]);
-
-  const probeKey =
-    state === 'operation-pending'
-      ? `operation:${checkpoint.provisioning?.id ?? ''}`
-      : state === 'identity-pending'
-        ? `identity:${checkpoint.provisionedAccount?.alias ?? ''}`
-        : null;
-  const automaticProbe = useRef<() => void>(() => {});
-  automaticProbe.current = () => {
-    if (state === 'operation-pending') void checkOperationStatus();
-    else void refreshAccountIdentity();
-  };
-  useEffect(() => {
-    if (!agentReady || !probeKey || busy || identityLoading) return;
-    if (autoProbedKey.current === probeKey) return;
-    autoProbedKey.current = probeKey;
-    if (mounted.current) automaticProbe.current();
-  }, [agentReady, busy, identityLoading, mounted, probeKey]);
-
-  const acknowledgeExistingAccount = async (
-    alias: string,
-    deviceName: string,
-  ): Promise<void> => {
-    const acknowledged = transitionFirstRun(
-      { ...checkpointRef.current, provisioning: undefined },
-      { type: 'account-provisioned', alias, deviceName },
+  ): Promise<void> =>
+    accountOperations.runAccountOperation(
+      { deviceName, username, email, invite, phrase: recoveryPhrase },
+      kind,
+      alias,
+      operation,
+      extra,
+      details,
     );
-    persistFirstRun(acknowledged);
-    commit(acknowledged);
-    setOperationStatus(null);
-    setExistingAccountAdoptable(false);
-    setDuplicateAlias(null);
-    await refreshAccountIdentity(acknowledged);
-  };
-
-  const adoptExistingAccount = async (): Promise<void> => {
-    const intent = checkpointRef.current.provisioning;
-    if (!intent || !existingAccountAdoptable || busy || identityLoading) return;
-    await acknowledgeExistingAccount(intent.alias, intent.deviceName);
-  };
-
-  const adoptDuplicateAccount = async (): Promise<void> => {
-    if (!duplicateAlias || busy || identityLoading) return;
-    await acknowledgeExistingAccount(
-      duplicateAlias.alias,
-      duplicateAlias.deviceName,
-    );
-  };
 
   const discardProvisioning = (): void => {
     try {
@@ -1455,9 +861,7 @@ function FirstRunSession({
         type: 'discard-provisioning',
       }),
     );
-    setOperationStatus(null);
-    setOperationProblem(null);
-    setOperationResumable(false);
+    accountOperations.clearOperationProblem();
     setMessage(null);
     setConnectionErrors({ copy: null, recover: null, pair: null });
   };
@@ -1474,36 +878,18 @@ function FirstRunSession({
         type: 'discard-provisioned-account',
       }),
     );
-    setIdentityError(null);
-    setIdentityProblem(null);
+    accountOperations.clearIdentityProblem();
   };
 
   const resumeAccountOperation = async (): Promise<void> => {
-    const saved = checkpointRef.current;
-    const intent = saved.provisioning;
-    if (!intent || !saved.profile || !operationResumable || busy) return;
-    const name = saved.profile.profile;
-    await runAccountOperation(intent.kind, intent.alias, () => {
-      if (intent.kind === 'signup')
-        return bridge.resumeFirstRunAccount(name, intent.alias);
-      if (intent.kind === 'recovery')
-        return bridge.resumeOwnerRecovery(
-          name,
-          intent.alias,
-          recoveryPhrase,
-          intent.deviceName,
-        );
-      if (intent.kind === 'pairing' && intent.candidateId)
-        return bridge.resumeGoProfilePairing(
-          intent.candidateId,
-          name,
-          intent.alias,
-        );
-      throw new Error(
-        'This operation cannot be resumed here. Review account settings.',
-      );
+    const resumed = await accountOperations.resumeAccountOperation({
+      deviceName,
+      username,
+      email,
+      invite,
+      phrase: recoveryPhrase,
     });
-    setRecoveryPhrase('');
+    if (resumed) setRecoveryPhrase('');
   };
 
   const executeSsoSignup = async (
@@ -1579,47 +965,25 @@ function FirstRunSession({
     busyOperation !== 'server-check' &&
     !checkpoint.provisioning;
 
-  const recoveryActions = setupActions(checkpoint, {
-    mutating: mutationBusy,
+  const {
+    recoveryActions,
+    restartError,
+    setRestartError,
+    confirmingRestart,
+    setConfirmingRestart,
+    reenterSetup,
+    startSetupOver,
+  } = useSetupSession({
+    bridge,
+    checkpoint,
+    checkpointRef,
+    mounted,
+    mutationBusy,
     operationRunning,
-    inFlight: Boolean(
-      checkpoint.provisioning &&
-      provisioningInFlight(bridge, checkpoint.provisioning.id),
-    ),
+    clearSecrets,
+    invalidateIdentity: accountOperations.invalidateIdentity,
+    onReplaceSession,
   });
-  const [restartError, setRestartError] = useState<string | null>(null);
-  const replaceSession = (next: FirstRunCheckpoint): void => {
-    persistFirstRun(next);
-    clearSecrets();
-    mounted.current = false;
-    identityGeneration.current++;
-    onReplaceSession(next);
-  };
-  /**
-   * Setup is re-entered from the app sidebar with an account already set up,
-   * so the attempt in hand is retained rather than discarded.
-   */
-  const reenterSetup = (): void => {
-    if (!recoveryActions.canRestart) return;
-    try {
-      retainSetup(checkpointRef.current);
-      replaceSession(initialFirstRun(checkpoint.path));
-    } catch (error) {
-      setRestartError(normalizeCommandError(error).message);
-    }
-  };
-  const [confirmingRestart, setConfirmingRestart] = useState(false);
-  /** Discards this device’s setup, retained attempts included. */
-  const startSetupOver = (): void => {
-    setConfirmingRestart(false);
-    if (!recoveryActions.canRestart) return;
-    try {
-      clearRetainedSetups();
-      replaceSession(initialFirstRun(checkpoint.path));
-    } catch (error) {
-      setRestartError(normalizeCommandError(error).message);
-    }
-  };
 
   /**
    * Setup is left through the sidebar, which clears what was typed on the way
@@ -3361,7 +2725,10 @@ function FirstRunSession({
                       }}
                       onComplete={() => {
                         setInvite('');
-                        accountProvisioned(accountAlias);
+                        accountOperations.accountProvisioned(
+                          accountAlias,
+                          deviceName,
+                        );
                       }}
                     />
                   </div>
