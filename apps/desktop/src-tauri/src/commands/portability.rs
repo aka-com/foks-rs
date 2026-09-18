@@ -4,7 +4,7 @@ use crate::{
         AgentError, MaintenanceCompletion, MaintenanceKind, MaintenancePhase, MaintenanceSnapshot,
         MaintenanceWorker, MAINTENANCE_EVENT,
     },
-    commands::{require_main_window, AppState},
+    commands::{require_main_window, AppState, MAIN},
 };
 use tauri::{Emitter as _, Manager as _, State};
 use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons};
@@ -199,8 +199,12 @@ fn selected_path(
     .transpose()
 }
 fn confirm(app: &tauri::AppHandle, title: &str, message: String) -> bool {
+    let window = app
+        .get_webview_window(MAIN)
+        .expect("main window unavailable during maintenance");
     app.dialog()
         .message(message)
+        .parent(&window)
         .title(title)
         .buttons(MessageDialogButtons::OkCancel)
         .blocking_show()
@@ -346,8 +350,12 @@ fn verify_accounts(
     }
     require_unlocked(app, generation)?;
     let message=format!("{}\n\nAccounts requiring sign-in remain blocked. Complete their existing-account sign-in, then verify again. No queued writes were submitted.",serde_json::to_string_pretty(&reports)?);
+    let window = app
+        .get_webview_window(MAIN)
+        .expect("main window unavailable during import verification");
     app.dialog()
         .message(message)
+        .parent(&window)
         .title("Import verification")
         .blocking_show();
     Ok(())

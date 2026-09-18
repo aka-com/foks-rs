@@ -2,17 +2,25 @@
 
 use std::path::Path;
 
+use tauri::Manager as _;
 use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
 
-use crate::agent::{AgentError, AgentHandle};
+use crate::{
+    agent::{AgentError, AgentHandle},
+    commands::MAIN,
+};
 
 /// Shows a blocking dialog and exits non-zero.
 ///
 /// Invoked from the startup thread to display a fatal error dialog before a
 /// non-zero exit.
 pub fn fatal_startup(app: &tauri::AppHandle, title: &str, body: &str) -> ! {
+    let window = app
+        .get_webview_window(MAIN)
+        .expect("main window unavailable during startup");
     app.dialog()
         .message(body)
+        .parent(&window)
         .kind(MessageDialogKind::Error)
         .title(title)
         .blocking_show();
@@ -27,6 +35,9 @@ pub fn fatal_startup(app: &tauri::AppHandle, title: &str, body: &str) -> ! {
 /// the dialog plugin. The caller holds ordinary agent commands until this
 /// returns (see `AgentHandle::hold_commands_for_startup`).
 pub fn require_agent(app: &tauri::AppHandle, agent: &AgentHandle) {
+    let window = app
+        .get_webview_window(MAIN)
+        .expect("main window unavailable during startup");
     let socket = agent.socket();
     loop {
         if let Err(error) = agent.ensure_started_with_confirmation(&|target| {
@@ -36,6 +47,7 @@ pub fn require_agent(app: &tauri::AppHandle, agent: &AgentHandle) {
                     target.pid,
                     &target.executable,
                 ))
+                .parent(&window)
                 .kind(MessageDialogKind::Warning)
                 .title("Replace Existing FOKS Agent?")
                 .buttons(MessageDialogButtons::OkCancelCustom(
@@ -58,6 +70,7 @@ pub fn require_agent(app: &tauri::AppHandle, agent: &AgentHandle) {
                     .message(format!(
                         "{body}\n\nYou can delete this device's local FOKS state and start again."
                     ))
+                    .parent(&window)
                     .kind(MessageDialogKind::Error)
                     .title("Agent Connection Failed")
                     .buttons(MessageDialogButtons::OkCancelCustom(
@@ -71,6 +84,7 @@ pub fn require_agent(app: &tauri::AppHandle, agent: &AgentHandle) {
                 let confirmed = app
                     .dialog()
                     .message(reset_warning(&root))
+                    .parent(&window)
                     .kind(MessageDialogKind::Warning)
                     .title("Delete Local FOKS State?")
                     .buttons(MessageDialogButtons::OkCancelCustom(
