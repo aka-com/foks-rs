@@ -2,21 +2,13 @@
  * The Servers section of Settings, displaying configured servers and detailed server state.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
-import {
-  enqueueProfileWork,
-  normalizeCommandError,
-  sharedServerStatus,
-  shouldReportPassiveServerStatusError,
-} from '../bridge';
-import type {
-  Bridge,
-  CheckedServer,
-  ResetPreview,
-  ServerStatusSnapshot,
-} from '../bridge';
+import type { Bridge, CheckedServer, ServerStatusSnapshot } from '../bridge';
+import { useServerMetadata } from './servers/use-server-metadata';
+import { useResetWorkflow } from './servers/use-reset-workflow';
+import { serverBinding } from './servers/server-workflow';
 import {
   Band,
   Button,
@@ -84,13 +76,6 @@ const expiresShort = (value: number | null): string => {
       }).format(date)
     : 'Unknown date';
 };
-const acceptanceText = (value: CheckedServer['acceptance']): string =>
-  value === 'inserted'
-    ? 'Server identity pinned'
-    : value === 'advanced'
-      ? 'Server verification updated'
-      : 'Server verification unchanged';
-
 /** Explains why a checked server does not accept this client's v0.1.9. */
 function versionMismatchText(
   version: NonNullable<CheckedServer['serverVersion']>,
@@ -212,10 +197,6 @@ export function ServersSection({
   onMutationError,
 }: Props): ReactNode {
   const [enteredScene] = useState(scene);
-  const [statuses, setStatuses] = useState<Map<string, ServerStatusSnapshot>>(
-    new Map(),
-  );
-  const [checked, setChecked] = useState<Map<string, CheckedServer>>(new Map());
   const [sheet, setSheet] = useState<Sheet>(() =>
     enteredScene === 'servers-add'
       ? 'add'
@@ -223,21 +204,23 @@ export function ServersSection({
         ? 'reset'
         : null,
   );
-  const [reset, setReset] = useState<ResetPreview | null>(null);
-  const [resetLoading, setResetLoading] = useState(false);
-  const [resetError, setResetError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const toasts = useToast();
   const selected = serverFor(agentSnapshot, profile);
-  const seededCheck = useRef(false);
   const rollback = enteredScene === 'servers-rollback';
+  const { statuses, checked, busy, check } = useServerMetadata({
+    bridge,
+    snapshot: agentSnapshot,
+    profile,
+    enteredScene,
+    onError,
+    onMutationError,
+    onRefresh,
+    toast: (message) => toasts.show(message),
+  });
 
-  // Reset preview tokens are invalidated when the window loses focus.
   useEffect(() => {
     const conceal = (): void => {
       setSheet(null);
-      setReset(null);
-      setResetError(null);
     };
     const concealWhenHidden = (): void => {
       if (document.hidden) conceal();
@@ -249,139 +232,6 @@ export function ServersSection({
       document.removeEventListener('visibilitychange', concealWhenHidden);
     };
   }, []);
-
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      const rows = new Map<string, ServerStatusSnapshot>();
-      for (const server of agentSnapshot.servers) {
-        if (
-          server.trust.status === 'blocked' ||
-          server.restrictions.some(
-            (restriction) => restriction.kind === 'schema-incompatible',
-          )
-        )
-          continue;
-        try {
-          const status = await sharedServerStatus(bridge, server.id);
-          if (status.profile !== server.id)
-            throw new Error(
-              'describe_server_status returned a different profile.',
-            );
-          rows.set(server.id, status);
-        } catch (error) {
-          if (alive && shouldReportPassiveServerStatusError(error))
-            onError(error);
-        }
-      }
-      if (alive) {
-        setStatuses(rows);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [bridge, onError, agentSnapshot.servers]);
-
-  useEffect(() => {
-    if (
-      !bridge.fixtureSnapshot ||
-      enteredScene !== 'servers-check' ||
-      !selected ||
-      seededCheck.current
-    )
-      return;
-    seededCheck.current = true;
-    void enqueueProfileWork(bridge, selected.id, () =>
-      bridge.checkServer(selected.id),
-    )
-      .then(async (report) => {
-        if (report.profile !== selected.id)
-          throw new Error('check_server returned a different profile.');
-        setChecked((current) => new Map(current).set(selected.id, report));
-        const passive = await enqueueProfileWork(bridge, selected.id, () =>
-          bridge.describeServerStatus(selected.id),
-        );
-        if (passive.profile !== selected.id)
-          throw new Error(
-            'describe_server_status returned a different profile.',
-          );
-        setStatuses((current) => new Map(current).set(selected.id, passive));
-      })
-      .catch((error) => void onMutationError(error));
-  }, [bridge, enteredScene, onMutationError, selected]);
-
-  const loadResetPreview = useCallback(() => {
-    if (!selected) return;
-    setResetLoading(true);
-    setResetError(null);
-    setReset(null);
-    void enqueueProfileWork(bridge, selected.id, () =>
-      bridge.describeReset(selected.id),
-    )
-      .then((preview) => {
-        if (preview.profile !== selected.id)
-          throw new Error('describe_reset returned a different profile.');
-        setReset(preview);
-      })
-      .catch((error) => {
-        setResetError(normalizeCommandError(error).message);
-        onError(error);
-      })
-      .finally(() => setResetLoading(false));
-  }, [bridge, onError, selected]);
-
-  useEffect(() => {
-    if (sheet !== 'reset' || !selected) return;
-    loadResetPreview();
-  }, [loadResetPreview, selected, sheet]);
-
-  const check = async (server: Server): Promise<void> => {
-    // Prevent duplicate checks from rapid key events and ignore blocked servers.
-    if (
-      busy ||
-      resolveServerUiState(agentSnapshot, server) === 'recovery-required'
-    )
-      return;
-    if (
-      server.trust.status === 'blocked' ||
-      server.restrictions.some(
-        (restriction) => restriction.kind === 'schema-incompatible',
-      )
-    )
-      return;
-    setBusy(true);
-    try {
-      const report = await enqueueProfileWork(bridge, server.id, () =>
-        bridge.checkServer(server.id),
-      );
-      if (report.profile !== server.id)
-        throw new Error('check_server returned a different profile.');
-      setChecked((current) => new Map(current).set(server.id, report));
-      toasts.show(
-        `Checked ${report.canonicalName}, ${acceptanceText(report.acceptance)}`,
-      );
-      try {
-        const passive = await enqueueProfileWork(bridge, server.id, () =>
-          bridge.describeServerStatus(server.id),
-        );
-        if (passive.profile !== server.id)
-          throw new Error(
-            'describe_server_status returned a different profile.',
-          );
-        setStatuses((current) => new Map(current).set(server.id, passive));
-        await onRefresh(
-          `Checked ${report.canonicalName}; refreshed signed server status`,
-        );
-      } catch (error) {
-        await onMutationError(error);
-      }
-    } catch (error) {
-      await onMutationError(error);
-    } finally {
-      setBusy(false);
-    }
-  };
 
   // A check pins or advances the server's identity and then reads its signed
   // status back; the section is where both answers are stated. Nothing else
@@ -434,19 +284,13 @@ export function ServersSection({
       />
     ) : sheet === 'reset' && selected ? (
       <ResetSheet
+        key={serverBinding(selected)}
         server={selected}
-        preview={reset}
-        resetLoading={resetLoading}
-        resetError={resetError}
-        onRetryPreview={loadResetPreview}
         bridge={bridge}
-        onClose={() => {
-          setSheet(null);
-          setReset(null);
-        }}
+        onPreviewError={onError}
+        onClose={() => setSheet(null)}
         onReset={async () => {
           setSheet(null);
-          setReset(null);
           await onRefresh(
             `${serverDisplayName(selected)} has been reset. Verify the server before reconnecting.`,
           );
@@ -1375,33 +1219,30 @@ function RenameServerSheet({
 
 function ResetSheet({
   server,
-  preview,
-  resetLoading,
-  resetError,
-  onRetryPreview,
   bridge,
   onClose,
   onReset,
   onError,
+  onPreviewError,
 }: {
   server: Server;
-  preview: ResetPreview | null;
-  resetLoading: boolean;
-  resetError: string | null;
-  onRetryPreview: () => void;
   bridge: Bridge;
   onClose: () => void;
   onReset: () => Promise<void>;
   onError: (error: unknown) => void;
+  onPreviewError: (error: unknown) => void;
 }): ReactNode {
   const [confirmation, setConfirmation] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [available, setAvailable] = useState(false);
-  const token = useRef<string | null>(null);
-  useEffect(() => {
-    token.current = preview?.token ?? null;
-    setAvailable(Boolean(preview?.token));
-  }, [preview?.token]);
+  const {
+    preview,
+    loading: resetLoading,
+    error: resetError,
+    available,
+    busy,
+    load: onRetryPreview,
+    close,
+    reset,
+  } = useResetWorkflow({ bridge, server, onClose, onError, onPreviewError });
   // The reset spends its one token and deletes local keys; the sheet is where
   // it says whether it did.
   useSheetGuard(
@@ -1412,14 +1253,11 @@ function ResetSheet({
   return (
     <SheetFrame
       title={`Erase local credentials for ${serverDisplayName(server)}?`}
-      onClose={() => {
-        if (busy) return;
-        onClose();
-      }}
+      onClose={close}
       danger
       footer={
         <>
-          <Button disabled={busy} onClick={onClose}>
+          <Button disabled={busy} onClick={close}>
             Cancel
           </Button>
           <Button
@@ -1427,18 +1265,7 @@ function ResetSheet({
             disabled={
               confirmation !== server.id || !preview || !available || busy
             }
-            onClick={() => {
-              const once = token.current;
-              token.current = null;
-              setAvailable(false);
-              if (!once) return;
-              setBusy(true);
-              void bridge
-                .resetServer(server.id, confirmation, once)
-                .then(onReset)
-                .catch(onError)
-                .finally(() => setBusy(false));
-            }}
+            onClick={() => void reset(confirmation, onReset)}
           >
             Erase credentials and reset
           </Button>
