@@ -101,6 +101,12 @@ async function setup(
     bridge,
     {
       getSnapshot: () => inbox,
+      handleError: (id, cause) => {
+        if ((cause as { code?: string }).code !== 'chat-integrity')
+          return false;
+        blocked.push(id);
+        return true;
+      },
       block: (id) => {
         blocked.push(id);
       },

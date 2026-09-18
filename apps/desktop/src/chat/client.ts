@@ -1,4 +1,5 @@
-import { enqueueProfileWork } from '../bridge';
+import { enqueueProfileWork, normalizeMutationError } from '../bridge';
+import { chatActionMutates } from '../chat-contract';
 import {
   scheduleProfileWork,
   type BackgroundHistoryWork,
@@ -62,7 +63,13 @@ export function chatClient(bridge: Bridge, profile: string, storeId: string) {
     const work = async () => {
       if (closed) throw cancelled();
       authorize?.('before');
-      const reply = await bridge.chat(storeId, action, view);
+      const reply = await bridge
+        .chat(storeId, action, view)
+        .catch((cause: unknown) => {
+          throw chatActionMutates(action)
+            ? normalizeMutationError(cause)
+            : cause;
+        });
       if (closed) throw cancelled();
       authorize?.('after');
       if (scope && !sameScope(scope, reply.scope)) throw integrity();

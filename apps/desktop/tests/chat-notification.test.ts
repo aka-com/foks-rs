@@ -93,6 +93,7 @@ test('consumer baselines verified history, filters own messages and never writes
   const alerts: unknown[] = [];
   const listeners = new Set<() => void>();
   const service = {
+    handleError: () => false,
     subscribe: (fn: () => void) => {
       listeners.add(fn);
       return () => listeners.delete(fn);
@@ -179,6 +180,7 @@ test('consumer rotates beyond 64 channels despite an always-failing first channe
   }));
   const checked = new Set<string>();
   const service = {
+    handleError: () => false,
     subscribe: () => () => {},
     getSnapshot: () =>
       new Map([
@@ -252,6 +254,7 @@ test('closing consumer during history discards late authorized plaintext', async
   let finish: ((value: unknown) => void) | undefined;
   let alerts = 0;
   const service = {
+    handleError: () => false,
     subscribe: () => () => {},
     getSnapshot: () =>
       new Map([
@@ -368,6 +371,7 @@ test('activating a notification opens the Chat tab on that team and channel', as
     cancelChat: async () => {},
   };
   const service = {
+    handleError: () => false,
     subscribe: () => () => {},
     getSnapshot: () => new Map(),
   };

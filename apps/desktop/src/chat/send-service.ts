@@ -33,6 +33,7 @@ type Inbox = Pick<
   | 'invalidate'
   | 'block'
   | 'blockChannel'
+  | 'handleError'
   | 'isChannelBlocked'
 >;
 export type SendPhase =
@@ -661,10 +662,7 @@ export class ChatSendService {
       return reply;
     } catch (error) {
       if (this.current(team, epoch)) {
-        const typed = normalizeCommandError(error);
-        if (typed.code === 'chat-channel-integrity' && channel)
-          this.inbox.blockChannel(team.storeId, channel);
-        else if (typed.fatal) this.inbox.block(team.storeId, typed.message);
+        this.inbox.handleError(team.storeId, error, channel);
         if (action.action === 'attempt') {
           team.operations = team.operations.map((op) =>
             op.id === action.operation ? { ...op, statusUnknown: true } : op,

@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { enqueueProfileWork, type Bridge } from '../src/bridge';
+import {
+  enqueueProfileWork,
+  normalizeCommandError,
+  type Bridge,
+} from '../src/bridge';
 import type {
   ChatAction,
   ChatOperation,
@@ -135,6 +139,16 @@ async function setup(hooks: Hooks = {}) {
         ...entries.get(STORE)!,
         blockedChannels: new Set([channel]),
       });
+    },
+    handleError: (store: string, cause: unknown, channel?: string) => {
+      const error = normalizeCommandError(cause);
+      if (error.code === 'chat-channel-integrity' && channel)
+        inbox.blockChannel(store, channel);
+      else if (error.code === 'chat-integrity')
+        inbox.block(store, error.message);
+      else if (error.code === 'chat-access-denied') inbox.invalidate(store);
+      else return false;
+      return true;
     },
     isChannelBlocked: (_store: string, channel: string) =>
       entries.get(STORE)!.blockedChannels.has(channel),
@@ -333,7 +347,11 @@ for (const committed of [false, true]) {
         h.channel,
       ).load();
       assert.ok(original);
-      assert.equal(h.service.messages(STORE, h.channel).length, 0);
+      assert.equal(
+        h.service.messages(STORE, h.channel)[0].phase,
+        'unconfirmed',
+      );
+      assert.equal(h.service.canSubmit(STORE, h.channel), false);
       h.service.stop();
       h.updateInbox(h.ready);
       h.service.start();
@@ -525,32 +543,6 @@ for (const committed of [false, true]) {
       });
       try {
         await h.service.submit(STORE, h.channel, 'original');
-        if (error instanceof Error) {
-          assert.equal(h.service.messages(STORE, h.channel).length, 0);
-          const saved = await chatIntentPersistence(
-            h.bridge,
-            STORE,
-            h.scope,
-            h.channel,
-          ).load();
-          assert.ok(saved);
-          assert.equal(saved.text, 'original');
-          await h.clock.advance(7000);
-          assert.equal(count(h.calls, 'prepare-message'), 0);
-          assert.equal(count(h.calls, 'attempt'), 0);
-          h.service.stop();
-          h.updateInbox(h.ready);
-          h.service.start();
-          await h.service.open(STORE, h.channel);
-          await settle();
-          const recovered = h.service.messages(STORE, h.channel)[0];
-          assert.equal(recovered.submission, saved.submission);
-          assert.equal(recovered.phase, 'sent');
-          assert.equal(count(h.calls, 'submit-message'), 1);
-          assert.equal(count(h.calls, 'prepare-message'), 1);
-          assert.equal(count(h.calls, 'attempt'), committed ? 0 : 1);
-          return;
-        }
         const message = h.service.messages(STORE, h.channel)[0];
         assert.equal(message.phase, 'unconfirmed');
         assert.equal(message.ambiguousPreparation, true);

@@ -1,4 +1,8 @@
-import { normalizeCommandError, type CommandError } from './bridge';
+import {
+  normalizeCommandError,
+  normalizeMutationError,
+  type CommandError,
+} from './bridge';
 
 export type FirstRunOperation =
   | 'pending-read'
@@ -24,7 +28,11 @@ export function classifyFirstRunFailure(
   operation: FirstRunOperation,
   error: unknown,
 ): FirstRunFailure {
-  const typed = normalizeCommandError(error);
+  const typed = ['pending-read', 'backup-prepare', 'group-discovery'].includes(
+    operation,
+  )
+    ? normalizeCommandError(error)
+    : normalizeMutationError(error);
   const uncertain =
     typed.ambiguous ||
     typed.code === 'ambiguous' ||

@@ -115,7 +115,11 @@ test('partial projection publishes healthy items without any unfinished metadata
   );
   current = false;
   gate.resolve(catalog);
-  await assert.rejects(pending, /retired/);
+  await assert.rejects(pending, {
+    code: 'catalog-read-retired',
+    fatal: false,
+    ambiguous: false,
+  });
 });
 
 async function observePartial(
@@ -152,7 +156,11 @@ async function observePartial(
   } finally {
     current = false;
     gate.resolve(response);
-    await assert.rejects(pending, /retired/);
+    await assert.rejects(pending, {
+      code: 'catalog-read-retired',
+      fatal: false,
+      ambiguous: false,
+    });
   }
 }
 

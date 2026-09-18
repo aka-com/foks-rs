@@ -1,5 +1,5 @@
 import type { Bridge } from './contract';
-import { checked } from './transport';
+import { checked, checkedMutation } from './transport';
 import {
   decodeYubiAccounts,
   decodeYubiCards,
@@ -15,5 +15,9 @@ export const yubiCommands: Pick<
   listYubiAccounts: (profile) =>
     checked('list_yubi_accounts', { profile }, decodeYubiAccounts),
   runYubi: ({ command, args }) =>
-    checked(command, { ...args }, (value) => decodeYubiResult(command, value)),
+    (['yubi_pin_status', 'verify_yubi_passphrase'].includes(command)
+      ? checked
+      : checkedMutation)(command, { ...args }, (value) =>
+      decodeYubiResult(command, value),
+    ),
 };

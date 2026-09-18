@@ -251,6 +251,146 @@ test('blocked accounts clear projections and require a fresh lifetime', async ()
   f.service.stop();
 });
 
+test('unknown inbox errors do not quarantine sibling teams and can be refreshed', async () => {
+  const f = fixture();
+  const chat = f.bridge.chat.bind(f.bridge);
+  let failed = true;
+  f.bridge.chat = async (id, action, view) => {
+    if (failed && id === 't0' && action.action === 'sync-inbox')
+      throw new Error('Projection failed.');
+    return chat(id, action, view);
+  };
+  try {
+    await f.clock.advance(500);
+    assert.notEqual(f.service.getSnapshot().get('t0')?.state, 'blocked');
+    assert.equal(f.service.getSnapshot().get('t1')?.state, 'ready');
+    failed = false;
+    f.service.invalidate('t0');
+    await f.clock.advance(500);
+    assert.equal(f.service.getSnapshot().get('t0')?.state, 'ready');
+  } finally {
+    f.service.stop();
+  }
+});
+
+test('agent loss clears authorization but fresh synchronization can recover the same service', async () => {
+  const f = fixture();
+  try {
+    await f.clock.advance(500);
+    const wait = f.waits.entries().next().value!;
+    f.waits.delete(wait[0]);
+    wait[1].reject({
+      code: 'agent-lost',
+      message: 'Disconnected.',
+      retryable: true,
+      fatal: true,
+      ambiguous: false,
+    });
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    for (const id of ['t0', 't1']) {
+      assert.equal(f.service.getSnapshot().get(id)?.state, 'unavailable');
+      assert.equal(f.service.getSnapshot().get(id)?.data, undefined);
+    }
+    await f.clock.advance(2_000);
+    for (const id of ['t0', 't1'])
+      assert.equal(f.service.getSnapshot().get(id)?.state, 'ready');
+  } finally {
+    f.service.stop();
+  }
+});
+
+test('quarantine is scoped and cannot be cleared by ordinary invalidation', () => {
+  const f = fixture(3);
+  try {
+    f.service.stop();
+    const stores = f.snapshot.stores.map((store) =>
+      store.id === 't2' ? { ...store, account: 'other' } : store,
+    );
+    f.service.updateStores({ ...f.snapshot, stores });
+    f.service.handleError('t0', {
+      code: 'chat-integrity',
+      message: 'Wrong actor.',
+      retryable: false,
+      fatal: true,
+      ambiguous: false,
+    });
+    assert.equal(f.service.getSnapshot().get('t0')?.state, 'blocked');
+    assert.equal(f.service.getSnapshot().get('t1')?.state, 'blocked');
+    assert.equal(f.service.getSnapshot().get('t2')?.state, 'loading');
+    assert.equal(
+      f.service.getSnapshot().get('t0')?.failure?.code,
+      'chat-integrity',
+    );
+    f.service.invalidate('t0');
+    assert.equal(f.service.getSnapshot().get('t0')?.state, 'blocked');
+  } finally {
+    f.service.stop();
+  }
+});
+
+test('an unscoped channel integrity failure quarantines only the affected team', async () => {
+  const f = fixture();
+  try {
+    await f.clock.advance(500);
+    f.service.handleError('t0', {
+      code: 'chat-channel-integrity',
+      message: 'Invalid channel.',
+      retryable: false,
+      fatal: true,
+      ambiguous: false,
+    });
+    f.service.invalidate('t0');
+    await f.clock.advance(1_000);
+    assert.equal(f.service.getSnapshot().get('t0')?.state, 'blocked');
+    assert.equal(f.service.getSnapshot().get('t1')?.state, 'ready');
+  } finally {
+    f.service.stop();
+  }
+});
+
+test('late inbox replies cannot restore authorization retired by a disconnect', async () => {
+  const f = fixture();
+  try {
+    await f.clock.advance(500);
+    const revision = f.service.getSnapshot().get('t0')!.authorizationRevision!;
+    const chat = f.bridge.chat.bind(f.bridge);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let held = true;
+    f.bridge.chat = async (id, action, view) => {
+      const reply = await chat(id, action, view);
+      if (id === 't0' && action.action === 'sync-inbox' && held) await gate;
+      return reply;
+    };
+    f.service.invalidate('t0');
+    await f.clock.advance(0);
+    f.service.handleError('t0', {
+      code: 'agent-lost',
+      message: 'Disconnected.',
+      retryable: true,
+      fatal: true,
+      ambiguous: false,
+    });
+    held = false;
+    release();
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    assert.equal(f.service.getSnapshot().get('t0')?.state, 'unavailable');
+    assert.equal(
+      f.service.getSnapshot().get('t0')?.authorizationRevision,
+      revision,
+    );
+    await f.clock.advance(2_000);
+    assert.equal(f.service.getSnapshot().get('t0')?.state, 'ready');
+    assert.ok(
+      f.service.getSnapshot().get('t0')!.authorizationRevision! > revision,
+    );
+  } finally {
+    f.service.stop();
+  }
+});
+
 test('finite admission serves excess accounts and releases more than the view limit over time', async () => {
   const clock = new Clock();
   const active = new Map<string, () => void>();

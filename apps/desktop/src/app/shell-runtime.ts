@@ -8,7 +8,8 @@ import {
   type AgentLifecycleController,
 } from '../agent-lifecycle';
 import {
-  isAgentReadinessError,
+  isAgentSessionError,
+  commandRecovery,
   normalizeCommandError,
   onAgentReadinessRequired,
 } from '../bridge';
@@ -185,6 +186,7 @@ export function useShellRuntime({
     healthProbe.current = pending;
   }, [agentController, bridge, commandErrorRef]);
 
+  const handledSessionErrors = useRef(new WeakSet<CommandError>());
   const commandError = useCallback(
     (error: unknown, item?: Item, draft = ''): void => {
       const typed = normalizeCommandError(error);
@@ -194,10 +196,10 @@ export function useShellRuntime({
       )
         return;
       if (typed.code === 'deadline-exceeded') checkAgentHealth();
-      if (
-        typed.fatal &&
-        ['unsafe-socket', 'protocol', 'response-binding'].includes(typed.code)
-      ) {
+      const recovery = commandRecovery(typed);
+      if (recovery.kind === 'quarantine' && recovery.scope === 'agent') {
+        if (handledSessionErrors.current.has(typed)) return;
+        handledSessionErrors.current.add(typed);
         recoveryRef.current?.cancel();
         agentController.fail(typed);
         lifetime.retire('access-change');
@@ -335,7 +337,7 @@ export function useShellRuntime({
   const handleAgentReadinessFailure = useCallback(
     (error: CommandError) => {
       if (
-        !isAgentReadinessError(error) ||
+        !isAgentSessionError(error) ||
         handledReadinessErrors.current.has(error)
       )
         return;
@@ -346,15 +348,14 @@ export function useShellRuntime({
         disconnectAgent(error.message);
         return;
       }
+      if (commandRecovery(error).kind === 'quarantine') {
+        commandError(error);
+        return;
+      }
       foregroundRefreshAllowed.current = false;
       retireBoot();
       lifetime.retire('access-change');
       setAgentCatalogReady(false);
-      if (error.code === 'version-mismatch') {
-        agentController.fail(error);
-        commandError(error);
-        return;
-      }
       const step = error.details?.reason ?? 'initialize-state';
       agentController.requireBootstrap(step);
       // Onboarding owns an explicit Retry setup action. Keep automatic

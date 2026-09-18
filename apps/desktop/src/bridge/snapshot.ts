@@ -1,4 +1,5 @@
 import { mergeProfileSnapshot } from '../catalog-state';
+import { CatalogReadRetiredError } from '../catalog-coordinator';
 import { profileInventoryComplete, serverFactAvailability } from '../model';
 import type { AgentSnapshot } from '../model';
 import {
@@ -114,9 +115,9 @@ async function loadSnapshotOnce(
   onPartial: ((snapshot: AgentSnapshot) => void) | undefined,
   isCurrent: () => boolean,
 ): Promise<AgentSnapshot> {
-  if (!isCurrent()) throw new Error('Catalog load was retired.');
+  if (!isCurrent()) throw new CatalogReadRetiredError();
   const agent = await bridge.agentStatus();
-  if (!isCurrent()) throw new Error('Catalog load was retired.');
+  if (!isCurrent()) throw new CatalogReadRetiredError();
   if (agent.state !== 'ready') {
     const error: CommandError = {
       code: 'bootstrap-required',
@@ -158,7 +159,7 @@ async function loadSnapshotOnce(
           }
         : undefined,
     );
-    if (!isCurrent()) throw new Error('Catalog load was retired.');
+    if (!isCurrent()) throw new CatalogReadRetiredError();
     const snapshot = await projectCatalog(
       bridge,
       response,
@@ -182,14 +183,14 @@ export async function loadProfileSnapshot(
   isCurrent: () => boolean = () => true,
   background?: BackgroundHistoryWork,
 ): Promise<AgentSnapshot> {
-  if (!isCurrent()) throw new Error('Catalog load was retired.');
+  if (!isCurrent()) throw new CatalogReadRetiredError();
   const response = await scheduleProfileWork(
     bridge,
     profile,
     () => bridge.listProfileCatalog(profile),
     background,
   );
-  if (!isCurrent()) throw new Error('Catalog load was retired.');
+  if (!isCurrent()) throw new CatalogReadRetiredError();
   if (
     response.profiles.length !== 1 ||
     response.profiles[0] !== profile ||
@@ -221,6 +222,6 @@ export async function loadProfileSnapshot(
     profile,
     background,
   );
-  if (!isCurrent()) throw new Error('Catalog load was retired.');
+  if (!isCurrent()) throw new CatalogReadRetiredError();
   return mergeProfileSnapshot(base, projected, profile);
 }

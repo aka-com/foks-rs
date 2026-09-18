@@ -1,5 +1,5 @@
 import { updateRetainedSetup } from './first-run-recovery';
-import { normalizeCommandError, type Bridge } from './bridge';
+import { normalizeMutationError, type Bridge } from './bridge';
 import {
   decodeFirstRunCheckpoint,
   encodeFirstRunCheckpoint,
@@ -55,7 +55,7 @@ export async function executeProvisioning(
     );
   } catch (error) {
     failure = error;
-    const typed = normalizeCommandError(error);
+    const typed = normalizeMutationError(error);
     // Transport loss may occur after the server applies the operation. Absence
     // from the catalog does not prove failure, so retain the intent for recovery.
     if (

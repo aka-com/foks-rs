@@ -1,22 +1,35 @@
 import { invoke } from '@tauri-apps/api/core';
 import {
-  isAgentReadinessError,
+  isAgentSessionError,
   normalizeCommandError,
+  normalizeMutationError,
   reportReadinessError,
   type CommandError,
 } from './errors';
 
 let nativeAgentGeneration = 0;
 
+export function checkedMutation<T>(
+  command: string,
+  args: Record<string, unknown> | undefined,
+  decode: (value: unknown) => T,
+): Promise<T> {
+  return checked(command, args, decode, true, true);
+}
+
 export async function checked<T>(
   command: string,
   args: Record<string, unknown> | undefined,
   decode: (value: unknown) => T,
   reportReadiness = true,
+  mutation = false,
 ): Promise<T> {
   const generation = nativeAgentGeneration;
+  let origin: 'invoke' | 'response' = 'invoke';
   try {
-    const value = decode(await invoke<unknown>(command, args));
+    const response = await invoke<unknown>(command, args);
+    origin = 'response';
+    const value = decode(response);
     if (
       command === 'auto_recover_agent' ||
       command === 'retry_agent_connection'
@@ -24,8 +37,21 @@ export async function checked<T>(
       nativeAgentGeneration++;
     return value;
   } catch (error) {
-    const typed = normalizeCommandError(error);
-    if (generation !== nativeAgentGeneration && isAgentReadinessError(typed)) {
+    let typed = normalizeCommandError(error);
+    typed = {
+      ...typed,
+      origin,
+      ...(origin === 'response' && typed.code === 'invalid-command-error'
+        ? { code: 'invalid-response' }
+        : {}),
+      ambiguous: mutation && typed.ambiguous,
+    };
+    if (mutation)
+      typed =
+        origin === 'response'
+          ? { ...typed, ambiguous: true, retryable: false }
+          : normalizeMutationError(typed);
+    if (generation !== nativeAgentGeneration && isAgentSessionError(typed)) {
       throw {
         ...typed,
         code: 'agent-request-retired',

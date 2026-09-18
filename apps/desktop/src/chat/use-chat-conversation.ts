@@ -135,10 +135,11 @@ export function useChatConversation(
       } catch (cause) {
         if (owner.current === client) {
           const typed = normalizeCommandError(cause);
+          service.handleError(storeId, typed, channel);
           if (typed.code === 'chat-channel-integrity' && channel) {
             service.blockChannel(storeId, channel);
             cancelHistory(channel);
-          } else if (typed.fatal) {
+          } else if (service.getSnapshot().get(storeId)?.state === 'blocked') {
             client.dispose();
             cancelHistory();
             owner.current = null;

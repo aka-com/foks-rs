@@ -47,6 +47,20 @@ export type ChatAction =
       action: 'attempt' | 'cancel' | 'finalize' | 'status' | 'reconcile';
       operation: string;
     };
+export function chatActionMutates(action: ChatAction): boolean {
+  return ![
+    'operation-body',
+    'channels',
+    'pending',
+    'inbox',
+    'sync-inbox',
+    'poll-inbox',
+    'history',
+    'notification-history',
+    'status',
+  ].includes(action.action);
+}
+
 export interface ChatScope {
   store: {
     profile: string;

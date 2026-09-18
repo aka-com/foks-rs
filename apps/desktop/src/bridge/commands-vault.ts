@@ -1,6 +1,6 @@
 import { Channel } from '@tauri-apps/api/core';
 import type { Bridge } from './contract';
-import { checked } from './transport';
+import { checked, checkedMutation } from './transport';
 import {
   decodeCatalog,
   decodeCopy,
@@ -63,7 +63,7 @@ export const vaultCommands: Pick<
   downloadFile: ({ storeId, path, version }) =>
     checked('download_file', { storeId, path, version }, decodeDownload),
   createTextItem: ({ storeId, path, value, readRole, writeRole }) =>
-    checked(
+    checkedMutation(
       'create_text_item',
       {
         storeId,
@@ -75,7 +75,7 @@ export const vaultCommands: Pick<
       decodeMutation,
     ),
   createLink: ({ storeId, path, target, readRole, writeRole }) =>
-    checked(
+    checkedMutation(
       'create_link',
       {
         storeId,
@@ -87,7 +87,7 @@ export const vaultCommands: Pick<
       decodeMutation,
     ),
   createFolder: ({ storeId, path, readRole, writeRole }) =>
-    checked(
+    checkedMutation(
       'create_folder',
       {
         storeId,
@@ -98,15 +98,15 @@ export const vaultCommands: Pick<
       decodeMutation,
     ),
   editTextItem: ({ storeId, path, version, value }) =>
-    checked(
+    checkedMutation(
       'edit_text_item',
       { storeId, path, version, value },
       decodeMutation,
     ),
   removeItem: ({ storeId, path, version }) =>
-    checked('remove_item', { storeId, path, version }, decodeMutation),
+    checkedMutation('remove_item', { storeId, path, version }, decodeMutation),
   importDroppedFile: ({ storeId, path, sourcePath, readRole, writeRole }) =>
-    checked(
+    checkedMutation(
       'import_dropped_file',
       {
         storeId,
@@ -118,7 +118,7 @@ export const vaultCommands: Pick<
       decodeMutation,
     ),
   pickAndImportFile: ({ storeId, path, readRole, writeRole }) =>
-    checked(
+    checkedMutation(
       'pick_and_import_file',
       {
         storeId,
@@ -129,13 +129,13 @@ export const vaultCommands: Pick<
       decodeMutation,
     ),
   replaceDroppedFile: ({ storeId, path, version, sourcePath }) =>
-    checked(
+    checkedMutation(
       'replace_dropped_file',
       { storeId, path, version, sourcePath },
       decodeMutation,
     ),
   pickAndReplaceFile: ({ storeId, path, version }) =>
-    checked(
+    checkedMutation(
       'pick_and_replace_file',
       { storeId, path, version },
       decodeMutation,

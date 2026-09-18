@@ -6,7 +6,10 @@ import {
   normalizeCommandError,
 } from '../bridge';
 import type { Bridge } from '../bridge';
-import { CatalogCoordinator } from '../catalog-coordinator';
+import {
+  CatalogCoordinator,
+  CatalogReadRetiredError,
+} from '../catalog-coordinator';
 import { CatalogReadGate } from '../catalog-read-gate';
 import { failCatalogRefresh, markCatalogRefresh } from '../catalog-state';
 import type { AgentSnapshot, Item } from '../model';
@@ -67,10 +70,7 @@ export function useCatalogRuntime({
           const ticket = lifetime.capture();
           const isCurrent = () => ticket.isCurrent() && catalogCurrent();
           return catalogGate.exclusive(async () => {
-            if (!isCurrent())
-              throw Object.assign(new Error('Catalog load was retired.'), {
-                code: 'catalog-read-retired',
-              });
+            if (!isCurrent()) throw new CatalogReadRetiredError();
             const base = markCatalogRefresh(latestRef.current);
             latestRef.current = base;
             setLatest(base);

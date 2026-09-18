@@ -1,5 +1,5 @@
 import type { Bridge } from '../bridge';
-import { normalizeCommandError } from '../bridge';
+import { commandRecovery, normalizeMutationError } from '../bridge';
 import type {
   ChatAction,
   ChatOperation,
@@ -78,7 +78,7 @@ export class ChannelCreationController {
     private bridge: Bridge,
     private inbox: Pick<
       ChatInboxService,
-      'getSnapshot' | 'invalidate' | 'block'
+      'getSnapshot' | 'invalidate' | 'block' | 'handleError'
     >,
     private access: () => ChannelCreationAccess,
   ) {}
@@ -426,7 +426,8 @@ export class ChannelCreationController {
       }
     } catch (cause) {
       if (epoch !== this.epoch) return;
-      const failed = normalizeCommandError(cause);
+      const failed = normalizeMutationError(cause);
+      const quarantined = commandRecovery(failed).kind === 'quarantine';
       // An ambiguous failure — the request may have been taken, the reply was
       // lost — leaves the submission where it is, and marks it as one the
       // agent may hold from here on.
@@ -434,10 +435,10 @@ export class ChannelCreationController {
       // A fatal failure ends the session this submission was made in: there
       // is nothing left to recover it with, so the sheet states the reason
       // and can be closed without preventing the user from navigating away.
-      record.invalidIdentity ||= failed.fatal;
-      if (failed.fatal) this.inbox.block(record.store.id, failed.message);
+      record.invalidIdentity ||= quarantined;
+      this.inbox.handleError(record.store.id, failed);
       record.state =
-        failed.fatal ||
+        quarantined ||
         (!record.held && preparationCanChange(cause)) ||
         failed.code === 'chat-reprepare-required' ||
         /(?:stale|key|name-conflict)/.test(failed.code)
@@ -452,7 +453,7 @@ export class ChannelCreationController {
         record.state === 'review' &&
         !record.operation &&
         !record.held &&
-        !failed.fatal
+        !quarantined
       ) {
         record.state = 'cancelled';
         record.input = undefined;

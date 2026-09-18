@@ -911,7 +911,7 @@ test('decodeCatalog preserves structured failure objects and typed error details
   );
 });
 
-test('normalizeCommandError preserves typed error fields and defaults malformed errors to fatal', () => {
+test('normalizeCommandError preserves typed fields without inventing fatality or mutation ambiguity', () => {
   assert.deepEqual(
     normalizeCommandError({
       code: 'lease-lapsed',
@@ -928,7 +928,17 @@ test('normalizeCommandError preserves typed error fields and defaults malformed 
       fatal: false,
     },
   );
-  assert.equal(normalizeCommandError('oops').fatal, true);
+  for (const cause of [
+    'oops',
+    new Error('projection failed'),
+    { code: 'io' },
+  ]) {
+    const error = normalizeCommandError(cause);
+    assert.equal(error.code, 'invalid-command-error');
+    assert.equal(error.fatal, false);
+    assert.equal(error.ambiguous, false);
+    assert.equal(error.retryable, false);
+  }
 });
 
 test('passive server status uses structured schema codes, not wording', () => {
@@ -2947,7 +2957,7 @@ test('retired scoped work cannot publish its result', async () => {
       1,
       () => current,
     ),
-    /retired/,
+    { code: 'catalog-read-retired', fatal: false, ambiguous: false },
   );
 });
 

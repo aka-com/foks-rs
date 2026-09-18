@@ -12,7 +12,7 @@ import {
   decodePendingOperations,
   decodeResetPreview,
 } from './enrollment';
-import { checked } from './transport';
+import { checked, checkedMutation } from './transport';
 import { record } from './validation';
 import { decodeMutation } from './vault-catalog';
 
@@ -48,7 +48,7 @@ export const enrollmentCommands: Pick<
   | 'resetServer'
 > = {
   runFirstRunAccountOperation: (request) =>
-    checked('run_first_run_account_operation', { request }, (value) => {
+    checkedMutation('run_first_run_account_operation', { request }, (value) => {
       const result = decodeMutation(value);
       if (!result.applied)
         throw new Error(
@@ -90,7 +90,7 @@ export const enrollmentCommands: Pick<
     passphrase,
     passphraseConfirmation,
   }) =>
-    checked(
+    checkedMutation(
       'create_first_run_account',
       {
         profile,
@@ -105,9 +105,13 @@ export const enrollmentCommands: Pick<
       decodeMutation,
     ),
   resumeFirstRunAccount: (profile, alias) =>
-    checked('resume_first_run_account', { profile, alias }, decodeMutation),
+    checkedMutation(
+      'resume_first_run_account',
+      { profile, alias },
+      decodeMutation,
+    ),
   setFirstRunPassphrase: ({ profile, alias, passphrase, confirmation }) =>
-    checked(
+    checkedMutation(
       'set_first_run_passphrase',
       { profile, alias, passphrase, confirmation },
       decodeMutation,
@@ -119,19 +123,19 @@ export const enrollmentCommands: Pick<
       decodeBackupPhrase,
     ),
   commitOwnerBackup: (profile, accountAlias, backupAlias, phrase) =>
-    checked(
+    checkedMutation(
       'commit_owner_backup',
       { profile, accountAlias, backupAlias, phrase },
       decodeMutation,
     ),
   recoverOwnerAccount: (profile, targetAlias, phrase, deviceName) =>
-    checked(
+    checkedMutation(
       'recover_owner_account',
       { profile, targetAlias, phrase, deviceName },
       decodeMutation,
     ),
   resumeOwnerRecovery: (profile, targetAlias, phrase, deviceName) =>
-    checked(
+    checkedMutation(
       'resume_owner_recovery',
       { profile, targetAlias, phrase, deviceName },
       decodeMutation,
@@ -139,7 +143,7 @@ export const enrollmentCommands: Pick<
   listAccountDevices: (accountStoreId) =>
     checked('list_account_devices', { accountStoreId }, decodeAccountDevices),
   removeAccountDevice: (accountStoreId, deviceId) =>
-    checked(
+    checkedMutation(
       'remove_account_device',
       { accountStoreId, deviceId },
       decodeDeviceRemoval,
@@ -151,7 +155,7 @@ export const enrollmentCommands: Pick<
       decodeBackupEnrollments,
     ),
   revokeOwnerBackup: (accountStoreId, backup, confirmation) =>
-    checked(
+    checkedMutation(
       'revoke_owner_backup',
       {
         accountStoreId,
@@ -173,17 +177,25 @@ export const enrollmentCommands: Pick<
       },
     ),
   startDevicePairing: (accountStoreId) =>
-    checked('start_device_pairing', { accountStoreId }, decodePairingOffer),
+    checkedMutation(
+      'start_device_pairing',
+      { accountStoreId },
+      decodePairingOffer,
+    ),
   resumeDevicePairingOffer: (accountStoreId) =>
-    checked(
+    checkedMutation(
       'resume_device_pairing_offer',
       { accountStoreId },
       decodePairingOffer,
     ),
   finishDevicePairing: (accountStoreId) =>
-    checked('finish_device_pairing', { accountStoreId }, decodeDeviceProvision),
+    checkedMutation(
+      'finish_device_pairing',
+      { accountStoreId },
+      decodeDeviceProvision,
+    ),
   acceptDevicePairing: (profile, targetAlias, deviceName, phrase) =>
-    checked(
+    checkedMutation(
       'accept_device_pairing',
       { profile, targetAlias, deviceName, phrase },
       decodeDeviceProvision,
@@ -195,37 +207,37 @@ export const enrollmentCommands: Pick<
     deviceName,
     phrase,
   ) =>
-    checked(
+    checkedMutation(
       'accept_go_profile_pairing',
       { request: { candidateId, profile, targetAlias, deviceName, phrase } },
       decodeDeviceProvision,
     ),
   resumeDevicePairingAcceptance: (profile, targetAlias) =>
-    checked(
+    checkedMutation(
       'resume_device_pairing_acceptance',
       { profile, targetAlias },
       decodeDeviceProvision,
     ),
   resumeGoProfilePairing: (candidateId, profile, targetAlias) =>
-    checked(
+    checkedMutation(
       'resume_go_profile_pairing',
       { candidateId, profile, targetAlias },
       decodeDeviceProvision,
     ),
   copyGoProfileDevice: (candidateId, profile, targetAlias) =>
-    checked(
+    checkedMutation(
       'copy_go_profile_device',
       { candidateId, profile, targetAlias },
       decodeDeviceProvision,
     ),
   setAccountPassphrase: (accountStoreId, passphrase, confirmation) =>
-    checked(
+    checkedMutation(
       'set_account_passphrase',
       { accountStoreId, passphrase, confirmation },
       decodePassphraseReport,
     ),
   changeAccountPassphrase: (accountStoreId, passphrase, confirmation) =>
-    checked(
+    checkedMutation(
       'change_account_passphrase',
       { accountStoreId, passphrase, confirmation },
       decodePassphraseReport,
@@ -239,5 +251,9 @@ export const enrollmentCommands: Pick<
   describeReset: (profile) =>
     checked('describe_reset', { profile }, decodeResetPreview),
   resetServer: (profile, confirmation, token) =>
-    checked('reset_server', { profile, confirmation, token }, decodeMutation),
+    checkedMutation(
+      'reset_server',
+      { profile, confirmation, token },
+      decodeMutation,
+    ),
 };

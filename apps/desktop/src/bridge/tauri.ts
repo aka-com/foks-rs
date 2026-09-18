@@ -7,7 +7,7 @@ import { vaultCommands } from './commands-vault';
 import { yubiCommands } from './commands-yubikey';
 import type { Bridge } from './contract';
 import { enqueueProfileWork } from './profile-work';
-import { checked } from './transport';
+import { checked, checkedMutation } from './transport';
 
 export const tauriBridge: Bridge = {
   native: true,
@@ -19,7 +19,18 @@ export const tauriBridge: Bridge = {
   ...yubiCommands,
   invitation: (profile, accountAlias, action, pin) =>
     enqueueProfileWork(tauriBridge, profile, () =>
-      checked(
+      ([
+        'preview',
+        'preview-remote',
+        'inbox',
+        'pending-approvals',
+        'list',
+        'status',
+        'status-remote',
+        'inspect-remote',
+      ].includes(action.action)
+        ? checked
+        : checkedMutation)(
         'invitation_request',
         { profile, accountAlias, action, pin },
         decodeInvitationReply,

@@ -496,8 +496,7 @@ export class NotificationConsumer {
           .chatLocal({ action: 'clear', epoch: this.session.epoch })
           .catch(() => {});
         this.service.invalidate(p.id);
-      } else if (error.fatal) {
-        this.service.block(p.id, error.message);
+      } else if (this.service.handleError(p.id, error, p.channel)) {
         this.discard(p);
       } else {
         p.failures = Math.min(p.failures + 1, 6);

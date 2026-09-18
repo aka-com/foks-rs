@@ -1,8 +1,11 @@
 export type { Bridge } from './contract';
 export type { CommandError } from './errors';
 export {
+  commandRecovery,
   isAgentReadinessError,
+  isAgentSessionError,
   normalizeCommandError,
+  normalizeMutationError,
   onAgentReadinessRequired,
   shouldReportPassiveServerStatusError,
 } from './errors';

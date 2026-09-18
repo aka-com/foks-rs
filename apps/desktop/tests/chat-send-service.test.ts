@@ -60,6 +60,7 @@ async function setup(
     },
     invalidate: () => {},
     block: () => {},
+    handleError: () => false,
     blockChannel: () => {},
     isChannelBlocked: () => false,
   };

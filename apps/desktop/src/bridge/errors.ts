@@ -12,6 +12,7 @@ export interface CommandError {
   retryable: boolean;
   ambiguous: boolean;
   fatal: boolean;
+  origin?: 'local' | 'invoke' | 'response';
   details?: {
     kind?: string;
     operation?: string;
@@ -22,6 +23,68 @@ export interface CommandError {
     foundSchema?: number;
     supportedSchema?: number;
   };
+}
+
+export type CommandRecovery =
+  | { kind: 'ignore' | 'retry' | 'refresh'; scope: 'request' }
+  | { kind: 'reconnect'; scope: 'agent' }
+  | { kind: 'quarantine'; scope: 'agent' | 'profile' | 'account' | 'channel' }
+  | { kind: 'revalidate'; scope: 'team' };
+
+export function commandRecovery(error: CommandError): CommandRecovery {
+  if (
+    !error.ambiguous &&
+    ['cancelled', 'catalog-read-retired', 'agent-request-retired'].includes(
+      error.code,
+    )
+  )
+    return { kind: 'ignore', scope: 'request' };
+  if (['agent-lost', 'bootstrap-required'].includes(error.code))
+    return { kind: 'reconnect', scope: 'agent' };
+  if (
+    [
+      'unsafe-socket',
+      'protocol',
+      'response-binding',
+      'version-mismatch',
+    ].includes(error.code)
+  )
+    return { kind: 'quarantine', scope: 'agent' };
+  if (error.code === 'chat-integrity')
+    return { kind: 'quarantine', scope: 'account' };
+  if (error.code === 'chat-channel-integrity')
+    return { kind: 'quarantine', scope: 'channel' };
+  if (
+    [
+      'unsupported-schema',
+      'rollback-detected',
+      'checkpoint-reset-required',
+      'server-identity-rejected',
+      'saved-trust-missing',
+    ].includes(error.code)
+  )
+    return { kind: 'quarantine', scope: 'profile' };
+  if (
+    ['chat-access-denied', 'capability-denied', 'chat-unsupported'].includes(
+      error.code,
+    )
+  )
+    return { kind: 'revalidate', scope: 'team' };
+  return { kind: error.retryable ? 'retry' : 'refresh', scope: 'request' };
+}
+
+export function isAgentSessionError(error: CommandError): boolean {
+  return commandRecovery(error).scope === 'agent';
+}
+
+export function normalizeMutationError(value: unknown): CommandError {
+  const error = normalizeCommandError(value);
+  return error.details?.reason !== 'admission-not-started' &&
+    ['invalid-command-error', 'invalid-response', 'unknown'].includes(
+      error.code,
+    )
+    ? { ...error, ambiguous: true, retryable: false }
+    : error;
 }
 
 type AgentReadinessListener = (error: CommandError) => void;
@@ -44,7 +107,7 @@ export function isAgentReadinessError(error: CommandError): boolean {
 }
 
 export function reportReadinessError(error: CommandError): void {
-  if (!isAgentReadinessError(error)) return;
+  if (!isAgentSessionError(error)) return;
   if (reportedReadinessErrors.has(error)) return;
   reportedReadinessErrors.add(error);
   for (const listener of readinessListeners) listener(error);
@@ -80,6 +143,11 @@ export function decodeCommandError(value: unknown, at: string): CommandError {
     retryable: bool(item.retryable, `${at}.retryable`),
     ambiguous: bool(item.ambiguous, `${at}.ambiguous`),
     fatal: bool(item.fatal, `${at}.fatal`),
+    ...(item.origin === 'local' ||
+    item.origin === 'invoke' ||
+    item.origin === 'response'
+      ? { origin: item.origin }
+      : {}),
     ...(details ? { details } : {}),
   };
 }
@@ -99,10 +167,11 @@ export function normalizeCommandError(value: unknown): CommandError {
       message:
         value instanceof Error
           ? value.message
-          : 'The local agent returned an invalid error.',
+          : 'An unexpected error occurred.',
       retryable: false,
-      ambiguous: true,
-      fatal: true,
+      ambiguous: false,
+      fatal: false,
+      origin: 'local',
     };
   }
 }

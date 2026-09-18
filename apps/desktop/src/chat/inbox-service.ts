@@ -1,5 +1,6 @@
-import type { Bridge } from '../bridge';
-import { normalizeCommandError } from '../bridge';
+import type { Bridge, CommandError } from '../bridge';
+import { commandRecovery, normalizeCommandError } from '../bridge';
+import { reportReadinessError } from '../bridge/errors';
 import type { ChatReply, ChatResult, ChatScope } from '../chat-contract';
 import { chatAvailable } from '../model';
 import type { AvailabilityOptions, TeamStore, AgentSnapshot } from '../model';
@@ -19,6 +20,7 @@ export interface TeamInbox {
   data?: Inbox;
   scope?: ChatScope;
   error: string;
+  failure?: CommandError;
   stale: boolean;
   revision: number;
   /** Advances only after an accepted authorized team synchronization. */
@@ -41,6 +43,8 @@ export const systemChatClock: ChatClock = {
   random: Math.random,
 };
 interface Team {
+  generation: number;
+  quarantine?: CommandError;
   blocked: Set<string>;
   store: TeamStore;
   dirty: boolean;
@@ -59,7 +63,7 @@ interface Account {
   due: number;
   retry: number;
   busy: boolean;
-  blocked: boolean;
+  blocked?: CommandError;
   pollClient?: ReturnType<typeof chatClient>;
   pollTeam?: string;
 }
@@ -101,6 +105,9 @@ export class ChatInboxService {
     const accepted = Object.freeze({
       ...entry,
       scope: entry.scope ? freezeDto(structuredClone(entry.scope)) : undefined,
+      failure: entry.failure
+        ? freezeDto(structuredClone(entry.failure))
+        : undefined,
       data: entry.data ? freezeDto(structuredClone(entry.data)) : undefined,
       blockedChannels: readonlySet(entry.blockedChannels),
       channelRevisions: readonlyMap(entry.channelRevisions),
@@ -178,7 +185,6 @@ export class ChatInboxService {
           due: 0,
           retry: 250,
           busy: false,
-          blocked: false,
         };
         this.accounts.set(key, account);
       }
@@ -187,6 +193,7 @@ export class ChatInboxService {
           (entry) => entry.id === store.server,
         );
         account.teams.set(store.id, {
+          generation: 0,
           store,
           blocked: new Set(),
           dirty: true,
@@ -198,7 +205,17 @@ export class ChatInboxService {
               ? server.compatibility.expiresAt * 1000
               : undefined,
         });
-        this.publish(store.id, initial());
+        this.publish(
+          store.id,
+          account.blocked
+            ? {
+                ...initial(),
+                state: 'blocked',
+                error: account.blocked.message,
+                failure: account.blocked,
+              }
+            : initial(),
+        );
       } else {
         const team = account.teams.get(store.id);
         const server = agentSnapshot.servers.find(
@@ -219,7 +236,7 @@ export class ChatInboxService {
   invalidate(id: string) {
     for (const account of this.accounts.values()) {
       const team = account.teams.get(id);
-      if (team && !account.blocked) {
+      if (team && !account.blocked && !team.quarantine) {
         team.dirty = true;
         team.due = 0;
       }
@@ -260,18 +277,66 @@ export class ChatInboxService {
     }
   }
   block(id: string, message: string) {
-    for (const account of this.accounts.values())
-      if (account.teams.has(id)) {
-        account.blocked = true;
-        for (const team of account.teams.values())
-          this.publish(team.store.id, {
-            ...initial(),
-            state: 'blocked',
-            error: message,
-          });
-        for (const [client, owner] of this.jobs)
-          if (owner === account) client.dispose();
+    this.handleError(id, integrity(message));
+  }
+  handleError(id: string, cause: unknown, channel?: string): boolean {
+    const error = normalizeCommandError(cause);
+    const recovery = commandRecovery(error);
+    if (recovery.kind === 'ignore') return true;
+    if (recovery.scope === 'channel' && channel) {
+      this.blockChannel(id, channel);
+      return true;
+    }
+    if (
+      recovery.scope === 'request' &&
+      !error.fatal &&
+      error.code !== 'invalid-response'
+    )
+      return false;
+    const profile = [...this.accounts.values()]
+      .flatMap((account) => [...account.teams.values()])
+      .find((team) => team.store.id === id)?.store.server;
+    for (const account of this.accounts.values()) {
+      const teams = [...account.teams.values()].filter(
+        (team) =>
+          recovery.scope === 'agent' ||
+          (recovery.scope === 'profile' && team.store.server === profile) ||
+          (recovery.scope === 'account' && account.teams.has(id)) ||
+          team.store.id === id,
+      );
+      if (!teams.length || account.blocked) continue;
+      const quarantined = recovery.kind === 'quarantine';
+      if (quarantined && recovery.scope !== 'channel') account.blocked = error;
+      for (const team of teams) {
+        team.generation++;
+        if (quarantined) team.quarantine = error;
+        team.dirty = true;
+        team.due =
+          quarantined || recovery.scope === 'request'
+            ? Infinity
+            : this.clock.now() +
+              (recovery.kind === 'revalidate'
+                ? 30_000
+                : this.delay(team.retry));
+        team.retry = Math.min(30_000, team.retry * 2);
+        this.publish(team.store.id, {
+          ...initial(),
+          state: quarantined ? 'blocked' : 'unavailable',
+          error: error.message,
+          failure: error,
+          authorizationRevision: this.snapshot.get(team.store.id)
+            ?.authorizationRevision,
+          revision: (this.snapshot.get(team.store.id)?.revision ?? 0) + 1,
+          blockedChannels: new Set(team.blocked),
+        });
       }
+      for (const [client, owner] of this.jobs)
+        if (owner === account) client.dispose();
+      account.due = this.clock.now() + this.delay(account.retry);
+    }
+    reportReadinessError(error);
+    this.kick();
+    return true;
   }
   private accept(account: Account, team: Team, reply: ChatReply) {
     const { scope } = reply;
@@ -288,13 +353,20 @@ export class ChatInboxService {
     account.actor = scope.actor;
     account.host = scope.host;
   }
-  private valid(account: Account, team: Team, epoch: number) {
+  private valid(
+    account: Account,
+    team: Team,
+    epoch: number,
+    generation: number,
+  ) {
     return (
       this.running &&
       epoch === this.epoch &&
       this.accounts.get(account.key) === account &&
       account.teams.get(team.store.id) === team &&
       !account.blocked &&
+      !team.quarantine &&
+      generation === team.generation &&
       this.accessValid(team)
     );
   }
@@ -323,6 +395,7 @@ export class ChatInboxService {
       const teams = [...account.teams.values()];
       const team = teams.find(
         (candidate) =>
+          !candidate.quarantine &&
           this.accessValid(candidate) &&
           !candidate.busy &&
           candidate.due <= now,
@@ -332,6 +405,7 @@ export class ChatInboxService {
       const canonical = teams
         .filter(
           (candidate) =>
+            !candidate.quarantine &&
             this.accessValid(candidate) &&
             this.snapshot.get(candidate.store.id)?.state !== 'unavailable',
         )
@@ -352,6 +426,7 @@ export class ChatInboxService {
   }
   private async sync(account: Account, team: Team) {
     const epoch = this.epoch;
+    const generation = team.generation;
     team.busy = true;
     team.dirty = false;
     this.profiles.add(team.store.server);
@@ -360,7 +435,7 @@ export class ChatInboxService {
     const client = chatClient(this.bridge, team.store.server, team.store.id);
     this.jobs.set(client, account);
     try {
-      if (!this.valid(account, team, epoch)) return;
+      if (!this.valid(account, team, epoch, generation)) return;
       const reply = await client.request(
         {
           action: 'sync-inbox',
@@ -368,10 +443,11 @@ export class ChatInboxService {
         },
         undefined,
         () => {
-          if (!this.valid(account, team, epoch)) throw cancelledAccess();
+          if (!this.valid(account, team, epoch, generation))
+            throw cancelledAccess();
         },
       );
-      if (!this.valid(account, team, epoch)) return;
+      if (!this.valid(account, team, epoch, generation)) return;
       this.accept(account, team, reply);
       if (reply.result.kind !== 'inbox') throw integrity();
       for (const id of reply.result.blocked_channels) team.blocked.add(id);
@@ -410,36 +486,19 @@ export class ChatInboxService {
       team.retry = 250;
       team.due = team.dirty ? 0 : this.clock.now() + 25_000;
     } catch (cause) {
-      if (!this.valid(account, team, epoch)) return;
+      if (!this.valid(account, team, epoch, generation)) return;
       const error = normalizeCommandError(cause);
-      if (error.fatal) this.block(team.store.id, error.message);
-      else if (error.code !== 'cancelled') {
-        const denied = [
-          'chat-access-denied',
-          'capability-denied',
-          'chat-unsupported',
-        ].includes(error.code);
-        if (denied && account.pollTeam === team.store.id) {
-          account.pollClient?.dispose();
-          account.due = 0;
-        }
-        const old = this.snapshot.get(team.store.id) ?? initial();
-        this.publish(
-          team.store.id,
-          denied
-            ? {
-                ...initial(),
-                blockedChannels: new Set(team.blocked),
-                state: 'unavailable',
-                error: error.message,
-              }
-            : { ...old, error: error.message, stale: true },
-        );
-        team.dirty = true;
-        team.due =
-          this.clock.now() + (denied ? 30_000 : this.delay(team.retry));
-        team.retry = Math.min(30_000, team.retry * 2);
-      }
+      if (this.handleError(team.store.id, error)) return;
+      const old = this.snapshot.get(team.store.id) ?? initial();
+      this.publish(team.store.id, {
+        ...old,
+        error: error.message,
+        failure: error,
+        stale: true,
+      });
+      team.dirty = true;
+      team.due = this.clock.now() + this.delay(team.retry);
+      team.retry = Math.min(30_000, team.retry * 2);
     } finally {
       client.dispose();
       this.jobs.delete(client);
@@ -451,6 +510,7 @@ export class ChatInboxService {
   }
   private async poll(account: Account, team: Team) {
     const epoch = this.epoch;
+    const generation = team.generation;
     const since = account.head;
     account.busy = true;
     this.polls++;
@@ -459,7 +519,7 @@ export class ChatInboxService {
     account.pollClient = client;
     account.pollTeam = team.store.id;
     try {
-      if (!this.valid(account, team, epoch)) return;
+      if (!this.valid(account, team, epoch, generation)) return;
       const reply = await client.request(
         {
           action: 'poll-inbox',
@@ -468,10 +528,11 @@ export class ChatInboxService {
         },
         undefined,
         () => {
-          if (!this.valid(account, team, epoch)) throw cancelledAccess();
+          if (!this.valid(account, team, epoch, generation))
+            throw cancelledAccess();
         },
       );
-      if (!this.valid(account, team, epoch)) return;
+      if (!this.valid(account, team, epoch, generation)) return;
       this.accept(account, team, reply);
       if (reply.result.kind !== 'poll') throw integrity();
       const result = reply.result;
@@ -503,13 +564,13 @@ export class ChatInboxService {
       account.retry = 250;
       account.due = this.clock.now() + 250;
     } catch (cause) {
-      if (!this.valid(account, team, epoch)) return;
+      if (!this.valid(account, team, epoch, generation)) return;
       const error = normalizeCommandError(cause);
-      if (error.fatal) this.block(team.store.id, error.message);
       if (error.code === 'cancelled') {
         account.due = 0;
         return;
       }
+      if (this.handleError(team.store.id, error)) return;
       account.due = this.clock.now() + this.delay(account.retry);
       account.retry = Math.min(30_000, account.retry * 2);
     } finally {

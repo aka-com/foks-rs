@@ -145,6 +145,11 @@ function setup(initial = entry()) {
     blockChannel: (_id: string, channel: string) =>
       update({ blockedChannels: new Set([channel]) }),
     block: () => update({ state: 'blocked' }),
+    handleError: (_id: string, cause: unknown) => {
+      if ((cause as { code?: string }).code !== 'chat-integrity') return false;
+      update({ state: 'blocked' });
+      return true;
+    },
   } as unknown as ChatInboxService;
   const bridge = {
     chat: async (id: string, action: ChatAction) => {

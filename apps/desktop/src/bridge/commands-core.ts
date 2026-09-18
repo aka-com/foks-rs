@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { decodeChatReply } from '../chat-contract';
+import { chatActionMutates, decodeChatReply } from '../chat-contract';
 import { decodeLocalSession } from '../chat/local-contract';
 import type { Bridge } from './contract';
 import {
@@ -14,7 +14,7 @@ import {
   decodeMaintenanceSnapshot,
   decodeWindowState,
 } from './core';
-import { checked } from './transport';
+import { checked, checkedMutation } from './transport';
 import { decodeCopy } from './vault-catalog';
 
 export const coreCommands: Pick<
@@ -52,8 +52,10 @@ export const coreCommands: Pick<
 > = {
   cancelChat: (viewId) => invoke<void>('cancel_chat_requests', { viewId }),
   chat: (storeId, action, viewId) =>
-    checked('chat_request', { storeId, action, viewId }, (value) =>
-      decodeChatReply(value, storeId, action),
+    (chatActionMutates(action) ? checkedMutation : checked)(
+      'chat_request',
+      { storeId, action, viewId },
+      (value) => decodeChatReply(value, storeId, action),
     ),
   appLockState: () => checked('app_lock_state', undefined, decodeAppLockState),
   windowState: () => checked('get_window_state', undefined, decodeWindowState),
@@ -91,7 +93,7 @@ export const coreCommands: Pick<
   openChatLink: (url) => checked('open_chat_link', { url }, decodeCopy),
   copyText: (text) => checked('copy_text', { text }, decodeCopy),
   initializeClientState: () =>
-    checked('initialize_client_state', undefined, decodeAgentStatus),
+    checkedMutation('initialize_client_state', undefined, decodeAgentStatus),
   onDropHover: async (listener) =>
     listen<unknown>('foks://drop-hover', (event) => {
       listener(decodeDropHover(event.payload));

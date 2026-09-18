@@ -9,7 +9,7 @@ import {
   decodeServers,
   decodeServerStatus,
 } from './servers';
-import { checked } from './transport';
+import { checked, checkedMutation } from './transport';
 
 export const serverCommands: Pick<
   Bridge,
@@ -30,13 +30,13 @@ export const serverCommands: Pick<
       decodeServers,
     ),
   checkAndAddProfile: (profileName, probe) =>
-    checked(
+    checkedMutation(
       'check_and_add_profile',
       { profileName, probe },
       decodeCheckedProfile,
     ),
   checkAndAddGoProfile: (candidateId, hostId, profileName, probe) =>
-    checked(
+    checkedMutation(
       'check_and_add_go_profile',
       { candidateId, hostId, profileName, probe },
       decodeCheckedProfile,
@@ -48,15 +48,23 @@ export const serverCommands: Pick<
       decodeServerStatus,
     ),
   checkServer: (profile) =>
-    checked('check_server', { profile }, decodeCheckedServer),
+    checkedMutation('check_server', { profile }, decodeCheckedServer),
   reconcileServer: (profile) =>
     checked('reconcile_server', { profile }, (value) =>
       decodeProfileReconciliation(value, profile),
     ),
   addServer: (profileName, probe) =>
-    checked('add_server', { profileName, probe }, decodeAddedServer),
+    checkedMutation('add_server', { profileName, probe }, decodeAddedServer),
   setServerLabel: (profile, label) =>
-    checked('set_server_label', { profile, label }, decodeServerLabelResponse),
+    checkedMutation(
+      'set_server_label',
+      { profile, label },
+      decodeServerLabelResponse,
+    ),
   forgetServer: (profile, confirmation) =>
-    checked('forget_server', { profile, confirmation }, decodeForgottenServer),
+    checkedMutation(
+      'forget_server',
+      { profile, confirmation },
+      decodeForgottenServer,
+    ),
 };
