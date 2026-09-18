@@ -1,0 +1,43 @@
+{
+  "yubiCard": { "serial": 424242 },
+  "yubiEnrollment": { "alias": "work_key", "state": "complete" },
+  "yubiAccount": {
+    "alias": "work_key",
+    "username": "satoshi",
+    "yubiId": "08080808080808080808080808080808080808080808080808080808080808080808",
+    "subkeyId": "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d",
+    "userChainSequence": 21,
+    "managementEnrolled": true
+  },
+  "yubiSync": {
+    "username": "satoshi",
+    "userChainSequence": 22,
+    "directories": 2,
+    "entries": 7,
+    "federation": [
+      {
+        "localProfile": "work",
+        "localTeamAlias": "engineering",
+        "refreshed": true,
+        "deferred": null
+      }
+    ]
+  },
+  "yubiPinStatus": { "remaining": 3, "blocked": false },
+  "yubiLifecycle": {
+    "alias": "work_key",
+    "managementEnrolled": true,
+    "managementGeneration": 4
+  },
+  "yubiSubkeyRecovery": {
+    "alias": "work_key",
+    "subkeyId": "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d",
+    "certificateCount": 2
+  },
+  "yubiRevocation": {
+    "alias": "work_key",
+    "userChainSequence": 23,
+    "removedLocalCredential": true
+  },
+  "yubiChanged": { "alias": "work_key", "changed": true }
+}

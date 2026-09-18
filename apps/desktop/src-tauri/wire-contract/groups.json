@@ -1,0 +1,42 @@
+{
+  "party": {
+    "store": "opaque-team-ref",
+    "username": "dana.okafor",
+    "party_kind": "user",
+    "generation": 5,
+    "locally_manageable": true,
+    "party_id_hex": "010101010101010101010101010101010101010101010101010101010101010101",
+    "source_role": { "role": "Member", "visibility": 0 },
+    "destination_role": { "role": "Member", "visibility": 0 }
+  },
+  "federationEntry": {
+    "store": "opaque-team-ref",
+    "remote_profile": "home.example",
+    "remote_team_alias": "homelab",
+    "remote_host_id_hex": "020202020202020202020202020202020202020202020202020202020202020202",
+    "remote_team_id_hex": "030303030303030303030303030303030303030303030303030303030303030303",
+    "destination": { "role": "Member", "visibility": -2 },
+    "operation_id_hex": "07070707070707070707070707070707",
+    "active": false
+  },
+  "federationExpulsionOperation": {
+    "operation": "expel-federated-team",
+    "profile": "foks.example",
+    "team_alias": "engineering",
+    "remote_host_id_hex": "020202020202020202020202020202020202020202020202020202020202020202",
+    "remote_team_id_hex": "030303030303030303030303030303030303030303030303030303030303030303"
+  },
+  "groupDiscovery": {
+    "accountAlias": "personal",
+    "groups": [
+      {
+        "alias": "engineering",
+        "accountAlias": "personal",
+        "teamIdHex": "030303030303030303030303030303030303030303030303030303030303030303",
+        "kind": "named",
+        "name": "Engineering",
+        "active": true
+      }
+    ]
+  }
+}

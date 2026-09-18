@@ -1,0 +1,34 @@
+{
+  "commandError": {
+    "code": "version-mismatch",
+    "message": "changed",
+    "retryable": false,
+    "ambiguous": false,
+    "fatal": true
+  },
+  "commandAck": { "ok": true },
+  "appliedMutation": { "applied": true },
+  "cancelledMutation": { "applied": false },
+  "alreadyExistsError": {
+    "code": "already-exists",
+    "message": "exists",
+    "retryable": false,
+    "ambiguous": false,
+    "fatal": false
+  },
+  "capabilityUnavailableError": {
+    "code": "capability-denied",
+    "message": "This server is not granting vault access. Check its compatibility status before reading or writing.",
+    "retryable": false,
+    "ambiguous": false,
+    "fatal": false,
+    "details": { "capability": "kv" }
+  },
+  "agentLostError": {
+    "code": "agent-lost",
+    "message": "gone",
+    "retryable": true,
+    "ambiguous": false,
+    "fatal": true
+  }
+}

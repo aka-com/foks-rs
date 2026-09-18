@@ -1,0 +1,7 @@
+{
+  "appInfo": {
+    "version": "0.3.0",
+    "agentSocket": "/private/foks/agent.sock",
+    "managedProfile": "local"
+  }
+}

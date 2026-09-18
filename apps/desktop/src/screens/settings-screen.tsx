@@ -48,6 +48,8 @@ import {
 } from '../location';
 import type { Location, NavigateOptions, SettingsSection } from '../location';
 import { useSheetGuard } from '../navigation-guard';
+import { useMetadataQuery, useMetadataRepository } from '../query-hooks';
+import { appInfoQuery } from '../resources/application';
 import {
   accountStores,
   plural,
@@ -115,7 +117,10 @@ export function SettingsScreen({
     store: AccountStore;
     mode: PassphraseMode;
   } | null>(null);
-  const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
+  const repository = useMetadataRepository(bridge);
+  const { data: appInfo } = useMetadataQuery(appInfoQuery(repository, bridge), {
+    onError,
+  });
 
   // A passphrase, a PIN or an unlock code must not stay on screen behind
   // another window, and a reset preview token is invalidated with it.
@@ -134,19 +139,6 @@ export function SettingsScreen({
       document.removeEventListener('visibilitychange', concealWhenHidden);
     };
   }, []);
-
-  useEffect(() => {
-    let alive = true;
-    void bridge
-      .appInfo()
-      .then((info) => {
-        if (alive) setAppInfo(info);
-      })
-      .catch(onError);
-    return () => {
-      alive = false;
-    };
-  }, [bridge, onError]);
 
   const section: SettingsSection = location.section ?? DEFAULT_SETTINGS_SECTION;
 
@@ -179,7 +171,7 @@ export function SettingsScreen({
       <ThisMacSection
         snapshot={snapshot}
         bridge={bridge}
-        appInfo={appInfo}
+        appInfo={appInfo ?? null}
         onError={onError}
         onMessage={(text: string) => toasts.show(text)}
         onLock={onLock}

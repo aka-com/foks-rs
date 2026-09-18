@@ -1,0 +1,41 @@
+{
+  "account": {
+    "store": "opaque-account-ref",
+    "profile": "foks.example",
+    "alias": "personal",
+    "username": "vitalik"
+  },
+  "backupPhrase": {
+    "backupAlias": "paper",
+    "phrase": "abandon 0 abandon 0 abandon 0 abandon 0 abandon 0 abandon 0 abandon 0 abandon 0 abandon"
+  },
+  "device": {
+    "id": "040404040404040404040404040404040404040404040404040404040404040404",
+    "name": "This Mac",
+    "role": "owner",
+    "current": true
+  },
+  "deviceRemoval": {
+    "deviceId": "040404040404040404040404040404040404040404040404040404040404040404",
+    "userChainSequence": 15,
+    "alreadyAbsent": false
+  },
+  "backupEnrollment": {
+    "backupAlias": "paper",
+    "accountAlias": "personal",
+    "backupId": "101010101010101010101010101010101010101010101010101010101010101010"
+  },
+  "backupRevocation": {
+    "backupAlias": "paper",
+    "accountAlias": "personal",
+    "backupId": "101010101010101010101010101010101010101010101010101010101010101010",
+    "userChainSequence": 16,
+    "alreadyAbsent": false,
+    "removedLocalEnrollment": true
+  },
+  "passphraseReport": {
+    "generation": 2,
+    "stretchVersion": "v1",
+    "verified": true
+  }
+}

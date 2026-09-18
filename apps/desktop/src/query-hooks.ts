@@ -6,25 +6,24 @@ import {
   useRef,
   useSyncExternalStore,
 } from 'react';
-import { QueryRepository, RetiredQueryError } from './query-repository';
+import { MetadataRepository, RetiredQueryError } from './metadata-repository';
 import type {
   MetadataQuery,
   QueryLoadOptions,
   QuerySnapshot,
-} from './query-repository';
+} from './metadata-repository';
 
-export const QueryRepositoryContext = createContext<QueryRepository | null>(
-  null,
-);
+export const MetadataRepositoryContext =
+  createContext<MetadataRepository | null>(null);
 
 /** The unlocked shell provides the shared scope; standalone views own a fallback. */
-export function useQueryRepository(
+export function useMetadataRepository(
   identity: object,
-  fallback?: QueryRepository,
-): QueryRepository {
-  const shared = useContext(QueryRepositoryContext);
+  fallback?: MetadataRepository,
+): MetadataRepository {
+  const shared = useContext(MetadataRepositoryContext);
   const local = useMemo(
-    () => fallback ?? new QueryRepository(),
+    () => fallback ?? new MetadataRepository(),
     // Bridge identity defines the fallback scope lifetime, not a read argument.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [fallback, identity],
@@ -37,6 +36,9 @@ export function useQueryRepository(
   );
   return shared ?? local;
 }
+
+export const QueryRepositoryContext = MetadataRepositoryContext;
+export const useQueryRepository = useMetadataRepository;
 
 const EMPTY: QuerySnapshot<never> = Object.freeze({
   data: undefined,

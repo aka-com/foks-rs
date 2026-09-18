@@ -4,8 +4,8 @@ import { enqueueProfileWork } from './bridge';
 import type { Bridge, PendingOperation } from './bridge';
 import type { TeamStore } from './model';
 import { useDeviceCache } from './device-cache';
-import { useMetadataQuery, useQueryRepository } from './query-hooks';
-import type { QueryRepository } from './query-repository';
+import { useMetadataQuery, useMetadataRepository } from './query-hooks';
+import type { MetadataRepository } from './metadata-repository';
 import type { InvitationReply } from './invitation-contract';
 
 export const pendingOperationKey = (profile: string) =>
@@ -20,16 +20,22 @@ export const invitationRecoveryKey = (store: TeamStore) =>
   ] as const;
 
 export function pendingOperationsQuery(
-  repository: QueryRepository,
+  repository: MetadataRepository,
   bridge: Bridge,
   profile: string,
 ) {
   return repository.query<PendingOperation[]>(
     pendingOperationKey(profile),
-    () =>
-      enqueueProfileWork(bridge, profile, () =>
+    async () => {
+      const operations = await enqueueProfileWork(bridge, profile, () =>
         bridge.listPendingOperations(profile),
-      ),
+      );
+      return operations.map(({ kind, alias, target }) => ({
+        kind,
+        alias,
+        ...(target === undefined ? {} : { target }),
+      }));
+    },
   );
 }
 
@@ -37,7 +43,7 @@ const rows = (value: InvitationReply) =>
   Array.isArray(value) ? value : (value.rows ?? [value]);
 
 export function invitationRecoveryQuery(
-  repository: QueryRepository,
+  repository: MetadataRepository,
   bridge: Bridge,
   store: TeamStore,
 ) {
@@ -71,7 +77,7 @@ export function usePendingGroupOperations(
   enabled: boolean,
 ) {
   const devices = useDeviceCache();
-  const repository = useQueryRepository(bridge, devices?.repository);
+  const repository = useMetadataRepository(bridge, devices?.repository);
   const query =
     store && enabled
       ? pendingOperationsQuery(repository, bridge, store.server)

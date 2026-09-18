@@ -1,0 +1,71 @@
+{
+  "checkedProfile": {
+    "profile": "work",
+    "acceptance": "inserted",
+    "lookupName": "foks.example",
+    "canonicalName": "foks.example",
+    "hostId": "020202020202020202020202020202020202020202020202020202020202020202",
+    "chain": 9,
+    "epoch": 12
+  },
+  "configuredServer": {
+    "id": "work",
+    "name": "work",
+    "label": "Work",
+    "configured_probe": "foks.example",
+    "accounts": ["personal"]
+  },
+  "serverStatusRequiredFields": [
+    "profile", "configuredProbe", "host", "compatibility", "chatSupported"
+  ],
+  "serverStatus": {
+    "profile": "work",
+    "configuredProbe": "foks.example",
+    "host": {
+      "lookupName": "foks.example",
+      "canonicalName": "foks.example",
+      "hostId": "020202020202020202020202020202020202020202020202020202020202020202",
+      "chain": 11,
+      "epoch": 42
+    },
+    "chatSupported": true,
+    "compatibility": {
+      "status": "validated",
+      "expires_at": 1900000000,
+      "capabilities": ["chat", "kv"]
+    }
+  },
+  "addedServer": {
+    "profile": "partner", "configuredProbe": "foks.partner.example"
+  },
+  "serverLabel": { "profile": "partner", "label": "Partners", "changed": true },
+  "forgottenServer": { "profile": "partner", "removed": true },
+  "profileReconciliation": {
+    "profile": "work",
+    "identity": {
+      "status": "connected",
+      "hostId": "020202020202020202020202020202020202020202020202020202020202020202",
+      "configuredProbe": "foks.example:4430"
+    },
+    "compatibility": { "status": "renewed" }
+  },
+  "checkedServer": {
+    "profile": "work",
+    "acceptance": "advanced",
+    "lookupName": "foks.example",
+    "canonicalName": "foks.example",
+    "hostId": "020202020202020202020202020202020202020202020202020202020202020202",
+    "chain": 12,
+    "epoch": 43,
+    "serverVersion": {
+      "minimum": null, "newest": null, "message": "", "compatible": true
+    }
+  },
+  "resetPreview": {
+    "profile": "work",
+    "resumables": [{ "kind": "pairing-offer", "alias": "personal" }],
+    "artifacts": [{ "kind": "hard-state", "entries": 3, "bytes": 4096 }],
+    "token": "one-use-reset-token",
+    "expiresInSeconds": 300
+  }
+}

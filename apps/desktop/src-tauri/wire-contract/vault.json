@@ -1,0 +1,54 @@
+{
+  "memberRole": { "role": "Member", "visibility": 0 },
+  "teamItemCreateAccess": { "readRole": "Member:0", "writeRole": "Admin" },
+  "cancelledDownload": { "saved": false },
+  "catalog": {
+    "profiles": ["foks.example"],
+    "stores": [
+      {
+        "id": "opaque-store-ref",
+        "kind": "account",
+        "name": "Personal",
+        "server": "foks.example",
+        "account": "personal"
+      }
+    ],
+    "knownStores": [
+      {
+        "id": "opaque-store-ref",
+        "kind": "account",
+        "name": "Personal",
+        "server": "foks.example",
+        "account": "personal"
+      }
+    ],
+    "inventory": [
+      {
+        "profile": "foks.example",
+        "accountsComplete": true,
+        "teamsComplete": true
+      }
+    ],
+    "storeReads": [],
+    "items": [
+      {
+        "store": "opaque-store-ref",
+        "path": "/wifi/password",
+        "kind": "Secret",
+        "size": 42,
+        "version": 7,
+        "read": { "role": "Member", "visibility": -16384 },
+        "write": { "role": "Admin" }
+      }
+    ],
+    "failures": [],
+    "blockedProfiles": [],
+    "generation": 7
+  },
+  "readItem": {
+    "store": "opaque-store-ref",
+    "path": "/wifi/password",
+    "version": 7,
+    "value": "secret"
+  }
+}
