@@ -66,6 +66,49 @@ test('mounted subscribers share invalidation reloads and report one failed read'
   assert.equal(rendered.getAllByText('Accepted devices').length, 2);
 });
 
+test('mounted enabled readers reconcile without background error toasts and disabled readers stop work', async () => {
+  let now = 0;
+  let calls = 0;
+  let fail = false;
+  const repository = new QueryRepository(() => now);
+  const query = repository.query(
+    ['metadata'],
+    async () => {
+      calls++;
+      if (fail) throw new Error('offline');
+      return `Metadata ${calls}`;
+    },
+    100,
+  );
+  const errors: unknown[] = [];
+  const error = (value: unknown) => {
+    errors.push(value);
+  };
+  const rendered = ui.render(createElement(View, { query, error }));
+  await ui.act(async () => {});
+  assert.ok(rendered.getByText('Metadata 1'));
+  now = 100;
+  await ui.act(async () => {
+    await repository.reconcileSubscribed();
+  });
+  assert.ok(rendered.getByText('Metadata 2'));
+  now = 200;
+  fail = true;
+  await ui.act(async () => {
+    await assert.rejects(repository.reconcileSubscribed(), /offline/);
+  });
+  assert.deepEqual(errors, []);
+  assert.ok(rendered.getByText('Metadata 2'));
+  rendered.rerender(createElement(View, { query: null, error }));
+  now = 60_000;
+  await ui.act(async () => {
+    await repository.reconcileSubscribed();
+  });
+  assert.equal(calls, 3);
+  assert.ok(rendered.getByText('No accepted metadata'));
+  assert.deepEqual(errors, []);
+});
+
 test('changing identity clears the displayed old account before either late reply arrives', async () => {
   const repository = new QueryRepository();
   const old = deferred<string>();
@@ -115,10 +158,11 @@ test('an access reset reloads subscribers and discards a prior epoch failure', a
   await ui.act(async () => {
     repository.clear();
   });
-  assert.equal(calls, 2);
+  assert.equal(calls, 1);
   await ui.act(async () => {
     old.reject(new Error('late stale failure'));
   });
+  assert.equal(calls, 2);
   assert.ok(rendered.getByText('Current epoch'));
   assert.deepEqual(errors, []);
 });

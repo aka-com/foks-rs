@@ -117,9 +117,16 @@ test('an invalidated in-flight read cannot replace a newer resource generation',
   const pending = query.load();
   await tick();
   repository.invalidate(['metadata']);
-  await query.load();
+  const fresh = query.load();
+  repository.invalidate(['metadata']);
+  assert.equal(query.load(), fresh);
+  await tick();
+  assert.equal(calls, 1);
+  assert.equal(query.getSnapshot().fetching, true);
   old.resolve('old');
   await assert.rejects(pending, RetiredQueryError);
+  assert.equal(await fresh, 'new');
+  assert.equal(calls, 2);
   assert.equal(query.getSnapshot().data, 'new');
 });
 
@@ -280,6 +287,213 @@ test('aggregate diagnostics omit identities and values and cannot affect read ou
       ),
     );
   }
+});
+
+test('reconciliation refreshes only due subscribed metadata and records attempt and success times', async () => {
+  let now = 0;
+  const repository = new QueryRepository(() => now);
+  let calls = 0;
+  const query = repository.query(['observed'], async () => ++calls, 100);
+  let unseenCalls = 0;
+  repository.query(['unobserved'], async () => ++unseenCalls, 100);
+  const unsubscribe = query.subscribe(() => {});
+  await repository.reconcileSubscribed();
+  assert.equal(calls, 1);
+  assert.equal(query.getSnapshot().lastAttemptAt, 0);
+  assert.equal(query.getSnapshot().lastSuccessAt, 0);
+  now = 99;
+  await repository.reconcileSubscribed();
+  assert.equal(calls, 1);
+  now = 100;
+  await repository.reconcileSubscribed();
+  assert.equal(calls, 2);
+  assert.equal(query.getSnapshot().data, 2);
+  assert.equal(query.getSnapshot().lastAttemptAt, 100);
+  assert.equal(query.getSnapshot().lastSuccessAt, 100);
+  unsubscribe();
+  now = 200;
+  await repository.reconcileSubscribed();
+  assert.equal(calls, 2);
+  assert.equal(unseenCalls, 0);
+});
+
+test('reconciliation failures retain historical metadata with capped exponential backoff', async () => {
+  let now = 0;
+  let calls = 0;
+  let fail = false;
+  const repository = new QueryRepository(() => now);
+  const query = repository.query(
+    ['metadata'],
+    async () => {
+      calls++;
+      if (fail) throw new Error('offline');
+      return calls;
+    },
+    100,
+  );
+  query.subscribe(() => {});
+  await query.load();
+  fail = true;
+  now = 100;
+  for (const delay of [30_000, 60_000, 120_000, 240_000, 300_000, 300_000]) {
+    await assert.rejects(repository.reconcileSubscribed(), /offline/);
+    const attempts = calls;
+    assert.equal(query.getSnapshot().data, 1);
+    assert.equal(query.getSnapshot().lastSuccessAt, 0);
+    assert.equal(query.getSnapshot().lastAttemptAt, now);
+    assert.equal(query.getSnapshot().fetching, false);
+    now += delay - 1;
+    await repository.reconcileSubscribed();
+    assert.equal(calls, attempts);
+    now++;
+  }
+  fail = false;
+  await repository.reconcileSubscribed();
+  assert.equal(query.getSnapshot().lastSuccessAt, now);
+  assert.equal(query.getSnapshot().error, undefined);
+  fail = true;
+  now += 100;
+  await assert.rejects(repository.reconcileSubscribed(), /offline/);
+  now += 30_000;
+  await assert.rejects(repository.reconcileSubscribed(), /offline/);
+  const attempts = calls;
+  repository.invalidate(['metadata']);
+  await assert.rejects(query.load(), /offline/);
+  assert.equal(calls, attempts + 1);
+});
+
+test('reconciliation coalesces passes, caps concurrency and skips readers removed while waiting', async () => {
+  const repository = new QueryRepository();
+  const replies = Array.from({ length: 5 }, () => deferred<number>());
+  const calls: number[] = [];
+  let active = 0;
+  let maximum = 0;
+  const queries = replies.map((reply, index) =>
+    repository.query([String(index)], async () => {
+      calls.push(index);
+      maximum = Math.max(maximum, ++active);
+      try {
+        return await reply.promise;
+      } finally {
+        active--;
+      }
+    }),
+  );
+  const unsubscribe = queries.map((query) => query.subscribe(() => {}));
+  const pass = repository.reconcileSubscribed();
+  assert.equal(repository.reconcileSubscribed(), pass);
+  await tick();
+  assert.deepEqual(calls, [0, 1]);
+  unsubscribe[2]();
+  replies[0].resolve(0);
+  await tick();
+  assert.deepEqual(calls, [0, 1, 3]);
+  replies[1].resolve(1);
+  await tick();
+  assert.deepEqual(calls, [0, 1, 3, 4]);
+  replies[3].resolve(3);
+  replies[4].resolve(4);
+  await pass;
+  assert.equal(maximum, 2);
+});
+
+test('a failed reconciliation reader does not stop other readers or release the pass early', async () => {
+  const repository = new QueryRepository();
+  const slow = deferred<number>();
+  let thirdCalls = 0;
+  const failed = repository.query(['failed'], async () => {
+    throw new Error('offline');
+  });
+  const pending = repository.query(['pending'], () => slow.promise);
+  const third = repository.query(['third'], async () => ++thirdCalls);
+  for (const query of [failed, pending, third]) query.subscribe(() => {});
+  const pass = repository.reconcileSubscribed();
+  const rejected = assert.rejects(pass, /offline/);
+  await tick();
+  assert.equal(thirdCalls, 1);
+  assert.equal(repository.reconcileSubscribed(), pass);
+  assert.equal(pending.getSnapshot().fetching, true);
+  slow.resolve(1);
+  await rejected;
+  assert.equal(pending.getSnapshot().data, 1);
+});
+
+test('polling skips active invalidated work and does not request overlapping or extra reloads', async () => {
+  const repository = new QueryRepository();
+  const reply = deferred<string>();
+  let calls = 0;
+  const query = repository.query(['metadata'], () =>
+    ++calls === 1 ? reply.promise : Promise.resolve('current'),
+  );
+  query.subscribe(() => {});
+  const pending = query.load();
+  await tick();
+  repository.invalidate(['metadata']);
+  for (let poll = 0; poll < 3; poll++) await repository.reconcileSubscribed();
+  assert.equal(calls, 1);
+  const trailing = query.load();
+  assert.equal(query.load(), trailing);
+  reply.resolve('retired');
+  await assert.rejects(pending, RetiredQueryError);
+  assert.equal(await trailing, 'current');
+  await repository.reconcileSubscribed();
+  assert.equal(calls, 2);
+});
+
+test('clear cancels queued reconciliation work and drops timestamps without losing outstanding reads', async () => {
+  let now = 10;
+  const repository = new QueryRepository(() => now);
+  const replies = [deferred<number>(), deferred<number>()];
+  const calls: number[] = [];
+  const queries = [0, 1, 2].map((index) =>
+    repository.query([String(index)], () => {
+      calls.push(index);
+      return replies[index]?.promise ?? Promise.resolve(index);
+    }),
+  );
+  queries.forEach((query) => query.subscribe(() => {}));
+  const pass = repository.reconcileSubscribed();
+  await tick();
+  repository.clear();
+  assert.equal(queries[0].getSnapshot().lastAttemptAt, undefined);
+  assert.equal(queries[0].getSnapshot().lastSuccessAt, undefined);
+  assert.equal(queries[0].getSnapshot().fetching, true);
+  assert.equal(repository.reconcileSubscribed(), pass);
+  replies[0].resolve(0);
+  replies[1].resolve(1);
+  await pass;
+  assert.deepEqual(calls, [0, 1]);
+  assert.equal(queries[0].getSnapshot().data, undefined);
+  assert.equal(queries[0].getSnapshot().fetching, false);
+  now = 20;
+  await repository.reconcileSubscribed();
+  assert.deepEqual(calls, [0, 1, 0, 1, 2]);
+  assert.equal(queries[0].getSnapshot().lastSuccessAt, 20);
+});
+
+test('retirement cancels a trailing reload and prevents later reconciliation', async () => {
+  const repository = new QueryRepository();
+  const reply = deferred<number>();
+  let calls = 0;
+  const query = repository.query(['metadata'], () => {
+    calls++;
+    return reply.promise;
+  });
+  query.subscribe(() => {});
+  const pending = query.load();
+  await tick();
+  query.invalidate();
+  const trailing = query.load();
+  repository.retire();
+  reply.resolve(1);
+  await Promise.all([
+    assert.rejects(pending, RetiredQueryError),
+    assert.rejects(trailing, RetiredQueryError),
+  ]);
+  await repository.reconcileSubscribed();
+  await assert.rejects(query.load(), RetiredQueryError);
+  assert.equal(calls, 1);
+  assert.equal(query.getSnapshot().data, undefined);
 });
 
 test('view recovery cannot bypass the session-wide repair admission policy', async () => {

@@ -17,6 +17,8 @@ export interface QuerySnapshot<T> {
   readonly data: T | undefined;
   readonly error: unknown;
   readonly fetching: boolean;
+  readonly lastSuccessAt?: number;
+  readonly lastAttemptAt?: number;
   /** Changes only when data is invalidated, so subscribers can request one reload. */
   readonly invalidation: number;
 }
@@ -72,6 +74,10 @@ export class MetadataQuery<T> {
   private generation = 0;
   private updated: number | undefined;
   private pending?: Promise<T>;
+  private pendingGeneration?: number;
+  private trailing?: { epoch: number; promise: Promise<T> };
+  private failures = 0;
+  private retryAt = 0;
   private reportedError: unknown;
 
   constructor(
@@ -103,21 +109,49 @@ export class MetadataQuery<T> {
   invalidate(drop = false): void {
     this.generation++;
     this.updated = undefined;
-    this.pending = undefined;
+    this.failures = 0;
+    this.retryAt = 0;
     this.reportedError = undefined;
     this.publish({
       data: drop ? undefined : this.state.data,
       error: undefined,
-      fetching: false,
+      fetching: this.pending !== undefined,
+      lastSuccessAt: drop ? undefined : this.state.lastSuccessAt,
+      lastAttemptAt: drop ? undefined : this.state.lastAttemptAt,
       invalidation: this.state.invalidation + 1,
     });
+  }
+
+  isDueSubscribed(): boolean {
+    const now = this.repository.now();
+    return (
+      !this.repository.retired &&
+      this.listeners.size > 0 &&
+      !this.pending &&
+      !this.trailing &&
+      now >= this.retryAt &&
+      (this.updated === undefined || now - this.updated >= this.freshFor)
+    );
   }
 
   load(options: QueryLoadOptions = {}): Promise<T> {
     if (this.repository.retired) return Promise.reject(new RetiredQueryError());
     if (this.pending) {
       this.repository.report({ kind: 'coalesced' });
-      return this.pending;
+      if (this.pendingGeneration === this.generation) return this.pending;
+      const epoch = this.repository.epoch;
+      if (this.trailing?.epoch === epoch) return this.trailing.promise;
+      const trailing: { epoch: number; promise: Promise<T> } = {
+        epoch,
+        promise: this.pending.catch(() => undefined).then(() => {
+          if (this.trailing === trailing) this.trailing = undefined;
+          if (this.repository.retired || epoch !== this.repository.epoch)
+            throw new RetiredQueryError();
+          return this.load(options);
+        }),
+      };
+      this.trailing = trailing;
+      return trailing.promise;
     }
     if (
       this.updated !== undefined &&
@@ -174,11 +208,14 @@ export class MetadataQuery<T> {
         requireCurrent();
         const data = immutableMetadata(value);
         this.updated = this.repository.now();
+        this.failures = 0;
+        this.retryAt = 0;
         this.publish({
           ...this.state,
           data,
           error: undefined,
           fetching: false,
+          lastSuccessAt: this.updated,
         });
         this.repository.report({
           kind: 'load-complete',
@@ -188,6 +225,10 @@ export class MetadataQuery<T> {
       })
       .catch((error: unknown) => {
         requireCurrent();
+        this.failures = Math.min(this.failures + 1, 5);
+        this.retryAt =
+          this.repository.now() +
+          Math.min(30_000 * 2 ** (this.failures - 1), 300_000);
         this.publish({ ...this.state, error, fetching: false });
         this.repository.report({
           kind: 'load-error',
@@ -196,11 +237,21 @@ export class MetadataQuery<T> {
         throw error;
       })
       .finally(() => {
-        if (this.pending === pending) this.pending = undefined;
+        if (this.pending === pending) {
+          this.pending = undefined;
+          if (this.state.fetching)
+            this.publish({ ...this.state, fetching: false });
+        }
       });
     this.pending = pending;
+    this.pendingGeneration = generation;
     this.repository.report({ kind: 'load-start' });
-    this.publish({ ...this.state, error: undefined, fetching: true });
+    this.publish({
+      ...this.state,
+      error: undefined,
+      fetching: true,
+      lastAttemptAt: started,
+    });
     return pending;
   }
 }
@@ -210,6 +261,7 @@ export class QueryRepository {
   private observers = new Set<QueryObserver>();
   private accessEpoch = 0;
   private closed = false;
+  private reconciliation?: Promise<void>;
   private recoveryOptions: () => QueryLoadOptions = () => ({});
   private recoveryAllowed: () => boolean = () => true;
 
@@ -271,6 +323,39 @@ export class QueryRepository {
       this.entries.set(id, entry);
     }
     return entry as MetadataQuery<T>;
+  }
+
+  reconcileSubscribed(): Promise<void> {
+    if (this.closed) return Promise.resolve();
+    if (this.reconciliation) return this.reconciliation;
+    const epoch = this.accessEpoch;
+    const due = [...this.entries.values()].filter((query) =>
+      query.isDueSubscribed(),
+    );
+    let next = 0;
+    const errors: unknown[] = [];
+    const worker = async () => {
+      while (!this.closed && epoch === this.accessEpoch && next < due.length) {
+        const query = due[next++];
+        if (!query.isDueSubscribed()) continue;
+        try {
+          await query.load();
+        } catch (error) {
+          if (!(error instanceof RetiredQueryError)) errors.push(error);
+        }
+      }
+    };
+    const pending = Promise.resolve()
+      .then(() => Promise.all([worker(), worker()]))
+      .then(() => {
+        if (!this.closed && epoch === this.accessEpoch && errors.length > 0)
+          throw errors[0];
+      })
+      .finally(() => {
+        if (this.reconciliation === pending) this.reconciliation = undefined;
+      });
+    this.reconciliation = pending;
+    return pending;
   }
 
   /** Stale display data stays available; only matching resource requests restart. */

@@ -58,6 +58,28 @@ test('device metadata deduplicates concurrent reads and reuses fresh values with
   assert.equal(cache.peek('p', 'a')?.devices[0].name, 'Mac');
 });
 
+test('subscribed device reconciliation uses metadata readers without probing hardware', async () => {
+  const f = fixture();
+  const cache = new DeviceCache(f.bridge, f.clock);
+  const stopAccount = cache.account('p', 'a').subscribe(() => {});
+  const stopEnrollments = cache.enrollments('p').subscribe(() => {});
+  await cache.repository.reconcileSubscribed();
+  f.advance();
+  await cache.repository.reconcileSubscribed();
+  assert.deepEqual(f.calls, {
+    devices: ['a', 'a'],
+    backups: ['a', 'a'],
+    enrollments: ['p', 'p'],
+    hardware: 0,
+  });
+  stopAccount();
+  stopEnrollments();
+  f.advance();
+  await cache.repository.reconcileSubscribed();
+  assert.equal(f.calls.devices.length, 2);
+  assert.equal(f.calls.enrollments.length, 2);
+});
+
 test('accounts are isolated while enrollments are shared only within a profile', async () => {
   const f = fixture();
   const cache = new DeviceCache(f.bridge, f.clock);
