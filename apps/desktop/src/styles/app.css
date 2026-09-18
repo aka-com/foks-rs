@@ -1440,6 +1440,10 @@ body {
   margin-top: 16px;
 }
 
+.first-run-main .pane .operation-actions {
+  margin-top: 12px;
+}
+
 .first-run-main .pane .crit + .actions {
   margin-top: 0;
 }

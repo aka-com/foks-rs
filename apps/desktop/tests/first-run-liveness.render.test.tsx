@@ -47,6 +47,9 @@ async function harness() {
   const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
     '/kit/toasts.tsx',
   )) as typeof import('../kit/toasts');
+  const { OverlayProvider } = (await vite.ssrLoadModule(
+    '/kit/overlay-primitives.tsx',
+  )) as typeof import('../kit/overlay-primitives');
   const { FIXTURE } = (await vite.ssrLoadModule(
     '/src/fixture.ts',
   )) as typeof import('../src/fixture');
@@ -99,10 +102,16 @@ async function harness() {
     firstRunFixture: undefined,
   };
   const controller = new ToastController();
+  const portalRoot = document.getElementById('overlays');
+  assert.ok(portalRoot);
   const element = (props: FirstRunExperienceProps) =>
-    createElement(ToastProvider, {
-      controller,
-      children: createElement(FirstRunExperience, props),
+    createElement(OverlayProvider, {
+      backgroundRef: { current: null },
+      portalRoot,
+      children: createElement(ToastProvider, {
+        controller,
+        children: createElement(FirstRunExperience, props),
+      }),
     });
   return {
     ...state,
@@ -316,6 +325,32 @@ test('phrase preparation has an accessible back action outside the disabled cont
   assert.ok(
     rendered.view.getByRole('button', { name: 'Show recovery phrase' }),
   );
+});
+
+test('recovery phrase commit shows a saving label while waiting for confirmation', async () => {
+  const h = await harness();
+  const commit = deferred<Awaited<ReturnType<Bridge['commitOwnerBackup']>>>();
+  const rendered = h.render(
+    { ...h.checkpoint, managedLocal: false },
+    {
+      bridge: { ...h.bridge, commitOwnerBackup: () => commit.promise },
+    },
+  );
+  ui.fireEvent.click(
+    rendered.view.getByRole('button', { name: 'Show my phrase' }),
+  );
+  ui.fireEvent.click(
+    await rendered.view.findByRole('button', {
+      name: 'I have written this down',
+    }),
+  );
+  ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Done' }));
+  const saving = await rendered.view.findByRole('button', {
+    name: 'Saving...',
+  });
+  assert.equal((saving as HTMLButtonElement).disabled, true);
+  await ui.act(async () => commit.resolve({ applied: true }));
+  await rendered.view.findByRole('button', { name: 'Show my phrase' });
 });
 
 test('multiple groups refresh the catalog and preserve a selected unavailable vault across restart', async () => {

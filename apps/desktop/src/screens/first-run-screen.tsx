@@ -1636,7 +1636,7 @@ function FirstRunSession({
             </label>
           </div>
         ) : null}
-        <div className="actions">
+        <div className="actions operation-actions">
           {adoptable ? (
             <Button
               variant="primary"
@@ -2256,7 +2256,9 @@ function FirstRunSession({
           >
             {signingIn ? (
               checkpoint.account ? (
-                <Button onClick={() => go('protect')}>Resume protection</Button>
+                <Button onClick={() => go('protect')}>
+                  Skip to latest step
+                </Button>
               ) : (
                 signinPrimary
               )
@@ -2493,7 +2495,7 @@ function FirstRunSession({
             back={() => go(checkpoint.account ? 'protect' : accountBackTarget)}
           >
             {checkpoint.account ? (
-              <Button onClick={() => go('protect')}>Resume protection</Button>
+              <Button onClick={() => go('protect')}>Skip to latest step</Button>
             ) : (
               <>
                 <Button

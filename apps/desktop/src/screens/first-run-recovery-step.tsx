@@ -225,7 +225,7 @@ export function RecoveryStep({
                   disabled={!backupPhrase || !phraseWritten || busy}
                   onClick={() => void commitBackup()}
                 >
-                  Done
+                  {busy ? 'Saving...' : 'Done'}
                 </Button>
               </>
             }
