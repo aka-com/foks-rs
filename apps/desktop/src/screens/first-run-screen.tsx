@@ -14,6 +14,9 @@ import {
   useSetupSession,
 } from './first-run/use-setup-session';
 import { useAccountOperations } from './first-run/use-account-operations';
+import { useServerWorkflow } from './first-run/use-server-workflow';
+import { useTeamDiscovery } from './first-run/use-team-discovery';
+export { profileNameFor } from './first-run/use-server-workflow';
 import { retainSetup, updateRetainedSetup } from '../first-run-recovery';
 import { SsoPanel } from '../components/sso-panel';
 import { provisioningInFlight } from '../first-run-operations';
@@ -49,18 +52,14 @@ import type { FilterKind } from '../components';
 import type {
   Bridge,
   CommandError,
-  CheckedProfileResponse,
   GoProfileCandidate,
   GoProfileDiscovery,
-  DiscoveredGroup,
   PendingOperation,
-  ServerStatusSnapshot,
 } from '../bridge';
 import {
   enqueueProfileWork,
   isAgentReadinessError,
   normalizeCommandError,
-  sharedServerStatus,
 } from '../bridge';
 import {
   completedFirstRunSteps,
@@ -115,29 +114,6 @@ function StepLabel({
       <span className="n">{n}</span>
       {children}
     </SectionLabel>
-  );
-}
-
-/**
- * The profile identifier a server address suggests: the host as letters,
- * digits, and dashes, keeping a port only when it is not the default. So
- * "foks.app:4430" is `foks-app` and "localhost:5000" is `localhost-5000`.
- */
-export function profileNameFor(address: string): string {
-  const host = address
-    .trim()
-    .toLowerCase()
-    .replace(/^[a-z]+:\/\//, '')
-    .replace(/\/.*$/, '');
-  // An IPv6 literal keeps its groups but would otherwise collapse to a run of
-  // dashes, so it is named for what it is: "[fe80::1]:4430" is `ipv6-fe80-1`.
-  const ipv6 = /^\[([^\]]+)\](?::\d+)?$/.exec(host);
-  const bare = ipv6 ? `ipv6-${ipv6[1]}` : host.replace(/:4430$/, '');
-  return (
-    bare
-      .replace(/[^a-z0-9_-]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 52) || 'server'
   );
 }
 
@@ -363,13 +339,7 @@ function FirstRunSession({
       onNavigate,
       agentReady,
     });
-  const setupEnvironment = useRef({ snapshot, onRefreshSnapshot });
-  setupEnvironment.current = { snapshot, onRefreshSnapshot };
   const facts = bridge.firstRunFixture?.[checkpoint.path];
-  const [address, setAddress] = useState(
-    () => checkpoint.serverAddress ?? facts?.server ?? '',
-  );
-  const [addressInvalid, setAddressInvalid] = useState(false);
   const [username, setUsername] = useState(
     () => checkpoint.account?.username ?? facts?.username ?? '',
   );
@@ -413,25 +383,10 @@ function FirstRunSession({
   // Pending path selection before confirmation.
   const [pendingPath, setPendingPath] = useState<FirstRunPath | null>(null);
   const [pending, setPending] = useState<PendingOperation[]>([]);
-  const [discoveredGroups, setDiscoveredGroups] = useState<DiscoveredGroup[]>(
-    [],
-  );
-  const discoveredSnapshot = useRef<AgentSnapshot>(snapshot);
   const pendingRef = useRef<PendingOperation[]>([]);
-  const [mutationBusy, setMutationBusy] = useState(false);
-  const [busyOperation, setBusyOperation] = useState<
-    'server-check' | 'other' | null
-  >(null);
-  const setBusy = useCallback(
-    (value: boolean, operation: 'server-check' | 'other' = 'other'): void => {
-      setMutationBusy(value);
-      setBusyOperation(value ? operation : null);
-    },
-    [],
-  );
+  const [otherMutationBusy, setBusy] = useState(false);
   const [phraseOperation, setPhraseOperation] = useState<symbol | null>(null);
   const phraseOwner = useRef<symbol | null>(null);
-  const busy = mutationBusy || phraseOperation !== null;
   const [personalRefreshing, setPersonalRefreshing] = useState(false);
   const [personalRefreshError, setPersonalRefreshError] = useState<
     string | null
@@ -441,29 +396,119 @@ function FirstRunSession({
   const [connectionErrors, setConnectionErrors] = useState<
     Record<'copy' | 'recover' | 'pair', string | null>
   >({ copy: null, recover: null, pair: null });
-  const addressRevision = useRef(0);
-  const serverAddressInput = useRef<HTMLInputElement>(null);
-  const addressSelection = useRef<{
-    start: number | null;
-    end: number | null;
-  } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   // The failure the message on screen came from, so a banner can offer the
   // raw chain behind it. Only `fail` sets it, and the reason is offered only
   // while the text it reported is still the text being shown.
   const [lastFailure, setLastFailure] = useState<FirstRunFailure | null>(null);
-  const [serverCheckFailure, setServerCheckFailure] =
-    useState<FirstRunFailure | null>(null);
-  const [managedStatus, setManagedStatus] =
-    useState<ServerStatusSnapshot | null>(null);
-  const [managedStatusError, setManagedStatusError] = useState<string | null>(
-    null,
-  );
-  const [managedStatusAttempt, setManagedStatusAttempt] = useState(0);
   const backupPreparation = useRef<{
     key: string;
     promise: Promise<{ backupAlias: string; phrase: string }>;
   } | null>(null);
+  const profile = checkpoint.profile;
+  const fail = useCallback(
+    (
+      operation: FirstRunOperation,
+      error: unknown,
+      report: (message: string) => void = setMessage,
+      isCurrent: () => boolean = () => mounted.current,
+      onFailure?: (failure: FirstRunFailure) => void,
+    ): void => {
+      if (!isCurrent()) return;
+      const failure = classifyFirstRunFailure(operation, error);
+      setLastFailure(failure);
+      onFailure?.(failure);
+      // The command layer sets its write gate when a first-run mutation
+      // returns an ambiguous or response-binding result, and only a fresh
+      // catalog load releases it. Without this refresh the user is stuck on
+      // "Refresh the vault..." until the app restarts, so reconcile here and
+      // re-read pending operations so a committed-but-unacknowledged signup
+      // can still be resumed.
+      if (failure.recovery !== 'pending') {
+        report(failure.error.message);
+        return;
+      }
+      report(presentFirstRunFailure(failure).detail);
+      // A first server check can set the gate before a profile has been
+      // selected. Only the pending-operation read needs a profile.
+      void reconcileFirstRunFailure(failure, async () => {
+        if (!isCurrent()) return;
+        await onRefreshSnapshot();
+        if (!isCurrent()) return;
+        if (profile) {
+          const rows = await enqueueProfileWork<PendingOperation[] | null>(
+            bridge,
+            profile.profile,
+            () =>
+              isCurrent()
+                ? bridge.listPendingOperations(profile.profile)
+                : Promise.resolve(null),
+          );
+          if (!isCurrent() || !rows) return;
+          pendingRef.current = rows;
+          setPending(rows);
+        }
+      }).then((reconciled) => {
+        if (!isCurrent()) return;
+        onFailure?.(reconciled);
+        report(presentFirstRunFailure(reconciled).detail);
+      });
+    },
+    [bridge, mounted, onRefreshSnapshot, profile],
+  );
+  const serverWorkflow = useServerWorkflow({
+    bridge,
+    agentReady,
+    checkpoint,
+    checkpointRef,
+    mounted,
+    send,
+    snapshot,
+    managedProfile,
+    onRefreshSnapshot,
+    goCandidate,
+    onAddressEdited: () => {
+      if (!goCandidateExplicit.current) setGoCandidate(null);
+    },
+    setMessage,
+    fail,
+  });
+  const {
+    address,
+    setAddress,
+    addressInvalid,
+    serverAddressInput,
+    editServerAddress,
+    checkServer,
+    serverCheckFailure,
+    managedStatus,
+    managedStatusError,
+    setManagedStatusAttempt,
+    managedReport,
+    selectManagedProfile,
+  } = serverWorkflow;
+  const teamDiscovery = useTeamDiscovery({
+    bridge,
+    agentReady,
+    checkpoint,
+    checkpointRef,
+    mounted,
+    commit,
+    busy: otherMutationBusy || serverWorkflow.busy || phraseOperation !== null,
+    onRefreshSnapshot,
+    setMessage,
+    fail,
+  });
+  const { discover, selectDiscoveredGroup, discoveredGroups } = teamDiscovery;
+  const mutationBusy =
+    otherMutationBusy || serverWorkflow.busy || teamDiscovery.busy;
+  const busyOperation =
+    otherMutationBusy || teamDiscovery.busy
+      ? 'other'
+      : serverWorkflow.busy
+        ? 'server-check'
+        : null;
+  const busy = mutationBusy || phraseOperation !== null;
   const accountOperations = useAccountOperations({
     bridge,
     agentReady,
@@ -592,7 +637,6 @@ function FirstRunSession({
   const serverCheckPresentation = serverCheckFailure
     ? presentFirstRunFailure(serverCheckFailure)
     : null;
-  const profile = checkpoint.profile;
   const accountAlias =
     checkpoint.account?.alias ??
     checkpoint.sso?.alias ??
@@ -683,77 +727,6 @@ function FirstRunSession({
     ? snapshot.items.filter((item) => item.store === accountStore).length
     : 0;
 
-  useEffect(() => {
-    if (!agentReady || state !== 'local') return;
-    setManagedStatus(null);
-    if (!managedProfile) {
-      setManagedStatusError(
-        'No local server is running on this device. Connect to an existing server to continue.',
-      );
-      return;
-    }
-    let alive = true;
-    setManagedStatusError(null);
-    const server = setupEnvironment.current.snapshot.servers.find(
-      (row) => row.id === managedProfile,
-    );
-    if (server?.trust.status === 'blocked' || server?.restrictions.length) {
-      setManagedStatusError(
-        server.trust.status === 'blocked'
-          ? server.trust.error.message
-          : server.restrictions[0].error.message,
-      );
-      return;
-    }
-    void sharedServerStatus(bridge, managedProfile, true).then(
-      async (status) => {
-        if (!alive) return;
-        if (
-          status.profile !== managedProfile ||
-          status.configuredProbe !== 'localhost:4430' ||
-          status.leaseRequired ||
-          !status.host
-        ) {
-          setManagedStatusError('The local server is not ready.');
-          return;
-        }
-        // Cached connectivity failure must not suppress a live local probe.
-        // Publish readiness only after the catalog agrees with its pinned host.
-        try {
-          const refreshed =
-            await setupEnvironment.current.onRefreshSnapshot(true);
-          if (!alive) return;
-          const current = refreshed.servers.filter(
-            (row) => row.id === managedProfile,
-          );
-          if (
-            current.length !== 1 ||
-            current[0].host_id !== status.host.hostId ||
-            current[0].trust.status === 'blocked' ||
-            current[0].restrictions.length
-          ) {
-            setManagedStatusError(
-              'The local server responded, but its saved identity or configuration needs attention. Review server settings.',
-            );
-            return;
-          }
-          setManagedStatus(status);
-        } catch (error) {
-          if (alive)
-            setManagedStatusError(
-              `The local server responded, but its account list could not be refreshed: ${normalizeCommandError(error).message}`,
-            );
-        }
-      },
-      (error) => {
-        if (alive) setManagedStatusError(normalizeCommandError(error).message);
-      },
-    );
-    return () => {
-      alive = false;
-    };
-  }, [bridge, managedProfile, managedStatusAttempt, state, agentReady]);
-
   const go = useCallback(
     (next: FirstRunStateName): void => {
       setMessage(null);
@@ -789,48 +762,6 @@ function FirstRunSession({
   const openExisting = useCallback((): void => {
     go('existing');
   }, [go]);
-  const fail = useCallback(
-    (
-      operation: FirstRunOperation,
-      error: unknown,
-      report: (message: string) => void = setMessage,
-    ): void => {
-      const failure = classifyFirstRunFailure(operation, error);
-      setLastFailure(failure);
-      if (operation === 'server-check') setServerCheckFailure(failure);
-      // The command layer sets its write gate when a first-run mutation
-      // returns an ambiguous or response-binding result, and only a fresh
-      // catalog load releases it. Without this refresh the user is stuck on
-      // "Refresh the vault..." until the app restarts, so reconcile here and
-      // re-read pending operations so a committed-but-unacknowledged signup
-      // can still be resumed.
-      if (failure.recovery !== 'pending') {
-        report(failure.error.message);
-        return;
-      }
-      report(presentFirstRunFailure(failure).detail);
-      // A first server check can set the gate before a profile has been
-      // selected. Only the pending-operation read needs a profile.
-      void reconcileFirstRunFailure(failure, async () => {
-        await onRefreshSnapshot();
-        if (profile) {
-          const rows = await enqueueProfileWork(bridge, profile.profile, () =>
-            bridge.listPendingOperations(profile.profile),
-          );
-          pendingRef.current = rows;
-          setPending(rows);
-        }
-      }).then((reconciled) => {
-        if (operation === 'server-check')
-          setServerCheckFailure((current) =>
-            current === failure ? reconciled : current,
-          );
-        report(presentFirstRunFailure(reconciled).detail);
-      });
-    },
-    [bridge, onRefreshSnapshot, profile],
-  );
-
   const runAccountOperation = (
     kind: ProvisioningIntent['kind'],
     alias: string,
@@ -1125,86 +1056,9 @@ function FirstRunSession({
     state,
   ]);
 
-  useLayoutEffect(() => {
-    const selection = addressSelection.current;
-    if (!selection) return;
-    addressSelection.current = null;
-    serverAddressInput.current?.focus();
-    serverAddressInput.current?.setSelectionRange(
-      selection.start,
-      selection.end,
-    );
-  }, [address, state]);
-
   const editUsername = (value: string): void => {
     setUsername(value);
     setDuplicateAlias(null);
-  };
-
-  const editServerAddress = (value: string): void => {
-    const input = serverAddressInput.current;
-    if (input && document.activeElement === input)
-      addressSelection.current = {
-        start: input.selectionStart,
-        end: input.selectionEnd,
-      };
-    if (!goCandidateExplicit.current) setGoCandidate(null);
-    addressRevision.current++;
-    setAddress(value);
-    setAddressInvalid(false);
-    setMessage(null);
-    setServerCheckFailure(null);
-    send({ type: 'server-edited', address: value });
-  };
-
-  const checkServer = async (): Promise<void> => {
-    if (!agentReady) return;
-    if (!address.trim()) {
-      setAddressInvalid(true);
-      if (state === 'error') send({ type: 'navigate', state: 'address' });
-      return;
-    }
-    const revision = addressRevision.current;
-    setAddressInvalid(false);
-    setBusy(true, 'server-check');
-    setMessage(null);
-    setServerCheckFailure(null);
-    try {
-      const profileName = facts?.profile ?? profileNameFor(address);
-      const report = goCandidate
-        ? await bridge.checkAndAddGoProfile(
-            goCandidate.candidateId,
-            goCandidate.hostId,
-            profileName,
-            address.trim(),
-          )
-        : await bridge.checkAndAddProfile(profileName, address.trim());
-      if (revision !== addressRevision.current) return;
-      if (goCandidate && report.hostId !== goCandidate.hostId)
-        throw new Error(
-          'The server response does not match the selected profile.',
-        );
-      // A profile made here is labelled with the server's own name, so the rail
-      // reads "foks.app" rather than the identifier derived from the address.
-      if (!facts?.profile && report.canonicalName) {
-        try {
-          await bridge.setServerLabel(profileName, report.canonicalName);
-        } catch {
-          // The label is cosmetic; failing to set it does not fail the check.
-        }
-      }
-      send({
-        type: 'profile-checked',
-        address: address.trim(),
-        profile: report,
-      });
-    } catch (error) {
-      if (revision !== addressRevision.current) return;
-      fail('server-check', error);
-      send({ type: 'navigate', state: 'error' });
-    } finally {
-      setBusy(false);
-    }
   };
 
   const createAccount = async (): Promise<void> => {
@@ -1487,129 +1341,6 @@ function FirstRunSession({
     }
   };
 
-  const selectDiscoveredGroup = (
-    found: DiscoveredGroup,
-    refreshed: AgentSnapshot,
-  ): void => {
-    if (
-      !bridge.firstRunFixture &&
-      refreshed.servers.filter(
-        (server) =>
-          server.id === profile?.profile && server.host_id === profile?.hostId,
-      ).length !== 1
-    ) {
-      setMessage(
-        'The server identity could not be confirmed. Review server settings before opening this team.',
-      );
-      return;
-    }
-    const identity = {
-      name: found.name ?? found.alias,
-      kind: found.kind,
-      alias: found.alias,
-      teamIdHex: found.teamIdHex,
-    };
-    const selected = {
-      ...checkpointRef.current,
-      state: 'waiting' as const,
-      selectedGroup: identity,
-    };
-    const stores = refreshed.stores.filter(
-      (store) =>
-        store.kind === 'team' &&
-        store.active &&
-        store.server === profile?.profile &&
-        store.account === checkpoint.account?.alias &&
-        store.team_id_hex === found.teamIdHex &&
-        store.alias === found.alias &&
-        store.team_kind === found.kind,
-    );
-    if (stores.length !== 1 || !storeReadable(refreshed, stores[0].id)) {
-      commit(selected);
-      setMessage(
-        'Team located, but the vault is currently unavailable. Retry loading the vault, or complete setup later.',
-      );
-      return;
-    }
-    commit(
-      transitionFirstRun(selected, {
-        type: 'group-discovered',
-        group: { ...identity, name: stores[0].name },
-      }),
-    );
-  };
-
-  const discover = async (): Promise<void> => {
-    if (!agentReady || !profile || !checkpoint.account || busy) return;
-    const saved = checkpointRef.current;
-    setBusy(true);
-    setMessage(null);
-    setDiscoveredGroups([]);
-    try {
-      let result: Awaited<ReturnType<Bridge['discoverGroups']>>;
-      let refreshed: AgentSnapshot;
-      try {
-        result = await enqueueProfileWork(bridge, profile.profile, () =>
-          bridge.discoverGroups(profile.profile, checkpoint.account!.alias),
-        );
-      } finally {
-        // Discovery invalidates the catalog even for zero groups or errors.
-        refreshed = await onRefreshSnapshot(true);
-      }
-      if (
-        !mounted.current ||
-        checkpointRef.current.profile?.hostId !== saved.profile?.hostId ||
-        checkpointRef.current.account?.alias !== saved.account?.alias
-      )
-        return;
-      if (
-        result.accountAlias !== checkpoint.account.alias ||
-        result.groups.some(
-          (row) => row.accountAlias !== checkpoint.account?.alias,
-        )
-      )
-        throw new Error(
-          'Team discovery returned data for a different account.',
-        );
-      const eligible = result.groups.filter(
-        (candidate) =>
-          candidate.active &&
-          (!facts?.groupName || candidate.name === facts.groupName),
-      );
-      discoveredSnapshot.current = refreshed;
-      const unique = new Set(
-        eligible.map((row) => `${row.kind}:${row.teamIdHex}:${row.alias}`),
-      );
-      if (unique.size !== eligible.length)
-        throw new Error('Team discovery returned conflicting team records.');
-      const selected = checkpointRef.current.selectedGroup;
-      const match = selected
-        ? eligible.filter(
-            (row) =>
-              row.teamIdHex === selected.teamIdHex &&
-              row.alias === selected.alias &&
-              row.kind === selected.kind,
-          )
-        : eligible;
-      if (match.length === 1) selectDiscoveredGroup(match[0], refreshed);
-      else if (match.length > 1) {
-        setDiscoveredGroups(match);
-        setMessage(
-          'Choose the team you want to open. Your other memberships will remain available.',
-        );
-      } else
-        setMessage(
-          selected
-            ? 'Membership in the selected team could not be confirmed. Check again or choose another team.'
-            : 'No active teams found yet. You can use Personal while you wait.',
-        );
-    } catch (error) {
-      if (mounted.current) fail('group-discovery', error);
-    } finally {
-      if (mounted.current) setBusy(false);
-    }
-  };
-
   const retryPersonal = (): void => {
     setPersonalRefreshing(true);
     setPersonalRefreshError(null);
@@ -1620,44 +1351,6 @@ function FirstRunSession({
         if (isAgentReadinessError(typed)) onAgentReadinessFailure?.(typed);
       })
       .finally(() => setPersonalRefreshing(false));
-  };
-
-  const managedReport: CheckedProfileResponse | null = useMemo(() => {
-    const host = managedStatus?.host;
-    if (!managedProfile || !host) return null;
-    return {
-      profile: managedProfile,
-      acceptance: 'unchanged',
-      lookupName: host.lookupName,
-      canonicalName: host.canonicalName,
-      hostId: host.hostId,
-      chain: host.chain,
-      epoch: host.epoch,
-    };
-  }, [managedProfile, managedStatus]);
-
-  const selectManagedProfile = (returning = false): void => {
-    if (!agentReady || !managedReport || !managedStatus) return;
-    const current = snapshot.servers.filter(
-      (server) => server.id === managedReport.profile,
-    );
-    if (
-      current.length !== 1 ||
-      current[0].host_id !== managedReport.hostId ||
-      current[0].trust.status === 'blocked' ||
-      current[0].restrictions.length
-    ) {
-      setManagedStatusError(
-        'Server settings changed. Check the local server again.',
-      );
-      return;
-    }
-    send({
-      type: 'managed-profile-selected',
-      address: managedStatus.configuredProbe,
-      profile: managedReport,
-      returning,
-    });
   };
 
   let content: ReactNode;
@@ -2933,9 +2626,7 @@ function FirstRunSession({
               {discoveredGroups.map((found) => (
                 <Button
                   key={`${found.kind}:${found.teamIdHex}:${found.alias}`}
-                  onClick={() =>
-                    selectDiscoveredGroup(found, discoveredSnapshot.current)
-                  }
+                  onClick={() => selectDiscoveredGroup(found)}
                 >
                   Open “{found.name ?? found.alias}”
                 </Button>
