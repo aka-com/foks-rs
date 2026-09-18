@@ -50,16 +50,18 @@ test('nothing reads window.__TAURI__', async () => {
 });
 
 test('only the bridge imports the Tauri API', async () => {
+  const transports = [
+    '/src/bridge/transport.ts',
+    '/src/bridge/commands-core.ts',
+    '/src/bridge/commands-vault.ts',
+  ];
   for (const file of await firstPartySources()) {
-    if (file.pathname.endsWith('/src/bridge.ts')) continue;
+    if (transports.some((path) => file.pathname.endsWith(path))) continue;
     const source = stripComments(await readSource(file.href, import.meta.url));
     assert.doesNotMatch(source, /from '@tauri-apps\//, file.pathname);
   }
-  const bridge = await readSource('../src/bridge.ts', import.meta.url);
-  assert.match(
-    bridge,
-    /import \{ Channel, invoke \} from '@tauri-apps\/api\/core';/,
-  );
+  const bridge = await readSource('../src/bridge/transport.ts', import.meta.url);
+  assert.match(bridge, /import \{ invoke \} from '@tauri-apps\/api\/core';/);
 });
 
 test('the model is pure: no DOM, no bridge, no fixture', async () => {
@@ -85,9 +87,9 @@ test('the model is pure: no DOM, no bridge, no fixture', async () => {
 
 test('the mock bridge is reached only by dynamic import, so it can be dropped', async () => {
   // Dynamic import ensures test fixture modules are excluded from production builds.
-  const bridge = await readSource('../src/bridge.ts', import.meta.url);
+  const bridge = await readSource('../src/bridge/selection.ts', import.meta.url);
   assert.doesNotMatch(bridge, /^import .*mock-bridge/m);
-  assert.match(bridge, /await import\('\.\/mock-bridge'\)/);
+  assert.match(bridge, /await import\('\.\.\/mock-bridge'\)/);
   const root = await readSource('../src/app-root.tsx', import.meta.url);
   assert.doesNotMatch(root, /mock-bridge|\.\/fixture/);
 });
@@ -110,11 +112,11 @@ test('ordinary production modules never import the fixture graph', async () => {
 });
 
 test('bridge verifies Tauri runtime presence and checks VITE_FOKS_MOCK flag', async () => {
-  const bridge = await readSource('../src/bridge.ts', import.meta.url);
+  const bridge = await readSource('../src/bridge/selection.ts', import.meta.url);
   assert.match(bridge, /'__TAURI_INTERNALS__' in window/);
   assert.match(bridge, /import\.meta\.env\?\.VITE_FOKS_MOCK === '1'/);
   assert.match(
-    bridge,
+    await readSource('../src/bridge.ts', import.meta.url),
     /The only seam between the FOKS webview and the local agent/,
   );
 });
