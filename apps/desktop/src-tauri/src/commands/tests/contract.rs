@@ -14,9 +14,10 @@ use crate::commands::groups::{
 };
 use crate::commands::servers::{
     added_server_response, checked_server_response, forgotten_server_response,
-    reset_preview_response, server_status_response, AddedServerDto, CheckedProfileDto,
-    CheckedServerDto, CheckedServerVersionDto, ForgottenServerDto, ResetArtifactDto,
-    ResetPreviewDto, ServerLabelDto, ServerStatusSnapshotDto, StoredHostDto,
+    reset_preview_response, server_status_response, validate_compatibility, AddedServerDto,
+    CheckedProfileDto, CheckedServerDto, CheckedServerVersionDto, ForgottenServerDto,
+    ResetArtifactDto, ResetPreviewDto, ServerDto, ServerLabelDto, ServerStatusSnapshotDto,
+    StoredHostDto,
 };
 use crate::commands::tests::support::test_profile_value;
 use crate::commands::types::{CommandAck, MutationDto, RoleDto};
@@ -67,9 +68,84 @@ fn server_status_requires_consistent_explicit_policy_facts() {
 }
 
 #[test]
+fn shared_compatibility_contract_validates_grants_and_preserves_service_support() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../../../wire-contract.json")).unwrap();
+    let host = &fixture["serverStatus"]["host"];
+    let status = serde_json::json!({
+        "profile": "work",
+        "configured_probe": "foks.example",
+        "host": {
+            "lookup_name": host["lookupName"],
+            "canonical_name": host["canonicalName"],
+            "host_id_hex": host["hostId"],
+            "host_chain_sequence": host["chain"],
+            "merkle_epoch": host["epoch"]
+        },
+        "compatibility": fixture["serverStatus"]["compatibility"],
+        "chat_supported": true
+    });
+    for case in fixture["compatibilityCases"].as_array().unwrap() {
+        let mut value = status.clone();
+        value["compatibility"] = case["wire"].clone();
+        let expected_required = case["wire"]["status"] != "not-required";
+        let result = server_status_response(value, "work", "foks.example", expected_required);
+        if case.get("decoded").is_some() {
+            let result = result.unwrap_or_else(|error| panic!("{}: {error:?}", case["name"]));
+            assert_eq!(result.chat_supported, Some(true), "{}", case["name"]);
+            assert!(result.host.is_some(), "{}", case["name"]);
+            let expected: foks_agent_proto::CompatibilityStatus =
+                serde_json::from_value(case["wire"].clone()).unwrap();
+            assert_eq!(result.compatibility, expected, "{}", case["name"]);
+        } else {
+            assert_eq!(result.unwrap_err().code, "invalid-response", "{}", case["name"]);
+        }
+    }
+    for capability in fixture["protocolCapabilities"].as_array().unwrap() {
+        let compatibility = serde_json::json!({
+            "status": "validated", "expires_at": 200, "capabilities": [capability]
+        });
+        assert!(validate_compatibility(compatibility).is_ok(), "{capability}");
+    }
+    for field in fixture["serverStatusRequiredFields"].as_array().unwrap() {
+        let key = match field.as_str().unwrap() {
+            "configuredProbe" => "configured_probe",
+            "chatSupported" => "chat_supported",
+            key => key,
+        };
+        for no_host in [false, true] {
+            let mut value = status.clone();
+            if no_host {
+                value["host"] = serde_json::Value::Null;
+                value["chat_supported"] = serde_json::Value::Null;
+            }
+            value.as_object_mut().unwrap().remove(key);
+            assert_eq!(
+                server_status_response(value, "work", "foks.example", true)
+                    .unwrap_err()
+                    .code,
+                "invalid-response",
+                "{key}"
+            );
+        }
+    }
+}
+
+#[test]
 fn wire_contract_fixture_matches_serialized_shapes() {
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("../../../wire-contract.json")).unwrap();
+    let configured_server = ServerDto {
+        id: "work".to_owned(),
+        name: "work".to_owned(),
+        label: Some("Work".to_owned()),
+        configured_probe: "foks.example".to_owned(),
+        accounts: vec!["personal".to_owned()],
+    };
+    assert_eq!(
+        serde_json::to_value(configured_server).unwrap(),
+        fixture["configuredServer"]
+    );
     let app_info = AppInfo {
         version: "0.3.0".to_owned(),
         agent_socket: "/private/foks/agent.sock".to_owned(),

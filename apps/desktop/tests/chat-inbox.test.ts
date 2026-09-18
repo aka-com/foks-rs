@@ -24,7 +24,7 @@ function chatSnapshot(stores: TeamStore[]): AgentSnapshot {
       {
         ...template,
         id: 'p',
-        capabilities: { chat: true },
+        services: { chat: true },
         compatibility: { status: 'not-required' },
       },
     ],

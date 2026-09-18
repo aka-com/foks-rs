@@ -49,7 +49,7 @@ async function setup(
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) => ({
       ...server,
-      capabilities: { ...server.capabilities, chat: true },
+      services: { ...server.services, chat: true },
       compatibility: { status: 'not-required' },
     })),
   };

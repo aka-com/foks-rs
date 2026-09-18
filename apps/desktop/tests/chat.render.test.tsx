@@ -56,7 +56,7 @@ async function setup(
     ),
     servers: FIXTURE.servers.map((s) =>
       s.id === 'acme'
-        ? { ...s, capabilities: { ...s.capabilities, chat: true } }
+        ? { ...s, services: { ...s.services, chat: true } }
         : s,
     ),
   };

@@ -76,8 +76,8 @@ async function snapshotWithChat(servers: string[]): Promise<AgentSnapshot> {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) => ({
       ...server,
-      capabilities: {
-        ...server.capabilities,
+      services: {
+        ...server.services,
         chat: servers.includes(server.id),
       },
     })),

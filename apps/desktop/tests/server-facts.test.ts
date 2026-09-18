@@ -1,15 +1,23 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFile } from 'node:fs/promises';
 import {
   decodeCompatibility,
   decodeServerStatus,
+  decodeServers,
   discoverUnboundTeams,
   loadSnapshot,
   type Bridge,
 } from '../src/bridge';
 import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';
-import { serverAvailability, storeAvailability } from '../src/model';
+import {
+  PROTOCOL_CAPABILITIES,
+  serverAvailability,
+  serverFactAvailability,
+  storeAvailability,
+  type Server,
+} from '../src/model';
 
 const failure = {
   code: 'deadline-exceeded',
@@ -40,9 +48,16 @@ async function harness() {
     ...base,
     native: true,
     listCatalog: async () => catalog,
-    listServers: async () => [
-      { ...server, host_id: null, trust: { status: 'unprobed' } },
-    ],
+    listServers: async () =>
+      decodeServers([
+        {
+          id: server.id,
+          name: server.name,
+          label: server.label,
+          configured_probe: server.configuredProbe,
+          accounts: server.accounts,
+        },
+      ]),
     listAccounts: async () =>
       FIXTURE.accounts.filter((entry) => entry.store === store.id),
   };
@@ -106,6 +121,29 @@ test('a failed status observation is not evidence of an absent saved identity', 
     ),
     false,
   );
+});
+
+test('catalog trust blocking remains authoritative when listServers contains only metadata', async () => {
+  const { bridge, catalog, server, store } = await harness();
+  let statusCalls = 0;
+  const snapshot = await loadSnapshot(
+    {
+      ...bridge,
+      listCatalog: async () => ({ ...catalog, blockedProfiles: [server.id] }),
+      describeServerStatus: async () => {
+        statusCalls++;
+        throw failure;
+      },
+    },
+    FIXTURE,
+  );
+  assert.equal(statusCalls, 0);
+  assert.equal(snapshot.servers[0].trust.status, 'blocked');
+  assert.equal(snapshot.servers[0].services.chat, null);
+  assert.deepEqual(storeAvailability(snapshot, store), {
+    available: false,
+    reason: 'verification-failed',
+  });
 });
 
 test('schema failures are not hidden behind an unobserved identity', async () => {
@@ -212,6 +250,126 @@ test('compatibility restrictions retain their scope without changing server trus
   );
 });
 
+test('shared wire contract separates metadata, service support, and compatibility grants', async () => {
+  const fixture = JSON.parse(
+    await readFile(
+      new URL('../src-tauri/wire-contract.json', import.meta.url),
+      'utf8',
+    ),
+  ) as {
+    configuredServer: Record<string, unknown>;
+    protocolCapabilities: string[];
+    serverStatusRequiredFields: string[];
+    serverStatus: Record<string, unknown>;
+    compatibilityCases: {
+      name: string;
+      wire: unknown;
+      decoded?: unknown;
+      nowSeconds: number;
+      granted: string[];
+    }[];
+  };
+  assert.deepEqual(PROTOCOL_CAPABILITIES, fixture.protocolCapabilities);
+  const [metadata] = decodeServers([fixture.configuredServer]);
+  assert.ok(metadata);
+  assert.deepEqual(metadata, {
+    id: 'work',
+    name: 'work',
+    label: 'Work',
+    configuredProbe: 'foks.example',
+    accounts: ['personal'],
+    host_id: null,
+    chain: null,
+    epoch: null,
+    trust: { status: 'unknown' },
+    compatibility: {
+      status: 'requirement-unknown',
+      error: {
+        code: 'catalog-loading',
+        message: 'Server facts have not been loaded.',
+        retryable: false,
+        ambiguous: false,
+        fatal: false,
+      },
+    },
+    passiveStatus: { status: 'loading' },
+    connectivity: { status: 'unknown' },
+    services: { chat: null },
+    restrictions: [],
+  });
+  assert.deepEqual(serverFactAvailability(metadata, []), {
+    available: false,
+    reason: 'loading',
+  });
+  for (const field of Object.keys(fixture.configuredServer)) {
+    const incomplete = { ...fixture.configuredServer };
+    delete incomplete[field];
+    assert.throws(() => decodeServers([incomplete]), field);
+  }
+  for (const field of [
+    'host_id', 'chain', 'epoch', 'lease', 'state', 'chat_available',
+  ]) {
+    assert.throws(
+      () => decodeServers([{ ...fixture.configuredServer, [field]: null }]),
+      /unexpected server metadata fields/,
+    );
+  }
+  for (const capability of PROTOCOL_CAPABILITIES) {
+    assert.deepEqual(
+      decodeCompatibility({
+        status: 'validated',
+        expires_at: 200,
+        capabilities: [capability],
+      }),
+      { status: 'required', expiresAt: 200, capabilities: [capability] },
+    );
+  }
+  for (const entry of fixture.compatibilityCases) {
+    const wire = { ...fixture.serverStatus, compatibility: entry.wire };
+    if (entry.decoded === undefined) {
+      assert.throws(() => decodeCompatibility(entry.wire), entry.name);
+      assert.throws(() => decodeServerStatus(wire), entry.name);
+      continue;
+    }
+    const status = decodeServerStatus(wire);
+    assert.deepEqual(status.compatibility, entry.decoded, entry.name);
+    assert.equal(status.chatSupported, true, entry.name);
+    assert.ok(status.host, entry.name);
+    const server: Server = {
+      ...metadata,
+      host_id: status.host.hostId,
+      chain: status.host.chain,
+      epoch: status.host.epoch,
+      trust: { status: 'verified' },
+      passiveStatus: { status: 'available', source: 'signed-server-status' },
+      compatibility: status.compatibility,
+      services: { chat: status.chatSupported },
+    };
+    for (const capability of PROTOCOL_CAPABILITIES) {
+      assert.equal(
+        serverFactAvailability(server, [], { nowSeconds: entry.nowSeconds }, [
+          capability,
+        ]).available,
+        entry.granted.includes(capability),
+        `${entry.name}: ${capability}`,
+      );
+    }
+    assert.equal(server.services.chat, true, entry.name);
+    assert.equal(server.trust.status, 'verified', entry.name);
+  }
+  for (const field of fixture.serverStatusRequiredFields) {
+    for (const noHost of [false, true]) {
+      const incomplete = { ...fixture.serverStatus };
+      if (noHost) {
+        incomplete.host = null;
+        incomplete.chatSupported = null;
+      }
+      delete incomplete[field];
+      assert.throws(() => decodeServerStatus(incomplete), field);
+    }
+  }
+});
+
 test('compatibility decoding preserves rejected outcomes and validates grant sets', () => {
   assert.deepEqual(
     decodeCompatibility({
@@ -249,6 +407,18 @@ test('compatibility decoding preserves rejected outcomes and validates grant set
       }),
     /inconsistent host support/,
   );
+});
+
+test('mock service support stays unknown until a new server is checked', async () => {
+  const bridge = mockBridge(FIXTURE);
+  await bridge.addServer('new-server', 'new.example');
+  const before = await bridge.describeServerStatus('new-server');
+  assert.equal(before.host, null);
+  assert.equal(before.chatSupported, null);
+  await bridge.checkServer('new-server');
+  const after = await bridge.describeServerStatus('new-server');
+  assert.ok(after.host);
+  assert.equal(after.chatSupported, false);
 });
 
 test('a successful observation of no host remains verification-required', async () => {

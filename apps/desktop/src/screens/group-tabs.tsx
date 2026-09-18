@@ -63,7 +63,7 @@ function noChannelsReason(
     return 'Chat is only available in teams, not shared folders.';
   const server = serverOf(snapshot, store.id);
   if (!server) return 'This team’s server is not configured on this device.';
-  if (server.capabilities.chat === false)
+  if (server.services.chat === false)
     return `Chat is not enabled on ${serverDisplayName(server)}.`;
   return undefined;
 }

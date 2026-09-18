@@ -97,7 +97,7 @@ fn lease_renewal_and_kv_capability_changes_do_not_retire_chat() {
     if let foks_agent_proto::ResponseResult::Success { value } =
         &mut catalog.profile_overviews[0].server_status
     {
-        value["compatibility"] = serde_json::json!({"status":"validated", "expires_at":u64::MAX - 1, "capabilities":["chat", "kv", "device-administration"]});
+        value["compatibility"] = serde_json::json!({"status":"validated", "expires_at":9_007_199_254_740_990u64, "capabilities":["chat", "kv", "device-administration"]});
     }
     let (load, _) = state.begin_catalog_load_checked().unwrap();
     assert!(state.publish_catalog(load, catalog.clone(), |_| {}));
@@ -105,7 +105,7 @@ fn lease_renewal_and_kv_capability_changes_do_not_retire_chat() {
     if let foks_agent_proto::ResponseResult::Success { value } =
         &mut catalog.profile_overviews[0].server_status
     {
-        value["compatibility"] = serde_json::json!({"status":"validated", "expires_at":u64::MAX, "capabilities":["chat"]});
+        value["compatibility"] = serde_json::json!({"status":"validated", "expires_at":9_007_199_254_740_991u64, "capabilities":["chat"]});
     }
     let (load, _) = state.begin_catalog_load_checked().unwrap();
     assert!(state.publish_catalog(load, catalog.clone(), |_| {}));
@@ -270,7 +270,7 @@ fn denied_expired_and_failed_profile_facts_do_not_authorize_chat() {
     for status in [
         serde_json::json!({"status":"missing"}),
         serde_json::json!({"status":"validated", "expires_at":1, "capabilities":["chat"]}),
-        serde_json::json!({"status":"validated", "expires_at":u64::MAX, "capabilities":["kv"]}),
+        serde_json::json!({"status":"validated", "expires_at":9_007_199_254_740_991u64, "capabilities":["kv"]}),
     ] {
         let state = phase_four_state(vec![]).for_profile("chat").unwrap();
         let mut catalog = chat_catalog();

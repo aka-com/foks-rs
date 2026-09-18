@@ -99,7 +99,7 @@ test('expiry changes permission without changing advertised chat support', () =>
     storeOperationAvailability(snapshot, team, 'chat', { nowSeconds: 200 }),
     { available: false, reason: 'check-in-expired' },
   );
-  assert.equal(snapshot.servers[0].capabilities.chat, true);
+  assert.equal(snapshot.servers[0].services.chat, true);
 });
 
 test('a scoped KV restriction does not become a chat restriction or a trust failure', () => {
@@ -132,7 +132,7 @@ test('unknown and unsupported chat service facts are distinct from permission', 
       ...granted,
       servers: granted.servers.map((server) =>
         server.id === team.server
-          ? { ...server, capabilities: { chat } }
+          ? { ...server, services: { chat } }
           : server,
       ),
     };

@@ -49,7 +49,7 @@ async function setup(override?: (base: Bridge) => Bridge) {
         ? {
             ...s,
             compatibility: { status: 'not-required' as const },
-            capabilities: { chat: true },
+            services: { chat: true },
           }
         : s,
     ),

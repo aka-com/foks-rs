@@ -431,7 +431,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
         'expiresAt' in compatibility ? compatibility.expiresAt : null,
       compatibility,
       chatSupported: serverHosts.has(server.id)
-        ? server.capabilities.chat
+        ? server.services.chat
         : null,
     };
   };
@@ -1228,6 +1228,8 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
         epoch: 118204,
       };
       serverHosts.set(server.id, host);
+      if (!existing && server.services.chat === null)
+        server.services = { chat: false };
       return {
         profile: server.id,
         acceptance: existing ? ('unchanged' as const) : ('inserted' as const),
@@ -1262,7 +1264,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
           source: 'signed-server-status',
         },
         connectivity: { status: 'unknown' },
-        capabilities: { chat: false },
+        services: { chat: null },
         restrictions: [],
       });
       serverProbes.set(profileName, probe);

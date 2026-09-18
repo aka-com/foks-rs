@@ -155,7 +155,7 @@ function listedServer(
           : { status: 'not-required' },
     passiveStatus: { status: 'available', source: 'signed-server-status' },
     connectivity: { status: 'unknown' },
-    capabilities: { chat: false },
+    services: { chat: false },
     restrictions: [],
   };
 }
@@ -359,16 +359,12 @@ test('decoders validate server status, member rosters, and federation entries', 
       name: 'foks.example.net',
       label: null,
       configured_probe: 'foks.example.net',
-      host_id: 'abc',
-      chain: 2,
-      epoch: 9,
-      lease: null,
       accounts: ['satoshi'],
-      state: 'ok',
-      chat_available: true,
     },
   ]);
-  assert.equal(servers[0]?.host_id, 'abc');
+  assert.equal(servers[0]?.host_id, null);
+  assert.deepEqual(servers[0]?.trust, { status: 'unknown' });
+  assert.deepEqual(servers[0]?.services, { chat: null });
   const parties = decodeParties([
     {
       store: catalog.stores[0]?.id,
@@ -400,7 +396,7 @@ test('decoders validate server status, member rosters, and federation entries', 
   assert.equal(federation[0]?.operation_id_hex, undefined);
   assert.throws(
     () => decodeServers([{ ...servers[0], state: 'mystery' }]),
-    /server state/,
+    /unexpected server metadata fields/,
   );
 });
 
@@ -2029,8 +2025,8 @@ test('loadSnapshot omits rosters for lapsed servers and enriches active member a
       FIXTURE.servers.map((server) => ({
         ...server,
         lease: null,
-        state: 'never-probed' as const,
-        chat_available: false,
+        trust: { status: 'unprobed' as const },
+        services: { chat: null },
       })),
     listAccounts: async () => [
       {

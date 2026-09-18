@@ -197,7 +197,7 @@ export type ConnectivityObservation =
   | { status: 'connected' }
   | { status: 'failed'; error: ServerFailure };
 
-export interface ServerCapabilities {
+export interface ServerServices {
   chat: boolean | null;
 }
 
@@ -227,7 +227,7 @@ export interface Server {
   compatibility: CompatibilityLease;
   passiveStatus: PassiveServerStatus;
   connectivity: ConnectivityObservation;
-  capabilities: ServerCapabilities;
+  services: ServerServices;
   restrictions: readonly ServerRestriction[];
 }
 

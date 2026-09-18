@@ -271,6 +271,44 @@ pub(super) fn server_label_response(
     })
 }
 
+fn is_compatibility_grant(name: &str) -> bool {
+    serde_json::from_value::<foks_client_app::Capability>(serde_json::Value::String(name.to_owned()))
+        .is_ok_and(|capability| capability != foks_client_app::Capability::Probe)
+}
+
+pub(super) fn validate_compatibility(
+    value: serde_json::Value,
+) -> Result<foks_agent_proto::CompatibilityStatus, AgentError> {
+    use foks_agent_proto::CompatibilityStatus;
+    let status: CompatibilityStatus = serde_json::from_value(value.clone())
+        .map_err(|error| invalid_response(error.to_string()))?;
+    match &status {
+        CompatibilityStatus::Validated {
+            expires_at,
+            capabilities,
+        } => {
+            if *expires_at > 9_007_199_254_740_991
+                || capabilities.is_empty()
+                || value["capabilities"].as_array().map(Vec::len) != Some(capabilities.len())
+                || capabilities.iter().any(|name| !is_compatibility_grant(name))
+            {
+                return Err(invalid_response(
+                    "The agent returned invalid compatibility grants.",
+                ));
+            }
+        }
+        CompatibilityStatus::Incompatible { expires_at, .. }
+            if *expires_at > 9_007_199_254_740_991 =>
+        {
+            return Err(invalid_response(
+                "The agent returned an invalid compatibility expiry.",
+            ));
+        }
+        _ => {}
+    }
+    Ok(status)
+}
+
 pub(super) fn server_status_response(
     value: serde_json::Value,
     expected_profile: &str,
@@ -279,34 +317,11 @@ pub(super) fn server_status_response(
 ) -> Result<ServerStatusSnapshotDto, AgentError> {
     let report: ServerStatusResponse =
         serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
-    let lease_required = match &report.compatibility {
-        foks_agent_proto::CompatibilityStatus::NotRequired => false,
-        foks_agent_proto::CompatibilityStatus::Missing
-        | foks_agent_proto::CompatibilityStatus::Incompatible { .. } => true,
-        foks_agent_proto::CompatibilityStatus::Validated { capabilities, .. } => {
-            if capabilities.is_empty()
-                || capabilities.iter().any(|name| {
-                    !matches!(
-                        name.as_str(),
-                        "signup"
-                            | "user-sync"
-                            | "kv"
-                            | "device-administration"
-                            | "recovery"
-                            | "passphrases"
-                            | "teams"
-                            | "chat"
-                            | "federation"
-                    )
-                })
-            {
-                return Err(invalid_response(
-                    "The agent returned invalid compatibility grants.",
-                ));
-            }
-            true
-        }
-    };
+    let compatibility = validate_compatibility(report.compatibility)?;
+    let lease_required = !matches!(
+        compatibility,
+        foks_agent_proto::CompatibilityStatus::NotRequired
+    );
     if report.host.is_some() != report.chat_supported.is_some() {
         return Err(invalid_response(
             "The agent returned inconsistent server facts.",
@@ -347,7 +362,7 @@ pub(super) fn server_status_response(
         profile: report.profile,
         configured_probe: report.configured_probe,
         host,
-        compatibility: report.compatibility,
+        compatibility,
         chat_supported: report.chat_supported,
     })
 }
@@ -478,13 +493,7 @@ pub struct ServerDto {
     pub name: String,
     pub label: Option<String>,
     pub configured_probe: String,
-    pub host_id: Option<String>,
-    pub chain: Option<u64>,
-    pub epoch: Option<u64>,
-    pub lease: Option<serde_json::Value>,
     pub accounts: Vec<String>,
-    pub state: &'static str,
-    pub chat_available: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -580,8 +589,10 @@ impl std::fmt::Debug for ResetPreviewDto {
 struct ServerStatusResponse {
     profile: String,
     configured_probe: String,
+    #[serde(deserialize_with = "Deserialize::deserialize")]
     host: Option<StoredHostResponse>,
-    compatibility: foks_agent_proto::CompatibilityStatus,
+    compatibility: serde_json::Value,
+    #[serde(deserialize_with = "Deserialize::deserialize")]
     chat_supported: Option<bool>,
 }
 
@@ -707,20 +718,11 @@ fn valid_profile_summary(profile: &ProfileSummary) -> bool {
 fn canary_grants_desktop(artifact: &foks_compat_artifact::SignedCanaryArtifact) -> bool {
     artifact.artifact.outcome == foks_compat_artifact::Outcome::Compatible
         && artifact.artifact.protocol_metadata_sha256 == PINNED_PROTOCOL_METADATA_SHA256
-        && artifact.artifact.capabilities.iter().all(|capability| {
-            matches!(
-                capability.as_str(),
-                "signup"
-                    | "user-sync"
-                    | "kv"
-                    | "device-administration"
-                    | "recovery"
-                    | "passphrases"
-                    | "teams"
-                    | "chat"
-                    | "federation"
-            )
-        })
+        && artifact
+            .artifact
+            .capabilities
+            .iter()
+            .all(|capability| is_compatibility_grant(capability))
 }
 
 fn valid_current_profile_policy(
@@ -1266,21 +1268,12 @@ pub async fn list_servers(
                             .collect()
                     })
                     .unwrap_or_default();
-                let blocked = catalog
-                    .as_ref()
-                    .is_some_and(|catalog| catalog.profile_blocked(&profile.name));
                 ServerDto {
                     id: profile.name.clone(),
                     name: profile.name,
                     label: profile.label,
                     configured_probe: profile.probe,
-                    host_id: None,
-                    chain: None,
-                    epoch: None,
-                    lease: None,
                     accounts,
-                    state: if blocked { "blocked" } else { "unknown" },
-                    chat_available: false,
                 }
             })
             .collect())

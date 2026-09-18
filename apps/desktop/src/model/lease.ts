@@ -289,10 +289,10 @@ export function storeOperationAvailability(
     if (
       store.kind !== 'team' ||
       store.team_kind !== 'named' ||
-      server.capabilities.chat === false
+      server.services.chat === false
     )
       return { available: false, reason: 'chat-unsupported' };
-    if (server.capabilities.chat === null)
+    if (server.services.chat === null)
       return { available: false, reason: 'server-status-unavailable' };
   }
   if (operation === 'vault') {
@@ -544,7 +544,7 @@ export function serverChatAvailable(
   options: AvailabilityOptions = {},
 ): boolean {
   return (
-    server.capabilities.chat === true &&
+    server.services.chat === true &&
     serverCapabilityAvailability(snapshot, server, ['chat'], options).available
   );
 }

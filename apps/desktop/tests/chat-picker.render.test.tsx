@@ -37,7 +37,7 @@ async function mount(override?: (base: Bridge) => Bridge, tabbed = false) {
     servers: FIXTURE.servers.map(
       (server: AgentSnapshot['servers'][number]) => ({
         ...server,
-        capabilities: { ...server.capabilities, chat: true },
+        services: { ...server.services, chat: true },
         compatibility: { status: 'not-required' },
       }),
     ),

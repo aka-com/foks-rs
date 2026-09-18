@@ -704,7 +704,7 @@ test('native-shaped account creation is not rewound by the pre-mutation inventor
           source: 'signed-server-status' as const,
         },
         connectivity: { status: 'unknown' as const },
-        capabilities: { chat: false },
+        services: { chat: false },
         restrictions: [],
       },
     ],

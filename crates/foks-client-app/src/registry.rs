@@ -1518,6 +1518,64 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
+    fn desktop_capability_contract_covers_profile_and_artifact_grants() {
+        fn grant_index(capability: Capability) -> Option<usize> {
+            match capability {
+                Capability::Probe => None,
+                Capability::Signup => Some(0),
+                Capability::UserSync => Some(1),
+                Capability::Kv => Some(2),
+                Capability::DeviceAdministration => Some(3),
+                Capability::Recovery => Some(4),
+                Capability::Passphrases => Some(5),
+                Capability::Teams => Some(6),
+                Capability::Chat => Some(7),
+                Capability::Federation => Some(8),
+            }
+        }
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../apps/desktop/src-tauri/wire-contract.json"
+        ))
+        .unwrap();
+        let names = fixture["protocolCapabilities"].as_array().unwrap();
+        assert_eq!(names.len(), 9);
+        for (index, name) in names.iter().enumerate() {
+            let capability: Capability = serde_json::from_value(name.clone()).unwrap();
+            assert_eq!(grant_index(capability), Some(index));
+            assert_eq!(serde_json::to_value(capability).unwrap(), *name);
+            assert_eq!(capability.as_str(), name.as_str().unwrap());
+            assert_eq!(
+                capability_from_canary(name.as_str().unwrap()).unwrap(),
+                capability
+            );
+        }
+        assert_eq!(grant_index(Capability::Probe), None);
+        assert!(capability_from_canary("probe").is_err());
+        for name in ["invented", "", " KV "] {
+            assert!(capability_from_canary(name).is_err());
+        }
+        for case in fixture["compatibilityCases"].as_array().unwrap() {
+            if case.get("decoded").is_none() {
+                continue;
+            }
+            let status: CompatibilityStatus =
+                serde_json::from_value(case["wire"].clone()).unwrap();
+            let now = case["nowSeconds"].as_u64().unwrap();
+            let granted = case["granted"].as_array().unwrap();
+            for name in names {
+                let capability = capability_from_canary(name.as_str().unwrap()).unwrap();
+                assert_eq!(
+                    status.denial_at(capability, now).is_none(),
+                    granted.contains(name),
+                    "{}: {}",
+                    case["name"],
+                    name
+                );
+            }
+        }
+    }
+
+    #[test]
     fn server_notices_fit_the_desktop_utf8_byte_limit() {
         for (notice, expected_bytes) in [
             ("a".repeat(600), 512),

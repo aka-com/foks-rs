@@ -24,7 +24,7 @@ const RAW: AgentSnapshot = {
       compatibility: { status: 'not-required' },
       passiveStatus: { status: 'available', source: 'signed-server-status' },
       connectivity: { status: 'unknown' },
-      capabilities: { chat: true },
+      services: { chat: true },
       restrictions: [],
     },
     {
@@ -44,7 +44,7 @@ const RAW: AgentSnapshot = {
       },
       passiveStatus: { status: 'available', source: 'signed-server-status' },
       connectivity: { status: 'unknown' },
-      capabilities: { chat: false },
+      services: { chat: false },
       restrictions: [],
     },
     {
@@ -60,7 +60,7 @@ const RAW: AgentSnapshot = {
       compatibility: { status: 'not-required' },
       passiveStatus: { status: 'available', source: 'signed-server-status' },
       connectivity: { status: 'unknown' },
-      capabilities: { chat: false },
+      services: { chat: null },
       restrictions: [],
     },
   ],

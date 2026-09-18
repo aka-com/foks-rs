@@ -70,7 +70,7 @@ async function rail(
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) => ({
       ...server,
-      capabilities: { ...server.capabilities, chat: true },
+      services: { ...server.services, chat: true },
     })),
   };
   const base: Bridge = mockBridge(snapshot);

@@ -1242,43 +1242,23 @@ function optionalInteger(value: unknown, at: string): number | undefined {
 
 function decodeServer(value: unknown, at: string): Server {
   const item = record(value, at);
-  const state = string(item.state, `${at}.state`);
   if (
-    ![
-      'ok',
-      'lease-lapsed',
-      'lease-unavailable',
-      'never-probed',
-      'unknown',
-      'blocked',
-    ].includes(state)
-  ) {
-    throw new Error(`${at}.state is not a server state`);
-  }
-  if (item.lease !== null)
-    throw new Error(`${at}.lease must be null when no lease is active`);
+    Object.keys(item).some(
+      (key) =>
+        !['id', 'name', 'label', 'configured_probe', 'accounts'].includes(key),
+    )
+  )
+    throw new Error(`${at} contains unexpected server metadata fields`);
   return {
     id: string(item.id, `${at}.id`),
     name: string(item.name, `${at}.name`),
     label: nullableString(item.label, at + '.label'),
     configuredProbe: string(item.configured_probe, at + '.configured_probe'),
-    host_id: nullableString(item.host_id, `${at}.host_id`),
-    chain: nullableInteger(item.chain, `${at}.chain`),
-    epoch: nullableInteger(item.epoch, `${at}.epoch`),
+    host_id: null,
+    chain: null,
+    epoch: null,
     accounts: array(item.accounts, `${at}.accounts`, string),
-    trust:
-      state === 'blocked'
-        ? {
-            status: 'blocked',
-            error: {
-              code: 'server-verification-failed',
-              message: 'Server verification failed.',
-              retryable: false,
-              ambiguous: false,
-              fatal: false,
-            },
-          }
-        : { status: 'unknown' },
+    trust: { status: 'unknown' },
     compatibility: {
       status: 'requirement-unknown',
       error: {
@@ -1291,7 +1271,7 @@ function decodeServer(value: unknown, at: string): Server {
     },
     passiveStatus: { status: 'loading' },
     connectivity: { status: 'unknown' },
-    capabilities: { chat: null },
+    services: { chat: null },
     restrictions: [],
   };
 }
@@ -3485,7 +3465,7 @@ async function projectCatalog(
             error: loadingError,
           },
           connectivity: { status: 'unknown' },
-          capabilities: { chat: null },
+          services: { chat: null },
           restrictions: previous?.restrictions ?? [],
         };
       })
@@ -3594,11 +3574,22 @@ async function projectCatalog(
       )?.error;
       return {
         ...server,
-        trust: trustFailure
-          ? { status: 'blocked' as const, error: trustFailure }
-          : server.trust,
+        trust: {
+          status: 'blocked' as const,
+          error:
+            trustFailure ??
+            (server.trust.status === 'blocked'
+              ? server.trust.error
+              : normalizeCommandError({
+                  code: 'server-verification-failed',
+                  message: 'Server verification failed.',
+                  retryable: false,
+                  ambiguous: false,
+                  fatal: false,
+                })),
+        },
         restrictions: allRestrictions,
-        capabilities: { chat: false },
+        services: { chat: null },
       };
     }
     if (
@@ -3635,7 +3626,7 @@ async function projectCatalog(
               new Error('Compatibility status is unknown.'),
             ),
         },
-        capabilities: { chat: null },
+        services: { chat: null },
         restrictions: allRestrictions,
       };
     return {
@@ -3652,7 +3643,7 @@ async function projectCatalog(
         status: 'available' as const,
         source: 'signed-server-status' as const,
       },
-      capabilities: { chat: status.chatSupported },
+      services: { chat: status.chatSupported },
       restrictions: allRestrictions,
     };
   });

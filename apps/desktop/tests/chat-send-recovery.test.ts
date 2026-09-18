@@ -88,7 +88,7 @@ async function setup(hooks: Hooks = {}) {
         ? {
             ...server,
             compatibility: { status: 'not-required' as const },
-            capabilities: { chat: true },
+            services: { chat: true },
           }
         : server,
     ),

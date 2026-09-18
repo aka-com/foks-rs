@@ -69,7 +69,7 @@ export function chatTeams(snapshot: AgentSnapshot): TeamStore[] {
       store.kind === 'team' &&
       store.team_kind === 'named' &&
       store.active !== false &&
-      serverFor(snapshot, store)?.capabilities.chat === true,
+      serverFor(snapshot, store)?.services.chat === true,
   );
 }
 
@@ -84,7 +84,7 @@ export function noChatReason(
   const server = serverFor(snapshot, store);
   if (store.active === false) return 'Finish setup in Teams';
   if (!server) return 'Server unavailable';
-  if (server.capabilities.chat === null)
+  if (server.services.chat === null)
     return 'Chat support has not been determined';
   return `Chat is not enabled on ${serverDisplayName(server)}`;
 }
