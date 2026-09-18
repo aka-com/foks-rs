@@ -1338,7 +1338,7 @@ function ResetSheet({
           >
             Failed to load reset preview: {resetError}
           </p>
-          <Button disabled={resetLoading} onClick={onRetryPreview}>
+          <Button disabled={resetLoading} onClick={() => void onRetryPreview()}>
             {resetLoading ? 'Retrying…' : 'Retry loading preview'}
           </Button>
         </div>

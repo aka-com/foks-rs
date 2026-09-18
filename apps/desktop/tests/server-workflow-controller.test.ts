@@ -27,13 +27,15 @@ function deferred<T>() {
 }
 
 const server = (id = 'p'): Server =>
-  decodeServers([{
-    id,
-    name: id,
-    label: null,
-    configured_probe: `${id}.example`,
-    accounts: [],
-  }])[0]!;
+  decodeServers([
+    {
+      id,
+      name: id,
+      label: null,
+      configured_probe: `${id}.example`,
+      accounts: [],
+    },
+  ])[0];
 
 const snapshot = (...servers: Server[]): AgentSnapshot =>
   ({
@@ -82,34 +84,55 @@ const ambiguous = {
 };
 
 function checkHarness(bridge: Bridge) {
-  let context = { snapshot: snapshot(server()), profile: 'p' as string | undefined };
+  let context = {
+    snapshot: snapshot(server()),
+    profile: 'p' as string | undefined,
+  };
   const events: unknown[] = [];
   const controller = new ServerCheckController(bridge, () => context, {
     busy: (value) => events.push(['busy', value]),
     checked: (_binding, value) => events.push(['checked', value]),
     status: (_binding, value) => events.push(['status', value]),
     toast: (value) => events.push(['toast', value]),
-    refresh: async (value) => { events.push(['refresh', value]); },
-    error: async (value) => { events.push(['error', value]); },
+    refresh: async (value) => {
+      events.push(['refresh', value]);
+    },
+    error: async (value) => {
+      events.push(['error', value]);
+    },
   });
   return {
     controller,
     events,
-    replace: (next: typeof context) => { context = next; },
+    replace: (next: typeof context) => {
+      context = next;
+    },
   };
 }
 
-for (const reason of ['blur', 'close', 'profile-change', 'StrictMode cleanup']) {
+for (const reason of [
+  'blur',
+  'close',
+  'profile-change',
+  'StrictMode cleanup',
+]) {
   test(`reset preview retirement on ${reason} discards a late one-use token`, async () => {
     const response = deferred<ResetPreview>();
     const started = deferred<void>();
     let writes = 0;
     const bridge = {
-      describeReset: () => { started.resolve(); return response.promise; },
-      resetServer: async () => { writes++; },
+      describeReset: () => {
+        started.resolve();
+        return response.promise;
+      },
+      resetServer: async () => {
+        writes++;
+      },
     } as unknown as Bridge;
     const workflow = new ResetWorkflow(
-      bridge, 'p', () => true,
+      bridge,
+      'p',
+      () => true,
       () => assert.fail('stale preview error'),
       () => assert.fail('stale mutation error'),
     );
@@ -130,10 +153,19 @@ test('reset preview queued before retirement never dispatches', async () => {
   const held = deferred<void>();
   let reads = 0;
   const bridge = {
-    describeReset: async () => { reads++; return preview(); },
+    describeReset: async () => {
+      reads++;
+      return preview();
+    },
   } as unknown as Bridge;
   const blocker = enqueueProfileWork(bridge, 'p', () => held.promise);
-  const workflow = new ResetWorkflow(bridge, 'p', () => true, unexpected, unexpected);
+  const workflow = new ResetWorkflow(
+    bridge,
+    'p',
+    () => true,
+    unexpected,
+    unexpected,
+  );
   workflow.activate();
   const pending = workflow.load();
   workflow.retire();
@@ -153,12 +185,21 @@ test('StrictMode setup after cleanup cannot revive the previous preview request'
   const bridge = {
     describeReset: () => {
       reads++;
-      if (reads === 1) { firstStarted.resolve(); return first.promise; }
+      if (reads === 1) {
+        firstStarted.resolve();
+        return first.promise;
+      }
       secondStarted.resolve();
       return second.promise;
     },
   } as unknown as Bridge;
-  const workflow = new ResetWorkflow(bridge, 'p', () => true, unexpected, unexpected);
+  const workflow = new ResetWorkflow(
+    bridge,
+    'p',
+    () => true,
+    unexpected,
+    unexpected,
+  );
   workflow.activate();
   const old = workflow.load();
   await firstStarted.promise;
@@ -180,9 +221,18 @@ test('reset preview binding changes suppress errors and token publication', asyn
   const started = deferred<void>();
   let current = true;
   const bridge = {
-    describeReset: () => { started.resolve(); return read.promise; },
+    describeReset: () => {
+      started.resolve();
+      return read.promise;
+    },
   } as unknown as Bridge;
-  const workflow = new ResetWorkflow(bridge, 'p', () => current, unexpected, unexpected);
+  const workflow = new ResetWorkflow(
+    bridge,
+    'p',
+    () => current,
+    unexpected,
+    unexpected,
+  );
   workflow.activate();
   const pending = workflow.load();
   await started.promise;
@@ -198,15 +248,28 @@ test('reset spends its token synchronously and never replays an ambiguous mutati
   let errors = 0;
   const bridge = {
     describeReset: async () => preview(),
-    resetServer: () => { writes++; return write.promise; },
+    resetServer: () => {
+      writes++;
+      return write.promise;
+    },
   } as unknown as Bridge;
   const workflow = new ResetWorkflow(
-    bridge, 'p', () => true, unexpected, () => { errors++; },
+    bridge,
+    'p',
+    () => true,
+    unexpected,
+    () => {
+      errors++;
+    },
   );
   workflow.activate();
   await workflow.load();
-  const first = workflow.reset('p', async () => assert.fail('ambiguous reset applied'));
-  const duplicate = workflow.reset('p', async () => assert.fail('duplicate reset applied'));
+  const first = workflow.reset('p', async () =>
+    assert.fail('ambiguous reset applied'),
+  );
+  const duplicate = workflow.reset('p', async () =>
+    assert.fail('duplicate reset applied'),
+  );
   assert.equal(writes, 1);
   write.reject(ambiguous);
   await Promise.all([first, duplicate]);
@@ -229,7 +292,11 @@ test('retired passive status loops do not dispatch the next profile or publish',
     },
   } as unknown as Bridge;
   const pending = loadServerStatuses(
-    bridge, [server(), server('q')], () => current, unexpected, unexpected,
+    bridge,
+    [server(), server('q')],
+    () => current,
+    unexpected,
+    unexpected,
   );
   await started.promise;
   current = false;
@@ -243,7 +310,10 @@ test('status reads check currentness after waiting for profile queue admission',
   let current = true;
   let reads = 0;
   const bridge = {
-    describeServerStatus: async () => { reads++; return status(); },
+    describeServerStatus: async () => {
+      reads++;
+      return status();
+    },
   } as unknown as Bridge;
   const blocker = enqueueProfileWork(bridge, 'p', () => held.promise);
   const pending = readCurrentServerStatus(bridge, server(), () => current);
@@ -281,9 +351,14 @@ test('rapid checks dispatch one identity probe and do not automatically reconcil
   const started = deferred<void>();
   let writes = 0;
   const bridge = {
-    checkServer: () => { writes++; started.resolve(); return read.promise; },
+    checkServer: () => {
+      writes++;
+      started.resolve();
+      return read.promise;
+    },
     describeServerStatus: async () => status(),
-    reconcileServer: async () => assert.fail('identity check delegated to reconciliation'),
+    reconcileServer: async () =>
+      assert.fail('identity check delegated to reconciliation'),
   } as unknown as Bridge;
   const { controller, events } = checkHarness(bridge);
   const first = controller.check(server());
@@ -293,9 +368,10 @@ test('rapid checks dispatch one identity probe and do not automatically reconcil
   read.resolve(report());
   await Promise.all([first, duplicate]);
   assert.equal(writes, 1);
-  assert.deepEqual(events.map((event) => (event as unknown[])[0]), [
-    'busy', 'checked', 'toast', 'status', 'refresh', 'busy',
-  ]);
+  assert.deepEqual(
+    events.map((event) => (event as unknown[])[0]),
+    ['busy', 'checked', 'toast', 'status', 'refresh', 'busy'],
+  );
 });
 
 for (const binding of ['profile', 'address', 'host'] as const) {
@@ -303,7 +379,10 @@ for (const binding of ['profile', 'address', 'host'] as const) {
     const read = deferred<CheckedServer>();
     const started = deferred<void>();
     const bridge = {
-      checkServer: () => { started.resolve(); return read.promise; },
+      checkServer: () => {
+        started.resolve();
+        return read.promise;
+      },
     } as unknown as Bridge;
     const { controller, events, replace } = checkHarness(bridge);
     const pending = controller.check(server());
@@ -326,7 +405,10 @@ test('retiring a queued check prevents native dispatch', async () => {
   const held = deferred<void>();
   let writes = 0;
   const bridge = {
-    checkServer: async () => { writes++; return report(); },
+    checkServer: async () => {
+      writes++;
+      return report();
+    },
   } as unknown as Bridge;
   const blocker = enqueueProfileWork(bridge, 'p', () => held.promise);
   const { controller, events } = checkHarness(bridge);
@@ -348,7 +430,10 @@ test('old check completion cannot clear a newer attempt after effect reactivatio
   const bridge = {
     checkServer: () => {
       writes++;
-      if (writes === 1) { firstStarted.resolve(); return first.promise; }
+      if (writes === 1) {
+        firstStarted.resolve();
+        return first.promise;
+      }
       secondStarted.resolve();
       return second.promise;
     },
@@ -363,7 +448,11 @@ test('old check completion cannot clear a newer attempt after effect reactivatio
   first.reject(ambiguous);
   await old;
   await secondStarted.promise;
-  assert.deepEqual(events, [['busy', true], ['busy', false], ['busy', true]]);
+  assert.deepEqual(events, [
+    ['busy', true],
+    ['busy', false],
+    ['busy', true],
+  ]);
   second.resolve(report());
   await next;
   assert.deepEqual(events.at(-1), ['busy', false]);
@@ -396,21 +485,30 @@ test('fixture-seeded checks require the fixture capability and consume seeding o
   let writes = 0;
   let seeded = 0;
   const bridge = {
-    checkServer: async () => { writes++; return report(); },
+    checkServer: async () => {
+      writes++;
+      return report();
+    },
     describeServerStatus: async () => status(),
   } as unknown as Bridge;
   const production = checkHarness(bridge);
-  await production.controller.check(server(), () => { seeded++; });
+  await production.controller.check(server(), () => {
+    seeded++;
+  });
   assert.equal(writes, 0);
   assert.equal(seeded, 0);
   const fixture = { ...bridge, fixtureSnapshot: snapshot(server()) };
   const { controller } = checkHarness(fixture);
   const held = deferred<void>();
   const blocker = enqueueProfileWork(fixture, 'p', () => held.promise);
-  const old = controller.check(server(), () => { seeded++; });
+  const old = controller.check(server(), () => {
+    seeded++;
+  });
   controller.retire();
   controller.activate();
-  const next = controller.check(server(), () => { seeded++; });
+  const next = controller.check(server(), () => {
+    seeded++;
+  });
   held.resolve();
   await Promise.all([blocker, old, next]);
   assert.equal(writes, 1);
@@ -422,10 +520,18 @@ test('an observed reset still reports refresh failure when its success callback 
   let writes = 0;
   const bridge = {
     describeReset: async () => preview(),
-    resetServer: async () => { writes++; },
+    resetServer: async () => {
+      writes++;
+    },
   } as unknown as Bridge;
   const workflow = new ResetWorkflow(
-    bridge, 'p', () => true, unexpected, () => { errors++; },
+    bridge,
+    'p',
+    () => true,
+    unexpected,
+    () => {
+      errors++;
+    },
   );
   workflow.activate();
   await workflow.load();
@@ -440,11 +546,17 @@ test('an observed reset still reports refresh failure when its success callback 
 test('current ambiguous check failure reports once and never retries', async () => {
   let writes = 0;
   const bridge = {
-    checkServer: async () => { writes++; throw ambiguous; },
+    checkServer: async () => {
+      writes++;
+      throw ambiguous;
+    },
   } as unknown as Bridge;
   const { controller, events } = checkHarness(bridge);
   await controller.check(server());
   assert.equal(writes, 1);
-  assert.equal(events.filter((event) => (event as unknown[])[0] === 'error').length, 1);
+  assert.equal(
+    events.filter((event) => (event as unknown[])[0] === 'error').length,
+    1,
+  );
   assert.deepEqual(events.at(-1), ['busy', false]);
 });

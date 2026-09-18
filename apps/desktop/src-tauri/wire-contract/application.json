@@ -20,12 +20,42 @@
   },
   "agentProcessInfoCases": {
     "valid": {
-      "absent": { "pid": null, "executable": null, "startedAt": null, "owned": false },
-      "owned": { "pid": 42, "executable": "/opt/foks-agent", "startedAt": 1700000000, "owned": true },
-      "external": { "pid": 43, "executable": "/usr/local/bin/foks-agent", "startedAt": 1700000001, "owned": false },
-      "uninspectable": { "pid": 44, "executable": null, "startedAt": null, "owned": true },
-      "pathOnly": { "pid": 45, "executable": "/opt/foks-agent", "startedAt": null, "owned": false },
-      "timeOnly": { "pid": 46, "executable": null, "startedAt": 0, "owned": false }
+      "absent": {
+        "pid": null,
+        "executable": null,
+        "startedAt": null,
+        "owned": false
+      },
+      "owned": {
+        "pid": 42,
+        "executable": "/opt/foks-agent",
+        "startedAt": 1700000000,
+        "owned": true
+      },
+      "external": {
+        "pid": 43,
+        "executable": "/usr/local/bin/foks-agent",
+        "startedAt": 1700000001,
+        "owned": false
+      },
+      "uninspectable": {
+        "pid": 44,
+        "executable": null,
+        "startedAt": null,
+        "owned": true
+      },
+      "pathOnly": {
+        "pid": 45,
+        "executable": "/opt/foks-agent",
+        "startedAt": null,
+        "owned": false
+      },
+      "timeOnly": {
+        "pid": 46,
+        "executable": null,
+        "startedAt": 0,
+        "owned": false
+      }
     },
     "invalid": [
       { "base": "absent", "path": ["pid"] },
@@ -49,11 +79,32 @@
   },
   "appLockStateCases": {
     "valid": {
-      "biometryLocked": { "locked": true, "available": true, "mechanism": "biometry" },
-      "biometryUnlocked": { "locked": false, "available": true, "mechanism": "biometry" },
-      "passwordLocked": { "locked": true, "available": true, "mechanism": "password" },
-      "passwordUnlocked": { "locked": false, "available": true, "mechanism": "password" },
-      "unavailable": { "locked": false, "available": false, "mechanism": "none", "unavailableReason": "OS authentication unavailable" }
+      "biometryLocked": {
+        "locked": true,
+        "available": true,
+        "mechanism": "biometry"
+      },
+      "biometryUnlocked": {
+        "locked": false,
+        "available": true,
+        "mechanism": "biometry"
+      },
+      "passwordLocked": {
+        "locked": true,
+        "available": true,
+        "mechanism": "password"
+      },
+      "passwordUnlocked": {
+        "locked": false,
+        "available": true,
+        "mechanism": "password"
+      },
+      "unavailable": {
+        "locked": false,
+        "available": false,
+        "mechanism": "none",
+        "unavailableReason": "OS authentication unavailable"
+      }
     },
     "invalid": [
       { "base": "unavailable", "path": ["locked"], "value": true },
@@ -62,8 +113,16 @@
       { "base": "unavailable", "path": ["mechanism"], "value": "password" },
       { "base": "biometryLocked", "path": ["mechanism"], "value": "none" },
       { "base": "biometryLocked", "path": ["mechanism"], "value": "invented" },
-      { "base": "biometryLocked", "path": ["unavailableReason"], "value": "unavailable" },
-      { "base": "biometryLocked", "path": ["unavailableReason"], "value": null },
+      {
+        "base": "biometryLocked",
+        "path": ["unavailableReason"],
+        "value": "unavailable"
+      },
+      {
+        "base": "biometryLocked",
+        "path": ["unavailableReason"],
+        "value": null
+      },
       { "base": "biometryLocked", "path": ["locked"], "value": 1 },
       { "base": "biometryLocked", "path": ["available"] },
       { "base": "biometryLocked", "path": ["mechanism"] }
@@ -72,21 +131,199 @@
   "maintenanceCases": {
     "valid": {
       "idle": { "state": "idle", "generation": 0, "revision": 0 },
-      "selecting": { "state": "active", "generation": 1, "revision": 1, "kind": "export", "phase": "selecting" },
-      "confirming": { "state": "active", "generation": 1, "revision": 2, "kind": "import", "phase": "confirming" },
-      "quiescing": { "state": "active", "generation": 1, "revision": 3, "kind": "relocate", "phase": "quiescing" },
-      "running": { "state": "active", "generation": 1, "revision": 4, "kind": "verify", "phase": "running" },
-      "restoring": { "state": "active", "generation": 1, "revision": 5, "kind": "restart", "phase": "restoring" },
-      "cancelled": { "state": "complete", "generation": 1, "revision": 6, "kind": "export", "operation": { "status": "cancelled" }, "disposition": { "status": "continue-current-root" } },
-      "completed": { "state": "complete", "generation": 1, "revision": 6, "kind": "verify", "operation": { "status": "completed" }, "disposition": { "status": "continue-current-root" } },
-      "failed": { "state": "complete", "generation": 1, "revision": 6, "kind": "import", "operation": { "status": "failed", "error": { "code": "io", "message": "Destination full", "retryable": false, "ambiguous": false, "fatal": false } }, "disposition": { "status": "continue-current-root" } },
-      "restart": { "state": "complete", "generation": 1, "revision": 6, "kind": "relocate", "operation": { "status": "completed" }, "disposition": { "status": "restart-selected-root", "root": "/private/foks/selected" } },
-      "recovery": { "state": "complete", "generation": 1, "revision": 6, "kind": "import", "operation": { "status": "completed" }, "disposition": { "status": "recovery-required", "root": "/private/foks/selected" } },
-      "failedRestart": { "state": "complete", "generation": 1, "revision": 6, "kind": "relocate", "operation": { "status": "failed", "error": { "code": "io", "message": "Destination full", "retryable": false, "ambiguous": false, "fatal": false } }, "disposition": { "status": "restart-selected-root", "root": "/private/foks/selected" } },
-      "failedRecovery": { "state": "complete", "generation": 1, "revision": 6, "kind": "import", "operation": { "status": "failed", "error": { "code": "io", "message": "Destination full", "retryable": false, "ambiguous": false, "fatal": false } }, "disposition": { "status": "recovery-required", "root": "/private/foks/selected" } },
-      "restorationFailed": { "state": "complete", "generation": 1, "revision": 6, "kind": "restart", "operation": { "status": "completed" }, "disposition": { "status": "restoration-failed", "root": "/private/foks/current", "error": { "code": "agent-lost", "message": "Restore failed", "retryable": true, "ambiguous": true, "fatal": true } } },
-      "cancelledRestorationFailed": { "state": "complete", "generation": 1, "revision": 6, "kind": "export", "operation": { "status": "cancelled" }, "disposition": { "status": "restoration-failed", "root": "/private/foks/current", "error": { "code": "agent-lost", "message": "Restore failed", "retryable": true, "ambiguous": true, "fatal": true } } },
-      "failedRestorationFailed": { "state": "complete", "generation": 1, "revision": 6, "kind": "import", "operation": { "status": "failed", "error": { "code": "io", "message": "Destination full", "retryable": false, "ambiguous": false, "fatal": false } }, "disposition": { "status": "restoration-failed", "root": "/private/foks/current", "error": { "code": "agent-lost", "message": "Restore failed", "retryable": true, "ambiguous": true, "fatal": true } } }
+      "selecting": {
+        "state": "active",
+        "generation": 1,
+        "revision": 1,
+        "kind": "export",
+        "phase": "selecting"
+      },
+      "confirming": {
+        "state": "active",
+        "generation": 1,
+        "revision": 2,
+        "kind": "import",
+        "phase": "confirming"
+      },
+      "quiescing": {
+        "state": "active",
+        "generation": 1,
+        "revision": 3,
+        "kind": "relocate",
+        "phase": "quiescing"
+      },
+      "running": {
+        "state": "active",
+        "generation": 1,
+        "revision": 4,
+        "kind": "verify",
+        "phase": "running"
+      },
+      "restoring": {
+        "state": "active",
+        "generation": 1,
+        "revision": 5,
+        "kind": "restart",
+        "phase": "restoring"
+      },
+      "cancelled": {
+        "state": "complete",
+        "generation": 1,
+        "revision": 6,
+        "kind": "export",
+        "operation": { "status": "cancelled" },
+        "disposition": { "status": "continue-current-root" }
+      },
+      "completed": {
+        "state": "complete",
+        "generation": 1,
+        "revision": 6,
+        "kind": "verify",
+        "operation": { "status": "completed" },
+        "disposition": { "status": "continue-current-root" }
+      },
+      "failed": {
+        "state": "complete",
+        "generation": 1,
+        "revision": 6,
+        "kind": "import",
+        "operation": {
+          "status": "failed",
+          "error": {
+            "code": "io",
+            "message": "Destination full",
+            "retryable": false,
+            "ambiguous": false,
+            "fatal": false
+          }
+        },
+        "disposition": { "status": "continue-current-root" }
+      },
+      "restart": {
+        "state": "complete",
+        "generation": 1,
+        "revision": 6,
+        "kind": "relocate",
+        "operation": { "status": "completed" },
+        "disposition": {
+          "status": "restart-selected-root",
+          "root": "/private/foks/selected"
+        }
+      },
+      "recovery": {
+        "state": "complete",
+        "generation": 1,
+        "revision": 6,
+        "kind": "import",
+        "operation": { "status": "completed" },
+        "disposition": {
+          "status": "recovery-required",
+          "root": "/private/foks/selected"
+        }
+      },
+      "failedRestart": {
+        "state": "complete",
+        "generation": 1,
+        "revision": 6,
+        "kind": "relocate",
+        "operation": {
+          "status": "failed",
+          "error": {
+            "code": "io",
+            "message": "Destination full",
+            "retryable": false,
+            "ambiguous": false,
+            "fatal": false
+          }
+        },
+        "disposition": {
+          "status": "restart-selected-root",
+          "root": "/private/foks/selected"
+        }
+      },
+      "failedRecovery": {
+        "state": "complete",
+        "generation": 1,
+        "revision": 6,
+        "kind": "import",
+        "operation": {
+          "status": "failed",
+          "error": {
+            "code": "io",
+            "message": "Destination full",
+            "retryable": false,
+            "ambiguous": false,
+            "fatal": false
+          }
+        },
+        "disposition": {
+          "status": "recovery-required",
+          "root": "/private/foks/selected"
+        }
+      },
+      "restorationFailed": {
+        "state": "complete",
+        "generation": 1,
+        "revision": 6,
+        "kind": "restart",
+        "operation": { "status": "completed" },
+        "disposition": {
+          "status": "restoration-failed",
+          "root": "/private/foks/current",
+          "error": {
+            "code": "agent-lost",
+            "message": "Restore failed",
+            "retryable": true,
+            "ambiguous": true,
+            "fatal": true
+          }
+        }
+      },
+      "cancelledRestorationFailed": {
+        "state": "complete",
+        "generation": 1,
+        "revision": 6,
+        "kind": "export",
+        "operation": { "status": "cancelled" },
+        "disposition": {
+          "status": "restoration-failed",
+          "root": "/private/foks/current",
+          "error": {
+            "code": "agent-lost",
+            "message": "Restore failed",
+            "retryable": true,
+            "ambiguous": true,
+            "fatal": true
+          }
+        }
+      },
+      "failedRestorationFailed": {
+        "state": "complete",
+        "generation": 1,
+        "revision": 6,
+        "kind": "import",
+        "operation": {
+          "status": "failed",
+          "error": {
+            "code": "io",
+            "message": "Destination full",
+            "retryable": false,
+            "ambiguous": false,
+            "fatal": false
+          }
+        },
+        "disposition": {
+          "status": "restoration-failed",
+          "root": "/private/foks/current",
+          "error": {
+            "code": "agent-lost",
+            "message": "Restore failed",
+            "retryable": true,
+            "ambiguous": true,
+            "fatal": true
+          }
+        }
+      }
     },
     "invalid": [
       { "base": "idle", "path": ["state"], "value": "ready" },
@@ -97,30 +334,62 @@
       { "base": "idle", "path": ["generation"], "value": 9007199254740992 },
       { "base": "idle", "path": ["kind"], "value": "restart" },
       { "base": "idle", "path": ["phase"], "value": "running" },
-      { "base": "idle", "path": ["operation"], "value": { "status": "completed" } },
-      { "base": "idle", "path": ["disposition"], "value": { "status": "continue-current-root" } },
+      {
+        "base": "idle",
+        "path": ["operation"],
+        "value": { "status": "completed" }
+      },
+      {
+        "base": "idle",
+        "path": ["disposition"],
+        "value": { "status": "continue-current-root" }
+      },
       { "base": "running", "path": ["kind"] },
       { "base": "running", "path": ["kind"], "value": "delete" },
       { "base": "running", "path": ["phase"] },
       { "base": "running", "path": ["phase"], "value": "complete" },
-      { "base": "running", "path": ["operation"], "value": { "status": "completed" } },
-      { "base": "running", "path": ["disposition"], "value": { "status": "continue-current-root" } },
+      {
+        "base": "running",
+        "path": ["operation"],
+        "value": { "status": "completed" }
+      },
+      {
+        "base": "running",
+        "path": ["disposition"],
+        "value": { "status": "continue-current-root" }
+      },
       { "base": "completed", "path": ["phase"], "value": "running" },
       { "base": "completed", "path": ["operation"] },
       { "base": "completed", "path": ["operation"], "value": null },
       { "base": "completed", "path": ["operation", "status"] },
-      { "base": "completed", "path": ["operation", "status"], "value": "success" },
+      {
+        "base": "completed",
+        "path": ["operation", "status"],
+        "value": "success"
+      },
       { "base": "completed", "path": ["operation", "error"], "value": null },
       { "base": "cancelled", "path": ["operation", "error"], "value": {} },
       { "base": "failed", "path": ["operation", "error"] },
       { "base": "failed", "path": ["operation", "error"], "value": "failed" },
       { "base": "failed", "path": ["operation", "error", "fatal"] },
-      { "base": "failed", "path": ["operation", "error", "retryable"], "value": "false" },
+      {
+        "base": "failed",
+        "path": ["operation", "error", "retryable"],
+        "value": "false"
+      },
       { "base": "completed", "path": ["disposition"] },
       { "base": "completed", "path": ["disposition"], "value": [] },
       { "base": "completed", "path": ["disposition", "status"] },
-      { "base": "completed", "path": ["disposition", "status"], "value": "ready" },
-      { "base": "completed", "path": ["disposition", "root"], "value": "/private/foks/current" },
+      {
+        "base": "completed",
+        "path": ["disposition", "status"],
+        "value": "ready"
+      },
+      {
+        "base": "completed",
+        "path": ["disposition", "root"],
+        "value": "/private/foks/current"
+      },
       { "base": "completed", "path": ["disposition", "error"], "value": {} },
       { "base": "restart", "path": ["disposition", "root"] },
       { "base": "restart", "path": ["disposition", "root"], "value": null },
@@ -130,7 +399,11 @@
       { "base": "restorationFailed", "path": ["disposition", "root"] },
       { "base": "restorationFailed", "path": ["disposition", "error"] },
       { "base": "restorationFailed", "path": ["disposition", "error", "code"] },
-      { "base": "restorationFailed", "path": ["disposition", "error", "ambiguous"], "value": 1 }
+      {
+        "base": "restorationFailed",
+        "path": ["disposition", "error", "ambiguous"],
+        "value": 1
+      }
     ]
   }
 }

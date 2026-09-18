@@ -198,7 +198,10 @@ fn shared_maintenance_contract_preserves_operation_and_restoration_outcomes() {
         [
             (
                 "idle",
-                MaintenanceSnapshot::Idle { generation: 0, revision: 0 },
+                MaintenanceSnapshot::Idle {
+                    generation: 0,
+                    revision: 0,
+                },
             ),
             (
                 "selecting",

@@ -36,7 +36,9 @@ export function useServerMetadata({
     bridge,
     rows: new Map<string, CheckedServer>(),
   });
-  const [busyOwner, setBusyOwner] = useState<ServerCheckController | null>(null);
+  const [busyOwner, setBusyOwner] = useState<ServerCheckController | null>(
+    null,
+  );
   const latest = useRef({
     bridge,
     snapshot,

@@ -38,7 +38,8 @@ export function useResetWorkflow({
         bridge,
         server.id,
         () =>
-          latest.current.bridge === bridge && latest.current.binding === binding,
+          latest.current.bridge === bridge &&
+          latest.current.binding === binding,
         (error) => latest.current.onPreviewError(error),
         (error) => latest.current.onError(error),
       ),

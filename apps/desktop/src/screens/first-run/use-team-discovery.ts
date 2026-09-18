@@ -11,7 +11,10 @@ import {
 import { storeReadable, type AgentSnapshot } from '../../model';
 import type { useFirstRunController } from '../../use-first-run-controller';
 import type { WorkflowFailureReporter } from './use-server-workflow';
-import { useSetupWorkflow, type WorkflowCheckpoint } from './workflow-ownership';
+import {
+  useSetupWorkflow,
+  type WorkflowCheckpoint,
+} from './workflow-ownership';
 
 type DiscoveryResult = Awaited<ReturnType<Bridge['discoverGroups']>>;
 

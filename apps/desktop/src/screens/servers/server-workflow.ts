@@ -125,7 +125,9 @@ export class ServerCheckController {
     const attempt = {};
     const isCurrent = (): boolean => {
       const next = this.context();
-      const selected = next.snapshot.servers.find((row) => row.id === server.id);
+      const selected = next.snapshot.servers.find(
+        (row) => row.id === server.id,
+      );
       return (
         this.live &&
         ticket.isCurrent() &&
@@ -144,8 +146,11 @@ export class ServerCheckController {
           enqueueProfileWork(this.bridge, server.id, async () => {
             if (!isCurrent()) return undefined;
             const latest = this.context().snapshot;
-            const currentServer = latest.servers.find((row) => row.id === server.id);
-            if (!currentServer || !canCheckServer(latest, currentServer)) return;
+            const currentServer = latest.servers.find(
+              (row) => row.id === server.id,
+            );
+            if (!currentServer || !canCheckServer(latest, currentServer))
+              return;
             seeded?.();
             return this.bridge.checkServer(server.id);
           }),
@@ -172,7 +177,10 @@ export class ServerCheckController {
         },
       );
       if (!isCurrent()) return;
-      if (outcome.outcome !== 'applied' || outcome.synchronization === 'pending')
+      if (
+        outcome.outcome !== 'applied' ||
+        outcome.synchronization === 'pending'
+      )
         await this.observer.error(outcome.error);
     } finally {
       if (isCurrent()) this.observer.busy(false);

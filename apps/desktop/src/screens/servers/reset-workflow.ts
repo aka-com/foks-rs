@@ -62,7 +62,8 @@ export class ResetWorkflow {
     if (!this.live || !this.ownsBinding() || this.state.busy) return;
     this.lifetime.retire('access-change');
     const ticket = this.lifetime.capture(this.profile);
-    const isCurrent = () => this.live && this.ownsBinding() && ticket.isCurrent();
+    const isCurrent = () =>
+      this.live && this.ownsBinding() && ticket.isCurrent();
     this.token = null;
     this.publish({ ...emptyState(), loading: true });
     const result = await attemptRead({ kind: 'read-recovery' }, () =>
@@ -89,7 +90,10 @@ export class ResetWorkflow {
     this.publish({ ...emptyState(), preview, available: Boolean(this.token) });
   };
 
-  async reset(confirmation: string, onReset: () => Promise<void>): Promise<void> {
+  async reset(
+    confirmation: string,
+    onReset: () => Promise<void>,
+  ): Promise<void> {
     if (
       !this.live ||
       !this.ownsBinding() ||
@@ -101,7 +105,8 @@ export class ResetWorkflow {
     const once = this.token;
     this.token = null;
     const ticket = this.lifetime.capture(this.profile);
-    const isCurrent = () => this.live && this.ownsBinding() && ticket.isCurrent();
+    const isCurrent = () =>
+      this.live && this.ownsBinding() && ticket.isCurrent();
     this.publish({ ...this.state, available: false, busy: true });
     let observed = false;
     try {
@@ -114,7 +119,10 @@ export class ResetWorkflow {
         },
       );
       if (!isCurrent() && !(observed && outcome.outcome === 'applied')) return;
-      if (outcome.outcome !== 'applied' || outcome.synchronization === 'pending')
+      if (
+        outcome.outcome !== 'applied' ||
+        outcome.synchronization === 'pending'
+      )
         this.onMutationError(outcome.error);
     } finally {
       if (isCurrent()) this.publish({ ...this.state, busy: false });

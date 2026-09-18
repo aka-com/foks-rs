@@ -330,17 +330,21 @@ test('discovery keeps both account response bindings after refreshing', async ()
     { accountAlias: 'bob', groups: [] },
     {
       accountAlias: 'alice',
-      groups: [{
-        accountAlias: 'bob',
-        alias: 'team',
-        teamIdHex: '01',
-        kind: 'named' as const,
-        active: true,
-      }],
+      groups: [
+        {
+          accountAlias: 'bob',
+          alias: 'team',
+          teamIdHex: '01',
+          kind: 'named' as const,
+          active: true,
+        },
+      ],
     },
   ]) {
     let refreshes = 0;
-    const bridge = { discoverGroups: async () => response } as unknown as Bridge;
+    const bridge = {
+      discoverGroups: async () => response,
+    } as unknown as Bridge;
     await assert.rejects(
       runTeamDiscovery({
         bridge,

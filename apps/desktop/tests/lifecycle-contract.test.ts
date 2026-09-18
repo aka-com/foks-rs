@@ -10,7 +10,12 @@ import {
 import { array, record, string } from '../src/bridge/validation';
 
 const fixture = record(
-  JSON.parse(readFileSync(new URL('../src-tauri/wire-contract.json', import.meta.url), 'utf8')),
+  JSON.parse(
+    readFileSync(
+      new URL('../src-tauri/wire-contract.json', import.meta.url),
+      'utf8',
+    ),
+  ),
   'fixture',
 );
 
@@ -48,7 +53,10 @@ for (const [name, decode] of Object.entries(decoders)) {
         assert.ok(Object.hasOwn(target, field), field);
         delete target[field];
       }
-      assert.throws(() => decode(wire), `${name}[${index}]: ${base}.${[...path, field].join('.')}`);
+      assert.throws(
+        () => decode(wire),
+        `${name}[${index}]: ${base}.${[...path, field].join('.')}`,
+      );
     }
   });
 
@@ -64,7 +72,10 @@ for (const [name, decode] of Object.entries(decoders)) {
 
   test(`${name}: unrelated extension fields retain existing normalization`, () => {
     for (const wire of Object.values(valid)) {
-      assert.deepEqual(decode({ ...record(wire, 'wire'), extension: true }), wire);
+      assert.deepEqual(
+        decode({ ...record(wire, 'wire'), extension: true }),
+        wire,
+      );
     }
   });
 
@@ -76,11 +87,17 @@ for (const [name, decode] of Object.entries(decoders)) {
 }
 
 test('process numeric fields reject non-JSON numbers and preserve explicit unknown metadata', () => {
-  const valid = record(record(fixture.agentProcessInfoCases, 'cases').valid, 'valid');
+  const valid = record(
+    record(fixture.agentProcessInfoCases, 'cases').valid,
+    'valid',
+  );
   const owned = record(valid.owned, 'owned');
   for (const field of ['pid', 'startedAt']) {
     for (const value of [NaN, Infinity, -Infinity, undefined]) {
-      assert.throws(() => decodeAgentProcessInfo({ ...owned, [field]: value }), field);
+      assert.throws(
+        () => decodeAgentProcessInfo({ ...owned, [field]: value }),
+        field,
+      );
     }
   }
   assert.deepEqual(decodeAgentProcessInfo(valid.absent), {
@@ -98,24 +115,38 @@ test('process numeric fields reject non-JSON numbers and preserve explicit unkno
 });
 
 test('maintenance counters reject non-JSON numbers without inferring completion', () => {
-  const valid = record(record(fixture.maintenanceCases, 'cases').valid, 'valid');
+  const valid = record(
+    record(fixture.maintenanceCases, 'cases').valid,
+    'valid',
+  );
   for (const wire of Object.values(valid)) {
     for (const field of ['generation', 'revision']) {
       for (const value of [NaN, Infinity, -Infinity, -1, 0.5, undefined]) {
-        assert.throws(() => decodeMaintenanceSnapshot({ ...record(wire, 'wire'), [field]: value }));
+        assert.throws(() =>
+          decodeMaintenanceSnapshot({
+            ...record(wire, 'wire'),
+            [field]: value,
+          }),
+        );
       }
     }
   }
 });
 
 test('maintenance operation and restoration errors remain independent', () => {
-  const valid = record(record(fixture.maintenanceCases, 'cases').valid, 'valid');
+  const valid = record(
+    record(fixture.maintenanceCases, 'cases').valid,
+    'valid',
+  );
   const snapshot = decodeMaintenanceSnapshot(valid.failedRestorationFailed);
   assert.equal(snapshot.state, 'complete');
   if (snapshot.state !== 'complete') assert.fail('Expected complete snapshot');
   assert.equal(snapshot.operation.status, 'failed');
   assert.equal(snapshot.disposition.status, 'restoration-failed');
-  if (snapshot.operation.status !== 'failed' || snapshot.disposition.status !== 'restoration-failed') {
+  if (
+    snapshot.operation.status !== 'failed' ||
+    snapshot.disposition.status !== 'restoration-failed'
+  ) {
     assert.fail('Expected both operation and restoration failures');
   }
   assert.equal(snapshot.operation.error.message, 'Destination full');

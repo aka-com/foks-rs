@@ -82,7 +82,9 @@
     "AgentStatus / AgentStatusDto": ["agentStatusCases"],
     "AgentProcessInfo": ["agentProcessInfoCases"],
     "AppLockState / LockStateDto": ["appLockStateCases"],
-    "MaintenanceSnapshot / MaintenanceOperationOutcome / MaintenanceDisposition": ["maintenanceCases"],
+    "MaintenanceSnapshot / MaintenanceOperationOutcome / MaintenanceDisposition": [
+      "maintenanceCases"
+    ],
     "CommandError": [
       "commandError",
       "alreadyExistsError",
@@ -135,10 +137,7 @@
     ]
   },
   "uncoveredPublicShapes": {
-    "application": [
-      "WindowStateEvent",
-      "DropHoverEvent"
-    ],
+    "application": ["WindowStateEvent", "DropHoverEvent"],
     "vault": [
       "CatalogFailureDto",
       "ItemRequest",

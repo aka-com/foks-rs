@@ -136,7 +136,11 @@ export function decodeMaintenanceSnapshot(value: unknown): MaintenanceSnapshot {
   if (generation < 0) throw new Error(`${at}.generation must be nonnegative`);
   if (revision < 0) throw new Error(`${at}.revision must be nonnegative`);
   if (state === 'idle') {
-    rejectVariantFields(item, ['kind', 'phase', 'operation', 'disposition'], at);
+    rejectVariantFields(
+      item,
+      ['kind', 'phase', 'operation', 'disposition'],
+      at,
+    );
     return { state, generation, revision };
   }
   const kind = string(item.kind, `${at}.kind`);
@@ -190,7 +194,11 @@ export function decodeMaintenanceSnapshot(value: unknown): MaintenanceSnapshot {
   );
   let disposition: MaintenanceDisposition;
   if (dispositionStatus === 'continue-current-root') {
-    rejectVariantFields(dispositionItem, ['root', 'error'], `${at}.disposition`);
+    rejectVariantFields(
+      dispositionItem,
+      ['root', 'error'],
+      `${at}.disposition`,
+    );
     disposition = { status: dispositionStatus };
   } else if (
     dispositionStatus === 'restart-selected-root' ||

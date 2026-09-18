@@ -144,6 +144,38 @@ async function harness() {
   };
 }
 
+test('leaving server entry while a cosmetic label write settles cannot accept the old check', async () => {
+  const h = await harness();
+  const label = deferred<Awaited<ReturnType<Bridge['setServerLabel']>>>();
+  let labels = 0;
+  const rendered = h.render(
+    { ...h.initialFirstRun('own', 'address'), serverAddress: 'localhost:4430' },
+    {
+      bridge: {
+        ...h.bridge,
+        checkAndAddProfile: async () => ({
+          ...h.checkpoint.profile!,
+          profile: 'localhost',
+        }),
+        setServerLabel: () => {
+          labels++;
+          return label.promise;
+        },
+      },
+    },
+  );
+  ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Continue' }));
+  await ui.waitFor(() => assert.equal(labels, 1));
+  rendered.rerender({
+    location: { kind: 'first-run', path: 'own', step: 'who' },
+  });
+  await ui.act(async () => {
+    label.resolve({ profile: 'localhost', label: 'localhost', changed: true });
+  });
+  assert.equal(h.saved()?.state, 'who');
+  assert.equal(h.saved()?.profile, undefined);
+});
+
 test('completed local setup explains unavailable inventory and offers a retry through failure and success', async () => {
   const h = await harness();
   let refreshes = 0;

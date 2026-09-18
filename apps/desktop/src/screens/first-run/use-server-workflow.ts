@@ -210,7 +210,11 @@ export function useServerWorkflow({
         isCurrent: operation.isCurrent,
       });
       if (!report || !operation.isCurrent()) return;
-      send({ type: 'profile-checked', address: address.trim(), profile: report });
+      send({
+        type: 'profile-checked',
+        address: address.trim(),
+        profile: report,
+      });
     } catch (error) {
       if (!operation.isCurrent()) return;
       operation.publish(() => send({ type: 'navigate', state: 'error' }));
@@ -345,7 +349,8 @@ export function useServerWorkflow({
       environment.current.bridge !== bridge ||
       environment.current.managedProfile !== managedProfile ||
       !environment.current.agentReady ||
-      setupWorkflowScope(checkpointRef.current) !== setupWorkflowScope(checkpoint)
+      setupWorkflowScope(checkpointRef.current) !==
+        setupWorkflowScope(checkpoint)
     )
       return;
     const current = snapshot.servers.filter(

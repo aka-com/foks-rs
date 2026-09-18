@@ -59,11 +59,17 @@ test('every golden record has explicit domain and shape or semantic-assertion co
   assert.deepEqual([...represented].sort(), Object.keys(aggregate).sort());
   assert.equal(inventory.generation.status, 'deferred');
   assert.match(inventory.generation.reason, /semantic normalization/);
-  assert.ok(
-    inventory.uncoveredPublicShapes.application.includes('AgentProcessInfo'),
+  assert.deepEqual(inventory.representedShapes.AgentProcessInfo, [
+    'agentProcessInfoCases',
+  ]);
+  assert.deepEqual(
+    inventory.representedShapes[
+      'MaintenanceSnapshot / MaintenanceOperationOutcome / MaintenanceDisposition'
+    ],
+    ['maintenanceCases'],
   );
   assert.ok(
-    inventory.uncoveredPublicShapes.application.includes('MaintenanceSnapshot'),
+    inventory.uncoveredPublicShapes.application.includes('WindowStateEvent'),
   );
   assert.ok(
     inventory.uncoveredPublicShapes.invitations.includes(
