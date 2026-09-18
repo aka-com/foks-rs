@@ -619,7 +619,6 @@ export function Sidebar({
   onLock,
   collapsed = false,
   onToggleCollapsed,
-  agent = 'ready',
   nativeChrome = false,
   blocked = false,
 }: SidebarProps): ReactNode {
@@ -778,9 +777,6 @@ export function Sidebar({
             </span>
           </button>
         ) : null}
-        <div className="foot">
-          <AgentLight state={agent} />
-        </div>
       </div>
     </nav>
   );

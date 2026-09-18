@@ -98,12 +98,9 @@ test('the rail draws the six tabs, the unread badge and the Settings dot', () =>
   assert.equal(tabs[4].getAttribute('aria-current'), null);
 });
 
-test('the status light reports a connected service at the rail foot', () => {
-  const light = document.querySelector('.side.rail .status');
-  assert.ok(light);
-  assert.ok(light.classList.contains('agent-ready'));
-  assert.equal(light.textContent, 'Connected');
-  assert.equal(light.getAttribute('title'), 'Connected');
+test('the rail has no connection status footer or separator', () => {
+  assert.equal(Boolean(document.querySelector('.side.rail .status')), false);
+  assert.equal(Boolean(document.querySelector('.side.rail .foot')), false);
 });
 
 test('the account header names the active account and opens its menu', async () => {

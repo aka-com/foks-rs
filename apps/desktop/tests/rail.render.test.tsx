@@ -51,6 +51,7 @@ async function rail(
   teamRequests: { label: string; description: string } | null = null,
   devicesAlert: { description: string } | null = null,
   settingsAlert: { description: string } | null = null,
+  agent: import('../src/shell/sidebar').RailAgentState = 'ready',
 ) {
   const { Sidebar } = await vite.ssrLoadModule('/src/shell/sidebar.tsx');
   const { ChatInboxProvider } = await vite.ssrLoadModule(
@@ -104,6 +105,7 @@ async function rail(
             teamRequests,
             devicesAlert,
             settingsAlert,
+            agent,
             onNavigate: (next: Location) => journal.navigations.push(next),
             onLock: () => {
               journal.locks += 1;
@@ -241,12 +243,50 @@ test('with nothing known, Teams, Devices and Settings draw nothing', async () =>
   assert.equal(settingsTab.querySelector('.rail-tail'), null);
 });
 
-test('the rail foot reports the connection, and says nothing about the step', async () => {
-  await rail({ kind: 'all' });
-  const light = document.querySelector('.side.rail .status');
-  assert.ok(light, 'the rail foot draws the agent light');
-  assert.equal(light.textContent, 'Connected');
-  assert.ok(light.classList.contains('agent-ready'));
+for (const agent of ['ready', 'starting', 'stopped', 'locked'] as const) {
+  test(`the ${agent} rail has no connection footer in either width`, async () => {
+    for (const collapsed of [false, true]) {
+      const { rendered } = await rail(
+        { kind: 'all' },
+        '0',
+        0,
+        collapsed,
+        false,
+        null,
+        null,
+        null,
+        agent,
+      );
+      assert.equal(
+        Boolean(document.querySelector('.side.rail .status')),
+        false,
+      );
+      assert.equal(Boolean(document.querySelector('.side.rail .foot')), false);
+      rendered.unmount();
+    }
+  });
+}
+
+test('both setup rails omit the connection footer while keeping setup actions', async () => {
+  const { SetupSidebar } = (await vite.ssrLoadModule(
+    '/src/screens/first-run-view.tsx',
+  )) as typeof import('../src/screens/first-run-view');
+  const { initialFirstRun } = (await vite.ssrLoadModule(
+    '/src/first-run-state.ts',
+  )) as typeof import('../src/first-run-state');
+  for (const managedLocal of [false, true]) {
+    const view = ui.render(
+      createElement(SetupSidebar, {
+        checkpoint: { ...initialFirstRun('own', 'who'), managedLocal },
+        agent: 'starting',
+        onCancel: () => {},
+      }),
+    );
+    assert.ok(view.getByRole('button', { name: 'Leave setup' }));
+    assert.equal(Boolean(document.querySelector('.setup-side .status')), false);
+    assert.equal(Boolean(document.querySelector('.setup-side .foot')), false);
+    view.unmount();
+  }
 });
 
 test('a tab click and Control-Tab both navigate over the six tabs', async () => {

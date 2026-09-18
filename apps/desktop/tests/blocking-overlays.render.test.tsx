@@ -449,7 +449,7 @@ test('locked startup outranks maintenance and keeps unlock errors in its card', 
   assert.ok(dialog.classList.contains('lock-back'));
   assert.equal(dialog.parentElement, document.querySelector('.window'));
   assert.equal(document.querySelector('.stopcard'), null);
-  assert.ok(document.querySelector('.status.agent-locked'));
+  assert.equal(Boolean(document.querySelector('.side.rail .status')), false);
   await ui.act(async () => {
     rendered.getByRole('button', { name: 'Unlock' }).click();
     await Promise.resolve();
@@ -486,7 +486,8 @@ test('boot error retry restarts startup', async () => {
   await ui.waitFor(() =>
     assert.equal(document.querySelector('.takeover'), null),
   );
-  assert.ok(document.querySelector('.status.agent-ready'));
+  assert.ok(document.querySelector('.side.rail'));
+  assert.equal(Boolean(document.querySelector('.side.rail .status')), false);
   assert.ok(statusCalls >= 2);
   rendered.unmount();
 });
@@ -933,7 +934,8 @@ test('catalog failure after reconnect reports a toast with the agent ready', asy
     await Promise.resolve();
   });
   await rendered.findByText('The catalog could not be refreshed.');
-  assert.ok(document.querySelector('.side.rail .status.agent-ready'));
+  assert.ok(document.querySelector('.side.rail'));
+  assert.equal(Boolean(document.querySelector('.side.rail .status')), false);
   assert.equal(document.querySelector('.stopwrap'), null);
   rendered.unmount();
 });
@@ -966,7 +968,7 @@ test('agent loss from the reconnect catalog restores the takeover', async () => 
   });
   assert.notEqual(second, first);
   assert.match(second.textContent ?? '', /disconnected during catalog refresh/);
-  assert.ok(document.querySelector('.side.rail .status.agent-stopped'));
+  assert.equal(Boolean(document.querySelector('.side.rail .status')), false);
   rendered.unmount();
 });
 
@@ -1174,7 +1176,7 @@ test('command-only agent loss preserves the active write workflow', async () => 
     document.querySelector('.stopwrap')?.textContent ?? '',
     /create command/,
   );
-  assert.ok(document.querySelector('.side.rail .status.agent-stopped'));
+  assert.equal(Boolean(document.querySelector('.side.rail .status')), false);
   assert.equal(document.querySelector('[aria-label="New password"]'), sheet);
   assert.equal(rendered.getByLabelText('Site'), site);
   assert.equal(site.value, 'command.example');
@@ -1364,14 +1366,15 @@ test('first-run loss blocks the setup rail without adding a topbar', async () =>
   assert.ok(document.querySelector('.first-run-main'));
   assert.equal(document.querySelector('.topbar'), null);
   assert.ok(document.querySelector('.setup-steps.is-blocked'));
-  assert.ok(document.querySelector('.status.agent-stopped'));
+  assert.equal(Boolean(document.querySelector('.setup-side .status')), false);
+  assert.equal(Boolean(document.querySelector('.setup-side .foot')), false);
   assert.ok(document.querySelector('.window > .takeover.stopwrap'));
   for (const button of document.querySelectorAll('.setup-side button'))
     assert.ok((button as HTMLButtonElement).disabled);
   rendered.unmount();
 });
 
-test('first-run maintenance blocks the setup rail with a starting light', async () => {
+test('first-run maintenance blocks the setup rail without a connection footer', async () => {
   const { App, FIXTURE, mockBridge } = await modules();
   window.history.replaceState(null, '', '/?state=first-run&step=who');
   const bridge: Bridge = {
@@ -1391,7 +1394,8 @@ test('first-run maintenance blocks the setup rail with a starting light', async 
   assert.ok(document.querySelector('.first-run-main'));
   assert.equal(document.querySelector('.topbar'), null);
   assert.ok(document.querySelector('.setup-steps.is-blocked'));
-  assert.ok(document.querySelector('.status.agent-starting'));
+  assert.equal(Boolean(document.querySelector('.setup-side .status')), false);
+  assert.equal(Boolean(document.querySelector('.setup-side .foot')), false);
   assert.ok(document.querySelector('.window > .takeover.stopveil'));
   for (const button of document.querySelectorAll('.setup-side button'))
     assert.ok((button as HTMLButtonElement).disabled);

@@ -12,7 +12,7 @@ import type { AgentSnapshot, RoleWire } from '../model';
 import { kindOf, plural, parseRole, formatRole } from '../model';
 import type { FilterKind } from '../components';
 import type { Location } from '../location';
-import { AgentLight, NavRow, Sidebar, TrafficStrip } from '../shell/sidebar';
+import { NavRow, Sidebar, TrafficStrip } from '../shell/sidebar';
 import type { RailAgentState } from '../shell/sidebar';
 import { PageHeader } from '../shell/page-header';
 import {
@@ -65,7 +65,6 @@ export function SetupSidebar({
   onAnotherServer,
   onRecoverAccount,
   recoverEnabled = false,
-  agent = 'ready',
   blocked = false,
 }: {
   checkpoint: FirstRunCheckpoint;
@@ -158,9 +157,6 @@ export function SetupSidebar({
               </span>
             </button>
           ) : null}
-          <div className="foot">
-            <AgentLight state={agent} />
-          </div>
         </div>
       </nav>
     );
@@ -215,9 +211,6 @@ export function SetupSidebar({
             </button>
           </>
         ) : null}
-        <div className="foot">
-          <AgentLight state={agent} />
-        </div>
       </div>
     </nav>
   );
