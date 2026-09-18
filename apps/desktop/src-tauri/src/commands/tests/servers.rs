@@ -384,6 +384,34 @@ fn server_label_response_is_exact_and_bound_to_the_request() {
 }
 
 #[test]
+fn reconciliation_observations_are_independent_and_strictly_scoped() {
+    use crate::commands::servers::reconcile_server_response;
+    let success = |status| serde_json::json!({"status":"success","value":{"status":status}});
+    let error = |code| serde_json::json!({"status":"error","code":code,"message":"Observation failed","fields":{"profile":"work"}});
+    let value = serde_json::json!({"profile":"work","identity":success("connected"),"compatibility":error("server-unavailable")});
+    let result = serde_json::to_value(reconcile_server_response(value.clone(), "work").unwrap()).unwrap();
+    assert_eq!(result["identity"]["status"], "connected");
+    assert_eq!(result["compatibility"]["error"]["code"], "server-unavailable");
+    assert_eq!(result["compatibility"]["error"]["retryable"], true);
+    assert_eq!(result["compatibility"]["error"]["fatal"], false);
+    let missing = serde_json::json!({"profile":"work","identity":error("saved-trust-missing"),"compatibility":success("renewed")});
+    let result = serde_json::to_value(reconcile_server_response(missing, "work").unwrap()).unwrap();
+    assert_eq!(result["identity"]["error"]["retryable"], false);
+    assert_eq!(result["compatibility"]["status"], "renewed");
+    for invalid in [
+        serde_json::json!({"profile":"other","identity":success("connected"),"compatibility":success("renewed")}),
+        serde_json::json!({"profile":"work","identity":success("inserted"),"compatibility":success("renewed")}),
+        serde_json::json!({"profile":"work","identity":success("connected"),"compatibility":success("connected")}),
+        serde_json::json!({"profile":"work","identity":success("connected"),"compatibility":success("renewed"),"allServicesConnected":true}),
+    ] {
+        assert_eq!(reconcile_server_response(invalid, "work").unwrap_err().code, "invalid-response");
+    }
+    let mut invalid = value;
+    invalid["compatibility"]["fields"]["profile"] = serde_json::json!("other");
+    assert_eq!(reconcile_server_response(invalid, "work").unwrap_err().code, "invalid-response");
+}
+
+#[test]
 fn malformed_reset_success_is_post_mutation_ambiguity() {
     let state = phase_four_state(Vec::new());
     let value = serde_json::json!({"profile":"other","hard_state_reset":true});

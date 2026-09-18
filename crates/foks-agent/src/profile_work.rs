@@ -65,7 +65,8 @@ pub(super) fn operation_scope(operation: &Operation) -> Scope {
         | RemoveProfile { .. }
         | SetProfileLabel { .. }
         | ResetHardState { .. }
-        | RefreshLease { .. } => Scope::Root,
+        | RefreshLease { .. }
+        | ReconcileProfile { .. } => Scope::Root,
         DemoteTeamMember { .. }
         | RemoveTeamMember { .. }
         | ResumeTeamMemberEdit { .. }

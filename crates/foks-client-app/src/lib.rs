@@ -67,6 +67,8 @@ pub use foks_protocol_metadata::PINNED_PROTOCOL_METADATA_SHA256;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("saved host identity is missing; explicit server verification is required")]
+    SavedTrustMissing,
     #[error("imported profile requires online verification before ordinary use; run state verify-online")]
     ImportVerificationRequired,
     #[error("client state is busy; stop its agent and close active operations before maintenance")]
@@ -262,7 +264,7 @@ pub use kv::{
 };
 pub use registry::{
     normalize_profile_label, Capability, CapabilityDenial, CheckedProfileSession,
-    CompatibilityFailure, CompatibilityStatus, ProbeAcceptance, ProbeReport, Profile, ProfilePaths,
+    CompatibilityFailure, CompatibilityStatus, HostedLeaseRenewal, ProbeAcceptance, ProbeReport, Profile, ProfilePaths,
     ProfilePublicationReport, ProfileRegistry, ProfileSession, ProtocolPolicy,
     ServerStatusSnapshot, ServerVersionReport, StoredHostStatus, TrustRoot,
     PROFILE_LABEL_MAX_BYTES,

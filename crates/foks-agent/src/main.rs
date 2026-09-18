@@ -4,6 +4,7 @@ mod bot_token;
 mod chat;
 mod chat_poll;
 mod data;
+mod connectivity;
 mod invitations;
 mod profile_work;
 mod retention;
@@ -162,7 +163,6 @@ fn main() {
     std::process::exit(1);
 }
 
-#[cfg(unix)]
 fn compatibility_http_client(timeout: Duration) -> Result<reqwest::Client, reqwest::Error> {
     reqwest::Client::builder()
         .https_only(true)
@@ -335,7 +335,7 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                 let cancellation = scheduler_cancellation.clone();
                 tokio::spawn(async move {
                     let _compatibility_permit = compatibility_permit;
-                    refresh_hosted_profiles(&state, client, cancellation).await;
+                    refresh_hosted_profiles(&state, client, cancellation, timeout).await;
                 });
             }
         }
@@ -486,6 +486,7 @@ async fn refresh_hosted_profiles(
     state_dir: &Path,
     client: reqwest::Client,
     cancellation: CancellationToken,
+    timeout: Duration,
 ) {
     let registry = match ProfileRegistry::open(state_dir) {
         Ok(registry) => registry,
@@ -504,56 +505,15 @@ async fn refresh_hosted_profiles(
         .collect::<Vec<_>>();
     drop(registry);
 
-    let mut profiles = profiles.into_iter();
-    let mut fetches = tokio::task::JoinSet::new();
-    for _ in 0..MAXIMUM_CANARY_FETCHES {
-        let Some(profile) = profiles.next() else {
-            break;
-        };
-        spawn_canary_fetch(&mut fetches, client.clone(), profile);
-    }
-    while let Some(fetched) = fetches.join_next().await {
+    for (profile, _) in profiles {
         if cancellation.is_cancelled() {
-            fetches.abort_all();
             break;
         }
-        match fetched {
-            Ok((profile, Ok(bytes))) => {
-                match apply_hosted_lease_if_idle(state_dir, &profile, &bytes) {
-                    Ok(Some(true)) => {
-                        eprintln!("foks-agent applied a newer compatibility lease for {profile}");
-                    }
-                    Ok(Some(false)) => {}
-                    Ok(None) => {
-                        eprintln!(
-                            "foks-agent deferred a compatibility lease while a mutation is active"
-                        );
-                    }
-                    Err(_) => {
-                        eprintln!("foks-agent rejected the compatibility lease for {profile}");
-                    }
-                }
-            }
-            Ok((profile, Err(error))) => {
-                eprintln!("foks-agent compatibility lease fetch failed for {profile}: {error}");
-            }
-            Err(_) => eprintln!("foks-agent compatibility lease fetch task failed"),
-        }
-        if let Some(profile) = profiles.next() {
-            spawn_canary_fetch(&mut fetches, client.clone(), profile);
+        let result = connectivity::renew(state_dir, &profile, client.clone(), timeout).await;
+        if let ResponseResult::Error { code, .. } = result {
+            eprintln!("foks-agent compatibility renewal failed for {profile}: {code:?}");
         }
     }
-}
-
-fn spawn_canary_fetch(
-    fetches: &mut tokio::task::JoinSet<(String, Result<Vec<u8>, LeaseFetchError>)>,
-    client: reqwest::Client,
-    (profile, url): (String, String),
-) {
-    fetches.spawn(async move {
-        let result = fetch_canary(&client, &url).await;
-        (profile, result)
-    });
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -619,6 +579,7 @@ fn append_canary_chunk(bytes: &mut Vec<u8>, chunk: &[u8]) -> Result<(), LeaseFet
     Ok(())
 }
 
+#[cfg(test)]
 fn apply_hosted_lease(
     state_dir: &Path,
     profile: &str,
@@ -634,6 +595,7 @@ fn apply_hosted_lease(
     Ok(current != previous)
 }
 
+#[cfg(test)]
 fn apply_hosted_lease_if_idle(
     state_dir: &Path,
     profile: &str,
@@ -721,35 +683,33 @@ async fn handle_connection(
             .await?;
             return Ok(());
         }
+        if let Operation::ReconcileProfile { profile } | Operation::RefreshLease { profile } = &request.operation {
+            if profile.is_empty() || profile.len() > 64 || !profile.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')) {
+                write_response(&mut stream, &Response::error(request.id, ErrorCode::InvalidRequest, "invalid profile name"), timeout).await?;
+                continue;
+            }
+        }
+        if let Operation::ReconcileProfile { profile } = &request.operation {
+            let value = connectivity::reconcile(&state_dir, profile, timeout, capacity.blocking.clone()).await;
+            write_response(&mut stream, &Response::success(request.id, value), timeout).await?;
+            continue;
+        }
         if let Operation::RefreshLease { profile } = &request.operation {
-            let result = async {
-                let registry = ProfileRegistry::open(&state_dir)?;
-                let url = registry
-                    .profile(profile)?
-                    .compatibility_lease_url()
-                    .ok_or(AgentRequestError(
-                        "profile does not use a refreshable compatibility lease",
-                    ))?
-                    .to_owned();
-                let client = compatibility_http_client(timeout)?;
-                let bytes = fetch_canary(&client, &url).await?;
-                let _profile_permit = profile_work::coordinator()
-                    .acquire(&state_dir, profile_work::Scope::Root, timeout)
-                    .await?;
-                let updated = apply_hosted_lease(&state_dir, profile, &bytes)?;
-                Ok::<_, Box<dyn std::error::Error>>(serde_json::json!({
-                    "profile": profile,
-                    "updated": updated,
-                }))
+            let result = match compatibility_http_client(timeout) {
+                Ok(client) => connectivity::renew(&state_dir, profile, client, timeout).await,
+                Err(error) => dispatch_error_response(request.id, &error).result,
             };
-            let response = match tokio::time::timeout(timeout, result).await {
-                Ok(Ok(value)) => Response::success(request.id, value),
-                Ok(Err(error)) => dispatch_error_response(request.id, error.as_ref()),
-                Err(_) => Response::error(
+            let response = match result {
+                ResponseResult::Success { value } if value["status"] == "not-required" => Response::error(
                     request.id,
-                    ErrorCode::DeadlineExceeded,
-                    "compatibility lease refresh exceeded its deadline",
+                    ErrorCode::InvalidRequest,
+                    "profile does not use a refreshable compatibility lease",
                 ),
+                ResponseResult::Success { value } => Response::success(request.id, serde_json::json!({
+                    "profile": profile,
+                    "updated": value["status"] == "renewed",
+                })),
+                ResponseResult::Error { code, message, fields } => Response::error_with_fields(Some(request.id), code, message, fields),
             };
             write_response(&mut stream, &response, timeout).await?;
             continue;
@@ -2695,7 +2655,7 @@ fn dispatch_result(
             })?;
             Ok(serde_json::to_value(report)?)
         }
-        Operation::RefreshLease { .. } => Err(Box::new(AgentRequestError(
+        Operation::RefreshLease { .. } | Operation::ReconcileProfile { .. } => Err(Box::new(AgentRequestError(
             "lease refresh requires the async agent connection path",
         ))),
         Operation::ListKnownStores { profile } => {

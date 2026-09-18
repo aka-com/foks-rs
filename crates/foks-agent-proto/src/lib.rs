@@ -56,7 +56,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
-                "version": 24,
+                "version": 25,
                 "id": 8,
                 "operation": { "operation": "discover-go-profiles" }
             })
@@ -75,7 +75,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
-                "version": 24,
+                "version": 25,
                 "id": 9,
                 "operation": {
                     "operation": "list-profile-overview",
@@ -203,7 +203,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
-                "version": 24,
+                "version": 25,
                 "id": 9,
                 "operation": {
                     "operation": "sync-team",
@@ -215,7 +215,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Response::error(9, ErrorCode::Busy, "locked")).unwrap(),
             serde_json::json!({
-                "version": 24,
+                "version": 25,
                 "id": 9,
                 "status": "error",
                 "code": "busy",
@@ -248,7 +248,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&admission).unwrap(),
             serde_json::json!({
-                "version": 24,
+                "version": 25,
                 "id": 13,
                 "operation": {
                     "operation": "admit-federated-team",
@@ -287,7 +287,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&expulsion).unwrap(),
             serde_json::json!({
-                "version": 24,
+                "version": 25,
                 "id": 15,
                 "operation": {
                     "operation": "expel-federated-team",
@@ -335,6 +335,18 @@ mod tests {
         };
         let encoded = serde_json::to_value(&page).unwrap();
         assert_eq!(serde_json::from_value::<KvPage>(encoded).unwrap(), page);
+    }
+
+    #[test]
+    fn reconcile_is_a_local_v25_mutation_with_no_initial_trust_inputs() {
+        assert_eq!(PROTOCOL_VERSION, 25);
+        let operation = Operation::ReconcileProfile { profile: "saved".into() };
+        assert!(operation.is_mutation());
+        let request = Request::new(19, operation);
+        assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
+        let mut previous = serde_json::to_value(&request).unwrap();
+        previous["version"] = serde_json::json!(24);
+        assert!(matches!(decode_request(&serde_json::to_vec(&previous).unwrap()), Err(Error::Version)));
     }
 
     #[test]
@@ -544,7 +556,7 @@ mod tests {
             ))
             .unwrap(),
             serde_json::json!({
-                "version": 24,
+                "version": 25,
                 "id": 25,
                 "operation": {
                     "operation": "demote-team-member",
@@ -567,7 +579,7 @@ mod tests {
             ))
             .unwrap(),
             serde_json::json!({
-                "version": 24,
+                "version": 25,
                 "id": 26,
                 "operation": {
                     "operation": "remove-team-member",

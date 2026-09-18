@@ -474,6 +474,52 @@ struct RegistryFile {
     profiles: BTreeMap<String, Profile>,
 }
 
+pub struct HostedLeaseRenewal {
+    lease: ClientStateLease,
+    profile: Profile,
+    config: File,
+}
+
+impl HostedLeaseRenewal {
+    pub fn url(&self) -> &str {
+        self.profile.compatibility_lease_url().unwrap_or_default()
+    }
+
+    pub fn apply(self, signed: &SignedCanaryArtifact, now: u64) -> Result<(bool, CompatibilityStatus)> {
+        self.lease.validate()?;
+        let root = self.lease.root();
+        let _lock = RegistryMutationLock::acquire_with_wait(root, false)?;
+        let current_config = fs::symlink_metadata(root.join("profiles.toml"))?;
+        let expected_config = self.config.metadata()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            if current_config.dev() != expected_config.dev()
+                || current_config.ino() != expected_config.ino()
+            {
+                return Err(Error::ProfileRegistryChanged);
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (current_config, expected_config);
+            return Err(Error::PortabilityUnsupported);
+        }
+        let mut profiles = load_registry(root)?;
+        if profiles.get(&self.profile.name) != Some(&self.profile) {
+            return Err(Error::ProfileRegistryChanged);
+        }
+        let updated = self.profile.apply_canary(signed, now)?;
+        let changed = updated != self.profile;
+        let status = updated.protocol.compatibility_status();
+        if changed {
+            profiles.insert(updated.name.clone(), updated);
+            save_registry(root, &profiles)?;
+        }
+        Ok((changed, status))
+    }
+}
+
 pub struct ProfileRegistry {
     lease: ClientStateLease,
     root: PathBuf,
@@ -507,10 +553,18 @@ impl ProfilePublicationAuthorizer for ClientCredentials {
 }
 
 impl ProfileRegistry {
+    pub fn try_open(root: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_wait(root.as_ref(), false)
+    }
+
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
-        let lease = ClientStateLease::acquire(root.as_ref())?;
+        Self::open_with_wait(root.as_ref(), true)
+    }
+
+    fn open_with_wait(root: &Path, wait: bool) -> Result<Self> {
+        let lease = ClientStateLease::acquire(root)?;
         let root = lease.root().to_owned();
-        let _lock = RegistryMutationLock::acquire(&root)?;
+        let _lock = RegistryMutationLock::acquire_with_wait(&root, wait)?;
         let profiles = load_registry(&root)?;
         recover_profile_publications(&root, &profiles)?;
         Ok(Self {
@@ -775,6 +829,22 @@ impl ProfileRegistry {
         updated.label = label;
         self.replace(updated)?;
         Ok(true)
+    }
+
+    pub fn hosted_lease_renewal(&self, name: &str) -> Result<Option<HostedLeaseRenewal>> {
+        self.lease.validate()?;
+        let _lock = RegistryMutationLock::acquire_with_wait(&self.root, false)?;
+        let profiles = load_registry(&self.root)?;
+        let profile = profiles.get(name).ok_or(Error::ProfileMissing)?.clone();
+        if profile.compatibility_lease_url().is_none() {
+            return Ok(None);
+        }
+        let config = File::open(self.root.join("profiles.toml"))?;
+        Ok(Some(HostedLeaseRenewal {
+            lease: self.lease.clone(),
+            profile,
+            config,
+        }))
     }
 
     pub fn apply_canary(
@@ -1125,6 +1195,10 @@ struct RegistryMutationLock(File);
 
 impl RegistryMutationLock {
     fn acquire(root: &Path) -> Result<Self> {
+        Self::acquire_with_wait(root, true)
+    }
+
+    fn acquire_with_wait(root: &Path, wait: bool) -> Result<Self> {
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true).truncate(false);
         #[cfg(unix)]
@@ -1133,7 +1207,11 @@ impl RegistryMutationLock {
             options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
         }
         let file = options.open(root.join(REGISTRY_LOCK_FILE))?;
-        fs2::FileExt::lock_exclusive(&file)?;
+        if wait {
+            fs2::FileExt::lock_exclusive(&file)?;
+        } else {
+            fs2::FileExt::try_lock_exclusive(&file)?;
+        }
         Ok(Self(file))
     }
 }
@@ -1451,6 +1529,25 @@ pub(crate) fn checkpoint_for_store(
 }
 
 impl CheckedProfileSession<'_> {
+    pub fn reconcile_saved_host(&self) -> Result<()> {
+        self.lease.validate()?;
+        self.profile.require(Capability::Probe)?;
+        let target = ProbeTarget::parse(&self.profile.probe)?;
+        let stored = HardStateStore::open(&self.paths.hard_database)?
+            .host_for_lookup(target.hostname())?
+            .ok_or(Error::SavedTrustMissing)?;
+        let expected = self.pinned_host()?;
+        if expected.host_id().as_bytes() != stored.host_id.as_slice() {
+            return Err(Error::RollbackDetected("saved host identity changed"));
+        }
+        self.client.probe_and_pin_host_id(
+            &target,
+            expected.host_id(),
+            &self.paths.hard_database,
+        )?;
+        Ok(())
+    }
+
     pub fn probe_and_pin(&self) -> Result<ProbeReport> {
         self.profile.require(Capability::Probe)?;
         self.probe_and_pin_unchecked()
@@ -1756,6 +1853,43 @@ mod tests {
             last_artifact: None,
         };
         profile
+    }
+
+    #[test]
+    fn saved_host_reconciliation_never_inserts_or_replaces_trust() {
+        let environment = TestEnvironment::new().unwrap();
+        let _server = environment.start_server().unwrap();
+        let addresses = environment.addresses().unwrap();
+        let state = environment.client_path("saved-reconcile", "state").unwrap();
+        let credentials = ClientCredentials::initialize(&state, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&state).unwrap();
+        registry.add(local_profile(&environment, "saved", format!("localhost:{}", addresses.probe.port()))).unwrap();
+        let session = ProfileSession::open(&registry, "saved").unwrap();
+        credentials.with_checked_session(&session, |checked| {
+            assert!(matches!(checked.reconcile_saved_host(), Err(Error::SavedTrustMissing)));
+            assert!(checked.server_status()?.host.is_none());
+            checked.probe_and_pin()?;
+            let before = checked.server_status()?.host.unwrap();
+            _server.shutdown().unwrap();
+            environment.rotate_host_key().unwrap();
+            let _rotated_server = environment.start_server().unwrap();
+            checked.reconcile_saved_host()?;
+            let after = checked.server_status()?.host.unwrap();
+            assert_eq!(after.host_id_hex, before.host_id_hex);
+            assert!(after.host_chain_sequence > before.host_chain_sequence);
+            Ok::<_, Error>(())
+        }).unwrap();
+        let other = TestEnvironment::new().unwrap();
+        let _other_server = other.start_server().unwrap();
+        let hostile = local_profile(&other, "saved", format!("localhost:{}", other.addresses().unwrap().probe.port()));
+        registry.replace(hostile).unwrap();
+        let hostile_session = ProfileSession::open(&registry, "saved").unwrap();
+        credentials.with_checked_session(&hostile_session, |checked| {
+            let before = checked.server_status()?.host.unwrap();
+            assert!(checked.reconcile_saved_host().is_err());
+            assert_eq!(checked.server_status()?.host.unwrap().host_id_hex, before.host_id_hex);
+            Ok::<_, Error>(())
+        }).unwrap();
     }
 
     #[test]

@@ -153,6 +153,11 @@ impl AgentError {
 
     pub fn from_agent(code: ErrorCode, message: String) -> Self {
         let (slug, retryable) = match code {
+            ErrorCode::SavedTrustMissing => ("saved-trust-missing", false),
+            ErrorCode::ServerUnavailable => ("server-unavailable", true),
+            ErrorCode::ServerIdentityRejected => ("server-identity-rejected", false),
+            ErrorCode::CompatibilityRejected => ("compatibility-rejected", false),
+            ErrorCode::ProfileConfigurationChanged => ("profile-configuration-changed", false),
             ErrorCode::RetentionFull => ("retention-full", false),
             ErrorCode::ClockUntrusted => ("clock-untrusted", false),
             ErrorCode::SubmissionActiveFull => ("submission-active-full", false),

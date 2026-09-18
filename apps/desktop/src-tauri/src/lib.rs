@@ -200,6 +200,7 @@ pub fn run() {
             commands::servers::set_server_label,
             commands::servers::forget_server,
             commands::servers::describe_server_status,
+            commands::servers::reconcile_server,
             commands::servers::check_server,
             commands::enrollment::list_pending_operations,
             commands::enrollment::create_first_run_account,

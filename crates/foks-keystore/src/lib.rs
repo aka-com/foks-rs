@@ -70,6 +70,39 @@ pub struct NativeCredentialStore {
     namespace: String,
 }
 
+thread_local! {
+    static UNATTENDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub fn without_user_interaction<T>(operation: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            UNATTENDED.with(|state| state.set(self.0));
+        }
+    }
+    let _restore = Restore(UNATTENDED.with(|state| state.replace(true)));
+    operation()
+}
+
+fn native_call<T>(operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    #[cfg(target_os = "macos")]
+    {
+        use security_framework::os::macos::keychain::SecKeychain;
+        static INTERACTION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        if UNATTENDED.with(std::cell::Cell::get) {
+            let _lock = INTERACTION.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _disabled = if SecKeychain::user_interaction_allowed().map_err(|error| Error::Native(error.to_string()))? {
+                Some(SecKeychain::disable_user_interaction().map_err(|error| Error::Native(error.to_string()))?)
+            } else {
+                None
+            };
+            return operation();
+        }
+    }
+    operation()
+}
+
 impl NativeCredentialStore {
     pub fn open(namespace: &str) -> Result<Self> {
         validate_key(namespace)?;
@@ -81,17 +114,17 @@ impl NativeCredentialStore {
     pub fn put(&mut self, key: &str, value: &[u8]) -> Result<()> {
         validate_key(key)?;
         validate_size(value.len())?;
-        native::put(&self.namespace, key, value)
+        native_call(|| native::put(&self.namespace, key, value))
     }
 
     pub fn get(&mut self, key: &str) -> Result<Zeroizing<Vec<u8>>> {
         validate_key(key)?;
-        native::get(&self.namespace, key).map(Zeroizing::new)
+        native_call(|| native::get(&self.namespace, key)).map(Zeroizing::new)
     }
 
     pub fn remove(&mut self, key: &str) -> Result<bool> {
         validate_key(key)?;
-        native::remove(&self.namespace, key)
+        native_call(|| native::remove(&self.namespace, key))
     }
 }
 
@@ -200,14 +233,33 @@ mod native {
         SecretService::connect(EncryptionType::Dh).map_err(|error| Error::Native(error.to_string()))
     }
 
+    fn prepare_collection(collection: &secret_service::blocking::Collection<'_>) -> Result<()> {
+        if super::UNATTENDED.with(std::cell::Cell::get) {
+            if collection.is_locked().map_err(|error| Error::Native(error.to_string()))? {
+                return Err(Error::Native("native credential collection requires unlocking".into()));
+            }
+            Ok(())
+        } else {
+            collection.unlock().map_err(|error| Error::Native(error.to_string()))
+        }
+    }
+
     pub(super) fn put(namespace: &str, key: &str, value: &[u8]) -> Result<()> {
         let service = connect()?;
         let collection = service
             .get_default_collection()
             .map_err(|error| Error::Native(error.to_string()))?;
-        collection
-            .unlock()
-            .map_err(|error| Error::Native(error.to_string()))?;
+        prepare_collection(&collection)?;
+        if super::UNATTENDED.with(std::cell::Cell::get) {
+            let mut items = collection.search_items(attributes(namespace, key))
+                .map_err(|error| Error::Native(error.to_string()))?;
+            let item = items.pop().ok_or(Error::Missing)?;
+            if !items.is_empty() || item.is_locked().map_err(|error| Error::Native(error.to_string()))? {
+                return Err(Error::Native("native credential record is unavailable without interaction".into()));
+            }
+            return item.set_secret(value, "application/octet-stream")
+                .map_err(|error| Error::Native(error.to_string()));
+        }
         collection
             .create_item(
                 &format!("FOKS {key}"),
@@ -225,9 +277,7 @@ mod native {
         let collection = service
             .get_default_collection()
             .map_err(|error| Error::Native(error.to_string()))?;
-        collection
-            .unlock()
-            .map_err(|error| Error::Native(error.to_string()))?;
+        prepare_collection(&collection)?;
         let mut items = collection
             .search_items(attributes(namespace, key))
             .map_err(|error| Error::Native(error.to_string()))?;
@@ -244,13 +294,14 @@ mod native {
     }
 
     pub(super) fn remove(namespace: &str, key: &str) -> Result<bool> {
+        if super::UNATTENDED.with(std::cell::Cell::get) {
+            return Err(Error::Native("native credential removal requires an interactive operation".into()));
+        }
         let service = connect()?;
         let collection = service
             .get_default_collection()
             .map_err(|error| Error::Native(error.to_string()))?;
-        collection
-            .unlock()
-            .map_err(|error| Error::Native(error.to_string()))?;
+        prepare_collection(&collection)?;
         let items = collection
             .search_items(attributes(namespace, key))
             .map_err(|error| Error::Native(error.to_string()))?;
@@ -625,6 +676,19 @@ fn sync_directory(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unattended_scope_restores_interaction_policy_after_unwind() {
+        assert!(!UNATTENDED.with(std::cell::Cell::get));
+        without_user_interaction(|| {
+            assert!(UNATTENDED.with(std::cell::Cell::get));
+            without_user_interaction(|| assert!(UNATTENDED.with(std::cell::Cell::get)));
+            assert!(UNATTENDED.with(std::cell::Cell::get));
+        });
+        assert!(!UNATTENDED.with(std::cell::Cell::get));
+        let _ = std::panic::catch_unwind(|| without_user_interaction(|| panic!("scope exit")));
+        assert!(!UNATTENDED.with(std::cell::Cell::get));
+    }
 
     fn key(byte: u8) -> Zeroizing<[u8; 32]> {
         Zeroizing::new([byte; 32])

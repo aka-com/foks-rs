@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 24;
+pub const PROTOCOL_VERSION: u32 = 25;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -537,6 +537,9 @@ pub enum Operation {
         profile: String,
     },
     RefreshLease {
+        profile: String,
+    },
+    ReconcileProfile {
         profile: String,
     },
     ListKnownStores {
@@ -1147,6 +1150,10 @@ impl std::fmt::Debug for Operation {
             Self::ListProfiles => formatter.write_str("ListProfiles"),
             Self::Probe { profile } => formatter
                 .debug_struct("Probe")
+                .field("profile", profile)
+                .finish(),
+            Self::ReconcileProfile { profile } => formatter
+                .debug_struct("ReconcileProfile")
                 .field("profile", profile)
                 .finish(),
             Self::RefreshLease { profile } => formatter
@@ -2005,6 +2012,11 @@ impl std::fmt::Debug for ResponseResult {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ErrorCode {
+    SavedTrustMissing,
+    ServerUnavailable,
+    ServerIdentityRejected,
+    CompatibilityRejected,
+    ProfileConfigurationChanged,
     RetentionFull,
     ClockUntrusted,
     SubmissionActiveFull,
