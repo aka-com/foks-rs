@@ -5,7 +5,6 @@ use super::{
 };
 use crate::agent::AgentError;
 use foks_agent_proto::chat::{ChatAction, ChatReply, CHAT_OPEN_VIEWS};
-use foks_desktop::CatalogStoreRef;
 use std::{
     collections::HashMap,
     sync::{
@@ -52,10 +51,7 @@ pub async fn chat_request(
     }
     let state = state.for_store(&store_id)?;
     let mutation = action.is_mutation();
-    let generation = state.catalog_generation.load(Ordering::Acquire);
-    let (CatalogStoreRef::Team(store), Some(true)) = state.selected_store(&store_id)? else {
-        return Err(invalid_request("Chat requires an active named team."));
-    };
+    let (generation, store) = state.selected_chat(&store_id)?;
     let expected = store.clone();
     let transport = state.agent.transport();
     let token = open_chat_view(
@@ -88,14 +84,20 @@ pub async fn chat_request(
     crate::applock::require_unlocked_generation(webview.app_handle(), unlocked)?;
     require_catalog_generation(
         generation,
-        state.catalog_generation.load(Ordering::Acquire),
+        state.chat_generation.load(Ordering::Acquire),
         mutation,
     )?;
-    if state.selected_store(&store_id)?.0 != CatalogStoreRef::Team(expected) {
+    if reply.scope.store != expected {
         let mut error = invalid_response("The selected chat account changed.");
         error.fatal = true;
         return Err(error);
     }
+    state
+        .accept_chat_scope(&store_id, generation, &reply.scope)
+        .map_err(|mut error| {
+            error.ambiguous = mutation;
+            error
+        })?;
     super::chat_local::remember(
         webview.app_handle(),
         &store_id,
@@ -229,11 +231,11 @@ mod tests {
         )));
         let store = serde_json::json!({"kind":"team", "profile":"chat", "accountAlias":"owner", "teamAlias":"team", "teamId":"team"}).to_string();
         let chat = state.for_store(&store).unwrap();
-        let generation = chat.catalog_generation.load(Ordering::Acquire);
+        let generation = chat.chat_generation.load(Ordering::Acquire);
         state.for_profile("other").unwrap().invalidate_catalog();
         assert!(require_catalog_generation(
             generation,
-            chat.catalog_generation.load(Ordering::Acquire),
+            chat.chat_generation.load(Ordering::Acquire),
             true
         )
         .is_ok());
@@ -241,17 +243,17 @@ mod tests {
         assert!(
             require_catalog_generation(
                 generation,
-                chat.catalog_generation.load(Ordering::Acquire),
+                chat.chat_generation.load(Ordering::Acquire),
                 true
             )
             .unwrap_err()
             .ambiguous
         );
-        let generation = chat.catalog_generation.load(Ordering::Acquire);
+        let generation = chat.chat_generation.load(Ordering::Acquire);
         state.invalidate_catalog();
         assert!(require_catalog_generation(
             generation,
-            chat.catalog_generation.load(Ordering::Acquire),
+            chat.chat_generation.load(Ordering::Acquire),
             false
         )
         .is_err());
@@ -275,7 +277,7 @@ mod tests {
             ..Default::default()
         };
         assert!(state.publish_catalog(load, snapshot.clone(), |_| {}));
-        let generation = chat.catalog_generation.load(Ordering::Acquire);
+        let generation = chat.chat_generation.load(Ordering::Acquire);
         snapshot
             .inventory
             .push(foks_desktop::CatalogInventoryState {
@@ -292,7 +294,7 @@ mod tests {
         assert!(
             require_catalog_generation(
                 generation,
-                chat.catalog_generation.load(Ordering::Acquire),
+                chat.chat_generation.load(Ordering::Acquire),
                 true
             )
             .is_ok(),

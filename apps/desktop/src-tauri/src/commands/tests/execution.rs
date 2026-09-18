@@ -82,6 +82,8 @@ fn guarded_worker_in_one_profile_does_not_block_another_or_local_aliases() {
     let state = phase_four_state(vec![]);
     let a = state.for_profile("work.example").unwrap();
     let b = state.for_profile("home.example").unwrap();
+    let a_chat = a.chat_generation.load(Ordering::Acquire);
+    let b_chat = b.chat_generation.load(Ordering::Acquire);
     let (entered_tx, entered_rx) = mpsc::channel();
     let (resume_tx, resume_rx) = mpsc::channel();
     let transport_a = Arc::new(WorkerTransport {
@@ -123,6 +125,8 @@ fn guarded_worker_in_one_profile_does_not_block_another_or_local_aliases() {
             .applied
         );
     });
+    assert_eq!(a.chat_generation.load(Ordering::Acquire), a_chat);
+    assert_eq!(b.chat_generation.load(Ordering::Acquire), b_chat);
     let aliases = state.for_local_aliases().unwrap();
     let local = aliases.begin_mutation().unwrap();
     let target = crate::commands::vault::store_id(&CatalogStoreRef::Account(account_ref(

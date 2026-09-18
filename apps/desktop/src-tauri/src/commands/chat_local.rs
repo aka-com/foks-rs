@@ -543,7 +543,7 @@ mod tests {
         });
         let chat = state.for_profile("chat").unwrap();
         let generation = chat
-            .catalog_generation
+            .chat_generation
             .load(std::sync::atomic::Ordering::Acquire);
         let mut inner = Inner::default();
         inner.scopes.insert(id.clone(), (scope.clone(), generation));
@@ -624,14 +624,11 @@ fn verify_scope(
     id: &str,
     scope: &ChatScope,
 ) -> Result<(), AgentError> {
-    let generation = state
-        .for_profile(&scope.store.profile)?
-        .catalog_generation
-        .load(std::sync::atomic::Ordering::Acquire);
+    let (generation, selected) = state.for_profile(&scope.store.profile)?.selected_chat(id)?;
     if inner.scopes.get(id) != Some(&(scope.clone(), generation)) {
         return Err(error("Refresh this chat before changing local alerts."));
     }
-    if state.selected_store(id)?.0 != foks_desktop::CatalogStoreRef::Team(scope.store.clone()) {
+    if selected != scope.store {
         return Err(error("The selected account changed."));
     }
     Ok(())

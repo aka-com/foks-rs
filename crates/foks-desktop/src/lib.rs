@@ -561,6 +561,19 @@ pub struct CatalogInventoryState {
     pub teams_complete: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CatalogStoreReadState {
+    NotLoaded,
+    Complete,
+    Failed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogStoreRead {
+    pub store: CatalogStoreRef,
+    pub state: CatalogStoreReadState,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CatalogSnapshot {
     pub profiles: Vec<String>,
@@ -569,6 +582,7 @@ pub struct CatalogSnapshot {
     pub inventory: Vec<CatalogInventoryState>,
     pub profile_overviews: Vec<ProfileOverview>,
     pub items: Vec<CatalogItem>,
+    pub store_reads: Vec<CatalogStoreRead>,
     pub full_item_reads: Option<Vec<String>>,
     pub failures: Vec<CatalogFailure>,
     pub blocked_profiles: Vec<String>,
@@ -620,8 +634,9 @@ pub fn load_profile_catalog_cancellable(
     token: CatalogLoadToken,
 ) -> Result<CatalogSnapshot, AgentError> {
     token.check()?;
-    let profiles: Vec<ProfileSummary> =
-        decode_agent_value(transport.call(Operation::ListProfiles)?)?;
+    let profiles: Vec<ProfileSummary> = decode_agent_value(
+        transport.call_cancellable(Operation::ListProfiles, &|| token.is_cancelled())?,
+    )?;
     token.check()?;
     if profiles
         .iter()
@@ -722,6 +737,10 @@ fn load_catalog_profiles(
             .profile_overviews
             .extend(loaded.profile_overviews.clone());
         snapshot.items.extend(loaded.items.clone());
+        snapshot
+            .store_reads
+            .retain(|read| read.store.profile() != profile);
+        snapshot.store_reads.extend(loaded.store_reads.clone());
         if include_items && !loaded.inventory.is_empty() {
             snapshot.full_item_reads.get_or_insert_with(Vec::new);
         }
@@ -831,6 +850,14 @@ fn load_profile_catalog_progress(
             error,
         }),
     }
+    snapshot.store_reads = snapshot
+        .known_stores
+        .iter()
+        .map(|store| CatalogStoreRead {
+            store: store.store_ref(),
+            state: CatalogStoreReadState::NotLoaded,
+        })
+        .collect();
     let mut accounts_complete = false;
     let mut teams_complete = false;
     token.check()?;
@@ -993,13 +1020,16 @@ fn load_profile_catalog_progress(
     snapshot
         .known_stores
         .sort_by(|left, right| left.label().cmp(right.label()));
+    snapshot.store_reads = snapshot
+        .known_stores
+        .iter()
+        .map(|store| CatalogStoreRead {
+            store: store.store_ref(),
+            state: CatalogStoreReadState::NotLoaded,
+        })
+        .collect();
     if include_items {
-        publish_local(&CatalogSnapshot {
-            known_stores: snapshot.known_stores.clone(),
-            failures: snapshot.failures.clone(),
-            blocked_profiles: snapshot.blocked_profiles.clone(),
-            ..CatalogSnapshot::default()
-        });
+        publish_local(&snapshot);
     }
     if !include_items || snapshot.blocked_profiles.contains(&profile) {
         return Ok(snapshot);
@@ -1015,7 +1045,19 @@ fn load_profile_catalog_progress(
         .collect::<Vec<_>>();
     for store in stores {
         token.check()?;
-        match load_store_pages(transport, &store, &token) {
+        let result = load_store_pages(transport, &store, &token);
+        if let Some(read) = snapshot
+            .store_reads
+            .iter_mut()
+            .find(|read| read.store == store)
+        {
+            read.state = if result.is_ok() {
+                CatalogStoreReadState::Complete
+            } else {
+                CatalogStoreReadState::Failed
+            };
+        }
+        match result {
             Ok(entries) => snapshot
                 .items
                 .extend(entries.into_iter().map(|metadata| CatalogItem {
@@ -1038,6 +1080,9 @@ fn load_profile_catalog_progress(
                 });
                 if blocks_profile || denies_kv {
                     snapshot.items.clear();
+                    for read in &mut snapshot.store_reads {
+                        read.state = CatalogStoreReadState::Failed;
+                    }
                     if blocks_profile {
                         snapshot.blocked_profiles.push(profile.clone());
                     }
@@ -2898,10 +2943,13 @@ mod tests {
             let mut healthy = None;
             let mut local = false;
             while let Ok(snapshot) = progress.recv_timeout(std::time::Duration::from_secs(2)) {
-                if snapshot.inventory.is_empty() && !snapshot.known_stores.is_empty() {
+                if snapshot
+                    .store_reads
+                    .iter()
+                    .any(|read| read.state == CatalogStoreReadState::NotLoaded)
+                {
                     local = true;
-                    assert_eq!(snapshot.full_item_reads, None);
-                    assert!(snapshot.stores.is_empty());
+                    assert!(!snapshot.known_stores.is_empty());
                 }
                 if snapshot
                     .full_item_reads
@@ -2923,6 +2971,16 @@ mod tests {
                 let result = result.unwrap();
                 assert_eq!(result.full_item_reads, Some(vec!["healthy".into()]));
                 assert_eq!(result.failures.len(), 1);
+                assert!(result
+                    .store_reads
+                    .iter()
+                    .any(|read| read.store.profile() == "healthy"
+                        && read.state == CatalogStoreReadState::Complete));
+                assert!(result
+                    .store_reads
+                    .iter()
+                    .any(|read| read.store.profile() == "slow"
+                        && read.state == CatalogStoreReadState::Failed));
                 assert!(
                     matches!(&result.failures[0].scope, CatalogFailureScope::Store(store) if store.profile() == "slow")
                 );
@@ -2931,14 +2989,16 @@ mod tests {
             let healthy = healthy.expect("healthy profile must publish while slow KV is blocked");
             assert_eq!(healthy.profiles, ["slow", "healthy"]);
             assert!(!healthy
-                .inventory
+                .store_reads
                 .iter()
-                .any(|entry| entry.profile == "slow"));
+                .any(|read| read.store.profile() == "slow"
+                    && read.state == CatalogStoreReadState::Complete));
             if cancel {
                 assert!(progress.try_iter().all(|snapshot| !snapshot
-                    .inventory
+                    .store_reads
                     .iter()
-                    .any(|entry| entry.profile == "slow")));
+                    .any(|read| read.store.profile() == "slow"
+                        && read.state != CatalogStoreReadState::NotLoaded)));
             }
         }
     }

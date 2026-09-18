@@ -3,7 +3,7 @@
 use crate::agent::AgentError;
 use crate::commands::context::AppState;
 use crate::commands::execution::{
-    ambiguous_worker_failure, apply_kv_mutation, apply_operation, map_mutation_error, MutationKind,
+    ambiguous_worker_failure, apply_kv_mutation, map_mutation_error, MutationKind,
 };
 use crate::commands::preparation::{check_mutation_access, prepare_catalog_mutation};
 use crate::commands::types::{CommandAck, MutationDto, RoleDto};
@@ -90,11 +90,19 @@ impl From<&CatalogInventoryState> for CatalogInventoryDto {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CatalogStoreReadDto {
+    pub store: String,
+    pub state: &'static str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CatalogDto {
     pub profiles: Vec<String>,
     pub stores: Vec<StoreDto>,
     pub known_stores: Vec<StoreDto>,
     pub inventory: Vec<CatalogInventoryDto>,
+    pub store_reads: Vec<CatalogStoreReadDto>,
     pub items: Vec<ItemDto>,
     pub failures: Vec<CatalogFailureDto>,
     pub blocked_profiles: Vec<String>,
@@ -140,6 +148,18 @@ impl CatalogDto {
                 .inventory
                 .iter()
                 .map(CatalogInventoryDto::from)
+                .collect(),
+            store_reads: snapshot
+                .store_reads
+                .iter()
+                .map(|read| CatalogStoreReadDto {
+                    store: store_id(&read.store),
+                    state: match read.state {
+                        foks_desktop::CatalogStoreReadState::NotLoaded => "not-loaded",
+                        foks_desktop::CatalogStoreReadState::Complete => "complete",
+                        foks_desktop::CatalogStoreReadState::Failed => "failed",
+                    },
+                })
                 .collect(),
             items: snapshot
                 .items
@@ -778,7 +798,7 @@ async fn apply_file_upload(
     source: PathBuf,
     kind: MutationKind,
 ) -> Result<MutationDto, AgentError> {
-    state.invalidate_catalog();
+    state.invalidate_catalog_items();
     let transport = state.agent.transport();
     let result = tauri::async_runtime::spawn_blocking(move || {
         upload_file(transport.as_ref(), header, &source, kind)
@@ -894,23 +914,26 @@ async fn load_catalog(
                 |snapshot| {
                     let result = (|| {
                         crate::applock::require_unlocked_generation(&worker_app, access)?;
-                        let mut dto = CatalogDto::from_snapshot(snapshot)?;
-                        dto.local_metadata = Some(catalog_local_metadata(snapshot, &profiles)?);
+                        CatalogDto::from_snapshot(snapshot)?;
+                        catalog_local_metadata(snapshot, &profiles)?;
                         let mut sent = Ok(());
-                        if !worker_state.publish_catalog(
+                        if !worker_state.publish_catalog_snapshot(
                             generation,
                             snapshot.clone(),
-                            |published| {
-                                dto.generation = published;
-                                sent = crate::applock::require_unlocked_generation(
-                                    &worker_app,
-                                    access,
-                                )
-                                .and_then(|()| {
+                            |published, accepted| {
+                                sent = (|| {
+                                    let mut dto = CatalogDto::from_snapshot(accepted)?;
+                                    dto.local_metadata =
+                                        Some(catalog_local_metadata(accepted, &profiles)?);
+                                    dto.generation = published;
+                                    crate::applock::require_unlocked_generation(
+                                        &worker_app,
+                                        access,
+                                    )?;
                                     channel
                                         .send(dto)
                                         .map_err(|error| AgentError::unknown(error.to_string()))
-                                });
+                                })();
                             },
                         ) {
                             return Err(super::context::catalog_changed_during_read());
@@ -949,10 +972,17 @@ async fn load_catalog(
     // reported as the current snapshot: the reads that follow it would answer
     // from whichever snapshot replaced it.
     crate::applock::require_unlocked_generation(app, access)?;
-    if include_items
-        && !state.publish_catalog(generation, snapshot, |published| dto.generation = published)
-    {
-        return Err(super::context::catalog_changed_during_read());
+    if include_items {
+        let mut result = Ok(dto);
+        if !state.publish_catalog_snapshot(generation, snapshot, |published, accepted| {
+            result = CatalogDto::from_snapshot(accepted).map(|mut dto| {
+                dto.generation = published;
+                dto
+            });
+        }) {
+            return Err(super::context::catalog_changed_during_read());
+        }
+        dto = result?;
     }
     crate::applock::require_unlocked_generation(app, access)?;
     Ok(dto)
@@ -974,6 +1004,49 @@ pub async fn list_catalog(
 ) -> Result<CatalogDto, AgentError> {
     require_main_window(&webview)?;
     load_catalog(&state, webview.app_handle(), true, None).await
+}
+
+#[tauri::command]
+pub async fn list_profile_catalog(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    profile: String,
+) -> Result<CatalogDto, AgentError> {
+    require_main_window(&webview)?;
+    let app = webview.app_handle();
+    let access = crate::applock::unlocked_generation(app)?;
+    let state = state.for_profile(&profile)?;
+    let (generation, token) = state.begin_catalog_load_checked()?;
+    let transport = state.agent.transport();
+    let (snapshot, profiles) = tauri::async_runtime::spawn_blocking(move || {
+        let mut profiles: Vec<super::servers::ProfileSummary> = serde_json::from_value(
+            transport
+                .call_cancellable(Operation::ListProfiles, &|| token.is_cancelled())
+                .map_err(AgentError::from_desktop)?,
+        )
+        .map_err(|error| super::validation::invalid_response(error.to_string()))?;
+        profiles.retain(|candidate| candidate.name == profile);
+        let snapshot = foks_desktop::load_profile_catalog_cancellable(transport, profile, token)
+            .map_err(AgentError::from_desktop)?;
+        Ok::<_, AgentError>((snapshot, profiles))
+    })
+    .await
+    .map_err(|error| AgentError::unknown(format!("Failed to load profile catalog: {error}")))??;
+    CatalogDto::from_snapshot(&snapshot)?;
+    catalog_local_metadata(&snapshot, &profiles)?;
+    crate::applock::require_unlocked_generation(app, access)?;
+    let mut result = Err(super::context::catalog_changed_during_read());
+    if !state.publish_catalog_snapshot(generation, snapshot, |published, accepted| {
+        result = CatalogDto::from_snapshot(accepted).and_then(|mut dto| {
+            dto.local_metadata = Some(catalog_local_metadata(accepted, &profiles)?);
+            dto.generation = published;
+            Ok(dto)
+        });
+    }) {
+        return Err(super::context::catalog_changed_during_read());
+    }
+    crate::applock::require_unlocked_generation(app, access)?;
+    result
 }
 
 #[tauri::command]
@@ -1155,7 +1228,12 @@ pub async fn create_link(
         .map_err(invalid_request)?;
     let operation = set_create_operation_roles(operation, read_role, write_role)?;
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
-    apply_operation(&state, operation, MutationKind::Create).await
+    apply_kv_mutation(
+        &state,
+        KvAccountMutation::Inline(operation),
+        MutationKind::Create,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1179,7 +1257,12 @@ pub async fn create_folder(
         foks_desktop::create_kv_directory_operation(&store, &path).map_err(invalid_request)?;
     let operation = set_create_operation_roles(operation, read_role, write_role)?;
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
-    apply_operation(&state, operation, MutationKind::Create).await
+    apply_kv_mutation(
+        &state,
+        KvAccountMutation::Inline(operation),
+        MutationKind::Create,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1220,7 +1303,12 @@ pub async fn remove_item(
     let item = state.selected_mutation_item(&store_id, &path, version)?;
     let operation = remove_item_operation(&item)?;
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
-    apply_operation(&state, operation, MutationKind::Guarded).await
+    apply_kv_mutation(
+        &state,
+        KvAccountMutation::Inline(operation),
+        MutationKind::Guarded,
+    )
+    .await
 }
 
 #[tauri::command]

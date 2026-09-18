@@ -16,6 +16,34 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 #[test]
+fn catalog_dto_preserves_store_read_provenance_for_empty_inventories() {
+    let store = CatalogStoreRef::Account(foks_agent_proto::AccountStoreRef {
+        profile: "local".into(),
+        account_alias: "owner".into(),
+    });
+    for (state, expected) in [
+        (foks_desktop::CatalogStoreReadState::NotLoaded, "not-loaded"),
+        (foks_desktop::CatalogStoreReadState::Complete, "complete"),
+        (foks_desktop::CatalogStoreReadState::Failed, "failed"),
+    ] {
+        let snapshot = CatalogSnapshot {
+            store_reads: vec![foks_desktop::CatalogStoreRead {
+                store: store.clone(),
+                state,
+            }],
+            ..Default::default()
+        };
+        let dto = CatalogDto::from_snapshot(&snapshot).unwrap();
+        assert!(dto.items.is_empty());
+        assert_eq!(dto.store_reads[0].state, expected);
+        assert_eq!(
+            serde_json::to_value(dto).unwrap()["storeReads"][0]["state"],
+            expected
+        );
+    }
+}
+
+#[test]
 fn progressive_metadata_uses_only_completed_overviews_and_preserves_scoped_errors() {
     use foks_agent_proto::{ProfileOverview, ResponseResult};
     let profiles = ["healthy.example", "slow.example", "failed.example"].map(|name| {

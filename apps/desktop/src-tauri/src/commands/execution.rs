@@ -130,7 +130,7 @@ pub(super) async fn apply_kv_mutation_with_transport(
     kind: MutationKind,
     transport: std::sync::Arc<dyn foks_desktop::AgentTransport>,
 ) -> Result<MutationDto, AgentError> {
-    state.invalidate_catalog();
+    state.invalidate_catalog_items();
     let result = tauri::async_runtime::spawn_blocking(move || {
         execute_kv_mutation(transport.as_ref(), mutation, kind)
     })

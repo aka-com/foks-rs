@@ -228,6 +228,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
             accounts_complete: true,
             teams_complete: true,
         }],
+        store_reads: vec![],
         items: vec![ItemDto {
             store: "opaque-store-ref".to_owned(),
             path: "/wifi/password".to_owned(),

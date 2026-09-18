@@ -132,6 +132,7 @@
         "teamsComplete": true
       }
     ],
+    "storeReads": [],
     "items": [
       {
         "store": "opaque-store-ref",

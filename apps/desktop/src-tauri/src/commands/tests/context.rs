@@ -9,6 +9,294 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+fn chat_catalog() -> CatalogSnapshot {
+    let team = team_ref("chat", "owner", "team");
+    let store = CatalogStoreRef::Team(team.clone());
+    let mut catalog = complete_profile_catalog("chat");
+    catalog.stores.push(CatalogStoreSummary::Team {
+        store: team,
+        kind: "named".into(),
+        name: Some("Team".into()),
+        active: true,
+        creation_phase: None,
+    });
+    catalog.known_stores = catalog.stores.clone();
+    catalog.store_reads.push(foks_desktop::CatalogStoreRead {
+        store: store.clone(),
+        state: foks_desktop::CatalogStoreReadState::Complete,
+    });
+    catalog.items.push(foks_desktop::CatalogItem {
+        store,
+        metadata: foks_agent_proto::KvEntryMetadata {
+            path: "/item".into(),
+            node_type: "small-file".into(),
+            version: 1,
+            size: Some(1),
+            read_role: foks_agent_proto::KvRole::Owner,
+            write_role: foks_agent_proto::KvRole::Owner,
+        },
+    });
+    let success = |value| foks_agent_proto::ResponseResult::Success { value };
+    catalog.profile_overviews.push(foks_agent_proto::ProfileOverview {
+        profile: "chat".into(),
+        accounts: success(serde_json::json!([{"profile":"chat", "alias":"owner", "username":"alice"}])),
+        teams: success(serde_json::json!([])),
+        server_status: success(serde_json::json!({"profile":"chat", "configured_probe":"chat.example", "host":null, "chat_supported":true, "compatibility":{"status":"not-required"}})),
+    });
+    catalog
+}
+
+#[test]
+fn kv_refresh_and_content_invalidation_preserve_chat_access_revision() {
+    let state = phase_four_state(vec![]);
+    let chat = state.for_profile("chat").unwrap();
+    let mut catalog = chat_catalog();
+    let id = store_id(&catalog.stores[0].store_ref());
+    let (load, _) = chat.begin_catalog_load_checked().unwrap();
+    assert!(chat.publish_catalog(load, catalog.clone(), |_| {}));
+    let (revision, _) = chat.selected_chat(&id).unwrap();
+    let item_generation = chat.catalog_at(None).unwrap().0;
+    catalog.items[0].metadata.version += 1;
+    let (load, _) = chat.begin_catalog_load_checked().unwrap();
+    assert!(chat.publish_catalog(load, catalog, |_| {}));
+    assert_eq!(chat.selected_chat(&id).unwrap().0, revision);
+    assert_ne!(chat.catalog_at(None).unwrap().0, item_generation);
+    chat.invalidate_catalog_items();
+    assert_eq!(chat.selected_chat(&id).unwrap().0, revision);
+    chat.invalidate_catalog();
+    assert_ne!(chat.chat_generation.load(Ordering::Acquire), revision);
+    assert!(chat.selected_chat(&id).is_err());
+}
+
+#[test]
+fn lease_renewal_and_kv_capability_changes_do_not_retire_chat() {
+    let state = phase_four_state(vec![]).for_profile("chat").unwrap();
+    let mut catalog = chat_catalog();
+    if let foks_agent_proto::ResponseResult::Success { value } =
+        &mut catalog.profile_overviews[0].server_status
+    {
+        value["compatibility"] = serde_json::json!({"status":"validated", "expires_at":u64::MAX - 1, "capabilities":["chat", "kv"]});
+    }
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.publish_catalog(load, catalog.clone(), |_| {}));
+    let revision = state.chat_generation.load(Ordering::Acquire);
+    if let foks_agent_proto::ResponseResult::Success { value } =
+        &mut catalog.profile_overviews[0].server_status
+    {
+        value["compatibility"] = serde_json::json!({"status":"validated", "expires_at":u64::MAX, "capabilities":["chat"]});
+    }
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.publish_catalog(load, catalog.clone(), |_| {}));
+    assert_eq!(state.chat_generation.load(Ordering::Acquire), revision);
+    if let foks_agent_proto::ResponseResult::Success { value } =
+        &mut catalog.profile_overviews[0].server_status
+    {
+        value["compatibility"]["expires_at"] = serde_json::json!(1);
+    }
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.publish_catalog(load, catalog, |_| {}));
+    assert_ne!(state.chat_generation.load(Ordering::Acquire), revision);
+}
+
+#[test]
+fn partial_publication_keeps_accepted_facts_and_does_not_clear_mutation_gate() {
+    let state = phase_four_state(vec![]);
+    let chat = state.for_profile("chat").unwrap();
+    let catalog = chat_catalog();
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.publish_catalog(load, catalog.clone(), |_| {}));
+    let revision = chat.chat_generation.load(Ordering::Acquire);
+    chat.mutation_requires_refresh
+        .store(true, Ordering::Release);
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    let partial = CatalogSnapshot {
+        profiles: vec!["chat".into()],
+        ..Default::default()
+    };
+    assert!(
+        state.publish_catalog_snapshot(load, partial, |_, accepted| {
+            assert_eq!(accepted.items, catalog.items);
+            assert_eq!(accepted.stores, catalog.stores);
+        })
+    );
+    let mut pending_items = catalog.clone();
+    pending_items.items.clear();
+    pending_items.full_item_reads = None;
+    pending_items.store_reads[0].state = foks_desktop::CatalogStoreReadState::NotLoaded;
+    assert!(
+        state.publish_catalog_snapshot(load, pending_items.clone(), |_, accepted| {
+            assert_eq!(accepted.items, catalog.items);
+            assert_eq!(accepted.store_reads, catalog.store_reads);
+        })
+    );
+    assert!(chat.mutation_requires_refresh.load(Ordering::Acquire));
+    assert_eq!(chat.chat_generation.load(Ordering::Acquire), revision);
+    pending_items.store_reads[0].state = foks_desktop::CatalogStoreReadState::Failed;
+    pending_items.failures.push(foks_desktop::CatalogFailure {
+        scope: foks_desktop::CatalogFailureScope::Store(catalog.stores[0].store_ref()),
+        error: foks_desktop::AgentError::Transport("unavailable".into()),
+    });
+    assert!(
+        state.publish_catalog_snapshot(load, pending_items, |_, accepted| {
+            assert!(accepted.items.is_empty());
+            assert_eq!(
+                accepted.store_reads[0].state,
+                foks_desktop::CatalogStoreReadState::Failed
+            );
+        })
+    );
+    assert_eq!(chat.chat_generation.load(Ordering::Acquire), revision);
+    assert!(chat.mutation_requires_refresh.load(Ordering::Acquire));
+}
+
+#[test]
+fn catalog_access_and_verified_actor_changes_retire_reused_aliases() {
+    let state = phase_four_state(vec![]);
+    let chat = state.for_profile("chat").unwrap();
+    let catalog = chat_catalog();
+    let id = store_id(&catalog.stores[0].store_ref());
+    let (load, _) = chat.begin_catalog_load_checked().unwrap();
+    assert!(chat.publish_catalog(load, catalog.clone(), |_| {}));
+    let (revision, team) = chat.selected_chat(&id).unwrap();
+    let scope = foks_agent_proto::chat::ChatScope {
+        store: team,
+        host: "02".to_owned() + &"ab".repeat(32),
+        actor: "01".to_owned() + &"ab".repeat(32),
+    };
+    chat.accept_chat_scope(&id, revision, &scope).unwrap();
+    let mut replacement = scope.clone();
+    replacement.actor = "01".to_owned() + &"cd".repeat(32);
+    assert_eq!(
+        chat.accept_chat_scope(&id, revision, &replacement)
+            .unwrap_err()
+            .code,
+        "chat-restart"
+    );
+    assert!(chat.accept_chat_scope(&id, revision, &scope).is_err());
+    let revision = chat.chat_generation.load(Ordering::Acquire);
+    chat.accept_chat_scope(&id, revision, &replacement).unwrap();
+    let mut changed = catalog.clone();
+    changed.profile_overviews[0].accounts = foks_agent_proto::ResponseResult::Success {
+        value: serde_json::json!([{"profile":"chat", "alias":"owner", "username":"replacement"}]),
+    };
+    let (load, _) = chat.begin_catalog_load_checked().unwrap();
+    assert!(chat.publish_catalog(load, changed, |_| {}));
+    assert_ne!(chat.chat_generation.load(Ordering::Acquire), revision);
+    let revision = chat.chat_generation.load(Ordering::Acquire);
+    let mut blocked = catalog;
+    blocked.blocked_profiles.push("chat".into());
+    let (load, _) = chat.begin_catalog_load_checked().unwrap();
+    assert!(chat.publish_catalog(load, blocked, |_| {}));
+    assert_ne!(chat.chat_generation.load(Ordering::Acquire), revision);
+    assert!(chat.selected_chat(&id).is_err());
+}
+
+#[test]
+fn root_and_profile_loads_retire_each_other_without_retiring_siblings() {
+    let state = phase_four_state(vec![]);
+    let a = state.for_profile("a").unwrap();
+    let b = state.for_profile("b").unwrap();
+    let (root_load, root_token) = state.begin_catalog_load_checked().unwrap();
+    let (a_load, a_token) = a.begin_catalog_load_checked().unwrap();
+    assert!(root_token.is_cancelled());
+    assert!(
+        !state.publish_catalog(root_load, CatalogSnapshot::default(), |_| panic!(
+            "retired root"
+        ))
+    );
+    let (b_load, _) = b.begin_catalog_load_checked().unwrap();
+    assert!(!a_token.is_cancelled());
+    assert!(
+        a.publish_catalog_snapshot(a_load, complete_profile_catalog("a"), |_, accepted| {
+            assert_eq!(accepted.profiles, ["a"]);
+        })
+    );
+    assert!(
+        b.publish_catalog_snapshot(b_load, complete_profile_catalog("b"), |_, accepted| {
+            assert_eq!(accepted.profiles, ["b"]);
+        })
+    );
+    let (a_load, a_token) = a.begin_catalog_load_checked().unwrap();
+    let (root_load, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(a_token.is_cancelled());
+    assert!(
+        !a.publish_catalog(a_load, complete_profile_catalog("a"), |_| panic!(
+            "retired profile"
+        ))
+    );
+    assert!(state.publish_catalog(root_load, complete_profile_catalog("root"), |_| {}));
+    let (a_load, _) = a.begin_catalog_load_checked().unwrap();
+    state.invalidate_catalog();
+    assert!(
+        !a.publish_catalog(a_load, complete_profile_catalog("a"), |_| panic!(
+            "retired by root change"
+        ))
+    );
+}
+
+#[test]
+fn denied_expired_and_failed_profile_facts_do_not_authorize_chat() {
+    for status in [
+        serde_json::json!({"status":"missing"}),
+        serde_json::json!({"status":"validated", "expires_at":1, "capabilities":["chat"]}),
+        serde_json::json!({"status":"validated", "expires_at":u64::MAX, "capabilities":["kv"]}),
+    ] {
+        let state = phase_four_state(vec![]).for_profile("chat").unwrap();
+        let mut catalog = chat_catalog();
+        let id = store_id(&catalog.stores[0].store_ref());
+        if let foks_agent_proto::ResponseResult::Success { value } =
+            &mut catalog.profile_overviews[0].server_status
+        {
+            value["compatibility"] = status;
+        }
+        let (load, _) = state.begin_catalog_load_checked().unwrap();
+        assert!(state.publish_catalog(load, catalog, |_| {}));
+        assert!(state.selected_chat(&id).is_err());
+    }
+    let state = phase_four_state(vec![]).for_profile("chat").unwrap();
+    let catalog = chat_catalog();
+    let id = store_id(&catalog.stores[0].store_ref());
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.publish_catalog(load, catalog.clone(), |_| {}));
+    let mut failed = CatalogSnapshot {
+        profiles: vec!["chat".into()],
+        known_stores: catalog.known_stores,
+        failures: vec![foks_desktop::CatalogFailure {
+            scope: foks_desktop::CatalogFailureScope::Profile {
+                profile: "chat".into(),
+                source: "profile overview".into(),
+            },
+            error: foks_desktop::AgentError::Transport("unavailable".into()),
+        }],
+        ..Default::default()
+    };
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.publish_catalog(load, failed.clone(), |_| {}));
+    assert!(state.selected_chat(&id).is_err());
+    failed.failures.clear();
+    assert!(state.publish_catalog(load, failed, |_| {}));
+    assert!(state.selected_chat(&id).is_err());
+}
+
+#[test]
+fn successful_empty_store_read_replaces_previous_items() {
+    let state = phase_four_state(vec![]).for_profile("chat").unwrap();
+    let mut catalog = chat_catalog();
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.publish_catalog(load, catalog.clone(), |_| {}));
+    catalog.items.clear();
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(
+        state.publish_catalog_snapshot(load, catalog, |_, accepted| {
+            assert!(accepted.items.is_empty());
+            assert_eq!(
+                accepted.store_reads[0].state,
+                foks_desktop::CatalogStoreReadState::Complete
+            );
+        })
+    );
+}
+
 #[test]
 fn kv_denial_does_not_revoke_account_or_chat_target_bindings() {
     let state = phase_four_state(vec![]);
