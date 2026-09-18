@@ -52,6 +52,9 @@ pub enum ChatAction {
     Attempt {
         operation: String,
     },
+    Reconcile {
+        operation: String,
+    },
     Cancel {
         operation: String,
     },
@@ -59,6 +62,7 @@ pub enum ChatAction {
         operation: String,
     },
     Pending,
+    CleanupPending,
 }
 impl ChatAction {
     pub fn is_mutation(&self) -> bool {
@@ -71,6 +75,7 @@ impl ChatAction {
                 | Self::SyncInbox { .. }
                 | Self::PollInbox { .. }
                 | Self::Pending
+                | Self::CleanupPending
                 | Self::Status { .. }
                 | Self::OperationBody { .. }
         )
@@ -115,6 +120,7 @@ impl ChatAction {
             }
             Self::Status { operation }
             | Self::Attempt { operation }
+            | Self::Reconcile { operation }
             | Self::Cancel { operation }
             | Self::Finalize { operation } => valid_chat_id(operation),
             Self::OperationBody { operation, channel } => {
@@ -129,7 +135,7 @@ impl ChatAction {
                         .len()
                         == blocked_channels.len()
             }
-            Self::Channels | Self::Inbox | Self::Pending => true,
+            Self::Channels | Self::Inbox | Self::Pending | Self::CleanupPending => true,
         }
     }
 }
@@ -273,6 +279,9 @@ pub enum ChatResult {
     Pending {
         operations: Vec<ChatOperation>,
     },
+    CleanupPending {
+        operations: Vec<ChatOperation>,
+    },
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -284,6 +293,37 @@ pub struct ChatReply {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recovery_actions_are_canonical_and_classified() {
+        let action = ChatAction::Reconcile {
+            operation: "ab".repeat(16),
+        };
+        assert!(action.validate());
+        assert!(action.is_mutation());
+        assert_eq!(
+            serde_json::to_value(&action).unwrap(),
+            serde_json::json!({
+                "action": "reconcile", "operation": "ab".repeat(16)
+            })
+        );
+        assert!(!ChatAction::Reconcile {
+            operation: "0".repeat(32)
+        }
+        .validate());
+        let cleanup: ChatAction = serde_json::from_str(r#"{"action":"cleanup-pending"}"#).unwrap();
+        assert_eq!(cleanup, ChatAction::CleanupPending);
+        assert!(cleanup.validate());
+        assert!(!cleanup.is_mutation());
+        assert_eq!(
+            serde_json::to_value(ChatResult::CleanupPending { operations: vec![] }).unwrap(),
+            serde_json::json!({"kind": "cleanup-pending", "operations": []})
+        );
+        assert!(serde_json::from_str::<ChatAction>(
+            r#"{"action":"reconcile","operation":"abababababababababababababababab","send":true}"#
+        )
+        .is_err());
+    }
+
     #[test]
     fn channel_description_is_bounded_and_part_of_submission() {
         let mut action = ChatAction::PrepareChannel {

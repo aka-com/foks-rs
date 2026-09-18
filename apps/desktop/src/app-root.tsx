@@ -1886,6 +1886,7 @@ function VaultShell({
           onNavigate={navigateFromNotification}
           clock={chatClock}
           accessNow={accessNow}
+          accessGenerations={accessGenerations}
         >
           {here.kind === 'first-run' ? (
             <FirstRunExperience

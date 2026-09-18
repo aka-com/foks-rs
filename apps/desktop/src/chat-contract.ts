@@ -17,6 +17,7 @@ export type ChatAction =
   | { action: 'operation-body'; operation: string; channel: string }
   | { action: 'channels' }
   | { action: 'pending' }
+  | { action: 'cleanup-pending' }
   | { action: 'inbox' }
   | { action: 'sync-inbox'; blocked_channels?: string[] }
   | { action: 'mark-read'; channel: string; sequence: string }
@@ -36,7 +37,10 @@ export type ChatAction =
       channel: string;
       text: string;
     }
-  | { action: 'attempt' | 'cancel' | 'finalize' | 'status'; operation: string };
+  | {
+      action: 'attempt' | 'cancel' | 'finalize' | 'status' | 'reconcile';
+      operation: string;
+    };
 export interface ChatScope {
   store: {
     profile: string;
@@ -123,7 +127,8 @@ export type ChatResult =
   | { kind: 'read'; channel: string; sequence: string }
   | { kind: 'poll'; bumped: boolean; inbox_version: string }
   | { kind: 'operation'; operation: ChatOperation }
-  | { kind: 'pending'; operations: ChatOperation[] };
+  | { kind: 'pending'; operations: ChatOperation[] }
+  | { kind: 'cleanup-pending'; operations: ChatOperation[] };
 export interface ChatReply {
   scope: ChatScope;
   result: ChatResult;
@@ -528,6 +533,7 @@ export function decodeChatReply(
       'cancel',
       'finalize',
       'status',
+      'reconcile',
     ].includes(action.action)
   ) {
     object(r, ['kind', 'operation']);
@@ -555,15 +561,22 @@ export function decodeChatReply(
       channel: channelId,
       text: r.text === null ? null : text(r.text, CHAT_TEXT_BYTES),
     };
-  } else if (r.kind === 'pending' && action.action === 'pending') {
+  } else if (
+    (r.kind === 'pending' && action.action === 'pending') ||
+    (r.kind === 'cleanup-pending' && action.action === 'cleanup-pending')
+  ) {
     object(r, ['kind', 'operations']);
     const operations = array(r.operations, CHAT_PENDING_ROWS, operation);
     if (
       new Set(operations.map((o) => o.id)).size !== operations.length ||
-      operations.some((o) => !['prepared', 'uncertain'].includes(o.state))
+      operations.some((o) =>
+        r.kind === 'pending'
+          ? !['prepared', 'uncertain'].includes(o.state)
+          : !['confirmed', 'rejected', 'cancelled'].includes(o.state),
+      )
     )
       return fail();
-    result = { kind: 'pending', operations };
+    result = { kind: r.kind, operations };
   } else return fail();
   return { scope: resolved, result };
 }

@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 37;
+pub(crate) const VERSION: u32 = 38;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
     "import_readiness",
@@ -86,10 +86,14 @@ CREATE TABLE chat_operations (
     scan_cursor INTEGER NOT NULL CHECK(scan_cursor>=0),
     receipt BLOB CHECK(receipt IS NULL OR length(receipt) BETWEEN 1 AND 256),
     rejection_code INTEGER,
+    cleanup_pending INTEGER NOT NULL DEFAULT 1 CHECK(cleanup_pending IN (0,1)),
+    CHECK (state NOT IN (0,1) OR cleanup_pending=1),
     CHECK ((state=3) = (rejection_code IS NOT NULL)),
     CHECK ((state=2) = (receipt IS NOT NULL))
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX chat_pending ON chat_operations(host_id,uid,team_id,state);
+CREATE INDEX chat_cleanup_pending ON chat_operations(host_id,uid,team_id,operation_id)
+WHERE cleanup_pending=1;
 CREATE TABLE chat_submissions (
     host_id BLOB NOT NULL CHECK(length(host_id)=33),
     uid BLOB NOT NULL CHECK(length(uid)=33),

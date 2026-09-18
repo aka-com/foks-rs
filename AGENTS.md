@@ -10,3 +10,9 @@ it.
 For commit messages, include a short description followed by paragraph(s). Use
 multiple `-m` arguments instead of embedded `\n` escapes when committing from
 the command line.
+
+Before running `cargo test --locked --workspace`, build the standalone agent
+with `cargo build --locked -p foks-agent`. CLI integration tests launch the
+sibling `target/debug/foks-agent` binary, which `cargo test` can leave stale
+when the hard-state schema changes. Use limited Cargo job concurrency and run
+Rust and UI suites separately when disk space is constrained.

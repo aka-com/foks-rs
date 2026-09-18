@@ -235,6 +235,9 @@ pub fn validate_chat_reply(
             | ChatAction::Attempt {
                 operation: expected,
             }
+            | ChatAction::Reconcile {
+                operation: expected,
+            }
             | ChatAction::Cancel {
                 operation: expected,
             }
@@ -243,6 +246,18 @@ pub fn validate_chat_reply(
             },
             ChatResult::Operation { operation },
         ) => valid_operation(operation) && &operation.id == expected,
+        (ChatAction::CleanupPending, ChatResult::CleanupPending { operations }) => {
+            let mut ids = HashSet::new();
+            operations.len() <= CHAT_PENDING_ROWS
+                && operations.iter().all(|op| {
+                    valid_operation(op)
+                        && ids.insert(&op.id)
+                        && matches!(
+                            op.state,
+                            ChatState::Confirmed | ChatState::Rejected | ChatState::Cancelled
+                        )
+                })
+        }
         (ChatAction::Pending, ChatResult::Pending { operations }) => {
             let mut ids = HashSet::new();
             operations.len() <= CHAT_PENDING_ROWS
@@ -296,6 +311,77 @@ pub fn chat_request_cancellable(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn validates_reconcile_identity_and_bounded_terminal_cleanup() {
+        let store = TeamStoreRef {
+            profile: "local".into(),
+            account_alias: "me".into(),
+            team_alias: "team".into(),
+            team_id: "03".to_owned() + &"ab".repeat(32),
+        };
+        let op = ChatOperation {
+            id: "ab".repeat(16),
+            channel: "cd".repeat(16),
+            kind: ChatOperationKind::SendMessage,
+            state: ChatState::Cancelled,
+            receipt: None,
+            rejection_code: None,
+        };
+        let mut reply = ChatReply {
+            scope: ChatScope {
+                store: store.clone(),
+                host: "02".to_owned() + &"ab".repeat(32),
+                actor: "01".to_owned() + &"ab".repeat(32),
+            },
+            result: ChatResult::Operation {
+                operation: op.clone(),
+            },
+        };
+        assert!(validate_chat_reply(
+            &store,
+            &ChatAction::Reconcile {
+                operation: op.id.clone()
+            },
+            &reply
+        )
+        .is_ok());
+        assert!(validate_chat_reply(
+            &store,
+            &ChatAction::Reconcile {
+                operation: "ef".repeat(16)
+            },
+            &reply
+        )
+        .is_err());
+        reply.result = ChatResult::CleanupPending {
+            operations: vec![op.clone()],
+        };
+        assert!(validate_chat_reply(&store, &ChatAction::CleanupPending, &reply).is_ok());
+        reply.result = ChatResult::CleanupPending {
+            operations: vec![op.clone(), op.clone()],
+        };
+        assert!(validate_chat_reply(&store, &ChatAction::CleanupPending, &reply).is_err());
+        reply.result = ChatResult::CleanupPending {
+            operations: vec![op.clone(); CHAT_PENDING_ROWS + 1],
+        };
+        assert!(validate_chat_reply(&store, &ChatAction::CleanupPending, &reply).is_err());
+        for state in [
+            ChatState::Prepared,
+            ChatState::Uncertain,
+            ChatState::Confirmed,
+        ] {
+            reply.result = ChatResult::CleanupPending {
+                operations: vec![ChatOperation {
+                    state,
+                    ..op.clone()
+                }],
+            };
+            assert!(validate_chat_reply(&store, &ChatAction::CleanupPending, &reply).is_err());
+        }
+        reply.result = ChatResult::Pending { operations: vec![] };
+        assert!(validate_chat_reply(&store, &ChatAction::CleanupPending, &reply).is_err());
+    }
+
     #[test]
     fn rejects_wrong_scope_duplicate_messages_and_cursor_lies() {
         let store = TeamStoreRef {

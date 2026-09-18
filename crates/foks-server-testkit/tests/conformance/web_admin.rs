@@ -109,6 +109,7 @@ fn forward(
     backend: SocketAddr,
     config: Arc<rustls::ServerConfig>,
 ) -> std::io::Result<()> {
+    socket.set_nonblocking(false)?;
     socket.set_read_timeout(Some(Duration::from_secs(10)))?;
     socket.set_write_timeout(Some(Duration::from_secs(10)))?;
     let connection = rustls::ServerConnection::new(config).map_err(std::io::Error::other)?;

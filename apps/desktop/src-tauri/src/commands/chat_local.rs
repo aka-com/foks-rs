@@ -153,7 +153,11 @@ fn intent_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, AgentError>
         .join("chat-intents"))
 }
 fn intent_error(error: foks_client_app::Error) -> AgentError {
-    AgentError::new("chat-intent", error.to_string(), false)
+    let message = match error {
+        foks_client_app::Error::InvalidConfig(message) => message,
+        _ => "Saved message storage is unavailable. Existing messages were not replaced.",
+    };
+    AgentError::new("chat-intent", message, false)
 }
 fn intent_binding(scope: &ChatScope, channel: &str) -> Result<Vec<u8>, AgentError> {
     if !foks_agent_proto::chat::valid_chat_id(channel) {
@@ -449,6 +453,15 @@ pub async fn chat_local(
 mod tests {
     use super::*;
     #[test]
+    fn intent_storage_errors_do_not_expose_raw_diagnostics() {
+        let error = intent_error(foks_client_app::Error::Io(std::io::Error::other(
+            "private text in diagnostic",
+        )));
+        assert_eq!(error.code, "chat-intent");
+        assert!(!error.message.contains("private text"));
+    }
+
+    #[test]
     fn stale_cleanup_cannot_close_replacement_session() {
         let mut state = Inner {
             epoch: "new".into(),
@@ -480,7 +493,12 @@ mod tests {
             .insert("store".into(), (scope.clone(), 7));
         assert!(verify_intent_scope(&inner, "store", &scope, 7).is_ok());
         assert!(inner.scopes.is_empty());
-        assert!(verify_intent_scope(&inner, "store", &scope, 8).is_err());
+        assert_eq!(
+            verify_intent_scope(&inner, "store", &scope, 8)
+                .unwrap_err()
+                .code,
+            "chat-intent-scope"
+        );
         assert!(verify_intent_scope(&inner, "other", &scope, 7).is_err());
         let mut replacement = scope.clone();
         replacement.actor = "01".to_owned() + &"cd".repeat(32);
@@ -592,8 +610,10 @@ fn verify_intent_scope(
     generation: u64,
 ) -> Result<(), AgentError> {
     if inner.intent_scopes.get(id) != Some(&(scope.clone(), generation)) {
-        return Err(error(
+        return Err(AgentError::new(
+            "chat-intent-scope",
             "Open this chat in the current unlocked session before accessing saved messages.",
+            true,
         ));
     }
     Ok(())

@@ -11,8 +11,7 @@ impl ChatSession<'_> {
     ) -> Result<ChatOperation> {
         let op = self.operation(id)?;
         if op.state.is_terminal() {
-            self.cleanup_terminal(store, &op)?;
-            return Ok(op);
+            return self.terminal_outcome(store, id);
         }
         if op.state == State::Uncertain {
             return self.reconcile_operation(rpc, store, id);
@@ -64,7 +63,7 @@ impl ChatSession<'_> {
             Err(error) => {
                 if let Some(code) = definite_rejection(&error) {
                     self.hard()?.chat_reject(id, code)?;
-                    self.finalize_operation(store, id)?;
+                    self.terminal_outcome(store, id)?;
                 }
                 return Err(error);
             }
@@ -78,7 +77,7 @@ impl ChatSession<'_> {
             }
             _ => return Err(Error::ChatIntegrity("unexpected mutation response")),
         }
-        self.finalize_operation(store, id)
+        self.terminal_outcome(store, id)
     }
 
     pub(super) fn confirm_send(

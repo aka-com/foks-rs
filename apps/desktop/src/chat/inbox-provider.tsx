@@ -1,5 +1,7 @@
 import type { Location } from '../location';
 import { NotificationProvider } from './notification-provider';
+import { ChatSendProvider } from './send-provider';
+import { ChannelCreationProvider } from './channel-creation-provider';
 import {
   createContext,
   useContext,
@@ -20,6 +22,7 @@ export function ChatInboxProvider({
   onNavigate,
   clock,
   accessNow,
+  accessGenerations,
 }: {
   bridge: Bridge;
   snapshot: AgentSnapshot;
@@ -32,6 +35,7 @@ export function ChatInboxProvider({
    * cannot disagree about a check-in that expired this second.
    */
   accessNow?: () => number;
+  accessGenerations?: ReadonlyMap<string, number>;
 }) {
   const service = useMemo(
     () => new ChatInboxService(bridge, clock),
@@ -56,7 +60,22 @@ export function ChatInboxProvider({
         service={service}
         onNavigate={onNavigate}
       >
-        {children}
+        <ChatSendProvider
+          bridge={bridge}
+          snapshot={snapshot}
+          inbox={service}
+          clock={clock}
+          accessGenerations={accessGenerations}
+        >
+          <ChannelCreationProvider
+            bridge={bridge}
+            snapshot={snapshot}
+            accessNow={accessNow}
+            accessGenerations={accessGenerations}
+          >
+            {children}
+          </ChannelCreationProvider>
+        </ChatSendProvider>
       </NotificationProvider>
     </Context.Provider>
   );

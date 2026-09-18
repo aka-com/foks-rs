@@ -27,6 +27,8 @@ const kinds = {
   'poll-inbox': 'poll',
   'mark-read': 'read',
   pending: 'pending',
+  'cleanup-pending': 'cleanup-pending',
+  reconcile: 'operation',
   'prepare-channel': 'operation',
   'prepare-message': 'operation',
   status: 'operation',

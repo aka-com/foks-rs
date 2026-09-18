@@ -1,11 +1,12 @@
-import { useTabSheetState } from '../navigation-guard';
+import { useChannelCreation } from '../chat/channel-creation-provider';
+import './chat-picker.css';
 /**
- * New chat: pick a team, then pick or create a channel in it.
+ * New chat: search existing conversations or open one channel-creation form.
  *
- * Chat supports channels in named teams, not one-to-one conversations. The
- * default flow selects a team and then a channel. When opened for a specific
- * team, the sheet skips team selection, opens the create step, and shows
- * Cancel instead of Back. Unavailable teams remain listed with an explanation.
+ * Chat supports channels in named teams, not one-to-one conversations. Search
+ * results open directly across teams. A team-specific entry opens the create
+ * form and shows Cancel instead of Back. Unavailable teams remain listed with
+ * an explanation. Unsubmitted forms survive same-session rail tab changes.
  * Channel creation uses the agent's durable preparation: one submission
  * identifier is retried rather than repeated, with the fields and audience
  * accepted by `prepare-channel`.
@@ -23,8 +24,7 @@ import {
   SheetDialog,
 } from '../components';
 import type { Bridge } from '../bridge';
-import { normalizeCommandError } from '../bridge';
-import type { ChatAction, ChatReply } from '../chat-contract';
+
 import {
   CHAT_DESCRIPTION_MAX_CHARS,
   CHAT_DESCRIPTION_MIN_CHARS,
@@ -32,7 +32,9 @@ import {
   CHAT_NAME_MIN_CHARS,
 } from '../chat-limits';
 import type { NavigationGuard } from '../location';
-import { useNavigationGuard } from '../navigation-guard';
+import { useNavigationGuard, useTabSheetState } from '../navigation-guard';
+import type { ChatScope } from '../chat-contract';
+import { sameScope } from '../chat/client';
 import { chatAvailable, serverDisplayName, storeDescription } from '../model';
 import type {
   AgentSnapshot,
@@ -40,8 +42,7 @@ import type {
   StoreRef,
   TeamStore,
 } from '../model';
-import { failure, preparationCanChange, submissionId } from '../chat/actions';
-import { chatClient, integrity, sameScope } from '../chat/client';
+import { failure } from '../chat/actions';
 import { useChatInbox } from '../chat/inbox-provider';
 import {
   accessSummary,
@@ -52,7 +53,12 @@ import {
   listChannels,
   normalizeChannelName,
 } from '../chat/presentation';
-import { chatTeams, noChatReason, noChatTeams } from './chat-teams';
+import {
+  chatTeams,
+  noChatReason,
+  noChatTeams,
+  pickerConversations,
+} from './chat-teams';
 import { GroupMark } from './group-mark';
 
 /** A team the sheet offers, and why it cannot be offered. */
@@ -63,18 +69,25 @@ interface TeamChoice {
   detail: string;
 }
 
-const systemAccessNow = () => Date.now() / 1000;
+interface ChannelFormDraft {
+  team?: StoreRef;
+  chosen?: StoreRef;
+  scope?: ChatScope;
+  creating: boolean;
+  name: string;
+  description: string;
+  admin: boolean;
+}
 
 export function NewChatSheet({
   snapshot,
-  bridge,
   team,
   accessOptions = {},
-  accessNow = systemAccessNow,
   accessGenerations,
   onClose,
   onOpen,
-  onUnresolved,
+  onSubmitted,
+  onDraft,
 }: {
   snapshot: AgentSnapshot;
   bridge: Bridge;
@@ -87,87 +100,159 @@ export function NewChatSheet({
   accessGenerations?: ReadonlyMap<string, number>;
   onClose: () => void;
   onOpen: (ref: StoreRef, channel?: string) => void;
+  onSubmitted?: () => void;
+  onDraft?: () => void;
   /**
-   * Whether the agent holds a submission this sheet has not settled. The tab
-   * keeps the sheet mounted while that is true, because a submission has to be
-   * settled where it was made.
+   * Legacy notification seam. Submission ownership now belongs to the
+   * application controller; the sheet does not block navigation while a
+   * preparation is unresolved.
    */
   onUnresolved?: (unresolved: boolean) => void;
 }): ReactNode {
-  const { service, snapshot: inbox } = useChatInbox();
+  const { snapshot: inbox } = useChatInbox();
   // A sheet opened on a team is that team's: there is no step behind it to go
   // back to, so it opens on the channel it was asked for — the create step —
   // and leaves by being cancelled.
   const fixedTeam = team !== undefined;
-  const [chosen, setChosen] = useTabSheetState<StoreRef | undefined>(
-    'channel.chosen',
-    team,
+  const [saved, setSaved] = useTabSheetState<ChannelFormDraft | null>(
+    'channel.form',
+    null,
   );
-  const [step, setStep] = useTabSheetState<'team' | 'channel'>(
-    'channel.step',
-    team ? 'channel' : 'team',
+  const restored = saved?.team === team ? saved : null;
+  const [chosen, setChosen] = useState<StoreRef | undefined>(
+    restored?.chosen ?? team,
   );
-  const [channel, setChannel] = useTabSheetState<string | undefined>(
-    'channel.channel',
-    undefined,
-  );
-  const [creating, setCreating] = useTabSheetState(
-    'channel.creating',
-    fixedTeam,
-  );
-  const [name, setName] = useTabSheetState('channel.name', '');
-  const [description, setDescription] = useTabSheetState(
-    'channel.description',
-    '',
-  );
-  const [admin, setAdmin] = useTabSheetState('channel.admin', false);
-  const [busy, setBusy] = useState(false);
+  const [creating, setCreating] = useState(restored?.creating ?? fixedTeam);
+  const [name, setName] = useState(restored?.name ?? '');
+  const [description, setDescription] = useState(restored?.description ?? '');
+  const [admin, setAdmin] = useState(restored?.admin ?? false);
+  const formScope = useRef({ store: restored?.chosen, scope: restored?.scope });
+  const closing = useRef(false);
+  const autoOpen = useRef(false);
+  const submittedRef = useRef(onSubmitted);
+  submittedRef.current = onSubmitted;
+  const [filter, setFilter] = useState('');
   const [error, setError] = useState('');
+  const { controller, creations } = useChannelCreation();
+  const [creationId, setCreationId] = useState<string>();
+  const active = creations.find((record) => record.id === creationId);
+  const draftRef = useRef(onDraft);
+  draftRef.current = onDraft;
+  useEffect(() => {
+    if (active?.state !== 'cancelled') return;
+    setError(active.error);
+    setCreationId(undefined);
+    autoOpen.current = false;
+    controller?.acknowledge(active.id);
+    draftRef.current?.();
+  }, [active, controller]);
+  useEffect(() => {
+    if (closing.current) return;
+    if (creationId) {
+      setSaved(null);
+      return;
+    }
+    const scope = chosen ? inbox.get(chosen)?.scope : undefined;
+    if (formScope.current.store !== chosen)
+      formScope.current = { store: chosen, scope };
+    if (
+      formScope.current.scope &&
+      scope &&
+      !sameScope(formScope.current.scope, scope)
+    ) {
+      formScope.current = { store: chosen, scope };
+      setName('');
+      setDescription('');
+      setAdmin(false);
+      setSaved(null);
+      setError(
+        'The chat identity changed. Review a new channel form before submitting.',
+      );
+      return;
+    }
+    formScope.current = {
+      store: chosen,
+      scope: scope ?? formScope.current.scope,
+    };
+    setSaved({
+      team,
+      chosen,
+      creating,
+      name,
+      description,
+      admin,
+      scope: formScope.current.scope
+        ? structuredClone(formScope.current.scope)
+        : undefined,
+    });
+  }, [
+    team,
+    chosen,
+    creating,
+    name,
+    description,
+    admin,
+    creationId,
+    inbox,
+    setSaved,
+  ]);
+  const close = () => {
+    closing.current = true;
+    autoOpen.current = false;
+    setSaved(null);
+    onClose();
+  };
+  const open = (ref: StoreRef, channel?: string) => {
+    closing.current = true;
+    setSaved(null);
+    onOpen(ref, channel);
+  };
+  const busy = active?.state === 'working';
+  const outstanding = Boolean(
+    active && active.state !== 'confirmed' && active.state !== 'cancelled',
+  );
   // The preparation the agent has been given but has not finished: the
   // `prepare-channel` until it is accepted, then the operation identifier it
   // answered with. Recovering re-issues the same one, so a lost reply is
   // retried rather than turned into a second channel.
-  const submission = useRef<ChatAction | null>(null);
+  const submission = creationId !== undefined && active?.state !== 'cancelled';
   // Whether the agent may already hold that submission: a request whose outcome
   // is unknown is one it may have taken, and from then on the only way to find
   // out is to re-issue the same one. A later refusal — of a request that never
   // reached the agent, say — does not make it discardable.
-  const held = useRef(false);
-  const prepared = useRef<{ operation: string; channel: string } | null>(null);
-  const [outstanding, setOutstanding] = useState(false);
-  const sending = useRef(false);
-  const alive = useRef(true);
   const nameField = useRef<HTMLInputElement | null>(null);
   const body = useRef<HTMLDivElement | null>(null);
   const opened = useRef(false);
-  // A request in flight has to be judged against what the shell knows now, not
-  // against what it knew when the request started: the snapshot, the
-  // availability options and the access generations are read out of refs
-  // assigned every render, the way `use-chat-conversation.ts` reads its own.
-  const snapshotRef = useRef(snapshot);
-  snapshotRef.current = snapshot;
-  const accessOptionsRef = useRef(accessOptions);
-  accessOptionsRef.current = accessOptions;
-  const generationsRef = useRef(accessGenerations);
-  generationsRef.current = accessGenerations;
-  const unresolvedRef = useRef(onUnresolved);
-  unresolvedRef.current = onUnresolved;
+  // The controller checks current access around each request. This sheet
+  // observes a confirmed result only while the initiating interaction is
+  // still active; restoring an unsubmitted form never restores a redirect
+  // subscription from an abandoned submission.
+  const openedCreation = useRef<string | undefined>(undefined);
+  const openRef = useRef(open);
+  openRef.current = open;
   useEffect(() => {
-    alive.current = true;
+    if (
+      !autoOpen.current ||
+      active?.state !== 'confirmed' ||
+      !active.operation ||
+      openedCreation.current === active.id
+    )
+      return;
+    openedCreation.current = active.id;
+    openRef.current(active.store.id, active.operation.channel);
+    controller?.acknowledge(active.id);
+  }, [active, controller]);
+  useEffect(() => {
     return () => {
-      alive.current = false;
-      submission.current = null;
-      held.current = false;
-      prepared.current = null;
-      // The tab holds the sheet open for an unresolved submission. A sheet that
-      // is gone holds nothing, so the latch leaves with it rather than keeping
-      // the next New chat pinned to a team switch that already happened.
-      unresolvedRef.current?.(false);
+      // Submitted work outlives this sheet in the application controller.
+      // Opening a later sheet does not restore this sheet's completion latch
+      // or redirect the reader back to its original team.
+      openedCreation.current = undefined;
     };
   }, []);
   useEffect(() => {
-    onUnresolved?.(outstanding);
-  }, [outstanding, onUnresolved]);
+    for (const store of chatTeams(snapshot)) void controller?.discover(store);
+  }, [controller, snapshot, inbox, accessGenerations]);
   // A step replaces the whole body, so focus follows it rather than staying on
   // a control that is no longer there — and the create form is a step of its
   // own, whose field is the name rather than its first control. The dialog
@@ -186,10 +271,12 @@ export function NewChatSheet({
       'input:not([disabled]), textarea:not([disabled]), button:not([disabled])',
     );
     first?.focus();
-  }, [step, creating]);
+  }, [creating]);
   const choices: TeamChoice[] = [
     ...chatTeams(snapshot).map((store) => {
-      const reachable = chatAvailable(snapshot, store, accessOptions);
+      const reachable =
+        chatAvailable(snapshot, store, accessOptions) &&
+        inbox.get(store.id)?.state !== 'blocked';
       const entry = inbox.get(store.id);
       // A hidden conversation is listed in the sheet with the rest, but it is
       // not one of the channels this line offers the reader.
@@ -239,7 +326,7 @@ export function NewChatSheet({
     nameLength > CHAT_NAME_MAX_CHARS ||
     (nameLength > 0 && nameLength < CHAT_NAME_MIN_CHARS);
   const descriptionOverLimit = descriptionProblem !== null;
-  // Step two cannot be answered until the team's channels are known: an empty
+  // Creation cannot be submitted until the team's channels are known: an empty
   // name is the general channel, and whether the team already has one is the
   // difference between creating it and being refused.
   const channelsKnown = Boolean(entry?.data);
@@ -248,31 +335,33 @@ export function NewChatSheet({
   // has already taken is past all of it: its fields are frozen, so the only
   // thing that can stop a recovery is a recovery already running.
   const unsendable =
+    !picked ||
+    !controller?.readyFor(picked.store.id) ||
     problem !== null ||
     descriptionProblem !== null ||
     !channelsKnown ||
     Boolean(picked?.reason);
-  const createDisabled = busy || (!outstanding && unsendable);
-  // Read by the guard when it is asked, so typing re-registers nothing. The
-  // latch above keeps the sheet mounted through a team switch; the guard is
-  // the same answer, given to the moves that would take the whole tab away.
+  const createDisabled =
+    !controller ||
+    busy ||
+    active?.state === 'review' ||
+    (!outstanding && unsendable);
+  // Read by the guard when it is asked, so typing re-registers nothing.
+  // Unsubmitted fields are restored on rail changes. Other destructive moves
+  // can ask for discard; submitted work never holds navigation open.
   const guardState = useRef({ typed: false, name: '', locked: false });
   guardState.current = {
-    typed: creating && Boolean(name.trim() || description.trim()),
+    typed:
+      creating && !submission && Boolean(name.trim() || description.trim()),
     name: name.trim(),
     locked,
   };
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
+  const closeRef = useRef(close);
+  closeRef.current = close;
   const formGuard = useCallback<NavigationGuard>(() => {
-    const { typed, name: typedName, locked: inFlight } = guardState.current;
-    // A submission the agent may already hold has to be settled in the sheet
-    // that made it: this is the one state the reader cannot choose to drop.
-    if (inFlight)
-      return {
-        verdict: 'refuse',
-        reason: 'Wait for the channel to finish being created.',
-      };
+    const { typed, name: typedName } = guardState.current;
+    // The application owns submitted work independently of this sheet.
+    // Only unsubmitted form fields need the destructive-navigation prompt.
     if (!typed) return null;
     return {
       verdict: 'prompt',
@@ -281,229 +370,212 @@ export function NewChatSheet({
         ? `#${normalizeChannelName(typedName)} has not been created and will be lost.`
         : 'This channel has not been created and will be lost.',
       confirm: 'Discard',
-      // Discard the form as well as allowing navigation. The sheet remains
-      // mounted through team switches and would otherwise retain the text.
+      // Discard the saved tab form as well as allowing navigation, so a
+      // later visit cannot restore fields the reader chose to discard.
       onConfirm: () => closeRef.current(),
     };
   }, []);
-  useNavigationGuard(formGuard, [], !locked);
-  const create = async () => {
-    if (sending.current || !picked) return;
-    const store = picked.store;
-    sending.current = true;
-    setBusy(true);
+  useNavigationGuard(formGuard, [], true);
+  const create = () => {
+    if (!controller || createDisabled) return;
     setError('');
-    // The conversation guards every request on the shell's availability and on
-    // the access generation the server is on; a channel created from this sheet
-    // is the same kind of write and is guarded the same way.
-    const generation = generationsRef.current?.get(store.server) ?? 0;
-    const authorize = (phase: 'before' | 'after'): void => {
-      const available = chatAvailable(snapshotRef.current, store, {
-        ...accessOptionsRef.current,
-        nowSeconds: accessNow(),
-      });
+    if (outstanding && active) {
+      autoOpen.current = true;
       if (
-        available &&
-        generation === (generationsRef.current?.get(store.server) ?? 0)
+        !active.operation ||
+        (active.operation.state === 'prepared' && active.input)
       )
-        return;
-      throw {
-        code: available ? 'access-changed' : 'chat-access-denied',
-        message:
-          phase === 'after'
-            ? 'Access changed after the channel was sent. Its saved preparation is kept; recover it once access is back.'
-            : 'Access changed before the channel was sent.',
-        fatal: false,
-        // A request that may already have been taken is not retryable on its
-        // own: the saved preparation is what settles it.
-        ambiguous: phase === 'after',
-        retryable: phase === 'before',
-      };
-    };
-    const client = chatClient(bridge, store.server, store.id);
-    // The service holds the scope this team's chat has been established under.
-    // A reply under a different identity is not this team's, so the account is
-    // quarantined rather than trusted for one more request.
-    const trust = (reply: ChatReply): void => {
-      const trusted = service.getSnapshot().get(store.id)?.scope;
-      if (trusted && !sameScope(trusted, reply.scope)) {
-        service.block(store.id, 'The chat identity changed.');
-        throw integrity();
-      }
-    };
+        controller.retry(active.id);
+      else controller.check(active.id);
+      return;
+    }
+    if (!picked) return;
     try {
-      if (!prepared.current) {
-        submission.current ??= {
-          action: 'prepare-channel',
-          submission: submissionId(),
-          name,
-          description,
-          admin,
-        };
-        setOutstanding(true);
-        const reply: ChatReply = await client.request(
-          submission.current,
-          undefined,
-          authorize,
-        );
-        if (!alive.current) return;
-        trust(reply);
-        if (reply.result.kind !== 'operation')
-          throw new Error('Invalid channel preparation.');
-        prepared.current = {
-          operation: reply.result.operation.id,
-          channel: reply.result.operation.channel,
-        };
-      }
-      const attempted: ChatReply = await client.request(
-        { action: 'attempt', operation: prepared.current.operation },
-        undefined,
-        authorize,
-      );
-      if (!alive.current) return;
-      trust(attempted);
-      const created =
-        attempted.result.kind === 'operation'
-          ? attempted.result.operation.channel
-          : prepared.current.channel;
-      // Only a settled attempt retires the submission: until then it is what a
-      // recovery re-issues.
-      submission.current = null;
-      held.current = false;
-      prepared.current = null;
-      setOutstanding(false);
-      // The column reads the service, so the new channel is listed only once
-      // the team has been synchronized again.
-      service.invalidate(store.id);
-      onOpen(store.id, created);
+      const id = controller.submit(picked.store, { name, description, admin });
+      autoOpen.current = true;
+      setSaved(null);
+      setCreationId(id);
+      onSubmitted?.();
     } catch (cause) {
-      if (alive.current) {
-        const failed = normalizeCommandError(cause);
-        // An ambiguous failure — the request may have been taken, the reply was
-        // lost — leaves the submission where it is, and marks it as one the
-        // agent may hold from here on.
-        if (failed.ambiguous) held.current = true;
-        // A preparation the agent refused on its content can be changed and
-        // sent again; one it may have taken cannot, and is recovered as it
-        // stands. That includes a later refusal of a request that never
-        // reached the agent: it says nothing about the one that did.
-        if (
-          !prepared.current &&
-          submission.current &&
-          !held.current &&
-          preparationCanChange(cause)
-        ) {
-          submission.current = null;
-          setOutstanding(false);
-        }
-        // A fatal failure ends the session this submission was made in: there
-        // is nothing left to recover it with, so the sheet states the reason
-        // and can be closed without preventing the user from navigating away.
-        if (failed.fatal) {
-          submission.current = null;
-          held.current = false;
-          prepared.current = null;
-          setOutstanding(false);
-        }
-        setError(failure(cause));
-        // Whatever the agent is still holding belongs in the conversation's
-        // "Needs attention" as well, in case the sheet is closed on it.
-        if (prepared.current) service.invalidate(store.id);
-      }
-    } finally {
-      client.dispose();
-      sending.current = false;
-      if (alive.current) setBusy(false);
+      setError(failure(cause));
     }
   };
   const back = () => {
-    if (creating) {
-      setCreating(false);
-      setError('');
-      return;
-    }
-    setStep('team');
-    setChannel(undefined);
+    setCreating(false);
+    setCreationId(undefined);
+    setError('');
   };
+  const recover = (id: string) => {
+    const record = creations.find((candidate) => candidate.id === id);
+    if (!record) return;
+    setChosen(record.store.id);
+    setName(record.input?.name ?? '');
+    setDescription(record.input?.description ?? '');
+    setAdmin(record.input?.admin ?? false);
+    setCreationId(id);
+    setSaved(null);
+    autoOpen.current = true;
+    onSubmitted?.();
+    setCreating(true);
+    setError('');
+  };
+  const pending = creations.filter(
+    (record) => record.state !== 'confirmed' && record.state !== 'cancelled',
+  );
+  const query = filter.trim().toLowerCase();
+  const results = pickerConversations(snapshot, inbox, query, accessOptions);
+  useEffect(() => {
+    if (!creating || creationId) return;
+    const saved = creations.find(
+      (record) =>
+        record.store.id === chosen &&
+        record.state !== 'confirmed' &&
+        record.state !== 'cancelled',
+    );
+    if (!saved) return;
+    setName(saved.input?.name ?? '');
+    setDescription(saved.input?.description ?? '');
+    setAdmin(saved.input?.admin ?? false);
+    setCreationId(saved.id);
+    setSaved(null);
+    submittedRef.current?.();
+  }, [creating, creationId, chosen, creations, setSaved]);
   return (
     <SheetDialog
-      title={
-        creating
-          ? 'New channel'
-          : step === 'team'
-            ? 'New chat'
-            : 'Pick a channel'
-      }
-      onClose={onClose}
-      dismissible={!locked}
+      title={creating ? 'Create channel' : 'New chat'}
+      onClose={close}
+      dismissible
       footer={
         <>
           {/* Back belongs to the step behind this one. A sheet opened on one
               team has none — the cross-team picker is not where it came
               from — so its left button leaves instead. */}
           <Button
-            disabled={locked}
-            onClick={step === 'team' || fixedTeam ? onClose : back}
+            onClick={!creating || fixedTeam || outstanding ? close : back}
           >
-            {step === 'team' || fixedTeam ? 'Cancel' : 'Back'}
+            {outstanding ? 'Close' : !creating || fixedTeam ? 'Cancel' : 'Back'}
           </Button>
-          {step === 'team' ? (
-            <Button
-              variant="primary"
-              disabled={!picked || Boolean(picked.reason) || !channelsKnown}
-              onClick={() => setStep('channel')}
-            >
-              Continue
-            </Button>
-          ) : creating ? (
+          {creating ? (
             <Button
               variant="primary"
               busy={busy}
               disabled={createDisabled}
-              onClick={() => void create()}
+              onClick={create}
             >
               {busy
                 ? 'Creating…'
                 : outstanding
-                  ? 'Retry channel creation'
+                  ? active?.operation
+                    ? active.operation.state === 'prepared' && active.input
+                      ? 'Retry creation'
+                      : 'Check again'
+                    : 'Retry channel creation'
                   : 'Create channel'}
             </Button>
           ) : (
             <Button
               variant="primary"
-              disabled={!channel || Boolean(picked?.reason)}
-              onClick={() =>
-                picked && channel && onOpen(picked.store.id, channel)
-              }
+              onClick={() => {
+                setCreating(true);
+                setCreationId(undefined);
+                setChosen(team);
+                setName('');
+                setDescription('');
+                setAdmin(false);
+              }}
             >
-              Open chat
+              Create channel
             </Button>
           )}
         </>
       }
     >
       <div ref={body}>
-        {step === 'team' ? (
-          <RadioGroup label="Team" className="chat-pick">
-            {choices.map((choice) => (
-              <RadioCard
-                key={choice.store.id}
-                title={
-                  <>
-                    <GroupMark store={choice.store} size="sm" />
-                    {choice.store.name}
-                  </>
-                }
-                detail={choice.reason || choice.detail}
-                selected={choice.store.id === chosen}
-                off={Boolean(choice.reason)}
-                onSelect={() => {
-                  setChosen(choice.store.id);
-                  setChannel(undefined);
-                }}
-              />
-            ))}
-          </RadioGroup>
+        {!creating ? (
+          <div className="chat-picker">
+            <input
+              type="search"
+              aria-label="Search conversations"
+              placeholder="Search teams and channels"
+              value={filter}
+              onChange={(event) => setFilter(event.target.value)}
+              data-sheet-autofocus="true"
+            />
+            <div className="chat-picker-results" aria-label="Conversations">
+              {results.map(({ store, entry: teamEntry, option, available }) => {
+                // A channel the column draws as stopped, restricted, hidden or
+                // muted says the same thing here: a picker that offered it as
+                // an ordinary channel would be offering something else.
+                const meta = channelMeta(option, teamEntry?.blockedChannels);
+                const about =
+                  option.channel.description || accessSummary(option.channel);
+                return (
+                  <button
+                    type="button"
+                    className="chat-picker-result"
+                    key={`${store.id}:${option.channel.id}`}
+                    disabled={!available}
+                    onClick={() => open(store.id, option.channel.id)}
+                  >
+                    <GroupMark store={store} size="sm" />
+                    <span>
+                      <b>
+                        {store.name} · {channelTitle(option.channel)}
+                      </b>
+                      <small>{meta ? `${meta} · ${about}` : about}</small>
+                    </span>
+                  </button>
+                );
+              })}
+              {!results.length && (
+                <p role="status">
+                  No conversations match{query ? ` “${filter}”` : ''}.
+                </p>
+              )}
+              {choices
+                .filter(
+                  (choice) =>
+                    (!query ||
+                      choice.store.name.toLowerCase().includes(query)) &&
+                    (choice.reason || !inbox.get(choice.store.id)?.data),
+                )
+                .map((choice) => (
+                  <p className="hint" key={choice.store.id}>
+                    {choice.store.name}:{' '}
+                    {choice.reason ||
+                      inbox.get(choice.store.id)?.error ||
+                      'Loading channels…'}
+                  </p>
+                ))}
+            </div>
+            {pending.length > 0 && (
+              <section aria-label="Pending channel creation">
+                <SectionLabel>Channel creation</SectionLabel>
+                {pending.map((record) => (
+                  <button
+                    type="button"
+                    className="chat-picker-result"
+                    key={record.id}
+                    onClick={() => recover(record.id)}
+                  >
+                    <span>
+                      <b>
+                        {record.store.name} ·{' '}
+                        {record.input
+                          ? `#${normalizeChannelName(record.input.name) || 'general'}`
+                          : 'Saved channel creation'}
+                      </b>
+                      <small>
+                        {record.state === 'working'
+                          ? 'Creating…'
+                          : record.error || 'Needs attention'}
+                      </small>
+                    </span>
+                  </button>
+                ))}
+              </section>
+            )}
+          </div>
         ) : (
           <form
             className="chat-create"
@@ -523,48 +595,93 @@ export function NewChatSheet({
             )}
             {/* Choosing Create takes the form over: the channel list it was
                 picked from is one Back away, not a second thing on screen. */}
-            {!creating && (
-              <RadioGroup label="Channel" className="chat-pick">
-                {listed.map((option) => {
-                  // A channel the column draws as stopped, restricted, hidden or
-                  // muted says the same thing here: a picker that offered it as
-                  // an ordinary channel would be offering something else.
-                  const meta = channelMeta(option, entry?.blockedChannels);
-                  const about =
-                    option.channel.description || accessSummary(option.channel);
-                  return (
-                    <RadioCard
-                      key={option.channel.id}
-                      title={channelTitle(option.channel)}
-                      detail={meta ? `${meta} · ${about}` : about}
-                      selected={!creating && option.channel.id === channel}
-                      disabled={locked || Boolean(picked?.reason)}
-                      onSelect={() => {
-                        setCreating(false);
-                        setChannel(option.channel.id);
-                      }}
-                    />
-                  );
-                })}
-                {/* Until the team's channel list has arrived there is nothing to
+            <Inset>
+              <InsetRow label="Team">
+                <select
+                  aria-label="Team"
+                  value={chosen ?? ''}
+                  disabled={locked}
+                  onChange={(event) => {
+                    const next = event.target.value || undefined;
+                    const saved = pending.find(
+                      (record) => record.store.id === next,
+                    );
+                    if (saved) recover(saved.id);
+                    else {
+                      setChosen(next);
+                      setCreationId(undefined);
+                    }
+                  }}
+                >
+                  <option value="">Choose a team</option>
+                  {choices.map((choice) => (
+                    <option
+                      key={choice.store.id}
+                      value={choice.store.id}
+                      disabled={Boolean(choice.reason)}
+                    >
+                      {choice.store.name}
+                      {choice.reason ? ` — ${choice.reason}` : ''}
+                    </option>
+                  ))}
+                  {active &&
+                    !choices.some(
+                      (choice) => choice.store.id === active.store.id,
+                    ) && (
+                      <option value={active.store.id}>
+                        {active.store.name} — Unavailable
+                      </option>
+                    )}
+                </select>
+                <small>{picked?.reason || picked?.detail}</small>
+              </InsetRow>
+            </Inset>
+            {/* Until the team's channel list has arrived there is nothing to
                 pick from and no way to tell whether a name is already taken. */}
-                {channelsKnown ? (
-                  <RadioCard
-                    title="Create a channel"
-                    detail="A new channel in this team"
-                    selected={creating}
-                    disabled={locked || Boolean(picked?.reason)}
-                    onSelect={() => {
-                      setChannel(undefined);
-                      setCreating(true);
-                    }}
-                  />
-                ) : (
-                  <p className="hint" role="status">
-                    Loading channels…
-                  </p>
-                )}
-              </RadioGroup>
+            {picked && !channelsKnown && (
+              <p className="hint" role="status">
+                {entry?.error || 'Loading channels…'}
+              </p>
+            )}
+            {!controller && (
+              <p role="status" className="action-error">
+                Channel creation is unavailable in this window.
+              </p>
+            )}
+            {controller && picked && !controller.readyFor(picked.store.id) && (
+              <p role="status">
+                Saved channel creations must be checked first.{' '}
+                <Button onClick={() => void controller.discover(picked.store)}>
+                  Check saved creations
+                </Button>
+              </p>
+            )}
+            {active && !active.input && outstanding && (
+              <p className="hint">
+                The original channel fields are held by the agent. Check the
+                saved operation or cancel it before creating another channel.
+              </p>
+            )}
+            {active?.operation && outstanding && (
+              <Button
+                disabled={
+                  busy ||
+                  active.blocked ||
+                  active.operation.state === 'uncertain'
+                }
+                onClick={() => {
+                  if (active.operation?.state === 'rejected') {
+                    controller?.review(active.id);
+                    setCreationId(undefined);
+                    autoOpen.current = false;
+                    onDraft?.();
+                  } else controller?.cancel(active.id);
+                }}
+              >
+                {active.operation.state === 'rejected'
+                  ? 'Review form'
+                  : 'Cancel preparation'}
+              </Button>
             )}
             {creating && (
               <>
@@ -634,15 +751,15 @@ export function NewChatSheet({
                 </Inset>
                 {outstanding && !busy && (
                   <p className="hint">
-                    The server did not respond. Select Retry to resend the
-                    request without creating a duplicate.
+                    Channel creation is not confirmed. You can close this form
+                    and check the saved creation later.
                   </p>
                 )}
               </>
             )}
-            {error && (
+            {(error || active?.error) && (
               <p role="alert" className="action-error">
-                {error}
+                {error || active?.error}
               </p>
             )}
           </form>

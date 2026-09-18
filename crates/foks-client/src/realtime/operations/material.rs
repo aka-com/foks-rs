@@ -122,6 +122,14 @@ impl ChatSession<'_> {
         decode_material(op, &bytes)
     }
 
+    pub fn list_cleanup_pending(&self) -> Result<Vec<ChatOperation>> {
+        Ok(self.hard()?.chat_cleanup_pending(
+            self.host.host_id().as_bytes(),
+            self.credential.uid.as_bytes(),
+            self.team_id.as_bytes(),
+        )?)
+    }
+
     pub fn list_pending(&self) -> Result<Vec<ChatOperation>> {
         Ok(self.hard()?.chat_pending(
             self.host.host_id().as_bytes(),
@@ -138,7 +146,7 @@ impl ChatSession<'_> {
     ) -> Result<ChatOperation> {
         self.operation(id)?;
         self.hard()?.chat_cancel(id)?;
-        self.finalize_operation(store, id)
+        self.terminal_outcome(store, id)
     }
 
     /// Retry terminal material cleanup, without a network connection or PTKs.
@@ -155,12 +163,27 @@ impl ChatSession<'_> {
         Ok(op)
     }
 
+    pub(super) fn terminal_outcome(
+        &self,
+        store: &mut impl ProtectedMutationStore,
+        id: &[u8; 16],
+    ) -> Result<ChatOperation> {
+        let op = self.operation(id)?;
+        if !op.state.is_terminal() {
+            return Err(Error::ChatOperationState("operation is not terminal"));
+        }
+        let _ = self.cleanup_terminal(store, &op);
+        Ok(op)
+    }
+
     pub(super) fn cleanup_terminal(
         &self,
         store: &mut impl ProtectedMutationStore,
         op: &ChatOperation,
     ) -> Result<()> {
-        remove_terminal_material(store, op)
+        remove_terminal_material(store, op)?;
+        self.hard()?.chat_complete_cleanup(&op.id)?;
+        Ok(())
     }
 }
 
@@ -321,11 +344,30 @@ mod tests {
         drop(protected);
         let db = HardStateStore::open(&db_path).unwrap();
         let cancelled = db.chat_operation(&op.id).unwrap().unwrap();
+        assert_eq!(
+            db.chat_cleanup_pending(&op.scope.host, &op.scope.uid, &op.scope.team)
+                .unwrap(),
+            vec![cancelled.clone()]
+        );
         assert_eq!(cancelled.state, State::Cancelled);
         let mut protected = store(&material_path);
         assert!(protected.get(&material_key(&op)).is_ok());
         remove_terminal_material(&mut protected, &cancelled).unwrap();
+        drop(db);
+        drop(protected);
+        let mut db = HardStateStore::open(&db_path).unwrap();
+        let mut protected = store(&material_path);
+        assert_eq!(
+            db.chat_cleanup_pending(&op.scope.host, &op.scope.uid, &op.scope.team)
+                .unwrap(),
+            vec![cancelled.clone()]
+        );
         remove_terminal_material(&mut protected, &cancelled).unwrap();
+        db.chat_complete_cleanup(&op.id).unwrap();
+        assert!(db
+            .chat_cleanup_pending(&op.scope.host, &op.scope.uid, &op.scope.team)
+            .unwrap()
+            .is_empty());
         assert!(matches!(
             protected.get(&material_key(&op)),
             Err(ProtectedStoreError::Missing)

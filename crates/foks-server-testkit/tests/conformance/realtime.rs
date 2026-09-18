@@ -1077,6 +1077,13 @@ fn client_chat_recovers_original_operations_after_lost_responses() {
             RtChannelTier::Bottom,
         )
         .unwrap();
+    assert_eq!(
+        chat.reconcile_operation(&mut rpc, &mut protected, &create.id)
+            .unwrap(),
+        create
+    );
+    assert!(chat.list_channels(&mut rpc).unwrap().channels.is_empty());
+    assert_eq!(rpc.send_calls, 0);
     rpc.channel = RtChannelId(create.scope.channel);
     let mut wrong_key =
         EncryptedFileMutationStore::open(dir.path(), zeroize::Zeroizing::new([8; 32])).unwrap();
@@ -1107,6 +1114,13 @@ fn client_chat_recovers_original_operations_after_lost_responses() {
     let channel = rpc.channel;
     let pending = chat.prepare_send(&mut rpc, &mut protected, channel, "original message");
     let pending = pending.unwrap();
+    let calls = rpc.send_calls;
+    assert_eq!(
+        chat.reconcile_operation(&mut rpc, &mut protected, &pending.id)
+            .unwrap(),
+        pending
+    );
+    assert_eq!(rpc.send_calls, calls);
     rpc.drop_send = true;
     assert!(chat
         .attempt_operation(&mut rpc, &mut protected, &pending.id)
@@ -1131,10 +1145,16 @@ fn client_chat_recovers_original_operations_after_lost_responses() {
         .unwrap();
     assert_eq!(first.state, State::Uncertain);
     assert_eq!(first.scan_cursor, 6);
+    let calls = rpc.send_calls;
     let second = chat
-        .attempt_operation(&mut rpc, &mut protected, &pending.id)
+        .reconcile_operation(&mut rpc, &mut FailRemove(&mut protected), &pending.id)
         .unwrap();
     assert_eq!(second.state, State::Confirmed);
+    assert_eq!(rpc.send_calls, calls);
+    assert_eq!(chat.list_cleanup_pending().unwrap(), vec![second.clone()]);
+    offline
+        .finalize_operation(&mut protected, &pending.id)
+        .unwrap();
     let receipt = RtSendResult::decode(second.receipt.as_ref().unwrap()).unwrap();
     assert_eq!(receipt.sequence, 102);
     let channel = rpc.channel;
@@ -1193,7 +1213,7 @@ fn client_chat_recovers_original_operations_after_lost_responses() {
         .is_err());
     let calls = rpc.send_calls;
     assert_eq!(
-        chat.attempt_operation(&mut rpc, &mut protected, &unsent.id)
+        chat.reconcile_operation(&mut rpc, &mut protected, &unsent.id)
             .unwrap()
             .state,
         State::Uncertain
@@ -1250,12 +1270,52 @@ fn client_chat_recovers_original_operations_after_lost_responses() {
             ))
         }
     }
-    let cleanup = chat
-        .prepare_send(&mut rpc, &mut protected, channel, "cleanup retry")
+    let cancel_cleanup = chat
+        .prepare_send(&mut rpc, &mut protected, channel, "cancel cleanup retry")
         .unwrap();
-    assert!(chat
+    let cancelled = offline
+        .cancel_prepared_operation(&mut FailRemove(&mut protected), &cancel_cleanup.id)
+        .unwrap();
+    assert_eq!(cancelled.state, State::Cancelled);
+    assert_eq!(offline.list_cleanup_pending().unwrap(), vec![cancelled]);
+    offline
+        .finalize_operation(&mut protected, &cancel_cleanup.id)
+        .unwrap();
+    let submission = foks_client_db::ChatSubmission {
+        id: [0x73; 16],
+        input_mac: [0x74; 32],
+    };
+    let cleanup = chat
+        .prepare_send_submission(
+            &mut rpc,
+            &mut protected,
+            channel,
+            "cleanup retry",
+            Some(&submission),
+        )
+        .unwrap();
+    let confirmed = chat
         .attempt_operation(&mut rpc, &mut FailRemove(&mut protected), &cleanup.id)
+        .unwrap();
+    assert_eq!(confirmed.state, State::Confirmed);
+    let calls = rpc.send_calls;
+    assert_eq!(
+        chat.reconcile_operation(&mut rpc, &mut FailRemove(&mut protected), &cleanup.id)
+            .unwrap(),
+        confirmed
+    );
+    assert_eq!(rpc.send_calls, calls);
+    assert_eq!(
+        chat.list_cleanup_pending().unwrap(),
+        vec![confirmed.clone()]
+    );
+    assert!(chat
+        .finalize_operation(&mut FailRemove(&mut protected), &cleanup.id)
         .is_err());
+    drop(protected);
+    let mut protected =
+        EncryptedFileMutationStore::open(dir.path(), zeroize::Zeroizing::new([9; 32])).unwrap();
+    assert_eq!(offline.list_cleanup_pending().unwrap(), vec![confirmed]);
     let calls = rpc.send_calls;
     assert_eq!(
         offline
@@ -1265,6 +1325,16 @@ fn client_chat_recovers_original_operations_after_lost_responses() {
         State::Confirmed
     );
     assert_eq!(rpc.send_calls, calls);
+    assert!(offline.list_cleanup_pending().unwrap().is_empty());
+    let replay = offline
+        .submitted_operation(Some(&submission))
+        .unwrap()
+        .unwrap();
+    assert_eq!(replay.id, cleanup.id);
+    assert_eq!(replay.state, State::Confirmed);
+    offline
+        .finalize_operation(&mut protected, &cleanup.id)
+        .unwrap();
     let stale = chat
         .prepare_channel(
             &mut rpc,

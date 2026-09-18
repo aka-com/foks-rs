@@ -129,6 +129,7 @@ async function setup(
     /** Registered before the first render, as a screen already on the page. */
     guard?: GuardVerdict;
     waitForHistory?: boolean;
+    includeHousehold?: boolean;
   } = {},
 ): Promise<Harness> {
   const { ChatTab } = await vite.ssrLoadModule('/src/screens/chat-tab.tsx');
@@ -155,7 +156,10 @@ async function setup(
   const snapshot = {
     ...FIXTURE,
     stores: FIXTURE.stores.filter(
-      (s) => s.kind !== 'team' || s.id === 'team:eng',
+      (s) =>
+        s.kind !== 'team' ||
+        s.id === 'team:eng' ||
+        (options.includeHousehold && s.id === 'team:household'),
     ),
     servers: FIXTURE.servers.map((s) =>
       s.id === 'acme'
@@ -297,13 +301,10 @@ async function channelRow(title: string): Promise<HTMLButtonElement> {
 /** The create-a-channel form, reached the way the tab offers it. */
 async function openChannelSheet(): Promise<HTMLInputElement> {
   ui.fireEvent.click(ui.screen.getAllByRole('button', { name: 'New chat' })[0]);
-  ui.fireEvent.click(
-    await ui.screen.findByRole('radio', { name: /^Engineering/ }),
-  );
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Continue' }));
-  ui.fireEvent.click(
-    await ui.screen.findByRole('radio', { name: /Create a channel/ }),
-  );
+  await click(await ui.screen.findByRole('button', { name: 'Create channel' }));
+  ui.fireEvent.change(ui.screen.getByRole('combobox', { name: 'Team' }), {
+    target: { value: 'team:eng' },
+  });
   return ui.screen.getByRole<HTMLInputElement>('textbox', {
     name: 'Channel name',
   });
@@ -317,33 +318,37 @@ test('an empty composer lets a move out of chat through', async () => {
   assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
 });
 
-test('an unsent message names its channel and Discard makes the move', async () => {
-  const { store } = await setup();
+test('an unsent message survives leaving chat without a discard prompt', async () => {
+  const { store, refusals } = await setup();
   write('half a thought');
   await leave(store);
-  const panel = dialog();
-  assert.ok(panel, 'the confirmation is up');
-  assert.equal(panel.querySelector('.hd h2')?.textContent, 'Discard message?');
-  assert.equal(
-    panel.querySelector('.sb p')?.textContent,
-    'Your unsent message in #general will be lost.',
-  );
-  // Nothing has moved while the question is open.
-  assert.deepEqual(store.getSnapshot().location, IN_CHAT);
-  await click(dialogButton('Discard'));
   assert.equal(dialog(), null);
+  assert.deepEqual(refusals, []);
   assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
+  assert.equal(ui.screen.queryByRole('textbox', { name: 'Message' }), null);
+  await leave(store, IN_CHAT);
+  await ui.waitFor(() => assert.equal(composer().value, 'half a thought'));
 });
 
-test('cancelling the prompt preserves the unsent draft and current location', async () => {
-  const { store } = await setup();
-  write('half a thought');
-  await leave(store);
-  assert.ok(dialog());
-  await click(dialogButton('Cancel'));
+test('switching teams preserves independent drafts without a prompt', async () => {
+  const { store, refusals } = await setup({ includeHousehold: true });
+  const household: Location = {
+    kind: 'chat',
+    ref: 'team:household',
+    channel: 'ab'.repeat(16),
+  };
+  write('Engineering draft');
+  await leave(store, household);
   assert.equal(dialog(), null);
-  assert.deepEqual(store.getSnapshot().location, IN_CHAT);
-  assert.equal(composer().value, 'half a thought');
+  assert.deepEqual(store.getSnapshot().location, household);
+  await ui.waitFor(() => assert.equal(composer().value, ''));
+  write('Household draft');
+  await leave(store, IN_CHAT);
+  await ui.waitFor(() => assert.equal(composer().value, 'Engineering draft'));
+  await leave(store, household);
+  await ui.waitFor(() => assert.equal(composer().value, 'Household draft'));
+  assert.equal(dialog(), null);
+  assert.deepEqual(refusals, []);
 });
 
 test('an unsent message follows the reader between channels of one team', async () => {
@@ -364,9 +369,11 @@ test('an unsent message follows the reader between channels of one team', async 
   await ui.waitFor(() => {
     assert.equal(composer().value, 'half a thought');
   });
-  // Leaving chat is where the same draft is finally asked about.
   await leave(store);
-  assert.ok(dialog());
+  assert.equal(dialog(), null);
+  assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
+  await leave(store, IN_CHAT);
+  await ui.waitFor(() => assert.equal(composer().value, 'half a thought'));
 });
 
 test('a draft is dropped when its channel stops being listed', async () => {
@@ -396,41 +403,66 @@ test('a draft is dropped when its channel stops being listed', async () => {
   assert.equal(composer().value, '');
 });
 
-test('navigation still warns until local message intent is durably saved', async () => {
+test('local intent persistence survives navigation and retains the next draft', async () => {
+  let finishSave!: () => void;
   let preparations = 0;
+  let attempts = 0;
   const { store, refusals } = await setup({
     override: (base) => ({
       ...base,
       chatLocal: async (action) => {
-        if (String(action.action) === 'save-intent')
-          return new Promise(() => {});
+        if (action.action === 'save-intent')
+          await new Promise<void>((resolve) => {
+            finishSave = resolve;
+          });
         return base.chatLocal(action);
       },
       chat: async (storeId, action, view) => {
-        if (action.action === 'prepare-message') {
-          preparations++;
-          return new Promise<ChatReply>(() => {});
-        }
+        if (action.action === 'prepare-message') preparations++;
+        if (action.action === 'attempt') attempts++;
         return base.chat(storeId, action, view);
       },
     }),
   });
   write('keep this until saved');
-  await ui.act(async () => {
-    ui.fireEvent.keyDown(composer(), { key: 'Enter' });
-    await Promise.resolve();
-  });
-  await ui.screen.findByRole('button', { name: 'Sending…' });
+  await click(ui.screen.getByRole('button', { name: 'Send' }));
+  await ui.screen.findByText('Sending…', { selector: '[role="status"]' });
+  assert.equal(composer().value, '');
+  assert.equal(composer().disabled, false);
+  write('the next draft');
+  assert.equal(
+    ui.screen.getByRole<HTMLButtonElement>('button', { name: 'Send' }).disabled,
+    true,
+  );
   await leave(store);
-  assert.deepEqual(store.getSnapshot().location, IN_CHAT);
-  assert.deepEqual(refusals, [
-    'Wait for the message to be saved on this device.',
-  ]);
+  assert.equal(dialog(), null);
+  assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
+  assert.deepEqual(refusals, []);
   assert.equal(
     preparations,
     0,
     'network preparation must follow local persistence',
   );
+  await ui.act(async () => {
+    finishSave();
+  });
+  await ui.waitFor(() => assert.equal(attempts, 1));
+  assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
+  await leave(store, IN_CHAT);
+  await ui.waitFor(() => assert.equal(composer().value, 'the next draft'));
+  await ui.screen.findByText('keep this until saved', {
+    selector: '.chat-message p',
+  });
+  await ui.waitFor(() =>
+    assert.equal(
+      ui.screen.getByRole<HTMLButtonElement>('button', { name: 'Send' })
+        .disabled,
+      false,
+    ),
+  );
+  assert.equal(preparations, 1);
+  assert.equal(attempts, 1);
+  assert.equal(document.querySelectorAll('.chat-message p').length, 2);
 });
 
 test('a lost preparation reply restores the same saved submission after leaving chat', async () => {
@@ -463,15 +495,30 @@ test('a lost preparation reply restores the same saved submission after leaving 
   });
   write('durable before delivery');
   await click(ui.screen.getByRole('button', { name: 'Send' }));
-  await ui.screen.findByRole('button', { name: 'Recover preparation' });
+  await ui.screen.findByRole('button', { name: 'Retry' });
+  const submission = document
+    .querySelector('.chat-outgoing')
+    ?.getAttribute('data-submission');
+  assert.ok(submission);
+  assert.equal(composer().value, '');
+  write('a later thought');
   await leave(store);
   assert.equal(dialog(), null);
   assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
+  await ui.waitFor(() => assert.equal(attempts, 1), { timeout: 5000 });
+  assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
   await leave(store, IN_CHAT);
-  await ui.screen.findByRole('button', { name: 'Recover preparation' });
-  assert.equal(composer().value, 'durable before delivery');
-  await click(ui.screen.getByRole('button', { name: 'Recover preparation' }));
-  await ui.waitFor(() => assert.equal(composer().value, ''));
+  await ui.waitFor(() => assert.equal(composer().value, 'a later thought'));
+  await ui.screen.findByText('durable before delivery', {
+    selector: '.chat-message p',
+  });
+  assert.equal(
+    ui.screen.getAllByText('durable before delivery', {
+      selector: '.chat-message p',
+    }).length,
+    1,
+  );
+  assert.equal(submissions[0], submission);
   assert.equal(submissions.length, 2);
   assert.equal(submissions[0], submissions[1]);
   assert.equal(attempts, 1);
@@ -495,12 +542,31 @@ test('a message being sent is neither prompted about nor refused', async () => {
     ui.fireEvent.keyDown(composer(), { key: 'Enter' });
     await Promise.resolve();
   });
-  await ui.screen.findByRole('button', { name: 'Sending…' });
+  await ui.screen.findByText('Sending…', { selector: '[role="status"]' });
+  const submission = document
+    .querySelector('.chat-outgoing')
+    ?.getAttribute('data-submission');
+  assert.ok(submission);
+  assert.equal(composer().disabled, false);
+  assert.equal(composer().value, '');
+  write('another thought');
   await leave(store);
   // Durable work is recovered in "Needs attention", so the move is allowed.
   assert.equal(dialog(), null);
   assert.deepEqual(refusals, []);
   assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
+  await leave(store, IN_CHAT);
+  await ui.screen.findByText('Sending…', { selector: '[role="status"]' });
+  assert.equal(
+    document.querySelector('.chat-outgoing')?.getAttribute('data-submission'),
+    submission,
+  );
+  await ui.screen.findByText('on its way', { selector: '.chat-message p' });
+  assert.equal(composer().value, 'another thought');
+  assert.equal(
+    ui.screen.getByRole<HTMLButtonElement>('button', { name: 'Send' }).disabled,
+    true,
+  );
 });
 
 test('an untouched New chat sheet does not prompt', async () => {
@@ -516,6 +582,7 @@ test('a half-finished new channel names itself and Discard makes the move', asyn
   const { store } = await setup();
   const name = await openChannelSheet();
   ui.fireEvent.change(name, { target: { value: 'Drawings' } });
+  // Leaving chat is where the same draft is finally asked about.
   await leave(store);
   const panel = dialog();
   assert.ok(panel, 'the confirmation is up');
@@ -527,19 +594,28 @@ test('a half-finished new channel names itself and Discard makes the move', asyn
     panel.querySelector('.sb p')?.textContent,
     '#drawings has not been created and will be lost.',
   );
+  // Nothing has moved while the question is open.
   assert.deepEqual(store.getSnapshot().location, IN_CHAT);
   await click(dialogButton('Discard'));
   assert.equal(dialog(), null);
   assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
 });
 
-test('a channel being created refuses the move outright', async () => {
+test('channel creation completes after navigation without redirecting back', async () => {
+  let finish!: () => void;
+  let preparations = 0;
+  let attempts = 0;
   const { store, refusals } = await setup({
     override: (base) => ({
       ...base,
       chat: async (storeId, action, view) => {
-        if (action.action === 'prepare-channel')
-          return new Promise<ChatReply>(() => {});
+        if (action.action === 'prepare-channel') {
+          preparations++;
+          await new Promise<void>((resolve) => {
+            finish = resolve;
+          });
+        }
+        if (action.action === 'attempt') attempts++;
         return base.chat(storeId, action, view);
       },
     }),
@@ -548,10 +624,22 @@ test('a channel being created refuses the move outright', async () => {
   ui.fireEvent.change(name, { target: { value: 'drawings' } });
   await click(ui.screen.getByRole('button', { name: 'Create channel' }));
   await ui.screen.findByRole('button', { name: 'Creating…' });
+  await ui.waitFor(() => assert.ok(finish));
   await leave(store);
   assert.equal(dialog(), null);
-  assert.deepEqual(refusals, ['Wait for the channel to finish being created.']);
+  assert.deepEqual(refusals, []);
+  assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
+  await ui.act(async () => {
+    finish();
+  });
+  await ui.waitFor(() => assert.equal(attempts, 1));
+  assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
+  await leave(store, IN_CHAT);
+  await channelRow('#drawings');
   assert.deepEqual(store.getSnapshot().location, IN_CHAT);
+  assert.equal(ui.screen.queryByRole('dialog'), null);
+  assert.equal(preparations, 1);
+  assert.equal(attempts, 1);
 });
 
 test('the tab’s own resolution of a chat location is not put to the guards', async () => {

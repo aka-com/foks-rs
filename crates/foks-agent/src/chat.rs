@@ -443,6 +443,21 @@ pub(super) fn dispatch(
                 master,
             )?)?,
         },
+        ChatAction::Reconcile { operation: op } => ChatResult::Operation {
+            operation: operation(session.reconcile_chat_operation(
+                team,
+                &id(&op)?,
+                vault,
+                master,
+            )?)?,
+        },
+        ChatAction::CleanupPending => ChatResult::CleanupPending {
+            operations: session
+                .list_cleanup_pending_chat(team, vault)?
+                .into_iter()
+                .map(operation)
+                .collect::<Result<_>>()?,
+        },
         ChatAction::Cancel { operation: op } => ChatResult::Operation {
             operation: operation(session.cancel_prepared_chat_operation(
                 team,

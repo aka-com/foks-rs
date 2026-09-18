@@ -8,7 +8,7 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createElement } from 'react';
+import { createElement, useState } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 
 import { installDom } from './lib/dom-harness';
@@ -80,6 +80,25 @@ async function group(
   assert.ok(portalRoot);
   const base = mockBridge(snapshot);
   const bridge = options.patchBridge ? options.patchBridge(base) : base;
+  let setPageMounted!: (mounted: boolean) => void;
+  function Page() {
+    const [mounted, setMounted] = useState(true);
+    setPageMounted = setMounted;
+    return mounted
+      ? createElement(GroupSettingsScreen, {
+          snapshot,
+          bridge,
+          location: { kind: 'group-settings', ref, tab },
+          ...(options.accessNow ? { accessNow: options.accessNow } : {}),
+          onNavigate: options.onNavigate ?? (() => {}),
+          onApplied: async () => {},
+          onError: (error: unknown) => {
+            throw error;
+          },
+          onMutationError: async () => {},
+        })
+      : createElement('p', null, 'Elsewhere');
+  }
   const rendered = ui.render(
     createElement(OverlayProvider, {
       backgroundRef: { current: null },
@@ -89,24 +108,13 @@ async function group(
         children: createElement(ChatInboxProvider, {
           bridge,
           snapshot,
-          children: createElement(GroupSettingsScreen, {
-            snapshot,
-            bridge,
-            location: { kind: 'group-settings', ref, tab },
-            ...(options.accessNow ? { accessNow: options.accessNow } : {}),
-            onNavigate: options.onNavigate ?? (() => {}),
-            onApplied: async () => {},
-            onError: (error: unknown) => {
-              throw error;
-            },
-            onMutationError: async () => {},
-          }),
+          children: createElement(Page),
         }),
       }),
     }),
   );
   await ui.act(async () => {});
-  return rendered;
+  return { ...rendered, setPageMounted };
 }
 
 /** The channel rows, by the `#name` each draws. */
@@ -260,7 +268,7 @@ test('the Channels tab lists the group’s channels and opens one in Chat', asyn
   assert.equal(tab?.querySelector('.n')?.textContent, '1');
 });
 
-test('Add channel opens the New channel step scoped to this group', async () => {
+test('Add channel opens the creation form with this group selected', async () => {
   const rendered = await group('team:household', 'channels');
   await ui.waitFor(() => assert.ok(channelRows().length));
   const add = rendered.getByRole('button', { name: 'Add channel' });
@@ -270,8 +278,15 @@ test('Add channel opens the New channel step scoped to this group', async () => 
   });
   // The sheet opens on the step it was asked for: the create form for this
   // group, not the channel picker and not the cross-team one.
-  assert.ok(rendered.getByRole('heading', { name: 'New channel' }));
+  assert.ok(rendered.getByRole('heading', { name: 'Create channel' }));
   assert.ok(rendered.getByLabelText('Channel name'));
+  const teamSelect = rendered.getByRole('combobox', { name: 'Team' });
+  assert.ok(teamSelect instanceof window.HTMLSelectElement);
+  assert.equal(teamSelect.value, 'team:household');
+  assert.ok(rendered.getByLabelText('Channel description'));
+  assert.ok(rendered.getByRole('radiogroup', { name: 'Channel audience' }));
+  assert.equal(rendered.queryByRole('button', { name: 'Continue' }), null);
+  assert.equal(rendered.queryByRole('button', { name: 'Open chat' }), null);
   assert.equal(document.querySelector('.sheet .hd small'), null);
   // This flow has no preceding team step, so the left button cancels instead
   // of opening the team picker.
@@ -312,6 +327,83 @@ test('a channel created from the group page opens it in Chat', async () => {
     'team:household',
   );
   assert.ok(opened?.kind === 'chat' && opened.channel);
+});
+
+test('channel creation survives leaving the group page without a late redirect', async () => {
+  const journal: Location[] = [];
+  let finish!: () => void;
+  let preparations = 0;
+  let attempts = 0;
+  const rendered = await group('team:household', 'channels', {
+    onNavigate: (to) => journal.push(to),
+    patchBridge: (base) => ({
+      ...base,
+      chat: async (id, action, view) => {
+        if (action.action === 'prepare-channel') preparations++;
+        if (action.action === 'attempt') {
+          attempts++;
+          await new Promise<void>((resolve) => {
+            finish = resolve;
+          });
+        }
+        return base.chat(id, action, view);
+      },
+    }),
+  });
+  await ui.waitFor(() => assert.equal(channelRows().length, 1));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add channel' }));
+  ui.fireEvent.change(rendered.getByLabelText('Channel name'), {
+    target: { value: 'garden' },
+  });
+  ui.fireEvent.change(rendered.getByLabelText('Channel description'), {
+    target: { value: 'Planting plans' },
+  });
+  await ui.waitFor(() =>
+    assert.equal(
+      rendered
+        .getByRole('button', {
+          name: 'Create channel',
+        })
+        .hasAttribute('disabled'),
+      false,
+    ),
+  );
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Create channel' }));
+  await ui.waitFor(() => assert.ok(finish));
+  await ui.act(async () => {
+    rendered.setPageMounted(false);
+  });
+  assert.equal(rendered.queryByRole('dialog'), null);
+  assert.ok(rendered.getByText('Elsewhere'));
+  await ui.act(async () => {
+    finish();
+  });
+  assert.equal(journal.length, 0);
+  await ui.act(async () => {
+    rendered.setPageMounted(true);
+  });
+  await ui.waitFor(() => assert.equal(channelRows().length, 2));
+  const garden = channelRows().find(
+    (row) => row.querySelector('.who2 .t b span')?.textContent === '#garden',
+  );
+  assert.ok(garden);
+  assert.equal(
+    garden.querySelector('.who2 .t small')?.textContent,
+    'planting plans',
+  );
+  assert.equal(journal.length, 0);
+  assert.equal(preparations, 1);
+  assert.equal(attempts, 1);
+  assert.equal(rendered.queryByRole('dialog'), null);
+  ui.fireEvent.click(
+    rendered.getByRole('button', { name: 'Open #garden in Chat' }),
+  );
+  assert.equal(journal.length, 1);
+  assert.ok(
+    journal[0].kind === 'chat' &&
+      journal[0].ref === 'team:household' &&
+      journal[0].channel,
+  );
 });
 
 test('the Files tab links to the group vault and displays its item count', async () => {

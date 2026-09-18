@@ -364,6 +364,7 @@ impl ProtectedMutationStore for EncryptedFileMutationStore {
         match fs::remove_file(path) {
             Ok(()) => sync_directory(&self.directory),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.sync()?;
                 Err(ProtectedStoreError::Missing)
             }
             Err(error) => Err(io_backend(error)),
@@ -608,6 +609,33 @@ mod tests {
         assert!(matches!(
             protected.get(b"key"),
             Err(ProtectedStoreError::Backend(_))
+        ));
+    }
+
+    #[test]
+    fn missing_removal_retries_directory_sync_before_reporting_completion() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut protected = store(directory.path(), 11);
+        protected.put_if_absent(b"key", b"secret").unwrap();
+        FAIL_NEXT_DIRECTORY_SYNC.set(true);
+        assert!(matches!(
+            protected.remove(b"key"),
+            Err(ProtectedStoreError::Backend(_))
+        ));
+        assert!(matches!(
+            protected.get(b"key"),
+            Err(ProtectedStoreError::Missing)
+        ));
+        FAIL_NEXT_DIRECTORY_SYNC.set(true);
+        assert!(matches!(
+            protected.remove(b"key"),
+            Err(ProtectedStoreError::Backend(_))
+        ));
+        drop(protected);
+        let mut protected = store(directory.path(), 11);
+        assert!(matches!(
+            protected.remove(b"key"),
+            Err(ProtectedStoreError::Missing)
         ));
     }
 

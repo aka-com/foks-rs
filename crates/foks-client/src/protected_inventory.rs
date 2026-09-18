@@ -354,7 +354,7 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO chat_operations VALUES (?1,?2,?3,?4,?5,1,1,?6,0,NULL,NULL)",
+            "INSERT INTO chat_operations (operation_id,host_id,uid,team_id,channel_id,kind,state,request_hash,scan_cursor,receipt,rejection_code) VALUES (?1,?2,?3,?4,?5,1,1,?6,0,NULL,NULL)",
             params![
                 [2u8; 16],
                 host,

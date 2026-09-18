@@ -149,6 +149,7 @@ fn validate_intent(intent: &LocalChatIntent) -> Result<()> {
             .submission
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        || intent.submission.bytes().all(|b| b == b'0')
         || intent.text.is_empty()
         || intent.text.len() > foks_proto::RT_MAX_BODY_BYTES
     {
@@ -265,6 +266,8 @@ mod tests {
         let mut bad = intent();
         bad.submission = "no".into();
         assert!(store.save("profile", b"bad", &bad).is_err());
+        bad.submission = "0".repeat(32);
+        assert!(store.save("profile", b"zero", &bad).is_err());
         bad = intent();
         bad.text = "x".repeat(foks_proto::RT_MAX_BODY_BYTES + 1);
         assert!(store.save("profile", b"big", &bad).is_err());

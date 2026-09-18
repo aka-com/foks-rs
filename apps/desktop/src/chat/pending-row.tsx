@@ -5,11 +5,11 @@ import type { ChatAction, ChatOperation, ChatReply } from '../chat-contract';
 import { shortId } from '../model';
 import { failure } from './actions';
 const PENDING_STATE: Record<ChatOperation['state'], string> = {
-  prepared: 'prepared',
-  uncertain: 'Delivery unknown',
-  confirmed: 'confirmed',
-  rejected: 'rejected',
-  cancelled: 'cancelled',
+  prepared: 'Not sent',
+  uncertain: 'Delivery unconfirmed',
+  confirmed: 'Sent',
+  rejected: 'Not sent',
+  cancelled: 'Cancelled',
 };
 
 function pendingExplanation(op: ChatOperation): string {
@@ -19,7 +19,7 @@ function pendingExplanation(op: ChatOperation): string {
     case 'uncertain':
       return 'The server may have received this message. Check delivery status before retrying.';
     case 'confirmed':
-      return 'Delivered. Finish cleanup to remove it from this list.';
+      return 'Sent. Local cleanup runs automatically.';
     case 'cancelled':
       return 'Cancelled before it was sent.';
     case 'rejected':
@@ -51,7 +51,9 @@ export function PendingRow({
       active.current = false;
     };
   }, []);
-  const run = async (action: 'attempt' | 'cancel' | 'finalize' | 'status') => {
+  const run = async (
+    action: 'attempt' | 'cancel' | 'finalize' | 'status' | 'reconcile',
+  ) => {
     if (running.current) return;
     running.current = true;
     setBusy(true);
@@ -81,10 +83,13 @@ export function PendingRow({
         {op.kind === 'create-channel' ? 'Channel' : 'Message'} ·{' '}
         {op.statusUnknown ? 'Checking status' : PENDING_STATE[op.state]}
       </span>
-      <small>
-        {channelName ? `${channelName} · ` : ''}
-        <span title={op.id}>{shortId(op.id)}</span>
-      </small>
+      {channelName && <small>{channelName}</small>}
+      <details>
+        <summary>Details</summary>
+        <span title={op.id}>
+          {shortId(op.id)} · {op.state}
+        </span>
+      </details>
       <p>
         {op.statusUnknown
           ? 'Delivery status is unavailable. This saved operation will be checked using the same ID.'
@@ -104,30 +109,19 @@ export function PendingRow({
             onClick={() =>
               void run(
                 op.statusUnknown || op.state === 'uncertain'
-                  ? 'status'
+                  ? 'reconcile'
                   : 'attempt',
               )
             }
           >
-            {op.statusUnknown
-              ? 'Check status'
-              : op.state === 'uncertain'
-                ? 'Check delivery'
-                : 'Send prepared'}
+            {op.statusUnknown || op.state === 'uncertain'
+              ? 'Check again'
+              : 'Retry'}
           </Button>
         )}
-        {op.state === 'prepared' && (
+        {op.state === 'prepared' && !op.statusUnknown && (
           <Button size="sm" disabled={busy} onClick={() => void run('cancel')}>
-            Cancel preparation
-          </Button>
-        )}
-        {['confirmed', 'rejected', 'cancelled'].includes(op.state) && (
-          <Button
-            size="sm"
-            disabled={busy}
-            onClick={() => void run('finalize')}
-          >
-            Finish cleanup
+            Cancel
           </Button>
         )}
       </div>

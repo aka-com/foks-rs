@@ -135,11 +135,16 @@ async function teamBadge(team: string): Promise<HTMLElement> {
 async function openChannelSheet() {
   ui.fireEvent.click(ui.screen.getAllByRole('button', { name: 'New chat' })[0]);
   ui.fireEvent.click(
-    await ui.screen.findByRole('radio', { name: /^Engineering/ }),
+    await ui.screen.findByRole('button', { name: 'Create channel' }),
   );
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Continue' }));
-  ui.fireEvent.click(
-    await ui.screen.findByRole('radio', { name: /Create a channel/ }),
+  ui.fireEvent.change(ui.screen.getByRole('combobox', { name: 'Team' }), {
+    target: { value: 'team:eng' },
+  });
+  await ui.waitFor(() =>
+    assert.equal(
+      ui.screen.queryByText('Checking saved channel creations…'),
+      null,
+    ),
   );
   return ui.screen.getByRole('textbox', { name: 'Channel name' });
 }
@@ -384,15 +389,14 @@ test('lost preparation reply reuses its submission and sends exactly once', asyn
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Send' }));
   await ui.screen.findByText('Preparation reply lost');
   assert.equal(attempts, 0);
-  ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Recover preparation' }),
-  );
-  await ui.screen.findByText('recover this message');
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Retry' }));
+  await ui.waitFor(() => assert.equal(attempts, 1));
+  assert.equal(ui.screen.getAllByText('recover this message').length, 1);
   assert.equal(new Set(submissions).size, 1);
   assert.equal(submissions.length, 2);
   assert.equal(attempts, 1);
 });
-test('closing a conversation during preparation never starts delivery', async () => {
+test('ending the unlocked application during preparation never starts delivery', async () => {
   let release!: () => void;
   let prepared!: () => void;
   const reached = new Promise<void>((resolve) => {
@@ -450,10 +454,10 @@ test('definite preparation errors allow input correction', async () => {
   assert.equal((name as HTMLInputElement).disabled, false);
   ui.fireEvent.change(name, { target: { value: 'valid' } });
   assert.equal((name as HTMLInputElement).value, 'valid');
-  assert.ok(ui.screen.getByRole('dialog', { name: 'New channel' }));
+  assert.ok(ui.screen.getByRole('dialog', { name: 'Create channel' }));
 });
 
-test('ambiguous channel preparation keeps its sheet and submission until recovery', async () => {
+test('ambiguous channel preparation keeps its submission after the sheet closes', async () => {
   const submissions: string[] = [];
   const descriptions: string[] = [];
   let dropped = false;
@@ -487,13 +491,19 @@ test('ambiguous channel preparation keeps its sheet and submission until recover
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create channel' }));
   await ui.screen.findByText('Preparation reply lost');
   assert.equal((description as HTMLTextAreaElement).disabled, true);
-  // The sheet cannot be stepped out of while its submission is unresolved.
+  // The application retains the submission when the sheet is dismissed.
   assert.equal(
-    ui.screen.getByRole('button', { name: 'Back' }).hasAttribute('disabled'),
-    true,
+    ui.screen.getByRole('button', { name: 'Close' }).hasAttribute('disabled'),
+    false,
   );
-  ui.fireEvent.keyDown(document, { key: 'Escape' });
-  assert.ok(ui.screen.getByRole('dialog', { name: 'New channel' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Close' }));
+  assert.equal(ui.screen.queryByRole('dialog'), null);
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New chat' }));
+  ui.fireEvent.click(
+    await ui.screen.findByRole('button', {
+      name: /Engineering · #recoverable/,
+    }),
+  );
   ui.fireEvent.click(
     ui.screen.getByRole('button', { name: 'Retry channel creation' }),
   );
@@ -901,14 +911,9 @@ for (const offline of [true, false]) {
     await ui.screen.findByText(
       offline ? 'Offline' : 'Your current role cannot read this channel.',
     );
-    ui.fireEvent.click(
-      ui.screen.getByRole('button', { name: 'Cancel preparation' }),
-    );
+    ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Cancel' }));
     await ui.waitFor(() =>
-      assert.ok(
-        ui.screen.queryByRole('button', { name: 'Cancel preparation' }) ===
-          null,
-      ),
+      assert.ok(ui.screen.queryByRole('button', { name: 'Cancel' }) === null),
     );
   });
 }
@@ -949,11 +954,8 @@ test('durable pending refresh replaces stale prepared state after lost delivery 
     target: { value: 'recover delivery' },
   });
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Send' }));
-  await ui.screen.findByRole('button', { name: 'Check delivery' });
-  assert.equal(
-    ui.screen.queryByRole('button', { name: 'Cancel preparation' }),
-    null,
-  );
+  await ui.screen.findByRole('button', { name: 'Check again' });
+  assert.equal(ui.screen.queryByRole('button', { name: 'Cancel' }), null);
   assert.equal(
     ui.screen.queryByRole('button', { name: 'Send prepared' }),
     null,
@@ -1047,7 +1049,7 @@ test('uncertain send retains body in thread and merges once after delivery check
       }
       // Simulate the server finishing the original in-flight request while the
       // client checks status; the UI must never submit a second attempt.
-      if (resolveDelivery && action.action === 'status')
+      if (resolveDelivery && action.action === 'reconcile')
         return base.chat(
           store,
           { action: 'attempt', operation: action.operation },
@@ -1073,11 +1075,11 @@ test('uncertain send retains body in thread and merges once after delivery check
     target: { value: 'Keep this pending body' },
   });
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Send' }));
-  await ui.screen.findByRole('button', { name: 'Check delivery' });
+  await ui.screen.findByRole('button', { name: 'Check again' });
   assert.ok(document.querySelector('.chat-messages [data-operation]'));
   assert.equal(ui.screen.getAllByText('Keep this pending body').length, 1);
   resolveDelivery = true;
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Check delivery' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Check again' }));
   await ui.waitFor(() =>
     assert.ok(
       document.querySelector('.chat-messages [data-operation]') === null,

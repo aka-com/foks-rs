@@ -1,4 +1,3 @@
-import { useTabSheetState } from '../navigation-guard';
 /**
  * The Chat tab: the inbox column beside one conversation.
  *
@@ -29,6 +28,8 @@ import { listChannels, openChannel } from '../chat/presentation';
 import { ChatScreen } from './chat-screen';
 import { ChannelInfoPanel } from './chat-info';
 import { NewChatSheet } from './chat-new';
+import { useTabSheetState } from '../navigation-guard';
+import { ChannelCreationCompletions } from '../chat/channel-creation-provider';
 import {
   ChatTeamColumn,
   chatTeams,
@@ -88,18 +89,23 @@ export function ChatTab({
     : teams.find((store) => store.id === openingRef);
   const ref: StoreRef | undefined = open?.id;
   const [info, setInfo] = useState(false);
-  const [newChat, setNewChat] = useTabSheetState<{ team?: StoreRef } | null>(
-    'chat.sheet',
-    null,
-    (value) => value !== null,
-  );
+  const [newChat, setNewChat] = useTabSheetState<{
+    team?: StoreRef;
+    originRef?: StoreRef;
+    originChannel?: string;
+  } | null>('chat.sheet', null);
+  const [submittedSheet, setSubmittedSheet] = useState<typeof newChat>(null);
+  const shownSheet = submittedSheet ?? newChat;
+  const closeSheet = () => {
+    setNewChat(null);
+    setSubmittedSheet(null);
+  };
   // The ⓘ toggle takes focus back when the panel it opened closes.
   const infoToggle = useRef<HTMLButtonElement | null>(null);
   const conversation = useRef<HTMLElement | null>(null);
   const search = useRef<HTMLInputElement | null>(null);
-  // A New chat sheet whose submission is unresolved cannot be dismissed, so a
-  // team switch must not take it away either.
-  const newChatUnresolved = useRef(false);
+  // Unsubmitted sheets can resume from tab-session state. Submitted sheets
+  // remain local views; closing or navigating never abandons the operation.
   // The tab with no conversation chosen is not a place to stay: it resolves to
   // the conversation with the most recent message, else to the first team that
   // has chat, and the location remembers the choice.
@@ -119,16 +125,23 @@ export function ChatTab({
       { force: true },
     );
   }, [location.ref, location.channel, openingRef, openingChannel, onNavigate]);
-  // A half-finished New chat belongs to the team it was opened in: a switch —
-  // a notification activation, say — closes it rather than rebinding it to the
-  // team that arrives. A submission the agent has already been given is the
-  // exception: it has to be settled where it was made.
+  // A New chat belongs to the location it was opened in: a team or channel
+  // switch closes its view rather than rebinding it to the location arriving.
+  // Unsubmitted rail-tab state restores on return; submitted work continues
+  // in the controller without restoring an automatic redirect.
   const priorTeam = useRef(ref);
+  const priorChannel = useRef(location.channel);
   useEffect(() => {
-    if (priorTeam.current !== ref && !newChatUnresolved.current)
+    if (
+      priorTeam.current !== ref ||
+      priorChannel.current !== location.channel
+    ) {
       setNewChat(null);
+      setSubmittedSheet(null);
+    }
     priorTeam.current = ref;
-  }, [ref, setNewChat]);
+    priorChannel.current = location.channel;
+  }, [ref, location.channel, setNewChat]);
   // The rail's Chat tab returns to the team and channel that were open. A
   // location naming a team without chat does not erase that memory: only the
   // remembered team losing chat forgets it. The teams are a newline-joined
@@ -180,9 +193,11 @@ export function ChatTab({
               : { kind: 'chat', ref: next },
           );
         }}
-        // The column's button starts at the team step: the inbox spans every
-        // team, so which one is open is not the answer to "new chat where".
-        onNewChat={() => setNewChat({})}
+        // The column's button searches conversations across every team;
+        // creating a channel is a separate form with its own team choice.
+        onNewChat={() =>
+          setNewChat({ originRef: ref, originChannel: location.channel })
+        }
         onSettings={(next) =>
           onNavigate({ kind: 'group-settings', ref: next, tab: 'settings' })
         }
@@ -194,6 +209,11 @@ export function ChatTab({
         tabIndex={-1}
         ref={conversation}
       >
+        <ChannelCreationCompletions
+          onOpen={(next, channelId) =>
+            onNavigate({ kind: 'chat', ref: next, channel: channelId })
+          }
+        />
         {ref &&
         !wanted &&
         open &&
@@ -216,7 +236,13 @@ export function ChatTab({
             infoOpen={info}
             onToggleInfo={() => setInfo((shown) => !shown)}
             infoRef={infoToggle}
-            onNewChat={() => setNewChat({ team: ref })}
+            onNewChat={() =>
+              setNewChat({
+                team: ref,
+                originRef: ref,
+                originChannel: location.channel,
+              })
+            }
             onSearch={() => {
               search.current?.focus();
               search.current?.select();
@@ -253,32 +279,35 @@ export function ChatTab({
           }}
         />
       )}
-      {newChat && (
-        <NewChatSheet
-          snapshot={snapshot}
-          bridge={bridge}
-          team={newChat.team}
-          accessOptions={accessOptions}
-          accessNow={accessNow}
-          accessGenerations={accessGenerations}
-          onUnresolved={(unresolved) => {
-            newChatUnresolved.current = unresolved;
-          }}
-          onClose={() => {
-            newChatUnresolved.current = false;
-            setNewChat(null);
-          }}
-          onOpen={(next, channelId) => {
-            newChatUnresolved.current = false;
-            setNewChat(null);
-            onNavigate(
-              channelId
-                ? { kind: 'chat', ref: next, channel: channelId }
-                : { kind: 'chat', ref: next },
-            );
-          }}
-        />
-      )}
+      {shownSheet &&
+        shownSheet.originRef === ref &&
+        shownSheet.originChannel === location.channel && (
+          <NewChatSheet
+            snapshot={snapshot}
+            bridge={bridge}
+            team={shownSheet.team}
+            accessOptions={accessOptions}
+            accessNow={accessNow}
+            accessGenerations={accessGenerations}
+            onSubmitted={() => {
+              setSubmittedSheet(shownSheet);
+              setNewChat(null);
+            }}
+            onDraft={() => {
+              setNewChat(shownSheet);
+              setSubmittedSheet(null);
+            }}
+            onClose={closeSheet}
+            onOpen={(next, channelId) => {
+              closeSheet();
+              onNavigate(
+                channelId
+                  ? { kind: 'chat', ref: next, channel: channelId }
+                  : { kind: 'chat', ref: next },
+              );
+            }}
+          />
+        )}
     </section>
   );
 }

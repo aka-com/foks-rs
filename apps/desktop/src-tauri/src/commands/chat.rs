@@ -146,6 +146,32 @@ fn require_catalog_generation(
 mod tests {
     use super::*;
 
+    #[test]
+    fn recovery_native_contract_preserves_local_mutation_classification() {
+        let reconcile: ChatAction = serde_json::from_value(serde_json::json!({
+            "action": "reconcile", "operation": "ab".repeat(16)
+        }))
+        .unwrap();
+        assert!(reconcile.validate());
+        assert!(reconcile.is_mutation());
+        assert!(
+            require_catalog_generation(1, 2, reconcile.is_mutation())
+                .unwrap_err()
+                .ambiguous
+        );
+        let cleanup: ChatAction = serde_json::from_value(serde_json::json!({
+            "action": "cleanup-pending"
+        }))
+        .unwrap();
+        assert!(cleanup.validate());
+        assert!(!cleanup.is_mutation());
+        assert!(
+            !require_catalog_generation(1, 2, cleanup.is_mutation())
+                .unwrap_err()
+                .ambiguous
+        );
+    }
+
     fn view_id(index: usize) -> String {
         format!("{:032x}", index + 1)
     }

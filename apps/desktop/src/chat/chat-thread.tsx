@@ -6,8 +6,9 @@ import { Band, Button, Chip, Icon } from '../components';
 import type { ChatAction, ChatChannel, ChatReply } from '../chat-contract';
 import { plural, shortId } from '../model';
 import { failure } from './actions';
-import { useChatComposer, TEXT_LIMIT_LABEL } from './use-chat-composer';
-import { chatIntentPersistence } from './intent';
+import { TEXT_LIMIT_LABEL } from './use-chat-composer';
+import { useMessageComposer } from './use-message-composer';
+import { OutgoingRow } from './outgoing-row';
 import { useChatReadIntent } from './use-chat-read-intent';
 import { useChatViewport } from './use-chat-viewport';
 import { useChatHistory } from './use-chat-history';
@@ -37,15 +38,9 @@ export function ChatThread({
   history,
   blockHistory,
   pending,
-  drafts,
 }: {
   bridge: Bridge;
   storeId: string;
-  /**
-   * The team's unsent messages, keyed by channel. The pane owns the map, so a
-   * draft outlives the remount a channel switch is.
-   */
-  drafts?: import('./use-chat-composer').ChannelDrafts;
   history: import('./conversation-model').HistoryWindow | null;
   blockHistory: (channel: string) => void;
   channel: ChatChannel;
@@ -82,8 +77,30 @@ export function ChatThread({
     before: string | null,
   ) => void;
 }): ReactNode {
+  const {
+    draft,
+    setDraft,
+    sendError,
+    draftBytes,
+    send,
+    overLimit,
+    nearLimit,
+    canSend,
+    loadError,
+    retryLoad,
+    messages: outgoing,
+    cleanupError,
+    service: sends,
+  } = useMessageComposer(storeId, channel, scope);
+  const pendingKey = [
+    ...outgoing
+      .filter((m) => !m.observed)
+      .map((m) => `${m.id}:${m.phase}:${m.text?.length ?? 0}`),
+    ...pending.map((op) => `${op.id}:${op.state}:${op.text?.length ?? 0}`),
+  ].join('|');
   const { scroller, atBottom, onScroll, capture } = useChatViewport(
     history?.channel === channel.id ? history.messages : EMPTY_MESSAGES,
+    pendingKey,
   );
   const { messages, before, missing, error, setError, busy, load } =
     useChatHistory(
@@ -95,29 +112,8 @@ export function ChatThread({
       blockHistory,
       capture,
     );
-  const {
-    draft,
-    setDraft,
-    sending,
-    sendError,
-    refreshError,
-    draftBytes,
-    send,
-    overLimit,
-    nearLimit,
-    recovering,
-    intentLoading,
-    intentLoadError,
-  } = useChatComposer(
-    channel,
-    request,
-    refreshPending,
-    load,
-    drafts,
-    storeId,
-    scope
-      ? chatIntentPersistence(bridge, storeId, scope, channel.id)
-      : undefined,
+  const outgoingIds = new Set(
+    outgoing.flatMap((m) => (m.operation ? [m.operation.id] : [])),
   );
   const hintId = useId();
   const newFrom = useChatReadIntent(
@@ -272,7 +268,7 @@ export function ChatThread({
                   (index === 0 ||
                     BigInt(messages[index - 1].sequence) <= BigInt(newFrom));
                 return (
-                  <Fragment key={m.id}>
+                  <Fragment key={sends.messageKey(storeId, m.id)}>
                     {isNew && (
                       <div
                         className="chat-divider"
@@ -314,24 +310,37 @@ export function ChatThread({
                   </Fragment>
                 );
               })}
-              {pending.map((op) => (
-                <article
-                  className="chat-message"
-                  key={op.id}
-                  data-operation={op.id}
-                >
-                  {op.text && <MessageText text={op.text} actions={bridge} />}
-                  <PendingRow
-                    operation={op}
-                    channelName={undefined}
-                    request={request}
-                    onChange={() => {
-                      void refreshPending();
-                      void load();
-                    }}
+              {outgoing
+                .filter((m) => !m.observed)
+                .map((message) => (
+                  <OutgoingRow
+                    key={message.id}
+                    message={message}
+                    storeId={storeId}
+                    service={sends}
+                    bridge={bridge}
                   />
-                </article>
-              ))}
+                ))}
+              {pending
+                .filter((op) => !outgoingIds.has(op.id))
+                .map((op) => (
+                  <article
+                    className="chat-message"
+                    key={op.id}
+                    data-operation={op.id}
+                  >
+                    {op.text && <MessageText text={op.text} actions={bridge} />}
+                    <PendingRow
+                      operation={op}
+                      channelName={undefined}
+                      request={request}
+                      onChange={() => {
+                        void refreshPending();
+                        void load();
+                      }}
+                    />
+                  </article>
+                ))}
             </div>
             {!atBottom && messages.length > 0 && (
               <Button
@@ -357,10 +366,20 @@ export function ChatThread({
                   <span role="alert">{sendError}</span>
                 </Band>
               )}
-              {refreshError && (
+              {loadError && (
+                <Band severity="crit">
+                  <span role="alert">
+                    Saved messages could not be loaded. {loadError}
+                  </span>
+                  <Button size="sm" onClick={retryLoad}>
+                    Retry local recovery
+                  </Button>
+                </Band>
+              )}
+              {cleanupError && (
                 <Band severity="info">
                   <span role="status">
-                    Last message refresh failed: {refreshError}
+                    Local message cleanup is pending. {cleanupError}
                   </span>
                 </Band>
               )}
@@ -368,9 +387,6 @@ export function ChatThread({
                 aria-label="Message"
                 aria-describedby={hintId}
                 value={draft}
-                disabled={
-                  sending || recovering || intentLoading || intentLoadError
-                }
                 placeholder={`Message ${title}`}
                 rows={2}
                 onChange={(e) => setDraft(e.target.value)}
@@ -388,11 +404,9 @@ export function ChatThread({
               />
               <div className="chat-composer-row">
                 <small id={hintId}>
-                  {intentLoading
-                    ? 'Checking saved messages on this device…'
-                    : recovering
-                      ? 'Recover this saved message’s preparation before changing its text.'
-                      : 'Enter to send · Shift+Enter for a new line'}
+                  {!canSend && draft.trim()
+                    ? 'Waiting for saved work. You can keep typing.'
+                    : 'Enter to send · Shift+Enter for a new line'}
                 </small>
                 {nearLimit && (
                   <small
@@ -405,20 +419,9 @@ export function ChatThread({
                 <Button
                   variant="primary"
                   type="submit"
-                  disabled={
-                    sending ||
-                    intentLoading ||
-                    overLimit ||
-                    (!draft.trim() && !recovering && !intentLoadError)
-                  }
+                  disabled={!canSend || overLimit || !draft.trim()}
                 >
-                  {sending
-                    ? 'Sending…'
-                    : intentLoadError
-                      ? 'Retry local recovery'
-                      : recovering
-                        ? 'Recover preparation'
-                        : 'Send'}
+                  Send
                 </Button>
               </div>
               {/* Only the markup the thread actually renders is advertised. */}

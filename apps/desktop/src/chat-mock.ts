@@ -240,6 +240,8 @@ export function mockChat(snapshot?: AgentSnapshot) {
           (o) => o.state === 'prepared' || o.state === 'uncertain',
         ),
       };
+    else if (action.action === 'cleanup-pending')
+      result = { kind: 'cleanup-pending', operations: [] };
     else if (
       action.action === 'prepare-channel' ||
       action.action === 'prepare-message'
@@ -287,8 +289,28 @@ export function mockChat(snapshot?: AgentSnapshot) {
       const op = team.operations.get(action.operation);
       if (!op)
         throw { code: 'chat-not-found', message: 'Operation not found.' };
-      if (action.action === 'cancel') op.state = 'cancelled';
-      else if (action.action === 'attempt' && op.state === 'prepared') {
+      if (action.action === 'cancel') {
+        if (op.state !== 'prepared' && op.state !== 'cancelled')
+          throw {
+            code: 'chat-operation-state',
+            message: 'Only unsent messages can be cancelled.',
+          };
+        op.state = 'cancelled';
+      } else if (action.action === 'reconcile' && op.state === 'uncertain') {
+        const message = team.messages
+          .get(op.channel)
+          ?.find((m) => m.id === op.id);
+        if (message) {
+          op.state = 'confirmed';
+          op.receipt = { kind: 'message-sent', sequence: message.sequence };
+        } else if (
+          op.kind === 'create-channel' &&
+          team.channels.some((c) => c.id === op.channel)
+        ) {
+          op.state = 'confirmed';
+          op.receipt = { kind: 'channel-created' };
+        }
+      } else if (action.action === 'attempt' && op.state === 'prepared') {
         const input = [...team.submissions.values()].find(
           (s) => s.op === op,
         )!.input;

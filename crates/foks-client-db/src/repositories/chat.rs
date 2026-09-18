@@ -152,7 +152,7 @@ impl HardStateStore {
              WHERE host_id = ?1
                AND uid = ?2
                AND team_id = ?3
-               AND state IN (0, 1)",
+               AND cleanup_pending = 1",
                 params![op.scope.host, op.scope.uid, op.scope.team],
                 |row| row.get(0),
             )
@@ -235,6 +235,48 @@ impl HardStateStore {
                 },
             )
             .optional()?)
+    }
+
+    pub fn chat_cleanup_pending(
+        &self,
+        host: &[u8],
+        uid: &[u8],
+        team: &[u8],
+    ) -> Result<Vec<ChatOperation>> {
+        let mut statement = self.connection.prepare(
+            "SELECT operation_id
+             FROM chat_operations
+             WHERE host_id = ?1 AND uid = ?2 AND team_id = ?3
+               AND cleanup_pending = 1 AND state IN (2, 3, 4)
+             ORDER BY operation_id LIMIT ?4",
+        )?;
+        let ids = statement
+            .query_map(
+                params![host, uid, team, (ChatLimits::PENDING_OPERATIONS + 1) as i64],
+                |row| row.get::<_, [u8; 16]>(0),
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if ids.len() > ChatLimits::PENDING_OPERATIONS {
+            return Err(Error::ChatLimit("pending cleanup limit"));
+        }
+        ids.into_iter()
+            .map(|id| {
+                self.chat_operation(&id)?
+                    .ok_or(Error::ChatNotFound("operation record not found"))
+            })
+            .collect()
+    }
+
+    pub fn chat_complete_cleanup(&mut self, id: &[u8; 16]) -> Result<()> {
+        let count = self.connection.execute(
+            "UPDATE chat_operations SET cleanup_pending = 0
+             WHERE operation_id = ?1 AND state IN (2, 3, 4)",
+            [id.as_slice()],
+        )?;
+        if count != 1 {
+            return Err(Error::ChatOperationState("operation is not terminal"));
+        }
+        Ok(())
     }
 
     pub fn chat_pending(&self, host: &[u8], uid: &[u8], team: &[u8]) -> Result<Vec<ChatOperation>> {
@@ -484,6 +526,68 @@ mod tests {
             receipt: None,
             rejection_code: None,
         }
+    }
+
+    #[test]
+    fn cleanup_obligations_are_bounded_scoped_checkpointed_and_restart_safe() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hard");
+        let mut db = HardStateStore::open(&path).unwrap();
+        let op = prepared(1);
+        let submission = ChatSubmission {
+            id: [9; 16],
+            input_mac: [10; 32],
+        };
+        db.chat_record_submission(&op, Some(&submission)).unwrap();
+        assert!(db.chat_complete_cleanup(&op.id).is_err());
+        assert!(db
+            .chat_cleanup_pending(&op.scope.host, &op.scope.uid, &op.scope.team)
+            .unwrap()
+            .is_empty());
+        db.chat_begin(&op.id).unwrap();
+        db.chat_confirm(&op.id, b"receipt").unwrap();
+        for id in 2..=ChatLimits::PENDING_OPERATIONS {
+            let pending = prepared(id as u128);
+            db.chat_record(&pending).unwrap();
+            if id == 2 {
+                db.chat_begin(&pending.id).unwrap();
+                db.chat_reject(&pending.id, 12006).unwrap();
+            } else {
+                db.chat_cancel(&pending.id).unwrap();
+            }
+        }
+        drop(db);
+        let mut db = HardStateStore::open(&path).unwrap();
+        let cleanup = db
+            .chat_cleanup_pending(&op.scope.host, &op.scope.uid, &op.scope.team)
+            .unwrap();
+        assert_eq!(cleanup.len(), ChatLimits::PENDING_OPERATIONS);
+        assert!(cleanup.iter().all(|op| op.state.is_terminal()));
+        assert!(db
+            .chat_cleanup_pending(&op.scope.host, &scope(9).uid, &op.scope.team)
+            .unwrap()
+            .is_empty());
+        assert!(matches!(
+            db.chat_record(&prepared(u128::MAX)),
+            Err(Error::ChatLimit(_))
+        ));
+        let confirmed = db.chat_operation(&op.id).unwrap().unwrap();
+        let revision = db.metadata().unwrap().revision;
+        db.chat_complete_cleanup(&op.id).unwrap();
+        assert!(db.metadata().unwrap().revision > revision);
+        db.chat_complete_cleanup(&op.id).unwrap();
+        db.chat_record(&prepared(u128::MAX)).unwrap();
+        drop(db);
+        let db = HardStateStore::open(&path).unwrap();
+        assert_eq!(
+            db.chat_submission(&op.scope, &submission).unwrap(),
+            Some(confirmed)
+        );
+        let cleanup = db
+            .chat_cleanup_pending(&op.scope.host, &op.scope.uid, &op.scope.team)
+            .unwrap();
+        assert_eq!(cleanup.len(), ChatLimits::PENDING_OPERATIONS - 1);
+        assert!(cleanup.iter().all(|row| row.id != op.id));
     }
 
     #[test]

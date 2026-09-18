@@ -52,6 +52,9 @@ impl CheckedProfileSession<'_> {
     ) -> Result<ChatOperation> {
         self.profile.require(Capability::Chat)?;
         let team = vault.team(team_alias)?;
+        if !team.active {
+            return Err(Error::InvalidAccount("team creation is pending"));
+        }
         let account = vault.account(&team.account_alias)?;
         let host = self.pinned_host()?;
         let op = HardStateStore::open(&self.paths.hard_database)?
@@ -320,6 +323,34 @@ impl CheckedProfileSession<'_> {
             Ok(chat.attempt_operation(&mut chat.connection()?, &mut protected, id)?)
         })
     }
+    pub fn reconcile_chat_operation(
+        &self,
+        team_alias: &str,
+        id: &[u8; 16],
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<ChatOperation> {
+        let op = self.chat_operation_status(team_alias, id, vault)?;
+        if op.state != foks_client_db::ChatOperationState::Uncertain {
+            return Ok(op);
+        }
+        self.with_chat(team_alias, vault, |chat| {
+            let mut protected = EncryptedFileMutationStore::open(
+                &self.paths.protected_mutations,
+                derive_mutation_key(master_key),
+            )?;
+            Ok(chat.reconcile_operation(&mut chat.connection()?, &mut protected, id)?)
+        })
+    }
+
+    pub fn list_cleanup_pending_chat(
+        &self,
+        team_alias: &str,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<Vec<ChatOperation>> {
+        self.with_chat(team_alias, vault, |chat| Ok(chat.list_cleanup_pending()?))
+    }
+
     pub fn cancel_prepared_chat_operation(
         &self,
         team_alias: &str,
@@ -410,6 +441,8 @@ mod tests {
             session.create_named_team("owner","chat-team","app-chat-team",&mut vault,&master)?;
             let op=session.prepare_chat_channel("chat-team","","",RtChannelTier::Bottom,&mut vault,&master)?;
             assert!(session.attempt_chat_operation(&wrong,"chat-team",&op.id,&mut vault,&master).is_err());
+            assert_eq!(session.reconcile_chat_operation("chat-team", &op.id, &mut vault, &master)?, op);
+            assert!(session.list_cleanup_pending_chat("chat-team", &mut vault)?.is_empty());
             assert!(session.list_chat_channels("chat-team",&mut vault)?.channels.is_empty());
             let created=session.attempt_chat_operation(&credentials,"chat-team",&op.id,&mut vault,&master)?;
             assert_eq!(created.state,foks_client_db::ChatOperationState::Confirmed);
@@ -427,6 +460,11 @@ mod tests {
             drop(_server);
             let replay = session.prepare_chat_send_submission("chat-team", RtChannelId(op.scope.channel), "offline replay", &mut vault, &master, Some(&submission))?;
             assert_eq!(prepared, replay);
+            assert_eq!(session.reconcile_chat_operation("chat-team", &prepared.id, &mut vault, &master)?, prepared);
+            assert!(session.list_cleanup_pending_chat("chat-team", &mut vault)?.is_empty());
+            let cancelled = session.cancel_prepared_chat_operation("chat-team", &prepared.id, &mut vault, &master)?;
+            assert_eq!(cancelled.state, foks_client_db::ChatOperationState::Cancelled);
+            assert_eq!(session.finalize_chat_operation("chat-team", &prepared.id, &mut vault, &master)?, cancelled);
 
             Ok::<_,Error>(())
         }).unwrap();

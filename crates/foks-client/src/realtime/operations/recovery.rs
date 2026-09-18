@@ -12,7 +12,7 @@ impl ChatSession<'_> {
     ) -> Result<ChatOperation> {
         let op = self.operation(id)?;
         if op.state.is_terminal() {
-            return self.finalize_operation(store, id);
+            return self.terminal_outcome(store, id);
         }
         if op.state != State::Uncertain {
             return Ok(op);
@@ -74,7 +74,7 @@ impl ChatSession<'_> {
                                 insert_time: m.insert_time,
                             },
                         )?;
-                        return self.finalize_operation(store, id);
+                        return self.terminal_outcome(store, id);
                     }
                 }
                 // Don't advance beyond the observed head on an empty/short page.
@@ -84,7 +84,7 @@ impl ChatSession<'_> {
         }
         let op = self.operation(id)?;
         if op.state.is_terminal() {
-            self.cleanup_terminal(store, &op)?;
+            return self.terminal_outcome(store, id);
         }
         Ok(op)
     }

@@ -6,7 +6,7 @@ import {
   openChannel,
   partyNames,
 } from '../chat/presentation';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode, Ref } from 'react';
 import { Band, Button, Icon, Notice, SectionLabel } from '../components';
 import type { Bridge } from '../bridge';
@@ -23,7 +23,8 @@ import {
 import type { AgentSnapshot, AvailabilityOptions, StoreRef } from '../model';
 import type { Location } from '../location';
 import { useChatConversation } from '../chat/use-chat-conversation';
-import type { ChannelDrafts } from '../chat/use-chat-composer';
+import { useChatSends } from '../chat/send-provider';
+import { cancelled } from '../chat/errors';
 import { chatTeams } from './chat-teams';
 import './chat.css';
 
@@ -64,6 +65,7 @@ export function ChatScreen({
   /** Moves to the column's search field, the only search chat has. */
   onSearch?: () => void;
 }): ReactNode {
+  const { service: sends } = useChatSends();
   const store = storeOf(agentSnapshot, location.ref);
   const access = useCallback(
     () =>
@@ -74,6 +76,7 @@ export function ChatScreen({
   );
   const {
     channels,
+    channelsKnown,
     conversations,
     pending,
     error,
@@ -110,21 +113,21 @@ export function ChatScreen({
   const channelNames = new Map(
     listed.map(({ channel }) => [channel.id, channelTitle(channel)]),
   );
-  // Unsent messages, one per channel. Moving between the channels of one team
-  // remounts the thread, and a message half written is not worth losing to a
-  // move between two rows of one column, so the text is kept here instead —
-  // which is also why the composer's guard only asks when the move leaves this
-  // team. The tab keys this pane on the team, so the map is discarded with it.
-  const drafts = useRef<ChannelDrafts>(new Map()).current;
+  // Unsent messages are owned by the unlocked application, one per channel.
+  // This pane only reconciles drafts against a completed channel listing.
+  // Navigation can remount this pane without discarding any other draft.
+  // Incomplete inbox data cannot establish that a channel was removed.
+  // Lock and identity changes are handled by the application send service.
+  const drafts = sends.drafts(location.ref);
   // A channel that is no longer listed cannot be returned to. Its draft is
   // dropped rather than held for an address that no longer resolves; an empty
   // list is only acted on once the channels are known.
   const channelIds = listed.map(({ channel }) => channel.id).join('\n');
   useEffect(() => {
-    if (loading) return;
+    if (!channelsKnown) return;
     const live = new Set(channelIds ? channelIds.split('\n') : []);
     for (const id of [...drafts.keys()]) if (!live.has(id)) drafts.delete(id);
-  }, [channelIds, drafts, loading]);
+  }, [channelIds, drafts, channelsKnown]);
   const storeId = store?.id ?? '';
   const senderNames = partyNames(agentSnapshot, storeId);
   // The roster the team page already loads, read here rather than fetched
@@ -154,7 +157,9 @@ export function ChatScreen({
   );
   const guardedMarkRead = useCallback(
     (channelId: string, sequence: string): Promise<void> =>
-      accessAvailable() ? markRead(channelId, sequence) : Promise.resolve(),
+      accessAvailable()
+        ? markRead(channelId, sequence)
+        : Promise.reject(cancelled()),
     [accessAvailable, markRead],
   );
   const describeOptions = accessOptions ?? { nowSeconds: accessNow() };
@@ -320,7 +325,6 @@ export function ChatScreen({
             revision={channelRevisions?.get(channel.id) ?? 0}
             readThrough={activeConversation?.read_through ?? null}
             markRead={guardedMarkRead}
-            drafts={drafts}
             history={history}
             acceptHistory={acceptHistory}
             blockHistory={blockHistory}

@@ -98,6 +98,33 @@ export function noChatTeams(snapshot: AgentSnapshot): TeamStore[] {
   );
 }
 
+export function pickerConversations(
+  snapshot: AgentSnapshot,
+  inbox: ReadonlyMap<string, TeamInbox>,
+  query: string,
+  options: AvailabilityOptions = {},
+) {
+  const search = query.trim().toLowerCase();
+  return chatTeams(snapshot).flatMap((store) => {
+    const entry = inbox.get(store.id);
+    const available =
+      chatAvailable(snapshot, store, options) && entry?.state !== 'blocked';
+    return (
+      entry?.data
+        ? listChannels(entry.data.channels, entry.data.conversations)
+        : []
+    )
+      .filter(
+        ({ channel }) =>
+          !search ||
+          `${store.name} ${channelTitle(channel)} ${channel.description ?? ''}`
+            .toLowerCase()
+            .includes(search),
+      )
+      .map((option) => ({ store, entry, option, available }));
+  });
+}
+
 /** The team the tab falls back to when no conversation has any activity. */
 export function firstChatTeam(
   snapshot: AgentSnapshot,
