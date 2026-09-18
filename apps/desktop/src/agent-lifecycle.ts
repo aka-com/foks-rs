@@ -105,6 +105,7 @@ class StaleAgentLifecycle extends Error {}
 
 export class AgentLifecycleController {
   readonly #bridge: Bridge;
+  readonly #autoRecover: () => Promise<AgentStatus>;
   readonly #listeners = new Set<(state: AgentLifecycle) => void>();
   #state: AgentLifecycle;
   #generation = 0;
@@ -113,8 +114,13 @@ export class AgentLifecycleController {
   #inFlight: { generation: number; promise: Promise<AgentStatus> } | null =
     null;
 
-  constructor(bridge: Bridge, status?: AgentStatus) {
+  constructor(
+    bridge: Bridge,
+    status?: AgentStatus,
+    autoRecover: () => Promise<AgentStatus> = () => bridge.agentStatus(),
+  ) {
     this.#bridge = bridge;
+    this.#autoRecover = autoRecover;
     this.#state = status ? lifecycleFromStatus(status) : { state: 'checking' };
   }
 
@@ -207,15 +213,33 @@ export class AgentLifecycleController {
     }
   }
 
-  establish(reconnect = false): Promise<AgentStatus> {
+  invalidatePending(): void {
+    this.#generation++;
+  }
+
+  establishAutomatic(isCurrent: () => boolean = () => true): Promise<AgentStatus> {
+    return this.#establish('automatic', isCurrent);
+  }
+
+  establish(
+    reconnect = false,
+    isCurrent: () => boolean = () => true,
+  ): Promise<AgentStatus> {
+    return this.#establish(reconnect ? 'reconnect' : 'initial', isCurrent);
+  }
+
+  #establish(
+    mode: 'automatic' | 'reconnect' | 'initial',
+    isCurrent: () => boolean = () => true,
+  ): Promise<AgentStatus> {
     const requestedGeneration = this.#generation;
     const live = this.#inFlight;
     if (live?.generation === requestedGeneration) return live.promise;
     const pending = live
       ? live.promise
           .catch(() => undefined)
-          .then(() => this.#run(reconnect, requestedGeneration))
-      : this.#run(reconnect, requestedGeneration);
+          .then(() => this.#run(mode, requestedGeneration, isCurrent))
+      : this.#run(mode, requestedGeneration, isCurrent);
     const entry = { generation: requestedGeneration, promise: pending };
     this.#inFlight = entry;
     void pending
@@ -226,21 +250,52 @@ export class AgentLifecycleController {
     return pending;
   }
 
-  #run(reconnect: boolean, generation: number): Promise<AgentStatus> {
+  #run(
+    mode: 'automatic' | 'reconnect' | 'initial',
+    generation: number,
+    isCurrent: () => boolean,
+  ): Promise<AgentStatus> {
+    const requireCurrent = () => {
+      this.#requireCurrent(generation);
+      if (!isCurrent()) throw new StaleAgentLifecycle();
+    };
     const disconnected =
-      reconnect && this.#state.state === 'disconnected' ? this.#state : null;
+      mode !== 'initial' && this.#state.state === 'disconnected'
+        ? this.#state
+        : null;
     return (async () => {
-      this.#requireCurrent(generation);
+      requireCurrent();
+      if (
+        mode === 'automatic' &&
+        [
+          'bootstrap',
+          'initializing',
+          'maintenance',
+          'restart-required',
+          'recovery-required',
+          'restoration-failed',
+        ].includes(this.#state.state)
+      )
+        throw new StaleAgentLifecycle();
       if (!disconnected) this.#publish({ state: 'checking' });
-      let status = reconnect
-        ? await this.#bridge.retryAgentConnection()
-        : await this.#bridge.agentStatus();
-      this.#requireCurrent(generation);
+      requireCurrent();
+      let status =
+        mode === 'automatic'
+          ? await this.#autoRecover()
+          : mode === 'reconnect'
+            ? await this.#bridge.retryAgentConnection()
+            : await this.#bridge.agentStatus();
+      requireCurrent();
+      if (mode === 'automatic') {
+        this.#publish(lifecycleFromStatus(status));
+        return status;
+      }
       if (status.state === 'bootstrap') {
         if (!disconnected)
           this.#publish({ state: 'initializing', step: status.step });
+        requireCurrent();
         status = await this.#bridge.initializeClientState();
-        this.#requireCurrent(generation);
+        requireCurrent();
       }
       if (status.state !== 'ready') {
         const error: CommandError = {
@@ -258,7 +313,8 @@ export class AgentLifecycleController {
     })().catch((error) => {
       if (
         !(error instanceof StaleAgentLifecycle) &&
-        generation === this.#generation
+        generation === this.#generation &&
+        isCurrent()
       )
         this.#publish(disconnected ?? { state: 'failure', error });
       throw error;
