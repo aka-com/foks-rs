@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useWorkflowAccess } from '../workflow-context';
 import { normalizeCommandError, type Bridge } from '../bridge';
 import { useSheetGuard } from '../navigation-guard';
 import {
@@ -22,6 +23,8 @@ export function LocalAliasPanel({
   presentation: PanelPresentation;
   onComplete: () => Promise<void>;
 }) {
+  const access = useWorkflowAccess();
+  const eligibility = access.props('local-alias', {});
   const [name, setName] = useState(alias);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,6 +55,7 @@ export function LocalAliasPanel({
     setBusy(true);
     setError(null);
     try {
+      access.require('local-alias', {});
       const reply = await bridge.setLocalAccountAlias(store, label);
       if (reply.store !== store || reply.alias !== label)
         throw new Error('Local alias response belongs to a different account.');
@@ -73,7 +77,8 @@ export function LocalAliasPanel({
           </Button>
           <Button
             variant="primary"
-            disabled={busy || !valid || label === alias}
+            title={eligibility.title}
+            disabled={busy || eligibility.disabled || !valid || label === alias}
             onClick={() => void save()}
           >
             Save

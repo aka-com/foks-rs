@@ -1,4 +1,6 @@
 import { useDeviceMetadata } from '../device-cache';
+import { WorkflowProvider, useWorkflowAccess } from '../workflow-context';
+import { workflowAvailability, workflowMessage } from '../model/workflow-availability';
 import { MetadataStatus } from '../components/metadata-status';
 import { useTabSheetState } from '../navigation-guard';
 /**
@@ -25,7 +27,6 @@ import {
 } from 'react';
 import type { ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
-import { enqueueProfileWork } from '../bridge';
 import type {
   AccountDevice,
   BackupEnrollment,
@@ -50,7 +51,6 @@ import type {
   DeviceLabel,
 } from '../model';
 import {
-  accountStopped,
   accountStores,
   accountSubtitle,
   plural,
@@ -71,6 +71,7 @@ import {
   RevokeBackupSheet,
   RevokeSheet,
   YubiActionSheet,
+  YUBI_WORKFLOWS,
 } from './device-sheets';
 import type { SimpleYubiAction } from './device-sheets';
 import {
@@ -218,9 +219,15 @@ export function DevicesScreen({
   const selected = requested
     ? stores.find((store) => store.id === requested)
     : stores[0];
-  const stopped = selected
-    ? accountStopped(snapshot, selected, 'devices')
-    : { stopped: true, reason: 'No account on this device' };
+  const deviceAccess = workflowAvailability(snapshot, 'devices-list', {
+    profile: selected?.server, account: selected?.account,
+  });
+  const stopped = { stopped: !deviceAccess.available, reason: workflowMessage(deviceAccess) ?? '' };
+  const access = useWorkflowAccess(snapshot);
+  const target = { profile: selected?.server, account: selected?.account };
+  const canAdd = (['device-pair', 'backup-create', 'yubi-provision'] as const)
+    .some((operation) => access.availability(operation, target).available);
+  const addReason = canAdd ? undefined : access.props('device-pair', target).title;
   const [pairMode, setPairMode] = useTabSheetState<'offer' | 'accept'>(
     'devices.pairMode',
     'offer',
@@ -262,6 +269,7 @@ export function DevicesScreen({
     freshness,
   } = useDeviceMetadata({
     bridge,
+    snapshot,
     profile: selected?.server,
     store: selected?.id,
     enabled: !stopped.stopped,
@@ -318,7 +326,6 @@ export function DevicesScreen({
 
   const selectedId = selected?.id;
   const profile = selected?.server;
-  const accessStopped = stopped.stopped;
 
   // Switching accounts drops what the page was doing with the last one. The
   // first read is not a switch: a scene may have opened a sheet with the page.
@@ -331,31 +338,8 @@ export function DevicesScreen({
 
   // Card presence is live hardware state, never part of the metadata cache.
   useEffect(() => {
-    let alive = true;
-    setCards([]);
-    if (profile && !accessStopped) {
-      void enqueueProfileWork(bridge, profile, () =>
-        bridge.listYubiCards(profile),
-      )
-        .then((cards) => {
-          if (alive) setCards(cards);
-        })
-        .catch((error: unknown) => {
-          if (alive) onError(error);
-        });
-    }
-    return () => {
-      alive = false;
-    };
-  }, [
-    accessStopped,
-    bridge,
-    deviceCache,
-    hardwareRefresh,
-    onError,
-    profile,
-    selectedId,
-  ]);
+    setCards([...snapshot.cardsConnected]);
+  }, [snapshot.cardsConnected, hardwareRefresh]);
 
   // A `section=` address — the Devices addresses written before the page was
   // one, when Macs and Security keys were two sections — lands on the one
@@ -474,8 +458,7 @@ export function DevicesScreen({
         <Button
           size="sm"
           variant="danger"
-          disabled={stopped.stopped}
-          title={why}
+          {...access.props('backup-revoke', target)}
           onClick={() => {
             setRevoking(backup);
             setSheet('revoke-backup');
@@ -579,8 +562,15 @@ export function DevicesScreen({
     );
 
   return (
-    <>
+    <WorkflowProvider snapshot={snapshot}>
       <MetadataStatus label="Device metadata" freshness={freshness} />
+      <Button
+        {...access.props('yubi-scan', { profile: selected.server })}
+        onClick={() => void access.run('yubi-scan', { profile: selected.server }, () => bridge.listYubiCards(selected.server))
+          .then(setCards).catch(onError)}
+      >
+        Refresh connected keys
+      </Button>
       {/* One key's own page: the full id, and the one destructive action for
           that kind. It reads the page's own lists, so a sheet opened from it
           is the sheet the row would have opened. */}
@@ -625,8 +615,8 @@ export function DevicesScreen({
               <Button
                 variant="primary"
                 icon="plus"
-                disabled={stopped.stopped}
-                title={why}
+                disabled={!canAdd}
+                title={addReason}
                 onClick={() => setSheet('add')}
               >
                 Add a device
@@ -680,7 +670,7 @@ export function DevicesScreen({
                 <Band
                   label="No paper key"
                   action={
-                    <Button size="sm" onClick={() => setSheet('phrase')}>
+                    <Button size="sm" {...access.props('backup-create', target)} onClick={() => setSheet('phrase')}>
                       Create a paper key…
                     </Button>
                   }
@@ -748,8 +738,7 @@ export function DevicesScreen({
                   variant="plain"
                   size="sm"
                   className="lnk"
-                  disabled={stopped.stopped}
-                  title={why}
+                  {...access.props('account-recover', { profile: selected.server })}
                   onClick={() => setSheet('recover')}
                 >
                   Recover an account with a paper key…
@@ -758,8 +747,7 @@ export function DevicesScreen({
                   variant="plain"
                   size="sm"
                   className="lnk"
-                  disabled={stopped.stopped}
-                  title={why}
+                  {...access.props('yubi-create', { profile: selected.server })}
                   onClick={() => setSheet('enrol')}
                 >
                   Create an account on a YubiKey…
@@ -771,6 +759,7 @@ export function DevicesScreen({
       )}
       {sheet === 'add' && selected ? (
         <AddDeviceSheet
+          store={selected}
           onClose={() => setSheet(null)}
           onChoose={(choice) => {
             // The chooser names the direction, so accepting a phrase has an
@@ -941,7 +930,7 @@ export function DevicesScreen({
           onError={(error) => void onMutationError(error)}
         />
       ) : null}
-    </>
+    </WorkflowProvider>
   );
 }
 
@@ -999,7 +988,8 @@ function DeviceDetail({
   onProvision: () => void;
   onYubiAction: (action: SimpleYubiAction, entry: YubiEnrollment) => void;
 }): ReactNode {
-  const why = stopped.stopped ? stopped.reason : undefined;
+  const access = useWorkflowAccess(snapshot);
+  const target = { profile: store.server, account: store.account };
   if (!entry)
     return (
       <>
@@ -1041,11 +1031,10 @@ function DeviceDetail({
   const source = entry.source;
   const username = usernameOf(snapshot, store) ?? store.account;
   const enrollment = source.kind === 'yubi' ? source.entry : undefined;
-  const revokeReason = stopped.stopped
-    ? stopped.reason
-    : enrollment && enrollment.state !== 'complete'
+  const revokeReason = access.props('yubi-revoke', target).title ??
+    (enrollment && enrollment.state !== 'complete'
       ? 'This enrollment is not complete'
-      : undefined;
+      : undefined);
   return (
     <>
       <PageHeader
@@ -1206,8 +1195,7 @@ function DeviceDetail({
                     <Button
                       size="sm"
                       variant="danger"
-                      disabled={stopped.stopped}
-                      title={why}
+                      {...access.props('device-remove', target)}
                       onClick={() => onRemove(source.device)}
                     >
                       Remove this device…
@@ -1227,8 +1215,7 @@ function DeviceDetail({
                     <Button
                       size="sm"
                       variant="danger"
-                      disabled={stopped.stopped}
-                      title={why}
+                      {...access.props('backup-revoke', target)}
                       onClick={() => onRevokeBackup(source.backup)}
                     >
                       Revoke…
@@ -1280,7 +1267,6 @@ function DeviceDetail({
 function CardOperations({
   enrollment,
   cards,
-  stopped,
   store,
   onNavigate,
   onProvision,
@@ -1295,30 +1281,24 @@ function CardOperations({
   onProvision: () => void;
   onYubiAction: (action: SimpleYubiAction, entry: YubiEnrollment) => void;
 }): ReactNode {
-  const why = stopped.stopped ? stopped.reason : undefined;
+  const access = useWorkflowAccess();
+  const target = { profile: store.server, account: enrollment.alias };
+  const why = access.props('yubi-provision', { profile: store.server, account: store.account }).title;
   const cardConnected =
     enrollment.cardSerial != null &&
     cards.some((card) => card.serial === enrollment.cardSerial);
-  const pinReason = stopped.stopped
-    ? stopped.reason
-    : cards.length === 0
+  const pinReason = access.props('yubi-pin', target).title ?? (cards.length === 0
       ? 'No security key connected.'
       : !cardConnected
         ? 'This key’s card is not connected.'
-        : undefined;
+        : undefined);
   // Every recovery action but "Resume enrollment" acts on a card whose
   // account already exists; that one acts on a card whose account does not,
   // so the two conditions are exact opposites rather than shades of one.
-  const opReason = stopped.stopped
-    ? stopped.reason
-    : enrollment.state === 'complete'
-      ? undefined
-      : 'This enrollment is not complete.';
-  const resumeReason = stopped.stopped
-    ? stopped.reason
-    : enrollment.state === 'pending'
-      ? undefined
-      : 'This enrollment is already complete.';
+  const opReason = enrollment.state === 'complete'
+    ? undefined : 'This enrollment is not complete.';
+  const resumeReason = enrollment.state === 'pending'
+    ? undefined : 'This enrollment is already complete.';
   return (
     <div
       className="settings-section"
@@ -1333,7 +1313,7 @@ function CardOperations({
             <>
               <Button
                 size="sm"
-                disabled={stopped.stopped}
+                disabled={why !== undefined}
                 title={why}
                 onClick={onProvision}
               >
@@ -1359,8 +1339,8 @@ function CardOperations({
             action={
               <>
                 {group.actions.map((action) => {
-                  const reason =
-                    action === 'resume-enrollment' ? resumeReason : opReason;
+                  const reason = access.props(YUBI_WORKFLOWS[action], target).title ??
+                    (action === 'resume-enrollment' ? resumeReason : opReason);
                   return (
                     <Button
                       key={action}

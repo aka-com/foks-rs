@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useWorkflowAccess } from '../workflow-context';
 import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
 import { normalizeCommandError } from '../bridge';
@@ -16,6 +17,10 @@ export function AdminPanel({
   account: string;
   presentation: PanelPresentation;
 }): ReactNode {
+  const access = useWorkflowAccess();
+  const target = { profile, account };
+  const configureAccess = access.props('web-admin-configure', target);
+  const openAccess = access.props('web-admin-open', target);
   const [destination, setDestination] = useState('');
   const [pin, setPin] = useState('');
   const [busy, setBusy] = useState(false);
@@ -41,6 +46,7 @@ export function AdminPanel({
     const supplied = pin || null;
     setPin('');
     try {
+      access.require(configure ? 'web-admin-configure' : 'web-admin-open', target);
       if (configure)
         await bridge.configureWebAdmin(profile, account, destination);
       else await bridge.openWebAdmin(profile, account, supplied);
@@ -66,14 +72,16 @@ export function AdminPanel({
             Cancel
           </Button>
           <Button
-            disabled={busy || !destination}
+            title={configureAccess.title}
+            disabled={busy || configureAccess.disabled || !destination}
             onClick={() => void run(true)}
           >
             Save address
           </Button>
           <Button
             variant="primary"
-            disabled={busy}
+            title={openAccess.title}
+            disabled={busy || openAccess.disabled}
             onClick={() => void run(false)}
           >
             Open admin panel

@@ -1,4 +1,6 @@
 import { localAliasOf } from '../model';
+import { WorkflowProvider } from '../workflow-context';
+import { workflowAvailability, workflowMessage } from '../model/workflow-availability';
 /**
  * The Settings tab: a sub-navigation of three pages, held on screen beside
  * whichever one is open.
@@ -44,7 +46,6 @@ import {
 import type { Location, NavigateOptions, SettingsSection } from '../location';
 import { useSheetGuard } from '../navigation-guard';
 import {
-  accountStopped,
   accountStores,
   plural,
   serverDisplayName,
@@ -226,6 +227,7 @@ export function SettingsScreen({
         </div>
       </div>
       {sheet === 'passphrase' && passphrase ? (
+        <WorkflowProvider snapshot={snapshot}>
         <PassphraseSheet
           bridge={bridge}
           store={passphrase.store}
@@ -241,6 +243,7 @@ export function SettingsScreen({
           }}
           onError={(error) => void onMutationError(error)}
         />
+        </WorkflowProvider>
       ) : null}
       {sheet === 'reset-mac' ? (
         <ResetMacSheet
@@ -277,7 +280,10 @@ function PreferencesSection({
       <Inset className="settings-inset middle wide">
         {stores.length ? (
           stores.map((store) => {
-            const stopped = accountStopped(snapshot, store);
+            const eligibility = workflowAvailability(snapshot, 'passphrase', {
+              profile: store.server, account: store.account,
+            });
+            const stopped = { stopped: !eligibility.available, reason: workflowMessage(eligibility) ?? '' };
             return (
               <InsetRow
                 key={store.id}

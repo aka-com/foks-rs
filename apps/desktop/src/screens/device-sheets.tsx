@@ -1,4 +1,6 @@
 import { useTabSheetState } from '../navigation-guard';
+import { useWorkflowAccess } from '../workflow-context';
+import type { WorkflowOperation } from '../model/workflow-availability';
 /**
  * The sheets that act on one account's devices, keys and passphrase.
  *
@@ -78,18 +80,40 @@ export const YUBI_ACTION_LABELS: Readonly<Record<SimpleYubiAction, string>> = {
   rotate: 'Rotate the management key',
 };
 
+export const YUBI_WORKFLOWS: Readonly<Record<SimpleYubiAction, WorkflowOperation>> = {
+  sync: 'account-sync',
+  'pin-status': 'yubi-pin',
+  'change-pin': 'yubi-pin',
+  'set-passphrase': 'passphrase',
+  'change-passphrase': 'passphrase',
+  'verify-passphrase': 'passphrase',
+  unblock: 'yubi-pin',
+  'change-puk': 'yubi-pin',
+  'recover-management': 'yubi-recover-management',
+  'recover-subkey': 'yubi-recover-subkey',
+  'resume-enrollment': 'yubi-resume',
+  'resume-rotation': 'yubi-rotate',
+  rotate: 'yubi-rotate',
+};
+
 /**
  * The chooser the Devices page's primary action opens: the ways this account
  * gains a key, each leading to the sheet that already did it.
  */
 export function AddDeviceSheet({
+  store,
   onChoose,
   onClose,
 }: {
+  store: AccountStore;
   onChoose: (choice: AddChoice) => void;
   onClose: () => void;
 }): ReactNode {
+  const access = useWorkflowAccess();
   const [choice, setChoice] = useState<AddChoice>('pair');
+  const operation: WorkflowOperation = choice === 'phrase' ? 'backup-create'
+    : choice === 'provision' ? 'yubi-provision' : choice === 'pair-accept' ? 'device-accept' : 'device-pair';
+  const eligibility = access.props(operation, { profile: store.server, account: choice === 'pair-accept' ? undefined : store.account });
   return (
     <DeviceSheetFrame
       title="Add a device"
@@ -97,7 +121,10 @@ export function AddDeviceSheet({
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" onClick={() => onChoose(choice)}>
+          <Button variant="primary" {...eligibility} onClick={() => {
+            if (!access.availability(operation, { profile: store.server, account: choice === 'pair-accept' ? undefined : store.account }).available) return;
+            onChoose(choice);
+          }}>
             Continue
           </Button>
         </>
@@ -198,6 +225,9 @@ export function PhraseSheet({
   onDone: () => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
+  const access = useWorkflowAccess();
+  const target = { profile, account: accountAlias };
+  const eligibility = access.props('backup-create', target);
   const [phrase, setPhrase] = useState<string | null>(() => seedPhrase ?? null);
   const [alias, setAlias] = useState(seedAlias ?? 'paper-backup');
   const [written, setWritten] = useState(false);
@@ -240,14 +270,15 @@ export function PhraseSheet({
               </Button>
               <Button
                 variant="primary"
-                disabled={!written || busy}
+                title={eligibility.title}
+                disabled={!written || busy || eligibility.disabled}
                 onClick={() => {
                   setBusy(true);
                   const once = phrase;
                   onForget?.();
                   setPhrase(null);
-                  void bridge
-                    .commitOwnerBackup(profile, accountAlias, alias, once)
+                  void access.run('backup-create', target, () =>
+                    bridge.commitOwnerBackup(profile, accountAlias, alias, once))
                     .then(onDone)
                     .catch(onError)
                     .finally(() => setBusy(false));
@@ -261,11 +292,12 @@ export function PhraseSheet({
               <Button onClick={discard}>Cancel</Button>
               <Button
                 variant="primary"
-                disabled={!alias.trim() || busy}
+                title={eligibility.title}
+                disabled={!alias.trim() || busy || eligibility.disabled}
                 onClick={() => {
                   setBusy(true);
-                  void bridge
-                    .prepareOwnerBackup(profile, accountAlias, alias.trim())
+                  void access.run('backup-create', target, () =>
+                    bridge.prepareOwnerBackup(profile, accountAlias, alias.trim()))
                     .then((result) => {
                       onPrepared?.(
                         { phrase: result.phrase, alias: alias.trim() },
@@ -340,6 +372,10 @@ export function PairSheet({
   // The direction is the chooser's answer, and the two steps are written for
   // it: there is no control here that silently changes what Start would do.
   const mode = initialMode;
+  const access = useWorkflowAccess();
+  const operation = mode === 'offer' ? 'device-pair' : 'device-accept';
+  const workflowTarget = { profile: store.server, account: mode === 'offer' ? store.account : undefined };
+  const eligibility = access.props(operation, workflowTarget);
   const [offer, setOffer] = useState<PairingOffer | null>(null);
   /** Whether the phrase on screen came from an offer the agent still held. */
   const [resumed, setResumed] = useState(false);
@@ -360,7 +396,7 @@ export function PairSheet({
   );
   const [busy, setBusy] = useState(false);
   const queued = <T,>(task: () => Promise<T>): Promise<T> =>
-    enqueueProfileWork(bridge, store.server, task);
+    enqueueProfileWork(bridge, store.server, () => access.run(operation, workflowTarget, task));
   const act = (
     task: () => Promise<unknown>,
     message: string,
@@ -439,7 +475,7 @@ export function PairSheet({
           {mode === 'offer' ? (
             <Button
               variant="primary"
-              disabled={!offer || busy}
+              disabled={!offer || busy || eligibility.disabled}
               onClick={() =>
                 act(
                   async () => {
@@ -464,7 +500,8 @@ export function PairSheet({
           ) : (
             <>
               <Button
-                disabled={busy || !target}
+                title={eligibility.title}
+                disabled={busy || eligibility.disabled || !target}
                 onClick={() =>
                   act(async () => {
                     const result = await bridge.resumeDevicePairingAcceptance(
@@ -483,7 +520,8 @@ export function PairSheet({
               </Button>
               <Button
                 variant="primary"
-                disabled={busy || !target || !device || !phrase}
+                title={eligibility.title}
+                disabled={busy || eligibility.disabled || !target || !device || !phrase}
                 onClick={() =>
                   act(async () => {
                     const result = await bridge.acceptDevicePairing(
@@ -532,7 +570,8 @@ export function PairSheet({
                 <span className="steprow">
                   <Button
                     variant="primary"
-                    disabled={busy}
+                    title={eligibility.title}
+                    disabled={busy || eligibility.disabled}
                     onClick={() =>
                       revealOffer(() => bridge.startDevicePairing(store.id))
                     }
@@ -540,7 +579,8 @@ export function PairSheet({
                     Start
                   </Button>
                   <Button
-                    disabled={busy}
+                    title={eligibility.title}
+                    disabled={busy || eligibility.disabled}
                     onClick={() =>
                       revealOffer(
                         () => bridge.resumeDevicePairingOffer(store.id),
@@ -605,6 +645,9 @@ export function RecoverSheet({
   onDone: () => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
+  const access = useWorkflowAccess();
+  const workflowTarget = { profile: store.server };
+  const eligibility = access.props('account-recover', workflowTarget);
   const [target, setTarget] = useState(store.account);
   const [device, setDevice] = useState('This device');
   const [phrase, setPhrase] = useState('');
@@ -639,13 +682,15 @@ export function RecoverSheet({
           <Button onClick={onClose}>Cancel</Button>
           <Button
             variant="primary"
-            disabled={!target || !device || !phrase || busy}
+            title={eligibility.title}
+            disabled={!target || !device || !phrase || busy || eligibility.disabled}
             onClick={() => {
               const once = phrase;
               setPhrase('');
               setBusy(true);
               void enqueueProfileWork(bridge, store.server, () =>
-                bridge.recoverOwnerAccount(store.server, target, once, device),
+                access.run('account-recover', workflowTarget, () =>
+                  bridge.recoverOwnerAccount(store.server, target, once, device)),
               )
                 .then(onDone)
                 .catch(onError)
@@ -687,6 +732,10 @@ export function EnrollSheet({
   onDone: () => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
+  const access = useWorkflowAccess();
+  const workflowTarget = { profile: store.server };
+  const operation = 'yubi-create';
+  const eligibility = access.props(operation, workflowTarget);
   const [alias, setAlias] = useState('work-key');
   const [username, setUsername] = useState('');
   // The card list resolves after the sheet opens, so the default names the
@@ -752,7 +801,9 @@ export function EnrollSheet({
           <Button onClick={onClose}>Cancel</Button>
           <Button
             variant="primary"
+            title={eligibility.title}
             disabled={
+              eligibility.disabled ||
               !card ||
               !alias.trim() ||
               !username.trim() ||
@@ -787,8 +838,7 @@ export function EnrollSheet({
               };
               clear();
               setBusy(true);
-              void bridge
-                .runYubi(command)
+              void access.run(operation, workflowTarget, () => bridge.runYubi(command))
                 .then(onDone)
                 .catch(onError)
                 .finally(() => setBusy(false));
@@ -896,6 +946,10 @@ export function ProvisionSheet({
   onDone: () => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
+  const access = useWorkflowAccess();
+  const workflowTarget = { profile: store.server, account: store.account };
+  const operation = 'yubi-provision';
+  const eligibility = access.props(operation, workflowTarget);
   const [targetAlias, setTargetAlias] = useState('new-key');
   const [deviceName, setDeviceName] = useState(
     cards[0] ? `YubiKey ${cards[0].serial}` : 'YubiKey',
@@ -944,7 +998,7 @@ export function ProvisionSheet({
           <Button onClick={onClose}>Cancel</Button>
           <Button
             variant="primary"
-            disabled={!valid || busy}
+            disabled={!valid || busy || eligibility.disabled}
             onClick={() => {
               const command: YubiCommand = {
                 command: 'provision_yubi_device',
@@ -963,8 +1017,7 @@ export function ProvisionSheet({
               };
               clear();
               setBusy(true);
-              void bridge
-                .runYubi(command)
+              void access.run(operation, workflowTarget, () => bridge.runYubi(command))
                 .then(onDone)
                 .catch(onError)
                 .finally(() => setBusy(false));
@@ -1036,6 +1089,13 @@ export function YubiActionSheet({
   onDone: () => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
+  const access = useWorkflowAccess();
+  const operation = YUBI_WORKFLOWS[action];
+  const workflowTarget = {
+    profile: store?.server ?? profile,
+    account: action === 'recover-management' ? store?.account : alias,
+  };
+  const eligibility = access.props(operation, workflowTarget);
   const [pin, setPin] = useState('');
   const [other, setOther] = useState('');
   const [confirmation, setConfirmation] = useState('');
@@ -1183,8 +1243,7 @@ export function YubiActionSheet({
     setOther('');
     setConfirmation('');
     setBusy(true);
-    void bridge
-      .runYubi(command)
+    void access.run(operation, workflowTarget, () => bridge.runYubi(command))
       .then(onDone)
       .catch(onError)
       .finally(() => setBusy(false));
@@ -1201,7 +1260,7 @@ export function YubiActionSheet({
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={!valid || busy} onClick={submit}>
+          <Button variant="primary" disabled={!valid || busy || eligibility.disabled} onClick={submit}>
             Continue
           </Button>
         </>
@@ -1257,6 +1316,9 @@ export function RevokeSheet({
   onDone: () => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
+  const access = useWorkflowAccess();
+  const workflowTarget = { profile: store.server, account: store.account };
+  const eligibility = access.props('yubi-revoke', workflowTarget);
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
   // A revocation rotates account keys and cannot be taken back, so the sheet
@@ -1283,18 +1345,18 @@ export function RevokeSheet({
           </Button>
           <Button
             variant="danger"
-            disabled={confirmation !== alias || busy}
+            disabled={confirmation !== alias || busy || eligibility.disabled}
             onClick={() => {
               setBusy(true);
-              void bridge
-                .runYubi({
+              void access.run('yubi-revoke', workflowTarget, () =>
+                bridge.runYubi({
                   command: 'revoke_yubi_device',
                   args: {
                     accountStoreId: store.id,
                     yubiAlias: alias,
                     confirmation,
                   },
-                })
+                }))
                 .then((result) => {
                   if (
                     result.alias !== alias ||
@@ -1343,6 +1405,9 @@ export function RevokeBackupSheet({
   onDone: () => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
+  const access = useWorkflowAccess();
+  const workflowTarget = { profile: store.server, account: store.account };
+  const eligibility = access.props('backup-revoke', workflowTarget);
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
   // Revoking a paper key rotates every account key it could read.
@@ -1367,11 +1432,11 @@ export function RevokeBackupSheet({
           </Button>
           <Button
             variant="danger"
-            disabled={confirmation !== backup.backupAlias || busy}
+            disabled={confirmation !== backup.backupAlias || busy || eligibility.disabled}
             onClick={() => {
               setBusy(true);
-              void bridge
-                .revokeOwnerBackup(store.id, backup, confirmation)
+              void access.run('backup-revoke', workflowTarget, () =>
+                bridge.revokeOwnerBackup(store.id, backup, confirmation))
                 .then((revoked) => {
                   if (
                     revoked.backupAlias !== backup.backupAlias ||
@@ -1423,6 +1488,9 @@ export function RemoveDeviceSheet({
   onDone: () => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
+  const access = useWorkflowAccess();
+  const workflowTarget = { profile: store.server, account: store.account };
+  const eligibility = access.props('device-remove', workflowTarget);
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
   const expected = device.name ?? device.id;
@@ -1451,15 +1519,17 @@ export function RemoveDeviceSheet({
           </Button>
           <Button
             variant="danger"
-            disabled={confirmation !== expected || busy}
+            disabled={confirmation !== expected || busy || eligibility.disabled}
             onClick={() => {
               setBusy(true);
               // The display cache can outlive the native catalog's retained
               // device list. Re-read before a destructive action so native
               // target/current-device validation uses fresh records.
               void enqueueProfileWork(bridge, store.server, async () => {
+                access.require('devices-list', workflowTarget);
                 await bridge.listAccountDevices(store.id);
-                return bridge.removeAccountDevice(store.id, device.id);
+                return access.run('device-remove', workflowTarget, () =>
+                  bridge.removeAccountDevice(store.id, device.id));
               })
                 .then((removed) => {
                   if (removed.deviceId !== device.id)
@@ -1509,6 +1579,9 @@ export function PassphraseSheet({
   onDone: (message: string) => void;
   onError: (error: unknown) => void;
 }): ReactNode {
+  const access = useWorkflowAccess();
+  const workflowTarget = { profile: store.server, account: store.account };
+  const eligibility = access.props('passphrase', workflowTarget);
   const [mode, setMode] = useState<PassphraseMode>(initialMode);
   const [passphrase, setPassphrase] = useState('');
   const [confirmation, setConfirmation] = useState('');
@@ -1517,12 +1590,12 @@ export function PassphraseSheet({
     const secret = passphrase;
     const repeated = confirmation;
     setBusy(true);
-    const task =
+    const task = access.run('passphrase', workflowTarget, () =>
       mode === 'set'
         ? bridge.setAccountPassphrase(store.id, secret, repeated)
         : mode === 'change'
           ? bridge.changeAccountPassphrase(store.id, secret, repeated)
-          : bridge.verifyAccountPassphrase(store.id, secret);
+          : bridge.verifyAccountPassphrase(store.id, secret));
     void task
       .then((report) => {
         setPassphrase('');
@@ -1576,7 +1649,9 @@ export function PassphraseSheet({
           </Button>
           <Button
             variant="primary"
+            title={eligibility.title}
             disabled={
+              eligibility.disabled ||
               !passphrase ||
               (mode !== 'verify' && passphrase !== confirmation) ||
               busy

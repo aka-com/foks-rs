@@ -352,12 +352,12 @@ test('a stopped account lists nothing and says why every action is off', async (
     name: 'Add a device',
   });
   assert.equal(add.hasAttribute('disabled'), true);
-  assert.match(add.getAttribute('title') ?? '', /Check-in expired/);
+  assert.match(add.getAttribute('title') ?? '', /check-in.*expired/i);
   const recover = rendered.getByRole('button', {
     name: 'Recover an account with a paper key…',
   });
   assert.equal(recover.hasAttribute('disabled'), true);
-  assert.match(recover.getAttribute('title') ?? '', /Check-in expired/);
+  assert.match(recover.getAttribute('title') ?? '', /check-in.*expired/i);
 });
 
 test('a Mac with no account says so instead of listing an empty page', async () => {
@@ -1037,10 +1037,11 @@ test('PIN status on a key’s own page acts on that key, not on card or list ord
       },
     }),
   });
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Refresh connected keys' }));
   const pinStatus = await rendered.findByRole('button', {
     name: 'PIN status',
   });
-  assert.equal(pinStatus.hasAttribute('disabled'), false);
+  await ui.waitFor(() => assert.equal(pinStatus.hasAttribute('disabled'), false));
   ui.fireEvent.click(pinStatus);
   const dialog = rendered.getByRole('dialog');
   assert.ok(ui.within(dialog).getAllByText('second').length);

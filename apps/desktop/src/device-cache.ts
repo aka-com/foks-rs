@@ -1,5 +1,7 @@
 /** Session-only metadata queries. Reader presence, PIN state and secrets are excluded. */
-import { createContext, useContext, useMemo } from 'react';
+import { createContext, useContext, useMemo, useRef } from 'react';
+import { requireWorkflow } from './model/workflow-availability';
+import type { AgentSnapshot } from './model/types';
 import { enqueueProfileWork } from './bridge';
 import type {
   AccountDevice,
@@ -43,6 +45,8 @@ interface AccountKeys {
 
 /** Typed resource service; the repository owns data, lifetimes and subscriptions. */
 export class DeviceCache {
+  snapshot: (() => AgentSnapshot | undefined) | undefined;
+
   constructor(
     private readonly bridge: Bridge,
     now: () => number = Date.now,
@@ -60,10 +64,16 @@ export class DeviceCache {
     return this.repository.query<AccountKeys>(
       accountDeviceKey(profile, store),
       () =>
-        enqueueProfileWork(this.bridge, profile, async () => ({
-          devices: await this.bridge.listAccountDevices(store),
-          backups: await this.bridge.listBackupEnrollments(store),
-        })),
+        enqueueProfileWork(this.bridge, profile, async () => {
+          const snapshot = this.snapshot?.();
+          if (this.snapshot) requireWorkflow(snapshot, 'devices-list', {
+            profile, account: snapshot?.accounts.find((entry) => entry.store === store)?.alias,
+          });
+          const devices = await this.bridge.listAccountDevices(store);
+          if (this.snapshot) requireWorkflow(this.snapshot(), 'backup-list', { profile });
+          const backups = await this.bridge.listBackupEnrollments(store);
+          return { devices, backups };
+        }),
     );
   }
 
@@ -71,9 +81,10 @@ export class DeviceCache {
     return this.repository.query<YubiEnrollment[]>(
       profileEnrollmentKey(profile),
       () =>
-        enqueueProfileWork(this.bridge, profile, () =>
-          this.bridge.listYubiAccounts(profile),
-        ),
+        enqueueProfileWork(this.bridge, profile, () => {
+          if (this.snapshot) requireWorkflow(this.snapshot(), 'yubi-list', { profile });
+          return this.bridge.listYubiAccounts(profile);
+        }),
     );
   }
 
@@ -115,18 +126,23 @@ export const useDeviceCache = (): DeviceCache | null =>
   useContext(DeviceCacheContext);
 
 /** Use one resource owner for profile pages and account pages in this access scope. */
-export function useDeviceQueries(bridge: Bridge): DeviceCache {
+export function useDeviceQueries(bridge: Bridge, snapshot?: AgentSnapshot): DeviceCache {
   const shared = useDeviceCache();
   const repository = useQueryRepository(bridge, shared?.repository);
-  return useMemo(
+  const latest = useRef(snapshot);
+  latest.current = snapshot;
+  const cache = useMemo(
     () => shared ?? new DeviceCache(bridge, Date.now, repository),
     [bridge, repository, shared],
   );
+  if (snapshot) cache.snapshot = () => latest.current;
+  return cache;
 }
 
 /** Both account pages subscribe to these exact resources instead of copying their results. */
 export function useDeviceMetadata({
   bridge,
+  snapshot,
   profile,
   store,
   enabled,
@@ -134,13 +150,14 @@ export function useDeviceMetadata({
   onError,
 }: {
   bridge: Bridge;
+  snapshot: AgentSnapshot;
   profile?: string;
   store?: StoreRef;
   enabled: boolean;
   recovery: CatalogReadRecovery;
   onError: (error: unknown) => void;
 }) {
-  const cache = useDeviceQueries(bridge);
+  const cache = useDeviceQueries(bridge, snapshot);
   const available = enabled && Boolean(profile && store);
   const account = available ? cache.account(profile!, store!) : null;
   const enrollments = available ? cache.enrollments(profile!) : null;

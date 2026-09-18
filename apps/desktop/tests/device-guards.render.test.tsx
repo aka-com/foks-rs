@@ -68,6 +68,7 @@ async function harness() {
   const { OverlayProvider } = (await vite.ssrLoadModule(
     '/kit/overlay-primitives.tsx',
   )) as typeof import('../kit/overlay-primitives');
+  const { WorkflowProvider } = await vite.ssrLoadModule('/src/workflow-context.tsx') as typeof import('../src/workflow-context');
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   const account = FIXTURE.stores.find(
@@ -106,7 +107,7 @@ async function harness() {
           controller: new ToastController(),
           children: createElement(guards.NavigationGuardProvider, {
             store,
-            children: node,
+            children: createElement(WorkflowProvider, { snapshot: FIXTURE, children: node }),
           }),
         }),
       }),

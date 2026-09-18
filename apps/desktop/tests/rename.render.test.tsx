@@ -4,6 +4,7 @@ import { createElement } from 'react';
 import type { ReactNode } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
+import { workflowScope } from './lib/workflow-scope';
 import { decodeRenameProgress } from '../src/rename-contract';
 import type { RenameProgress } from '../src/rename-contract';
 installDom({
@@ -34,7 +35,7 @@ async function overlay(children: ReactNode) {
   return createElement(OverlayProvider, {
     backgroundRef: { current: null },
     portalRoot,
-    children,
+    children: await workflowScope(vite, children),
   });
 }
 

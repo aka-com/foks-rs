@@ -1,4 +1,6 @@
 import { useDeviceMetadata } from '../device-cache';
+import { WorkflowProvider, useWorkflowAccess } from '../workflow-context';
+import { workflowAvailability } from '../model/workflow-availability';
 import { MetadataStatus } from '../components/metadata-status';
 import { deviceAlertRegistry } from './device-alert';
 import { LocalAliasPanel } from '../components/local-alias-panel';
@@ -337,7 +339,9 @@ export function PeopleScreen({
     ? accountStopped(snapshot, selected)
     : { stopped: true, reason: '' };
   const keysStopped =
-    !selected || accountStopped(snapshot, selected, 'devices').stopped;
+    !selected || !workflowAvailability(snapshot, 'devices-list', {
+      profile: selected.server, account: selected.account,
+    }).available;
   const {
     lists,
     loading: loadingKeys,
@@ -345,6 +349,7 @@ export function PeopleScreen({
     freshness,
   } = useDeviceMetadata({
     bridge,
+    snapshot,
     profile: selected?.server,
     store: selected?.id,
     enabled: !keysStopped,
@@ -441,7 +446,7 @@ export function PeopleScreen({
   );
 
   return (
-    <>
+    <WorkflowProvider snapshot={snapshot}>
       <PageHeader
         ruled
         title={identity?.title ?? 'Account'}
@@ -607,7 +612,7 @@ export function PeopleScreen({
           onComplete={() => onRefresh('SSO sign-in verified')}
         />
       ) : null}
-    </>
+    </WorkflowProvider>
   );
 }
 
@@ -637,8 +642,10 @@ function AccountPanel({
   notices: ReactNode;
 }): ReactNode {
   const username = usernameOf(snapshot, store);
-  const reason = stopped.stopped ? stopped.reason : undefined;
-  const devicesStopped = accountStopped(snapshot, store, 'devices');
+  const access = useWorkflowAccess(snapshot);
+  const target = { profile: store.server, account: store.account };
+  const devicesAccess = access.props('devices-list', target);
+  const devicesStopped = { stopped: devicesAccess.disabled, reason: devicesAccess.title };
   const deviceCount = deviceEntries(lists).length;
   const teams = teamsOnAccount(snapshot, store);
   const server = snapshot.servers.find((entry) => entry.id === store.server);
@@ -665,8 +672,8 @@ function AccountPanel({
             </Button>
           }
         >
-          Nothing on this account can be read, changed or verified until{' '}
-          {serverName(snapshot, store)} is checked.
+          Remote operations are unavailable until{' '}
+          {serverName(snapshot, store)} is checked. Local aliases can still be edited.
         </Band>
       ) : null}
       {notices}
@@ -676,8 +683,7 @@ function AccountPanel({
           action={
             <Button
               size="sm"
-              disabled={devicesStopped.stopped}
-              title={devicesStopped.stopped ? devicesStopped.reason : undefined}
+              {...access.props('account-rename', target)}
               onClick={() => onSheet('rename')}
             >
               Change…
@@ -692,8 +698,7 @@ function AccountPanel({
             <Button
               size="sm"
               aria-label="Change local alias"
-              disabled={stopped.stopped}
-              title={reason}
+              {...access.props('local-alias', target)}
               onClick={() => onSheet('local-alias')}
             >
               Change…
@@ -769,6 +774,7 @@ function AccountPanel({
           variant="plain"
           size="sm"
           className="lnk"
+          {...access.props('bot-list', target)}
           onClick={() => onSheet('bot')}
         >
           Bot accounts
@@ -777,6 +783,7 @@ function AccountPanel({
           variant="plain"
           size="sm"
           className="lnk"
+          {...access.props('web-admin-configure', target)}
           onClick={() => onSheet('admin')}
         >
           Open web admin panel
@@ -785,6 +792,7 @@ function AccountPanel({
           variant="plain"
           size="sm"
           className="lnk"
+          {...access.props('sso-login', target)}
           onClick={() => onSheet('sso')}
         >
           Sign in via SSO

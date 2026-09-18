@@ -4,7 +4,7 @@ import { useMetadataQuery } from '../query-hooks';
 import { useEffect, useState } from 'react';
 import type { Bridge } from '../bridge';
 import { Button, Inset, InsetRow, SectionLabel } from '../components';
-import { serverAvailability } from '../model';
+import { WorkflowProvider, useWorkflowAccess } from '../workflow-context';
 import type { AgentSnapshot, Server } from '../model';
 import { YubiActionSheet } from './device-sheets';
 import type { SimpleYubiAction } from './device-sheets';
@@ -20,13 +20,14 @@ export function ProfileKeys({
   bridge: Bridge;
   onError: (error: unknown) => void;
 }) {
-  const deviceCache = useDeviceQueries(bridge);
+  const deviceCache = useDeviceQueries(bridge, snapshot);
   const [action, setAction] = useState<{
     profile: string;
     alias: string;
     kind: SimpleYubiAction;
   } | null>(null);
-  const available = serverAvailability(snapshot, server).available;
+  const access = useWorkflowAccess(snapshot);
+  const available = access.availability('yubi-list', { profile: server.id }).available;
   const query = available ? deviceCache.enrollments(server.id) : null;
   const state = useMetadataQuery(query, { onError });
   const entries = state.data ?? [];
@@ -46,6 +47,7 @@ export function ProfileKeys({
     };
   }, []);
   return (
+    <WorkflowProvider snapshot={snapshot}>
     <section aria-label="Security keys">
       <SectionLabel>Security keys</SectionLabel>
       <MetadataStatus
@@ -76,6 +78,7 @@ export function ProfileKeys({
               action={
                 entry.state === 'pending' ? (
                   <Button
+                    {...access.props('yubi-resume', { profile: server.id, account: entry.alias })}
                     onClick={() =>
                       setAction({
                         profile: server.id,
@@ -89,6 +92,7 @@ export function ProfileKeys({
                 ) : (
                   <>
                     <Button
+                      {...access.props('yubi-pin', { profile: server.id, account: entry.alias })}
                       onClick={() =>
                         setAction({
                           profile: server.id,
@@ -100,6 +104,7 @@ export function ProfileKeys({
                       Change PIN…
                     </Button>
                     <Button
+                      {...access.props('yubi-pin', { profile: server.id, account: entry.alias })}
                       onClick={() =>
                         setAction({
                           profile: server.id,
@@ -111,6 +116,7 @@ export function ProfileKeys({
                       Unblock PIN…
                     </Button>
                     <Button
+                      {...access.props('yubi-pin', { profile: server.id, account: entry.alias })}
                       onClick={() =>
                         setAction({
                           profile: server.id,
@@ -149,5 +155,6 @@ export function ProfileKeys({
         />
       )}
     </section>
+    </WorkflowProvider>
   );
 }

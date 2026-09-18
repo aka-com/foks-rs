@@ -4,6 +4,7 @@ import { createElement } from 'react';
 import type { ReactNode } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
+import { workflowScope } from './lib/workflow-scope';
 import { decodeBotReply } from '../src/bot-contract';
 import type { BotEnrollment, BotAction } from '../src/bot-contract';
 installDom({
@@ -34,7 +35,7 @@ async function overlay(children: ReactNode) {
   return createElement(OverlayProvider, {
     backgroundRef: { current: null },
     portalRoot,
-    children,
+    children: await workflowScope(vite, children),
   });
 }
 
@@ -72,6 +73,36 @@ test('bot DTOs reject secret fields and wrong handles', () => {
     }),
   );
 });
+test('hardware-needed enrollment stays passive until a PIN is explicitly supplied', async () => {
+  const { BotPanel } = await vite.ssrLoadModule('/src/components/bot-panel.tsx') as typeof import('../src/components/bot-panel');
+  const { mockBridge } = await vite.ssrLoadModule('/src/mock-bridge.ts') as typeof import('../src/mock-bridge');
+  const actions: BotAction[] = [];
+  let scans = 0;
+  const bridge = {
+    ...mockBridge(),
+    listYubiCards: async () => { scans++; return []; },
+    botAccount: async (_profile: string, _account: string, action: BotAction) => {
+      actions.push(action);
+      return { rows: [{ ...progress, hardware_required: true }], message: 'Hardware needed' };
+    },
+  };
+  const r = ui.render(await overlay(createElement(BotPanel, {
+    bridge, profile: 'local', account: 'work', presentation, onComplete() {},
+  })));
+  assert.equal(actions.length, 0);
+  ui.fireEvent.click(r.getByText('Enroll bot'));
+  await ui.waitFor(() => assert.ok(r.queryByText('Confirm')));
+  assert.equal((r.getByText('Confirm') as HTMLButtonElement).disabled, true);
+  assert.equal(scans, 0);
+  assert.equal(actions.length, 1);
+  ui.fireEvent.change(r.getByLabelText('Security key PIN (enrolled keys only)'), {
+    target: { value: '654321' },
+  });
+  ui.fireEvent.click(r.getByText('Confirm'));
+  await ui.waitFor(() => assert.equal(actions.length, 2));
+  assert.equal(scans, 0);
+});
+
 test('explicit role, confirmation and unknown recovery never export or replay', async () => {
   const { BotPanel } = (await vite.ssrLoadModule(
     '/src/components/bot-panel.tsx',
