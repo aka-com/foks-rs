@@ -63,6 +63,24 @@ pub async fn agent_status(
 }
 
 #[tauri::command]
+pub async fn auto_recover_agent(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+) -> Result<AgentStatusDto, AgentError> {
+    require_main_window(&webview)?;
+    let agent = Arc::clone(&state.agent);
+    let response = tauri::async_runtime::spawn_blocking(move || agent.auto_recover_blocking())
+        .await
+        .map_err(|error| AgentError::unknown(format!("Agent recovery worker failed: {error}")))??;
+    let value = success_value(response)?;
+    serde_json::from_value::<foks_agent_proto::AgentStatus>(value)
+        .map(AgentStatusDto::from)
+        .map_err(|error| {
+            AgentError::new("protocol", format!("Invalid agent status: {error}"), false)
+        })
+}
+
+#[tauri::command]
 pub async fn retry_agent_connection(
     webview: tauri::Webview,
     state: State<'_, AppState>,

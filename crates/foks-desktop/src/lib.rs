@@ -42,6 +42,13 @@ pub enum AgentError {
     Local(LocalAgentCondition),
     Ambiguous(String),
     Cancelled,
+    DeadlineExceeded,
+    Ipc {
+        code: &'static str,
+        message: String,
+        ambiguous: bool,
+        connection_lost: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -67,6 +74,11 @@ impl AgentError {
                 ..
             } | Self::Transport(_)
                 | Self::Ambiguous(_)
+                | Self::DeadlineExceeded
+                | Self::Ipc {
+                    connection_lost: true,
+                    ..
+                }
         )
     }
 
@@ -75,6 +87,9 @@ impl AgentError {
             self,
             Self::Protocol {
                 code: ErrorCode::VersionMismatch,
+                ..
+            } | Self::Ipc {
+                code: "unsafe-socket" | "protocol" | "response-binding" | "version-mismatch",
                 ..
             }
         )
@@ -87,6 +102,21 @@ impl AgentError {
                 code: ErrorCode::DeadlineExceeded,
                 ..
             } | Self::Ambiguous(_)
+                | Self::Ipc {
+                    ambiguous: true,
+                    ..
+                }
+        )
+    }
+
+    pub fn connection_lost(&self) -> bool {
+        matches!(
+            self,
+            Self::Transport(_)
+                | Self::Ipc {
+                    connection_lost: true,
+                    ..
+                }
         )
     }
 
@@ -94,7 +124,8 @@ impl AgentError {
         match self {
             Self::Protocol { message, .. }
             | Self::Transport(message)
-            | Self::Ambiguous(message) => message,
+            | Self::Ambiguous(message)
+            | Self::Ipc { message, .. } => message,
             Self::Local(condition) => match condition {
                 LocalAgentCondition::Maintenance => "State maintenance is in progress.",
                 LocalAgentCondition::RestartRequired => {
@@ -108,6 +139,7 @@ impl AgentError {
                 }
             },
             Self::Cancelled => "Request cancelled.",
+            Self::DeadlineExceeded => "Request deadline exceeded.",
         }
     }
 }
@@ -125,7 +157,7 @@ impl std::fmt::Display for AgentError {
                 }
                 Ok(())
             }
-            Self::Transport(message) => formatter.write_str(message),
+            Self::Transport(message) | Self::Ipc { message, .. } => formatter.write_str(message),
             Self::Local(condition) => formatter.write_str(match condition {
                 LocalAgentCondition::Maintenance => "state maintenance is in progress",
                 LocalAgentCondition::RestartRequired => "application restart is required",
@@ -139,6 +171,7 @@ impl std::fmt::Display for AgentError {
                 "{message}\n\nThe upload commit may have completed. The store will be refreshed before another mutation."
             ),
             Self::Cancelled => formatter.write_str("Request cancelled"),
+            Self::DeadlineExceeded => formatter.write_str("Request deadline exceeded"),
         }
     }
 }
@@ -214,7 +247,7 @@ pub trait AgentTransport: Send + Sync + 'static {
         }
         let mutation = operation.is_mutation();
         let result = self.call(operation);
-        if cancelled() {
+        if result.is_ok() && cancelled() {
             return Err(if mutation {
                 AgentError::Ambiguous("Request cancelled after mutation started.".into())
             } else {
@@ -284,17 +317,96 @@ impl AgentTransport for AgentClient {
     }
 }
 
-fn agent_client_error(error: foks_agent_client::Error) -> AgentError {
+pub fn agent_client_error(error: foks_agent_client::Error) -> AgentError {
+    use foks_agent_client::Error;
+    let connection_lost = error.is_connection_loss();
+    let message = error.to_string();
+    let ipc = |code| AgentError::Ipc {
+        code,
+        message: message.clone(),
+        ambiguous: false,
+        connection_lost,
+    };
     match error {
-        foks_agent_client::Error::Ambiguous(message) => AgentError::Ambiguous(message),
-        foks_agent_client::Error::Protocol(foks_agent_proto::Error::Version) => {
-            AgentError::Protocol {
-                code: ErrorCode::VersionMismatch,
-                message: "desktop and agent protocol versions do not match".to_owned(),
-                fields: ErrorFields::default(),
+        Error::Cancelled => AgentError::Cancelled,
+        Error::DeadlineExceeded => AgentError::DeadlineExceeded,
+        Error::Ambiguous(cause) => {
+            let cause = agent_client_error(*cause);
+            let code = match &cause {
+                AgentError::Ipc { code, .. } => *code,
+                AgentError::Protocol {
+                    code: ErrorCode::VersionMismatch,
+                    ..
+                } => "version-mismatch",
+                _ => "ambiguous",
+            };
+            AgentError::Ipc {
+                code,
+                message,
+                ambiguous: true,
+                connection_lost,
             }
         }
-        error => AgentError::Transport(error.to_string()),
+        Error::Protocol(foks_agent_proto::Error::Version) => AgentError::Protocol {
+            code: ErrorCode::VersionMismatch,
+            message: "desktop and agent protocol versions do not match".to_owned(),
+            fields: ErrorFields::default(),
+        },
+        Error::Io(_) if connection_lost => AgentError::Transport(message),
+        Error::Io(_) => ipc("io"),
+        Error::UploadSource(_) => ipc("upload-source"),
+        Error::UnsafeSocket => ipc("unsafe-socket"),
+        Error::Protocol(_) => ipc("protocol"),
+        Error::ResponseBinding => ipc("response-binding"),
+        Error::Unsupported => ipc("unsupported"),
+    }
+}
+
+#[cfg(test)]
+mod ipc_error_tests {
+    use super::*;
+
+    #[test]
+    fn client_cancellation_and_local_deadline_are_not_agent_loss() {
+        for error in [
+            foks_agent_client::Error::Cancelled,
+            foks_agent_client::Error::DeadlineExceeded,
+        ] {
+            let mapped = agent_client_error(error);
+            assert!(!mapped.connection_lost());
+            assert!(!mapped.fatal());
+            assert!(!mapped.ambiguous());
+            assert!(matches!(
+                mapped,
+                AgentError::Cancelled | AgentError::DeadlineExceeded
+            ));
+        }
+    }
+
+    #[test]
+    fn default_adapter_does_not_hide_security_failures_behind_cancellation() {
+        struct Failed(std::sync::atomic::AtomicBool);
+        impl AgentTransport for Failed {
+            fn call(&self, _: Operation) -> Result<Value, AgentError> {
+                self.0.store(true, std::sync::atomic::Ordering::Release);
+                Err(agent_client_error(foks_agent_client::Error::UnsafeSocket))
+            }
+        }
+        let transport = Failed(std::sync::atomic::AtomicBool::new(false));
+        let error = transport
+            .call_cancellable(Operation::Ping, &|| {
+                transport.0.load(std::sync::atomic::Ordering::Acquire)
+            })
+            .unwrap_err();
+        assert!(error.fatal());
+        assert!(!error.connection_lost());
+        assert!(matches!(
+            error,
+            AgentError::Ipc {
+                code: "unsafe-socket",
+                ..
+            }
+        ));
     }
 }
 

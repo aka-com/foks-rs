@@ -27,12 +27,37 @@ pub enum Error {
     UnsafeSocket,
     #[error("local agent I/O failed: {0}")]
     Io(#[from] std::io::Error),
+    #[error("upload source failed: {0}")]
+    UploadSource(std::io::Error),
     #[error("local agent protocol failed: {0}")]
     Protocol(#[from] foks_agent_proto::Error),
     #[error("local agent response ID does not match request ID")]
     ResponseBinding,
+    #[error("local agent request was cancelled")]
+    Cancelled,
+    #[error("local agent request deadline exceeded")]
+    DeadlineExceeded,
     #[error("local agent mutation outcome is ambiguous: {0}")]
-    Ambiguous(String),
+    Ambiguous(Box<Error>),
+}
+
+impl Error {
+    pub fn is_connection_loss(&self) -> bool {
+        match self {
+            Self::Io(error) => matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound
+                    | std::io::ErrorKind::ConnectionRefused
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::NotConnected
+                    | std::io::ErrorKind::UnexpectedEof
+            ),
+            Self::Ambiguous(cause) => cause.is_connection_loss(),
+            _ => false,
+        }
+    }
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -91,7 +116,7 @@ impl AgentClient {
         )?;
         if response.id != Some(id) {
             return Err(if mutation {
-                Error::Ambiguous(Error::ResponseBinding.to_string())
+                Error::Ambiguous(Box::new(Error::ResponseBinding))
             } else {
                 Error::ResponseBinding
             });
@@ -116,7 +141,7 @@ impl AgentClient {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let response = upload_platform(&self.socket, self.timeout, id, header, reader, cancelled)?;
         if response.id != Some(id) {
-            return Err(Error::Ambiguous(Error::ResponseBinding.to_string()));
+            return Err(Error::Ambiguous(Box::new(Error::ResponseBinding)));
         }
         Ok(response)
     }
@@ -134,25 +159,22 @@ fn call_platform(
     let frame = foks_agent_proto::encode(&request);
     request.operation.zeroize_plaintext();
     let frame = frame?;
-    if cancelled() {
-        return Err(Error::Io(std::io::Error::new(
-            std::io::ErrorKind::Interrupted,
-            "request cancelled",
-        )));
-    }
-    let mut stream = connect_platform(socket, timeout)?;
     let deadline = std::time::Instant::now() + timeout;
+    check_upload_cancelled(cancelled, deadline)?;
+    let mut stream = connect_platform(socket, timeout)?;
+    check_upload_cancelled(cancelled, deadline)?;
     if let Err(error) = stream.write_all(&frame) {
+        let error = socket_write_error(error);
         return Err(if mutation {
-            Error::Ambiguous(error.to_string())
+            Error::Ambiguous(Box::new(error))
         } else {
-            Error::Io(error)
+            error
         });
     }
     drop(frame);
     read_response_cancellable(&mut stream, cancelled, deadline).map_err(|error| {
         if mutation {
-            Error::Ambiguous(error.to_string())
+            Error::Ambiguous(Box::new(error))
         } else {
             error
         }
@@ -174,10 +196,13 @@ fn upload_platform<R: std::io::Read + ?Sized>(
     check_upload_cancelled(cancelled, deadline)?;
     let total = header.total_length;
     let mut stream = connect_platform(socket, timeout)?;
-    stream.write_all(&foks_agent_proto::encode(&Request::new(
-        id,
-        Operation::PutKvStream { header },
-    ))?)?;
+    check_upload_cancelled(cancelled, deadline)?;
+    stream
+        .write_all(&foks_agent_proto::encode(&Request::new(
+            id,
+            Operation::PutKvStream { header },
+        ))?)
+        .map_err(socket_write_error)?;
     let mut buffer = Zeroizing::new(vec![0u8; MAXIMUM_UPLOAD_FRAME_BYTES]);
     let mut offset = 0u64;
     while offset < total {
@@ -199,18 +224,18 @@ fn upload_platform<R: std::io::Read + ?Sized>(
         }
         let encoded = encoded?;
         if let Err(error) = stream.write_all(&encoded) {
-            return match read_response(&mut stream) {
+            return match read_response_cancellable(&mut stream, cancelled, deadline) {
+                Ok(response) if response.id != Some(id) => Err(Error::ResponseBinding),
                 Ok(response)
-                    if response.id == Some(id)
-                        && matches!(
-                            &response.result,
-                            foks_agent_proto::ResponseResult::Error { .. }
-                        ) =>
+                    if matches!(
+                        &response.result,
+                        foks_agent_proto::ResponseResult::Error { .. }
+                    ) =>
                 {
                     Ok(response)
                 }
-                Err(_) => Err(Error::Io(error)),
-                Ok(_) => Err(Error::Io(error)),
+                Err(cause) => Err(upload_write_failure(error, cause)),
+                Ok(_) => Err(socket_write_error(error)),
             };
         }
         offset = offset
@@ -218,7 +243,7 @@ fn upload_platform<R: std::io::Read + ?Sized>(
             .ok_or_else(|| Error::Io(std::io::Error::other("upload offset overflow")))?;
     }
     let mut excess = [0u8; 1];
-    if reader.read(&mut excess)? != 0 {
+    if reader.read(&mut excess).map_err(Error::UploadSource)? != 0 {
         excess.zeroize();
         return Err(Error::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -232,37 +257,56 @@ fn upload_platform<R: std::io::Read + ?Sized>(
         payload: KvUploadPayload::Commit,
     })?;
     if let Err(error) = stream.write_all(&commit) {
-        return match read_response(&mut stream) {
+        return match read_response_cancellable(&mut stream, cancelled, deadline) {
             Ok(response) => Ok(response),
-            Err(_) => Err(Error::Ambiguous(error.to_string())),
+            Err(cause) => Err(Error::Ambiguous(Box::new(upload_write_failure(
+                error, cause,
+            )))),
         };
     }
     read_response_cancellable(&mut stream, cancelled, deadline)
-        .map_err(|error| Error::Ambiguous(error.to_string()))
+        .map_err(|error| Error::Ambiguous(Box::new(error)))
 }
 
 fn check_upload_cancelled(
     cancelled: &dyn Fn() -> bool,
     deadline: std::time::Instant,
 ) -> Result<()> {
-    if cancelled() || std::time::Instant::now() >= deadline {
-        return Err(Error::Io(std::io::Error::new(
-            std::io::ErrorKind::Interrupted,
-            "upload cancelled or deadline exceeded",
-        )));
+    if cancelled() {
+        return Err(Error::Cancelled);
+    }
+    if std::time::Instant::now() >= deadline {
+        return Err(Error::DeadlineExceeded);
     }
     Ok(())
+}
+
+fn socket_write_error(error: std::io::Error) -> Error {
+    match error.kind() {
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => Error::DeadlineExceeded,
+        _ => Error::Io(error),
+    }
+}
+
+fn upload_write_failure(write: std::io::Error, response: Error) -> Error {
+    let write = socket_write_error(write);
+    if matches!(response, Error::Cancelled | Error::DeadlineExceeded) && write.is_connection_loss()
+    {
+        write
+    } else {
+        response
+    }
 }
 
 fn read_upload_chunk<R: std::io::Read + ?Sized>(reader: &mut R, output: &mut [u8]) -> Result<()> {
     reader.read_exact(output).map_err(|error| {
         if error.kind() == std::io::ErrorKind::UnexpectedEof {
-            Error::Io(std::io::Error::new(
+            Error::UploadSource(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
                 "upload ended before its declared length",
             ))
         } else {
-            Error::Io(error)
+            Error::UploadSource(error)
         }
     })
 }
@@ -293,26 +337,15 @@ fn read_response_cancellable(
 ) -> Result<Response> {
     use std::io::{ErrorKind, Read as _};
     stream.set_read_timeout(Some(Duration::from_millis(100)))?;
-    let mut read = |mut bytes: &mut [u8]| -> std::io::Result<()> {
+    let mut read = |mut bytes: &mut [u8]| -> Result<()> {
         while !bytes.is_empty() {
-            if cancelled() {
-                return Err(std::io::Error::new(
-                    ErrorKind::Interrupted,
-                    "request cancelled",
-                ));
-            }
-            if std::time::Instant::now() >= deadline {
-                return Err(std::io::Error::new(
-                    ErrorKind::TimedOut,
-                    "request deadline exceeded",
-                ));
-            }
+            check_upload_cancelled(cancelled, deadline)?;
             match stream.read(bytes) {
                 Ok(0) => {
-                    return Err(std::io::Error::new(
+                    return Err(Error::Io(std::io::Error::new(
                         ErrorKind::UnexpectedEof,
                         "agent disconnected",
-                    ))
+                    )))
                 }
                 Ok(count) => bytes = &mut bytes[count..],
                 Err(error)
@@ -320,7 +353,7 @@ fn read_response_cancellable(
                         error.kind(),
                         ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
                     ) => {}
-                Err(error) => return Err(error),
+                Err(error) => return Err(Error::Io(error)),
             }
         }
         Ok(())
@@ -334,30 +367,8 @@ fn read_response_cancellable(
     let mut frame = Zeroizing::new(vec![0; 4 + length]);
     frame[..4].copy_from_slice(&prefix);
     read(&mut frame[4..])?;
-    if cancelled() {
-        return Err(Error::Io(std::io::Error::new(
-            ErrorKind::Interrupted,
-            "request cancelled",
-        )));
-    }
+    check_upload_cancelled(cancelled, deadline)?;
     Ok(foks_agent_proto::decode_response(&frame)?)
-}
-
-#[cfg(unix)]
-fn read_response(stream: &mut std::os::unix::net::UnixStream) -> Result<Response> {
-    use std::io::Read as _;
-
-    let mut prefix = [0u8; 4];
-    stream.read_exact(&mut prefix)?;
-    let length = u32::from_be_bytes(prefix) as usize;
-    if length > MAXIMUM_MESSAGE_BYTES {
-        return Err(foks_agent_proto::Error::TooLarge.into());
-    }
-    let mut frame = Zeroizing::new(Vec::with_capacity(4 + length));
-    frame.extend_from_slice(&prefix);
-    frame.resize(4 + length, 0);
-    stream.read_exact(&mut frame[4..])?;
-    foks_agent_proto::decode_response(&frame).map_err(Into::into)
 }
 
 #[cfg(not(unix))]
@@ -406,6 +417,158 @@ mod tests {
             self.0 -= 1;
             Ok(1)
         }
+    }
+
+    fn read_frame(stream: &mut std::os::unix::net::UnixStream) -> Vec<u8> {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut prefix = [0; 4];
+        stream.read_exact(&mut prefix).unwrap();
+        let mut frame = vec![0; 4 + u32::from_be_bytes(prefix) as usize];
+        frame[..4].copy_from_slice(&prefix);
+        stream.read_exact(&mut frame[4..]).unwrap();
+        frame
+    }
+
+    #[test]
+    fn cancellation_before_connect_or_dispatch_never_makes_a_mutation_ambiguous() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("agent.sock");
+        let operation = || Operation::RemoveProfile {
+            name: "local".into(),
+        };
+        assert!(matches!(
+            AgentClient::new(&socket).call_cancellable(operation(), &|| true),
+            Err(Error::Cancelled)
+        ));
+        let listener = UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let calls = std::cell::Cell::new(0);
+        assert!(matches!(
+            AgentClient::new(&socket).call_cancellable(operation(), &|| {
+                calls.set(calls.get() + 1);
+                calls.get() == 2
+            }),
+            Err(Error::Cancelled)
+        ));
+        let (mut stream, _) = listener.accept().unwrap();
+        assert_eq!(stream.read(&mut [0; 1]).unwrap(), 0);
+    }
+
+    #[test]
+    fn local_deadlines_are_typed_and_distinct_from_eof() {
+        let (mut client, server) = std::os::unix::net::UnixStream::pair().unwrap();
+        let error = read_response_cancellable(&mut client, &|| false, std::time::Instant::now())
+            .unwrap_err();
+        assert!(matches!(error, Error::DeadlineExceeded));
+        assert!(!error.is_connection_loss());
+        drop(server);
+        let error = read_response_cancellable(
+            &mut client,
+            &|| false,
+            std::time::Instant::now() + Duration::from_secs(1),
+        )
+        .unwrap_err();
+        assert!(error.is_connection_loss());
+        assert!(
+            matches!(error, Error::Io(cause) if cause.kind() == std::io::ErrorKind::UnexpectedEof)
+        );
+    }
+
+    #[test]
+    fn cancellation_during_prefix_body_and_completed_reply_stays_typed() {
+        for cancel_at in 1..=3 {
+            let (mut client, mut server) = std::os::unix::net::UnixStream::pair().unwrap();
+            let response = Response::success(1, serde_json::json!({"ready": true}));
+            server
+                .write_all(&foks_agent_proto::encode(&response).unwrap())
+                .unwrap();
+            let checks = std::cell::Cell::new(0);
+            let error = read_response_cancellable(
+                &mut client,
+                &|| {
+                    checks.set(checks.get() + 1);
+                    checks.get() == cancel_at
+                },
+                std::time::Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap_err();
+            assert!(matches!(error, Error::Cancelled));
+            assert!(!error.is_connection_loss());
+        }
+    }
+
+    #[test]
+    fn deadlines_after_dispatch_preserve_mutation_uncertainty() {
+        for mutation in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let socket = directory.path().join("agent.sock");
+            let listener = UnixListener::bind(&socket).unwrap();
+            std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                read_frame(&mut stream);
+                assert_eq!(stream.read(&mut [0; 1]).unwrap(), 0);
+            });
+            let mut client = AgentClient::new(&socket);
+            client.set_timeout(Duration::from_millis(50)).unwrap();
+            let operation = if mutation {
+                Operation::RemoveProfile {
+                    name: "local".into(),
+                }
+            } else {
+                Operation::Ping
+            };
+            let error = client.call(operation).unwrap_err();
+            assert!(!error.is_connection_loss());
+            if mutation {
+                assert!(
+                    matches!(error, Error::Ambiguous(cause) if matches!(*cause, Error::DeadlineExceeded))
+                );
+            } else {
+                assert!(matches!(error, Error::DeadlineExceeded));
+            }
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn upload_cancellation_after_commit_preserves_its_cause() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("agent.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_frame(&mut stream);
+            let frame = foks_agent_proto::decode_upload_frame(&read_frame(&mut stream)).unwrap();
+            assert!(matches!(frame.payload, KvUploadPayload::Commit));
+            assert_eq!(stream.read(&mut [0; 1]).unwrap(), 0);
+        });
+        let header = KvUploadHeader {
+            adapter: None,
+            store: KvStoreRef::Account(AccountStoreRef {
+                profile: "local".into(),
+                account_alias: "owner".into(),
+            }),
+            path: "/empty".into(),
+            total_length: 0,
+            read_role: KvRole::Owner,
+            write_role: KvRole::Owner,
+            precondition: KvPrecondition::Create,
+            mkdir_p: false,
+        };
+        let checks = std::cell::Cell::new(0);
+        let error = AgentClient::new(&socket)
+            .put_kv_stream_cancellable(header, &mut std::io::empty(), &|| {
+                checks.set(checks.get() + 1);
+                checks.get() >= 4
+            })
+            .unwrap_err();
+        assert!(!error.is_connection_loss());
+        assert!(matches!(error, Error::Ambiguous(cause) if matches!(*cause, Error::Cancelled)));
+        server.join().unwrap();
     }
 
     #[test]
@@ -567,9 +730,14 @@ mod tests {
             precondition: KvPrecondition::Create,
             mkdir_p: false,
         };
-        assert!(AgentClient::new(&socket)
-            .put_kv_stream_cancellable(header, &mut Reader(&cancelled, false), &|| cancelled.get())
-            .is_err());
+        assert!(matches!(
+            AgentClient::new(&socket).put_kv_stream_cancellable(
+                header,
+                &mut Reader(&cancelled, false),
+                &|| cancelled.get()
+            ),
+            Err(Error::Cancelled)
+        ));
         server.join().unwrap();
     }
 
@@ -672,7 +840,14 @@ mod chat_cancellation_tests {
             let start = Instant::now();
             cancel.store(true, Ordering::Release);
             let error = client.join().unwrap().unwrap_err();
-            assert_eq!(matches!(error, Error::Ambiguous(_)), mutation);
+            assert!(!error.is_connection_loss());
+            if mutation {
+                assert!(
+                    matches!(error, Error::Ambiguous(cause) if matches!(*cause, Error::Cancelled))
+                );
+            } else {
+                assert!(matches!(error, Error::Cancelled));
+            }
             assert!(start.elapsed() < Duration::from_secs(2));
             server.join().unwrap();
         }

@@ -190,6 +190,7 @@ pub fn run() {
             commands::portability::client_state_maintenance_status,
             commands::sso::open_sso_browser,
             commands::application::agent_status,
+            commands::application::auto_recover_agent,
             commands::application::retry_agent_connection,
             commands::enrollment::initialize_client_state,
             commands::enrollment::discover_go_profiles,

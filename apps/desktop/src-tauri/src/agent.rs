@@ -90,7 +90,7 @@ impl AgentError {
 
     pub fn from_client(error: &foks_agent_client::Error) -> Self {
         use foks_agent_client::Error;
-        match error {
+        let mut mapped = match error {
             Error::Unsupported => Self::new(
                 "unsupported",
                 "Local agent communication is not supported on this platform.",
@@ -101,13 +101,19 @@ impl AgentError {
                 "The agent socket is not private to this user account and cannot be used.",
                 false,
             ),
-            Error::Io(error) => {
+            Error::Cancelled => Self::new("cancelled", "The request was cancelled.", true),
+            Error::DeadlineExceeded => {
+                Self::new("deadline-exceeded", "The request deadline exceeded.", true)
+            }
+            Error::UploadSource(error) => Self::new("upload-source", error.to_string(), false),
+            Error::Io(cause) => {
+                let lost = error.is_connection_loss();
                 let mut mapped = Self::new(
-                    "agent-lost",
-                    format!("Failed to connect to agent: {error}"),
-                    true,
+                    if lost { "agent-lost" } else { "io" },
+                    format!("Local agent I/O failed: {cause}"),
+                    lost,
                 );
-                mapped.fatal = true;
+                mapped.fatal = lost;
                 mapped
             }
             Error::Protocol(foks_agent_proto::Error::Version) => Self::from_agent(
@@ -122,18 +128,27 @@ impl AgentError {
             Error::ResponseBinding => Self::new(
                 "response-binding",
                 "The agent response did not match the request.",
-                true,
+                false,
             ),
-            Error::Ambiguous(detail) => {
-                let mut mapped = Self::new(
-                    "ambiguous",
-                    format!("Ambiguous operation result: {detail}"),
-                    false,
-                );
+            Error::Ambiguous(cause) => {
+                let mut mapped = Self::from_client(cause);
+                if matches!(
+                    mapped.code.as_str(),
+                    "agent-lost" | "cancelled" | "deadline-exceeded"
+                ) {
+                    mapped.code = "ambiguous".to_owned();
+                }
+                mapped.message = error.to_string();
+                mapped.retryable = false;
                 mapped.ambiguous = true;
                 mapped
             }
-        }
+        };
+        mapped.fatal |= matches!(
+            mapped.code.as_str(),
+            "unsafe-socket" | "protocol" | "response-binding"
+        );
+        mapped
     }
 
     pub fn from_agent(code: ErrorCode, message: String) -> Self {
@@ -238,6 +253,24 @@ impl AgentError {
             }
             DesktopAgentError::Cancelled => {
                 Self::new("cancelled", "The request was cancelled.", true)
+            }
+            DesktopAgentError::DeadlineExceeded => {
+                Self::new("deadline-exceeded", "The request deadline exceeded.", true)
+            }
+            DesktopAgentError::Ipc {
+                code,
+                message,
+                ambiguous,
+                connection_lost,
+            } => {
+                let mut mapped = Self::new(code, message, connection_lost && !ambiguous);
+                mapped.ambiguous = ambiguous;
+                mapped.fatal = connection_lost
+                    || matches!(
+                        code,
+                        "unsafe-socket" | "protocol" | "response-binding" | "version-mismatch"
+                    );
+                mapped
             }
         }
     }
@@ -476,6 +509,12 @@ impl ObservedTransport {
         let guard = self.maintenance.try_read().map_err(|_| {
             DesktopAgentError::Local(foks_desktop::LocalAgentCondition::Maintenance)
         })?;
+        self.require_current()?;
+        Ok(guard)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn require_current(&self) -> Result<(), DesktopAgentError> {
         match *self
             .disposition
             .lock()
@@ -498,15 +537,17 @@ impl ObservedTransport {
                 ));
             }
         }
-        Ok(guard)
+        Ok(())
     }
 
-    fn record(&self, result: &Result<Value, DesktopAgentError>) {
-        if let Err(DesktopAgentError::Transport(message)) = result {
-            *self
-                .connection_failure
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(message.clone());
+    fn record<T>(&self, result: &Result<T, DesktopAgentError>) {
+        if let Err(error) = result {
+            if error.connection_lost() {
+                *self
+                    .connection_failure
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.to_string());
+            }
         }
     }
 }
@@ -576,17 +617,7 @@ fn response_result(result: ResponseResult) -> Result<Value, DesktopAgentError> {
 }
 
 fn client_to_desktop(error: foks_agent_client::Error) -> DesktopAgentError {
-    match error {
-        foks_agent_client::Error::Ambiguous(message) => DesktopAgentError::Ambiguous(message),
-        foks_agent_client::Error::Protocol(foks_agent_proto::Error::Version) => {
-            DesktopAgentError::Protocol {
-                code: ErrorCode::VersionMismatch,
-                message: "Desktop and agent protocol versions do not match".to_owned(),
-                fields: Default::default(),
-            }
-        }
-        error => DesktopAgentError::Transport(error.to_string()),
-    }
+    foks_desktop::agent_client_error(error)
 }
 
 pub struct AgentHandle {
@@ -689,6 +720,166 @@ impl AgentHandle {
         &self.socket
     }
 
+    pub fn auto_recover_blocking(&self) -> Result<Response, AgentError> {
+        self.wait_for_startup();
+        self.maintenance_in_flight
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| {
+                AgentError::from_desktop(DesktopAgentError::Local(
+                    foks_desktop::LocalAgentCondition::Maintenance,
+                ))
+            })?;
+        let _admission = MaintenanceAdmission(&self.maintenance_in_flight);
+        let _reservation = self.transport.maintenance.try_write().map_err(|_| {
+            AgentError::from_desktop(DesktopAgentError::Local(
+                foks_desktop::LocalAgentCondition::Maintenance,
+            ))
+        })?;
+        self.transport
+            .require_current()
+            .map_err(AgentError::from_desktop)?;
+        let initial_error = match self.probe_status() {
+            Ok(response) => {
+                self.clear_connection_failure();
+                return Ok(response);
+            }
+            Err(error) if error.code == "agent-lost" => error,
+            Err(error) => return Err(error),
+        };
+        self.require_managed_endpoint()?;
+        self.require_auto_recovery_root()?;
+        self.require_missing_agent_endpoint()?;
+        if MANAGED_AGENT_PID
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
+            || self
+                .pending_stop_pid
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        {
+            return Err(AgentError::new(
+                "agent-busy",
+                "The managed agent has not exited.",
+                true,
+            ));
+        }
+        let binary = managed_agent_binary(&self.socket).ok_or_else(|| {
+            AgentError::new(
+                "agent-start-failed",
+                "The managed agent binary is unavailable.",
+                false,
+            )
+        })?;
+        validate_agent_binary(&binary)?;
+        let root = self
+            .socket
+            .parent()
+            .ok_or_else(|| AgentError::unknown("Agent state path has no parent."))?;
+        let _root_lease = foks_client_app::ClientStateLease::acquire(root)
+            .map_err(|error| AgentError::new("agent-state", error.to_string(), false))?;
+        let _spawn_lock = acquire_spawn_lock(&self.socket)?;
+        self.require_auto_recovery_root()?;
+        match self.probe_status() {
+            Ok(response) => {
+                self.clear_connection_failure();
+                return Ok(response);
+            }
+            Err(error) if error.code == "agent-lost" => self.require_missing_agent_endpoint()?,
+            Err(error) => return Err(error),
+        }
+        launch_agent(&binary, root, &self.socket)?;
+        let mut last_error = initial_error;
+        for _ in 0..50 {
+            std::thread::sleep(Duration::from_millis(100));
+            match self.probe_status() {
+                Ok(response) => {
+                    self.clear_connection_failure();
+                    return Ok(response);
+                }
+                Err(error) if error.code == "agent-lost" => last_error = error,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(last_error)
+    }
+
+    fn require_missing_agent_endpoint(&self) -> Result<(), AgentError> {
+        use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _};
+        let metadata = match std::fs::symlink_metadata(&self.socket) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(AgentError::from_client(&error.into())),
+            Ok(metadata) => metadata,
+        };
+        if !metadata.file_type().is_socket()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.mode() & 0o777 != 0o600
+        {
+            return Err(AgentError::from_client(
+                &foks_agent_client::Error::UnsafeSocket,
+            ));
+        }
+        match std::os::unix::net::UnixStream::connect(&self.socket) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {}
+            Err(error) => return Err(AgentError::from_client(&error.into())),
+            Ok(_) => {
+                return Err(AgentError::new(
+                    "agent-busy",
+                    "An existing listener owns the agent endpoint.",
+                    true,
+                ))
+            }
+        }
+        let current = std::fs::symlink_metadata(&self.socket)
+            .map_err(|error| AgentError::from_client(&error.into()))?;
+        if current.dev() != metadata.dev() || current.ino() != metadata.ino() {
+            return Err(AgentError::new(
+                "agent-busy",
+                "The agent endpoint changed during recovery.",
+                true,
+            ));
+        }
+        Ok(())
+    }
+
+    fn require_auto_recovery_root(&self) -> Result<(), AgentError> {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let root = self
+            .socket
+            .parent()
+            .ok_or_else(|| AgentError::unknown("Agent state path has no parent."))?;
+        for (path, directory) in [
+            (root.to_path_buf(), true),
+            (root.join("client-state.toml"), false),
+        ] {
+            let metadata = std::fs::symlink_metadata(path)
+                .map_err(|error| AgentError::new("agent-state", error.to_string(), false))?;
+            if metadata.file_type().is_symlink()
+                || (directory && !metadata.is_dir())
+                || (!directory && !metadata.is_file())
+                || metadata.uid() != unsafe { libc::geteuid() }
+                || metadata.permissions().mode() & 0o077 != 0
+            {
+                return Err(AgentError::new(
+                    "agent-state",
+                    "Automatic recovery requires existing private client state.",
+                    false,
+                ));
+            }
+        }
+        match (self.maintenance_readiness)(root, &[]) {
+            SafeRootDisposition::Current => Ok(()),
+            SafeRootDisposition::Selected(_) => Err(AgentError::from_desktop(
+                DesktopAgentError::Local(foks_desktop::LocalAgentCondition::RestartRequired),
+            )),
+            SafeRootDisposition::Recovery(_) => Err(AgentError::from_desktop(
+                DesktopAgentError::Local(foks_desktop::LocalAgentCondition::RecoveryRequired),
+            )),
+        }
+    }
+
     /// Recovery is limited to a missing, desktop-managed endpoint with a usable
     /// replacement binary. External launcher paths must never become delete targets.
     pub fn startup_reset_directory(&self) -> Option<PathBuf> {
@@ -742,20 +933,45 @@ impl AgentHandle {
             .transport
             .reserve_use()
             .map_err(AgentError::from_desktop)?;
-        self.call_unreserved(operation)
+        let result = self
+            .transport
+            .client
+            .call(operation)
+            .map_err(client_to_desktop);
+        self.transport.record(&result);
+        result.map_err(AgentError::from_desktop)
     }
 
     fn call_unreserved(&self, operation: Operation) -> Result<Response, AgentError> {
-        match self.transport.client.call(operation) {
-            Ok(response) => Ok(response),
-            Err(error) => {
-                *self
-                    .connection_failure
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.to_string());
-                Err(AgentError::from_client(&error))
+        self.transport
+            .client
+            .call(operation)
+            .map_err(|error| AgentError::from_client(&error))
+    }
+
+    fn probe_status(&self) -> Result<Response, AgentError> {
+        let response = self.call_unreserved(Operation::AgentStatus)?;
+        match &response.result {
+            ResponseResult::Success { value } => {
+                serde_json::from_value::<foks_agent_proto::AgentStatus>(value.clone()).map_err(
+                    |error| {
+                        AgentError::new("protocol", format!("Invalid agent status: {error}"), false)
+                    },
+                )?;
+            }
+            ResponseResult::Error {
+                code,
+                message,
+                fields,
+            } => {
+                return Err(AgentError::from_desktop(DesktopAgentError::Protocol {
+                    code: *code,
+                    message: message.clone(),
+                    fields: fields.clone(),
+                }));
             }
         }
+        Ok(response)
     }
 
     #[cfg(test)]
@@ -833,7 +1049,7 @@ impl AgentHandle {
         &self,
         confirm: &dyn Fn(&AgentTakeover) -> Result<bool, AgentError>,
     ) -> Result<Response, AgentError> {
-        match self.call_unreserved(Operation::AgentStatus) {
+        match self.probe_status() {
             Ok(response) => {
                 self.clear_connection_failure();
                 self.adopt_orphaned_agent();
@@ -842,7 +1058,7 @@ impl AgentHandle {
             Err(_) => {}
         }
         let Some(binary) = managed_agent_binary(&self.socket) else {
-            return self.call_unreserved(Operation::AgentStatus);
+            return self.probe_status();
         };
         self.start_with_binary(&binary, confirm)
     }
@@ -866,7 +1082,7 @@ impl AgentHandle {
         // approval for each replacement process and limit retries for respawning services.
         let mut approvals = 0;
         for _ in 0..=MAX_STARTUP_TAKEOVERS {
-            match self.call_unreserved(Operation::AgentStatus) {
+            match self.probe_status() {
                 Ok(response) => {
                     self.clear_connection_failure();
                     self.adopt_orphaned_agent();
@@ -885,7 +1101,7 @@ impl AgentHandle {
                     }
                     // Recheck before spawning: a new listener may already own
                     // the path, including a compatible agent we can simply use.
-                    match self.call_unreserved(Operation::AgentStatus) {
+                    match self.probe_status() {
                         Ok(response) => {
                             self.clear_connection_failure();
                             return Ok(response);
@@ -903,7 +1119,7 @@ impl AgentHandle {
             let mut replaced = false;
             for _ in 0..50 {
                 std::thread::sleep(Duration::from_millis(100));
-                match self.call_unreserved(Operation::AgentStatus) {
+                match self.probe_status() {
                     Ok(response) => {
                         self.clear_connection_failure();
                         return Ok(response);
@@ -2912,6 +3128,312 @@ mod tests {
         );
     }
 
+    fn read_socket_request(
+        stream: &mut std::os::unix::net::UnixStream,
+    ) -> foks_agent_proto::Request {
+        use std::io::Read as _;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut prefix = [0; 4];
+        stream.read_exact(&mut prefix).unwrap();
+        let mut frame = vec![0; 4 + u32::from_be_bytes(prefix) as usize];
+        frame[..4].copy_from_slice(&prefix);
+        stream.read_exact(&mut frame[4..]).unwrap();
+        foks_agent_proto::decode_request(&frame).unwrap()
+    }
+
+    #[test]
+    fn client_and_desktop_mappings_preserve_health_separately_from_ambiguity() {
+        use foks_agent_client::Error;
+        let errors = vec![
+            Error::Cancelled,
+            Error::DeadlineExceeded,
+            Error::UnsafeSocket,
+            Error::ResponseBinding,
+            Error::Protocol(foks_agent_proto::Error::Version),
+            Error::Protocol(foks_agent_proto::Error::TooLarge),
+            Error::Io(std::io::ErrorKind::ConnectionRefused.into()),
+            Error::Io(std::io::ErrorKind::UnexpectedEof.into()),
+            Error::UploadSource(std::io::ErrorKind::UnexpectedEof.into()),
+        ];
+        for error in errors {
+            let lost = error.is_connection_loss();
+            let direct = AgentError::from_client(&error);
+            let desktop = client_to_desktop(error);
+            assert_eq!(desktop.connection_lost(), lost);
+            let mapped = AgentError::from_desktop(desktop);
+            assert_eq!(
+                (
+                    &mapped.code,
+                    mapped.fatal,
+                    mapped.ambiguous,
+                    mapped.retryable
+                ),
+                (
+                    &direct.code,
+                    direct.fatal,
+                    direct.ambiguous,
+                    direct.retryable
+                )
+            );
+        }
+        for cause in [
+            Error::Cancelled,
+            Error::DeadlineExceeded,
+            Error::Io(std::io::ErrorKind::UnexpectedEof.into()),
+            Error::ResponseBinding,
+            Error::Protocol(foks_agent_proto::Error::Version),
+        ] {
+            let error = Error::Ambiguous(Box::new(cause));
+            let lost = error.is_connection_loss();
+            let direct = AgentError::from_client(&error);
+            let desktop = client_to_desktop(error);
+            assert!(desktop.ambiguous());
+            assert_eq!(desktop.connection_lost(), lost);
+            let mapped = AgentError::from_desktop(desktop);
+            assert!(mapped.ambiguous && !mapped.retryable);
+            assert_eq!((&mapped.code, mapped.fatal), (&direct.code, direct.fatal));
+        }
+    }
+
+    #[test]
+    fn observed_cancellation_and_deadline_leave_the_next_call_healthy() {
+        use std::io::{Read as _, Write as _};
+        use std::os::unix::net::UnixListener;
+        for deadline in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let socket = directory.path().join("agent.sock");
+            let listener = UnixListener::bind(&socket).unwrap();
+            std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let signal = cancelled.clone();
+            let server = std::thread::spawn(move || {
+                let (mut first, _) = listener.accept().unwrap();
+                let request = read_socket_request(&mut first);
+                assert!(matches!(request.operation, Operation::Ping));
+                first.write_all(&[0, 0]).unwrap();
+                if !deadline {
+                    signal.store(true, Ordering::Release);
+                }
+                assert_eq!(first.read(&mut [0; 1]).unwrap(), 0);
+                let (mut second, _) = listener.accept().unwrap();
+                let request = read_socket_request(&mut second);
+                second
+                    .write_all(
+                        &foks_agent_proto::encode(&Response::success(
+                            request.id,
+                            serde_json::json!({"healthy": true}),
+                        ))
+                        .unwrap(),
+                    )
+                    .unwrap();
+            });
+            let mut handle = AgentHandle::new(socket);
+            Arc::get_mut(&mut handle.transport)
+                .unwrap()
+                .client
+                .set_timeout(Duration::from_millis(500))
+                .unwrap();
+            let result = handle
+                .transport()
+                .call_cancellable(Operation::Ping, &|| cancelled.load(Ordering::Acquire));
+            if deadline {
+                assert!(matches!(result, Err(DesktopAgentError::DeadlineExceeded)));
+            } else {
+                assert!(matches!(result, Err(DesktopAgentError::Cancelled)));
+            }
+            assert_eq!(handle.take_connection_failure(), None);
+            assert!(handle.transport().call(Operation::Ping).is_ok());
+            assert_eq!(handle.take_connection_failure(), None);
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn observed_eof_records_loss_even_when_the_mutation_is_ambiguous() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("agent.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_socket_request(&mut stream);
+        });
+        let handle = AgentHandle::new(socket);
+        let error = handle
+            .transport()
+            .call(Operation::RemoveProfile {
+                name: "local".into(),
+            })
+            .unwrap_err();
+        assert!(error.ambiguous() && error.connection_lost());
+        assert!(handle.take_connection_failure().is_some());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn auto_recovery_validates_status_and_clears_only_successful_probe_failures() {
+        use std::io::Write as _;
+        for response_kind in ["ready", "bootstrap", "error", "invalid", "version"] {
+            let directory = tempfile::tempdir().unwrap();
+            let socket = directory.path().join("agent.sock");
+            let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+            std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_socket_request(&mut stream);
+                let response = match response_kind {
+                    "error" => Response::error(request.id, ErrorCode::Busy, "not ready"),
+                    "version" => {
+                        Response::error(request.id, ErrorCode::VersionMismatch, "incompatible")
+                    }
+                    "invalid" => {
+                        Response::success(request.id, serde_json::json!({"unrelated": true}))
+                    }
+                    "bootstrap" => Response::success(
+                        request.id,
+                        serde_json::to_value(foks_agent_proto::AgentStatus::Bootstrap {
+                            step: "choose".into(),
+                        })
+                        .unwrap(),
+                    ),
+                    _ => Response::success(
+                        request.id,
+                        serde_json::to_value(foks_agent_proto::AgentStatus::Ready).unwrap(),
+                    ),
+                };
+                stream
+                    .write_all(&foks_agent_proto::encode(&response).unwrap())
+                    .unwrap();
+            });
+            let handle = AgentHandle::new(socket);
+            *handle.connection_failure.lock().unwrap() = Some("older connection loss".into());
+            let result = handle.auto_recover_blocking();
+            assert_eq!(
+                result.is_ok(),
+                matches!(response_kind, "ready" | "bootstrap")
+            );
+            assert_eq!(handle.take_connection_failure().is_none(), result.is_ok());
+            if let Err(error) = result {
+                assert_eq!(
+                    error.code,
+                    match response_kind {
+                        "version" => "version-mismatch",
+                        "invalid" => "protocol",
+                        _ => "busy",
+                    }
+                );
+            }
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn auto_recovery_endpoint_checks_allow_only_missing_or_private_stale_sockets() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("agent.sock");
+        let handle = AgentHandle::new(socket.clone());
+        assert!(handle.require_missing_agent_endpoint().is_ok());
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            handle.require_missing_agent_endpoint().unwrap_err().code,
+            "agent-busy"
+        );
+        drop(listener);
+        assert!(handle.require_missing_agent_endpoint().is_ok());
+        assert!(socket.exists());
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert_eq!(
+            handle.require_missing_agent_endpoint().unwrap_err().code,
+            "unsafe-socket"
+        );
+        std::fs::remove_file(&socket).unwrap();
+        std::os::unix::fs::symlink(directory.path().join("missing"), &socket).unwrap();
+        assert_eq!(
+            handle.require_missing_agent_endpoint().unwrap_err().code,
+            "unsafe-socket"
+        );
+    }
+
+    #[test]
+    fn auto_recovery_never_initializes_or_overrides_maintenance_or_unsafe_endpoints() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("agent.sock");
+        let process = FakeMaintenanceProcess::healthy();
+        let handle =
+            AgentHandle::new_for_maintenance_test(socket.clone(), process.clone(), |_, _| {
+                SafeRootDisposition::Current
+            });
+        assert_eq!(
+            handle.auto_recover_blocking().unwrap_err().code,
+            "agent-state"
+        );
+        assert!(!directory.path().join("client-state.toml").exists());
+        assert_eq!(handle.take_connection_failure(), None);
+        for (disposition, code) in [
+            (
+                TransportDisposition::RestorationFailed,
+                "state-restoration-failed",
+            ),
+            (
+                TransportDisposition::RecoveryRequired,
+                "state-recovery-required",
+            ),
+            (
+                TransportDisposition::RestartRequired,
+                "state-restart-required",
+            ),
+        ] {
+            *handle.transport.disposition.lock().unwrap() = disposition;
+            assert_eq!(handle.auto_recover_blocking().unwrap_err().code, code);
+        }
+        assert_eq!(process.restore_calls.load(Ordering::Acquire), 0);
+        *handle.transport.disposition.lock().unwrap() = TransportDisposition::Current;
+        handle.maintenance_in_flight.store(true, Ordering::Release);
+        assert_eq!(
+            handle.auto_recover_blocking().unwrap_err().code,
+            "state-maintenance-active"
+        );
+        handle.maintenance_in_flight.store(false, Ordering::Release);
+        {
+            let _request = handle.transport.reserve_use().unwrap();
+            assert_eq!(
+                handle.auto_recover_blocking().unwrap_err().code,
+                "state-maintenance-active"
+            );
+        }
+        std::fs::write(&socket, b"not a socket").unwrap();
+        assert_eq!(
+            handle.auto_recover_blocking().unwrap_err().code,
+            "unsafe-socket"
+        );
+        assert_eq!(
+            handle.call_blocking(Operation::Ping).unwrap_err().code,
+            "unsafe-socket"
+        );
+        assert!(!handle
+            .transport()
+            .call(Operation::Ping)
+            .unwrap_err()
+            .connection_lost());
+        assert_eq!(handle.take_connection_failure(), None);
+        assert_eq!(std::fs::read(&socket).unwrap(), b"not a socket");
+        std::fs::remove_file(&socket).unwrap();
+        let external = AgentHandle::new(socket);
+        assert_eq!(
+            external.auto_recover_blocking().unwrap_err().code,
+            "external-agent"
+        );
+        assert_eq!(external.take_connection_failure(), None);
+        assert_eq!(
+            external.call_blocking(Operation::Ping).unwrap_err().code,
+            "agent-lost"
+        );
+        assert!(external.take_connection_failure().is_some());
+    }
+
     #[test]
     fn classifications_preserve_ambiguity_and_fatality() {
         let timeout = AgentError::from_agent(ErrorCode::DeadlineExceeded, "slow".to_owned());
@@ -2923,8 +3445,9 @@ mod tests {
         let quota = AgentError::from_agent(ErrorCode::QuotaExceeded, "full".to_owned());
         assert_eq!(quota.code, "quota-exceeded");
         assert!(!quota.retryable);
-        let ambiguous =
-            AgentError::from_client(&foks_agent_client::Error::Ambiguous("write".to_owned()));
+        let ambiguous = AgentError::from_client(&foks_agent_client::Error::Ambiguous(Box::new(
+            foks_agent_client::Error::Cancelled,
+        )));
         assert!(ambiguous.ambiguous && !ambiguous.retryable);
         let protocol_version = AgentError::from_client(&foks_agent_client::Error::Protocol(
             foks_agent_proto::Error::Version,
