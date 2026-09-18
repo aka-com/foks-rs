@@ -1,0 +1,590 @@
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from 'react';
+import { OverlayProvider } from '/kit/overlay-primitives';
+import { ToastController, ToastProvider } from '/kit/toasts';
+import type { AgentLifecycleController } from '../agent-lifecycle';
+import type { Bridge } from '../bridge';
+import { ChatInboxProvider } from '../chat/inbox-provider';
+import { DeviceCacheContext } from '../device-cache';
+import { FIRST_RUN_PROGRESS_EVENT } from '../first-run-operations';
+import {
+  FIRST_RUN_CHECKPOINT_KEY,
+  completedFirstRunSteps,
+  decodeFirstRunCheckpoint,
+  firstRunStepCount,
+  type FirstRunCheckpoint,
+} from '../first-run-state';
+import {
+  storeAtScene,
+  useLocationState,
+  type LocationStore,
+} from '../location';
+import {
+  applyLease,
+  settingsAlertSummary,
+  storeOf,
+  storeReadable,
+  type AgentSnapshot,
+  type DeviceLabel,
+} from '../model';
+import { NavigationGuardProvider, useTabSheetState } from '../navigation-guard';
+import { QueryRepositoryContext } from '../query-hooks';
+import {
+  systemLeaseExpiryClock,
+  type LeaseExpiryClock,
+} from '../scheduling/lease-expiry';
+import {
+  deviceAlertRegistry,
+  devicesAlertSummary,
+} from '../screens/device-alert';
+import { DetailsPanel } from '../screens/details-panel';
+import {
+  FirstRunChecklistStatus,
+  FirstRunExperience,
+} from '../screens/first-run-screen';
+import { unroutedNotices } from '../screens/people-screen';
+import { listsItems } from '../screens/scope';
+import {
+  teamRequestRegistry,
+  teamRequestsBadge,
+} from '../screens/team-requests';
+import {
+  initialWriteWorkflow,
+  type WriteWorkflow,
+} from '../screens/write-workflows';
+import { useSearchShortcut } from '../shell/search-palette';
+import { Sidebar } from '../shell/sidebar';
+import { SyncStatus } from '../shell/sync-status';
+import { Topbar } from '../shell/topbar';
+import { useAccessRuntime } from './access-runtime';
+import { shellBlock, shellChrome } from './blocking-shell';
+import { useCatalogRuntime, useMutationError } from './catalog-runtime';
+import type { MaintenanceOwnership } from './maintenance-ownership';
+import { useMetadataRuntime } from './metadata-runtime';
+import { useShellNavigation } from './navigation-runtime';
+import { demoAvailabilityFacts, demoSelection, initialScene } from './scenes';
+import { ScreenRouter } from './screen-router';
+import {
+  ShellOverlays,
+  useDroppedUpload,
+  type ResumeDraft,
+} from './shell-overlays';
+import { useShellRuntime } from './shell-runtime';
+import { ShellSearch } from './shell-search';
+import { useWindowRuntime } from './window-runtime';
+
+function incompleteFirstRunCheckpoint(): FirstRunCheckpoint | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const checkpoint = decodeFirstRunCheckpoint(
+      window.localStorage.getItem(FIRST_RUN_CHECKPOINT_KEY),
+    );
+    return checkpoint &&
+      completedFirstRunSteps(checkpoint) < firstRunStepCount(checkpoint)
+      ? checkpoint
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+interface VaultShellProps {
+  snapshot: AgentSnapshot;
+  bridge: Bridge;
+  store?: LocationStore;
+  firstRunStart?: 'who' | 'local' | null;
+  managedProfile?: string | null;
+  onLock: () => Promise<boolean>;
+  retireBoot: () => void;
+  currentBootSnapshot: () => boolean;
+  agentController: AgentLifecycleController;
+  maintenanceOwnership: MaintenanceOwnership;
+  leaseClock?: LeaseExpiryClock;
+}
+
+export function VaultShell({
+  snapshot: agentSnapshot,
+  bridge,
+  store,
+  firstRunStart = null,
+  managedProfile = null,
+  onLock,
+  retireBoot,
+  currentBootSnapshot,
+  agentController,
+  maintenanceOwnership,
+  leaseClock = systemLeaseExpiryClock,
+}: VaultShellProps): ReactNode {
+  const [{ scene, automaticFirstRun }] = useState(() => {
+    const decoded = initialScene();
+    const automatic = Boolean(
+      firstRunStart && decoded.location.kind !== 'first-run',
+    );
+    return {
+      scene:
+        automatic && firstRunStart
+          ? {
+              ...decoded,
+              location: { kind: 'first-run' as const, step: firstRunStart },
+            }
+          : decoded,
+      automaticFirstRun: automatic,
+    };
+  });
+  const [initialSelection] = useState(
+    () => scene.selection ?? demoSelection(scene.demo, agentSnapshot),
+  );
+  const [deviceLabel, setDeviceLabel] = useState<DeviceLabel | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  useSearchShortcut(() => setSearchOpen(true));
+  const [fallback] = useState(() => {
+    return storeAtScene({ ...scene, selection: initialSelection });
+  });
+  const locations = store ?? fallback;
+  const navigateFromNotification = useCallback(
+    (location: Parameters<LocationStore['navigate']>[0]) =>
+      locations.navigate(location),
+    [locations],
+  );
+  const state = useLocationState(locations);
+  const [, updateSetupProgress] = useState(0);
+  useEffect(() => {
+    const update = () => updateSetupProgress((value) => value + 1);
+    window.addEventListener(FIRST_RUN_PROGRESS_EVENT, update);
+    return () => window.removeEventListener(FIRST_RUN_PROGRESS_EVENT, update);
+  }, []);
+  const [workflow, setWorkflow] = useTabSheetState<WriteWorkflow>(
+    'write.workflow',
+    () =>
+      initialWriteWorkflow(
+        typeof window === 'undefined' ? '' : window.location.search,
+        agentSnapshot,
+      ),
+    (value) => value?.kind === 'new',
+    locations,
+  );
+  const [toasts] = useState(() => new ToastController());
+  const catalog = useCatalogRuntime({
+    bridge,
+    agentSnapshot,
+    retireBoot,
+    currentBootSnapshot,
+    toasts,
+  });
+  const {
+    latest,
+    setLatest,
+    agentCatalogReady,
+    refreshingSnapshot,
+    hardwareRefresh,
+    refreshSnapshot,
+    refresh,
+    refreshAll,
+  } = catalog;
+  const runtime = useShellRuntime({
+    bridge,
+    agentController,
+    maintenanceOwnership,
+    catalog,
+    retireBoot,
+    locations,
+    locationKind: state.location.kind,
+    toasts,
+    setWorkflow,
+    leaseClock,
+  });
+  const {
+    agentLifecycle,
+    concealSignal,
+    setConcealSignal,
+    commandError,
+    recoverAgentReadiness,
+    handleAgentReadinessFailure,
+    reconciliation,
+  } = runtime;
+  const mutationError = useMutationError(commandError, refreshSnapshot);
+  const {
+    observedExpiredLeases,
+    accessGenerations,
+    accessSession,
+    accessNow,
+    chatClock,
+  } = useAccessRuntime({
+    agentSnapshot,
+    latest,
+    bridge,
+    leaseClock,
+    foregroundRefreshAllowed: runtime.foregroundRefreshAllowed,
+    reconciliationRef: runtime.reconciliationRef,
+    refreshSnapshotRef: runtime.refreshSnapshotRef,
+    commandErrorRef: catalog.commandErrorRef,
+  });
+  const [resumeDraft, setResumeDraft] = useState<ResumeDraft | null>(null);
+  const [revealRequest, setRevealRequest] = useState<string | null>(() =>
+    scene.reveal && initialSelection
+      ? `${initialSelection.store}|${initialSelection.path}`
+      : null,
+  );
+  // Captured once because the canonical URL rewrite removes fixture-only intent.
+  const [namedState] = useState(() =>
+    typeof window === 'undefined'
+      ? ''
+      : (new URLSearchParams(window.location.search).get('state') ?? ''),
+  );
+  // Scenes trigger only on initial navigation. Conceal events remount tabs to
+  // clear sensitive inputs, so tabs must not re-trigger scene dialogs.
+  const enteredScene = concealSignal === 0 ? namedState : '';
+
+  const fixtureFirstRunBoot = Boolean(
+    bridge.firstRunFixture &&
+    state.location.kind === 'first-run' &&
+    state.location.step === 'boot',
+  );
+  // Apply URL query lease overrides to the active snapshot. Ordinary
+  // navigation must not manufacture a new snapshot: first-run treats a changed
+  // snapshot as authoritative inventory and could otherwise rewind a server
+  // profile that the preceding command just created.
+  const shown = useMemo(() => {
+    const reconciled = { ...latest, observedExpiredLeases };
+    const leased =
+      scene.lease === 'lapsed' ? applyLease(reconciled, 'lapsed') : reconciled;
+    const demonstrated = demoAvailabilityFacts(leased, namedState);
+    if (fixtureFirstRunBoot) {
+      return {
+        ...demonstrated,
+        agent: { state: 'bootstrap' as const, step: 'create-state' },
+      };
+    }
+    return demonstrated;
+  }, [
+    fixtureFirstRunBoot,
+    latest,
+    namedState,
+    observedExpiredLeases,
+    scene.lease,
+  ]);
+
+  useEffect(
+    () => locations.setAccountStores(shown.stores),
+    [locations, shown.stores],
+  );
+  const uploadDroppedFile = useDroppedUpload({
+    bridge,
+    shown,
+    refresh,
+    mutationError,
+    setWorkflow,
+  });
+  const { prompt, settlePrompt } = useShellNavigation({
+    locations,
+    state,
+    lease: scene.lease,
+    toasts,
+  });
+  const here = state.location;
+  const pendingFirstRun = incompleteFirstRunCheckpoint();
+  const detailsShown =
+    state.details &&
+    listsItems(here) &&
+    !(here.kind === 'store' && !storeReadable(shown, here.ref)) &&
+    !(state.selection && !storeReadable(shown, state.selection.store));
+  const { sideCollapsed, railCollapsed, toggleSidebar, windowChromeHidden } =
+    useWindowRuntime({
+      bridge,
+      locations,
+      here,
+      detailsShown,
+      commandError,
+    });
+  const selectedAccessGeneration = state.selection
+    ? (accessGenerations.get(
+        storeOf(shown, state.selection.store)?.server ?? '',
+      ) ?? 0)
+    : 0;
+  // The rail's own badges: Teams' and Devices' each read a registry the page
+  // that already loads the underlying fact reports into, rather than asking
+  // the agent again from here. See `team-requests.ts` and `device-alert.ts`.
+  const teamRequestCounts = useSyncExternalStore(
+    teamRequestRegistry(bridge).subscribe,
+    teamRequestRegistry(bridge).getSnapshot,
+  );
+  const deviceAlerts = useSyncExternalStore(
+    deviceAlertRegistry(bridge).subscribe,
+    deviceAlertRegistry(bridge).getSnapshot,
+  );
+  const appRef = useRef<HTMLDivElement>(null);
+  const portalRoot = useMemo(
+    () =>
+      typeof document === 'undefined'
+        ? null
+        : (document.getElementById('overlays') ?? document.body),
+    [],
+  );
+  const lockFromMenu = () => {
+    void onLock().then(
+      (locked) => {
+        if (!locked)
+          toasts.show('Application lock is not available on this system.');
+      },
+      (error: unknown) => commandError(error),
+    );
+  };
+
+  // Render takeover overlays as siblings of the main grid so they remain
+  // interactive while the grid is inert. The adjacent rail and topbar use the
+  // same disabled styling as `BlockedShell`.
+  const block = shellBlock(agentLifecycle);
+  const chrome = shellChrome(block, agentLifecycle.state, shown.agent.state);
+  const shell = (
+    <div
+      className={[
+        'window',
+        bridge.native ? 'native-window' : 'web-mock-window',
+        windowChromeHidden ? 'window-chrome-hidden' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+    >
+      <div
+        className={[
+          'app',
+          detailsShown || (here.kind === 'first-run' && here.step === 'added')
+            ? 'with-details'
+            : '',
+          // The setup steps replace the rail with one that has no toggle; the
+          // checklist screens draw the rail itself and collapse with it.
+          railCollapsed ? 'side-narrow' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        ref={appRef}
+      >
+        <ChatInboxProvider
+          key={`inbox:${concealSignal}`}
+          enabled={agentLifecycle.state === 'ready' && agentCatalogReady}
+          bridge={bridge}
+          snapshot={shown}
+          onNavigate={navigateFromNotification}
+          clock={chatClock}
+          accessNow={accessNow}
+          accessGenerations={accessGenerations}
+        >
+          {here.kind === 'first-run' ? (
+            <FirstRunExperience
+              snapshot={shown}
+              bridge={bridge}
+              location={here}
+              onNavigate={(location) => locations.navigate(location)}
+              onRefreshSnapshot={refreshSnapshot}
+              concealSignal={concealSignal}
+              agentReady={
+                shown.agent.state === 'ready' &&
+                agentLifecycle.state === 'ready' &&
+                agentCatalogReady
+              }
+              onRetryAgent={() =>
+                recoverAgentReadiness(agentLifecycle.state === 'disconnected')
+              }
+              onAgentReadinessFailure={handleAgentReadinessFailure}
+              automaticEntry={automaticFirstRun}
+              managedProfile={managedProfile ?? undefined}
+              agent={chrome.agent}
+              blocked={chrome.blocked}
+              collapsed={sideCollapsed}
+              onToggleCollapsed={toggleSidebar}
+              devicesAlert={devicesAlertSummary(shown, deviceAlerts)}
+            />
+          ) : (
+            <>
+              <Sidebar
+                snapshot={shown}
+                location={here}
+                folder={state.folder}
+                account={locations.getAccount()}
+                attention={unroutedNotices(shown).length}
+                teamRequests={teamRequestsBadge(shown, teamRequestCounts)}
+                devicesAlert={devicesAlertSummary(shown, deviceAlerts)}
+                settingsAlert={settingsAlertSummary(shown)}
+                onTabNavigate={(tab) => locations.navigateTab(tab)}
+                onNavigate={(location) => {
+                  locations.navigate(location);
+                }}
+                onSetFolder={(folder) => locations.setFolder(folder)}
+                onLock={lockFromMenu}
+                status={
+                  pendingFirstRun ? (
+                    <FirstRunChecklistStatus
+                      checkpoint={pendingFirstRun}
+                      onNavigate={(location) => locations.navigate(location)}
+                    />
+                  ) : undefined
+                }
+                onToggleCollapsed={toggleSidebar}
+                collapsed={sideCollapsed}
+                // The lifecycle is the rail's own authority for whether the
+                // agent is gone, whichever path raised the disconnect.
+                agent={chrome.agent}
+                nativeChrome={bridge.native}
+                blocked={chrome.blocked}
+              />
+              <main className="main">
+                <Topbar
+                  blocked={chrome.blocked}
+                  deviceLabel={deviceLabel}
+                  snapshot={shown}
+                  location={here}
+                  folder={state.folder}
+                  onNavigate={(location) => locations.navigate(location)}
+                  onSetFolder={(folder) => locations.setFolder(folder)}
+                  onSearch={() => setSearchOpen(true)}
+                  collapsed={sideCollapsed}
+                  refreshing={refreshingSnapshot}
+                  onRefresh={() =>
+                    refreshAll(() => {
+                      reconciliation.scheduler.requestAll('manual', [
+                        'discovery',
+                        'metadata',
+                        'registry',
+                        'connectivity',
+                      ]);
+                    }, commandError)
+                  }
+                />
+                {bridge.native ? (
+                  <SyncStatus
+                    snapshot={shown}
+                    service={reconciliation}
+                    storeId={
+                      state.selection?.store ??
+                      (here.kind === 'store' ? here.ref : undefined)
+                    }
+                  />
+                ) : null}
+                <ScreenRouter
+                  shown={shown}
+                  bridge={bridge}
+                  state={state}
+                  locations={locations}
+                  enteredScene={enteredScene}
+                  namedState={namedState}
+                  concealSignal={concealSignal}
+                  hardwareRefresh={hardwareRefresh}
+                  setDeviceLabel={setDeviceLabel}
+                  setRevealRequest={setRevealRequest}
+                  workflow={workflow}
+                  setWorkflow={setWorkflow}
+                  refresh={refresh}
+                  refreshSnapshot={refreshSnapshot}
+                  commandError={commandError}
+                  mutationError={mutationError}
+                  onLock={onLock}
+                  lockFromMenu={lockFromMenu}
+                  agentLifecycle={agentLifecycle}
+                  recoverAgentReadiness={recoverAgentReadiness}
+                  uploadDroppedFile={uploadDroppedFile}
+                  accessNow={accessNow}
+                  accessGenerations={accessGenerations}
+                />
+              </main>
+            </>
+          )}
+          {here.kind !== 'first-run' && detailsShown ? (
+            <DetailsPanel
+              snapshot={shown}
+              bridge={bridge}
+              revealRequest={revealRequest}
+              onRevealHandled={() => setRevealRequest(null)}
+              selection={state.selection}
+              onClose={() => {
+                locations.setDetails(false);
+              }}
+              onDelete={(item) => setWorkflow({ kind: 'delete', item })}
+              onConflict={(item, draft) =>
+                setWorkflow({ kind: 'conflict', item, draft })
+              }
+              onApplied={refresh}
+              onCommandError={commandError}
+              onMutationError={mutationError}
+              concealSignal={concealSignal}
+              accessGeneration={selectedAccessGeneration}
+              accessNow={accessNow}
+              accessSession={accessSession}
+              resumeDraft={resumeDraft}
+            />
+          ) : null}
+          <ShellSearch
+            snapshot={shown}
+            open={searchOpen}
+            onClose={() => setSearchOpen(false)}
+            onNavigate={(location) => locations.navigate(location)}
+            onOpenItem={(storeId, path) =>
+              locations.navigateAndSelect(
+                { kind: 'store', ref: storeId },
+                { store: storeId, path },
+              )
+            }
+          />
+        </ChatInboxProvider>
+      </div>
+      <ShellOverlays
+        shown={shown}
+        bridge={bridge}
+        accessNow={accessNow}
+        workflow={workflow}
+        setWorkflow={setWorkflow}
+        refresh={refresh}
+        commandError={commandError}
+        mutationError={mutationError}
+        refreshSnapshot={refreshSnapshot}
+        setResumeDraft={setResumeDraft}
+        setConcealSignal={setConcealSignal}
+        setLatest={setLatest}
+        toasts={toasts}
+        locations={locations}
+        prompt={prompt}
+        settlePrompt={settlePrompt}
+        block={block}
+        recoverAgentReadiness={recoverAgentReadiness}
+      />
+    </div>
+  );
+
+  const deviceCache = useMetadataRuntime({
+    bridge,
+    shown,
+    concealSignal,
+    accessGenerations,
+    metadataInvalidation: catalog.metadataInvalidation,
+    metadataReconciliation: catalog.metadataReconciliation,
+    foregroundRefreshAllowed: runtime.foregroundRefreshAllowed,
+    refreshSnapshot,
+  });
+  const withToasts = (
+    <ToastProvider controller={toasts} portalRoot={portalRoot}>
+      <NavigationGuardProvider store={locations}>
+        <QueryRepositoryContext.Provider value={deviceCache.repository}>
+          <DeviceCacheContext.Provider value={deviceCache}>
+            {shell}
+          </DeviceCacheContext.Provider>
+        </QueryRepositoryContext.Provider>
+      </NavigationGuardProvider>
+    </ToastProvider>
+  );
+  if (!portalRoot) return withToasts;
+  return (
+    <OverlayProvider
+      backgroundRef={appRef}
+      portalRoot={portalRoot}
+      blocking={block !== null}
+    >
+      {withToasts}
+    </OverlayProvider>
+  );
+}
