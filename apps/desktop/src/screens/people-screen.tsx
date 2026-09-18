@@ -1,4 +1,5 @@
 import { useDeviceMetadata } from '../device-cache';
+import { MetadataStatus } from '../components/metadata-status';
 import { deviceAlertRegistry } from './device-alert';
 import { LocalAliasPanel } from '../components/local-alias-panel';
 import { localAliasOf } from '../model';
@@ -341,6 +342,7 @@ export function PeopleScreen({
     lists,
     loading: loadingKeys,
     failed: keysFailed,
+    freshness,
   } = useDeviceMetadata({
     bridge,
     profile: selected?.server,
@@ -496,22 +498,25 @@ export function PeopleScreen({
               />
             </>
           ) : selected ? (
-            <AccountPanel
-              notices={notices}
-              snapshot={snapshot}
-              store={selected}
-              lists={lists}
-              loading={loadingKeys}
-              failed={keysFailed}
-              stopped={stopped}
-              onNavigate={onNavigate}
-              onSheet={(next) => {
-                // The import sheet opened from the account's own line adds an
-                // account; a server row's Pair fills `pairingProfile` instead.
-                if (next === 'go-profile') setPairingProfile(undefined);
-                setSheet(next);
-              }}
-            />
+            <>
+              <MetadataStatus label="Device metadata" freshness={freshness} />
+              <AccountPanel
+                notices={notices}
+                snapshot={snapshot}
+                store={selected}
+                lists={lists}
+                loading={loadingKeys}
+                failed={keysFailed}
+                stopped={stopped}
+                onNavigate={onNavigate}
+                onSheet={(next) => {
+                  // The import sheet opened from the account's own line adds an
+                  // account; a server row's Pair fills `pairingProfile` instead.
+                  if (next === 'go-profile') setPairingProfile(undefined);
+                  setSheet(next);
+                }}
+              />
+            </>
           ) : (
             <>
               {notices}

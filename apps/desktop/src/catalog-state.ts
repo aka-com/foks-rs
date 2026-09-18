@@ -26,6 +26,17 @@ export function catalogItemsComplete(
   return !partial || response.fullItemReads?.includes(profile) === true;
 }
 
+export function catalogStoreComplete(
+  response: CatalogDto,
+  store: Store,
+  partial: boolean,
+): boolean {
+  const read = response.storeReads?.find((entry) => entry.store === store.id);
+  return read
+    ? read.state === 'complete'
+    : catalogItemsComplete(response, store.server, partial);
+}
+
 export function markCatalogRefresh(
   snapshot: AgentSnapshot,
   profiles: readonly string[] = snapshot.catalogProfiles,
@@ -110,15 +121,11 @@ export function projectCatalogFreshness(
           (failure.scope === 'profile' || failure.store === store.id),
       );
       const complete =
-        catalogItemsComplete(response, store.server, partial) &&
+        catalogStoreComplete(response, store, partial) &&
         inventory?.status === 'available';
       return [
         store.id,
-        entry(
-          previous?.stores[store.id],
-          complete,
-          failure?.error,
-        ),
+        entry(previous?.stores[store.id], complete, failure?.error),
       ];
     }),
   );
@@ -162,6 +169,45 @@ export function mergeProfileSnapshot(
   projected: AgentSnapshot,
   profile: string,
 ): AgentSnapshot {
+  const scopedStores = projected.stores.filter(
+    (store) => store.server === profile,
+  );
+  const scopedIds = new Set(scopedStores.map((store) => store.id));
+  const inScope = (entry: { store: string }) => scopedIds.has(entry.store);
+  projected = {
+    ...projected,
+    servers: projected.servers.filter((server) => server.id === profile),
+    accounts: projected.accounts.filter(
+      (account) => account.server === profile,
+    ),
+    stores: scopedStores,
+    storeInventory: projected.storeInventory.filter(inScope),
+    profileInventory: projected.profileInventory.filter(
+      (entry) => entry.profile === profile,
+    ),
+    items: projected.items.filter(inScope),
+    parties: projected.parties.filter(inScope),
+    federation: projected.federation.filter(inScope),
+    groupDetailFailures: projected.groupDetailFailures.filter(inScope),
+    observedExpiredLeases: projected.observedExpiredLeases.filter(
+      (entry) => entry.profile === profile,
+    ),
+    notifications: projected.notifications.filter(
+      (entry) => entry.profile === profile,
+    ),
+    catalogFreshness: {
+      profiles: Object.fromEntries(
+        Object.entries(projected.catalogFreshness?.profiles ?? {}).filter(
+          ([key]) => key === profile,
+        ),
+      ),
+      stores: Object.fromEntries(
+        Object.entries(projected.catalogFreshness?.stores ?? {}).filter(
+          ([key]) => scopedIds.has(key),
+        ),
+      ),
+    },
+  };
   const previousIds = new Set(
     base.stores
       .filter((store) => store.server === profile)
@@ -206,8 +252,22 @@ export function mergeProfileSnapshot(
       ...projected.groupDetailFailures,
     ],
     observedExpiredLeases: [
-      ...base.observedExpiredLeases.filter((entry) => entry.profile !== profile),
-      ...projected.observedExpiredLeases,
+      ...new Map(
+        [...base.observedExpiredLeases, ...projected.observedExpiredLeases].map(
+          (entry) => [
+            entry.profile,
+            {
+              profile: entry.profile,
+              expiresAt: Math.max(
+                entry.expiresAt,
+                base.observedExpiredLeases.find(
+                  (previous) => previous.profile === entry.profile,
+                )?.expiresAt ?? 0,
+              ),
+            },
+          ],
+        ),
+      ).values(),
     ],
     notifications: [
       ...base.notifications.filter(

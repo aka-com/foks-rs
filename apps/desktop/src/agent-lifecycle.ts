@@ -217,7 +217,9 @@ export class AgentLifecycleController {
     this.#generation++;
   }
 
-  establishAutomatic(isCurrent: () => boolean = () => true): Promise<AgentStatus> {
+  establishAutomatic(
+    isCurrent: () => boolean = () => true,
+  ): Promise<AgentStatus> {
     return this.#establish('automatic', isCurrent);
   }
 

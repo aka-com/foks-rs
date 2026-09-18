@@ -588,7 +588,10 @@ fn fresh_profile_catalog(socket: &Path, profile: &str) -> CatalogSnapshot {
     )
     .expect("fresh native profile catalog");
     assert_eq!(snapshot.profiles, vec![profile]);
-    assert!(snapshot.stores.iter().all(|store| store.profile() == profile));
+    assert!(snapshot
+        .stores
+        .iter()
+        .all(|store| store.profile() == profile));
     assert!(snapshot
         .items
         .iter()
@@ -652,7 +655,11 @@ fn exercise_remote_catalog(
         socket,
         process_ids: Vec::new(),
     };
-    remote.success(words(&["initialize", "--credential-backend", "private-file"]));
+    remote.success(words(&[
+        "initialize",
+        "--credential-backend",
+        "private-file",
+    ]));
     remote.success(with_file(
         words(&["check-profile", "remote", probe, "--certificate-der"]),
         certificate,
@@ -682,7 +689,13 @@ fn exercise_remote_catalog(
     private_file(&original, b"remote initial secret");
     private_file(&current, b"remote updated secret");
     let created = remote.success(with_file(
-        words(&["kv-create-text", "remote", "recovered", path, "--value-file"]),
+        words(&[
+            "kv-create-text",
+            "remote",
+            "recovered",
+            path,
+            "--value-file",
+        ]),
         &original,
     ));
     let created_version = created["version"].as_u64().expect("remote create version");

@@ -11,9 +11,26 @@ import type { StoreRef } from './model';
 import type { DeviceLists } from './screens/device-model';
 import { NO_DEVICES } from './screens/device-model';
 import { QueryRepository } from './query-repository';
+import type { QuerySnapshot } from './query-repository';
 import { useMetadataQuery, useQueryRepository } from './query-hooks';
 import { readRecoveryFor } from './query-read-recovery';
 import type { CatalogReadRecovery } from './query-read-recovery';
+
+export function metadataFreshness(states: readonly QuerySnapshot<unknown>[]) {
+  const complete =
+    states.length > 0 && states.every((state) => state.data !== undefined);
+  const times = states.map((state) => state.lastSuccessAt);
+  return {
+    complete,
+    stale: states.some((state) => state.error !== undefined),
+    refreshing: states.some((state) => state.fetching),
+    lastSuccessAt:
+      times.length > 0 &&
+      times.every((time): time is number => time !== undefined)
+        ? Math.min(...times)
+        : undefined,
+  };
+}
 
 export const accountDeviceKey = (profile: string, store: StoreRef) =>
   ['account-devices', profile, store] as const;
@@ -145,5 +162,11 @@ export function useDeviceMetadata({
     }),
     [accountState.data, enrollmentState.data],
   );
-  return { cache, lists, loading: available && !complete && !failed, failed };
+  return {
+    cache,
+    lists,
+    loading: available && !complete && !failed,
+    failed,
+    freshness: metadataFreshness([accountState, enrollmentState]),
+  };
 }

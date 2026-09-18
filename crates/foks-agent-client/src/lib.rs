@@ -324,7 +324,7 @@ fn connect_platform(socket: &Path, timeout: Duration) -> Result<std::os::unix::n
         return Err(Error::UnsafeSocket);
     }
     let stream = UnixStream::connect(socket)?;
-    stream.set_read_timeout(Some(timeout))?;
+    stream.set_read_timeout(Some(timeout.min(Duration::from_millis(100))))?;
     stream.set_write_timeout(Some(timeout))?;
     Ok(stream)
 }
@@ -336,7 +336,6 @@ fn read_response_cancellable(
     deadline: std::time::Instant,
 ) -> Result<Response> {
     use std::io::{ErrorKind, Read as _};
-    stream.set_read_timeout(Some(Duration::from_millis(100)))?;
     let mut read = |mut bytes: &mut [u8]| -> Result<()> {
         while !bytes.is_empty() {
             check_upload_cancelled(cancelled, deadline)?;
@@ -470,7 +469,7 @@ mod tests {
             std::time::Instant::now() + Duration::from_secs(1),
         )
         .unwrap_err();
-        assert!(error.is_connection_loss());
+        assert!(error.is_connection_loss(), "{error:?}");
         assert!(
             matches!(error, Error::Io(cause) if cause.kind() == std::io::ErrorKind::UnexpectedEof)
         );

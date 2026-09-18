@@ -22,3 +22,9 @@ Run native desktop unit tests serially with
 A parallel run can intermittently fail the first-run receipt-lock release
 assertion; rerun that test in isolation and the native suite serially before
 attributing the failure to a code change.
+
+If CLI integration readiness checks report an IPC protocol version mismatch
+while Cargo reports the standalone agent as fresh, force a relink with
+`cargo rustc --locked -j 2 -p foks-agent --bin foks-agent -- -C metadata=agent-readiness-recheck`
+and rerun the failing test. A successful ordinary build alone did not replace
+a stale standalone executable during desktop synchronization verification.

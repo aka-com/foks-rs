@@ -13,7 +13,7 @@ import type {
   KvRoleInput,
   ReadItemResponse,
 } from './bridge';
-import { roleDto } from './bridge';
+import { roleDto, normalizeCommandError } from './bridge';
 import { FIXTURE } from './fixture';
 import { catalog } from './model/lease';
 import { parseRole, roleRank, visibilityOf } from './model/roles';
@@ -413,6 +413,28 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     blockedProfiles: [],
   });
   const chat = mockChat(snapshot);
+  const describeServerStatus: Bridge['describeServerStatus'] = async (
+    profile,
+  ) => {
+    const server = servers.find((entry) => entry.id === profile);
+    if (!server)
+      throw failure('store-not-found', 'That server is not configured.');
+    const compatibility = server.compatibility;
+    if (compatibility.status === 'requirement-unknown')
+      throw compatibility.error;
+    return {
+      profile: server.id,
+      configuredProbe: serverProbes.get(server.id) ?? server.name,
+      host: serverHosts.get(server.id) ?? null,
+      leaseRequired: compatibility.status !== 'not-required',
+      leaseExpiresAt:
+        'expiresAt' in compatibility ? compatibility.expiresAt : null,
+      compatibility,
+      chatSupported: serverHosts.has(server.id)
+        ? server.capabilities.chat
+        : null,
+    };
+  };
   return {
     native: false,
     maintainClientState: async () => {
@@ -467,18 +489,47 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     },
     listProfileCatalog: async (profile) => {
       restoreFirstRunAccount();
-      if (!servers.some((server) => server.id === profile))
+      const server = servers.find((server) => server.id === profile);
+      if (!server)
         throw failure('profile-not-found', 'The profile was not found.');
       const response = catalogResponse();
-      const scopedStores = response.stores.filter((store) => store.server === profile);
+      const scopedStores = response.stores.filter(
+        (store) => store.server === profile,
+      );
       const ids = new Set(scopedStores.map((store) => store.id));
+      const status = await describeServerStatus(profile).then(
+        (status) => ({ status, error: null }),
+        (error: unknown) => ({
+          status: null,
+          error: normalizeCommandError(error),
+        }),
+      );
       return {
         ...response,
+        storeReads: scopedStores.map((store) => ({
+          store: store.id,
+          state: 'complete' as const,
+        })),
+        localMetadata: {
+          accounts: accounts.filter((account) => account.server === profile),
+          profiles: [
+            {
+              profile,
+              label: server.label,
+              configuredProbe: server.configuredProbe,
+              ...status,
+            },
+          ],
+        },
         profiles: [profile],
         fullItemReads: [profile],
         stores: scopedStores,
-        knownStores: response.knownStores.filter((store) => store.server === profile),
-        inventory: response.inventory.filter((entry) => entry.profile === profile),
+        knownStores: response.knownStores.filter(
+          (store) => store.server === profile,
+        ),
+        inventory: response.inventory.filter(
+          (entry) => entry.profile === profile,
+        ),
         items: response.items.filter((item) => ids.has(item.store)),
       };
     },
@@ -1163,26 +1214,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
         ],
       };
     },
-    describeServerStatus: async (profile) => {
-      const server = servers.find((entry) => entry.id === profile);
-      if (!server)
-        throw failure('store-not-found', 'That server is not configured.');
-      const compatibility = server.compatibility;
-      if (compatibility.status === 'requirement-unknown')
-        throw compatibility.error;
-      return {
-        profile: server.id,
-        configuredProbe: serverProbes.get(server.id) ?? server.name,
-        host: serverHosts.get(server.id) ?? null,
-        leaseRequired: compatibility.status !== 'not-required',
-        leaseExpiresAt:
-          'expiresAt' in compatibility ? compatibility.expiresAt : null,
-        compatibility,
-        chatSupported: serverHosts.has(server.id)
-          ? server.capabilities.chat
-          : null,
-      };
-    },
+    describeServerStatus,
     checkServer: async (profile) => {
       const server = servers.find((entry) => entry.id === profile);
       if (!server)

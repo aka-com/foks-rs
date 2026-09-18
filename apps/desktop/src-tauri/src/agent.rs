@@ -731,9 +731,11 @@ impl AgentHandle {
             })?;
         let _admission = MaintenanceAdmission(&self.maintenance_in_flight);
         let _reservation = self.transport.maintenance.try_write().map_err(|_| {
-            AgentError::from_desktop(DesktopAgentError::Local(
-                foks_desktop::LocalAgentCondition::Maintenance,
-            ))
+            AgentError::new(
+                "agent-busy",
+                "Outstanding agent requests are still settling.",
+                true,
+            )
         })?;
         self.transport
             .require_current()
@@ -3401,7 +3403,7 @@ mod tests {
             let _request = handle.transport.reserve_use().unwrap();
             assert_eq!(
                 handle.auto_recover_blocking().unwrap_err().code,
-                "state-maintenance-active"
+                "agent-busy"
             );
         }
         std::fs::write(&socket, b"not a socket").unwrap();

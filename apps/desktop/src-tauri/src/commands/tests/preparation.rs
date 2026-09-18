@@ -62,7 +62,10 @@ impl AgentTransport for PreparationTransport {
                 profile: profile.clone(),
                 accounts: success(serde_json::json!([{"profile": profile, "alias":"personal", "username":"alice"}])),
                 teams: success(serde_json::json!([])),
-                server_status: success(serde_json::Value::Null),
+                server_status: success(serde_json::json!({
+                    "profile": profile, "configured_probe": profile, "host": null,
+                    "compatibility": {"status": "not-required"}, "chat_supported": null,
+                })),
             }).unwrap()),
             Operation::ListKv { .. } if self.fail_items => Err(foks_desktop::AgentError::Transport("items unavailable".into())),
             Operation::ListKv { .. } => Ok(serde_json::to_value(KvPage {

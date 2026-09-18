@@ -384,6 +384,17 @@ mod ipc_error_tests {
     }
 
     #[test]
+    fn malformed_catalog_payload_is_not_a_connection_loss() {
+        let error =
+            decode_agent_value::<Vec<ProfileSummary>>(serde_json::json!({"unexpected":true}))
+                .err()
+                .unwrap();
+        assert!(error.fatal());
+        assert!(!error.connection_lost());
+        assert!(!error.ambiguous());
+    }
+
+    #[test]
     fn default_adapter_does_not_hide_security_failures_behind_cancellation() {
         struct Failed(std::sync::atomic::AtomicBool);
         impl AgentTransport for Failed {
@@ -1576,7 +1587,12 @@ fn decode_agent_value<T: DeserializeOwned>(value: Value) -> Result<T, AgentError
 }
 
 fn invalid_agent_response(message: &str) -> AgentError {
-    AgentError::Transport(message.to_owned())
+    AgentError::Ipc {
+        code: "protocol",
+        message: message.to_owned(),
+        ambiguous: false,
+        connection_lost: false,
+    }
 }
 
 fn catalog_accounts(catalog: &CatalogSnapshot, profile: Option<&str>) -> Vec<String> {

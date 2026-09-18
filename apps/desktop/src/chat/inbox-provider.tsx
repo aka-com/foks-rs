@@ -23,7 +23,9 @@ export function ChatInboxProvider({
   clock,
   accessNow,
   accessGenerations,
+  enabled = true,
 }: {
+  enabled?: boolean;
   bridge: Bridge;
   snapshot: AgentSnapshot;
   children: ReactNode;
@@ -41,18 +43,17 @@ export function ChatInboxProvider({
     () => new ChatInboxService(bridge, clock),
     [bridge, clock],
   );
-  useEffect(
-    () =>
+  useEffect(() => {
+    if (enabled)
       service.updateStores(
         snapshot,
         accessNow ? { nowSeconds: accessNow() } : {},
-      ),
-    [service, snapshot, accessNow],
-  );
+      );
+  }, [service, snapshot, accessNow, enabled]);
   useEffect(() => {
-    service.start();
+    if (enabled) service.start();
     return () => service.stop();
-  }, [service]);
+  }, [service, enabled]);
   return (
     <Context.Provider value={service}>
       <NotificationProvider
@@ -61,6 +62,7 @@ export function ChatInboxProvider({
         onNavigate={onNavigate}
       >
         <ChatSendProvider
+          enabled={enabled}
           bridge={bridge}
           snapshot={snapshot}
           inbox={service}

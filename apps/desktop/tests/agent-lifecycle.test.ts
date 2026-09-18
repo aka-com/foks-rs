@@ -25,27 +25,33 @@ function deferred<T>(): {
 
 test('automatic establishment returns bootstrap without initialization or manual reconnect', async () => {
   const calls: string[] = [];
-  const controller = new AgentLifecycleController({
-    ...mockBridge(FIXTURE),
-    retryAgentConnection: async () => {
-      calls.push('manual');
-      return { state: 'ready' };
+  const controller = new AgentLifecycleController(
+    {
+      ...mockBridge(FIXTURE),
+      retryAgentConnection: async () => {
+        calls.push('manual');
+        return { state: 'ready' };
+      },
+      initializeClientState: async () => {
+        calls.push('initialize');
+        return { state: 'ready' };
+      },
     },
-    initializeClientState: async () => {
-      calls.push('initialize');
-      return { state: 'ready' };
+    { state: 'ready' },
+    async () => {
+      calls.push('automatic');
+      return { state: 'bootstrap', step: 'initialize-state' };
     },
-  }, { state: 'ready' }, async () => {
-    calls.push('automatic');
-    return { state: 'bootstrap', step: 'initialize-state' };
-  });
+  );
   controller.disconnect('socket closed');
   assert.deepEqual(await controller.establishAutomatic(), {
-    state: 'bootstrap', step: 'initialize-state',
+    state: 'bootstrap',
+    step: 'initialize-state',
   });
   assert.deepEqual(calls, ['automatic']);
   assert.deepEqual(controller.snapshot(), {
-    state: 'bootstrap', step: 'initialize-state',
+    state: 'bootstrap',
+    step: 'initialize-state',
   });
 });
 
@@ -71,7 +77,9 @@ test('automatic establishment defaults to a status probe, not manual retry', asy
 test('automatic and manual establishment share an active native request', async () => {
   const automatic = deferred<AgentStatus>();
   const controller = new AgentLifecycleController(
-    mockBridge(FIXTURE), undefined, () => automatic.promise,
+    mockBridge(FIXTURE),
+    undefined,
+    () => automatic.promise,
   );
   const pending = controller.establishAutomatic();
   assert.equal(controller.establish(true), pending);
@@ -92,7 +100,11 @@ test('automatic establishment cannot bypass bootstrap or maintenance', async () 
   await assert.rejects(controller.establishAutomatic());
   assert.equal(controller.snapshot().state, 'bootstrap');
   controller.applyMaintenance({
-    state: 'active', generation: 1, revision: 1, kind: 'verify', phase: 'running',
+    state: 'active',
+    generation: 1,
+    revision: 1,
+    kind: 'verify',
+    phase: 'running',
   });
   await assert.rejects(controller.establishAutomatic());
   assert.equal(controller.snapshot().state, 'maintenance');
@@ -103,14 +115,19 @@ test('automatic request validity suppresses late failure publication', async () 
   const automatic = deferred<AgentStatus>();
   let current = true;
   const controller = new AgentLifecycleController(
-    mockBridge(FIXTURE), { state: 'ready' }, () => automatic.promise,
+    mockBridge(FIXTURE),
+    { state: 'ready' },
+    () => automatic.promise,
   );
   controller.disconnect('socket closed');
   const pending = controller.establishAutomatic(() => current);
   current = false;
   automatic.reject(new Error('late transport error'));
   await assert.rejects(pending);
-  assert.deepEqual(controller.snapshot(), { state: 'disconnected', error: 'socket closed' });
+  assert.deepEqual(controller.snapshot(), {
+    state: 'disconnected',
+    error: 'socket closed',
+  });
 });
 
 test('maintenance operation outcomes remain distinct from service restoration', () => {

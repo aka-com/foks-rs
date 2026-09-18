@@ -136,7 +136,11 @@ async function observePartial(
     },
   };
   const pending = loadSnapshot(
-    bridge, previous, nowSeconds, published.resolve, () => current,
+    bridge,
+    previous,
+    nowSeconds,
+    published.resolve,
+    () => current,
   );
   try {
     return await Promise.race([
@@ -166,7 +170,9 @@ async function pendingCatalog() {
       accounts: [],
       profiles: catalog.profiles.map((profile) => ({
         profile,
-        configuredProbe: previous.servers.find((server) => server.id === profile)!.configuredProbe,
+        configuredProbe: previous.servers.find(
+          (server) => server.id === profile,
+        )!.configuredProbe,
         label: null,
         status: null,
         error: null,
@@ -177,70 +183,138 @@ async function pendingCatalog() {
 }
 
 const timeoutFailure = {
-  code: 'deadline-exceeded', message: 'Timed out', retryable: true,
-  fatal: false, ambiguous: false,
+  code: 'deadline-exceeded',
+  message: 'Timed out',
+  retryable: true,
+  fatal: false,
+  ambiguous: false,
 };
 
 test('pending refresh retains accepted facts and metadata without completing freshness', async () => {
   const { previous, response, store, server } = await pendingCatalog();
   const first = await observePartial(response);
-  assert.equal(first.servers.find((entry) => entry.id === server.id)!.trust.status, 'unknown');
-  assert.equal(first.servers.find((entry) => entry.id === server.id)!.passiveStatus.status, 'loading');
-  assert.equal(first.storeInventory.find((entry) => entry.store === store.id)!.status, 'loading');
-  assert.equal(first.catalogFreshness?.profiles[server.id].lastSuccessAt, undefined);
+  assert.equal(
+    first.servers.find((entry) => entry.id === server.id)!.trust.status,
+    'unknown',
+  );
+  assert.equal(
+    first.servers.find((entry) => entry.id === server.id)!.passiveStatus.status,
+    'loading',
+  );
+  assert.equal(
+    first.storeInventory.find((entry) => entry.store === store.id)!.status,
+    'loading',
+  );
+  assert.equal(
+    first.catalogFreshness?.profiles[server.id].lastSuccessAt,
+    undefined,
+  );
   const refreshed = await observePartial(response, previous);
-  assert.equal(storeAvailability(refreshed, store, { nowSeconds: 2 }).available, true);
+  assert.equal(
+    storeAvailability(refreshed, store, { nowSeconds: 2 }).available,
+    true,
+  );
   assert.ok(refreshed.items.some((item) => item.store === store.id));
-  assert.equal(refreshed.catalogFreshness?.profiles[server.id].lastSuccessAt, 1);
+  assert.equal(
+    refreshed.catalogFreshness?.profiles[server.id].lastSuccessAt,
+    1,
+  );
   assert.equal(refreshed.catalogFreshness?.stores[store.id].lastSuccessAt, 1);
-  assert.equal(refreshed.catalogFreshness?.profiles[server.id].refreshing, true);
+  assert.equal(
+    refreshed.catalogFreshness?.profiles[server.id].refreshing,
+    true,
+  );
 });
 
 test('failed status invalidates prior authorization rather than remaining pending', async () => {
   const { previous, response, store } = await pendingCatalog();
-  response.localMetadata!.profiles.find((entry) => entry.profile === store.server)!.error = timeoutFailure;
+  response.localMetadata!.profiles.find(
+    (entry) => entry.profile === store.server,
+  )!.error = timeoutFailure;
   const snapshot = await observePartial(response, previous);
   assert.deepEqual(storeAvailability(snapshot, store, { nowSeconds: 2 }), {
-    available: false, reason: 'server-status-unavailable',
+    available: false,
+    reason: 'server-status-unavailable',
   });
-  assert.equal(snapshot.catalogFreshness?.profiles[store.server].lastSuccessAt, 1);
-  assert.deepEqual(snapshot.catalogFreshness?.profiles[store.server].error, timeoutFailure);
+  assert.equal(
+    snapshot.catalogFreshness?.profiles[store.server].lastSuccessAt,
+    1,
+  );
+  assert.deepEqual(
+    snapshot.catalogFreshness?.profiles[store.server].error,
+    timeoutFailure,
+  );
 });
 
 test('pending KV denial does not disable independently accepted chat facts', async () => {
   const { previous, response, store, server } = await pendingCatalog();
   response.failures.push({
-    scope: 'store', profile: server.id, store: store.id,
-    error: { ...timeoutFailure, code: 'capability-denied', details: { capability: 'kv' } },
+    scope: 'store',
+    profile: server.id,
+    store: store.id,
+    error: {
+      ...timeoutFailure,
+      code: 'capability-denied',
+      details: { capability: 'kv' },
+    },
   });
   const snapshot = await observePartial(response, previous);
   const accepted = snapshot.servers.find((entry) => entry.id === server.id)!;
-  assert.equal(storeAvailability(snapshot, store, { nowSeconds: 2 }).available, false);
-  assert.equal(serverCapabilityAvailability(snapshot, accepted, ['chat'], { nowSeconds: 2 }).available, true);
+  assert.equal(
+    storeAvailability(snapshot, store, { nowSeconds: 2 }).available,
+    false,
+  );
+  assert.equal(
+    serverCapabilityAvailability(snapshot, accepted, ['chat'], {
+      nowSeconds: 2,
+    }).available,
+    true,
+  );
   assert.ok(snapshot.items.some((item) => item.store === store.id));
 });
 
 test('changed configured identity cannot retain previous accepted facts', async () => {
   const { previous, response, store } = await pendingCatalog();
-  response.localMetadata!.profiles.find((entry) => entry.profile === store.server)!.configuredProbe = 'different.example';
+  response.localMetadata!.profiles.find(
+    (entry) => entry.profile === store.server,
+  )!.configuredProbe = 'different.example';
   const snapshot = await observePartial(response, previous);
-  assert.equal(storeAvailability(snapshot, store, { nowSeconds: 2 }).available, false);
-  assert.equal(snapshot.items.some((item) => item.store === store.id), false);
-  assert.equal(snapshot.storeInventory.find((entry) => entry.store === store.id)!.status, 'loading');
+  assert.equal(
+    storeAvailability(snapshot, store, { nowSeconds: 2 }).available,
+    false,
+  );
+  assert.equal(
+    snapshot.items.some((item) => item.store === store.id),
+    false,
+  );
+  assert.equal(
+    snapshot.storeInventory.find((entry) => entry.store === store.id)!.status,
+    'loading',
+  );
 });
 
 test('retained lease facts cannot reopen after observed expiry and clock rollback', async () => {
   const { previous, response, store, server } = await pendingCatalog();
   const leased: AgentSnapshot = {
     ...previous,
-    servers: previous.servers.map((entry) => entry.id === server.id ? {
-      ...entry, compatibility: { status: 'required', expiresAt: 10, capabilities: ['kv'] },
-    } : entry),
+    servers: previous.servers.map((entry) =>
+      entry.id === server.id
+        ? {
+            ...entry,
+            compatibility: {
+              status: 'required',
+              expiresAt: 10,
+              capabilities: ['kv'],
+            },
+          }
+        : entry,
+    ),
   };
   const expired = await observePartial(response, leased, 11);
   const rollback = await observePartial(response, expired, 2);
   assert.deepEqual(storeAvailability(rollback, store, { nowSeconds: 2 }), {
-    available: false, reason: 'check-in-expired',
+    available: false,
+    reason: 'check-in-expired',
   });
 });
 

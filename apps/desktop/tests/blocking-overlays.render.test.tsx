@@ -92,6 +92,101 @@ async function agentLostOverlay(options: {
   return { rendered, bridge };
 }
 
+test('agent loss automatically recovers once and manual Retry shares the active attempt', async () => {
+  const { App, FIXTURE, mockBridge } = await modules();
+  const base = mockBridge(FIXTURE);
+  const ready = deferred<Awaited<ReturnType<Bridge['agentStatus']>>>();
+  let loss = true,
+    automatic = 0,
+    manual = 0,
+    initialized = 0,
+    catalogs = 0,
+    recovering = false,
+    chatDuringRecovery = 0;
+  const bridge: Bridge = {
+    ...base,
+    native: true,
+    takeAgentConnectionLoss: async () => {
+      if (!loss) return null;
+      loss = false;
+      return 'Agent endpoint closed';
+    },
+    autoRecoverAgent: () => {
+      automatic++;
+      recovering = true;
+      return ready.promise;
+    },
+    chat: (...args) => {
+      if (recovering) chatDuringRecovery++;
+      return base.chat(...args);
+    },
+    retryAgentConnection: async () => {
+      manual++;
+      return { state: 'ready' };
+    },
+    initializeClientState: async () => {
+      initialized++;
+      return { state: 'ready' };
+    },
+    listCatalog: async () => {
+      catalogs++;
+      return base.listCatalog();
+    },
+  };
+  const rendered = ui.render(createElement(App, { snapshot: FIXTURE, bridge }));
+  await rendered.findByRole('alertdialog', {
+    name: 'Connection to background service lost',
+  });
+  await ui.act(async () => {
+    rendered.getByRole('button', { name: 'Retry' }).click();
+  });
+  assert.equal(automatic, 1);
+  assert.equal(manual, 0);
+  await ui.act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  assert.equal(chatDuringRecovery, 0);
+  await ui.act(async () => {
+    recovering = false;
+    ready.resolve({ state: 'ready' });
+  });
+  await ui.waitFor(() =>
+    assert.equal(document.querySelector('.stopwrap'), null),
+  );
+  assert.ok(catalogs > 0);
+  assert.equal(initialized, 0);
+});
+
+test('automatic recovery reporting bootstrap never initializes client state', async () => {
+  const { App, FIXTURE, mockBridge } = await modules();
+  let loss = true,
+    initialized = 0,
+    automatic = 0;
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    native: true,
+    takeAgentConnectionLoss: async () => {
+      if (!loss) return null;
+      loss = false;
+      return 'Agent endpoint closed';
+    },
+    autoRecoverAgent: async () => {
+      automatic++;
+      return { state: 'bootstrap', step: 'initialize-state' };
+    },
+    initializeClientState: async () => {
+      initialized++;
+      return { state: 'ready' };
+    },
+  };
+  ui.render(createElement(App, { snapshot: FIXTURE, bridge }));
+  await ui.waitFor(() => assert.equal(automatic, 1));
+  await ui.act(async () => {
+    await Promise.resolve();
+  });
+  assert.equal(initialized, 0);
+});
+
 async function agentLostWithDeferredCatalog() {
   const { App, FIXTURE, mockBridge } = await modules();
   const base = mockBridge(FIXTURE);

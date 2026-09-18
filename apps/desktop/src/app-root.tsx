@@ -1,6 +1,11 @@
 import { QueryRepositoryContext } from './query-hooks';
 import { readRecoveryFor } from './query-read-recovery';
 import { CatalogCoordinator } from './catalog-coordinator';
+import { CatalogReadGate } from './catalog-read-gate';
+import { markCatalogRefresh, failCatalogRefresh } from './catalog-state';
+import { useDesktopReconciliation } from './use-desktop-reconciliation';
+import { SyncStatus } from './shell/sync-status';
+import { AgentRecoveryController } from './agent-recovery';
 import { synchronizeApplied } from './operation-outcome';
 import { accountStopped } from './model';
 import { DeviceCache, DeviceCacheContext } from './device-cache';
@@ -604,6 +609,7 @@ export function App({
         const controller = new AgentLifecycleController(
           bridge,
           agentSnapshot.agent,
+          () => bridge.autoRecoverAgent?.() ?? bridge.agentStatus(),
         );
         setAgentController(controller);
         setAgentLifecycle(controller.snapshot());
@@ -632,7 +638,11 @@ export function App({
     void (async () => {
       try {
         const selected = bridge ?? (await selectBridge());
-        const controller = new AgentLifecycleController(selected);
+        const controller = new AgentLifecycleController(
+          selected,
+          undefined,
+          () => selected.autoRecoverAgent?.() ?? selected.agentStatus(),
+        );
         stopLifecycle = controller.subscribe((state) => {
           if (alive) setAgentLifecycle(state);
         });
@@ -1078,6 +1088,7 @@ function VaultShell({
   }, [locations, settlePrompt, toasts]);
   const [concealSignal, setConcealSignal] = useState(0);
   const metadataInvalidation = useRef<() => void>(() => undefined);
+  const metadataReconciliation = useRef<() => Promise<void>>(async () => {});
   const [hardwareRefresh, setHardwareRefresh] = useState(0);
   // A conceal ends the session the remembered chat belonged to: the account
   // that comes back may not have that team on this Mac, so the rail's Chat tab
@@ -1198,28 +1209,56 @@ function VaultShell({
     };
   }, [bridge]);
 
+  const [catalogGate] = useState(() => new CatalogReadGate());
+  const publishSnapshot = useCallback(
+    (next: AgentSnapshot, accepted = true): void => {
+      latestRef.current = next;
+      setLatest(next);
+      if (accepted) setAgentCatalogReady(true);
+    },
+    [],
+  );
   const catalogCoordinator = useMemo(
     () =>
       new CatalogCoordinator<AgentSnapshot>(
         (onPartial, isCurrent) =>
-          loadSnapshot(
-            bridge,
-            latestRef.current,
-            undefined,
-            onPartial,
-            isCurrent,
-          ),
+          catalogGate.exclusive(async () => {
+            if (!isCurrent())
+              throw Object.assign(new Error('Catalog load was retired.'), {
+                code: 'catalog-read-retired',
+              });
+            const base = markCatalogRefresh(latestRef.current);
+            latestRef.current = base;
+            setLatest(base);
+            try {
+              return await loadSnapshot(
+                bridge,
+                base,
+                undefined,
+                onPartial,
+                isCurrent,
+              );
+            } catch (error) {
+              if (isCurrent()) {
+                latestRef.current = failCatalogRefresh(
+                  latestRef.current,
+                  base.catalogProfiles,
+                  normalizeCommandError(error),
+                );
+                setLatest(latestRef.current);
+              }
+              throw error;
+            }
+          }),
         (next, forced) => {
-          latestRef.current = next;
-          setLatest(next);
+          publishSnapshot(next);
           if (forced) {
             metadataInvalidation.current();
             setHardwareRefresh((generation) => generation + 1);
           }
-          setAgentCatalogReady(true);
         },
       ),
-    [bridge],
+    [bridge, catalogGate, publishSnapshot],
   );
   useEffect(() => {
     catalogCoordinator.activate();
@@ -1235,7 +1274,14 @@ function VaultShell({
 
   const refresh = useCallback(
     async (message: string): Promise<void> => {
-      const result = await synchronizeApplied(() => refreshSnapshot(true));
+      const result = await synchronizeApplied(async () => {
+        const snapshot = await refreshSnapshot(true);
+        const failure = Object.values(
+          snapshot.catalogFreshness?.profiles ?? {},
+        ).find((entry) => entry.error)?.error;
+        if (failure) throw failure;
+        return snapshot;
+      });
       if (result.synchronization === 'pending') {
         if (result.error.code === 'catalog-read-retired') return;
         if (isAgentReadinessError(result.error))
@@ -1255,11 +1301,12 @@ function VaultShell({
   const refreshSnapshotRef = useRef(refreshSnapshot);
   const commandErrorRef = useRef<(error: unknown) => void>(() => undefined);
   const foregroundRefreshAllowed = useRef(false);
+  const recoveryRef = useRef<AgentRecoveryController | null>(null);
+  const healthProbe = useRef<Promise<void> | null>(null);
   refreshSnapshotRef.current = refreshSnapshot;
   foregroundRefreshAllowed.current =
     latest.agent.state === 'ready' &&
-    agentController.snapshot().state === 'ready' &&
-    agentCatalogReady;
+    agentController.snapshot().state === 'ready';
 
   const disconnectAgent = useCallback(
     (message: string): void => {
@@ -1269,12 +1316,33 @@ function VaultShell({
       catalogCoordinator.reset();
       setAgentCatalogReady(false);
       setConcealSignal((value) => value + 1);
+      if (bridge.autoRecoverAgent)
+        void recoveryRef.current
+          ?.recover({
+            code: 'agent-lost',
+            message,
+            retryable: true,
+            fatal: true,
+            ambiguous: false,
+          })
+          .catch((error: unknown) => commandErrorRef.current(error));
     },
-    [agentController, catalogCoordinator, retireBoot],
+    [agentController, bridge, catalogCoordinator, retireBoot],
   );
 
   const recoverAgentReadiness = useCallback(
     async (reconnect: boolean): Promise<void> => {
+      if (
+        reconnect &&
+        bridge.autoRecoverAgent &&
+        recoveryRef.current &&
+        ['ready', 'disconnected', 'failure'].includes(
+          agentController.snapshot().state,
+        )
+      ) {
+        await recoveryRef.current.retry();
+        return;
+      }
       try {
         await agentController.establish(reconnect);
       } catch (error) {
@@ -1296,13 +1364,63 @@ function VaultShell({
         commandErrorRef.current(error);
       }
     },
-    [agentController, refreshSnapshot],
+    [agentController, bridge, refreshSnapshot],
   );
+
+  const checkAgentHealth = useCallback((): void => {
+    if (!bridge.autoRecoverAgent || healthProbe.current) return;
+    const recovery = recoveryRef.current;
+    const generation = recovery?.captureGeneration();
+    const pending = (bridge.probeAgentStatus?.() ?? bridge.agentStatus())
+      .then((status) => {
+        if (
+          recoveryRef.current !== recovery ||
+          recovery?.captureGeneration() !== generation
+        )
+          return;
+        if (status.state === 'bootstrap')
+          agentController.requireBootstrap(status.step);
+      })
+      .catch((error: unknown) => {
+        if (
+          recoveryRef.current !== recovery ||
+          recovery?.captureGeneration() !== generation
+        )
+          return;
+        const typed = normalizeCommandError(error);
+        if (typed.code === 'bootstrap-required')
+          agentController.requireBootstrap(
+            typed.details?.reason ?? 'initialize-state',
+          );
+        else if (typed.code === 'agent-lost' || typed.fatal)
+          commandErrorRef.current(error);
+      })
+      .finally(() => {
+        if (healthProbe.current === pending) healthProbe.current = null;
+      });
+    healthProbe.current = pending;
+  }, [agentController, bridge]);
 
   const commandError = useCallback(
     (error: unknown, item?: Item, draft = ''): void => {
       const typed = normalizeCommandError(error);
-      if (typed.code === 'catalog-read-retired') return;
+      if (
+        typed.code === 'catalog-read-retired' ||
+        typed.code === 'agent-request-retired'
+      )
+        return;
+      if (typed.code === 'deadline-exceeded') checkAgentHealth();
+      if (
+        typed.fatal &&
+        ['unsafe-socket', 'protocol', 'response-binding'].includes(typed.code)
+      ) {
+        recoveryRef.current?.cancel();
+        agentController.fail(typed);
+        catalogCoordinator.reset();
+        setAgentCatalogReady(false);
+        setConcealSignal((value) => value + 1);
+        return;
+      }
       if (typed.code === 'agent-lost') {
         disconnectAgent(typed.message);
         return;
@@ -1318,9 +1436,52 @@ function VaultShell({
         typed.code === 'catalog-required' ? undefined : { tone: 'warning' },
       );
     },
-    [disconnectAgent, toasts, setWorkflow],
+    [
+      agentController,
+      catalogCoordinator,
+      checkAgentHealth,
+      disconnectAgent,
+      toasts,
+      setWorkflow,
+    ],
   );
   commandErrorRef.current = commandError;
+
+  useEffect(() => {
+    let alive = true;
+    const recovery = new AgentRecoveryController({
+      lifecycle: agentController,
+      isRecoveryPermitted: () => alive,
+      reconcile: async (_status, isCurrent) => {
+        if (isCurrent()) await refreshSnapshotRef.current(true);
+      },
+    });
+    recoveryRef.current = recovery;
+    return () => {
+      alive = false;
+      recovery.dispose();
+      if (recoveryRef.current === recovery) recoveryRef.current = null;
+    };
+  }, [agentController]);
+
+  const reconciliation = useDesktopReconciliation({
+    bridge,
+    snapshot: latest,
+    enabled:
+      agentLifecycle.state === 'ready' && state.location.kind !== 'first-run',
+    gate: catalogGate,
+    retireBoot,
+    current: () => latestRef.current,
+    publish: publishSnapshot,
+    refresh: () => refreshSnapshotRef.current(),
+    metadata: () => metadataReconciliation.current(),
+    report: (error) => {
+      if (normalizeCommandError(error).code === 'deadline-exceeded')
+        checkAgentHealth();
+      else commandErrorRef.current(error);
+    },
+    nowSeconds: () => leaseClock.now(),
+  });
 
   const expiryCoordinator = useRef<LeaseExpiryCoordinator | null>(null);
   useEffect(() => {
@@ -1344,7 +1505,7 @@ function VaultShell({
     expiryCoordinator.current = coordinator;
     const reconcileForeground = (): void => {
       coordinator.foreground();
-      if (foregroundRefreshAllowed.current)
+      if (!bridge.native && foregroundRefreshAllowed.current)
         void refreshSnapshotRef
           .current()
           .catch((error: unknown) => commandErrorRef.current(error));
@@ -1362,7 +1523,7 @@ function VaultShell({
       window.removeEventListener('pageshow', reconcileForeground);
       document.removeEventListener('visibilitychange', reconcileVisible);
     };
-  }, [leaseClock]);
+  }, [leaseClock, bridge.native]);
 
   useEffect(() => {
     expiryCoordinator.current?.update(
@@ -1427,7 +1588,22 @@ function VaultShell({
     if (refreshingSnapshot) return;
     setRefreshingSnapshot(true);
     void refreshSnapshot(true)
-      .then(() => toasts.show('Vaults and teams refreshed'))
+      .then((next) => {
+        reconciliation.scheduler.requestAll('manual', [
+          'discovery',
+          'metadata',
+          'registry',
+        ]);
+        const incomplete = Object.values(
+          next.catalogFreshness?.profiles ?? {},
+        ).some((entry) => entry.error || entry.refreshing);
+        toasts.show(
+          incomplete
+            ? 'Refresh completed with unavailable data. See Refresh status.'
+            : 'Vaults and teams refreshed',
+          incomplete ? { tone: 'warning' } : undefined,
+        );
+      })
       .catch(commandError)
       .finally(() => setRefreshingSnapshot(false));
   };
@@ -1545,8 +1721,14 @@ function VaultShell({
       if (pending) return;
       pending = true;
       try {
+        const generation = recoveryRef.current?.captureGeneration();
         const message = await bridge.takeAgentConnectionLoss();
-        if (alive && message) disconnectAgent(message);
+        if (
+          alive &&
+          message &&
+          recoveryRef.current?.captureGeneration() === generation
+        )
+          disconnectAgent(message);
       } catch (error) {
         if (alive && normalizeCommandError(error).code === 'agent-lost')
           commandError(error);
@@ -1881,6 +2063,7 @@ function VaultShell({
       >
         <ChatInboxProvider
           key={`inbox:${concealSignal}`}
+          enabled={agentLifecycle.state === 'ready' && agentCatalogReady}
           bridge={bridge}
           snapshot={shown}
           onNavigate={navigateFromNotification}
@@ -1960,6 +2143,16 @@ function VaultShell({
                   refreshing={refreshingSnapshot}
                   onRefresh={refreshAll}
                 />
+                {bridge.native ? (
+                  <SyncStatus
+                    snapshot={shown}
+                    service={reconciliation}
+                    storeId={
+                      state.selection?.store ??
+                      (here.kind === 'store' ? here.ref : undefined)
+                    }
+                  />
+                ) : null}
                 {screen}
               </main>
             </>
@@ -2101,6 +2294,10 @@ function VaultShell({
     [bridge, concealSignal, deviceIdentity],
   );
   metadataInvalidation.current = () => deviceCache.repository.invalidate([]);
+  metadataReconciliation.current = () =>
+    deviceCache.repository.reconcileSubscribed(
+      () => foregroundRefreshAllowed.current && !document.hidden,
+    );
   deviceCache.repository.setReadRecovery(
     () =>
       readRecoveryFor(deviceCache.repository).options({

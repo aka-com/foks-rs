@@ -258,6 +258,26 @@ export function DetailsPanel({
   // work. `null` while no editor is open, and for a draft restored from a
   // conflict, whose stored counterpart is by definition not what it holds.
   const editBaseline = useRef<string | null>(null);
+  const editTarget = useRef<Item | null>(null);
+  const editScope = useRef('');
+  const editGeneration = useRef(accessGeneration);
+  const selectedStore = item ? storeOf(snapshot, item.store) : undefined;
+  const selectedServer = snapshot.servers.find(
+    (server) => server.id === selectedStore?.server,
+  );
+  const selectedAccount = snapshot.accounts.find(
+    (account) =>
+      account.server === selectedStore?.server &&
+      account.alias === selectedStore?.account,
+  );
+  const scopeIdentity = JSON.stringify([
+    item?.store,
+    item?.path,
+    item?.kind,
+    selectedServer?.host_id,
+    selectedServer?.configuredProbe,
+    selectedAccount?.username,
+  ]);
   // Epoch of the retained draft already restored, preventing duplicate restores on refresh.
   const appliedDraft = useRef<number | null>(null);
   // Current item key ref to avoid stale closures in asynchronous callbacks.
@@ -348,17 +368,28 @@ export function DetailsPanel({
   useEffect(() => {
     concealEpoch.current += 1;
     setRead(null);
-    setEditing(false);
-    setEditValue('');
-    editBaseline.current = null;
     setEditPasswordShown(false);
-    setReplacementPath(null);
-    setEditError(null);
-    setBinaryFile(false);
+    if (
+      editTarget.current &&
+      editScope.current === scopeIdentity &&
+      editGeneration.current === accessGeneration
+    ) {
+      setEditError(
+        'This item changed on the server. Saving will check the original version.',
+      );
+    } else {
+      setEditing(false);
+      setEditValue('');
+      editBaseline.current = null;
+      editTarget.current = null;
+      setReplacementPath(null);
+      setEditError(null);
+      setBinaryFile(false);
+    }
     return () => {
       concealEpoch.current += 1;
     };
-  }, [key]);
+  }, [key, scopeIdentity, accessGeneration]);
 
   // Reveal content only when explicitly requested.
   useEffect(() => {
@@ -391,6 +422,7 @@ export function DetailsPanel({
     setRead(null);
     setEditValue('');
     editBaseline.current = null;
+    editTarget.current = null;
     setEditing(false);
     setEditPasswordShown(false);
     setReplacementPath(null);
@@ -405,8 +437,11 @@ export function DetailsPanel({
     appliedDraft.current = resumeDraft.epoch;
     setEditValue(resumeDraft.value);
     editBaseline.current = null;
+    editTarget.current = item;
+    editScope.current = scopeIdentity;
+    editGeneration.current = accessGeneration;
     setEditing(true);
-  }, [item, resumeDraft]);
+  }, [item, resumeDraft, scopeIdentity, accessGeneration]);
 
   const selectedFileMode = item?.kind === 'File' || binaryFile;
   useFileDrop({
@@ -433,6 +468,7 @@ export function DetailsPanel({
     setEditing(false);
     setEditValue('');
     editBaseline.current = null;
+    editTarget.current = null;
     setEditPasswordShown(false);
     setReplacementPath(null);
     setEditError(null);
@@ -541,6 +577,9 @@ export function DetailsPanel({
     if (!request || !accessAvailable()) return;
     if (fileMode) {
       editBaseline.current = '';
+      editTarget.current = item;
+      editScope.current = scopeIdentity;
+      editGeneration.current = accessGeneration;
       setEditing(true);
       return;
     }
@@ -566,6 +605,9 @@ export function DetailsPanel({
       const opened = editableValue(item, response.value);
       setEditValue(opened);
       editBaseline.current = opened;
+      editTarget.current = item;
+      editScope.current = scopeIdentity;
+      editGeneration.current = accessGeneration;
       setEditPasswordShown(false);
       setEditing(true);
       setRead(null);
@@ -576,6 +618,9 @@ export function DetailsPanel({
         setBinaryFile(true);
         setRead(null);
         editBaseline.current = '';
+        editTarget.current = item;
+        editScope.current = scopeIdentity;
+        editGeneration.current = accessGeneration;
         setEditing(true);
       } else {
         onCommandError(error, item);
@@ -586,30 +631,44 @@ export function DetailsPanel({
   };
 
   const saveEdit = async (): Promise<void> => {
-    if (!request || !accessAvailable()) return;
+    const target = editTarget.current;
+    if (
+      !request ||
+      !target ||
+      editScope.current !== scopeIdentity ||
+      editGeneration.current !== accessGeneration ||
+      !accessAvailable()
+    )
+      return;
+    const editRequest = {
+      storeId: target.store,
+      path: target.path,
+      version: target.version,
+    };
     setSaving(true);
     try {
       if (fileMode) {
         const response = replacementPath
           ? await bridge.replaceDroppedFile({
-              ...request,
+              ...editRequest,
               sourcePath: replacementPath,
             })
-          : await bridge.pickAndReplaceFile(request);
+          : await bridge.pickAndReplaceFile(editRequest);
         if (!response.applied) return;
       } else {
-        await bridge.editTextItem({ ...request, value: editValue });
+        await bridge.editTextItem({ ...editRequest, value: editValue });
       }
       editBaseline.current = null;
+      editTarget.current = null;
       setEditing(false);
       await onApplied('Changes saved');
     } catch (error) {
       const typed = normalizeCommandError(error);
       if (typed.code === 'conflict') {
-        onConflict(item, editValue);
+        onConflict(target, editValue);
         await onMutationError(error, { report: false });
       } else {
-        await onMutationError(error, { item });
+        await onMutationError(error, { item: target });
       }
     } finally {
       setSaving(false);

@@ -1,4 +1,5 @@
-import { useDeviceQueries } from '../device-cache';
+import { useDeviceQueries, metadataFreshness } from '../device-cache';
+import { MetadataStatus } from '../components/metadata-status';
 import { useMetadataQuery } from '../query-hooks';
 import { useEffect, useState } from 'react';
 import type { Bridge } from '../bridge';
@@ -47,6 +48,10 @@ export function ProfileKeys({
   return (
     <section aria-label="Security keys">
       <SectionLabel>Security keys</SectionLabel>
+      <MetadataStatus
+        label="Security key metadata"
+        freshness={metadataFreshness([state])}
+      />
 
       <Inset>
         {!available ? (

@@ -20,7 +20,9 @@ export function ChatSendProvider({
   clock,
   accessGenerations,
   children,
+  enabled = true,
 }: {
+  enabled?: boolean;
   bridge: Bridge;
   snapshot: AgentSnapshot;
   inbox: ChatInboxService;
@@ -39,9 +41,9 @@ export function ChatSendProvider({
     service.update(snapshot, accessGenerations);
   }, [service, snapshot, accessGenerations]);
   useLayoutEffect(() => {
-    service.start();
+    if (enabled) service.start();
     return () => service.stop();
-  }, [service]);
+  }, [service, enabled]);
   return <Context.Provider value={service}>{children}</Context.Provider>;
 }
 export function useChatSends() {

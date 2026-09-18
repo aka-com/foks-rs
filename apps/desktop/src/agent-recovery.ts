@@ -91,6 +91,7 @@ export function isAutomaticRecoveryError(
     !requiresExplicitAction(error) &&
     error.retryable &&
     (error.code === 'agent-lost' ||
+      error.code === 'agent-busy' ||
       error.code === 'agent-start-failed' ||
       scope === 'health-probe')
   );

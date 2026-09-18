@@ -103,6 +103,8 @@ pub struct CatalogDto {
     pub known_stores: Vec<StoreDto>,
     pub inventory: Vec<CatalogInventoryDto>,
     pub store_reads: Vec<CatalogStoreReadDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub full_item_reads: Option<Vec<String>>,
     pub items: Vec<ItemDto>,
     pub failures: Vec<CatalogFailureDto>,
     pub blocked_profiles: Vec<String>,
@@ -134,6 +136,7 @@ impl CatalogDto {
     pub(super) fn from_snapshot(snapshot: &CatalogSnapshot) -> Result<Self, AgentError> {
         Ok(Self {
             profiles: snapshot.profiles.clone(),
+            full_item_reads: snapshot.full_item_reads.clone(),
             stores: snapshot
                 .stores
                 .iter()

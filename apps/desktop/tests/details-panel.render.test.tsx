@@ -268,6 +268,57 @@ test('a login edits in structured fields and serializes through the existing dra
   assert.match(saved, /url: https:\/\/github\.com\/login/);
 });
 
+test('background version changes retain the draft and its original write precondition', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
+  let submitted: Parameters<Bridge['editTextItem']>[0] | undefined;
+  let conflict: { version: number; draft: string } | undefined;
+  p.bridge.editTextItem = async (request) => {
+    submitted = request;
+    throw {
+      code: 'conflict',
+      message: 'The item changed.',
+      retryable: false,
+      fatal: false,
+      ambiguous: false,
+    };
+  };
+  p.props.onConflict = (item, draft) => {
+    conflict = { version: item.version, draft };
+  };
+  const rendered = ui.render(p.draw());
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
+  const username = await rendered.findByLabelText('User name');
+  ui.fireEvent.change(username, { target: { value: 'retained-draft' } });
+  p.props.snapshot = {
+    ...p.props.snapshot,
+    items: p.props.snapshot.items.map((item) =>
+      item.store === p.subject.store && item.path === p.subject.path
+        ? { ...item, version: item.version + 1 }
+        : item,
+    ),
+  };
+  rendered.rerender(p.draw());
+  assert.equal(
+    (rendered.getByLabelText('User name') as HTMLInputElement).value,
+    'retained-draft',
+  );
+  assert.match(rendered.container.textContent ?? '', /original version/);
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Save changes' }));
+  await ui.waitFor(() => assert.ok(conflict));
+  assert.equal(submitted?.version, p.subject.version);
+  assert.equal(conflict?.version, p.subject.version);
+  assert.match(conflict.draft, /retained-draft/);
+  p.props.accessGeneration = 1;
+  rendered.rerender(p.draw());
+  await ui.waitFor(() =>
+    assert.ok(rendered.getByRole('button', { name: 'Edit' })),
+  );
+  assert.equal(rendered.queryByLabelText('User name'), null);
+});
+
 /* ------------------------------------------------- the unsaved-edit guard -- */
 
 /** The shell's prompter, reduced to what these tests ask of it. */

@@ -129,8 +129,10 @@ export class MetadataQuery<T> {
       this.listeners.size > 0 &&
       !this.pending &&
       !this.trailing &&
-      now >= this.retryAt &&
-      (this.updated === undefined || now - this.updated >= this.freshFor)
+      (now >= this.retryAt || now < (this.state.lastAttemptAt ?? now)) &&
+      (this.updated === undefined ||
+        now < this.updated ||
+        now - this.updated >= this.freshFor)
     );
   }
 
@@ -143,18 +145,21 @@ export class MetadataQuery<T> {
       if (this.trailing?.epoch === epoch) return this.trailing.promise;
       const trailing: { epoch: number; promise: Promise<T> } = {
         epoch,
-        promise: this.pending.catch(() => undefined).then(() => {
-          if (this.trailing === trailing) this.trailing = undefined;
-          if (this.repository.retired || epoch !== this.repository.epoch)
-            throw new RetiredQueryError();
-          return this.load(options);
-        }),
+        promise: this.pending
+          .catch(() => undefined)
+          .then(() => {
+            if (this.trailing === trailing) this.trailing = undefined;
+            if (this.repository.retired || epoch !== this.repository.epoch)
+              throw new RetiredQueryError();
+            return this.load(options);
+          }),
       };
       this.trailing = trailing;
       return trailing.promise;
     }
     if (
       this.updated !== undefined &&
+      this.repository.now() >= this.updated &&
       this.repository.now() - this.updated < this.freshFor
     ) {
       this.repository.report({ kind: 'cache-hit' });
@@ -325,8 +330,8 @@ export class QueryRepository {
     return entry as MetadataQuery<T>;
   }
 
-  reconcileSubscribed(): Promise<void> {
-    if (this.closed) return Promise.resolve();
+  reconcileSubscribed(allowed: () => boolean = () => true): Promise<void> {
+    if (this.closed || !allowed()) return Promise.resolve();
     if (this.reconciliation) return this.reconciliation;
     const epoch = this.accessEpoch;
     const due = [...this.entries.values()].filter((query) =>
@@ -335,7 +340,12 @@ export class QueryRepository {
     let next = 0;
     const errors: unknown[] = [];
     const worker = async () => {
-      while (!this.closed && epoch === this.accessEpoch && next < due.length) {
+      while (
+        !this.closed &&
+        epoch === this.accessEpoch &&
+        allowed() &&
+        next < due.length
+      ) {
         const query = due[next++];
         if (!query.isDueSubscribed()) continue;
         try {

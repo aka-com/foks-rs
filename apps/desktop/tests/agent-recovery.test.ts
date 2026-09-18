@@ -69,28 +69,37 @@ class Clock implements AgentRecoveryClock {
   }
 }
 
-function setup(options: {
-  automatic?: () => Promise<AgentStatus>;
-  manual?: () => Promise<AgentStatus>;
-  reconcile?: (status: AgentStatus, isCurrent: () => boolean) => Promise<void>;
-} = {}) {
+function setup(
+  options: {
+    automatic?: () => Promise<AgentStatus>;
+    manual?: () => Promise<AgentStatus>;
+    reconcile?: (
+      status: AgentStatus,
+      isCurrent: () => boolean,
+    ) => Promise<void>;
+  } = {},
+) {
   const clock = new Clock();
   const calls = { automatic: 0, manual: 0, initialize: 0, reconcile: 0 };
   const permission = { allowed: true };
-  const lifecycle = new AgentLifecycleController({
-    ...mockBridge(FIXTURE),
-    retryAgentConnection: async () => {
-      calls.manual++;
-      return options.manual ? options.manual() : { state: 'ready' };
+  const lifecycle = new AgentLifecycleController(
+    {
+      ...mockBridge(FIXTURE),
+      retryAgentConnection: async () => {
+        calls.manual++;
+        return options.manual ? options.manual() : { state: 'ready' };
+      },
+      initializeClientState: async () => {
+        calls.initialize++;
+        return { state: 'ready' };
+      },
     },
-    initializeClientState: async () => {
-      calls.initialize++;
-      return { state: 'ready' };
+    { state: 'ready' },
+    async () => {
+      calls.automatic++;
+      return options.automatic ? options.automatic() : { state: 'ready' };
     },
-  }, { state: 'ready' }, async () => {
-    calls.automatic++;
-    return options.automatic ? options.automatic() : { state: 'ready' };
-  });
+  );
   const recovery = new AgentRecoveryController({
     lifecycle,
     clock,
@@ -105,13 +114,21 @@ function setup(options: {
 
 function maintenance(lifecycle: AgentLifecycleController): void {
   lifecycle.applyMaintenance({
-    state: 'active', generation: 1, revision: 1, kind: 'verify', phase: 'running',
+    state: 'active',
+    generation: 1,
+    revision: 1,
+    kind: 'verify',
+    phase: 'running',
   });
 }
 
 test('automatic health recovery shares one bounded sequence and never replays a mutation', async () => {
   const error = failure('agent-lost', true);
-  const { recovery, lifecycle, calls, clock } = setup({ automatic: async () => { throw error; } });
+  const { recovery, lifecycle, calls, clock } = setup({
+    automatic: async () => {
+      throw error;
+    },
+  });
   const generation = recovery.captureGeneration();
   const pending = recovery.recover(error, { generation });
   const rejected = assert.rejects(pending, (value: unknown) => value === error);
@@ -144,7 +161,9 @@ test('automatic health recovery shares one bounded sequence and never replays a 
 
 test('bootstrap result stops automatic recovery without initialization', async () => {
   const status: AgentStatus = { state: 'bootstrap', step: 'create-state' };
-  const { recovery, lifecycle, calls, clock } = setup({ automatic: async () => status });
+  const { recovery, lifecycle, calls, clock } = setup({
+    automatic: async () => status,
+  });
   assert.deepEqual(await recovery.recover(failure()), status);
   assert.deepEqual(lifecycle.snapshot(), status);
   assert.equal(calls.initialize, 0);
@@ -178,7 +197,11 @@ test('manual Retry shares an in-flight automatic attempt and its reconciliation'
 });
 
 test('manual Retry cancels scheduled backoff and retains one shared result', async () => {
-  const { recovery, clock, calls } = setup({ automatic: async () => { throw failure(); } });
+  const { recovery, clock, calls } = setup({
+    automatic: async () => {
+      throw failure();
+    },
+  });
   const pending = recovery.recover(failure());
   await flush();
   assert.equal(clock.tasks.size, 1);
@@ -193,7 +216,9 @@ test('manual Retry cancels scheduled backoff and retains one shared result', asy
 
 test('lock cancellation retires pending success and queued retries', async () => {
   const automatic = deferred<AgentStatus>();
-  const { recovery, permission, lifecycle, calls, clock } = setup({ automatic: () => automatic.promise });
+  const { recovery, permission, lifecycle, calls, clock } = setup({
+    automatic: () => automatic.promise,
+  });
   const pending = recovery.recover(failure());
   await flush();
   permission.allowed = false;
@@ -212,7 +237,11 @@ test('lock cancellation retires pending success and queued retries', async () =>
 });
 
 test('permission checks cancel backoff even without a lock notification', async () => {
-  const { recovery, permission, clock, calls } = setup({ automatic: async () => { throw failure(); } });
+  const { recovery, permission, clock, calls } = setup({
+    automatic: async () => {
+      throw failure();
+    },
+  });
   const pending = recovery.recover(failure());
   await flush();
   permission.allowed = false;
@@ -225,7 +254,9 @@ test('permission checks cancel backoff even without a lock notification', async 
 
 test('late completion checks permission before publishing lifecycle readiness', async () => {
   const automatic = deferred<AgentStatus>();
-  const { recovery, permission, lifecycle, calls } = setup({ automatic: () => automatic.promise });
+  const { recovery, permission, lifecycle, calls } = setup({
+    automatic: () => automatic.promise,
+  });
   const pending = recovery.recover(failure());
   await flush();
   permission.allowed = false;
@@ -288,7 +319,11 @@ test('terminal maintenance states exclude automatic and generic manual recovery'
   for (const disposition of [
     { status: 'restart-selected-root', root: '/tmp/selected' } as const,
     { status: 'recovery-required', root: '/tmp/selected' } as const,
-    { status: 'restoration-failed', root: '/tmp/selected', error: failure() } as const,
+    {
+      status: 'restoration-failed',
+      root: '/tmp/selected',
+      error: failure(),
+    } as const,
   ]) {
     const { recovery, lifecycle, calls } = setup();
     lifecycle.applyMaintenance({
@@ -310,7 +345,11 @@ test('terminal maintenance states exclude automatic and generic manual recovery'
 });
 
 test('disposal clears scheduled backoff and prevents subsequent recovery', async () => {
-  const { recovery, calls, clock } = setup({ automatic: async () => { throw failure(); } });
+  const { recovery, calls, clock } = setup({
+    automatic: async () => {
+      throw failure();
+    },
+  });
   const pending = recovery.recover(failure());
   await flush();
   recovery.dispose();
@@ -324,7 +363,9 @@ test('disposal clears scheduled backoff and prevents subsequent recovery', async
 
 test('maintenance preempts pending recovery and preserves authoritative state', async () => {
   const automatic = deferred<AgentStatus>();
-  const { recovery, lifecycle, calls, clock } = setup({ automatic: () => automatic.promise });
+  const { recovery, lifecycle, calls, clock } = setup({
+    automatic: () => automatic.promise,
+  });
   const pending = recovery.recover(failure());
   await flush();
   maintenance(lifecycle);
@@ -341,7 +382,11 @@ test('maintenance preempts pending recovery and preserves authoritative state', 
 });
 
 test('maintenance preempts scheduled backoff', async () => {
-  const { recovery, lifecycle, calls, clock } = setup({ automatic: async () => { throw failure(); } });
+  const { recovery, lifecycle, calls, clock } = setup({
+    automatic: async () => {
+      throw failure();
+    },
+  });
   const pending = recovery.recover(failure());
   await flush();
   maintenance(lifecycle);
@@ -355,10 +400,15 @@ test('maintenance preempts scheduled backoff', async () => {
 test('catalog reconciliation failure leaves the recovered agent ready and Retry only refreshes', async () => {
   const catalogError = failure('catalog-required');
   let refreshes = 0;
-  const { recovery, lifecycle, calls, clock } = setup({ reconcile: async () => {
-    if (++refreshes === 1) throw catalogError;
-  } });
-  await assert.rejects(recovery.recover(failure()), (error: unknown) => error === catalogError);
+  const { recovery, lifecycle, calls, clock } = setup({
+    reconcile: async () => {
+      if (++refreshes === 1) throw catalogError;
+    },
+  });
+  await assert.rejects(
+    recovery.recover(failure()),
+    (error: unknown) => error === catalogError,
+  );
   assert.equal(lifecycle.snapshot().state, 'ready');
   assert.equal(clock.tasks.size, 0);
   assert.equal(recovery.snapshot().halted, false);
@@ -375,7 +425,9 @@ test('health-probe scope admits retryable probe failures without treating ordina
   const error = failure('probe-timeout');
   await recovery.recover(error);
   assert.equal(calls.automatic, 0);
-  assert.deepEqual(await recovery.recover(error, { scope: 'health-probe' }), { state: 'ready' });
+  assert.deepEqual(await recovery.recover(error, { scope: 'health-probe' }), {
+    state: 'ready',
+  });
   assert.equal(calls.automatic, 1);
   recovery.dispose();
 });
@@ -394,7 +446,9 @@ test('old request failures cannot disconnect a successfully recovered agent', as
 
 test('cancelled native failure cannot roll back a queued successful manual recovery', async () => {
   const automatic = deferred<AgentStatus>();
-  const { recovery, lifecycle, calls } = setup({ automatic: () => automatic.promise });
+  const { recovery, lifecycle, calls } = setup({
+    automatic: () => automatic.promise,
+  });
   const old = recovery.recover(failure());
   await flush();
   recovery.cancel();
@@ -414,12 +468,14 @@ test('cancelled reconciliation receives a validity guard and cannot affect the n
   const oldRefresh = deferred<void>();
   let oldIsCurrent!: () => boolean;
   let refreshes = 0;
-  const { recovery, lifecycle, calls } = setup({ reconcile: async (_status, isCurrent) => {
-    if (++refreshes === 1) {
-      oldIsCurrent = isCurrent;
-      await oldRefresh.promise;
-    }
-  } });
+  const { recovery, lifecycle, calls } = setup({
+    reconcile: async (_status, isCurrent) => {
+      if (++refreshes === 1) {
+        oldIsCurrent = isCurrent;
+        await oldRefresh.promise;
+      }
+    },
+  });
   const old = recovery.recover(failure());
   await flush();
   recovery.cancel();
@@ -436,16 +492,32 @@ test('cancelled reconciliation receives a validity guard and cannot affect the n
 });
 
 for (const code of [
-  'bootstrap-required', 'unsafe-socket', 'version-mismatch', 'integrity',
-  'agent-takeover-required', 'state-recovery-required', 'state-restart-required',
-  'restoration-failed', 'unsupported-schema',
+  'bootstrap-required',
+  'unsafe-socket',
+  'version-mismatch',
+  'integrity',
+  'agent-takeover-required',
+  'state-recovery-required',
+  'state-restart-required',
+  'restoration-failed',
+  'unsupported-schema',
 ]) {
   test(`${code} halts automatic recovery despite a retryable flag`, async () => {
     const error = failure(code);
-    const { recovery, lifecycle, calls, clock } = setup({ automatic: async () => { throw error; } });
-    await assert.rejects(recovery.recover(failure()), (value: unknown) => value === error);
+    const { recovery, lifecycle, calls, clock } = setup({
+      automatic: async () => {
+        throw error;
+      },
+    });
+    await assert.rejects(
+      recovery.recover(failure()),
+      (value: unknown) => value === error,
+    );
     assert.equal(recovery.snapshot().halted, true);
-    assert.equal(lifecycle.snapshot().state, code === 'bootstrap-required' ? 'bootstrap' : 'failure');
+    assert.equal(
+      lifecycle.snapshot().state,
+      code === 'bootstrap-required' ? 'bootstrap' : 'failure',
+    );
     assert.equal(clock.tasks.size, 0);
     await recovery.recover(failure());
     await clock.advance(60_000);

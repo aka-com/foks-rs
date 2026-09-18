@@ -155,7 +155,10 @@ test('store identity does not imply a successfully loaded item inventory', async
   });
   assert.deepEqual(snapshot.storeInventory[0].error, failure);
   assert.ok(snapshot.items.some((item) => item.store === store.id));
-  assert.equal(snapshot.items.some((item) => item.value !== undefined), false);
+  assert.equal(
+    snapshot.items.some((item) => item.value !== undefined),
+    false,
+  );
   assert.equal(snapshot.catalogFreshness?.stores[store.id].lastSuccessAt, 1);
   assert.equal(
     serverAvailability(snapshot, snapshot.servers[0]).available,
@@ -167,7 +170,10 @@ test('successful complete empty listing clears historical item metadata', async 
   const { bridge, store } = await harness();
   assert.ok(FIXTURE.items.some((item) => item.store === store.id));
   const snapshot = await loadSnapshot(bridge, FIXTURE, 1);
-  assert.equal(snapshot.items.some((item) => item.store === store.id), false);
+  assert.equal(
+    snapshot.items.some((item) => item.store === store.id),
+    false,
+  );
   assert.equal(snapshot.storeInventory[0].status, 'available');
   assert.equal(snapshot.catalogFreshness?.stores[store.id].lastSuccessAt, 1);
 });

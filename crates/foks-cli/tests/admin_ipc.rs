@@ -84,8 +84,8 @@ fn admin_configuration_and_checks_use_the_real_agent_without_printing_sessions()
     );
     let client = foks_agent_client::AgentClient::new(state.join("foks-rs.sock"));
     let deadline = Instant::now() + Duration::from_secs(10);
-    while client.call(foks_agent_proto::Operation::Ping).is_err() {
-        assert!(Instant::now() < deadline);
+    while let Err(error) = client.call(foks_agent_proto::Operation::Ping) {
+        assert!(Instant::now() < deadline, "agent readiness failed: {error}");
         std::thread::sleep(Duration::from_millis(20));
     }
 

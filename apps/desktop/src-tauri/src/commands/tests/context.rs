@@ -47,6 +47,28 @@ fn chat_catalog() -> CatalogSnapshot {
 }
 
 #[test]
+fn stale_item_versions_do_not_report_agent_protocol_mismatch() {
+    let state = phase_four_state(vec![]);
+    let catalog = chat_catalog();
+    let item = catalog.items[0].clone();
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.publish_catalog(load, catalog, |_| {}));
+    let store = store_id(&item.store);
+    let error = state
+        .selected_item(&store, &item.metadata.path, item.metadata.version + 1)
+        .unwrap_err();
+    assert_eq!(error.code, "item-version-mismatch");
+    assert!(!error.fatal);
+    assert_eq!(
+        state
+            .selected_mutation_item(&store, &item.metadata.path, item.metadata.version + 1)
+            .unwrap_err()
+            .code,
+        "conflict"
+    );
+}
+
+#[test]
 fn kv_refresh_and_content_invalidation_preserve_chat_access_revision() {
     let state = phase_four_state(vec![]);
     let chat = state.for_profile("chat").unwrap();
@@ -75,7 +97,7 @@ fn lease_renewal_and_kv_capability_changes_do_not_retire_chat() {
     if let foks_agent_proto::ResponseResult::Success { value } =
         &mut catalog.profile_overviews[0].server_status
     {
-        value["compatibility"] = serde_json::json!({"status":"validated", "expires_at":u64::MAX - 1, "capabilities":["chat", "kv"]});
+        value["compatibility"] = serde_json::json!({"status":"validated", "expires_at":u64::MAX - 1, "capabilities":["chat", "kv", "device-administration"]});
     }
     let (load, _) = state.begin_catalog_load_checked().unwrap();
     assert!(state.publish_catalog(load, catalog.clone(), |_| {}));
@@ -117,6 +139,11 @@ fn partial_publication_keeps_accepted_facts_and_does_not_clear_mutation_gate() {
         state.publish_catalog_snapshot(load, partial, |_, accepted| {
             assert_eq!(accepted.items, catalog.items);
             assert_eq!(accepted.stores, catalog.stores);
+            assert_eq!(accepted.full_item_reads, None);
+            assert_eq!(
+                accepted.store_reads[0].state,
+                foks_desktop::CatalogStoreReadState::NotLoaded
+            );
         })
     );
     let mut pending_items = catalog.clone();
@@ -126,7 +153,11 @@ fn partial_publication_keeps_accepted_facts_and_does_not_clear_mutation_gate() {
     assert!(
         state.publish_catalog_snapshot(load, pending_items.clone(), |_, accepted| {
             assert_eq!(accepted.items, catalog.items);
-            assert_eq!(accepted.store_reads, catalog.store_reads);
+            assert_eq!(accepted.full_item_reads, None);
+            assert_eq!(
+                accepted.store_reads[0].state,
+                foks_desktop::CatalogStoreReadState::NotLoaded
+            );
         })
     );
     assert!(chat.mutation_requires_refresh.load(Ordering::Acquire));
@@ -880,7 +911,7 @@ fn catalog_reads_bound_to_a_generation_fail_once_it_is_replaced() {
     // A replacement is private until publication; the accepted token and
     // facts stay valid while a refresh is running or fails.
     let (next, _token) = state.begin_catalog_load_checked().unwrap();
-    assert_eq!(next, generation + 1);
+    assert!(next > generation);
     assert!(state.catalog_at(Some(generation)).unwrap().1.is_some());
     assert!(state.catalog_at(Some(next)).is_err());
     assert!(state.accept_catalog(next, CatalogSnapshot::default()));

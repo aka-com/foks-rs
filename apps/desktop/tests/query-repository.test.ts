@@ -518,3 +518,40 @@ test('view recovery cannot bypass the session-wide repair admission policy', asy
   await assert.rejects(pending);
   assert.equal(repairs, 0);
 });
+
+test('a hidden metadata pass finishes active reads without dispatching the remaining readers', async () => {
+  const repository = new QueryRepository();
+  const reply = deferred<number>();
+  let visible = true,
+    calls = 0;
+  for (let i = 0; i < 4; i++)
+    repository
+      .query([String(i)], async () => {
+        calls++;
+        return reply.promise;
+      })
+      .subscribe(() => {});
+  const pass = repository.reconcileSubscribed(() => visible);
+  await tick();
+  assert.equal(calls, 2);
+  visible = false;
+  reply.resolve(1);
+  await pass;
+  assert.equal(calls, 2);
+  visible = true;
+  await repository.reconcileSubscribed(() => visible);
+  assert.equal(calls, 4);
+});
+
+test('clock rollback cannot keep metadata fresh indefinitely', async () => {
+  let now = 100_000,
+    calls = 0;
+  const repository = new QueryRepository(() => now);
+  const query = repository.query(['devices'], async () => ++calls);
+  query.subscribe(() => {});
+  await query.load();
+  now = 50_000;
+  await repository.reconcileSubscribed();
+  assert.equal(calls, 2);
+  assert.equal(query.getSnapshot().lastSuccessAt, 50_000);
+});

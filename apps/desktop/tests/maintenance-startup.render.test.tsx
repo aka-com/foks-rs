@@ -108,6 +108,10 @@ test('startup mounts local catalog shells before a blocked profile and hands off
 });
 
 test('healthy startup progress renders and an older boot cannot overwrite a shell refresh', async () => {
+  Object.defineProperty(document, 'hidden', {
+    configurable: true,
+    value: false,
+  });
   const { App } = (await vite.ssrLoadModule(
     '/src/app-root.tsx',
   )) as typeof import('../src/app-root');
@@ -123,6 +127,7 @@ test('healthy startup progress renders and an older boot cannot overwrite a shel
   const partial = {
     ...full,
     profiles: [...full.profiles, 'unfinished'],
+    fullItemReads: full.profiles,
     items: [{ ...item, path: '/boot-partial-marker' }],
     localMetadata: {
       accounts: await base.listAccounts(),
@@ -152,6 +157,17 @@ test('healthy startup progress renders and an older boot cannot overwrite a shel
       }
       return { ...full, items: [{ ...item, path: '/new-catalog-marker' }] };
     },
+    listProfileCatalog: async (profile) => {
+      const response = await base.listProfileCatalog(profile);
+      return {
+        ...response,
+        items: response.items.map((entry) =>
+          entry.store === item.store && entry.path === item.path
+            ? { ...entry, path: '/new-catalog-marker' }
+            : entry,
+        ),
+      };
+    },
   };
   const rendered = ui.render(createElement(App, { bridge }));
   try {
@@ -173,6 +189,7 @@ test('healthy startup progress renders and an older boot cannot overwrite a shel
   } finally {
     finish(full);
     rendered.unmount();
+    Reflect.deleteProperty(document, 'hidden');
   }
 });
 

@@ -68,16 +68,24 @@ pub async fn auto_recover_agent(
     state: State<'_, AppState>,
 ) -> Result<AgentStatusDto, AgentError> {
     require_main_window(&webview)?;
+    let app = webview.app_handle().clone();
+    let access = crate::applock::unlocked_generation(&app)?;
     let agent = Arc::clone(&state.agent);
-    let response = tauri::async_runtime::spawn_blocking(move || agent.auto_recover_blocking())
-        .await
-        .map_err(|error| AgentError::unknown(format!("Agent recovery worker failed: {error}")))??;
+    let response = tauri::async_runtime::spawn_blocking(move || {
+        crate::applock::require_unlocked_generation(&app, access)?;
+        agent.auto_recover_blocking()
+    })
+    .await
+    .map_err(|error| AgentError::unknown(format!("Agent recovery worker failed: {error}")))??;
+    crate::applock::require_unlocked_generation(webview.app_handle(), access)?;
     let value = success_value(response)?;
-    serde_json::from_value::<foks_agent_proto::AgentStatus>(value)
+    let status = serde_json::from_value::<foks_agent_proto::AgentStatus>(value)
         .map(AgentStatusDto::from)
         .map_err(|error| {
             AgentError::new("protocol", format!("Invalid agent status: {error}"), false)
-        })
+        })?;
+    state.invalidate_catalog();
+    Ok(status)
 }
 
 #[tauri::command]

@@ -1,6 +1,10 @@
-import { scheduleProfileWork } from './scheduling/profile-work';
+import {
+  scheduleProfileWork,
+  type BackgroundHistoryWork,
+} from './scheduling/profile-work';
 import {
   catalogItemsComplete,
+  catalogStoreComplete,
   mergeProfileSnapshot,
   projectCatalogFreshness,
   sameStoreIdentity,
@@ -191,6 +195,7 @@ export interface CatalogInventoryDto {
 }
 
 export interface CatalogDto {
+  storeReads?: { store: string; state: 'not-loaded' | 'complete' | 'failed' }[];
   fullItemReads?: string[];
   profiles: string[];
   stores: StoreDto[];
@@ -811,6 +816,7 @@ export interface Bridge {
   restartApp(): Promise<void>;
   quitApp(): Promise<void>;
   agentStatus(): Promise<AgentStatus>;
+  probeAgentStatus?(): Promise<AgentStatus>;
   appInfo(): Promise<AppInfo>;
   /** Returns the full catalog including stores. Mutually exclusive with `listStores`. */
   listCatalog(onPartial?: (catalog: CatalogDto) => void): Promise<CatalogDto>;
@@ -855,6 +861,7 @@ export interface Bridge {
   abandonGroupCreation(storeId: StoreRef): Promise<MutationResponse>;
   takeAgentConnectionLoss(): Promise<string | null>;
   retryAgentConnection(): Promise<AgentStatus>;
+  autoRecoverAgent?(): Promise<AgentStatus>;
   createGroup(request: CreateGroupRequest): Promise<MutationResponse>;
   addGroupMember(request: GroupRoleRequest): Promise<MutationResponse>;
   resumeGroupMemberAddition(
@@ -1595,6 +1602,21 @@ export function decodeCatalog(value: unknown): CatalogDto {
           },
         }
       : {}),
+    ...(item.storeReads === undefined
+      ? {}
+      : {
+          storeReads: array(item.storeReads, 'storeReads', (value, at) => {
+            const read = record(value, at);
+            const state = string(read.state, `${at}.state`);
+            if (
+              state !== 'not-loaded' &&
+              state !== 'complete' &&
+              state !== 'failed'
+            )
+              throw new Error(`${at}.state is invalid`);
+            return { store: string(read.store, `${at}.store`), state };
+          }),
+        }),
     ...(item.fullItemReads === undefined
       ? {}
       : { fullItemReads: array(item.fullItemReads, 'fullItemReads', string) }),
@@ -2453,16 +2475,35 @@ function notificationsOf(
   return notes;
 }
 
+let nativeAgentGeneration = 0;
+
 async function checked<T>(
   command: string,
   args: Record<string, unknown> | undefined,
   decode: (value: unknown) => T,
+  reportReadiness = true,
 ): Promise<T> {
+  const generation = nativeAgentGeneration;
   try {
-    return decode(await invoke<unknown>(command, args));
+    const value = decode(await invoke<unknown>(command, args));
+    if (
+      command === 'auto_recover_agent' ||
+      command === 'retry_agent_connection'
+    )
+      nativeAgentGeneration++;
+    return value;
   } catch (error) {
     const typed = normalizeCommandError(error);
-    reportReadinessError(typed);
+    if (generation !== nativeAgentGeneration && isAgentReadinessError(typed)) {
+      throw {
+        ...typed,
+        code: 'agent-request-retired',
+        message: 'An earlier agent request was retired after recovery.',
+        retryable: false,
+        fatal: false,
+      } satisfies CommandError;
+    }
+    if (reportReadiness) reportReadinessError(typed);
     throw typed;
   }
 }
@@ -2525,6 +2566,8 @@ export const tauriBridge: Bridge = {
   restartApp: () => invoke<void>('restart_app'),
   quitApp: () => invoke<void>('quit_app'),
   agentStatus: () => checked('agent_status', undefined, decodeAgentStatus),
+  probeAgentStatus: () =>
+    checked('agent_status', undefined, decodeAgentStatus, false),
   appInfo: () => checked('app_info', undefined, decodeAppInfo),
   listCatalog: async (onPartial) => {
     if (!onPartial) return checked('list_catalog', undefined, decodeCatalog);
@@ -2663,6 +2706,8 @@ export const tauriBridge: Bridge = {
     checked('take_agent_connection_loss', undefined, decodeConnectionLoss),
   retryAgentConnection: () =>
     checked('retry_agent_connection', undefined, decodeAgentStatus),
+  autoRecoverAgent: () =>
+    checked('auto_recover_agent', undefined, decodeAgentStatus, false),
   createGroup: ({ accountStoreId, teamAlias, name, kind }) =>
     checked(
       'create_group',
@@ -3246,9 +3291,15 @@ export async function loadProfileSnapshot(
   base: AgentSnapshot,
   nowSeconds: number = Math.floor(Date.now() / 1000),
   isCurrent: () => boolean = () => true,
+  background?: BackgroundHistoryWork,
 ): Promise<AgentSnapshot> {
   if (!isCurrent()) throw new Error('Catalog load was retired.');
-  const response = await bridge.listProfileCatalog(profile);
+  const response = await scheduleProfileWork(
+    bridge,
+    profile,
+    () => bridge.listProfileCatalog(profile),
+    background,
+  );
   if (!isCurrent()) throw new Error('Catalog load was retired.');
   if (
     response.profiles.length !== 1 ||
@@ -3279,6 +3330,7 @@ export async function loadProfileSnapshot(
     base.agent,
     false,
     profile,
+    background,
   );
   if (!isCurrent()) throw new Error('Catalog load was retired.');
   return mergeProfileSnapshot(base, projected, profile);
@@ -3292,8 +3344,10 @@ async function projectCatalog(
   agent: AgentStatus,
   partial: boolean,
   profileScope?: string,
+  background?: BackgroundHistoryWork,
 ): Promise<AgentSnapshot> {
-  const embeddedMetadata = partial || (bridge.native && profileScope !== undefined);
+  const embeddedMetadata =
+    partial || (bridge.native && profileScope !== undefined);
   const globalFailure = response.failures.find((failure) =>
     ['bootstrap-required', 'agent-lost', 'version-mismatch'].includes(
       failure.error.code,
@@ -3325,8 +3379,8 @@ async function projectCatalog(
   const stores = [...storesById.values()];
   const liveStoreIds = new Set(liveStores.map((store) => store.id));
   const storeInventory = stores.map((store) => {
-    const failures = response.failures.filter(
-      (entry) => entry.scope === 'store'
+    const failures = response.failures.filter((entry) =>
+      entry.scope === 'store'
         ? entry.store === store.id
         : entry.profile === store.server && entry.source === 'KV catalog',
     );
@@ -3335,11 +3389,19 @@ async function projectCatalog(
       return restriction ? [restriction] : [];
     });
     const failure = failures[0];
-    const complete = catalogItemsComplete(response, store.server, partial);
-    const previous = base?.storeInventory.find((entry) => entry.store === store.id);
+    const complete = catalogStoreComplete(response, store, partial);
+    const previous = base?.storeInventory.find(
+      (entry) => entry.store === store.id,
+    );
     const previousStore = base?.stores.find((entry) => entry.id === store.id);
-    if (partial && !complete && !failure && previous && previousStore &&
-      sameStoreIdentity(previousStore, store))
+    if (
+      partial &&
+      !complete &&
+      !failure &&
+      previous &&
+      previousStore &&
+      sameStoreIdentity(previousStore, store)
+    )
       return previous;
     return liveStoreIds.has(store.id) && complete && !failure
       ? {
@@ -3427,8 +3489,8 @@ async function projectCatalog(
           restrictions: previous?.restrictions ?? [],
         };
       })
-    : (await bridge.listServers(response.generation)).filter((server) =>
-        profileScope === undefined || server.id === profileScope,
+    : (await bridge.listServers(response.generation)).filter(
+        (server) => profileScope === undefined || server.id === profileScope,
       );
   const statusResults =
     bridge.native || partial
@@ -3445,8 +3507,12 @@ async function projectCatalog(
                   (entry) => entry.profile === server.id,
                 );
                 if (embeddedMetadata && (cached?.error || !cached?.status))
-                  throw cached?.error ?? (partial ? loadingError :
-                    new Error('Server status was not returned.'));
+                  throw (
+                    cached?.error ??
+                    (partial
+                      ? loadingError
+                      : new Error('Server status was not returned.'))
+                  );
                 const status = embeddedMetadata
                   ? cached!.status!
                   : await sharedServerStatus(bridge, server.id);
@@ -3504,13 +3570,17 @@ async function projectCatalog(
     const statusError = statusFailures.get(server.id);
     const statusRestriction = statusError && restrictionFromError(statusError);
     const previous = base?.servers.find((entry) => entry.id === server.id);
-    const pendingSameIdentity = partial && statusError?.code === 'catalog-loading' &&
+    const pendingSameIdentity =
+      partial &&
+      statusError?.code === 'catalog-loading' &&
       previous?.configuredProbe === server.configuredProbe;
     const allRestrictions = [
-      ...(pendingSameIdentity || (partial &&
+      ...(pendingSameIdentity ||
+      (partial &&
         !catalogItemsComplete(response, server.id, partial) &&
         previous?.configuredProbe === server.configuredProbe)
-        ? previous?.restrictions ?? [] : []),
+        ? (previous?.restrictions ?? [])
+        : []),
       ...restrictions,
       ...(statusRestriction ? [statusRestriction] : []),
     ];
@@ -3531,9 +3601,16 @@ async function projectCatalog(
         capabilities: { chat: false },
       };
     }
-    if (pendingSameIdentity && previous?.trust.status === 'verified' &&
-      previous.passiveStatus.status === 'available')
-      return { ...previous, label: server.label, restrictions: allRestrictions };
+    if (
+      pendingSameIdentity &&
+      previous?.trust.status === 'verified' &&
+      previous.passiveStatus.status === 'available'
+    )
+      return {
+        ...previous,
+        label: server.label,
+        restrictions: allRestrictions,
+      };
     if (!status || statusError)
       return {
         ...server,
@@ -3579,43 +3656,84 @@ async function projectCatalog(
       restrictions: allRestrictions,
     };
   });
-  const observedExpiredLeases = (base?.observedExpiredLeases ?? []).filter((entry) => {
-    const server = servers.find((server) => server.id === entry.profile);
-    const previous = base?.servers.find((server) => server.id === entry.profile);
-    return server && previous && server.configuredProbe === previous.configuredProbe &&
-      (!server.host_id || !previous.host_id || server.host_id === previous.host_id);
-  });
+  const observedExpiredLeases = (base?.observedExpiredLeases ?? []).filter(
+    (entry) => {
+      const server = servers.find((server) => server.id === entry.profile);
+      const previous = base?.servers.find(
+        (server) => server.id === entry.profile,
+      );
+      return (
+        server &&
+        previous &&
+        server.configuredProbe === previous.configuredProbe &&
+        (!server.host_id ||
+          !previous.host_id ||
+          server.host_id === previous.host_id)
+      );
+    },
+  );
   for (const server of servers) {
     const lease = server.compatibility;
-    if ((lease.status === 'required' || lease.status === 'incompatible') &&
-      lease.expiresAt <= nowSeconds && !observedExpiredLeases.some((entry) =>
-        entry.profile === server.id && entry.expiresAt === lease.expiresAt))
-      observedExpiredLeases.push({ profile: server.id, expiresAt: lease.expiresAt });
+    if (
+      (lease.status === 'required' || lease.status === 'incompatible') &&
+      lease.expiresAt <= nowSeconds &&
+      !observedExpiredLeases.some(
+        (entry) =>
+          entry.profile === server.id && entry.expiresAt === lease.expiresAt,
+      )
+    )
+      observedExpiredLeases.push({
+        profile: server.id,
+        expiresAt: lease.expiresAt,
+      });
   }
-  const sameIdentityStores = new Set(stores.filter((store) => {
-    const previous = base?.stores.find((entry) => entry.id === store.id);
-    const server = servers.find((entry) => entry.id === store.server);
-    const previousServer = base?.servers.find((entry) => entry.id === store.server);
-    return previous && sameStoreIdentity(previous, store) && server && previousServer &&
-      server.configuredProbe === previousServer.configuredProbe &&
-      (!server.host_id || !previousServer.host_id || server.host_id === previousServer.host_id);
-  }).map((store) => store.id));
+  const sameIdentityStores = new Set(
+    stores
+      .filter((store) => {
+        const previous = base?.stores.find((entry) => entry.id === store.id);
+        const server = servers.find((entry) => entry.id === store.server);
+        const previousServer = base?.servers.find(
+          (entry) => entry.id === store.server,
+        );
+        return (
+          previous &&
+          sameStoreIdentity(previous, store) &&
+          server &&
+          previousServer &&
+          server.configuredProbe === previousServer.configuredProbe &&
+          (!server.host_id ||
+            !previousServer.host_id ||
+            server.host_id === previousServer.host_id)
+        );
+      })
+      .map((store) => store.id),
+  );
   for (const [index, inventory] of storeInventory.entries()) {
     const store = stores.find((store) => store.id === inventory.store)!;
-    if (partial && !catalogItemsComplete(response, store.server, partial) &&
-      !sameIdentityStores.has(store.id) && inventory.status === 'available')
-      storeInventory[index] = { store: store.id, status: 'loading', restrictions: [] };
+    if (
+      partial &&
+      !catalogStoreComplete(response, store, partial) &&
+      !sameIdentityStores.has(store.id) &&
+      inventory.status === 'available'
+    )
+      storeInventory[index] = {
+        store: store.id,
+        status: 'loading',
+        restrictions: [],
+      };
   }
   const rawAccounts = embeddedMetadata
     ? (response.localMetadata?.accounts ?? [])
-    : (await bridge.listAccounts(response.generation)).filter((account) =>
-        profileScope === undefined || account.server === profileScope,
+    : (await bridge.listAccounts(response.generation)).filter(
+        (account) =>
+          profileScope === undefined || account.server === profileScope,
       );
   const unavailableServers = new Set(
     servers
       .filter(
         (server) =>
-          !serverFactAvailability(server, observedExpiredLeases, { nowSeconds }).available,
+          !serverFactAvailability(server, observedExpiredLeases, { nowSeconds })
+            .available,
       )
       .map((server) => server.id),
   );
@@ -3631,13 +3749,17 @@ async function projectCatalog(
       servers.some(
         (server) =>
           server.id === store.server &&
-          serverFactAvailability(server, observedExpiredLeases, { nowSeconds }, ['teams'])
-            .available,
+          serverFactAvailability(
+            server,
+            observedExpiredLeases,
+            { nowSeconds },
+            ['teams'],
+          ).available,
       ),
   );
   const rosters = await Promise.all(
     teams.map(async (store) => {
-      const { parties, federation, failures } = await enqueueProfileWork(
+      const { parties, federation, failures } = await scheduleProfileWork(
         bridge,
         store.server,
         async () => {
@@ -3676,6 +3798,9 @@ async function projectCatalog(
           }
           return { parties, federation, failures };
         },
+        background
+          ? { ...background, key: `${background.key}:roster:${store.id}` }
+          : undefined,
       );
       if (parties.some((party) => party.store !== store.id)) {
         throw new Error(
@@ -3731,8 +3856,10 @@ async function projectCatalog(
   }
   if (partial) {
     for (const account of base?.accounts ?? []) {
-      if (sameIdentityStores.has(account.store) &&
-        !accounts.some((entry) => entry.store === account.store))
+      if (
+        sameIdentityStores.has(account.store) &&
+        !accounts.some((entry) => entry.store === account.store)
+      )
         accounts.push(account);
     }
   }
@@ -3795,9 +3922,21 @@ async function projectCatalog(
       };
     });
   if (partial) {
-    parties.push(...(base?.parties ?? []).filter((entry) => sameIdentityStores.has(entry.store)));
-    federation.push(...(base?.federation ?? []).filter((entry) => sameIdentityStores.has(entry.store)));
-    groupDetailFailures.push(...(base?.groupDetailFailures ?? []).filter((entry) => sameIdentityStores.has(entry.store)));
+    parties.push(
+      ...(base?.parties ?? []).filter((entry) =>
+        sameIdentityStores.has(entry.store),
+      ),
+    );
+    federation.push(
+      ...(base?.federation ?? []).filter((entry) =>
+        sameIdentityStores.has(entry.store),
+      ),
+    );
+    groupDetailFailures.push(
+      ...(base?.groupDetailFailures ?? []).filter((entry) =>
+        sameIdentityStores.has(entry.store),
+      ),
+    );
   }
   const baseItems = new Map(
     (base?.items ?? []).map((item) => [itemKey(item), item]),
@@ -3829,16 +3968,33 @@ async function projectCatalog(
   const itemKeys = new Set(items.map(itemKey));
   for (const item of base?.items ?? []) {
     const store = stores.find((store) => store.id === item.store);
-    if (!store || !sameIdentityStores.has(item.store) || itemKeys.has(itemKey(item))) continue;
-    if (catalogItemsComplete(response, store.server, partial) &&
-      storeInventory.find((entry) => entry.store === item.store)?.status === 'available') continue;
-    const { value: _value, target: _target, ...metadata } = item;
+    if (
+      !store ||
+      !sameIdentityStores.has(item.store) ||
+      itemKeys.has(itemKey(item))
+    )
+      continue;
+    if (
+      catalogStoreComplete(response, store, partial) &&
+      storeInventory.find((entry) => entry.store === item.store)?.status ===
+        'available'
+    )
+      continue;
+    const metadata = { ...item };
+    delete metadata.value;
+    delete metadata.target;
     items.push(bridge.native ? metadata : item);
   }
   const withFreshness = (snapshot: AgentSnapshot): AgentSnapshot => ({
     ...snapshot,
     observedExpiredLeases,
-    catalogFreshness: projectCatalogFreshness(snapshot, base, response, partial, nowSeconds),
+    catalogFreshness: projectCatalogFreshness(
+      snapshot,
+      base,
+      response,
+      partial,
+      nowSeconds,
+    ),
   });
   if (!bridge.native) {
     if (!base)

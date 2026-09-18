@@ -1,4 +1,5 @@
 import { useDeviceMetadata } from '../device-cache';
+import { MetadataStatus } from '../components/metadata-status';
 import { useTabSheetState } from '../navigation-guard';
 /**
  * The Devices tab: one page per account, with no sub-navigation.
@@ -258,6 +259,7 @@ export function DevicesScreen({
     lists,
     loading,
     failed,
+    freshness,
   } = useDeviceMetadata({
     bridge,
     profile: selected?.server,
@@ -578,6 +580,7 @@ export function DevicesScreen({
 
   return (
     <>
+      <MetadataStatus label="Device metadata" freshness={freshness} />
       {/* One key's own page: the full id, and the one destructive action for
           that kind. It reads the page's own lists, so a sheet opened from it
           is the sheet the row would have opened. */}

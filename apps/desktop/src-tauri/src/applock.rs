@@ -149,6 +149,10 @@ pub fn lock_app(
 ) -> Result<LockStateDto, AgentError> {
     crate::commands::require_main_window(&webview)?;
     lock.lock()?;
+    webview
+        .app_handle()
+        .state::<crate::commands::AppState>()
+        .invalidate_catalog();
     crate::commands::web_admin::close_all(webview.app_handle());
     crate::commands::chat_local::conceal(webview.app_handle());
     Ok(lock.state())

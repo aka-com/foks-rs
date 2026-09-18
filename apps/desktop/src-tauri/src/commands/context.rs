@@ -452,6 +452,7 @@ impl AppState {
         self.accept_catalog_locked(generation, generation, catalog, false)
     }
 
+    #[cfg(test)]
     pub(super) fn publish_catalog(
         &self,
         load_generation: u64,
@@ -482,6 +483,8 @@ impl AppState {
         {
             return false;
         }
+        let observed_reads = catalog.store_reads.clone();
+        let completed_profiles = catalog.full_item_reads.clone();
         let generation = self.next_generation();
         if !self.accept_catalog_locked(load_generation, generation, catalog, true) {
             return false;
@@ -502,6 +505,15 @@ impl AppState {
                 remove_profile_catalog(&mut published, &other);
             }
             published.profiles.retain(|candidate| candidate == profile);
+        }
+        published.full_item_reads = completed_profiles;
+        for read in &mut published.store_reads {
+            read.state = observed_reads
+                .iter()
+                .find(|observed| observed.store == read.store)
+                .map_or(foks_desktop::CatalogStoreReadState::NotLoaded, |observed| {
+                    observed.state
+                });
         }
         publish(generation, &published);
         true
@@ -764,7 +776,7 @@ impl AppState {
         self.root.generation.store(generation, Ordering::Release);
     }
 
-    pub(super) fn invalidate_catalog(&self) {
+    pub(crate) fn invalidate_catalog(&self) {
         let _coordination = self
             .catalog_coordination
             .lock()
@@ -1125,15 +1137,11 @@ impl AppState {
                 false,
             )),
             Some(item) if item.metadata.version == version => Ok(item.clone()),
-            Some(_) => {
-                let mut error = AgentError::new(
-                    "version-mismatch",
-                    "This item changed. Refresh the vault before reading it.",
-                    false,
-                );
-                error.fatal = true;
-                Err(error)
-            }
+            Some(_) => Err(AgentError::new(
+                "item-version-mismatch",
+                "This item changed. Refresh the vault before reading it.",
+                true,
+            )),
             None => Err(AgentError::new(
                 "item-not-found",
                 "This item is no longer in the vault.",
@@ -1666,7 +1674,9 @@ impl AppState {
                 )),
                 Some(true) | None => Ok(item),
             },
-            Err(error) if error.code == "version-mismatch" || error.code == "item-not-found" => {
+            Err(error)
+                if error.code == "item-version-mismatch" || error.code == "item-not-found" =>
+            {
                 Err(AgentError::new(
                     "conflict",
                     "This item changed or was removed. Refresh the vault before modifying it.",
@@ -2013,7 +2023,7 @@ fn profile_chat_matches(left: &CatalogSnapshot, right: &CatalogSnapshot, profile
                         .get_mut("capabilities")
                         .and_then(serde_json::Value::as_array_mut)
                     {
-                        capabilities.retain(|capability| capability.as_str() != Some("kv"));
+                        capabilities.retain(|capability| capability.as_str() == Some("chat"));
                     }
                 }
                 value
