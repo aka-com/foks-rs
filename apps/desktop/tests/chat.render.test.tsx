@@ -152,7 +152,7 @@ test('composer suppresses IME and repeated Enter, and renders hostile text safel
   await setup((base) => ({
     ...base,
     chat: async (store, action) => {
-      if (action.action === 'prepare-message') preparations++;
+      if (action.action === 'submit-message') preparations++;
       if (action.action === 'attempt') attempts++;
       return base.chat(store, action);
     },
@@ -171,7 +171,7 @@ test('composer suppresses IME and repeated Enter, and renders hostile text safel
   ui.fireEvent.keyDown(composer, { key: 'Enter' });
   await ui.screen.findByText('<img src=x onerror=alert(1)>');
   assert.equal(preparations, 1);
-  assert.equal(attempts, 1);
+  assert.equal(attempts, 0);
   assert.equal(document.querySelector('.chat-messages img'), null);
   assert.equal((composer as HTMLTextAreaElement).value, '');
 });
@@ -356,7 +356,7 @@ test('read markers require focus and the newest displayed position', async () =>
   }
 });
 
-test('lost preparation reply reuses its submission and sends exactly once', async () => {
+test('lost submit reply recovers its submission without a second send', async () => {
   const submissions: string[] = [];
   let attempts = 0;
   let dropped = false;
@@ -364,13 +364,16 @@ test('lost preparation reply reuses its submission and sends exactly once', asyn
     ...base,
     chat: async (store, action) => {
       const reply = await base.chat(store, action);
-      if (action.action === 'prepare-message') {
+      if (
+        action.action === 'submit-message' ||
+        action.action === 'prepare-message'
+      ) {
         submissions.push(action.submission);
         if (!dropped) {
           dropped = true;
           throw {
             code: 'ambiguous',
-            message: 'Preparation reply lost',
+            message: 'Submit reply lost',
             ambiguous: true,
             retryable: false,
             fatal: false,
@@ -385,14 +388,14 @@ test('lost preparation reply reuses its submission and sends exactly once', asyn
     target: { value: 'recover this message' },
   });
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Send' }));
-  await ui.screen.findByText('Preparation reply lost');
+  await ui.screen.findByText('Submit reply lost');
   assert.equal(attempts, 0);
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Retry' }));
-  await ui.waitFor(() => assert.equal(attempts, 1));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Check again' }));
+  await ui.waitFor(() => assert.equal(submissions.length, 2));
   assert.equal(ui.screen.getAllByText('recover this message').length, 1);
   assert.equal(new Set(submissions).size, 1);
   assert.equal(submissions.length, 2);
-  assert.equal(attempts, 1);
+  assert.equal(attempts, 0);
 });
 test('ending the unlocked application during preparation never starts delivery', async () => {
   let release!: () => void;
@@ -407,8 +410,13 @@ test('ending the unlocked application during preparation never starts delivery',
   const rendered = await setup((base) => ({
     ...base,
     chat: async (store, action) => {
-      const result = await base.chat(store, action);
-      if (action.action === 'prepare-message') {
+      const result = await base.chat(
+        store,
+        action.action === 'submit-message'
+          ? { ...action, action: 'prepare-message' }
+          : action,
+      );
+      if (action.action === 'submit-message') {
         prepared();
         await gate;
       }
@@ -921,6 +929,8 @@ test('durable pending refresh replaces stale prepared state after lost delivery 
   await setup((base) => ({
     ...base,
     chat: async (store, action) => {
+      if (action.action === 'submit-message')
+        return base.chat(store, { ...action, action: 'prepare-message' });
       if (action.action === 'attempt') {
         uncertain = true;
         throw {
@@ -1032,6 +1042,8 @@ test('uncertain send retains body in thread and merges once after delivery check
   await setup((base) => ({
     ...base,
     chat: async (store, action, view) => {
+      if (action.action === 'submit-message')
+        return base.chat(store, { ...action, action: 'prepare-message' }, view);
       if (action.action === 'attempt') {
         attempts++;
         if (!lost) {

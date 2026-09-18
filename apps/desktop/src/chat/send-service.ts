@@ -494,7 +494,8 @@ export class ChatSendService {
   private apply(team: Team, reply: ChatReply, action: ChatAction) {
     if (
       reply.result.kind === 'operation' &&
-      action.action === 'prepare-message'
+      (action.action === 'prepare-message' ||
+        action.action === 'submit-message')
     ) {
       const message = team.messages.find(
         (m) => m.submission === action.submission,
@@ -619,7 +620,16 @@ export class ChatSendService {
       if (
         !localActions.has(action.action) &&
         (!this.available(team) ||
-          generation !== (this.generations.get(team.profile) ?? 0))
+          generation !== (this.generations.get(team.profile) ?? 0) ||
+          (phase === 'before' &&
+            action.action === 'submit-message' &&
+            (!this.readable(team, action.channel) ||
+              !this.inbox
+                .getSnapshot()
+                .get(team.storeId)
+                ?.data?.channels.some(
+                  (c) => c.id === action.channel && c.writable,
+                ))))
       )
         throw {
           code: 'access-changed',
@@ -726,8 +736,12 @@ export class ChatSendService {
         if (!this.current(team, epoch)) return;
         message.phase = 'preparing';
         this.publish();
+        const action = message.ambiguousPreparation
+          ? 'prepare-message'
+          : 'submit-message';
+        if (action === 'submit-message') message.ambiguousPreparation = true;
         const reply = await this.request(team.storeId, {
-          action: 'prepare-message',
+          action,
           submission: message.submission,
           channel: message.channel,
           text: message.text,
@@ -768,7 +782,11 @@ export class ChatSendService {
       message.error = failure(error);
       if (!message.operation) {
         message.ambiguousPreparation ||= typed.ambiguous;
-        message.phase = typed.code === 'access-changed' ? 'paused' : 'not-sent';
+        message.phase = message.ambiguousPreparation
+          ? 'unconfirmed'
+          : typed.code === 'access-changed'
+            ? 'paused'
+            : 'not-sent';
         if (!message.ambiguousPreparation && preparationCanChange(error))
           await this.clearIntent(team, message);
       } else {

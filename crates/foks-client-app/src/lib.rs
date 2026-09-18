@@ -233,7 +233,7 @@ pub use invitations::InvitationAction;
 mod sso;
 pub use sso::{SsoAction, SsoReport, SsoSignupInput};
 mod chat;
-pub use chat::{chat_submission, ChatChannelInput};
+pub use chat::{chat_submission, ChatChannelInput, ChatMessageInput};
 mod checkpoint;
 mod kv;
 mod registry;

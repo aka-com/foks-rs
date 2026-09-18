@@ -56,7 +56,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
-                "version": 25,
+                "version": 26,
                 "id": 8,
                 "operation": { "operation": "discover-go-profiles" }
             })
@@ -75,7 +75,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
-                "version": 25,
+                "version": 26,
                 "id": 9,
                 "operation": {
                     "operation": "list-profile-overview",
@@ -203,7 +203,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
-                "version": 25,
+                "version": 26,
                 "id": 9,
                 "operation": {
                     "operation": "sync-team",
@@ -215,7 +215,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Response::error(9, ErrorCode::Busy, "locked")).unwrap(),
             serde_json::json!({
-                "version": 25,
+                "version": 26,
                 "id": 9,
                 "status": "error",
                 "code": "busy",
@@ -248,7 +248,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&admission).unwrap(),
             serde_json::json!({
-                "version": 25,
+                "version": 26,
                 "id": 13,
                 "operation": {
                     "operation": "admit-federated-team",
@@ -287,7 +287,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&expulsion).unwrap(),
             serde_json::json!({
-                "version": 25,
+                "version": 26,
                 "id": 15,
                 "operation": {
                     "operation": "expel-federated-team",
@@ -353,8 +353,8 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_is_a_local_v25_mutation_with_no_initial_trust_inputs() {
-        assert_eq!(PROTOCOL_VERSION, 25);
+    fn reconcile_is_a_local_v26_mutation_with_no_initial_trust_inputs() {
+        assert_eq!(PROTOCOL_VERSION, 26);
         let operation = Operation::ReconcileProfile {
             profile: "saved".into(),
         };
@@ -362,7 +362,37 @@ mod tests {
         let request = Request::new(19, operation);
         assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
         let mut previous = serde_json::to_value(&request).unwrap();
-        previous["version"] = serde_json::json!(24);
+        previous["version"] = serde_json::json!(25);
+        assert!(matches!(
+            decode_request(&encode(&previous).unwrap()),
+            Err(Error::Version)
+        ));
+    }
+
+    #[test]
+    fn submit_message_is_a_local_v26_mutation() {
+        assert_eq!(PROTOCOL_VERSION, 26);
+        let request = Request::new(
+            20,
+            Operation::Chat {
+                store: TeamStoreRef {
+                    profile: "saved".into(),
+                    account_alias: "owner".into(),
+                    team_alias: "team".into(),
+                    team_id: format!("03{}", "ab".repeat(32)),
+                },
+                action: chat::ChatAction::SubmitMessage {
+                    submission: "ab".repeat(16),
+                    channel: "cd".repeat(16),
+                    text: SecretString::new("private message"),
+                },
+            },
+        );
+        assert!(request.operation.is_mutation());
+        assert!(!format!("{request:?}").contains("private message"));
+        assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
+        let mut previous = serde_json::to_value(&request).unwrap();
+        previous["version"] = serde_json::json!(25);
         assert!(matches!(
             decode_request(&encode(&previous).unwrap()),
             Err(Error::Version)
@@ -576,7 +606,7 @@ mod tests {
             ))
             .unwrap(),
             serde_json::json!({
-                "version": 25,
+                "version": 26,
                 "id": 25,
                 "operation": {
                     "operation": "demote-team-member",
@@ -599,7 +629,7 @@ mod tests {
             ))
             .unwrap(),
             serde_json::json!({
-                "version": 25,
+                "version": 26,
                 "id": 26,
                 "operation": {
                     "operation": "remove-team-member",

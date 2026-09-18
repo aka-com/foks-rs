@@ -57,7 +57,7 @@ const unavailable = (message: string) => ({
 async function setup(
   intercept?: (
     action: ChatAction,
-    run: () => Promise<ChatReply>,
+    run: (action?: ChatAction) => Promise<ChatReply>,
   ) => Promise<ChatReply>,
 ) {
   const { ChatInboxProvider, useChatInbox } = (await vite.ssrLoadModule(
@@ -87,7 +87,7 @@ async function setup(
     ...base,
     chat: async (store: string, action: ChatAction, view?: string) => {
       calls.push(action);
-      const run = () => base.chat(store, action, view);
+      const run = (input = action) => base.chat(store, input, view);
       return intercept ? intercept(action, run) : run();
     },
   };
@@ -185,7 +185,7 @@ test('confirmed delivery releases the composer before delayed history completes'
   const h = await setup(async (action, run) => {
     if (action.action === 'history' && delayed) await history.promise;
     const reply = await run();
-    if (action.action === 'attempt' && !refresh) refresh = load();
+    if (action.action === 'submit-message' && !refresh) refresh = load();
     return reply;
   });
   const load = (): Promise<void> => h.history.load();
@@ -206,11 +206,11 @@ test('confirmed delivery releases the composer before delayed history completes'
     });
     await ui.waitFor(() => assertSent(h.current, 2));
     assert.equal(
-      h.calls.filter((action) => action.action === 'attempt').length,
+      h.calls.filter((action) => action.action === 'submit-message').length,
       2,
     );
     const ids = h.calls
-      .filter((action) => action.action === 'prepare-message')
+      .filter((action) => action.action === 'submit-message')
       .map((action) => action.submission);
     assert.equal(new Set(ids).size, 2);
   } finally {
@@ -221,13 +221,13 @@ test('confirmed delivery releases the composer before delayed history completes'
   }
 });
 
-test('pending-view refresh is not a prerequisite to attempting prepared delivery', async () => {
+test('pending-view refresh is not a prerequisite to submitting delivery', async () => {
   const pendingView = deferred();
   let refresh: Promise<void> | undefined;
   const h = await setup(async (action, run) => {
     if (action.action === 'pending') await pendingView.promise;
     const reply = await run();
-    if (action.action === 'attempt') refresh = refreshPending();
+    if (action.action === 'submit-message') refresh = refreshPending();
     return reply;
   });
   const refreshPending = (): Promise<void> =>
@@ -237,7 +237,7 @@ test('pending-view refresh is not a prerequisite to attempting prepared delivery
     await ui.waitFor(() => assertSent(h.current, 1));
     assert.ok(h.calls.some((action) => action.action === 'pending'));
     assert.equal(
-      h.calls.filter((action) => action.action === 'attempt').length,
+      h.calls.filter((action) => action.action === 'submit-message').length,
       1,
     );
   } finally {
@@ -264,7 +264,7 @@ test('display refresh failure is reported separately and never retries delivery'
   assertSent(h.current, 1);
   assert.equal(h.current.messages[0].error, '');
   assert.equal(
-    h.calls.filter((action) => action.action === 'attempt').length,
+    h.calls.filter((action) => action.action === 'submit-message').length,
     1,
   );
 });
@@ -292,7 +292,7 @@ test('late refresh failures cannot overwrite a later send state', async () => {
     await ui.waitFor(() => assertSent(h.current, 2));
     assert.ok(h.current.messages.every((message) => message.error === ''));
     assert.equal(
-      h.calls.filter((action) => action.action === 'attempt').length,
+      h.calls.filter((action) => action.action === 'submit-message').length,
       2,
     );
   } finally {
@@ -306,6 +306,8 @@ test('late refresh failures cannot overwrite a later send state', async () => {
 test('ambiguous delivery can finish the composer while a read-only status check waits', async () => {
   const status = deferred();
   const h = await setup(async (action, run) => {
+    if (action.action === 'submit-message')
+      return run({ ...action, action: 'prepare-message' });
     if (action.action === 'attempt')
       throw {
         code: 'ambiguous',
@@ -331,6 +333,10 @@ test('ambiguous delivery can finish the composer while a read-only status check 
       h.calls.filter((action) => action.action === 'attempt').length,
       1,
     );
+    assert.equal(
+      h.calls.filter((action) => action.action === 'submit-message').length,
+      1,
+    );
     await ui.act(async () => {
       h.current.setDraft('next draft');
     });
@@ -346,6 +352,8 @@ test('an older delivery error belongs to its message, not a newer send', async (
   const old = deferred();
   let attempts = 0;
   const h = await setup(async (action, run) => {
+    if (action.action === 'submit-message')
+      return run({ ...action, action: 'prepare-message' });
     if (action.action === 'attempt' && ++attempts === 1) {
       await old.promise;
       throw unavailable('older delivery failed');
@@ -380,7 +388,7 @@ test('an older delivery error belongs to its message, not a newer send', async (
 test('the application service completes preparation after the composer unmounts', async () => {
   const preparation = deferred();
   const h = await setup(async (action, run) => {
-    if (action.action === 'prepare-message') await preparation.promise;
+    if (action.action === 'submit-message') await preparation.promise;
     return run();
   });
   try {
@@ -401,7 +409,7 @@ test('the application service completes preparation after the composer unmounts'
     assert.equal(h.current.draft, 'next draft');
     assertSent(h.current, 1);
     assert.equal(
-      h.calls.filter((action) => action.action === 'attempt').length,
+      h.calls.filter((action) => action.action === 'submit-message').length,
       1,
     );
   } finally {

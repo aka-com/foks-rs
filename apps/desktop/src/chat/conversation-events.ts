@@ -64,7 +64,10 @@ export function eventFromReply(
           action.action === 'finalize' ||
           result.operation.state === 'cancelled',
         preparedText:
-          action.action === 'prepare-message' ? action.text : undefined,
+          action.action === 'prepare-message' ||
+          action.action === 'submit-message'
+            ? action.text
+            : undefined,
       };
     case 'pending':
       return { kind: 'pending', operations: result.operations };

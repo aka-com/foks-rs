@@ -6310,6 +6310,11 @@ mod tests {
                 channel: "channel".into(),
                 text: foks_agent_proto::SecretString::new("message"),
             },
+            ChatAction::SubmitMessage {
+                submission: "pending".into(),
+                channel: "channel".into(),
+                text: foks_agent_proto::SecretString::new("message"),
+            },
             ChatAction::Attempt {
                 operation: "pending".into(),
             },

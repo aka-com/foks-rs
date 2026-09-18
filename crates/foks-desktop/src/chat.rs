@@ -220,7 +220,10 @@ pub fn validate_chat_reply(
             chat_sequence(inbox_version)
                 .is_some_and(|head| (*bumped && head > since) || (!*bumped && head <= since))
         }),
-        (ChatAction::PrepareMessage { channel, .. }, ChatResult::Operation { operation }) => {
+        (
+            ChatAction::PrepareMessage { channel, .. } | ChatAction::SubmitMessage { channel, .. },
+            ChatResult::Operation { operation },
+        ) => {
             valid_operation(operation)
                 && operation.kind == ChatOperationKind::SendMessage
                 && &operation.channel == channel
@@ -380,6 +383,85 @@ mod tests {
         }
         reply.result = ChatResult::Pending { operations: vec![] };
         assert!(validate_chat_reply(&store, &ChatAction::CleanupPending, &reply).is_err());
+    }
+
+    #[test]
+    fn submit_reply_requires_matching_channel_send_kind_and_valid_state() {
+        let store = TeamStoreRef {
+            profile: "local".into(),
+            account_alias: "me".into(),
+            team_alias: "team".into(),
+            team_id: format!("03{}", "ab".repeat(32)),
+        };
+        let action = ChatAction::SubmitMessage {
+            submission: "ef".repeat(16),
+            channel: "ab".repeat(16),
+            text: foks_agent_proto::SecretString::new("private message"),
+        };
+        let op = ChatOperation {
+            id: "cd".repeat(16),
+            channel: "ab".repeat(16),
+            kind: ChatOperationKind::SendMessage,
+            state: ChatState::Prepared,
+            receipt: None,
+            rejection_code: None,
+        };
+        let mut reply = ChatReply {
+            scope: ChatScope {
+                store: store.clone(),
+                host: format!("02{}", "ab".repeat(32)),
+                actor: format!("01{}", "ab".repeat(32)),
+            },
+            result: ChatResult::Operation {
+                operation: op.clone(),
+            },
+        };
+        for state in [
+            ChatState::Prepared,
+            ChatState::Uncertain,
+            ChatState::Cancelled,
+        ] {
+            reply.result = ChatResult::Operation {
+                operation: ChatOperation {
+                    state,
+                    ..op.clone()
+                },
+            };
+            assert!(validate_chat_reply(&store, &action, &reply).is_ok());
+        }
+        for operation in [
+            ChatOperation {
+                channel: "ef".repeat(16),
+                ..op.clone()
+            },
+            ChatOperation {
+                kind: ChatOperationKind::CreateChannel,
+                ..op.clone()
+            },
+            ChatOperation {
+                state: ChatState::Confirmed,
+                ..op.clone()
+            },
+            ChatOperation {
+                id: "0".repeat(32),
+                ..op.clone()
+            },
+        ] {
+            reply.result = ChatResult::Operation { operation };
+            assert!(validate_chat_reply(&store, &action, &reply).is_err());
+        }
+        reply.result = ChatResult::Operation {
+            operation: ChatOperation {
+                state: ChatState::Confirmed,
+                receipt: Some(ChatReceipt::MessageSent {
+                    sequence: "1".into(),
+                }),
+                ..op
+            },
+        };
+        assert!(validate_chat_reply(&store, &action, &reply).is_ok());
+        reply.result = ChatResult::Pending { operations: vec![] };
+        assert!(validate_chat_reply(&store, &action, &reply).is_err());
     }
 
     #[test]

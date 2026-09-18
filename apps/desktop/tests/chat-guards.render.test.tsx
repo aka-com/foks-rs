@@ -416,7 +416,7 @@ test('local intent persistence survives navigation and retains the next draft', 
         return base.chatLocal(action);
       },
       chat: async (storeId, action, view) => {
-        if (action.action === 'prepare-message') preparations++;
+        if (action.action === 'submit-message') preparations++;
         if (action.action === 'attempt') attempts++;
         return base.chat(storeId, action, view);
       },
@@ -444,7 +444,7 @@ test('local intent persistence survives navigation and retains the next draft', 
   await ui.act(async () => {
     finishSave();
   });
-  await ui.waitFor(() => assert.equal(attempts, 1));
+  await ui.waitFor(() => assert.equal(preparations, 1));
   assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
   await leave(store, IN_CHAT);
   await ui.waitFor(() => assert.equal(composer().value, 'the next draft'));
@@ -459,11 +459,11 @@ test('local intent persistence survives navigation and retains the next draft', 
     ),
   );
   assert.equal(preparations, 1);
-  assert.equal(attempts, 1);
+  assert.equal(attempts, 0);
   assert.equal(document.querySelectorAll('.chat-message p').length, 2);
 });
 
-test('a lost preparation reply restores the same saved submission after leaving chat', async () => {
+test('a lost submit reply restores the same saved submission after leaving chat', async () => {
   const submissions: string[] = [];
   let lost = true;
   let attempts = 0;
@@ -471,7 +471,10 @@ test('a lost preparation reply restores the same saved submission after leaving 
     override: (base) => ({
       ...base,
       chat: async (storeId, action, view) => {
-        if (action.action === 'prepare-message') {
+        if (
+          action.action === 'submit-message' ||
+          action.action === 'prepare-message'
+        ) {
           submissions.push(action.submission);
           const reply = await base.chat(storeId, action, view);
           if (lost) {
@@ -493,7 +496,7 @@ test('a lost preparation reply restores the same saved submission after leaving 
   });
   write('durable before delivery');
   await click(ui.screen.getByRole('button', { name: 'Send' }));
-  await ui.screen.findByRole('button', { name: 'Retry' });
+  await ui.screen.findByRole('button', { name: 'Check again' });
   const submission = document
     .querySelector('.chat-outgoing')
     ?.getAttribute('data-submission');
@@ -503,7 +506,9 @@ test('a lost preparation reply restores the same saved submission after leaving 
   await leave(store);
   assert.equal(dialog(), null);
   assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
-  await ui.waitFor(() => assert.equal(attempts, 1), { timeout: 5000 });
+  await ui.waitFor(() => assert.equal(submissions.length, 2), {
+    timeout: 5000,
+  });
   assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
   await leave(store, IN_CHAT);
   await ui.waitFor(() => assert.equal(composer().value, 'a later thought'));
@@ -519,7 +524,7 @@ test('a lost preparation reply restores the same saved submission after leaving 
   assert.equal(submissions[0], submission);
   assert.equal(submissions.length, 2);
   assert.equal(submissions[0], submissions[1]);
-  assert.equal(attempts, 1);
+  assert.equal(attempts, 0);
 });
 
 test('a message being sent is neither prompted about nor refused', async () => {
@@ -529,7 +534,7 @@ test('a message being sent is neither prompted about nor refused', async () => {
       chat: async (storeId, action, view) => {
         // The preparation the agent has been given never answers, so the send
         // is still in flight when the move is asked for.
-        if (action.action === 'prepare-message')
+        if (action.action === 'submit-message')
           return new Promise<ChatReply>(() => {});
         return base.chat(storeId, action, view);
       },

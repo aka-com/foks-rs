@@ -204,6 +204,26 @@ fn operation(op: foks_client_db::ChatOperation) -> Result<ChatOperation> {
         rejection_code: op.rejection_code,
     })
 }
+fn submission_input(action: &ChatAction) -> Result<Zeroizing<Vec<u8>>> {
+    let canonical;
+    let action = match action {
+        ChatAction::SubmitMessage {
+            submission,
+            channel,
+            text,
+        } => {
+            canonical = ChatAction::PrepareMessage {
+                submission: submission.clone(),
+                channel: channel.clone(),
+                text: text.clone(),
+            };
+            &canonical
+        }
+        action => action,
+    };
+    Ok(Zeroizing::new(serde_json::to_vec(action)?))
+}
+
 pub(super) fn dispatch(
     state_dir: &Path,
     session: &CheckedProfileSession<'_>,
@@ -218,8 +238,9 @@ pub(super) fn dispatch(
     let (resolved, scope) = resolve_scope(session, vault, &store)?;
     let submission = match &action {
         ChatAction::PrepareChannel { submission, .. }
-        | ChatAction::PrepareMessage { submission, .. } => {
-            let input = Zeroizing::new(serde_json::to_vec(&action)?);
+        | ChatAction::PrepareMessage { submission, .. }
+        | ChatAction::SubmitMessage { submission, .. } => {
+            let input = submission_input(&action)?;
             Some(foks_client_app::chat_submission(
                 master,
                 id(submission)?,
@@ -431,6 +452,23 @@ pub(super) fn dispatch(
                 submission.as_ref(),
             )?)?,
         },
+        ChatAction::SubmitMessage { channel, text, .. } => ChatResult::Operation {
+            operation: operation(
+                session.submit_chat_message(
+                    &ClientCredentials::open(state_dir)?,
+                    team,
+                    foks_client_app::ChatMessageInput {
+                        channel: RtChannelId(id(&channel)?),
+                        text: text.expose(),
+                        submission: submission
+                            .as_ref()
+                            .ok_or(super::AgentRequestError("missing chat submission"))?,
+                    },
+                    vault,
+                    master,
+                )?,
+            )?,
+        },
         ChatAction::Status { operation: op } => ChatResult::Operation {
             operation: operation(session.chat_operation_status(team, &id(&op)?, vault)?)?,
         },
@@ -513,6 +551,49 @@ pub(super) fn contextual_error(error: Box<dyn std::error::Error>) -> Box<dyn std
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn submit_fingerprint_uses_legacy_prepare_message_bytes() {
+        let submission = "ab".repeat(16);
+        let channel = "cd".repeat(16);
+        let text = SecretString::new("private \"message\"\n日本語");
+        let prepare = ChatAction::PrepareMessage {
+            submission: submission.clone(),
+            channel: channel.clone(),
+            text: text.clone(),
+        };
+        let submit = ChatAction::SubmitMessage {
+            submission: submission.clone(),
+            channel: channel.clone(),
+            text: text.clone(),
+        };
+        let legacy = Zeroizing::new(serde_json::to_vec(&prepare).unwrap());
+        assert_eq!(submission_input(&prepare).unwrap(), legacy);
+        assert_eq!(submission_input(&submit).unwrap(), legacy);
+        let fingerprint = |action: &ChatAction| {
+            foks_client_app::chat_submission(
+                &[7; 32],
+                id(&submission).unwrap(),
+                &submission_input(action).unwrap(),
+            )
+            .input_mac
+        };
+        assert_eq!(fingerprint(&prepare), fingerprint(&submit));
+        for altered in [
+            ChatAction::SubmitMessage {
+                submission: submission.clone(),
+                channel: "ef".repeat(16),
+                text,
+            },
+            ChatAction::SubmitMessage {
+                submission: submission.clone(),
+                channel,
+                text: SecretString::new("changed message"),
+            },
+        ] {
+            assert_ne!(fingerprint(&submit), fingerprint(&altered));
+        }
+    }
 
     #[test]
     fn content_failure_retains_channel_classification_at_dispatch() {

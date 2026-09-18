@@ -33,6 +33,56 @@ const storeId = JSON.stringify({
   teamId: store.team_id,
 });
 const channel = 'ab'.repeat(16);
+
+test('submit operation replies bind the message kind and channel strictly', () => {
+  const action = {
+    action: 'submit-message' as const,
+    submission: 'ef'.repeat(16),
+    channel,
+    text: 'body',
+  };
+  const operation = {
+    id: 'cd'.repeat(16),
+    channel,
+    kind: 'send-message',
+    state: 'confirmed',
+    receipt: { kind: 'message-sent', sequence: '2' },
+    rejection_code: null,
+  };
+  const reply = {
+    scope: {
+      store,
+      host: '02' + 'ab'.repeat(32),
+      actor: '01' + 'ab'.repeat(32),
+    },
+    result: { kind: 'operation', operation },
+  };
+  assert.deepEqual(decodeChatReply(reply, storeId, action), reply);
+  for (const changed of [
+    { channel: 'ef'.repeat(16) },
+    { kind: 'create-channel', receipt: { kind: 'channel-created' } },
+  ])
+    assert.throws(() =>
+      decodeChatReply(
+        {
+          ...reply,
+          result: {
+            kind: 'operation',
+            operation: { ...operation, ...changed },
+          },
+        },
+        storeId,
+        action,
+      ),
+    );
+  assert.throws(() =>
+    decodeChatReply(
+      { ...reply, result: { kind: 'pending', operations: [] } },
+      storeId,
+      action,
+    ),
+  );
+});
 test('chat navigation round trips and clears vault-only state', () => {
   const location = { kind: 'chat' as const, ref: storeId, channel };
   const encoded = encodeLocation(location);

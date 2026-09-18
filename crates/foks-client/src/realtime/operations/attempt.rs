@@ -21,14 +21,7 @@ impl ChatSession<'_> {
         match &request {
             RealtimeRequest::Send(arg) => {
                 let md = self.channel(rpc, RtChannelId(op.scope.channel), true)?;
-                let RtMessageWrapper::Encrypted(b) = &arg.send.wrapper else {
-                    return Err(Error::ChatIntegrity("pending message is not encrypted"));
-                };
-                if self.current(md.roles.read)? != b.key {
-                    return Err(Error::ChatReprepareRequired(
-                        "pending message key is stale; preserve operation for review",
-                    ));
-                }
+                self.validate_prepared_send(&md, &arg.send)?;
             }
             RealtimeRequest::CreateChannel(arg) => {
                 self.validate_channel(&arg.metadata)?;
@@ -57,6 +50,33 @@ impl ChatSession<'_> {
             }
             _ => return Err(Error::ChatIntegrity("invalid pending operation")),
         }
+        self.deliver_prepared(rpc, store, &op, request)
+    }
+
+    pub(super) fn validate_prepared_send(
+        &self,
+        md: &RtChannelMetadata,
+        send: &RtSend,
+    ) -> Result<()> {
+        let RtMessageWrapper::Encrypted(b) = &send.wrapper else {
+            return Err(Error::ChatIntegrity("pending message is not encrypted"));
+        };
+        if self.current(md.roles.read)? != b.key {
+            return Err(Error::ChatReprepareRequired(
+                "pending message key is stale; preserve operation for review",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn deliver_prepared(
+        &self,
+        rpc: &mut impl ChatTransport,
+        store: &mut impl ProtectedMutationStore,
+        op: &ChatOperation,
+        request: RealtimeRequest,
+    ) -> Result<ChatOperation> {
+        let id = &op.id;
         self.hard()?.chat_begin(id)?;
         let response = match rpc.request(&request) {
             Ok(response) => response,
@@ -70,7 +90,7 @@ impl ChatSession<'_> {
         };
         match (&request, response) {
             (RealtimeRequest::Send(arg), RealtimeResponse::Sent(receipt)) => {
-                self.confirm_send(&op, &arg.send, receipt)?
+                self.confirm_send(op, &arg.send, receipt)?
             }
             (RealtimeRequest::CreateChannel(_), RealtimeResponse::Void) => {
                 self.hard()?.chat_confirm(id, &op.scope.channel)?

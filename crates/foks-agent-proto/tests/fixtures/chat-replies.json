@@ -7,6 +7,51 @@
   },
   "cases": [
     {
+      "name": "submit message confirms the bound channel",
+      "valid": true,
+      "action": { "action": "submit-message", "submission": "efefefefefefefefefefefefefefefef", "channel": "abababababababababababababababab", "text": "message" },
+      "reply": {
+        "scope": { "store": { "profile": "local", "account_alias": "me", "team_alias": "team", "team_id": "03abababababababababababababababababababababababababababababababab" }, "host": "02abababababababababababababababababababababababababababababababab", "actor": "01abababababababababababababababababababababababababababababababab" },
+        "result": { "kind": "operation", "operation": { "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd", "channel": "abababababababababababababababab", "state": "confirmed", "rejection_code": null, "kind": "send-message", "receipt": { "kind": "message-sent", "sequence": "3" } } }
+      }
+    },
+    {
+      "name": "submit message recovers prepared work",
+      "valid": true,
+      "action": { "action": "submit-message", "submission": "efefefefefefefefefefefefefefefef", "channel": "abababababababababababababababab", "text": "message" },
+      "reply": {
+        "scope": { "store": { "profile": "local", "account_alias": "me", "team_alias": "team", "team_id": "03abababababababababababababababababababababababababababababababab" }, "host": "02abababababababababababababababababababababababababababababababab", "actor": "01abababababababababababababababababababababababababababababababab" },
+        "result": { "kind": "operation", "operation": { "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd", "channel": "abababababababababababababababab", "state": "prepared", "rejection_code": null, "kind": "send-message", "receipt": null } }
+      }
+    },
+    {
+      "name": "submit message preserves uncertainty",
+      "valid": true,
+      "action": { "action": "submit-message", "submission": "efefefefefefefefefefefefefefefef", "channel": "abababababababababababababababab", "text": "message" },
+      "reply": {
+        "scope": { "store": { "profile": "local", "account_alias": "me", "team_alias": "team", "team_id": "03abababababababababababababababababababababababababababababababab" }, "host": "02abababababababababababababababababababababababababababababababab", "actor": "01abababababababababababababababababababababababababababababababab" },
+        "result": { "kind": "operation", "operation": { "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd", "channel": "abababababababababababababababab", "state": "uncertain", "rejection_code": null, "kind": "send-message", "receipt": null } }
+      }
+    },
+    {
+      "name": "submit message cannot return another channel",
+      "valid": false,
+      "action": { "action": "submit-message", "submission": "efefefefefefefefefefefefefefefef", "channel": "abababababababababababababababab", "text": "message" },
+      "reply": {
+        "scope": { "store": { "profile": "local", "account_alias": "me", "team_alias": "team", "team_id": "03abababababababababababababababababababababababababababababababab" }, "host": "02abababababababababababababababababababababababababababababababab", "actor": "01abababababababababababababababababababababababababababababababab" },
+        "result": { "kind": "operation", "operation": { "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd", "channel": "efefefefefefefefefefefefefefefef", "state": "prepared", "rejection_code": null, "kind": "send-message", "receipt": null } }
+      }
+    },
+    {
+      "name": "submit message cannot return channel creation",
+      "valid": false,
+      "action": { "action": "submit-message", "submission": "efefefefefefefefefefefefefefefef", "channel": "abababababababababababababababab", "text": "message" },
+      "reply": {
+        "scope": { "store": { "profile": "local", "account_alias": "me", "team_alias": "team", "team_id": "03abababababababababababababababababababababababababababababababab" }, "host": "02abababababababababababababababababababababababababababababababab", "actor": "01abababababababababababababababababababababababababababababababab" },
+        "result": { "kind": "operation", "operation": { "id": "abababababababababababababababab", "channel": "abababababababababababababababab", "state": "prepared", "rejection_code": null, "kind": "create-channel", "receipt": null } }
+      }
+    },
+    {
       "name": "large sequence and literal text",
       "valid": true,
       "action": {

@@ -32,6 +32,12 @@ export type ChatAction =
       admin: boolean;
     }
   | {
+      action: 'submit-message';
+      submission: string;
+      channel: string;
+      text: string;
+    }
+  | {
       action: 'prepare-message';
       submission: string;
       channel: string;
@@ -529,6 +535,7 @@ export function decodeChatReply(
     [
       'prepare-channel',
       'prepare-message',
+      'submit-message',
       'attempt',
       'cancel',
       'finalize',
@@ -540,7 +547,8 @@ export function decodeChatReply(
     const op = operation(r.operation);
     if (
       ('operation' in action && action.operation !== op.id) ||
-      (action.action === 'prepare-message' &&
+      ((action.action === 'prepare-message' ||
+        action.action === 'submit-message') &&
         (op.kind !== 'send-message' || op.channel !== action.channel)) ||
       (action.action === 'prepare-channel' && op.kind !== 'create-channel')
     )

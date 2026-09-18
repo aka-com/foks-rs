@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { Bridge } from '../src/bridge';
+import { enqueueProfileWork, type Bridge } from '../src/bridge';
 import type {
   ChatAction,
   ChatOperation,
@@ -8,6 +8,7 @@ import type {
 } from '../src/chat-contract';
 import type { ChatClock, TeamInbox } from '../src/chat/inbox-service';
 import { ChatSendService } from '../src/chat/send-service';
+import { chatIntentPersistence } from '../src/chat/intent';
 import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';
 
@@ -72,7 +73,7 @@ type LocalReply = Awaited<ReturnType<Bridge['chatLocal']>>;
 type Hooks = {
   chat?: (
     action: ChatAction,
-    run: () => Promise<ChatReply>,
+    run: (action?: ChatAction) => Promise<ChatReply>,
   ) => Promise<ChatReply>;
   local?: (
     action: LocalAction,
@@ -142,8 +143,8 @@ async function setup(hooks: Hooks = {}) {
     ...base,
     chat: async (store, action, view) => {
       calls.push(structuredClone(action));
-      const run = async () =>
-        structuredClone(await base.chat(store, action, view));
+      const run = async (input = action) =>
+        structuredClone(await base.chat(store, input, view));
       return hooks.chat ? hooks.chat(action, run) : run();
     },
     chatLocal: async (action) => {
@@ -161,6 +162,7 @@ async function setup(hooks: Hooks = {}) {
   return {
     service,
     base,
+    bridge,
     snapshot,
     ready,
     channel,
@@ -177,6 +179,244 @@ function count(calls: ChatAction[], action: ChatAction['action']) {
   return calls.filter((call) => call.action === action).length;
 }
 
+test('fresh message persists its intent before a single submit request', async () => {
+  const order: string[] = [];
+  const h = await setup({
+    local: async (action, run) => {
+      const reply = await run();
+      order.push(action.action);
+      return reply;
+    },
+    chat: async (action, run) => {
+      order.push(action.action);
+      return run();
+    },
+  });
+  try {
+    await h.service.submit(STORE, h.channel, 'one request');
+    assert.deepEqual(
+      h.calls.map((call) => call.action),
+      ['submit-message'],
+    );
+    assert.ok(order.indexOf('save-intent') < order.indexOf('submit-message'));
+    assert.equal(h.service.messages(STORE, h.channel)[0].phase, 'sent');
+    assert.equal(h.service.operations(STORE)[0].text, 'one request');
+  } finally {
+    h.service.stop();
+  }
+});
+
+for (const state of ['prepared', 'uncertain'] as const) {
+  test(`submit returning retained ${state} only attempts verified prepared work`, async () => {
+    const h = await setup({
+      chat: async (action, run) => {
+        if (action.action === 'submit-message') {
+          const reply = await run({ ...action, action: 'prepare-message' });
+          const pending = await h.base.chat(STORE, { action: 'pending' });
+          if (pending.result.kind !== 'pending')
+            throw new Error('pending expected');
+          pending.result.operations[0].state = state;
+          if (reply.result.kind === 'operation')
+            reply.result.operation.state = state;
+          return reply;
+        }
+        return run();
+      },
+    });
+    try {
+      await h.service.submit(STORE, h.channel, 'retained body');
+      const message = h.service.messages(STORE, h.channel)[0];
+      assert.equal(
+        message.phase,
+        state === 'prepared' ? 'sent' : 'unconfirmed',
+      );
+      await h.service.retry(STORE, message.id);
+      await h.clock.advance(7000);
+      assert.equal(count(h.calls, 'submit-message'), 1);
+      assert.equal(count(h.calls, 'attempt'), state === 'prepared' ? 1 : 0);
+      if (state === 'uncertain') assert.ok(count(h.calls, 'reconcile') > 0);
+    } finally {
+      h.service.stop();
+    }
+  });
+}
+
+test('lost legacy recovery preparation replies retain the original submit identity', async () => {
+  let losePreparation = true;
+  const h = await setup({
+    chat: async (action, run) => {
+      if (action.action === 'submit-message') throw lostReply;
+      const reply = await run();
+      if (action.action === 'prepare-message' && losePreparation) {
+        losePreparation = false;
+        throw lostReply;
+      }
+      return reply;
+    },
+  });
+  try {
+    await h.service.submit(STORE, h.channel, 'original recovery body');
+    const original = h.service.messages(STORE, h.channel)[0];
+    await h.clock.advance(10000);
+    const preparations = h.calls.filter(
+      (call) => call.action === 'prepare-message',
+    );
+    assert.equal(preparations.length, 2);
+    assert.ok(
+      preparations.every(
+        (call) =>
+          call.submission === original.submission &&
+          call.channel === h.channel &&
+          call.text === original.text,
+      ),
+    );
+    assert.equal(count(h.calls, 'submit-message'), 1);
+    assert.equal(count(h.calls, 'attempt'), 1);
+    assert.equal(h.service.messages(STORE, h.channel)[0].phase, 'sent');
+  } finally {
+    h.service.stop();
+  }
+});
+
+test('a lost submit reply after its uncertain checkpoint recovers without replay', async () => {
+  const h = await setup({
+    chat: async (action, run) => {
+      if (action.action === 'submit-message') {
+        await run({ ...action, action: 'prepare-message' });
+        const pending = await h.base.chat(STORE, { action: 'pending' });
+        if (pending.result.kind !== 'pending')
+          throw new Error('pending expected');
+        pending.result.operations[0].state = 'uncertain';
+        throw lostReply;
+      }
+      return run();
+    },
+  });
+  try {
+    await h.service.submit(STORE, h.channel, 'checkpointed body');
+    const original = h.service.messages(STORE, h.channel)[0];
+    assert.equal(original.intentPending, true);
+    await h.clock.advance(7000);
+    const recovered = h.service.messages(STORE, h.channel)[0];
+    assert.equal(recovered.id, original.id);
+    assert.equal(recovered.operation?.state, 'uncertain');
+    assert.equal(recovered.phase, 'unconfirmed');
+    assert.equal(recovered.text, 'checkpointed body');
+    await h.service.retry(STORE, recovered.id);
+    assert.equal(count(h.calls, 'submit-message'), 1);
+    assert.equal(count(h.calls, 'prepare-message'), 1);
+    assert.equal(count(h.calls, 'attempt'), 0);
+    assert.ok(count(h.calls, 'reconcile') > 0);
+    await assert.rejects(h.service.restoreDraft(STORE, recovered.id));
+  } finally {
+    h.service.stop();
+  }
+});
+
+for (const committed of [false, true]) {
+  test(`restored intent uses legacy prepare only after lost submit committed=${committed}`, async () => {
+    const h = await setup({
+      chat: async (action, run) => {
+        if (action.action === 'submit-message') {
+          if (committed) await run();
+          throw new Error('Reply lost');
+        }
+        return run();
+      },
+    });
+    try {
+      await h.service.submit(STORE, h.channel, 'protected body');
+      const original = await chatIntentPersistence(
+        h.bridge,
+        STORE,
+        h.scope,
+        h.channel,
+      ).load();
+      assert.ok(original);
+      assert.equal(h.service.messages(STORE, h.channel).length, 0);
+      h.service.stop();
+      h.updateInbox(h.ready);
+      h.service.start();
+      await h.service.open(STORE, h.channel);
+      await settle();
+      const restored = h.service.messages(STORE, h.channel)[0];
+      assert.equal(restored.id, original.submission);
+      assert.equal(restored.ambiguousPreparation, true);
+      assert.equal(restored.phase, 'sent');
+      assert.equal(count(h.calls, 'submit-message'), 1);
+      assert.deepEqual(
+        h.calls.find((call) => call.action === 'prepare-message'),
+        {
+          action: 'prepare-message',
+          submission: original.submission,
+          channel: h.channel,
+          text: 'protected body',
+        },
+      );
+      assert.equal(count(h.calls, 'attempt'), committed ? 0 : 1);
+    } finally {
+      h.service.stop();
+    }
+  });
+}
+
+for (const boundary of [
+  'generation',
+  'locked',
+  'read-only',
+  'stopped',
+] as const) {
+  test(`queued submit rechecks ${boundary} eligibility before dispatch`, async () => {
+    const h = await setup();
+    const gate = deferred();
+    const hold = enqueueProfileWork(h.bridge, 'acme', () => gate.promise);
+    let sending: Promise<void> | undefined;
+    try {
+      await settle();
+      sending = h.service.submit(STORE, h.channel, 'queued body');
+      await settle();
+      if (boundary === 'generation')
+        h.service.update(h.snapshot, new Map([['acme', 1]]));
+      else if (boundary === 'locked')
+        h.service.update({
+          ...h.snapshot,
+          agent: { state: 'bootstrap', step: 'locked' },
+        });
+      else if (boundary === 'read-only')
+        h.updateInbox({
+          ...h.ready,
+          data: {
+            ...h.ready.data!,
+            channels: h.ready.data!.channels.map((c) => ({
+              ...c,
+              writable: false,
+            })),
+          },
+        });
+      else h.service.stop();
+      gate.resolve();
+      await hold;
+      await sending;
+      assert.equal(count(h.calls, 'submit-message'), 0);
+      assert.equal(count(h.calls, 'attempt'), 0);
+      assert.equal(
+        h.localCalls.some((call) => call.action === 'clear-intent'),
+        false,
+      );
+      if (boundary !== 'stopped') {
+        const message = h.service.messages(STORE, h.channel)[0];
+        assert.equal(message.intentPending, true);
+        assert.equal(message.phase, 'unconfirmed');
+      }
+    } finally {
+      gate.resolve();
+      await hold;
+      await sending;
+      h.service.stop();
+    }
+  });
+}
+
 test('failed local intent deletion does not hide known delivery or admit another same-slot intent', async () => {
   let failClear = true;
   const h = await setup({
@@ -187,6 +427,7 @@ test('failed local intent deletion does not hide known delivery or admit another
   });
   try {
     await h.service.submit(STORE, h.channel, 'delivered');
+    await settle();
     const sent = h.service.messages(STORE, h.channel)[0];
     assert.equal(sent.phase, 'sent');
     assert.equal(sent.operation?.state, 'confirmed');
@@ -200,7 +441,7 @@ test('failed local intent deletion does not hide known delivery or admit another
     await h.clock.advance(6000);
     assert.equal(h.service.messages(STORE, h.channel)[0].intentPending, false);
     assert.equal(h.service.canSubmit(STORE, h.channel), true);
-    assert.equal(count(h.calls, 'attempt'), 1);
+    assert.equal(count(h.calls, 'submit-message'), 1);
   } finally {
     h.service.stop();
   }
@@ -259,50 +500,110 @@ test('repeated local intent cleanup failures use increasing automatic retry back
       `expected backoff, observed ${times.length} clear attempts in 30 seconds`,
     );
     assert.equal(h.service.messages(STORE, h.channel)[0].phase, 'sent');
-    assert.equal(count(h.calls, 'attempt'), 1);
+    assert.equal(count(h.calls, 'submit-message'), 1);
   } finally {
     h.service.stop();
   }
 });
 
-test('lost prepare reply recovers automatically using exactly the original submission and body', async () => {
-  let lose = true;
-  const h = await setup({
-    chat: async (action, run) => {
-      const reply = await run();
-      if (action.action === 'prepare-message' && lose) {
-        lose = false;
-        throw lostReply;
+for (const committed of [false, true]) {
+  for (const error of [
+    new Error('Reply lost'),
+    lostReply,
+    { ...unavailable, code: 'chat-limit' },
+    { ...unavailable, code: 'access-denied' },
+  ]) {
+    test(`lost submit reply committed=${committed} error=${'code' in error ? error.code : 'Error'} recovers the exact submission`, async () => {
+      const h = await setup({
+        chat: async (action, run) => {
+          if (action.action === 'submit-message') {
+            if (committed) await run();
+            throw error;
+          }
+          return run();
+        },
+      });
+      try {
+        await h.service.submit(STORE, h.channel, 'original');
+        if (error instanceof Error) {
+          assert.equal(h.service.messages(STORE, h.channel).length, 0);
+          const saved = await chatIntentPersistence(
+            h.bridge,
+            STORE,
+            h.scope,
+            h.channel,
+          ).load();
+          assert.ok(saved);
+          assert.equal(saved.text, 'original');
+          await h.clock.advance(7000);
+          assert.equal(count(h.calls, 'prepare-message'), 0);
+          assert.equal(count(h.calls, 'attempt'), 0);
+          h.service.stop();
+          h.updateInbox(h.ready);
+          h.service.start();
+          await h.service.open(STORE, h.channel);
+          await settle();
+          const recovered = h.service.messages(STORE, h.channel)[0];
+          assert.equal(recovered.submission, saved.submission);
+          assert.equal(recovered.phase, 'sent');
+          assert.equal(count(h.calls, 'submit-message'), 1);
+          assert.equal(count(h.calls, 'prepare-message'), 1);
+          assert.equal(count(h.calls, 'attempt'), committed ? 0 : 1);
+          return;
+        }
+        const message = h.service.messages(STORE, h.channel)[0];
+        assert.equal(message.phase, 'unconfirmed');
+        assert.equal(message.ambiguousPreparation, true);
+        assert.equal(message.intentPending, true);
+        assert.equal(h.service.canSubmit(STORE, h.channel), false);
+        await assert.rejects(h.service.restoreDraft(STORE, message.id));
+        assert.equal(
+          h.localCalls.some((call) => call.action === 'clear-intent'),
+          false,
+        );
+        h.service.setDraft(STORE, h.channel, 'new draft');
+        await h.clock.advance(7000);
+        const preparations = h.calls.filter(
+          (call) => call.action === 'prepare-message',
+        );
+        assert.equal(preparations.length, 1);
+        assert.deepEqual(preparations[0], {
+          action: 'prepare-message',
+          submission: message.submission,
+          channel: h.channel,
+          text: 'original',
+        });
+        assert.equal(count(h.calls, 'submit-message'), 1);
+        assert.equal(count(h.calls, 'attempt'), committed ? 0 : 1);
+        assert.equal(h.service.messages(STORE, h.channel)[0].phase, 'sent');
+        assert.equal(h.service.messages(STORE, h.channel)[0].id, message.id);
+        assert.equal(h.service.draft(STORE, h.channel), 'new draft');
+        const history = await h.base.chat(STORE, {
+          action: 'history',
+          channel: h.channel,
+          before: null,
+        });
+        assert.equal(history.result.kind, 'history');
+        if (history.result.kind === 'history')
+          assert.equal(
+            history.result.messages.filter(
+              (m) => m.content.kind === 'text' && m.content.text === 'original',
+            ).length,
+            1,
+          );
+      } finally {
+        h.service.stop();
       }
-      return reply;
-    },
-  });
-  try {
-    await h.service.submit(STORE, h.channel, 'original');
-    const id = h.service.messages(STORE, h.channel)[0].id;
-    h.service.setDraft(STORE, h.channel, 'new draft');
-    await h.clock.advance(7000);
-    const preparations = h.calls.filter(
-      (call) => call.action === 'prepare-message',
-    );
-    assert.ok(preparations.length >= 2);
-    assert.ok(
-      preparations.every(
-        (call) => call.submission === id && call.text === 'original',
-      ),
-    );
-    assert.equal(count(h.calls, 'attempt'), 1);
-    assert.equal(h.service.messages(STORE, h.channel)[0].phase, 'sent');
-    assert.equal(h.service.draft(STORE, h.channel), 'new draft');
-  } finally {
-    h.service.stop();
+    });
   }
-});
+}
 
 for (const mode of ['unknown', 'uncertain'] as const) {
   test(`${mode} attempt failure never causes an automatic resend`, async () => {
     const h = await setup({
       chat: async (action, run) => {
+        if (action.action === 'submit-message')
+          return run({ ...action, action: 'prepare-message' });
         if (action.action === 'attempt') throw lostReply;
         if (action.action === 'status' && mode === 'unknown') throw unavailable;
         const reply = await run();
@@ -324,8 +625,9 @@ for (const mode of ['unknown', 'uncertain'] as const) {
     try {
       await h.service.submit(STORE, h.channel, 'only once');
       await h.clock.advance(30000);
+      assert.equal(count(h.calls, 'submit-message'), 1);
+      assert.equal(count(h.calls, 'prepare-message'), 0);
       assert.equal(count(h.calls, 'attempt'), 1);
-      assert.equal(count(h.calls, 'prepare-message'), 1);
       assert.notEqual(h.service.messages(STORE, h.channel)[0].phase, 'sent');
       if (mode === 'uncertain') assert.ok(count(h.calls, 'reconcile') > 0);
     } finally {
@@ -339,6 +641,8 @@ test('delayed local status recovery does not hold the primary submit completion'
   let statusStarted = false;
   const h = await setup({
     chat: async (action, run) => {
+      if (action.action === 'submit-message')
+        return run({ ...action, action: 'prepare-message' });
       if (action.action === 'attempt') throw lostReply;
       if (action.action === 'status') {
         statusStarted = true;
@@ -397,7 +701,7 @@ test('observed history deduplicates delivery and leaves previously returned oper
     );
     assert.equal(h.service.messageKey(STORE, sent.operation!.id), sent.id);
     assert.equal(h.service.operations(STORE)[0].text, undefined);
-    assert.equal(count(h.calls, 'attempt'), 1);
+    assert.equal(count(h.calls, 'submit-message'), 1);
   } finally {
     h.service.stop();
   }
@@ -437,7 +741,7 @@ for (const stage of ['saving', 'preparing'] as const) {
         },
         chat: async (action, run) => {
           const reply = await run();
-          if (stage === 'preparing' && action.action === 'prepare-message') {
+          if (stage === 'preparing' && action.action === 'submit-message') {
             started = true;
             await gate.promise;
           }
@@ -455,7 +759,7 @@ for (const stage of ['saving', 'preparing'] as const) {
             ...h.snapshot,
             agent: { state: 'bootstrap', step: 'locked' },
           });
-        const prepareCount = count(h.calls, 'prepare-message');
+        const prepareCount = count(h.calls, 'submit-message');
         const clearCount = h.localCalls.filter(
           (call) => call.action === 'clear-intent',
         ).length;
@@ -463,7 +767,7 @@ for (const stage of ['saving', 'preparing'] as const) {
         gate.resolve();
         await sending;
         await h.clock.advance(5000);
-        assert.equal(count(h.calls, 'prepare-message'), prepareCount);
+        assert.equal(count(h.calls, 'submit-message'), prepareCount);
         assert.equal(count(h.calls, 'attempt'), 0);
         assert.equal(
           h.localCalls.filter((call) => call.action === 'clear-intent').length,
@@ -709,20 +1013,16 @@ test('a large failing cleanup backlog does not starve automatic uncertain-delive
   }
 });
 
-test('verified history arriving before a preparation reply is merged without another delivery', async () => {
+test('verified history arriving before a submit reply is merged without another delivery', async () => {
   const gate = deferred();
   let reached = false;
   const h = await setup({
     chat: async (action, run) => {
       const reply = await run();
       if (
-        action.action === 'prepare-message' &&
+        action.action === 'submit-message' &&
         reply.result.kind === 'operation'
       ) {
-        await h.base.chat(STORE, {
-          action: 'attempt',
-          operation: reply.result.operation.id,
-        });
         const history = await h.base.chat(STORE, {
           action: 'history',
           channel: action.channel,

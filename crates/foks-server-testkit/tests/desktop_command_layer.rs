@@ -575,7 +575,15 @@ fn process_reentry_and_real_kv_conflict_against_testkit() {
         &team_id,
     );
     exercise_profile_failure_isolation(&mut backend);
-    exercise_chat(&socket, &team_id, &probe, &certificate);
+    exercise_chat(&socket, &team_id, &probe, &certificate, || {
+        agent
+            .child
+            .kill()
+            .expect("stop agent before durable reentry");
+        agent.child.wait().expect("wait for stopped agent");
+        std::fs::remove_file(&socket).expect("remove stopped agent socket");
+        agent = start_agent(&agent_binary, &state, &socket);
+    });
     agent.assert_running();
     backend.assert_every_invocation_was_a_fresh_process();
 }
@@ -921,7 +929,332 @@ fn exercise_profile_failure_isolation(backend: &mut BackendRunner) {
     healthy_profile_catalog(&backend.socket);
 }
 
-fn exercise_chat(socket: &Path, team_id: &str, probe: &str, certificate: &Path) {
+#[test]
+#[ignore = "child process for the real-agent SubmitMessage integration flow"]
+fn chat_submit_client_process() {
+    use foks_agent_proto::{chat::ChatAction, TeamStoreRef};
+
+    let Some(request_path) = std::env::var_os("FOKS_CHAT_PROCESS_REQUEST") else {
+        return;
+    };
+    let request_path = PathBuf::from(request_path);
+    let (socket, store, action): (PathBuf, TeamStoreRef, ChatAction) =
+        serde_json::from_slice(&std::fs::read(&request_path).unwrap()).unwrap();
+    let reply = foks_desktop::chat_request(&AgentClient::new(socket), store, action).unwrap();
+    if let Some(path) = std::env::var_os("FOKS_CHAT_PROCESS_REPLY") {
+        private_file(Path::new(&path), &serde_json::to_vec(&reply).unwrap());
+    }
+}
+
+fn chat_from_fresh_process(
+    socket: &Path,
+    store: &foks_agent_proto::TeamStoreRef,
+    action: &foks_agent_proto::chat::ChatAction,
+    discard_reply: bool,
+) -> Option<foks_agent_proto::chat::ChatReply> {
+    let directory = socket.parent().unwrap();
+    let request_path = directory.join("submit-process-request.json");
+    let reply_path = directory.join("submit-process-reply.json");
+    assert!(!request_path.exists());
+    assert!(!reply_path.exists());
+    private_file(
+        &request_path,
+        &serde_json::to_vec(&(socket, store, action)).unwrap(),
+    );
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--ignored", "--exact", "chat_submit_client_process"])
+        .env("FOKS_CHAT_PROCESS_REQUEST", &request_path)
+        .env_remove("FOKS_CHAT_PROCESS_REPLY")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if !discard_reply {
+        command.env("FOKS_CHAT_PROCESS_REPLY", &reply_path);
+    }
+    let mut child = AgentProcess {
+        child: command.spawn().expect("start fresh chat client process"),
+    };
+    let deadline = Instant::now() + PROCESS_TIMEOUT;
+    let status = loop {
+        if let Some(status) = child.child.try_wait().unwrap() {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "chat client process timed out");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    std::fs::remove_file(request_path).unwrap();
+    if !status.success() {
+        use std::io::Read as _;
+
+        let mut output = String::new();
+        child
+            .child
+            .stdout
+            .take()
+            .unwrap()
+            .read_to_string(&mut output)
+            .unwrap();
+        child
+            .child
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut output)
+            .unwrap();
+        panic!("chat client process failed: {status}: {output}");
+    }
+    if discard_reply {
+        assert!(!reply_path.exists());
+        None
+    } else {
+        let reply = serde_json::from_slice(&std::fs::read(&reply_path).unwrap()).unwrap();
+        std::fs::remove_file(reply_path).unwrap();
+        Some(reply)
+    }
+}
+
+fn exercise_chat_submit(
+    socket: &Path,
+    owner: &foks_agent_proto::TeamStoreRef,
+    channel: &str,
+    restart_agent: &mut impl FnMut(),
+) {
+    use foks_agent_proto::{
+        chat::{
+            ChatAction as A, ChatContent, ChatOperationKind, ChatReceipt, ChatResult as R,
+            ChatState,
+        },
+        SecretString,
+    };
+
+    let chat = |action| {
+        foks_desktop::chat_request(&AgentClient::new(socket), owner.clone(), action)
+            .unwrap()
+            .result
+    };
+    let operation = |result| {
+        let R::Operation { operation } = result else {
+            panic!("expected durable chat operation")
+        };
+        operation
+    };
+    let history = || {
+        let R::History { messages, .. } = chat(A::History {
+            channel: channel.into(),
+            before: None,
+        }) else {
+            panic!("expected submit history")
+        };
+        messages
+    };
+    let submit = |submission: &str, text: &str| A::SubmitMessage {
+        submission: submission.into(),
+        channel: channel.into(),
+        text: SecretString::new(text),
+    };
+    let prepare = |submission: &str, text: &str| A::PrepareMessage {
+        submission: submission.into(),
+        channel: channel.into(),
+        text: SecretString::new(text),
+    };
+    let original_history = history();
+    let fresh_id = "a1".repeat(16);
+    let fresh_text = "fresh submit survives durable reentry";
+    let fresh_action = submit(&fresh_id, fresh_text);
+    let fresh = operation(chat(fresh_action.clone()));
+    assert_eq!(fresh.state, ChatState::Confirmed);
+    assert_eq!(fresh.kind, ChatOperationKind::SendMessage);
+    assert_eq!(fresh.channel, channel);
+    let after_fresh = history();
+    assert_eq!(after_fresh.len(), original_history.len() + 1);
+    let fresh_message = after_fresh
+        .iter()
+        .find(|message| matches!(&message.content, ChatContent::Text { text } if text.expose() == fresh_text))
+        .unwrap();
+    assert_eq!(
+        fresh.receipt,
+        Some(ChatReceipt::MessageSent {
+            sequence: fresh_message.sequence.clone(),
+        })
+    );
+    assert_eq!(operation(chat(fresh_action.clone())), fresh);
+    assert_eq!(operation(chat(prepare(&fresh_id, fresh_text))), fresh);
+    assert_eq!(history(), after_fresh);
+    assert!(matches!(
+        chat(A::OperationBody {
+            operation: fresh.id.clone(),
+            channel: channel.into(),
+        }),
+        R::OperationBody { text: None, .. }
+    ));
+    assert!(!serde_json::to_string(&fresh).unwrap().contains(fresh_text));
+
+    let prepared_id = "a2".repeat(16);
+    let prepared_text = "prepared submission requires explicit attempt";
+    let prepared = operation(chat(prepare(&prepared_id, prepared_text)));
+    assert_eq!(prepared.state, ChatState::Prepared);
+    assert_eq!(prepared.receipt, None);
+    assert_ne!(prepared.id, fresh.id);
+    restart_agent();
+    assert_eq!(operation(chat(fresh_action)), fresh);
+    assert_eq!(operation(chat(prepare(&fresh_id, fresh_text))), fresh);
+    assert_eq!(
+        operation(chat(submit(&prepared_id, prepared_text))),
+        prepared
+    );
+    assert_eq!(
+        operation(chat(prepare(&prepared_id, prepared_text))),
+        prepared
+    );
+    let R::Pending { operations } = chat(A::Pending) else {
+        panic!("expected prepared operation after restart")
+    };
+    assert_eq!(operations, vec![prepared.clone()]);
+    assert!(matches!(
+        chat(A::OperationBody {
+            operation: prepared.id.clone(),
+            channel: channel.into(),
+        }),
+        R::OperationBody { text: Some(text), .. } if text.expose() == prepared_text
+    ));
+    assert_eq!(history(), after_fresh);
+    let attempted = operation(chat(A::Attempt {
+        operation: prepared.id.clone(),
+    }));
+    assert_eq!(attempted.id, prepared.id);
+    assert_eq!(attempted.state, ChatState::Confirmed);
+    assert_eq!(
+        operation(chat(submit(&prepared_id, prepared_text))),
+        attempted
+    );
+    let after_attempt = history();
+    assert_eq!(after_attempt.len(), after_fresh.len() + 1);
+    assert_eq!(
+        after_attempt
+            .iter()
+            .filter(|message| matches!(&message.content, ChatContent::Text { text } if text.expose() == prepared_text))
+            .count(),
+        1
+    );
+
+    let alternate = operation(chat(A::PrepareChannel {
+        submission: "a3".repeat(16),
+        name: SecretString::new("submitmismatch"),
+        description: SecretString::new(""),
+        admin: false,
+    }));
+    assert_eq!(
+        operation(chat(A::Attempt {
+            operation: alternate.id,
+        }))
+        .state,
+        ChatState::Confirmed
+    );
+    for altered in [
+        submit(&fresh_id, "altered submit body"),
+        prepare(&fresh_id, "altered prepare body"),
+        A::SubmitMessage {
+            submission: fresh_id.clone(),
+            channel: alternate.channel.clone(),
+            text: SecretString::new(fresh_text),
+        },
+        A::PrepareMessage {
+            submission: fresh_id.clone(),
+            channel: alternate.channel.clone(),
+            text: SecretString::new(fresh_text),
+        },
+    ] {
+        assert!(
+            foks_desktop::chat_request(&AgentClient::new(socket), owner.clone(), altered).is_err()
+        );
+        assert_eq!(
+            operation(chat(A::Status {
+                operation: fresh.id.clone(),
+            })),
+            fresh
+        );
+    }
+    let R::History { messages, .. } = chat(A::History {
+        channel: alternate.channel,
+        before: None,
+    }) else {
+        panic!("expected alternate channel history")
+    };
+    assert!(messages.is_empty());
+    assert_eq!(history(), after_attempt);
+
+    let cancelled_id = "a4".repeat(16);
+    let cancelled_text = "cancelled submission must stay cancelled";
+    let cancellable = operation(chat(prepare(&cancelled_id, cancelled_text)));
+    let cancelled = operation(chat(A::Cancel {
+        operation: cancellable.id,
+    }));
+    assert_eq!(cancelled.state, ChatState::Cancelled);
+    assert_eq!(
+        operation(chat(submit(&cancelled_id, cancelled_text))),
+        cancelled
+    );
+    assert_eq!(history(), after_attempt);
+
+    let lost_id = "a5".repeat(16);
+    let lost_text = "caller discards successful submit reply";
+    let lost_action = submit(&lost_id, lost_text);
+    assert!(chat_from_fresh_process(socket, owner, &lost_action, true).is_none());
+    restart_agent();
+    let recovered = operation(
+        chat_from_fresh_process(socket, owner, &lost_action, false)
+            .unwrap()
+            .result,
+    );
+    assert_eq!(recovered.state, ChatState::Confirmed);
+    assert_ne!(recovered.id, fresh.id);
+    assert_ne!(recovered.id, attempted.id);
+    assert_eq!(operation(chat(prepare(&lost_id, lost_text))), recovered);
+    assert_eq!(
+        operation(
+            chat_from_fresh_process(socket, owner, &lost_action, false)
+                .unwrap()
+                .result,
+        ),
+        recovered
+    );
+    assert_eq!(
+        operation(chat(A::Status {
+            operation: recovered.id.clone(),
+        })),
+        recovered
+    );
+    assert_eq!(
+        operation(chat(submit(&cancelled_id, cancelled_text))),
+        cancelled
+    );
+    let after_recovery = history();
+    assert_eq!(after_recovery.len(), after_attempt.len() + 1);
+    let lost_messages = after_recovery
+        .iter()
+        .filter(|message| matches!(&message.content, ChatContent::Text { text } if text.expose() == lost_text))
+        .collect::<Vec<_>>();
+    assert_eq!(lost_messages.len(), 1);
+    assert_eq!(
+        recovered.receipt,
+        Some(ChatReceipt::MessageSent {
+            sequence: lost_messages[0].sequence.clone(),
+        })
+    );
+    let R::Pending { operations } = chat(A::Pending) else {
+        panic!("expected no pending submit operations")
+    };
+    assert!(operations.is_empty());
+}
+
+fn exercise_chat(
+    socket: &Path,
+    team_id: &str,
+    probe: &str,
+    certificate: &Path,
+    mut restart_agent: impl FnMut(),
+) {
     use foks_agent_proto::{
         chat::{ChatAction as A, ChatContent, ChatResult as R, ChatState},
         SecretString, TeamRole, TeamStoreRef,
@@ -1267,6 +1600,7 @@ fn exercise_chat(socket: &Path, team_id: &str, probe: &str, certificate: &Path) 
         ..owner.clone()
     };
     assert!(foks_desktop::chat_request(&client, wrong, A::Channels).is_err());
+    exercise_chat_submit(socket, &owner, &channel, &mut restart_agent);
     // Optional bounded manual-desktop fixture. Only synthetic test accounts are
     // used. The operator owns a private control directory; no production agent is
     // contacted. Removing `ready` ends the fixture, touching `send` emits one

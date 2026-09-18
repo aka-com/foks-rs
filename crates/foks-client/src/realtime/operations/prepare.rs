@@ -164,6 +164,41 @@ impl ChatSession<'_> {
             return Ok(operation);
         }
 
+        Ok(self
+            .prepare_fresh_send(rpc, store, channel, text, submission)?
+            .0)
+    }
+
+    pub fn submit_message<E: From<Error>>(
+        &mut self,
+        rpc: &mut impl ChatTransport,
+        store: &mut impl ProtectedMutationStore,
+        channel: RtChannelId,
+        text: &str,
+        submission: &ChatSubmission,
+        before_delivery: impl FnOnce() -> std::result::Result<(), E>,
+    ) -> std::result::Result<ChatOperation, E> {
+        if let Some(operation) = self.submitted_operation(Some(submission))? {
+            return Ok(operation);
+        }
+        let (op, md) = self.prepare_fresh_send(rpc, store, channel, text, Some(submission))?;
+        before_delivery()?;
+        let request = self.material(store, &op)?;
+        let RealtimeRequest::Send(arg) = &request else {
+            return Err(Error::ChatIntegrity("fresh message is not a send").into());
+        };
+        self.validate_prepared_send(&md, &arg.send)?;
+        Ok(self.deliver_prepared(rpc, store, &op, request)?)
+    }
+
+    fn prepare_fresh_send(
+        &mut self,
+        rpc: &mut impl ChatTransport,
+        store: &mut impl ProtectedMutationStore,
+        channel: RtChannelId,
+        text: &str,
+        submission: Option<&ChatSubmission>,
+    ) -> Result<(ChatOperation, RtChannelMetadata)> {
         if text.is_empty() || text.len() > RT_MAX_BODY_BYTES {
             return Err(Error::ChatInvalidInput("invalid message text length"));
         }
@@ -207,7 +242,7 @@ impl ChatSession<'_> {
             &self.noncer(channel, metadata.clone(), self.credential.uid.clone()),
             text.as_bytes(),
         )?;
-        self.prepare(
+        let op = self.prepare(
             store,
             id,
             submission,
@@ -221,6 +256,7 @@ impl ChatSession<'_> {
                     expected_previous_sequence: 0,
                 },
             }),
-        )
+        )?;
+        Ok((op, md))
     }
 }

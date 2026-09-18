@@ -118,15 +118,15 @@ async function setup(override?: (base: Bridge) => Bridge) {
 test('optimistic submission survives conversation unmount during preparation and leaves the next draft editable', async () => {
   const gate = deferred();
   let preparations = 0;
-  let attempts = 0;
+  let submits = 0;
   await setup((base) => ({
     ...base,
     chat: async (store, action, view) => {
-      if (action.action === 'prepare-message') {
+      if (action.action === 'submit-message') {
         preparations++;
         await gate.promise;
       }
-      if (action.action === 'attempt') attempts++;
+      if (action.action === 'submit-message') submits++;
       return base.chat(store, action, view);
     },
   }));
@@ -160,7 +160,7 @@ test('optimistic submission survives conversation unmount during preparation and
   );
   await ui.screen.findByText('Other view');
   gate.resolve();
-  await ui.waitFor(() => assert.equal(attempts, 1));
+  await ui.waitFor(() => assert.equal(submits, 1));
   ui.fireEvent.click(
     ui.screen.getByRole<HTMLButtonElement>('button', {
       name: 'Toggle conversation',
@@ -180,12 +180,12 @@ test('optimistic submission survives conversation unmount during preparation and
 
 test('partial catalog omission preserves both a submitted message and the next unsent draft', async () => {
   const gate = deferred();
-  let attempts = 0;
+  let submits = 0;
   await setup((base) => ({
     ...base,
     chat: async (store, action, view) => {
-      if (action.action === 'prepare-message') await gate.promise;
-      if (action.action === 'attempt') attempts++;
+      if (action.action === 'submit-message') await gate.promise;
+      if (action.action === 'submit-message') submits++;
       return base.chat(store, action, view);
     },
   }));
@@ -219,7 +219,7 @@ test('partial catalog omission preserves both a submitted message and the next u
         'retained draft',
       ),
     );
-    await ui.waitFor(() => assert.equal(attempts, 1));
+    await ui.waitFor(() => assert.equal(submits, 1));
     assert.equal(ui.screen.getAllByText('retained submission').length, 1);
   } finally {
     gate.resolve();
@@ -257,7 +257,7 @@ test('optimistic rows follow the bottom without pulling a reader away from older
   await setup((base) => ({
     ...base,
     chat: async (store, action, view) => {
-      if (action.action === 'prepare-message') await gate.promise;
+      if (action.action === 'submit-message') await gate.promise;
       return base.chat(store, action, view);
     },
   }));
@@ -306,7 +306,7 @@ test('confirmation becomes Sent independently of a stalled history refresh', asy
     chat: async (store, action, view) => {
       if (action.action === 'history' && sent) await gate.promise;
       const reply = await base.chat(store, action, view);
-      if (action.action === 'attempt') sent = true;
+      if (action.action === 'submit-message') sent = true;
       return reply;
     },
   }));

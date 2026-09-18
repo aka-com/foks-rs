@@ -91,7 +91,7 @@ async function setup(
 test('a pending send releases its draft while delivery continues outside the conversation', async () => {
   const gate = deferred();
   const h = await setup(async (action, run) => {
-    if (action.action === 'attempt') await gate.promise;
+    if (action.action === 'submit-message') await gate.promise;
     return run();
   });
   try {
@@ -104,7 +104,10 @@ test('a pending send releases its draft while delivery continues outside the con
     await sending;
     assert.equal(h.service.messages('team:eng', h.channel)[0].phase, 'sent');
     assert.equal(h.service.draft('team:eng', h.channel), 'next draft');
-    assert.equal(h.calls.filter((a) => a.action === 'attempt').length, 1);
+    assert.deepEqual(
+      h.calls.map((a) => a.action),
+      ['submit-message'],
+    );
   } finally {
     gate.resolve();
     h.service.stop();
@@ -114,7 +117,7 @@ test('a pending send releases its draft while delivery continues outside the con
 test('one channel intent applies admission backpressure without blocking typing', async () => {
   const gate = deferred();
   const h = await setup(async (action, run) => {
-    if (action.action === 'prepare-message') await gate.promise;
+    if (action.action === 'submit-message') await gate.promise;
     return run();
   });
   try {
@@ -132,10 +135,10 @@ test('one channel intent applies admission backpressure without blocking typing'
   }
 });
 
-test('uncertain delivery is not retried as a new send', async () => {
+test('a lost submit reply is not retried as a new send', async () => {
   let attempts = 0;
   const h = await setup(async (action, run) => {
-    if (action.action === 'attempt') {
+    if (action.action === 'submit-message') {
       attempts++;
       await run();
       throw {

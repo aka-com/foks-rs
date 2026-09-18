@@ -17,6 +17,12 @@ pub struct ChatChannelInput<'a> {
     pub tier: RtChannelTier,
 }
 
+pub struct ChatMessageInput<'a> {
+    pub channel: RtChannelId,
+    pub text: &'a str,
+    pub submission: &'a ChatSubmission,
+}
+
 const SUBMISSION_MAC_DOMAIN: u64 = 0x8d7a_1f31_697c_f490;
 
 /// The commitment is keyed so durable metadata does not reveal guessable text.
@@ -304,6 +310,37 @@ impl CheckedProfileSession<'_> {
             )?)
         })
     }
+    pub fn submit_chat_message(
+        &self,
+        credentials: &ClientCredentials,
+        team_alias: &str,
+        input: ChatMessageInput<'_>,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<ChatOperation> {
+        let ChatMessageInput {
+            channel,
+            text,
+            submission,
+        } = input;
+        self.with_chat(team_alias, vault, |chat| {
+            if let Some(operation) = chat.submitted_operation(Some(submission))? {
+                return Ok(operation);
+            }
+            let mut protected = EncryptedFileMutationStore::open(
+                &self.paths.protected_mutations,
+                derive_mutation_key(master_key),
+            )?;
+            chat.submit_message(
+                &mut chat.connection()?,
+                &mut protected,
+                channel,
+                text,
+                submission,
+                || credentials.checkpoint_before_chat_delivery(self),
+            )
+        })
+    }
     /// Publishes the prepared ledger checkpoint before delivery. An uncertain
     /// operation only reconciles; it is never blindly resubmitted.
     pub fn attempt_chat_operation(
@@ -455,9 +492,41 @@ mod tests {
             assert_eq!(inbox.inbox.conversations[0].unread,0);
             session.mark_chat_read("chat-team",RtChannelId(op.scope.channel),recent.messages[0].message.sequence,&mut vault)?;
             assert!(session.list_pending_chat("chat-team",&mut vault)?.is_empty());
+            let failed_submission = super::chat_submission(&master, [8; 16], b"checkpoint failure");
+            assert!(matches!(
+                session.submit_chat_message(&wrong, "chat-team", super::ChatMessageInput { channel: RtChannelId(op.scope.channel), text: "checkpoint failure", submission: &failed_submission }, &mut vault, &master),
+                Err(Error::InvalidConfig("profile session belongs to a different client state"))
+            ));
+            let prepared_after_failure = session.list_pending_chat("chat-team", &mut vault)?.pop().unwrap();
+            assert_eq!(prepared_after_failure.state, foks_client_db::ChatOperationState::Prepared);
+            assert_eq!(
+                session.recover_chat_operation_text("chat-team", &prepared_after_failure.id, RtChannelId(op.scope.channel), &mut vault, &master)?.unwrap().as_str(),
+                "checkpoint failure"
+            );
+            assert_eq!(session.read_recent_chat("chat-team", RtChannelId(op.scope.channel), 10, &mut vault)?.messages.len(), 1);
+            assert_eq!(session.submit_chat_message(&credentials, "chat-team", super::ChatMessageInput { channel: RtChannelId(op.scope.channel), text: "checkpoint failure", submission: &failed_submission }, &mut vault, &master)?, prepared_after_failure);
+            let cancelled_after_failure = session.cancel_prepared_chat_operation("chat-team", &prepared_after_failure.id, &mut vault, &master)?;
+            let sent_submission = super::chat_submission(&master, [9; 16], b"combined send");
+            let submitted = session.submit_chat_message(&credentials, "chat-team", super::ChatMessageInput { channel: RtChannelId(op.scope.channel), text: "combined send", submission: &sent_submission }, &mut vault, &master)?;
+            assert_eq!(submitted.state, foks_client_db::ChatOperationState::Confirmed);
+            assert_eq!(session.read_recent_chat("chat-team", RtChannelId(op.scope.channel), 10, &mut vault)?.messages.len(), 2);
             let submission = super::chat_submission(&master, [7; 16], b"offline replay");
             let prepared = session.prepare_chat_send_submission("chat-team", RtChannelId(op.scope.channel), "offline replay", &mut vault, &master, Some(&submission))?;
+            let uncertain_submission = super::chat_submission(&master, [10; 16], b"uncertain replay");
+            let uncertain_prepared = session.prepare_chat_send_submission("chat-team", RtChannelId(op.scope.channel), "uncertain replay", &mut vault, &master, Some(&uncertain_submission))?;
             drop(_server);
+            let mut hard = foks_client_db::HardStateStore::open(&session.paths().hard_database)?;
+            hard.chat_begin(&uncertain_prepared.id)?;
+            let uncertain = hard.chat_operation(&uncertain_prepared.id)?.unwrap();
+            assert_eq!(uncertain.state, foks_client_db::ChatOperationState::Uncertain);
+            assert_eq!(session.submit_chat_message(&credentials, "chat-team", super::ChatMessageInput { channel: RtChannelId(op.scope.channel), text: "uncertain replay", submission: &uncertain_submission }, &mut vault, &master)?, uncertain);
+            hard.chat_reject(&uncertain.id, 1013)?;
+            let rejected = hard.chat_operation(&uncertain.id)?.unwrap();
+            assert_eq!(session.submit_chat_message(&credentials, "chat-team", super::ChatMessageInput { channel: RtChannelId(op.scope.channel), text: "uncertain replay", submission: &uncertain_submission }, &mut vault, &master)?, rejected);
+            session.finalize_chat_operation("chat-team", &rejected.id, &mut vault, &master)?;
+            assert_eq!(session.submit_chat_message(&credentials, "chat-team", super::ChatMessageInput { channel: RtChannelId(op.scope.channel), text: "combined send", submission: &sent_submission }, &mut vault, &master)?, submitted);
+            assert_eq!(session.submit_chat_message(&credentials, "chat-team", super::ChatMessageInput { channel: RtChannelId(op.scope.channel), text: "checkpoint failure", submission: &failed_submission }, &mut vault, &master)?, cancelled_after_failure);
+            assert_eq!(session.submit_chat_message(&credentials, "chat-team", super::ChatMessageInput { channel: RtChannelId(op.scope.channel), text: "offline replay", submission: &submission }, &mut vault, &master)?, prepared);
             let replay = session.prepare_chat_send_submission("chat-team", RtChannelId(op.scope.channel), "offline replay", &mut vault, &master, Some(&submission))?;
             assert_eq!(prepared, replay);
             assert_eq!(session.reconcile_chat_operation("chat-team", &prepared.id, &mut vault, &master)?, prepared);

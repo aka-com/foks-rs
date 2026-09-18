@@ -96,6 +96,24 @@ export function mockChat(snapshot?: AgentSnapshot) {
       for (const wake of account.waiters) wake();
       account.waiters.clear();
     };
+    const sendMessage = (op: ChatOperation, text: string) => {
+      op.state = 'uncertain';
+      const rows = team.messages.get(op.channel) ?? [];
+      const sequence = String(rows.length + 1);
+      rows.push({
+        id: op.id,
+        sequence,
+        sender: '01' + 'ab'.repeat(32),
+        send_time: String(Date.now()),
+        insert_time: String(Date.now()),
+        content: { kind: 'text', text },
+      });
+      team.messages.set(op.channel, rows);
+      team.reads.set(op.channel, BigInt(sequence));
+      bump(op.channel);
+      op.receipt = { kind: 'message-sent', sequence };
+      op.state = 'confirmed';
+    };
     let result: ChatResult;
     if (action.action === 'channels')
       result = {
@@ -244,13 +262,23 @@ export function mockChat(snapshot?: AgentSnapshot) {
       result = { kind: 'cleanup-pending', operations: [] };
     else if (
       action.action === 'prepare-channel' ||
-      action.action === 'prepare-message'
+      action.action === 'prepare-message' ||
+      action.action === 'submit-message'
     ) {
       const old = team.submissions.get(action.submission);
-      const input = JSON.stringify(action);
+      const input = JSON.stringify(
+        action.action === 'prepare-channel'
+          ? action
+          : {
+              action: 'prepare-message',
+              submission: action.submission,
+              channel: action.channel,
+              text: action.text,
+            },
+      );
       if (old && old.input !== input)
         throw { code: 'conflict', message: 'Submission changed.' };
-      const id = (++counter).toString(16).padStart(32, '0');
+      const id = old?.op.id ?? (++counter).toString(16).padStart(32, '0');
       const op: ChatOperation = old?.op ?? {
         id,
         channel: action.action === 'prepare-channel' ? id : action.channel,
@@ -264,6 +292,8 @@ export function mockChat(snapshot?: AgentSnapshot) {
       };
       team.operations.set(op.id, op);
       team.submissions.set(action.submission, { input, op });
+      if (!old && action.action === 'submit-message')
+        sendMessage(op, action.text);
       result = { kind: 'operation', operation: { ...op } };
     } else if (action.action === 'operation-body') {
       const op = team.operations.get(action.operation);
@@ -336,24 +366,8 @@ export function mockChat(snapshot?: AgentSnapshot) {
           team.reads.set(op.channel, 0n);
           bump(op.channel);
         }
-        if (submitted.action === 'prepare-message') {
-          const rows = team.messages.get(op.channel) ?? [];
-          op.receipt = {
-            kind: 'message-sent',
-            sequence: String(rows.length + 1),
-          };
-          rows.push({
-            id: op.id,
-            sequence: op.receipt.sequence,
-            sender: '01' + 'ab'.repeat(32),
-            send_time: String(Date.now()),
-            insert_time: String(Date.now()),
-            content: { kind: 'text', text: submitted.text },
-          });
-          team.messages.set(op.channel, rows);
-          team.reads.set(op.channel, BigInt(op.receipt.sequence));
-          bump(op.channel);
-        }
+        if (submitted.action === 'prepare-message')
+          sendMessage(op, submitted.text);
         op.state = 'confirmed';
       }
       result = { kind: 'operation', operation: { ...op } };

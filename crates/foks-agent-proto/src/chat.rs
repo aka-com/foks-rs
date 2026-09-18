@@ -42,6 +42,11 @@ pub enum ChatAction {
         channel: String,
         text: SecretString,
     },
+    SubmitMessage {
+        submission: String,
+        channel: String,
+        text: SecretString,
+    },
     Status {
         operation: String,
     },
@@ -109,6 +114,11 @@ impl ChatAction {
                     && description.expose().len() <= CHAT_DESCRIPTION_BYTES
             }
             Self::PrepareMessage {
+                submission,
+                channel,
+                text,
+            }
+            | Self::SubmitMessage {
                 submission,
                 channel,
                 text,
@@ -293,6 +303,56 @@ pub struct ChatReply {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn submit_message_is_bounded_redacted_and_canonical() {
+        let submission = "ab".repeat(16);
+        let channel = "cd".repeat(16);
+        let action = ChatAction::SubmitMessage {
+            submission: submission.clone(),
+            channel: channel.clone(),
+            text: SecretString::new("private submit text"),
+        };
+        assert!(action.validate());
+        assert!(action.is_mutation());
+        assert!(!format!("{action:?}").contains("private submit text"));
+        let wire = serde_json::to_value(&action).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "action": "submit-message",
+                "submission": submission,
+                "channel": channel,
+                "text": "private submit text",
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<ChatAction>(wire.clone()).unwrap(),
+            action
+        );
+        for (field, value) in [
+            ("submission", serde_json::json!("0".repeat(32))),
+            ("submission", serde_json::json!("AB".repeat(16))),
+            ("channel", serde_json::json!("invalid")),
+            ("channel", serde_json::json!("0".repeat(32))),
+            ("text", serde_json::json!("")),
+            ("text", serde_json::json!("x".repeat(CHAT_TEXT_BYTES + 1))),
+        ] {
+            let mut invalid = wire.clone();
+            invalid[field] = value;
+            assert!(!serde_json::from_value::<ChatAction>(invalid)
+                .unwrap()
+                .validate());
+        }
+        let mut extra = wire.clone();
+        extra["skip-refresh"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<ChatAction>(extra).is_err());
+        let mut maximum = wire;
+        maximum["text"] = serde_json::json!("x".repeat(CHAT_TEXT_BYTES));
+        assert!(serde_json::from_value::<ChatAction>(maximum)
+            .unwrap()
+            .validate());
+    }
+
     #[test]
     fn recovery_actions_are_canonical_and_classified() {
         let action = ChatAction::Reconcile {

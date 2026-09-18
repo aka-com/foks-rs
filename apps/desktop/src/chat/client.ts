@@ -31,6 +31,7 @@ const kinds = {
   reconcile: 'operation',
   'prepare-channel': 'operation',
   'prepare-message': 'operation',
+  'submit-message': 'operation',
   status: 'operation',
   attempt: 'operation',
   cancel: 'operation',
