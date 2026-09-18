@@ -312,6 +312,7 @@ impl Coordinator {
         state.active.insert(id, work);
         true
     }
+    #[cfg(test)]
     pub(super) fn try_acquire(
         self: &Arc<Self>,
         root: &Path,

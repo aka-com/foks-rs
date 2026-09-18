@@ -1308,7 +1308,12 @@ pub struct ReconcileServerDto {
 #[derive(Debug, Serialize)]
 #[serde(tag = "status", rename_all = "kebab-case")]
 pub enum IdentityObservationDto {
-    Connected,
+    Connected {
+        #[serde(rename = "hostId")]
+        host_id: String,
+        #[serde(rename = "configuredProbe")]
+        configured_probe: String,
+    },
     Failed { error: AgentError },
 }
 
@@ -1329,23 +1334,20 @@ struct ReconcileServerResponse {
     compatibility: foks_agent_proto::ResponseResult,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConnectedIdentityResponse {
+    status: String,
+    host_id: String,
+    configured_probe: String,
+}
+
 fn reconcile_observation(
     result: foks_agent_proto::ResponseResult,
     profile: &str,
-) -> Result<Result<String, AgentError>, AgentError> {
+) -> Result<Result<serde_json::Value, AgentError>, AgentError> {
     match result {
-        foks_agent_proto::ResponseResult::Success { value } => {
-            let status = value
-                .get("status")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| invalid_response("Invalid connectivity observation."))?;
-            if value != serde_json::json!({"status": status}) {
-                return Err(invalid_response(
-                    "Unexpected connectivity observation fields.",
-                ));
-            }
-            Ok(Ok(status.to_owned()))
-        }
+        foks_agent_proto::ResponseResult::Success { value } => Ok(Ok(value)),
         foks_agent_proto::ResponseResult::Error {
             code,
             message,
@@ -1387,14 +1389,34 @@ pub(super) fn reconcile_server_response(
         ));
     }
     let identity = match reconcile_observation(response.identity, profile)? {
-        Ok(status) if status == "connected" => IdentityObservationDto::Connected,
+        Ok(value) => {
+            let connected: ConnectedIdentityResponse = serde_json::from_value(value)
+                .map_err(|_| invalid_response("Invalid identity observation."))?;
+            let (hostname, port) = normalized_probe_endpoint(&connected.configured_probe)
+                .ok_or_else(|| invalid_response("Invalid identity probe address."))?;
+            let canonical_probe = if hostname.contains(':') {
+                format!("[{hostname}]:{port}")
+            } else {
+                format!("{hostname}:{port}")
+            };
+            if connected.status != "connected"
+                || !valid_typed_entity_id_hex(&connected.host_id, HOST_ID_PREFIX)
+                || !valid_response_text(&connected.configured_probe, 512)
+                || connected.configured_probe != canonical_probe
+            {
+                return Err(invalid_response("Invalid identity observation binding."));
+            }
+            IdentityObservationDto::Connected {
+                host_id: connected.host_id,
+                configured_probe: connected.configured_probe,
+            }
+        }
         Err(error) => IdentityObservationDto::Failed { error },
-        _ => return Err(invalid_response("Invalid identity observation.")),
     };
     let compatibility = match reconcile_observation(response.compatibility, profile)? {
-        Ok(status) if status == "not-required" => CompatibilityObservationDto::NotRequired,
-        Ok(status) if status == "renewed" => CompatibilityObservationDto::Renewed,
-        Ok(status) if status == "unchanged" => CompatibilityObservationDto::Unchanged,
+        Ok(value) if value == serde_json::json!({"status": "not-required"}) => CompatibilityObservationDto::NotRequired,
+        Ok(value) if value == serde_json::json!({"status": "renewed"}) => CompatibilityObservationDto::Renewed,
+        Ok(value) if value == serde_json::json!({"status": "unchanged"}) => CompatibilityObservationDto::Unchanged,
         Err(error) => CompatibilityObservationDto::Failed { error },
         _ => return Err(invalid_response("Invalid compatibility observation.")),
     };

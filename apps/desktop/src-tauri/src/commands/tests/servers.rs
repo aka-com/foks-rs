@@ -386,12 +386,22 @@ fn server_label_response_is_exact_and_bound_to_the_request() {
 #[test]
 fn reconciliation_observations_are_independent_and_strictly_scoped() {
     use crate::commands::servers::reconcile_server_response;
-    let success = |status| serde_json::json!({"status":"success","value":{"status":status}});
+    let host_id = format!("02{}", "ab".repeat(32));
+    let success = |status| {
+        let value = if status == "connected" {
+            serde_json::json!({"status":status,"host_id":host_id,"configured_probe":"foks.app:4430"})
+        } else {
+            serde_json::json!({"status":status})
+        };
+        serde_json::json!({"status":"success","value":value})
+    };
     let error = |code| serde_json::json!({"status":"error","code":code,"message":"Observation failed","fields":{"profile":"work"}});
     let value = serde_json::json!({"profile":"work","identity":success("connected"),"compatibility":error("server-unavailable")});
     let result =
         serde_json::to_value(reconcile_server_response(value.clone(), "work").unwrap()).unwrap();
     assert_eq!(result["identity"]["status"], "connected");
+    assert_eq!(result["identity"]["hostId"], host_id);
+    assert_eq!(result["identity"]["configuredProbe"], "foks.app:4430");
     assert_eq!(
         result["compatibility"]["error"]["code"],
         "server-unavailable"
@@ -419,6 +429,40 @@ fn reconciliation_observations_are_independent_and_strictly_scoped() {
         reconcile_server_response(invalid, "work").unwrap_err().code,
         "invalid-response"
     );
+}
+
+#[test]
+fn reconciliation_requires_exact_canonical_host_and_endpoint_bindings() {
+    use crate::commands::servers::reconcile_server_response;
+    let host_id = format!("02{}", "ab".repeat(32));
+    let observation = |identity| serde_json::json!({
+        "profile":"work",
+        "identity":{"status":"success","value":identity},
+        "compatibility":{"status":"success","value":{"status":"unchanged"}},
+    });
+    for probe in ["foks.app:4430", "localhost:9443", "[::1]:4430"] {
+        let value = observation(serde_json::json!({"status":"connected","host_id":host_id,"configured_probe":probe}));
+        let dto = serde_json::to_value(reconcile_server_response(value, "work").unwrap()).unwrap();
+        assert_eq!(dto["identity"], serde_json::json!({"status":"connected","hostId":host_id,"configuredProbe":probe}));
+    }
+    for identity in [
+        serde_json::json!({"status":"connected"}),
+        serde_json::json!({"status":"connected","host_id":host_id}),
+        serde_json::json!({"status":"connected","configured_probe":"foks.app:4430"}),
+        serde_json::json!({"status":"connected","host_id":format!("03{}", "ab".repeat(32)),"configured_probe":"foks.app:4430"}),
+        serde_json::json!({"status":"connected","host_id":"02ab","configured_probe":"foks.app:4430"}),
+        serde_json::json!({"status":"connected","host_id":host_id,"configured_probe":"foks.app:4430","acceptance":"inserted"}),
+        serde_json::json!({"status":"connected","hostId":host_id,"configuredProbe":"foks.app:4430"}),
+    ] {
+        assert_eq!(reconcile_server_response(observation(identity), "work").unwrap_err().code, "invalid-response");
+    }
+    for probe in ["foks.app", "FOKS.APP:4430", "foks.app.:4430", " foks.app:4430", "foks.app:04430", "https://foks.app:4430", "[0:0:0:0:0:0:0:1]:4430", "::1"] {
+        let value = observation(serde_json::json!({"status":"connected","host_id":host_id,"configured_probe":probe}));
+        assert_eq!(reconcile_server_response(value, "work").unwrap_err().code, "invalid-response");
+    }
+    let mut invalid = observation(serde_json::json!({"status":"connected","host_id":host_id,"configured_probe":"foks.app:4430"}));
+    invalid["compatibility"]["value"]["extra"] = serde_json::json!(true);
+    assert_eq!(reconcile_server_response(invalid, "work").unwrap_err().code, "invalid-response");
 }
 
 #[test]

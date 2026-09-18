@@ -38,6 +38,34 @@ fn success(status: &str) -> ResponseResult {
     Response::success(0, serde_json::json!({"status": status})).result
 }
 
+fn read_registry_snapshot<T>(
+    started: Instant,
+    timeout: Duration,
+    mut read: impl FnMut() -> Result<T, foks_client_app::Error>,
+) -> Result<T, foks_client_app::Error> {
+    loop {
+        let remaining = timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return Err(foks_client_app::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "registry snapshot acquisition deadline exceeded",
+            )));
+        }
+        match read() {
+            Err(foks_client_app::Error::Io(error))
+                if error.kind() == std::io::ErrorKind::WouldBlock =>
+            {
+                std::thread::sleep(
+                    timeout
+                        .saturating_sub(started.elapsed())
+                        .min(Duration::from_millis(20)),
+                );
+            }
+            result => return result,
+        }
+    }
+}
+
 fn scoped_error(profile: &str, error: &(dyn std::error::Error + 'static)) -> ResponseResult {
     let code = match error.downcast_ref::<foks_client_app::Error>() {
         Some(foks_client_app::Error::SavedTrustMissing) => Some(ErrorCode::SavedTrustMissing),
@@ -159,8 +187,10 @@ async fn renew_one(
     let snapshot_profile = profile.to_owned();
     let snapshot = tokio::task::spawn_blocking(move || {
         let _admission = admission;
-        let snapshot = ProfileRegistry::try_open(&snapshot_root)
-            .and_then(|registry| registry.hosted_lease_renewal(&snapshot_profile));
+        let snapshot = read_registry_snapshot(started, timeout, || {
+            ProfileRegistry::try_open(&snapshot_root)
+                .and_then(|registry| registry.hosted_lease_renewal(&snapshot_profile))
+        });
         (snapshot, worker)
     })
     .await;
@@ -339,11 +369,13 @@ async fn identity(
                 let cancellation = CancellationToken::new();
                 let result = foks_keystore::without_user_interaction(|| {
                     profile_work::with_control(remaining, cancellation.clone(), || {
-                        let registry = ProfileRegistry::try_open(&root)?;
+                        let registry = read_registry_snapshot(started, timeout, || {
+                            ProfileRegistry::try_open(&root)
+                        })?;
                         let session = ProfileSession::open_with_control(
                             &registry,
                             &profile,
-                            remaining,
+                            timeout.saturating_sub(started.elapsed()),
                             cancellation,
                         )?;
                         let credentials = ClientCredentials::open(&root)?;
@@ -355,7 +387,17 @@ async fn identity(
                     })
                 });
                 match result {
-                    Ok(()) => success("connected"),
+                    Ok((host_id, configured_probe)) => {
+                        Response::success(
+                            0,
+                            serde_json::json!({
+                                "status": "connected",
+                                "host_id": host_id,
+                                "configured_probe": configured_probe,
+                            }),
+                        )
+                        .result
+                    }
                     Err(error) => identity_error(&profile, error.as_ref()),
                 }
             })
@@ -396,6 +438,102 @@ pub(super) async fn reconcile(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registry_snapshot_waits_for_the_registry_lock_then_succeeds() {
+        for hosted in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut registry = ProfileRegistry::open(directory.path()).unwrap();
+            registry
+                .add(Profile {
+                    name: "saved".into(),
+                    label: None,
+                    probe: "foks.app".into(),
+                    protocol: ProtocolPolicy::CurrentProbeOnly {
+                        canary_public_key:
+                            "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+                                .into(),
+                        lease_url: "https://updates.example.test/lease.json".into(),
+                        last_artifact: None,
+                    },
+                    trust: TrustRoot::WebPki,
+                })
+                .unwrap();
+            drop(registry);
+            let lock = std::fs::File::open(directory.path().join(".profiles.lock")).unwrap();
+            fs2::FileExt::lock_exclusive(&lock).unwrap();
+            let root = directory.path().to_owned();
+            let (attempted, observed) = std::sync::mpsc::sync_channel(1);
+            let (finished, completed) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                let result = read_registry_snapshot(Instant::now(), Duration::from_secs(5), || {
+                    let snapshot = ProfileRegistry::try_open(&root).and_then(|registry| {
+                        if hosted {
+                            registry
+                                .hosted_lease_renewal("saved")
+                                .map(|snapshot| assert!(snapshot.is_some()))
+                        } else {
+                            registry.profile("saved").map(|_| ())
+                        }
+                    });
+                    if matches!(&snapshot, Err(foks_client_app::Error::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock)
+                    {
+                        let _ = attempted.try_send(());
+                    }
+                    snapshot
+                });
+                finished.send(result).unwrap();
+            });
+            observed.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(matches!(
+                completed.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ));
+            fs2::FileExt::unlock(&lock).unwrap();
+            completed
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap();
+            worker.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn registry_snapshot_stops_at_the_deadline_without_replaying_other_errors() {
+        let directory = tempfile::tempdir().unwrap();
+        drop(ProfileRegistry::open(directory.path()).unwrap());
+        let lock = std::fs::File::open(directory.path().join(".profiles.lock")).unwrap();
+        fs2::FileExt::lock_exclusive(&lock).unwrap();
+        let started = Instant::now();
+        let timeout = Duration::from_millis(50);
+        let mut attempts = 0;
+        let result = read_registry_snapshot(started, timeout, || {
+            attempts += 1;
+            ProfileRegistry::try_open(directory.path())
+        });
+        assert!(
+            matches!(result, Err(foks_client_app::Error::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+        assert!(started.elapsed() >= timeout);
+        assert!(attempts > 0);
+        fs2::FileExt::unlock(&lock).unwrap();
+        let mut attempts = 0;
+        let result = read_registry_snapshot::<()>(Instant::now(), Duration::from_secs(5), || {
+            attempts += 1;
+            Err(foks_client_app::Error::ProfileMissing)
+        });
+        assert!(matches!(
+            result,
+            Err(foks_client_app::Error::ProfileMissing)
+        ));
+        assert_eq!(attempts, 1);
+        let mut calls_after_deadline = 0;
+        let _ = read_registry_snapshot(Instant::now(), Duration::ZERO, || {
+            calls_after_deadline += 1;
+            Ok(())
+        });
+        assert_eq!(calls_after_deadline, 0);
+    }
 
     #[tokio::test]
     async fn hosted_pipeline_bounds_parallelism_without_waiting_for_an_unhealthy_profile() {

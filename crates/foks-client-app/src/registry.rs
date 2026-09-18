@@ -1533,7 +1533,7 @@ pub(crate) fn checkpoint_for_store(
 }
 
 impl CheckedProfileSession<'_> {
-    pub fn reconcile_saved_host(&self) -> Result<()> {
+    pub fn reconcile_saved_host(&self) -> Result<(String, String)> {
         self.lease.validate()?;
         self.profile.require(Capability::Probe)?;
         let target = ProbeTarget::parse(&self.profile.probe)?;
@@ -1544,12 +1544,12 @@ impl CheckedProfileSession<'_> {
         if expected.host_id().as_bytes() != stored.host_id.as_slice() {
             return Err(Error::RollbackDetected("saved host identity changed"));
         }
-        self.client.probe_and_pin_host_id(
+        let outcome = self.client.probe_and_pin_host_id(
             &target,
             expected.host_id(),
             &self.paths.hard_database,
         )?;
-        Ok(())
+        Ok((hex(outcome.pinned.host_id().as_bytes()), target.address()))
     }
 
     pub fn probe_and_pin(&self) -> Result<ProbeReport> {
@@ -1888,7 +1888,9 @@ mod tests {
                 _server.shutdown().unwrap();
                 environment.rotate_host_key().unwrap();
                 let _rotated_server = environment.start_server().unwrap();
-                checked.reconcile_saved_host()?;
+            let (host_id, configured_probe) = checked.reconcile_saved_host()?;
+            assert_eq!(host_id, before.host_id_hex);
+            assert_eq!(configured_probe, format!("localhost:{}", addresses.probe.port()));
                 let after = checked.server_status()?.host.unwrap();
                 assert_eq!(after.host_id_hex, before.host_id_hex);
                 assert!(after.host_chain_sequence > before.host_chain_sequence);
