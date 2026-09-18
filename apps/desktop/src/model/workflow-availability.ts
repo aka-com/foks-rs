@@ -43,15 +43,27 @@ export type WorkflowAvailability =
   | { available: true }
   | {
       available: false;
-      reason: AvailabilityReason | 'credentials-needed' | 'hardware-needed' |
-        'auth-needed' | 'permission-denied' | 'unreachable' | 'unknown';
+      reason:
+        | AvailabilityReason
+        | 'credentials-needed'
+        | 'hardware-needed'
+        | 'auth-needed'
+        | 'permission-denied'
+        | 'unreachable'
+        | 'unknown';
       capability?: ProtocolCapability;
     };
 
 export interface WorkflowTarget {
+  store?: string;
   profile?: string;
   account?: string;
   remoteProfile?: string;
+  reachability?: {
+    operation: WorkflowOperation;
+    status: 'reachable' | 'unreachable';
+    observedAt: number;
+  };
   credentials?: 'ready' | 'needed' | 'unknown';
   hardware?: 'ready' | 'needed' | 'unknown';
   authentication?: 'ready' | 'needed' | 'unknown';
@@ -62,12 +74,20 @@ export interface WorkflowTarget {
 }
 
 const localOperations = new Set<WorkflowOperation>([
-  'local-alias', 'bot-list', 'bot-unload', 'web-admin-configure', 'yubi-list', 'backup-list',
+  'local-alias',
+  'bot-list',
+  'bot-unload',
+  'web-admin-configure',
+  'yubi-list',
+  'backup-list',
 ]);
 
-function accountFailure(error?: ServerFailure): WorkflowAvailability | undefined {
+function accountFailure(
+  error?: ServerFailure,
+): WorkflowAvailability | undefined {
   switch (error?.code) {
     case 'bot-token-locked':
+    case 'credentials-required':
       return { available: false, reason: 'credentials-needed' };
     case 'reauthentication-required':
       return { available: false, reason: 'auth-needed' };
@@ -84,74 +104,181 @@ export function workflowAvailability(
   if (!snapshot) return { available: false, reason: 'unknown' };
   if (snapshot.agent.state !== 'ready')
     return { available: false, reason: 'agent-unavailable' };
-  if (localOperations.has(operation)) return { available: true };
+  if (target.store) {
+    const store = snapshot.stores.find((entry) => entry.id === target.store);
+    if (
+      !store ||
+      (target.profile && store.server !== target.profile) ||
+      (target.account && store.account !== target.account)
+    )
+      return { available: false, reason: 'unknown' };
+    target = { ...target, profile: store.server, account: store.account };
+  }
   const server = snapshot.servers.find((entry) => entry.id === target.profile);
   if (!server) return { available: false, reason: 'unknown' };
-  const capabilities: ProtocolCapability[] = [...WORKFLOW_REQUIREMENTS[operation]];
+  if (
+    operation === 'local-alias' &&
+    !snapshot.accounts.some(
+      (account) =>
+        account.server === target.profile && account.alias === target.account,
+    ) &&
+    !snapshot.stores.some(
+      (store) =>
+        store.kind === 'account' &&
+        store.server === target.profile &&
+        store.account === target.account,
+    )
+  )
+    return { available: false, reason: 'unknown' };
+  if (localOperations.has(operation)) return { available: true };
+  const capabilities: ProtocolCapability[] = [
+    ...WORKFLOW_REQUIREMENTS[operation],
+  ];
   if (target.passphraseRequired) capabilities.push('passphrases');
   if (target.signupRequired) capabilities.push('signup');
   const serverAccess = serverFactAvailability(
-    server, snapshot.observedExpiredLeases, { nowSeconds: target.nowSeconds }, capabilities,
+    server,
+    snapshot.observedExpiredLeases,
+    { nowSeconds: target.nowSeconds },
+    capabilities,
   );
-  if (!serverAccess.available) return serverAccess;
-  if (server.connectivity.status === 'failed' && operation !== 'yubi-pin' && operation !== 'yubi-scan')
+  if (!serverAccess.available)
+    return serverAccess.reason === 'server-status-unavailable' &&
+      server.passiveStatus.status === 'failed' &&
+      server.passiveStatus.error.code === 'credentials-required'
+      ? { available: false, reason: 'credentials-needed' }
+      : serverAccess;
+  const reachability = target.reachability;
+  const elapsed = reachability
+    ? (target.nowSeconds ?? Date.now() / 1_000) - reachability.observedAt
+    : Infinity;
+  if (
+    reachability?.operation === operation &&
+    reachability.status === 'unreachable' &&
+    elapsed >= 0 &&
+    elapsed < 30
+  )
     return { available: false, reason: 'unreachable' };
   if (operation === 'federate') {
     if (!target.remoteProfile) return { available: false, reason: 'unknown' };
-    const remoteServer = snapshot.servers.find((entry) => entry.id === target.remoteProfile);
+    const remoteServer = snapshot.servers.find(
+      (entry) => entry.id === target.remoteProfile,
+    );
     if (!remoteServer) return { available: false, reason: 'unknown' };
-    const access = serverFactAvailability(remoteServer, snapshot.observedExpiredLeases,
-      { nowSeconds: target.nowSeconds }, capabilities);
+    const access = serverFactAvailability(
+      remoteServer,
+      snapshot.observedExpiredLeases,
+      { nowSeconds: target.nowSeconds },
+      capabilities,
+    );
     if (!access.available) return access;
-    if (remoteServer.connectivity.status === 'failed')
-      return { available: false, reason: 'unreachable' };
   }
-  const account = snapshot.accounts.find((entry) =>
-    entry.server === target.profile && entry.alias === target.account);
-  const inventory = account && snapshot.storeInventory.find((entry) => entry.store === account.store);
+  const account = snapshot.accounts.find(
+    (entry) =>
+      entry.server === target.profile && entry.alias === target.account,
+  );
+  const inventory =
+    account &&
+    snapshot.storeInventory.find((entry) => entry.store === account.store);
   for (const restriction of inventory?.restrictions ?? []) {
-    if (restriction.kind === 'capability-denied' && capabilities.includes(restriction.capability))
-      return { available: false, reason: 'capability-unavailable', capability: restriction.capability };
-    if (restriction.kind === 'schema-incompatible' || restriction.kind === 'import-verification-required')
+    if (
+      restriction.kind === 'capability-denied' &&
+      capabilities.includes(restriction.capability)
+    )
+      return {
+        available: false,
+        reason: 'capability-unavailable',
+        capability: restriction.capability,
+      };
+    if (
+      restriction.kind === 'schema-incompatible' ||
+      restriction.kind === 'import-verification-required'
+    )
       return { available: false, reason: restriction.kind };
   }
   const failure = accountFailure(inventory?.error);
-  if (failure && !failure.available && !(operation === 'sso-login' && failure.reason === 'auth-needed') &&
-      operation !== 'bot-load' && operation !== 'account-recover') return failure;
-  if (target.credentials === 'needed') return { available: false, reason: 'credentials-needed' };
-  if (target.hardware === 'needed') return { available: false, reason: 'hardware-needed' };
+  if (
+    failure &&
+    !failure.available &&
+    !(operation === 'sso-login' && failure.reason === 'auth-needed') &&
+    operation !== 'bot-load' &&
+    operation !== 'account-recover'
+  )
+    return failure;
+  if (target.credentials === 'needed')
+    return { available: false, reason: 'credentials-needed' };
+  if (target.hardware === 'needed')
+    return { available: false, reason: 'hardware-needed' };
   if (target.authentication === 'needed' && operation !== 'sso-login')
     return { available: false, reason: 'auth-needed' };
-  if (target.permission === 'denied') return { available: false, reason: 'permission-denied' };
-  if ([target.credentials, target.hardware, target.authentication, target.permission].includes('unknown'))
+  if (target.permission === 'denied')
+    return { available: false, reason: 'permission-denied' };
+  if (
+    [
+      target.credentials,
+      target.hardware,
+      target.authentication,
+      target.permission,
+    ].includes('unknown')
+  )
     return { available: false, reason: 'unknown' };
   return { available: true };
 }
 
-export function workflowMessage(access: WorkflowAvailability): string | undefined {
+export function workflowMessage(
+  access: WorkflowAvailability,
+): string | undefined {
   if (access.available) return undefined;
   switch (access.reason) {
-    case 'credentials-needed': return 'Load this account’s credentials to continue.';
-    case 'hardware-needed': return 'Connect and explicitly unlock the required security key.';
-    case 'auth-needed': return 'Sign in to this account to continue.';
-    case 'permission-denied': return 'This account is not permitted to perform this operation.';
-    case 'capability-unavailable': return `The server does not permit ${access.capability ?? 'this operation'}.`;
-    case 'unreachable': return 'The server could not be reached.';
-    case 'compatibility-incompatible': return 'The server protocol is incompatible.';
-    case 'check-in-expired': return 'The server check-in has expired.';
-    case 'check-in-unavailable': return 'The server check-in is unavailable.';
-    case 'verification-failed': return 'Server verification failed.';
+    case 'credentials-needed':
+      return 'Load this account’s credentials to continue.';
+    case 'hardware-needed':
+      return 'Connect and explicitly unlock the required security key.';
+    case 'auth-needed':
+      return 'Sign in to this account to continue.';
+    case 'permission-denied':
+      return 'This account is not permitted to perform this operation.';
+    case 'capability-unavailable':
+      return `The server does not permit ${access.capability ?? 'this operation'}.`;
+    case 'unreachable':
+      return 'The server could not be reached.';
+    case 'compatibility-incompatible':
+      return 'The server protocol is incompatible.';
+    case 'check-in-expired':
+      return 'The server check-in has expired.';
+    case 'check-in-unavailable':
+      return 'The server check-in is unavailable.';
+    case 'verification-failed':
+      return 'Server verification failed.';
+    case 'security-state-missing':
+      return 'Restore saved security state before continuing.';
     case 'verification-required':
-    case 'import-verification-required': return 'Server verification is required.';
-    case 'schema-incompatible': return 'The local schema is incompatible.';
-    case 'agent-unavailable': return 'The background service is unavailable.';
-    default: return 'Operation readiness is not known. Refresh status before continuing.';
+    case 'import-verification-required':
+      return 'Server verification is required.';
+    case 'schema-incompatible':
+      return 'The local schema is incompatible.';
+    case 'agent-unavailable':
+      return 'The background service is unavailable.';
+    default:
+      return 'Operation readiness is not known. Refresh status before continuing.';
   }
 }
 
 export function requireWorkflow(
-  snapshot: AgentSnapshot | undefined, operation: WorkflowOperation, target: WorkflowTarget,
+  snapshot: AgentSnapshot | undefined,
+  operation: WorkflowOperation,
+  target: WorkflowTarget,
 ): void {
   const access = workflowAvailability(snapshot, operation, target);
-  if (!access.available) throw new Error(workflowMessage(access));
+  if (!access.available)
+    throw Object.assign(new Error(workflowMessage(access)), {
+      code: 'workflow-unavailable',
+      retryable: false,
+      fatal: false,
+      ambiguous: false,
+      details: {
+        reason: access.reason,
+        ...(access.capability ? { capability: access.capability } : {}),
+      },
+    });
 }

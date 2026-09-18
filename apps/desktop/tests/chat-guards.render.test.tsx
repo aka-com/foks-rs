@@ -162,9 +162,7 @@ async function setup(
         (options.includeHousehold && s.id === 'team:household'),
     ),
     servers: FIXTURE.servers.map((s) =>
-      s.id === 'acme'
-        ? { ...s, services: { ...s.services, chat: true } }
-        : s,
+      s.id === 'acme' ? { ...s, services: { ...s.services, chat: true } } : s,
     ),
   };
   const bridge = options.override

@@ -643,7 +643,7 @@ test('the catalog note keeps the live retry, and it reloads the snapshot', async
   assert.ok(refreshed.includes('snapshot'));
 });
 
-test('a stopped account disables username changes while recovery remains enabled', async () => {
+test('a trust block stops remote workflows while local recovery controls remain enabled', async () => {
   const snapshot = await fixture();
   const blocked: AgentSnapshot = {
     ...snapshot,
@@ -669,7 +669,16 @@ test('a stopped account disables username changes while recovery remains enabled
 
   const rename = rendered.getByRole('button', { name: 'Change…' });
   assert.equal(rename.hasAttribute('disabled'), true);
-  assert.match(rename.getAttribute('title') ?? '', /Account access is stopped/);
+  assert.match(
+    rename.getAttribute('title') ?? '',
+    /Server verification failed/,
+  );
+  assert.equal(
+    rendered
+      .getByRole('button', { name: 'Sign in via SSO' })
+      .hasAttribute('disabled'),
+    true,
+  );
   assert.ok(rendered.getByText('Account access is stopped'));
   await ui.act(async () =>
     ui.fireEvent.click(
@@ -682,7 +691,6 @@ test('a stopped account disables username changes while recovery remains enabled
   for (const name of [
     'Bot accounts',
     'Open web admin panel',
-    'Sign in via SSO',
     'Import from FOKS CLI',
   ])
     assert.equal(

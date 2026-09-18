@@ -222,7 +222,7 @@ impl AgentError {
                 fields,
             } => {
                 let mut mapped = Self::from_agent(code, message);
-                mapped.details = error_details(fields).map(Box::new);
+                mapped.details = error_details(*fields).map(Box::new);
                 mapped
             }
             DesktopAgentError::Transport(message) => {
@@ -617,7 +617,7 @@ fn response_result(result: ResponseResult) -> Result<Value, DesktopAgentError> {
         } => Err(DesktopAgentError::Protocol {
             code,
             message,
-            fields,
+            fields: fields.into(),
         }),
     }
 }
@@ -625,6 +625,8 @@ fn response_result(result: ResponseResult) -> Result<Value, DesktopAgentError> {
 fn client_to_desktop(error: foks_agent_client::Error) -> DesktopAgentError {
     foks_desktop::agent_client_error(error)
 }
+
+type MaintenanceReadiness = dyn Fn(&Path, &[PathBuf]) -> SafeRootDisposition + Send + Sync;
 
 pub struct AgentHandle {
     transport: Arc<ObservedTransport>,
@@ -636,7 +638,7 @@ pub struct AgentHandle {
     maintenance_snapshot: Mutex<MaintenanceSnapshot>,
     pending_stop_pid: Mutex<Option<u32>>,
     maintenance_process: Arc<dyn MaintenanceProcess>,
-    maintenance_readiness: Arc<dyn Fn(&Path, &[PathBuf]) -> SafeRootDisposition + Send + Sync>,
+    maintenance_readiness: Arc<MaintenanceReadiness>,
     /// Closed while the desktop's startup check runs on a background thread
     /// (see `startup::require_agent`). Ordinary commands wait on it so the
     /// frontend cannot reach an agent that has not been verified, started, or
@@ -975,7 +977,7 @@ impl AgentHandle {
                 return Err(AgentError::from_desktop(DesktopAgentError::Protocol {
                     code: *code,
                     message: message.clone(),
-                    fields: fields.clone(),
+                    fields: fields.clone().into(),
                 }));
             }
         }
@@ -1057,13 +1059,10 @@ impl AgentHandle {
         &self,
         confirm: &dyn Fn(&AgentTakeover) -> Result<bool, AgentError>,
     ) -> Result<Response, AgentError> {
-        match self.probe_status() {
-            Ok(response) => {
-                self.clear_connection_failure();
-                self.adopt_orphaned_agent();
-                return Ok(response);
-            }
-            Err(_) => {}
+        if let Ok(response) = self.probe_status() {
+            self.clear_connection_failure();
+            self.adopt_orphaned_agent();
+            return Ok(response);
         }
         let Some(binary) = managed_agent_binary(&self.socket) else {
             return self.probe_status();
@@ -1350,26 +1349,27 @@ impl AgentHandle {
                 MaintenanceDisposition::ContinueCurrentRoot,
             ),
             MaintenanceCompletion::RestartSelected(root) => {
-                let disposition = match (self.maintenance_readiness)(&source, &[root.clone()]) {
-                    SafeRootDisposition::Selected(selected) if selected == root => {
-                        MaintenanceDisposition::RestartSelectedRoot {
-                            root: selected.display().to_string(),
+                let disposition =
+                    match (self.maintenance_readiness)(&source, std::slice::from_ref(&root)) {
+                        SafeRootDisposition::Selected(selected) if selected == root => {
+                            MaintenanceDisposition::RestartSelectedRoot {
+                                root: selected.display().to_string(),
+                            }
                         }
-                    }
-                    SafeRootDisposition::Current => MaintenanceDisposition::RecoveryRequired {
-                        root: root.display().to_string(),
-                    },
-                    SafeRootDisposition::Recovery(root) => {
-                        MaintenanceDisposition::RecoveryRequired {
+                        SafeRootDisposition::Current => MaintenanceDisposition::RecoveryRequired {
                             root: root.display().to_string(),
+                        },
+                        SafeRootDisposition::Recovery(root) => {
+                            MaintenanceDisposition::RecoveryRequired {
+                                root: root.display().to_string(),
+                            }
                         }
-                    }
-                    SafeRootDisposition::Selected(selected) => {
-                        MaintenanceDisposition::RecoveryRequired {
-                            root: selected.display().to_string(),
+                        SafeRootDisposition::Selected(selected) => {
+                            MaintenanceDisposition::RecoveryRequired {
+                                root: selected.display().to_string(),
+                            }
                         }
-                    }
-                };
+                    };
                 (MaintenanceOperationOutcome::Completed, disposition)
             }
             MaintenanceCompletion::Failed {
@@ -3444,10 +3444,14 @@ mod tests {
 
     #[test]
     fn classifications_preserve_ambiguity_and_fatality() {
-        let credentials = AgentError::from_agent(ErrorCode::CredentialsRequired, "locked".to_owned());
+        let credentials =
+            AgentError::from_agent(ErrorCode::CredentialsRequired, "locked".to_owned());
         assert_eq!(credentials.code, "credentials-required");
         assert!(!credentials.retryable && !credentials.ambiguous && !credentials.fatal);
-        assert_ne!(credentials.code, AgentError::from_agent(ErrorCode::ReauthenticationRequired, "sign in".to_owned()).code);
+        assert_ne!(
+            credentials.code,
+            AgentError::from_agent(ErrorCode::ReauthenticationRequired, "sign in".to_owned()).code
+        );
         let timeout = AgentError::from_agent(ErrorCode::DeadlineExceeded, "slow".to_owned());
         assert!(timeout.retryable && timeout.ambiguous);
         assert!(AgentError::from_agent(ErrorCode::VersionMismatch, "old".to_owned()).fatal);

@@ -46,7 +46,10 @@ export function AdminPanel({
     const supplied = pin || null;
     setPin('');
     try {
-      access.require(configure ? 'web-admin-configure' : 'web-admin-open', target);
+      access.require(
+        configure ? 'web-admin-configure' : 'web-admin-open',
+        target,
+      );
       if (configure)
         await bridge.configureWebAdmin(profile, account, destination);
       else await bridge.openWebAdmin(profile, account, supplied);

@@ -339,8 +339,10 @@ export function PeopleScreen({
     ? accountStopped(snapshot, selected)
     : { stopped: true, reason: '' };
   const keysStopped =
-    !selected || !workflowAvailability(snapshot, 'devices-list', {
-      profile: selected.server, account: selected.account,
+    !selected ||
+    !workflowAvailability(snapshot, 'devices-list', {
+      profile: selected.server,
+      account: selected.account,
     }).available;
   const {
     lists,
@@ -645,7 +647,10 @@ function AccountPanel({
   const access = useWorkflowAccess(snapshot);
   const target = { profile: store.server, account: store.account };
   const devicesAccess = access.props('devices-list', target);
-  const devicesStopped = { stopped: devicesAccess.disabled, reason: devicesAccess.title };
+  const devicesStopped = {
+    stopped: devicesAccess.disabled,
+    reason: devicesAccess.title,
+  };
   const deviceCount = deviceEntries(lists).length;
   const teams = teamsOnAccount(snapshot, store);
   const server = snapshot.servers.find((entry) => entry.id === store.server);
@@ -672,8 +677,8 @@ function AccountPanel({
             </Button>
           }
         >
-          Remote operations are unavailable until{' '}
-          {serverName(snapshot, store)} is checked. Local aliases can still be edited.
+          Remote operations are unavailable until {serverName(snapshot, store)}{' '}
+          is checked. Local aliases can still be edited.
         </Band>
       ) : null}
       {notices}

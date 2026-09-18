@@ -11,6 +11,7 @@ import {
 export interface DesktopReconciliationReads {
   snapshot(): AgentSnapshot;
   profile(profile: string, context: ReconciliationContext): Promise<void>;
+  connectivity?(profile: string, context: ReconciliationContext): Promise<void>;
   registry(context: ReconciliationContext): Promise<void>;
   discovery(account: Account, context: ReconciliationContext): Promise<void>;
   metadata(context: ReconciliationContext): Promise<void>;
@@ -30,6 +31,11 @@ export const profileRefreshKey = (
   ]);
 };
 
+export const profileConnectivityKey = (
+  snapshot: AgentSnapshot,
+  profile: string,
+): string => `connectivity:${profileRefreshKey(snapshot, profile)}`;
+
 export class DesktopReconciliation {
   readonly scheduler: ReconciliationScheduler;
   private accepted = new Map<string, CatalogFreshnessEntry>();
@@ -38,6 +44,9 @@ export class DesktopReconciliation {
     clock?: ReconciliationClock,
   ) {
     this.scheduler = new ReconciliationScheduler(clock);
+  }
+  get supportsConnectivity(): boolean {
+    return this.reads.connectivity !== undefined;
   }
   update(snapshot: AgentSnapshot): void {
     const profiles =
@@ -64,6 +73,36 @@ export class DesktopReconciliation {
       },
       run: (context) => this.reads.profile(profile, context),
     }));
+    if (this.reads.connectivity) {
+      jobs.unshift(
+        ...profiles.map((profile): ReconciliationJob => ({
+          key: profileConnectivityKey(snapshot, profile),
+          scope: profile,
+          kind: 'connectivity',
+          interval: 120_000,
+          initialDelay: 0,
+          eligible: () => {
+            const current = this.reads.snapshot();
+            const server = current.servers.find(
+              (candidate) => candidate.id === profile,
+            );
+            return (
+              server !== undefined &&
+              server.trust.status !== 'blocked' &&
+              ((server.host_id !== null &&
+                server.trust.status !== 'unprobed') ||
+                current.stores.some((store) => store.server === profile)) &&
+              !server.restrictions.some(
+                (restriction) =>
+                  restriction.kind === 'schema-incompatible' ||
+                  restriction.kind === 'import-verification-required',
+              )
+            );
+          },
+          run: (context) => this.reads.connectivity!(profile, context),
+        })),
+      );
+    }
     for (const account of snapshot.accounts) {
       const server = snapshot.servers.find(
         (candidate) => candidate.id === account.server,
@@ -127,6 +166,24 @@ export class DesktopReconciliation {
   }
   wake(trigger: ReconciliationTrigger): void {
     this.scheduler.requestAll(trigger, ['catalog', 'registry', 'metadata']);
+    if (this.reads.connectivity) {
+      for (const server of this.reads.snapshot().servers) {
+        const key = profileConnectivityKey(this.reads.snapshot(), server.id);
+        const last = this.scheduler.snapshot(key)?.lastAttemptAt;
+        const elapsed =
+          last === undefined
+            ? Infinity
+            : this.reads.nowSeconds() * 1_000 - last;
+        if (trigger !== 'foreground' || elapsed < 0 || elapsed >= 30_000)
+          this.scheduler.request(key, trigger);
+      }
+    }
+  }
+  reconnect(profile: string, trigger: ReconciliationTrigger = 'manual'): void {
+    this.scheduler.request(
+      profileConnectivityKey(this.reads.snapshot(), profile),
+      trigger,
+    );
   }
   invalidate(profile?: string): void {
     if (profile)

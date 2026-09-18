@@ -3,6 +3,11 @@ import {
   type BackgroundHistoryWork,
 } from './scheduling/profile-work';
 import {
+  canonicalProbeEndpoint,
+  retainProfileConnection,
+} from './profile-connectivity';
+import type { ProfileReconciliation } from './profile-connectivity';
+import {
   catalogItemsComplete,
   catalogStoreComplete,
   mergeProfileSnapshot,
@@ -942,6 +947,7 @@ export interface Bridge {
     fresh?: boolean,
   ): Promise<ServerStatusSnapshot>;
   checkServer(profile: string): Promise<CheckedServer>;
+  reconcileServer?(profile: string): Promise<ProfileReconciliation>;
   addServer(
     profileName: string,
     probe: string,
@@ -1819,6 +1825,86 @@ export function decodeCompatibility(
     status: 'required',
     expiresAt,
     capabilities: capabilities as ProtocolCapability[],
+  };
+}
+
+function decodeConnectionResult<S extends string>(
+  value: unknown,
+  expectedProfile: string,
+  allowed: readonly S[],
+  fields: readonly string[] = [],
+): { status: S } | { status: 'failed'; error: CommandError } {
+  const item = record(value, 'connectivity observation');
+  const status = string(item.status, 'connectivity observation.status');
+  if (status === 'failed') {
+    if (Object.keys(item).some((key) => key !== 'status' && key !== 'error'))
+      throw new Error('Unexpected connectivity failure fields.');
+    const error = decodeCommandError(
+      item.error,
+      'connectivity observation.error',
+    );
+    if (error.details?.profile !== expectedProfile)
+      throw new Error('Connectivity error belongs to a different profile.');
+    return { status: 'failed', error };
+  }
+  if (
+    Object.keys(item).length !== fields.length + 1 ||
+    Object.keys(item).some((key) => key !== 'status' && !fields.includes(key))
+  )
+    throw new Error(
+      'Successful connectivity observation contains unexpected fields.',
+    );
+  for (const candidate of allowed)
+    if (candidate === status) return { status: candidate };
+  throw new Error('Invalid connectivity observation status.');
+}
+
+export function decodeProfileReconciliation(
+  value: unknown,
+  expectedProfile: string,
+): ProfileReconciliation {
+  const item = record(value, 'connectivity response');
+  if (
+    item.profile !== expectedProfile ||
+    Object.keys(item).some(
+      (key) => !['profile', 'identity', 'compatibility'].includes(key),
+    )
+  )
+    throw new Error(
+      'Connectivity response belongs to a different profile or has unexpected fields.',
+    );
+  const observed = decodeConnectionResult(
+    item.identity,
+    expectedProfile,
+    ['connected'] as const,
+    ['hostId', 'configuredProbe'],
+  );
+  const identity: ProfileReconciliation['identity'] =
+    observed.status === 'failed'
+      ? observed
+      : (() => {
+          const value = record(item.identity, 'connectivity identity');
+          const hostId = entityId(
+            value.hostId,
+            '02',
+            'connectivity identity.hostId',
+          );
+          const configuredProbe = string(
+            value.configuredProbe,
+            'connectivity identity.configuredProbe',
+          );
+          if (!canonicalProbeEndpoint(configuredProbe))
+            throw new Error('Invalid verified probe endpoint.');
+          return { status: 'connected' as const, hostId, configuredProbe };
+        })();
+  return {
+    profile: expectedProfile,
+    identity,
+    compatibility: decodeConnectionResult(item.compatibility, expectedProfile, [
+      'not-required',
+      'renewed',
+      'unchanged',
+    ] as const),
   };
 }
 
@@ -2888,6 +2974,10 @@ export const tauriBridge: Bridge = {
     ),
   checkServer: (profile) =>
     checked('check_server', { profile }, decodeCheckedServer),
+  reconcileServer: (profile) =>
+    checked('reconcile_server', { profile }, (value) =>
+      decodeProfileReconciliation(value, profile),
+    ),
   addServer: (profileName, probe) =>
     checked('add_server', { profileName, probe }, decodeAddedServer),
   setServerLabel: (profile, label) =>
@@ -3978,6 +4068,14 @@ async function projectCatalog(
   }
   const withFreshness = (snapshot: AgentSnapshot): AgentSnapshot => ({
     ...snapshot,
+    servers: snapshot.servers.map((server) => ({
+      ...server,
+      connectivity: retainProfileConnection(
+        server,
+        base?.servers.find((previous) => previous.id === server.id)
+          ?.connectivity,
+      ),
+    })),
     observedExpiredLeases,
     catalogFreshness: projectCatalogFreshness(
       snapshot,

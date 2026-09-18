@@ -72,22 +72,25 @@ test('reopening a saved accepted signup uses status without replaying signup', a
     const actions: string[] = [];
     let completed = 0;
     const view = ui.render(
-      createElement(SsoPanel, {
-        bridge: {
-          ...mockBridge(),
-          sso: async (_profile, _alias, action) => {
-            actions.push(action.action);
-            return { ...progress, purpose: 'signup', state };
+      await workflowScope(
+        vite,
+        createElement(SsoPanel, {
+          bridge: {
+            ...mockBridge(),
+            sso: async (_profile, _alias, action) => {
+              actions.push(action.action);
+              return { ...progress, purpose: 'signup', state };
+            },
           },
-        },
-        profile: 'host',
-        account: 'work',
-        login: false,
-        initialOperationId: progress.operationId!,
-        onComplete: () => {
-          completed++;
-        },
-      }),
+          profile: 'host',
+          account: 'work',
+          login: false,
+          initialOperationId: progress.operationId!,
+          onComplete: () => {
+            completed++;
+          },
+        }),
+      ),
     );
     await ui.waitFor(() => assert.equal(completed, 1));
     assert.deepEqual(actions, ['status']);

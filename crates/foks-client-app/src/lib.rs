@@ -264,9 +264,9 @@ pub use kv::{
 };
 pub use registry::{
     normalize_profile_label, Capability, CapabilityDenial, CheckedProfileSession,
-    CompatibilityFailure, CompatibilityStatus, HostedLeaseRenewal, ProbeAcceptance, ProbeReport, Profile, ProfilePaths,
-    ProfilePublicationReport, ProfileRegistry, ProfileSession, ProtocolPolicy,
-    ServerStatusSnapshot, ServerVersionReport, StoredHostStatus, TrustRoot,
+    CompatibilityFailure, CompatibilityStatus, HostedLeaseRenewal, ProbeAcceptance, ProbeReport,
+    Profile, ProfilePaths, ProfilePublicationReport, ProfileRegistry, ProfileSession,
+    ProtocolPolicy, ServerStatusSnapshot, ServerVersionReport, StoredHostStatus, TrustRoot,
     PROFILE_LABEL_MAX_BYTES,
 };
 #[cfg(test)]

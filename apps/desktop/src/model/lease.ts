@@ -6,6 +6,7 @@
  */
 
 import { storeNavigationOrder } from './order';
+import { connectionSecurityFailure } from '../profile-connectivity';
 import { admissionActive, partiesOf, peopleGroups, storeOf } from './readers';
 import { admits } from './roles';
 import { serverName } from './server-name';
@@ -44,6 +45,7 @@ export type AvailabilityReason =
   | 'store-metadata-unavailable'
   | 'verification-required'
   | 'verification-failed'
+  | 'security-state-missing'
   | 'schema-incompatible'
   | 'import-verification-required'
   | 'server-status-unavailable'
@@ -153,6 +155,18 @@ function serverSecurityAvailability(server: Server): Availability | null {
     )
   )
     return { available: false, reason: 'import-verification-required' };
+  const observed = connectionSecurityFailure(server.connectivity);
+  if (observed)
+    return {
+      available: false,
+      reason:
+        observed.code === 'saved-trust-missing' ||
+        observed.code === 'security-state-missing'
+          ? 'security-state-missing'
+          : observed.code === 'import-verification-required'
+            ? 'import-verification-required'
+            : 'verification-failed',
+    };
   if (server.trust.status === 'unknown')
     return {
       available: false,
@@ -472,6 +486,7 @@ export function storeDescription(
   if (state === 'setup-incomplete') return 'Setup incomplete';
   if (state === 'verification-required') return 'Verification required';
   if (state === 'verification-failed') return 'Verification failed';
+  if (state === 'security-state-missing') return 'Security state missing';
   if (state === 'schema-incompatible') return 'Schema incompatible';
   if (state === 'import-verification-required') return 'Verification required';
   if (state === 'check-in-expired') return 'Check-in expired';

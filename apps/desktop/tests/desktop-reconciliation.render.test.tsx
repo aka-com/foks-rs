@@ -7,7 +7,7 @@ import { CatalogReadGate } from '../src/catalog-read-gate';
 import { mockBridge } from '../src/mock-bridge';
 import { FIXTURE } from '../src/fixture';
 import type { Bridge, CatalogDto } from '../src/bridge';
-import type { AgentSnapshot } from '../src/model';
+import { serverAvailability, type AgentSnapshot } from '../src/model';
 import type { ReconciliationClock } from '../src/scheduling/reconciliation';
 
 installDom({ url: 'http://localhost/', timers: true, act: true });
@@ -297,4 +297,89 @@ test('a failed store does not replace a healthy sibling’s successful freshness
   assert.ok(
     accepted.catalogFreshness?.stores[healthy.id]?.lastSuccessAt !== undefined,
   );
+});
+
+test('connectivity recovery refreshes signed facts without replaying setup or blocking healthy profiles', async () => {
+  const data = await fixture(),
+    clock = new Clock();
+  const affected = data.initial.catalogProfiles[0];
+  let renewed = false,
+    probes = 0,
+    accepted = data.initial;
+  data.initial.servers = data.initial.servers.map((server) =>
+    server.id === affected
+      ? {
+          ...server,
+          compatibility: {
+            status: 'required',
+            expiresAt: 1,
+            capabilities: ['kv'],
+          },
+        }
+      : server,
+  );
+  const bridge: Bridge = {
+    ...data.bridge,
+    checkServer: async () =>
+      assert.fail('initial trust probing must not be used'),
+    reconcileServer: async (profile) => {
+      probes++;
+      if (profile === affected) renewed = true;
+      const status = await data.bridge.describeServerStatus(profile);
+      assert.ok(status.host);
+      return {
+        profile,
+        identity: {
+          status: 'connected',
+          hostId: status.host.hostId,
+          configuredProbe: status.configuredProbe,
+        },
+        compatibility: {
+          status: profile === affected ? 'renewed' : 'not-required',
+        },
+      };
+    },
+    listProfileCatalog: async (profile) => {
+      const result = await data.bridge.listProfileCatalog(profile);
+      if (profile !== affected) return result;
+      return {
+        ...result,
+        localMetadata: {
+          ...result.localMetadata!,
+          profiles: result.localMetadata!.profiles.map((entry) => ({
+            ...entry,
+            status: {
+              ...entry.status!,
+              compatibility: {
+                status: 'required',
+                expiresAt: renewed ? 200 : 1,
+                capabilities: ['kv', 'teams', 'chat'],
+              },
+              leaseRequired: true,
+              leaseExpiresAt: renewed ? 200 : 1,
+            },
+          })),
+        },
+      };
+    },
+  };
+  ui.render(
+    createElement(Harness, {
+      ...data,
+      bridge,
+      clock,
+      publish: (next) => {
+        accepted = next;
+      },
+    }),
+  );
+  await clock.advance(0);
+  assert.ok(renewed && probes > 0);
+  const server = accepted.servers.find((server) => server.id === affected)!;
+  assert.equal(server.connectivity.status, 'observed');
+  assert.equal(
+    serverAvailability(accepted, server, { nowSeconds: 2 }).available,
+    true,
+  );
+  assert.equal(accepted.agent.state, 'ready');
 });

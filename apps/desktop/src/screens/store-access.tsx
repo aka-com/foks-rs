@@ -83,6 +83,12 @@ export function accessCopy(
         detail: `The required capability is not granted for ${serverName}. ${subject}.`,
         action: 'review-server',
       };
+    case 'security-state-missing':
+      return {
+        title: 'Saved security state missing',
+        detail: `Restore saved trust for ${serverName} before continuing. No replacement identity will be established automatically.`,
+        action: 'review-server',
+      };
     case 'verification-failed':
       return {
         title: 'Server access blocked',

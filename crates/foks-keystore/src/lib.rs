@@ -90,7 +90,9 @@ pub fn without_user_interaction<T>(operation: impl FnOnce() -> T) -> T {
 #[cfg(any(target_os = "macos", test))]
 fn serialized_native_call<T>(operation: impl FnOnce() -> T) -> T {
     static INTERACTION: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _lock = INTERACTION.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _lock = INTERACTION
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     operation()
 }
 
@@ -236,7 +238,9 @@ mod native {
 
     pub(super) fn map_error(error: secret_service::Error) -> Error {
         match error {
-            secret_service::Error::Locked | secret_service::Error::Prompt => Error::CredentialsRequired,
+            secret_service::Error::Locked | secret_service::Error::Prompt => {
+                Error::CredentialsRequired
+            }
             _ => Error::Native(error.to_string()),
         }
     }
@@ -266,21 +270,23 @@ mod native {
 
     pub(super) fn put(namespace: &str, key: &str, value: &[u8]) -> Result<()> {
         let service = connect()?;
-        let collection = service
-            .get_default_collection()
-            .map_err(map_error)?;
+        let collection = service.get_default_collection().map_err(map_error)?;
         prepare_collection(&collection)?;
         if super::UNATTENDED.with(std::cell::Cell::get) {
-            let mut items = collection.search_items(attributes(namespace, key))
+            let mut items = collection
+                .search_items(attributes(namespace, key))
                 .map_err(map_error)?;
             let item = items.pop().ok_or(Error::CredentialsRequired)?;
             if !items.is_empty() {
-                return Err(Error::Native("duplicate credential records match the requested key".into()));
+                return Err(Error::Native(
+                    "duplicate credential records match the requested key".into(),
+                ));
             }
             if item.is_locked().map_err(map_error)? {
                 return Err(Error::CredentialsRequired);
             }
-            return item.set_secret(value, "application/octet-stream")
+            return item
+                .set_secret(value, "application/octet-stream")
                 .map_err(map_error);
         }
         collection
@@ -297,9 +303,7 @@ mod native {
 
     pub(super) fn get(namespace: &str, key: &str) -> Result<Vec<u8>> {
         let service = connect()?;
-        let collection = service
-            .get_default_collection()
-            .map_err(map_error)?;
+        let collection = service.get_default_collection().map_err(map_error)?;
         prepare_collection(&collection)?;
         let mut items = collection
             .search_items(attributes(namespace, key))
@@ -323,17 +327,14 @@ mod native {
             return Err(Error::CredentialsRequired);
         }
         let service = connect()?;
-        let collection = service
-            .get_default_collection()
-            .map_err(map_error)?;
+        let collection = service.get_default_collection().map_err(map_error)?;
         prepare_collection(&collection)?;
         let items = collection
             .search_items(attributes(namespace, key))
             .map_err(map_error)?;
         let removed = !items.is_empty();
         for item in items {
-            item.delete()
-                .map_err(map_error)?;
+            item.delete().map_err(map_error)?;
         }
         Ok(removed)
     }
@@ -704,25 +705,32 @@ mod tests {
 
     #[test]
     fn native_call_serialization_covers_normal_calls_and_policy_restoration() {
-        use std::sync::{atomic::{AtomicBool, Ordering}, mpsc, Arc};
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            mpsc, Arc,
+        };
         use std::time::Duration;
         struct Suppression(Arc<AtomicBool>);
         impl Drop for Suppression {
-            fn drop(&mut self) { self.0.store(false, Ordering::SeqCst); }
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::SeqCst);
+            }
         }
         let suppressed = Arc::new(AtomicBool::new(false));
         let (entered, observed) = mpsc::channel();
         let (release, released) = mpsc::channel();
         let background_flag = suppressed.clone();
-        let background = std::thread::spawn(move || without_user_interaction(|| {
-            serialized_native_call(|| {
-                assert!(UNATTENDED.with(std::cell::Cell::get));
-                background_flag.store(true, Ordering::SeqCst);
-                let _restore = Suppression(background_flag);
-                entered.send(()).unwrap();
-                released.recv_timeout(Duration::from_secs(5)).unwrap();
-            });
-        }));
+        let background = std::thread::spawn(move || {
+            without_user_interaction(|| {
+                serialized_native_call(|| {
+                    assert!(UNATTENDED.with(std::cell::Cell::get));
+                    background_flag.store(true, Ordering::SeqCst);
+                    let _restore = Suppression(background_flag);
+                    entered.send(()).unwrap();
+                    released.recv_timeout(Duration::from_secs(5)).unwrap();
+                });
+            })
+        });
         observed.recv_timeout(Duration::from_secs(5)).unwrap();
         let (attempting, attempted) = mpsc::channel();
         let (finished, completed) = mpsc::channel();
@@ -735,7 +743,10 @@ mod tests {
             });
         });
         attempted.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert!(matches!(completed.recv_timeout(Duration::from_millis(25)), Err(mpsc::RecvTimeoutError::Timeout)));
+        assert!(matches!(
+            completed.recv_timeout(Duration::from_millis(25)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
         release.send(()).unwrap();
         completed.recv_timeout(Duration::from_secs(5)).unwrap();
         background.join().unwrap();
@@ -746,18 +757,36 @@ mod tests {
     #[test]
     fn macos_interaction_statuses_are_typed_without_keychain_access() {
         for code in [-25_308, -25_315] {
-            assert!(matches!(native::map_error(security_framework::base::Error::from_code(code)), Error::CredentialsRequired));
+            assert!(matches!(
+                native::map_error(security_framework::base::Error::from_code(code)),
+                Error::CredentialsRequired
+            ));
         }
-        assert!(matches!(native::map_error(security_framework::base::Error::from_code(-25_300)), Error::Missing));
-        assert!(matches!(native::map_error(security_framework::base::Error::from_code(-50)), Error::Native(_)));
+        assert!(matches!(
+            native::map_error(security_framework::base::Error::from_code(-25_300)),
+            Error::Missing
+        ));
+        assert!(matches!(
+            native::map_error(security_framework::base::Error::from_code(-50)),
+            Error::Native(_)
+        ));
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn secret_service_interaction_statuses_are_typed_without_service_access() {
-        assert!(matches!(native::map_error(secret_service::Error::Locked), Error::CredentialsRequired));
-        assert!(matches!(native::map_error(secret_service::Error::Prompt), Error::CredentialsRequired));
-        assert!(matches!(native::map_error(secret_service::Error::Unavailable), Error::Native(_)));
+        assert!(matches!(
+            native::map_error(secret_service::Error::Locked),
+            Error::CredentialsRequired
+        ));
+        assert!(matches!(
+            native::map_error(secret_service::Error::Prompt),
+            Error::CredentialsRequired
+        ));
+        assert!(matches!(
+            native::map_error(secret_service::Error::Unavailable),
+            Error::Native(_)
+        ));
     }
 
     #[test]

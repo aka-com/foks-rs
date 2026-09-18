@@ -15,7 +15,7 @@ export const reconciliationClock: ReconciliationClock = {
 export type ReconciliationTrigger =
   'periodic' | 'foreground' | 'network' | 'mutation' | 'recovery' | 'manual';
 export type ReconciliationKind =
-  'catalog' | 'discovery' | 'metadata' | 'registry';
+  'catalog' | 'discovery' | 'metadata' | 'registry' | 'connectivity';
 export interface ReconciliationContext {
   signal: AbortSignal;
   trigger: ReconciliationTrigger;
@@ -161,6 +161,12 @@ export class ReconciliationScheduler {
       }
       return;
     }
+    if (
+      entry.retry > 0 &&
+      (trigger === 'foreground' || trigger === 'periodic') &&
+      this.clock.now() < entry.due
+    )
+      return;
     entry.trigger = trigger;
     entry.due = Math.min(
       entry.due,

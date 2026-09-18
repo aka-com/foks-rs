@@ -512,7 +512,7 @@ impl foks_desktop::AgentTransport for ConflictTransport {
         Err(foks_desktop::AgentError::Protocol {
             code: foks_agent_proto::ErrorCode::Conflict,
             message: "precondition failed".to_owned(),
-            fields: foks_agent_proto::ErrorFields::default(),
+            fields: Box::default(),
         })
     }
 }

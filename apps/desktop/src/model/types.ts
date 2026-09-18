@@ -193,9 +193,7 @@ export type PassiveServerStatus =
 
 /** Passive signed status is not evidence of a live connection. */
 export type ConnectivityObservation =
-  | { status: 'unknown' }
-  | { status: 'connected' }
-  | { status: 'failed'; error: ServerFailure };
+  import('../profile-connectivity').ProfileConnectivity;
 
 export interface ServerServices {
   chat: boolean | null;

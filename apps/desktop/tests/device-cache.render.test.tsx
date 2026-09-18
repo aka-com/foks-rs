@@ -74,7 +74,9 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
   };
   await navigate('Devices');
   assert.equal(calls.cards, 0);
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Refresh connected keys' }));
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', { name: 'Refresh connected keys' }),
+  );
   await ui.waitFor(() => assert.equal(calls.cards, 1));
   assert.deepEqual(calls, { devices: 1, backups: 1, enrollments: 1, cards: 1 });
   assert.equal(document.body.textContent?.includes('Loading devices'), false);
@@ -84,7 +86,9 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
   await navigate('Account');
   await navigate('Devices');
   assert.equal(calls.cards, 1);
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Refresh connected keys' }));
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', { name: 'Refresh connected keys' }),
+  );
   await ui.waitFor(() => assert.equal(calls.cards, 2));
   assert.equal(calls.devices, 1);
   const refresh = document.querySelector<HTMLButtonElement>(
@@ -120,7 +124,9 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
   assert.equal(calls.backups, 2);
   assert.equal(calls.enrollments, 2);
   assert.equal(calls.cards, 2);
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Refresh connected keys' }));
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', { name: 'Refresh connected keys' }),
+  );
   await ui.waitFor(() => {
     assert.equal(calls.cards, 3);
     assert.equal(pinStatus.hasAttribute('disabled'), false);
@@ -131,7 +137,9 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
   });
   await ui.waitFor(() => assert.equal(calls.devices, 3));
   assert.equal(calls.cards, 3);
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Refresh connected keys' }));
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', { name: 'Refresh connected keys' }),
+  );
   await ui.waitFor(() => {
     assert.equal(calls.cards, 4);
     assert.equal(pinStatus.hasAttribute('disabled'), true);

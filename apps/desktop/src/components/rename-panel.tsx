@@ -47,10 +47,19 @@ export function RenamePanel({
     const suppliedPin = pin || null;
     setPin('');
     try {
-      const needsHardware = action && 'operation_id' in action && 'pin' in action &&
-        rows.some((row) => row.operation_id === action.operation_id && row.hardware_required);
+      const needsHardware =
+        action &&
+        'operation_id' in action &&
+        'pin' in action &&
+        rows.some(
+          (row) =>
+            row.operation_id === action.operation_id && row.hardware_required,
+        );
       access.require('account-rename', {
-        ...target, ...(needsHardware && !suppliedPin ? { hardware: 'needed' as const } : {}),
+        ...target,
+        ...(needsHardware && !suppliedPin
+          ? { hardware: 'needed' as const }
+          : {}),
       });
       const result = await bridge.renameAccount(
         profile,
@@ -85,7 +94,11 @@ export function RenamePanel({
           <Button disabled={busy} onClick={presentation.onClose}>
             Cancel
           </Button>
-          <Button disabled={busy || eligibility.disabled} title={eligibility.title} onClick={() => void run(null)}>
+          <Button
+            disabled={busy || eligibility.disabled}
+            title={eligibility.title}
+            onClick={() => void run(null)}
+          >
             Show pending changes
           </Button>
           <Button
@@ -107,7 +120,8 @@ export function RenamePanel({
           <input
             value={name}
             maxLength={256}
-            disabled={busy || eligibility.disabled} title={eligibility.title}
+            disabled={busy || eligibility.disabled}
+            title={eligibility.title}
             onChange={(e) => setName(e.target.value)}
           />
         </InsetRow>
@@ -117,7 +131,8 @@ export function RenamePanel({
             autoComplete="off"
             value={pin}
             maxLength={32}
-            disabled={busy || eligibility.disabled} title={eligibility.title}
+            disabled={busy || eligibility.disabled}
+            title={eligibility.title}
             onChange={(e) => setPin(e.target.value)}
           />
         </InsetRow>
@@ -151,8 +166,17 @@ export function RenamePanel({
               <>
                 <Button
                   variant="primary"
-                  disabled={busy || eligibility.disabled || (p.hardware_required && !pin)}
-                  title={eligibility.title ?? (p.hardware_required && !pin ? 'Enter the security key PIN to continue.' : undefined)}
+                  disabled={
+                    busy ||
+                    eligibility.disabled ||
+                    (p.hardware_required && !pin)
+                  }
+                  title={
+                    eligibility.title ??
+                    (p.hardware_required && !pin
+                      ? 'Enter the security key PIN to continue.'
+                      : undefined)
+                  }
                   onClick={() =>
                     void run({
                       action: 'attempt',
@@ -164,7 +188,8 @@ export function RenamePanel({
                   Confirm
                 </Button>
                 <Button
-                  disabled={busy || eligibility.disabled} title={eligibility.title}
+                  disabled={busy || eligibility.disabled}
+                  title={eligibility.title}
                   onClick={() =>
                     void run({ action: 'cancel', operation_id: p.operation_id })
                   }
@@ -175,8 +200,15 @@ export function RenamePanel({
             )}
             {!['complete', 'rejected'].includes(p.state) && (
               <Button
-                disabled={busy || eligibility.disabled || (p.hardware_required && !pin)}
-                title={eligibility.title ?? (p.hardware_required && !pin ? 'Enter the security key PIN to continue.' : undefined)}
+                disabled={
+                  busy || eligibility.disabled || (p.hardware_required && !pin)
+                }
+                title={
+                  eligibility.title ??
+                  (p.hardware_required && !pin
+                    ? 'Enter the security key PIN to continue.'
+                    : undefined)
+                }
                 onClick={() =>
                   void run({
                     action: 'status',

@@ -130,14 +130,16 @@ pub(super) async fn handle_chat_poll(
     let mut task = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         let _guard = guard;
-        match foks_keystore::without_user_interaction(|| run_chat_poll(
-            &state_dir,
-            store,
-            since,
-            poll_timeout,
-            timeout,
-            worker_cancellation,
-        )) {
+        match foks_keystore::without_user_interaction(|| {
+            run_chat_poll(
+                &state_dir,
+                store,
+                since,
+                poll_timeout,
+                timeout,
+                worker_cancellation,
+            )
+        }) {
             Ok(value) => Response::success(id, value),
             Err(error) => dispatch_error_response(id, error.as_ref()),
         }

@@ -380,7 +380,7 @@ pub(super) fn group_detail_result<T>(
             error: AgentError::from_desktop(DesktopAgentError::Protocol {
                 code,
                 message,
-                fields,
+                fields: fields.into(),
             }),
         }),
     }

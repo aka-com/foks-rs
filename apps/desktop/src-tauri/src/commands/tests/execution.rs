@@ -152,7 +152,7 @@ fn mutation_failures_have_stable_ui_codes() {
     let conflict = || foks_desktop::AgentError::Protocol {
         code: foks_agent_proto::ErrorCode::Conflict,
         message: "precondition failed".to_owned(),
-        fields: foks_agent_proto::ErrorFields::default(),
+        fields: Box::default(),
     };
     assert_eq!(
         map_mutation_error(conflict(), MutationKind::Create).code,
@@ -169,7 +169,8 @@ fn mutation_failures_have_stable_ui_codes() {
             fields: foks_agent_proto::ErrorFields {
                 capability: Some("kv".to_owned()),
                 ..Default::default()
-            },
+            }
+            .into(),
         },
         MutationKind::Guarded,
     );

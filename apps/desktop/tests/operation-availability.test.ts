@@ -131,9 +131,7 @@ test('unknown and unsupported chat service facts are distinct from permission', 
     const snapshot = {
       ...granted,
       servers: granted.servers.map((server) =>
-        server.id === team.server
-          ? { ...server, services: { chat } }
-          : server,
+        server.id === team.server ? { ...server, services: { chat } } : server,
       ),
     };
     assert.deepEqual(storeOperationAvailability(snapshot, team, 'chat', now), {

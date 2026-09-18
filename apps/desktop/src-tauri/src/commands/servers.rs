@@ -300,18 +300,16 @@ pub(super) fn validate_compatibility(
         CompatibilityStatus::Validated {
             expires_at,
             capabilities,
-        } => {
-            if *expires_at > 9_007_199_254_740_991
-                || capabilities.is_empty()
-                || value["capabilities"].as_array().map(Vec::len) != Some(capabilities.len())
-                || capabilities
-                    .iter()
-                    .any(|name| !is_compatibility_grant(name))
-            {
-                return Err(invalid_response(
-                    "The agent returned invalid compatibility grants.",
-                ));
-            }
+        } if *expires_at > 9_007_199_254_740_991
+            || capabilities.is_empty()
+            || value["capabilities"].as_array().map(Vec::len) != Some(capabilities.len())
+            || capabilities
+                .iter()
+                .any(|name| !is_compatibility_grant(name)) =>
+        {
+            return Err(invalid_response(
+                "The agent returned invalid compatibility grants.",
+            ));
         }
         CompatibilityStatus::Incompatible { expires_at, .. }
             if *expires_at > 9_007_199_254_740_991 =>
@@ -1130,7 +1128,7 @@ pub async fn describe_server_status(
                     foks_desktop::AgentError::Protocol {
                         code,
                         message,
-                        fields,
+                        fields: fields.into(),
                     },
                 ));
             }
@@ -1314,7 +1312,9 @@ pub enum IdentityObservationDto {
         #[serde(rename = "configuredProbe")]
         configured_probe: String,
     },
-    Failed { error: AgentError },
+    Failed {
+        error: AgentError,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -1366,7 +1366,7 @@ fn reconcile_observation(
                 foks_desktop::AgentError::Protocol {
                     code,
                     message,
-                    fields,
+                    fields: fields.into(),
                 },
             )))
         }
@@ -1414,9 +1414,15 @@ pub(super) fn reconcile_server_response(
         Err(error) => IdentityObservationDto::Failed { error },
     };
     let compatibility = match reconcile_observation(response.compatibility, profile)? {
-        Ok(value) if value == serde_json::json!({"status": "not-required"}) => CompatibilityObservationDto::NotRequired,
-        Ok(value) if value == serde_json::json!({"status": "renewed"}) => CompatibilityObservationDto::Renewed,
-        Ok(value) if value == serde_json::json!({"status": "unchanged"}) => CompatibilityObservationDto::Unchanged,
+        Ok(value) if value == serde_json::json!({"status": "not-required"}) => {
+            CompatibilityObservationDto::NotRequired
+        }
+        Ok(value) if value == serde_json::json!({"status": "renewed"}) => {
+            CompatibilityObservationDto::Renewed
+        }
+        Ok(value) if value == serde_json::json!({"status": "unchanged"}) => {
+            CompatibilityObservationDto::Unchanged
+        }
         Err(error) => CompatibilityObservationDto::Failed { error },
         _ => return Err(invalid_response("Invalid compatibility observation.")),
     };

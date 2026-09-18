@@ -440,7 +440,7 @@ pub(super) fn load_accounts(
                         foks_desktop::AgentError::Protocol {
                             code,
                             message,
-                            fields,
+                            fields: fields.into(),
                         },
                     ));
                 }

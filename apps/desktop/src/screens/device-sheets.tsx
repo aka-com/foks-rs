@@ -80,7 +80,9 @@ export const YUBI_ACTION_LABELS: Readonly<Record<SimpleYubiAction, string>> = {
   rotate: 'Rotate the management key',
 };
 
-export const YUBI_WORKFLOWS: Readonly<Record<SimpleYubiAction, WorkflowOperation>> = {
+export const YUBI_WORKFLOWS: Readonly<
+  Record<SimpleYubiAction, WorkflowOperation>
+> = {
   sync: 'account-sync',
   'pin-status': 'yubi-pin',
   'change-pin': 'yubi-pin',
@@ -111,9 +113,18 @@ export function AddDeviceSheet({
 }): ReactNode {
   const access = useWorkflowAccess();
   const [choice, setChoice] = useState<AddChoice>('pair');
-  const operation: WorkflowOperation = choice === 'phrase' ? 'backup-create'
-    : choice === 'provision' ? 'yubi-provision' : choice === 'pair-accept' ? 'device-accept' : 'device-pair';
-  const eligibility = access.props(operation, { profile: store.server, account: choice === 'pair-accept' ? undefined : store.account });
+  const operation: WorkflowOperation =
+    choice === 'phrase'
+      ? 'backup-create'
+      : choice === 'provision'
+        ? 'yubi-provision'
+        : choice === 'pair-accept'
+          ? 'device-accept'
+          : 'device-pair';
+  const eligibility = access.props(operation, {
+    profile: store.server,
+    account: choice === 'pair-accept' ? undefined : store.account,
+  });
   return (
     <DeviceSheetFrame
       title="Add a device"
@@ -121,10 +132,20 @@ export function AddDeviceSheet({
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" {...eligibility} onClick={() => {
-            if (!access.availability(operation, { profile: store.server, account: choice === 'pair-accept' ? undefined : store.account }).available) return;
-            onChoose(choice);
-          }}>
+          <Button
+            variant="primary"
+            {...eligibility}
+            onClick={() => {
+              if (
+                !access.availability(operation, {
+                  profile: store.server,
+                  account: choice === 'pair-accept' ? undefined : store.account,
+                }).available
+              )
+                return;
+              onChoose(choice);
+            }}
+          >
             Continue
           </Button>
         </>
@@ -277,8 +298,15 @@ export function PhraseSheet({
                   const once = phrase;
                   onForget?.();
                   setPhrase(null);
-                  void access.run('backup-create', target, () =>
-                    bridge.commitOwnerBackup(profile, accountAlias, alias, once))
+                  void access
+                    .run('backup-create', target, () =>
+                      bridge.commitOwnerBackup(
+                        profile,
+                        accountAlias,
+                        alias,
+                        once,
+                      ),
+                    )
                     .then(onDone)
                     .catch(onError)
                     .finally(() => setBusy(false));
@@ -296,8 +324,14 @@ export function PhraseSheet({
                 disabled={!alias.trim() || busy || eligibility.disabled}
                 onClick={() => {
                   setBusy(true);
-                  void access.run('backup-create', target, () =>
-                    bridge.prepareOwnerBackup(profile, accountAlias, alias.trim()))
+                  void access
+                    .run('backup-create', target, () =>
+                      bridge.prepareOwnerBackup(
+                        profile,
+                        accountAlias,
+                        alias.trim(),
+                      ),
+                    )
                     .then((result) => {
                       onPrepared?.(
                         { phrase: result.phrase, alias: alias.trim() },
@@ -374,7 +408,10 @@ export function PairSheet({
   const mode = initialMode;
   const access = useWorkflowAccess();
   const operation = mode === 'offer' ? 'device-pair' : 'device-accept';
-  const workflowTarget = { profile: store.server, account: mode === 'offer' ? store.account : undefined };
+  const workflowTarget = {
+    profile: store.server,
+    account: mode === 'offer' ? store.account : undefined,
+  };
   const eligibility = access.props(operation, workflowTarget);
   const [offer, setOffer] = useState<PairingOffer | null>(null);
   /** Whether the phrase on screen came from an offer the agent still held. */
@@ -396,7 +433,9 @@ export function PairSheet({
   );
   const [busy, setBusy] = useState(false);
   const queued = <T,>(task: () => Promise<T>): Promise<T> =>
-    enqueueProfileWork(bridge, store.server, () => access.run(operation, workflowTarget, task));
+    enqueueProfileWork(bridge, store.server, () =>
+      access.run(operation, workflowTarget, task),
+    );
   const act = (
     task: () => Promise<unknown>,
     message: string,
@@ -521,7 +560,9 @@ export function PairSheet({
               <Button
                 variant="primary"
                 title={eligibility.title}
-                disabled={busy || eligibility.disabled || !target || !device || !phrase}
+                disabled={
+                  busy || eligibility.disabled || !target || !device || !phrase
+                }
                 onClick={() =>
                   act(async () => {
                     const result = await bridge.acceptDevicePairing(
@@ -683,14 +724,22 @@ export function RecoverSheet({
           <Button
             variant="primary"
             title={eligibility.title}
-            disabled={!target || !device || !phrase || busy || eligibility.disabled}
+            disabled={
+              !target || !device || !phrase || busy || eligibility.disabled
+            }
             onClick={() => {
               const once = phrase;
               setPhrase('');
               setBusy(true);
               void enqueueProfileWork(bridge, store.server, () =>
                 access.run('account-recover', workflowTarget, () =>
-                  bridge.recoverOwnerAccount(store.server, target, once, device)),
+                  bridge.recoverOwnerAccount(
+                    store.server,
+                    target,
+                    once,
+                    device,
+                  ),
+                ),
               )
                 .then(onDone)
                 .catch(onError)
@@ -838,7 +887,8 @@ export function EnrollSheet({
               };
               clear();
               setBusy(true);
-              void access.run(operation, workflowTarget, () => bridge.runYubi(command))
+              void access
+                .run(operation, workflowTarget, () => bridge.runYubi(command))
                 .then(onDone)
                 .catch(onError)
                 .finally(() => setBusy(false));
@@ -1017,7 +1067,8 @@ export function ProvisionSheet({
               };
               clear();
               setBusy(true);
-              void access.run(operation, workflowTarget, () => bridge.runYubi(command))
+              void access
+                .run(operation, workflowTarget, () => bridge.runYubi(command))
                 .then(onDone)
                 .catch(onError)
                 .finally(() => setBusy(false));
@@ -1243,7 +1294,8 @@ export function YubiActionSheet({
     setOther('');
     setConfirmation('');
     setBusy(true);
-    void access.run(operation, workflowTarget, () => bridge.runYubi(command))
+    void access
+      .run(operation, workflowTarget, () => bridge.runYubi(command))
       .then(onDone)
       .catch(onError)
       .finally(() => setBusy(false));
@@ -1260,7 +1312,11 @@ export function YubiActionSheet({
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={!valid || busy || eligibility.disabled} onClick={submit}>
+          <Button
+            variant="primary"
+            disabled={!valid || busy || eligibility.disabled}
+            onClick={submit}
+          >
             Continue
           </Button>
         </>
@@ -1348,15 +1404,17 @@ export function RevokeSheet({
             disabled={confirmation !== alias || busy || eligibility.disabled}
             onClick={() => {
               setBusy(true);
-              void access.run('yubi-revoke', workflowTarget, () =>
-                bridge.runYubi({
-                  command: 'revoke_yubi_device',
-                  args: {
-                    accountStoreId: store.id,
-                    yubiAlias: alias,
-                    confirmation,
-                  },
-                }))
+              void access
+                .run('yubi-revoke', workflowTarget, () =>
+                  bridge.runYubi({
+                    command: 'revoke_yubi_device',
+                    args: {
+                      accountStoreId: store.id,
+                      yubiAlias: alias,
+                      confirmation,
+                    },
+                  }),
+                )
                 .then((result) => {
                   if (
                     result.alias !== alias ||
@@ -1432,11 +1490,17 @@ export function RevokeBackupSheet({
           </Button>
           <Button
             variant="danger"
-            disabled={confirmation !== backup.backupAlias || busy || eligibility.disabled}
+            disabled={
+              confirmation !== backup.backupAlias ||
+              busy ||
+              eligibility.disabled
+            }
             onClick={() => {
               setBusy(true);
-              void access.run('backup-revoke', workflowTarget, () =>
-                bridge.revokeOwnerBackup(store.id, backup, confirmation))
+              void access
+                .run('backup-revoke', workflowTarget, () =>
+                  bridge.revokeOwnerBackup(store.id, backup, confirmation),
+                )
                 .then((revoked) => {
                   if (
                     revoked.backupAlias !== backup.backupAlias ||
@@ -1529,7 +1593,8 @@ export function RemoveDeviceSheet({
                 access.require('devices-list', workflowTarget);
                 await bridge.listAccountDevices(store.id);
                 return access.run('device-remove', workflowTarget, () =>
-                  bridge.removeAccountDevice(store.id, device.id));
+                  bridge.removeAccountDevice(store.id, device.id),
+                );
               })
                 .then((removed) => {
                   if (removed.deviceId !== device.id)
@@ -1595,7 +1660,8 @@ export function PassphraseSheet({
         ? bridge.setAccountPassphrase(store.id, secret, repeated)
         : mode === 'change'
           ? bridge.changeAccountPassphrase(store.id, secret, repeated)
-          : bridge.verifyAccountPassphrase(store.id, secret));
+          : bridge.verifyAccountPassphrase(store.id, secret),
+    );
     void task
       .then((report) => {
         setPassphrase('');

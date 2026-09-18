@@ -1302,6 +1302,9 @@ function VaultShell({
   const commandErrorRef = useRef<(error: unknown) => void>(() => undefined);
   const foregroundRefreshAllowed = useRef(false);
   const recoveryRef = useRef<AgentRecoveryController | null>(null);
+  const reconciliationRef = useRef<ReturnType<
+    typeof useDesktopReconciliation
+  > | null>(null);
   const healthProbe = useRef<Promise<void> | null>(null);
   refreshSnapshotRef.current = refreshSnapshot;
   foregroundRefreshAllowed.current =
@@ -1454,6 +1457,7 @@ function VaultShell({
       isRecoveryPermitted: () => alive,
       reconcile: async (_status, isCurrent) => {
         if (isCurrent()) await refreshSnapshotRef.current(true);
+        if (isCurrent()) reconciliationRef.current?.wake('recovery');
       },
     });
     recoveryRef.current = recovery;
@@ -1482,6 +1486,7 @@ function VaultShell({
     },
     nowSeconds: () => leaseClock.now(),
   });
+  reconciliationRef.current = reconciliation;
 
   const expiryCoordinator = useRef<LeaseExpiryCoordinator | null>(null);
   useEffect(() => {
@@ -1496,6 +1501,9 @@ function VaultShell({
             next.set(entry.profile, (next.get(entry.profile) ?? 0) + 1);
           return next;
         });
+        if (foregroundRefreshAllowed.current)
+          for (const entry of newlyExpired)
+            reconciliationRef.current?.reconnect(entry.profile, 'recovery');
         if (foregroundRefreshAllowed.current)
           void refreshSnapshotRef
             .current(true)
@@ -1593,6 +1601,7 @@ function VaultShell({
           'discovery',
           'metadata',
           'registry',
+          'connectivity',
         ]);
         const incomplete = Object.values(
           next.catalogFreshness?.profiles ?? {},
@@ -2293,6 +2302,9 @@ function VaultShell({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [bridge, concealSignal, deviceIdentity],
   );
+  const deviceSnapshot = useRef(shown);
+  deviceSnapshot.current = shown;
+  deviceCache.snapshot = () => deviceSnapshot.current;
   metadataInvalidation.current = () => deviceCache.repository.invalidate([]);
   metadataReconciliation.current = () =>
     deviceCache.repository.reconcileSubscribed(

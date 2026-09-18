@@ -193,11 +193,22 @@
     "accounts": ["personal"]
   },
   "protocolCapabilities": [
-    "signup", "user-sync", "kv", "device-administration", "recovery",
-    "passphrases", "teams", "chat", "federation"
+    "signup",
+    "user-sync",
+    "kv",
+    "device-administration",
+    "recovery",
+    "passphrases",
+    "teams",
+    "chat",
+    "federation"
   ],
   "serverStatusRequiredFields": [
-    "profile", "configuredProbe", "host", "compatibility", "chatSupported"
+    "profile",
+    "configuredProbe",
+    "host",
+    "compatibility",
+    "chatSupported"
   ],
   "compatibilityCases": [
     {
@@ -205,7 +216,17 @@
       "wire": { "status": "not-required" },
       "decoded": { "status": "not-required" },
       "nowSeconds": 100,
-      "granted": ["signup", "user-sync", "kv", "device-administration", "recovery", "passphrases", "teams", "chat", "federation"]
+      "granted": [
+        "signup",
+        "user-sync",
+        "kv",
+        "device-administration",
+        "recovery",
+        "passphrases",
+        "teams",
+        "chat",
+        "federation"
+      ]
     },
     {
       "name": "missing",
@@ -216,73 +237,230 @@
     },
     {
       "name": "partial-grants",
-      "wire": { "status": "validated", "expires_at": 200, "capabilities": ["kv"] },
-      "decoded": { "status": "required", "expiresAt": 200, "capabilities": ["kv"] },
+      "wire": {
+        "status": "validated",
+        "expires_at": 200,
+        "capabilities": ["kv"]
+      },
+      "decoded": {
+        "status": "required",
+        "expiresAt": 200,
+        "capabilities": ["kv"]
+      },
       "nowSeconds": 100,
       "granted": ["kv"]
     },
     {
       "name": "chat-before-expiry",
-      "wire": { "status": "validated", "expires_at": 200, "capabilities": ["chat", "kv"] },
-      "decoded": { "status": "required", "expiresAt": 200, "capabilities": ["chat", "kv"] },
+      "wire": {
+        "status": "validated",
+        "expires_at": 200,
+        "capabilities": ["chat", "kv"]
+      },
+      "decoded": {
+        "status": "required",
+        "expiresAt": 200,
+        "capabilities": ["chat", "kv"]
+      },
       "nowSeconds": 199,
       "granted": ["chat", "kv"]
     },
     {
       "name": "expiry-boundary",
-      "wire": { "status": "validated", "expires_at": 200, "capabilities": ["chat", "kv"] },
-      "decoded": { "status": "required", "expiresAt": 200, "capabilities": ["chat", "kv"] },
+      "wire": {
+        "status": "validated",
+        "expires_at": 200,
+        "capabilities": ["chat", "kv"]
+      },
+      "decoded": {
+        "status": "required",
+        "expiresAt": 200,
+        "capabilities": ["chat", "kv"]
+      },
       "nowSeconds": 200,
       "granted": []
     },
     {
       "name": "unsorted-grants",
-      "wire": { "status": "validated", "expires_at": 200, "capabilities": ["kv", "chat"] },
-      "decoded": { "status": "required", "expiresAt": 200, "capabilities": ["kv", "chat"] },
+      "wire": {
+        "status": "validated",
+        "expires_at": 200,
+        "capabilities": ["kv", "chat"]
+      },
+      "decoded": {
+        "status": "required",
+        "expiresAt": 200,
+        "capabilities": ["kv", "chat"]
+      },
       "nowSeconds": 100,
       "granted": ["kv", "chat"]
     },
     {
       "name": "future-incompatible-drift",
-      "wire": { "status": "incompatible", "expires_at": 200, "reason": "drift" },
-      "decoded": { "status": "incompatible", "expiresAt": 200, "reason": "drift" },
+      "wire": {
+        "status": "incompatible",
+        "expires_at": 200,
+        "reason": "drift"
+      },
+      "decoded": {
+        "status": "incompatible",
+        "expiresAt": 200,
+        "reason": "drift"
+      },
       "nowSeconds": 100,
       "granted": []
     },
     {
       "name": "future-incompatible-protocol",
-      "wire": { "status": "incompatible", "expires_at": 200, "reason": "protocol-mismatch" },
-      "decoded": { "status": "incompatible", "expiresAt": 200, "reason": "protocol-mismatch" },
+      "wire": {
+        "status": "incompatible",
+        "expires_at": 200,
+        "reason": "protocol-mismatch"
+      },
+      "decoded": {
+        "status": "incompatible",
+        "expiresAt": 200,
+        "reason": "protocol-mismatch"
+      },
       "nowSeconds": 100,
       "granted": []
     },
     {
       "name": "future-incompatible-unknown-capability",
-      "wire": { "status": "incompatible", "expires_at": 200, "reason": "unknown-capability" },
-      "decoded": { "status": "incompatible", "expiresAt": 200, "reason": "unknown-capability" },
+      "wire": {
+        "status": "incompatible",
+        "expires_at": 200,
+        "reason": "unknown-capability"
+      },
+      "decoded": {
+        "status": "incompatible",
+        "expiresAt": 200,
+        "reason": "unknown-capability"
+      },
       "nowSeconds": 100,
       "granted": []
     },
-    { "name": "unknown-grant", "wire": { "status": "validated", "expires_at": 200, "capabilities": ["invented"] } },
-    { "name": "probe-is-not-a-grant", "wire": { "status": "validated", "expires_at": 200, "capabilities": ["probe"] } },
-    { "name": "duplicate-grant", "wire": { "status": "validated", "expires_at": 200, "capabilities": ["kv", "kv"] } },
-    { "name": "empty-grants", "wire": { "status": "validated", "expires_at": 200, "capabilities": [] } },
-    { "name": "malformed-grant", "wire": { "status": "validated", "expires_at": 200, "capabilities": [1] } },
-    { "name": "malformed-grant-name", "wire": { "status": "validated", "expires_at": 200, "capabilities": [" KV "] } },
-    { "name": "malformed-grants", "wire": { "status": "validated", "expires_at": 200, "capabilities": "kv" } },
-    { "name": "missing-grants", "wire": { "status": "validated", "expires_at": 200 } },
-    { "name": "missing-expiry", "wire": { "status": "validated", "capabilities": ["kv"] } },
-    { "name": "missing-status", "wire": { "expires_at": 200, "capabilities": ["kv"] } },
-    { "name": "missing-reason", "wire": { "status": "incompatible", "expires_at": 200 } },
-    { "name": "incompatible-missing-expiry", "wire": { "status": "incompatible", "reason": "drift" } },
-    { "name": "unknown-reason", "wire": { "status": "incompatible", "expires_at": 200, "reason": "invented" } },
-    { "name": "incompatible-grants", "wire": { "status": "incompatible", "expires_at": 200, "reason": "drift", "capabilities": ["kv"] } },
-    { "name": "unexpected-grants", "wire": { "status": "not-required", "capabilities": ["kv"] } },
-    { "name": "unexpected-expiry", "wire": { "status": "missing", "expires_at": 200 } },
-    { "name": "negative-expiry", "wire": { "status": "validated", "expires_at": -1, "capabilities": ["kv"] } },
-    { "name": "fractional-expiry", "wire": { "status": "validated", "expires_at": 1.5, "capabilities": ["kv"] } },
-    { "name": "unsafe-expiry", "wire": { "status": "validated", "expires_at": 9007199254740992, "capabilities": ["kv"] } },
-    { "name": "incompatible-unsafe-expiry", "wire": { "status": "incompatible", "expires_at": 9007199254740992, "reason": "drift" } },
+    {
+      "name": "unknown-grant",
+      "wire": {
+        "status": "validated",
+        "expires_at": 200,
+        "capabilities": ["invented"]
+      }
+    },
+    {
+      "name": "probe-is-not-a-grant",
+      "wire": {
+        "status": "validated",
+        "expires_at": 200,
+        "capabilities": ["probe"]
+      }
+    },
+    {
+      "name": "duplicate-grant",
+      "wire": {
+        "status": "validated",
+        "expires_at": 200,
+        "capabilities": ["kv", "kv"]
+      }
+    },
+    {
+      "name": "empty-grants",
+      "wire": { "status": "validated", "expires_at": 200, "capabilities": [] }
+    },
+    {
+      "name": "malformed-grant",
+      "wire": { "status": "validated", "expires_at": 200, "capabilities": [1] }
+    },
+    {
+      "name": "malformed-grant-name",
+      "wire": {
+        "status": "validated",
+        "expires_at": 200,
+        "capabilities": [" KV "]
+      }
+    },
+    {
+      "name": "malformed-grants",
+      "wire": { "status": "validated", "expires_at": 200, "capabilities": "kv" }
+    },
+    {
+      "name": "missing-grants",
+      "wire": { "status": "validated", "expires_at": 200 }
+    },
+    {
+      "name": "missing-expiry",
+      "wire": { "status": "validated", "capabilities": ["kv"] }
+    },
+    {
+      "name": "missing-status",
+      "wire": { "expires_at": 200, "capabilities": ["kv"] }
+    },
+    {
+      "name": "missing-reason",
+      "wire": { "status": "incompatible", "expires_at": 200 }
+    },
+    {
+      "name": "incompatible-missing-expiry",
+      "wire": { "status": "incompatible", "reason": "drift" }
+    },
+    {
+      "name": "unknown-reason",
+      "wire": {
+        "status": "incompatible",
+        "expires_at": 200,
+        "reason": "invented"
+      }
+    },
+    {
+      "name": "incompatible-grants",
+      "wire": {
+        "status": "incompatible",
+        "expires_at": 200,
+        "reason": "drift",
+        "capabilities": ["kv"]
+      }
+    },
+    {
+      "name": "unexpected-grants",
+      "wire": { "status": "not-required", "capabilities": ["kv"] }
+    },
+    {
+      "name": "unexpected-expiry",
+      "wire": { "status": "missing", "expires_at": 200 }
+    },
+    {
+      "name": "negative-expiry",
+      "wire": {
+        "status": "validated",
+        "expires_at": -1,
+        "capabilities": ["kv"]
+      }
+    },
+    {
+      "name": "fractional-expiry",
+      "wire": {
+        "status": "validated",
+        "expires_at": 1.5,
+        "capabilities": ["kv"]
+      }
+    },
+    {
+      "name": "unsafe-expiry",
+      "wire": {
+        "status": "validated",
+        "expires_at": 9007199254740992,
+        "capabilities": ["kv"]
+      }
+    },
+    {
+      "name": "incompatible-unsafe-expiry",
+      "wire": {
+        "status": "incompatible",
+        "expires_at": 9007199254740992,
+        "reason": "drift"
+      }
+    },
     { "name": "null-status", "wire": null },
     { "name": "unknown-status", "wire": { "status": "invented" } }
   ],
@@ -315,6 +493,15 @@
   "forgottenServer": {
     "profile": "partner",
     "removed": true
+  },
+  "profileReconciliation": {
+    "profile": "work",
+    "identity": {
+      "status": "connected",
+      "hostId": "020202020202020202020202020202020202020202020202020202020202020202",
+      "configuredProbe": "foks.example:4430"
+    },
+    "compatibility": { "status": "renewed" }
   },
   "checkedServer": {
     "profile": "work",

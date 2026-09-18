@@ -122,6 +122,7 @@ type ServerUiState =
   | 'schema'
   | 'incompatible'
   | 'import-verification'
+  | 'recovery-required'
   | 'pending';
 
 const STATE_LABEL: Readonly<Record<ServerUiState, string>> = {
@@ -133,6 +134,7 @@ const STATE_LABEL: Readonly<Record<ServerUiState, string>> = {
   schema: 'Schema incompatible',
   incompatible: 'Protocol incompatible',
   'import-verification': 'Verification required',
+  'recovery-required': 'Security state missing',
   pending: 'Checking status',
 };
 
@@ -143,7 +145,8 @@ const isLocked = (state: ServerUiState): boolean =>
   state === 'blocked' ||
   state === 'schema' ||
   state === 'incompatible' ||
-  state === 'import-verification';
+  state === 'import-verification' ||
+  state === 'recovery-required';
 
 const markTone = (state: ServerUiState): string =>
   state === 'checked' ? 'ok' : isLocked(state) ? 'bad' : '';
@@ -157,6 +160,8 @@ function resolveServerUiState(
   if (availability.reason === 'loading') return 'pending';
   if (availability.reason === 'compatibility-incompatible')
     return 'incompatible';
+  if (availability.reason === 'security-state-missing')
+    return 'recovery-required';
   if (availability.reason === 'verification-required') return 'unprobed';
   if (availability.reason === 'check-in-expired') return 'lapsed';
   if (availability.reason === 'verification-failed') return 'blocked';
@@ -333,7 +338,11 @@ export function ServersSection({
 
   const check = async (server: Server): Promise<void> => {
     // Prevent duplicate checks from rapid key events and ignore blocked servers.
-    if (busy) return;
+    if (
+      busy ||
+      resolveServerUiState(agentSnapshot, server) === 'recovery-required'
+    )
+      return;
     if (
       server.trust.status === 'blocked' ||
       server.restrictions.some(
@@ -559,6 +568,13 @@ function StatusLine({
       <>
         <b>Check-in expired</b>
         {sep}Locked since {expiresShort(expiry)}
+      </>
+    );
+  if (state === 'recovery-required')
+    return (
+      <>
+        <b>Security state missing</b>
+        {sep}Restore saved trust before reconnecting
       </>
     );
   if (state === 'unavailable')
@@ -816,6 +832,13 @@ function StatusBand({
         it.
       </Band>
     );
+  if (state === 'recovery-required')
+    return (
+      <Band severity="crit" label="Saved security state is missing">
+        Restore or inspect the saved client security state before reconnecting.
+        FOKS will not establish a replacement identity automatically.
+      </Band>
+    );
   if (state === 'unavailable')
     return (
       <Band severity="crit" label="Check-in status unknown">
@@ -944,11 +967,13 @@ function ServerBody({
         <Button
           size="sm"
           icon="again"
-          disabled={busy || blocked}
+          disabled={busy || blocked || state === 'recovery-required'}
           title={
-            blocked
-              ? 'This server is blocked until its identity is reset'
-              : undefined
+            state === 'recovery-required'
+              ? 'Restore saved security state before checking this identity.'
+              : blocked
+                ? 'This server is blocked until its identity is reset'
+                : 'Verify the saved server identity; this does not renew compatibility permission.'
           }
           onClick={onCheck}
         >

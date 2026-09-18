@@ -98,9 +98,15 @@ export function SsoPanel({
   const access = useWorkflowAccess();
   const authorizedSetup = !login && executeSignup !== undefined;
   const [hardware, setHardware] = useState(initialHardware);
-  const workflow = login ? 'sso-login' : hardware ? 'sso-yubi-signup' : 'sso-signup';
+  const workflow = login
+    ? 'sso-login'
+    : hardware
+      ? 'sso-yubi-signup'
+      : 'sso-signup';
   const target = { profile, account };
-  const eligibility = authorizedSetup ? { disabled: false, title: undefined } : access.props(workflow, target);
+  const eligibility = authorizedSetup
+    ? { disabled: false, title: undefined }
+    : access.props(workflow, target);
   const preflight = useRef(() => {});
   preflight.current = () => {
     if (!authorizedSetup) access.require(workflow, target);
@@ -128,13 +134,14 @@ export function SsoPanel({
     if (!initialOperationId) return;
     let alive = true;
     setBusy(true);
-    void Promise.resolve().then(() => {
-      preflight.current();
-      return bridge.sso(profile, account, {
-        action: 'status',
-        operation_id: initialOperationId,
-      });
-    })
+    void Promise.resolve()
+      .then(() => {
+        preflight.current();
+        return bridge.sso(profile, account, {
+          action: 'status',
+          operation_id: initialOperationId,
+        });
+      })
       .then((p) => {
         if (!alive) return;
         if (
@@ -166,8 +173,12 @@ export function SsoPanel({
     setError(null);
     try {
       preflight.current();
-      if (login && progress?.state === 'hardware-verification-required' &&
-          action.action === 'finish-login' && !action.pin)
+      if (
+        login &&
+        progress?.state === 'hardware-verification-required' &&
+        action.action === 'finish-login' &&
+        !action.pin
+      )
         access.require('sso-login', { ...target, hardware: 'needed' });
       const submit =
         action.action === 'finish-signup' ||
@@ -198,7 +209,11 @@ export function SsoPanel({
     }
   };
   const blocked =
-    busy || disabled || eligibility.disabled || !account || (!login && !deviceName.trim());
+    busy ||
+    disabled ||
+    eligibility.disabled ||
+    !account ||
+    (!login && !deviceName.trim());
   const finishable =
     progress !== null &&
     !progress.accountStatus &&
@@ -284,10 +299,16 @@ export function SsoPanel({
       variant={primary === 'browser' ? 'primary' : 'plain'}
       disabled={blocked}
       onClick={() =>
-        void Promise.resolve().then(() => {
-          preflight.current();
-          return bridge.openSsoBrowser(profile, account, progress.operationId!);
-        }).catch((e) => setError(normalizeCommandError(e).message))
+        void Promise.resolve()
+          .then(() => {
+            preflight.current();
+            return bridge.openSsoBrowser(
+              profile,
+              account,
+              progress.operationId!,
+            );
+          })
+          .catch((e) => setError(normalizeCommandError(e).message))
       }
     >
       Open sign-in browser
@@ -297,7 +318,9 @@ export function SsoPanel({
     <Button
       variant="primary"
       title={eligibility.title}
-      disabled={blocked || (progress.state === 'hardware-verification-required' && !pin)}
+      disabled={
+        blocked || (progress.state === 'hardware-verification-required' && !pin)
+      }
       onClick={() => {
         const action: SsoAction =
           !login && hardware

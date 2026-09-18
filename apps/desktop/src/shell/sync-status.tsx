@@ -3,7 +3,12 @@ import type { ReactNode } from 'react';
 import type { AgentSnapshot, CatalogFreshnessEntry } from '../model';
 import { serverDisplayName } from '../model';
 import type { DesktopReconciliation } from '../desktop-reconciliation';
-import { profileRefreshKey } from '../desktop-reconciliation';
+import {
+  profileRefreshKey,
+  profileConnectivityKey,
+} from '../desktop-reconciliation';
+import { ProfileConnectionStatus } from '../components/profile-connection-status';
+import { connectionSecurityFailure } from '../profile-connectivity';
 import { normalizeCommandError } from '../bridge';
 
 function freshnessLabel(entry: CatalogFreshnessEntry | undefined): string {
@@ -67,6 +72,32 @@ export function SyncStatus({
                   ? '. Automatic refresh is paused; use Refresh to retry.'
                   : '. Automatic refresh will retry.'
                 : ''}
+              <ProfileConnectionStatus
+                name={serverDisplayName(server)}
+                observation={server.connectivity}
+                busy={
+                  service.scheduler.snapshot(
+                    profileConnectivityKey(snapshot, server.id),
+                  )?.refreshing
+                }
+                disabled={
+                  server.trust.status === 'blocked' ||
+                  server.restrictions.some(
+                    (entry) =>
+                      entry.kind === 'schema-incompatible' ||
+                      entry.kind === 'import-verification-required',
+                  ) ||
+                  connectionSecurityFailure(server.connectivity)?.code ===
+                    'saved-trust-missing'
+                }
+                onRetry={
+                  service.supportsConnectivity &&
+                  (server.host_id !== null ||
+                    snapshot.stores.some((store) => store.server === server.id))
+                    ? () => service.reconnect(server.id)
+                    : undefined
+                }
+              />
             </li>
           );
         })}
@@ -80,7 +111,9 @@ export function SyncStatus({
               ? 'Team discovery'
               : entry.kind === 'metadata'
                 ? 'Account metadata'
-                : 'Profile inventory';
+                : entry.kind === 'connectivity'
+                  ? 'Connectivity reconciliation'
+                  : 'Profile inventory';
           return (
             <li key={entry.key}>
               {label}

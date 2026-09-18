@@ -2,17 +2,29 @@ import { createContext, useContext, useRef } from 'react';
 import type { ReactNode } from 'react';
 import type { AgentSnapshot } from './model/types';
 import {
-  requireWorkflow, workflowAvailability, workflowMessage,
+  requireWorkflow,
+  workflowAvailability,
+  workflowMessage,
 } from './model/workflow-availability';
-import type { WorkflowOperation, WorkflowTarget } from './model/workflow-availability';
+import type {
+  WorkflowOperation,
+  WorkflowTarget,
+} from './model/workflow-availability';
 
 const WorkflowContext = createContext<AgentSnapshot | undefined>(undefined);
 
-export function WorkflowProvider({ snapshot, children }: {
+export function WorkflowProvider({
+  snapshot,
+  children,
+}: {
   snapshot: AgentSnapshot;
   children: ReactNode;
 }) {
-  return <WorkflowContext.Provider value={snapshot}>{children}</WorkflowContext.Provider>;
+  return (
+    <WorkflowContext.Provider value={snapshot}>
+      {children}
+    </WorkflowContext.Provider>
+  );
 }
 
 export function useWorkflowAccess(snapshot?: AgentSnapshot) {
@@ -30,7 +42,11 @@ export function useWorkflowAccess(snapshot?: AgentSnapshot) {
     require(operation: WorkflowOperation, target: WorkflowTarget) {
       requireWorkflow(latest.current, operation, target);
     },
-    async run<T>(operation: WorkflowOperation, target: WorkflowTarget, task: () => Promise<T>): Promise<T> {
+    async run<T>(
+      operation: WorkflowOperation,
+      target: WorkflowTarget,
+      task: () => Promise<T>,
+    ): Promise<T> {
       requireWorkflow(latest.current, operation, target);
       return task();
     },

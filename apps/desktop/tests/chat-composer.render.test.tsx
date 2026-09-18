@@ -230,7 +230,8 @@ test('pending-view refresh is not a prerequisite to attempting prepared delivery
     if (action.action === 'attempt') refresh = refreshPending();
     return reply;
   });
-  const refreshPending = (): Promise<void> => h.current.service.refresh(storeId);
+  const refreshPending = (): Promise<void> =>
+    h.current.service.refresh(storeId);
   try {
     await h.send('send before optional refresh');
     await ui.waitFor(() => assertSent(h.current, 1));

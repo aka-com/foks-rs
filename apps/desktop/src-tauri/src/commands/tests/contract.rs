@@ -143,6 +143,15 @@ fn shared_compatibility_contract_validates_grants_and_preserves_service_support(
 fn wire_contract_fixture_matches_serialized_shapes() {
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("../../../wire-contract.json")).unwrap();
+    let connectivity = crate::commands::servers::reconcile_server_response(serde_json::json!({
+        "profile": "work",
+        "identity": { "status": "success", "value": { "status": "connected", "host_id": fixture["profileReconciliation"]["identity"]["hostId"], "configured_probe": "foks.example:4430" } },
+        "compatibility": { "status": "success", "value": { "status": "renewed" } }
+    }), "work").unwrap();
+    assert_eq!(
+        serde_json::to_value(connectivity).unwrap(),
+        fixture["profileReconciliation"]
+    );
     let configured_server = ServerDto {
         id: "work".to_owned(),
         name: "work".to_owned(),
@@ -260,7 +269,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
         foks_desktop::AgentError::Protocol {
             code: foks_agent_proto::ErrorCode::Conflict,
             message: "exists".to_owned(),
-            fields: foks_agent_proto::ErrorFields::default(),
+            fields: Box::default(),
         },
         MutationKind::Create,
     );
@@ -275,7 +284,8 @@ fn wire_contract_fixture_matches_serialized_shapes() {
             fields: foks_agent_proto::ErrorFields {
                 capability: Some("kv".to_owned()),
                 ..Default::default()
-            },
+            }
+            .into(),
         },
         MutationKind::Guarded,
     );

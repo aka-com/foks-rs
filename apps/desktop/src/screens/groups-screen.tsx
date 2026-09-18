@@ -1,4 +1,9 @@
 import { usePendingGroupOperations } from '../operation-queries';
+import {
+  requireWorkflow,
+  workflowAvailability,
+  workflowMessage,
+} from '../model/workflow-availability';
 import { useTabSheetState } from '../navigation-guard';
 import { InvitationRecovery } from '../components/invitation-recovery';
 import { InvitationPanel } from '../components/invitation-panel';
@@ -1309,6 +1314,20 @@ export function GroupSheet({
   const reservedName = serverTeamName(name);
   const remote =
     remotes.find((candidate) => candidate.id === remoteStoreId) ?? remotes[0];
+  const federationTarget = {
+    profile: store.server,
+    account: store.account,
+    remoteProfile: remote?.server,
+  };
+  const admissionReason =
+    sheet === 'admit'
+      ? ((store.kind === 'team'
+          ? manageReason(snapshot, store, 'federation')
+          : 'Select a named team.') ??
+        workflowMessage(
+          workflowAvailability(snapshot, 'federate', federationTarget),
+        ))
+      : undefined;
   const requiredFailure =
     sheet === 'admit'
       ? groupDetailFailure(snapshot, store.id, 'federation')
@@ -1411,13 +1430,15 @@ export function GroupSheet({
           storeId: store.id,
           username: target.username!,
         });
-      else if (sheet === 'admit' && remote)
+      else if (sheet === 'admit' && remote) {
+        if (admissionReason) throw new Error(admissionReason);
+        requireWorkflow(snapshot, 'federate', federationTarget);
         await bridge.admitGroup({
           storeId: store.id,
           remoteStoreId: remote.id,
           visibility,
         });
-      else if (sheet === 'create') {
+      } else if (sheet === 'create') {
         // Re-resolved from the availability-filtered list at the moment of
         // the write, not from the render that drew the button: the server
         // can lapse while the sheet is open.
@@ -1489,13 +1510,14 @@ export function GroupSheet({
           ) : (
             <Button
               variant="primary"
+              title={admissionReason}
               disabled={
                 busy ||
                 Boolean(requiredFailure) ||
                 (sheet === 'add' && (!username.trim() || Boolean(existing))) ||
                 (sheet === 'demote' &&
                   (!target || !canTarget(snapshot, target) || !demotion)) ||
-                (sheet === 'admit' && !remote) ||
+                (sheet === 'admit' && (!remote || Boolean(admissionReason))) ||
                 (sheet === 'create' &&
                   (!teamAlias ||
                     !creationAccount ||

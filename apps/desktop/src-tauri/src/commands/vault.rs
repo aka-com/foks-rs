@@ -861,7 +861,7 @@ pub(super) fn catalog_local_metadata(
                         foks_desktop::AgentError::Protocol {
                             code,
                             message,
-                            fields,
+                            fields: fields.into(),
                         },
                     )),
                 });

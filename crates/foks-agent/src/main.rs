@@ -3,8 +3,8 @@ mod account;
 mod bot_token;
 mod chat;
 mod chat_poll;
-mod data;
 mod connectivity;
+mod data;
 mod invitations;
 mod profile_work;
 mod retention;
@@ -509,10 +509,11 @@ async fn refresh_hosted_profiles(
         async move {
             let result = connectivity::renew(&state_dir, &profile, client, timeout).await;
             if let ResponseResult::Error { code, .. } = result {
-                eprintln!("foks-agent compatibility renewal failed for {profile}: {code:?}");
+                eprintln!("foks-agent compatibility renewal failed: {code:?}");
             }
         }
-    }).await;
+    })
+    .await;
 }
 
 async fn run_hosted_refreshes<F, Fut>(
@@ -531,7 +532,9 @@ async fn run_hosted_refreshes<F, Fut>(
             break;
         }
         while pending.len() < MAXIMUM_CANARY_FETCHES {
-            let Some(profile) = profiles.next() else { break; };
+            let Some(profile) = profiles.next() else {
+                break;
+            };
             pending.spawn(renew(profile));
         }
         if pending.is_empty() {
@@ -711,14 +714,32 @@ async fn handle_connection(
             .await?;
             return Ok(());
         }
-        if let Operation::ReconcileProfile { profile } | Operation::RefreshLease { profile } = &request.operation {
-            if profile.is_empty() || profile.len() > 64 || !profile.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')) {
-                write_response(&mut stream, &Response::error(request.id, ErrorCode::InvalidRequest, "invalid profile name"), timeout).await?;
+        if let Operation::ReconcileProfile { profile } | Operation::RefreshLease { profile } =
+            &request.operation
+        {
+            if profile.is_empty()
+                || profile.len() > 64
+                || !profile
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            {
+                write_response(
+                    &mut stream,
+                    &Response::error(
+                        request.id,
+                        ErrorCode::InvalidRequest,
+                        "invalid profile name",
+                    ),
+                    timeout,
+                )
+                .await?;
                 continue;
             }
         }
         if let Operation::ReconcileProfile { profile } = &request.operation {
-            let value = connectivity::reconcile(&state_dir, profile, timeout, capacity.blocking.clone()).await;
+            let value =
+                connectivity::reconcile(&state_dir, profile, timeout, capacity.blocking.clone())
+                    .await;
             write_response(&mut stream, &Response::success(request.id, value), timeout).await?;
             continue;
         }
@@ -728,16 +749,25 @@ async fn handle_connection(
                 Err(error) => dispatch_error_response(request.id, &error).result,
             };
             let response = match result {
-                ResponseResult::Success { value } if value["status"] == "not-required" => Response::error(
+                ResponseResult::Success { value } if value["status"] == "not-required" => {
+                    Response::error(
+                        request.id,
+                        ErrorCode::InvalidRequest,
+                        "profile does not use a refreshable compatibility lease",
+                    )
+                }
+                ResponseResult::Success { value } => Response::success(
                     request.id,
-                    ErrorCode::InvalidRequest,
-                    "profile does not use a refreshable compatibility lease",
+                    serde_json::json!({
+                        "profile": profile,
+                        "updated": value["status"] == "renewed",
+                    }),
                 ),
-                ResponseResult::Success { value } => Response::success(request.id, serde_json::json!({
-                    "profile": profile,
-                    "updated": value["status"] == "renewed",
-                })),
-                ResponseResult::Error { code, message, fields } => Response::error_with_fields(Some(request.id), code, message, fields),
+                ResponseResult::Error {
+                    code,
+                    message,
+                    fields,
+                } => Response::error_with_fields(Some(request.id), code, message, fields),
             };
             write_response(&mut stream, &response, timeout).await?;
             continue;
@@ -1340,9 +1370,15 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
     }
     let mut source = Some(error);
     while let Some(candidate) = source {
-        if matches!(candidate.downcast_ref::<foks_keystore::Error>(), Some(foks_keystore::Error::CredentialsRequired)) {
-            return Response::error(id, ErrorCode::CredentialsRequired,
-                "Native credentials require user interaction before this operation can continue.");
+        if matches!(
+            candidate.downcast_ref::<foks_keystore::Error>(),
+            Some(foks_keystore::Error::CredentialsRequired)
+        ) {
+            return Response::error(
+                id,
+                ErrorCode::CredentialsRequired,
+                "Native credentials require user interaction before this operation can continue.",
+            );
         }
         if matches!(
             candidate.downcast_ref::<foks_rpc::Error>(),
@@ -2417,18 +2453,27 @@ fn operation_is_noninteractive(operation: &Operation) -> bool {
         | Operation::ListFederatedTeams { .. }
         | Operation::ListAccountRenames { .. }
         | Operation::DataWriteStatus { .. }
-        | Operation::PendingDataWrites { .. } => true,
-        Operation::Chat { action, .. } => matches!(action,
+        | Operation::PendingDataWrites { .. }
+        | Operation::BotAccount {
+            action: foks_agent_proto::bot::BotAction::List,
+            ..
+        }
+        | Operation::Sso {
+            action: foks_agent_proto::sso::SsoAction::Status { .. },
+            ..
+        } => true,
+        Operation::Chat { action, .. } => matches!(
+            action,
             foks_agent_proto::chat::ChatAction::Channels
-            | foks_agent_proto::chat::ChatAction::History { .. }
-            | foks_agent_proto::chat::ChatAction::NotificationHistory { .. }
-            | foks_agent_proto::chat::ChatAction::Inbox
-            | foks_agent_proto::chat::ChatAction::SyncInbox { .. }
-            | foks_agent_proto::chat::ChatAction::PollInbox { .. }
-            | foks_agent_proto::chat::ChatAction::Pending
-            | foks_agent_proto::chat::ChatAction::CleanupPending
-            | foks_agent_proto::chat::ChatAction::Status { .. }
-            | foks_agent_proto::chat::ChatAction::OperationBody { .. }
+                | foks_agent_proto::chat::ChatAction::History { .. }
+                | foks_agent_proto::chat::ChatAction::NotificationHistory { .. }
+                | foks_agent_proto::chat::ChatAction::Inbox
+                | foks_agent_proto::chat::ChatAction::SyncInbox { .. }
+                | foks_agent_proto::chat::ChatAction::PollInbox { .. }
+                | foks_agent_proto::chat::ChatAction::Pending
+                | foks_agent_proto::chat::ChatAction::CleanupPending
+                | foks_agent_proto::chat::ChatAction::Status { .. }
+                | foks_agent_proto::chat::ChatAction::OperationBody { .. }
         ),
         _ => false,
     }
@@ -2743,9 +2788,9 @@ fn dispatch_result_inner(
             })?;
             Ok(serde_json::to_value(report)?)
         }
-        Operation::RefreshLease { .. } | Operation::ReconcileProfile { .. } => Err(Box::new(AgentRequestError(
-            "lease refresh requires the async agent connection path",
-        ))),
+        Operation::RefreshLease { .. } | Operation::ReconcileProfile { .. } => Err(Box::new(
+            AgentRequestError("lease refresh requires the async agent connection path"),
+        )),
         Operation::ListKnownStores { profile } => {
             registry.profile(&profile)?;
             let paths = registry.prepare_profile_directory(&profile)?;
@@ -6064,42 +6109,154 @@ mod tests {
     #[test]
     fn metadata_reads_are_noninteractive_without_changing_explicit_workflows() {
         let profile = "saved".to_owned();
-        let account = AccountStoreRef { profile: profile.clone(), account_alias: "owner".into() };
-        let data_scope = foks_agent_proto::data::DataScope { profile: profile.clone(), account_alias: "owner".into(), host_id: "host".into(), user_id: "user".into(), team_id: None };
+        let account = AccountStoreRef {
+            profile: profile.clone(),
+            account_alias: "owner".into(),
+        };
+        let data_scope = foks_agent_proto::data::DataScope {
+            profile: profile.clone(),
+            account_alias: "owner".into(),
+            host_id: "host".into(),
+            user_id: "user".into(),
+            team_id: None,
+        };
         for operation in [
+            Operation::BotAccount {
+                profile: profile.clone(),
+                account_alias: "owner".into(),
+                action: foks_agent_proto::bot::BotAction::List,
+            },
+            Operation::Sso {
+                profile: profile.clone(),
+                account_alias: "owner".into(),
+                action: foks_agent_proto::sso::SsoAction::Status {
+                    operation_id: "0".repeat(32),
+                },
+            },
             Operation::ListProfiles,
-            Operation::ListKnownStores { profile: profile.clone() },
-            Operation::ListProfileOverview { profile: profile.clone() },
-            Operation::ListAccounts { profile: profile.clone() },
-            Operation::ListPendingOperations { profile: profile.clone() },
-            Operation::DescribeServerStatus { profile: profile.clone() },
-            Operation::ListYubiAccounts { profile: profile.clone() },
-            Operation::ListDevices { profile: profile.clone(), alias: "owner".into() },
-            Operation::ListBackupEnrollments { profile: profile.clone(), account_alias: "owner".into() },
-            Operation::ListTeams { profile: profile.clone() },
-            Operation::ListTeamDetails { profile: profile.clone(), team_alias: "team".into() },
-            Operation::ListTeamMembers { profile: profile.clone(), team_alias: "team".into() },
-            Operation::ListFederatedTeams { profile: profile.clone(), team_alias: "team".into() },
-            Operation::ListAccountRenames { profile: profile.clone(), account_alias: "owner".into() },
-            Operation::ListKv { store: account.clone(), cursor: None, limit: 10 },
-            Operation::ReadKv { store: KvStoreRef::Account(account.clone()), path: "/entry".into(), version: 1 },
-            Operation::ReadKvChunk { store: KvStoreRef::Account(account), path: "/entry".into(), version: 1, offset: 0, length: 10 },
-            Operation::BindDataAccount { profile: profile.clone(), account_alias: "owner".into() },
-            Operation::ReadData { scope: data_scope.clone(), query: foks_agent_proto::data::DataRead::Catalog },
-            Operation::DataWriteStatus { submission: foks_agent_proto::data::DataSubmission { scope: data_scope.clone(), submission_id: "pending".into() } },
+            Operation::ListKnownStores {
+                profile: profile.clone(),
+            },
+            Operation::ListProfileOverview {
+                profile: profile.clone(),
+            },
+            Operation::ListAccounts {
+                profile: profile.clone(),
+            },
+            Operation::ListPendingOperations {
+                profile: profile.clone(),
+            },
+            Operation::DescribeServerStatus {
+                profile: profile.clone(),
+            },
+            Operation::ListYubiAccounts {
+                profile: profile.clone(),
+            },
+            Operation::ListDevices {
+                profile: profile.clone(),
+                alias: "owner".into(),
+            },
+            Operation::ListBackupEnrollments {
+                profile: profile.clone(),
+                account_alias: "owner".into(),
+            },
+            Operation::ListTeams {
+                profile: profile.clone(),
+            },
+            Operation::ListTeamDetails {
+                profile: profile.clone(),
+                team_alias: "team".into(),
+            },
+            Operation::ListTeamMembers {
+                profile: profile.clone(),
+                team_alias: "team".into(),
+            },
+            Operation::ListFederatedTeams {
+                profile: profile.clone(),
+                team_alias: "team".into(),
+            },
+            Operation::ListAccountRenames {
+                profile: profile.clone(),
+                account_alias: "owner".into(),
+            },
+            Operation::ListKv {
+                store: account.clone(),
+                cursor: None,
+                limit: 10,
+            },
+            Operation::ReadKv {
+                store: KvStoreRef::Account(account.clone()),
+                path: "/entry".into(),
+                version: 1,
+            },
+            Operation::ReadKvChunk {
+                store: KvStoreRef::Account(account),
+                path: "/entry".into(),
+                version: 1,
+                offset: 0,
+                length: 10,
+            },
+            Operation::BindDataAccount {
+                profile: profile.clone(),
+                account_alias: "owner".into(),
+            },
+            Operation::ReadData {
+                scope: data_scope.clone(),
+                query: foks_agent_proto::data::DataRead::Catalog,
+            },
+            Operation::DataWriteStatus {
+                submission: foks_agent_proto::data::DataSubmission {
+                    scope: data_scope.clone(),
+                    submission_id: "pending".into(),
+                },
+            },
             Operation::PendingDataWrites { scope: data_scope },
-            Operation::ListTeamKv { store: TeamStoreRef { profile: profile.clone(), account_alias: "owner".into(), team_alias: "team".into(), team_id: "team-id".into() }, cursor: None, limit: 10 },
+            Operation::ListTeamKv {
+                store: TeamStoreRef {
+                    profile: profile.clone(),
+                    account_alias: "owner".into(),
+                    team_alias: "team".into(),
+                    team_id: "team-id".into(),
+                },
+                cursor: None,
+                limit: 10,
+            },
         ] {
             assert!(operation_is_noninteractive(&operation), "{operation:?}");
         }
         for operation in [
-            Operation::RunDueJobs { profile: profile.clone() },
-            Operation::ListYubiCards { profile: profile.clone() },
-            Operation::YubiPinStatus { profile: profile.clone(), alias: "owner".into() },
-            Operation::Probe { profile: profile.clone() },
-            Operation::CreateAccount { profile: profile.clone(), alias: "owner".into(), username: "owner".into(), device_name: "device".into(), email: String::new(), invite: foks_agent_proto::SecretString::new(""), passphrase: None },
-            Operation::SyncYubiAccount { profile: profile.clone(), alias: "owner".into(), pin: foks_agent_proto::SecretString::new("123456"), with_federation: false },
-            Operation::ResetHardState { profile, token: foks_agent_proto::SecretString::new("token") },
+            Operation::RunDueJobs {
+                profile: profile.clone(),
+            },
+            Operation::ListYubiCards {
+                profile: profile.clone(),
+            },
+            Operation::YubiPinStatus {
+                profile: profile.clone(),
+                alias: "owner".into(),
+            },
+            Operation::Probe {
+                profile: profile.clone(),
+            },
+            Operation::CreateAccount {
+                profile: profile.clone(),
+                alias: "owner".into(),
+                username: "owner".into(),
+                device_name: "device".into(),
+                email: String::new(),
+                invite: foks_agent_proto::SecretString::new(""),
+                passphrase: None,
+            },
+            Operation::SyncYubiAccount {
+                profile: profile.clone(),
+                alias: "owner".into(),
+                pin: foks_agent_proto::SecretString::new("123456"),
+                with_federation: false,
+            },
+            Operation::ResetHardState {
+                profile,
+                token: foks_agent_proto::SecretString::new("token"),
+            },
         ] {
             assert!(!operation_is_noninteractive(&operation), "{operation:?}");
         }
@@ -6108,39 +6265,93 @@ mod tests {
     #[test]
     fn chat_background_reads_are_noninteractive_but_submissions_are_not() {
         use foks_agent_proto::chat::ChatAction;
-        let store = TeamStoreRef { profile: "saved".into(), account_alias: "owner".into(), team_alias: "team".into(), team_id: "team-id".into() };
+        let store = TeamStoreRef {
+            profile: "saved".into(),
+            account_alias: "owner".into(),
+            team_alias: "team".into(),
+            team_id: "team-id".into(),
+        };
         for action in [
             ChatAction::Channels,
-            ChatAction::History { channel: "channel".into(), before: None },
-            ChatAction::NotificationHistory { channel: "channel".into(), before: None },
+            ChatAction::History {
+                channel: "channel".into(),
+                before: None,
+            },
+            ChatAction::NotificationHistory {
+                channel: "channel".into(),
+                before: None,
+            },
             ChatAction::Inbox,
-            ChatAction::SyncInbox { blocked_channels: Vec::new() },
-            ChatAction::PollInbox { since: "0".into(), timeout_milliseconds: 100 },
+            ChatAction::SyncInbox {
+                blocked_channels: Vec::new(),
+            },
+            ChatAction::PollInbox {
+                since: "0".into(),
+                timeout_milliseconds: 100,
+            },
             ChatAction::Pending,
             ChatAction::CleanupPending,
-            ChatAction::Status { operation: "pending".into() },
-            ChatAction::OperationBody { operation: "pending".into(), channel: "channel".into() },
+            ChatAction::Status {
+                operation: "pending".into(),
+            },
+            ChatAction::OperationBody {
+                operation: "pending".into(),
+                channel: "channel".into(),
+            },
         ] {
-            assert!(operation_is_noninteractive(&Operation::Chat { store: store.clone(), action }));
+            assert!(operation_is_noninteractive(&Operation::Chat {
+                store: store.clone(),
+                action
+            }));
         }
         for action in [
-            ChatAction::PrepareMessage { submission: "pending".into(), channel: "channel".into(), text: foks_agent_proto::SecretString::new("message") },
-            ChatAction::Attempt { operation: "pending".into() },
-            ChatAction::Reconcile { operation: "pending".into() },
-            ChatAction::MarkRead { channel: "channel".into(), sequence: "1".into() },
+            ChatAction::PrepareMessage {
+                submission: "pending".into(),
+                channel: "channel".into(),
+                text: foks_agent_proto::SecretString::new("message"),
+            },
+            ChatAction::Attempt {
+                operation: "pending".into(),
+            },
+            ChatAction::Reconcile {
+                operation: "pending".into(),
+            },
+            ChatAction::MarkRead {
+                channel: "channel".into(),
+                sequence: "1".into(),
+            },
         ] {
-            assert!(!operation_is_noninteractive(&Operation::Chat { store: store.clone(), action }));
+            assert!(!operation_is_noninteractive(&Operation::Chat {
+                store: store.clone(),
+                action
+            }));
         }
     }
 
     #[test]
     fn interaction_required_credentials_have_a_distinct_typed_response() {
         let wrapped = foks_client_app::Error::Keystore(foks_keystore::Error::CredentialsRequired);
-        for error in [&wrapped as &dyn std::error::Error, &foks_keystore::Error::CredentialsRequired] {
-            assert!(matches!(dispatch_error_response(17, error).result, ResponseResult::Error { code: ErrorCode::CredentialsRequired, .. }));
+        for error in [
+            &wrapped as &dyn std::error::Error,
+            &foks_keystore::Error::CredentialsRequired,
+        ] {
+            assert!(matches!(
+                dispatch_error_response(17, error).result,
+                ResponseResult::Error {
+                    code: ErrorCode::CredentialsRequired,
+                    ..
+                }
+            ));
         }
-        let unrelated = foks_keystore::Error::Native("native credentials require user interaction".into());
-        assert!(matches!(dispatch_error_response(17, &unrelated).result, ResponseResult::Error { code: ErrorCode::OperationFailed, .. }));
+        let unrelated =
+            foks_keystore::Error::Native("native credentials require user interaction".into());
+        assert!(matches!(
+            dispatch_error_response(17, &unrelated).result,
+            ResponseResult::Error {
+                code: ErrorCode::OperationFailed,
+                ..
+            }
+        ));
     }
 
     #[test]

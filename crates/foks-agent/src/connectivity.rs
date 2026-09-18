@@ -2,7 +2,28 @@ use super::*;
 use std::future::Future;
 use tokio::sync::watch;
 
-type FlightKey = (PathBuf, String, bool);
+type RegistryRevision = (u64, u64, i64, i64);
+type FlightKey = (PathBuf, String, bool, Option<RegistryRevision>);
+
+fn flight_key(root: &Path, profile: &str, identity: bool) -> FlightKey {
+    #[cfg(unix)]
+    let revision = {
+        use std::os::unix::fs::MetadataExt as _;
+        std::fs::symlink_metadata(root.join("profiles.toml"))
+            .ok()
+            .map(|metadata| {
+                (
+                    metadata.dev(),
+                    metadata.ino(),
+                    metadata.ctime(),
+                    metadata.ctime_nsec(),
+                )
+            })
+    };
+    #[cfg(not(unix))]
+    let revision = None;
+    (root.to_owned(), profile.to_owned(), identity, revision)
+}
 type FlightResult = watch::Receiver<Option<ResponseResult>>;
 static FLIGHTS: OnceLock<Mutex<BTreeMap<FlightKey, FlightResult>>> = OnceLock::new();
 static FETCH_CAPACITY: OnceLock<Arc<Semaphore>> = OnceLock::new();
@@ -149,7 +170,7 @@ pub(super) async fn renew(
     let root = state_dir.to_owned();
     let profile = profile.to_owned();
     coalesce(
-        (root.clone(), profile.clone(), false),
+        flight_key(&root, &profile, false),
         timeout,
         move || async move { renew_one(&root, &profile, &client, timeout).await },
     )
@@ -243,7 +264,7 @@ async fn renew_one(
     let admission = match profile_work::coordinator()
         .acquire(
             root,
-            profile_work::Scope::Root,
+            profile_work::Scope::profile(profile),
             timeout.saturating_sub(started.elapsed()),
         )
         .await
@@ -339,7 +360,7 @@ async fn identity(
     let root = root.to_owned();
     let profile = profile.to_owned();
     coalesce(
-        (root.clone(), profile.clone(), true),
+        flight_key(&root, &profile, true),
         timeout,
         move || async move {
             let started = Instant::now();
@@ -622,7 +643,7 @@ mod tests {
             (0..8).map(|index| index.to_string()).collect(),
             cancellation.clone(),
             move |profile| {
-                let key = (root.clone(), profile, false);
+                let key = flight_key(&root, &profile, false);
                 let workers = worker_slots.clone();
                 let release = worker_release.clone();
                 let started = started.clone();
@@ -663,10 +684,23 @@ mod tests {
         assert_eq!(workers.available_permits(), MAXIMUM_CANARY_FETCHES);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn changed_registry_cannot_join_an_old_observation_flight() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("profiles.toml");
+        std::fs::write(&file, b"before").unwrap();
+        let before = flight_key(directory.path(), "saved", true);
+        let replacement = directory.path().join("replacement.toml");
+        std::fs::write(&replacement, b"after").unwrap();
+        std::fs::rename(replacement, file).unwrap();
+        assert_ne!(before, flight_key(directory.path(), "saved", true));
+    }
+
     #[tokio::test]
     async fn concurrent_renewal_callers_share_one_result() {
         let directory = tempfile::tempdir().unwrap();
-        let key = (directory.path().to_owned(), "saved".to_owned(), false);
+        let key = flight_key(directory.path(), "saved", false);
         let started = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
         let first_started = started.clone();
@@ -695,7 +729,7 @@ mod tests {
     #[tokio::test]
     async fn observation_timeout_does_not_release_an_active_flight() {
         let directory = tempfile::tempdir().unwrap();
-        let key = (directory.path().to_owned(), "saved".to_owned(), false);
+        let key = flight_key(directory.path(), "saved", false);
         let release = Arc::new(tokio::sync::Notify::new());
         let worker_release = release.clone();
         let first = coalesce(key.clone(), Duration::from_millis(10), move || async move {

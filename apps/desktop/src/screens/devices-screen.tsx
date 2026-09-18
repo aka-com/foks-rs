@@ -1,6 +1,9 @@
 import { useDeviceMetadata } from '../device-cache';
 import { WorkflowProvider, useWorkflowAccess } from '../workflow-context';
-import { workflowAvailability, workflowMessage } from '../model/workflow-availability';
+import {
+  workflowAvailability,
+  workflowMessage,
+} from '../model/workflow-availability';
 import { MetadataStatus } from '../components/metadata-status';
 import { useTabSheetState } from '../navigation-guard';
 /**
@@ -220,14 +223,21 @@ export function DevicesScreen({
     ? stores.find((store) => store.id === requested)
     : stores[0];
   const deviceAccess = workflowAvailability(snapshot, 'devices-list', {
-    profile: selected?.server, account: selected?.account,
+    profile: selected?.server,
+    account: selected?.account,
   });
-  const stopped = { stopped: !deviceAccess.available, reason: workflowMessage(deviceAccess) ?? '' };
+  const stopped = {
+    stopped: !deviceAccess.available,
+    reason: workflowMessage(deviceAccess) ?? '',
+  };
   const access = useWorkflowAccess(snapshot);
   const target = { profile: selected?.server, account: selected?.account };
-  const canAdd = (['device-pair', 'backup-create', 'yubi-provision'] as const)
-    .some((operation) => access.availability(operation, target).available);
-  const addReason = canAdd ? undefined : access.props('device-pair', target).title;
+  const canAdd = (
+    ['device-pair', 'backup-create', 'yubi-provision'] as const
+  ).some((operation) => access.availability(operation, target).available);
+  const addReason = canAdd
+    ? undefined
+    : access.props('device-pair', target).title;
   const [pairMode, setPairMode] = useTabSheetState<'offer' | 'accept'>(
     'devices.pairMode',
     'offer',
@@ -566,8 +576,14 @@ export function DevicesScreen({
       <MetadataStatus label="Device metadata" freshness={freshness} />
       <Button
         {...access.props('yubi-scan', { profile: selected.server })}
-        onClick={() => void access.run('yubi-scan', { profile: selected.server }, () => bridge.listYubiCards(selected.server))
-          .then(setCards).catch(onError)}
+        onClick={() =>
+          void access
+            .run('yubi-scan', { profile: selected.server }, () =>
+              bridge.listYubiCards(selected.server),
+            )
+            .then(setCards)
+            .catch(onError)
+        }
       >
         Refresh connected keys
       </Button>
@@ -670,7 +686,11 @@ export function DevicesScreen({
                 <Band
                   label="No paper key"
                   action={
-                    <Button size="sm" {...access.props('backup-create', target)} onClick={() => setSheet('phrase')}>
+                    <Button
+                      size="sm"
+                      {...access.props('backup-create', target)}
+                      onClick={() => setSheet('phrase')}
+                    >
                       Create a paper key…
                     </Button>
                   }
@@ -738,7 +758,9 @@ export function DevicesScreen({
                   variant="plain"
                   size="sm"
                   className="lnk"
-                  {...access.props('account-recover', { profile: selected.server })}
+                  {...access.props('account-recover', {
+                    profile: selected.server,
+                  })}
                   onClick={() => setSheet('recover')}
                 >
                   Recover an account with a paper key…
@@ -1031,7 +1053,8 @@ function DeviceDetail({
   const source = entry.source;
   const username = usernameOf(snapshot, store) ?? store.account;
   const enrollment = source.kind === 'yubi' ? source.entry : undefined;
-  const revokeReason = access.props('yubi-revoke', target).title ??
+  const revokeReason =
+    access.props('yubi-revoke', target).title ??
     (enrollment && enrollment.state !== 'complete'
       ? 'This enrollment is not complete'
       : undefined);
@@ -1283,11 +1306,16 @@ function CardOperations({
 }): ReactNode {
   const access = useWorkflowAccess();
   const target = { profile: store.server, account: enrollment.alias };
-  const why = access.props('yubi-provision', { profile: store.server, account: store.account }).title;
+  const why = access.props('yubi-provision', {
+    profile: store.server,
+    account: store.account,
+  }).title;
   const cardConnected =
     enrollment.cardSerial != null &&
     cards.some((card) => card.serial === enrollment.cardSerial);
-  const pinReason = access.props('yubi-pin', target).title ?? (cards.length === 0
+  const pinReason =
+    access.props('yubi-pin', target).title ??
+    (cards.length === 0
       ? 'No security key connected.'
       : !cardConnected
         ? 'This key’s card is not connected.'
@@ -1295,10 +1323,14 @@ function CardOperations({
   // Every recovery action but "Resume enrollment" acts on a card whose
   // account already exists; that one acts on a card whose account does not,
   // so the two conditions are exact opposites rather than shades of one.
-  const opReason = enrollment.state === 'complete'
-    ? undefined : 'This enrollment is not complete.';
-  const resumeReason = enrollment.state === 'pending'
-    ? undefined : 'This enrollment is already complete.';
+  const opReason =
+    enrollment.state === 'complete'
+      ? undefined
+      : 'This enrollment is not complete.';
+  const resumeReason =
+    enrollment.state === 'pending'
+      ? undefined
+      : 'This enrollment is already complete.';
   return (
     <div
       className="settings-section"
@@ -1339,7 +1371,8 @@ function CardOperations({
             action={
               <>
                 {group.actions.map((action) => {
-                  const reason = access.props(YUBI_WORKFLOWS[action], target).title ??
+                  const reason =
+                    access.props(YUBI_WORKFLOWS[action], target).title ??
                     (action === 'resume-enrollment' ? resumeReason : opReason);
                   return (
                     <Button

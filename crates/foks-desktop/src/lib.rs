@@ -36,7 +36,7 @@ pub enum AgentError {
     Protocol {
         code: ErrorCode,
         message: String,
-        fields: ErrorFields,
+        fields: Box<ErrorFields>,
     },
     Transport(String),
     Local(LocalAgentCondition),
@@ -289,7 +289,7 @@ impl AgentTransport for AgentClient {
             } => Err(AgentError::Protocol {
                 code,
                 message,
-                fields,
+                fields: fields.into(),
             }),
         }
     }
@@ -311,7 +311,7 @@ impl AgentTransport for AgentClient {
             } => Err(AgentError::Protocol {
                 code,
                 message,
-                fields,
+                fields: fields.into(),
             }),
         }
     }
@@ -350,7 +350,7 @@ pub fn agent_client_error(error: foks_agent_client::Error) -> AgentError {
         Error::Protocol(foks_agent_proto::Error::Version) => AgentError::Protocol {
             code: ErrorCode::VersionMismatch,
             message: "desktop and agent protocol versions do not match".to_owned(),
-            fields: ErrorFields::default(),
+            fields: Box::default(),
         },
         Error::Io(_) if connection_lost => AgentError::Transport(message),
         Error::Io(_) => ipc("io"),
@@ -365,6 +365,46 @@ pub fn agent_client_error(error: foks_agent_client::Error) -> AgentError {
 #[cfg(test)]
 mod ipc_error_tests {
     use super::*;
+
+    #[test]
+    fn protocol_errors_remain_small_and_preserve_fields_and_classification() {
+        assert!(std::mem::size_of::<AgentError>() < 128);
+        let fields = ErrorFields {
+            capability: Some("kv".into()),
+            profile: Some("work.example".into()),
+            state_dir: Some("/state/work".into()),
+            reason: Some("schema mismatch".into()),
+            found_schema: Some(3),
+            supported_schema: Some(2),
+        };
+        for (code, transient, ambiguous, fatal) in [
+            (ErrorCode::DeadlineExceeded, true, true, false),
+            (ErrorCode::VersionMismatch, false, false, true),
+            (ErrorCode::CapabilityDenied, false, false, false),
+        ] {
+            let error = response_value(ResponseResult::Error {
+                code,
+                message: "original message".into(),
+                fields: fields.clone(),
+            })
+            .unwrap_err();
+            assert_eq!(error.transient(), transient);
+            assert_eq!(error.ambiguous(), ambiguous);
+            assert_eq!(error.fatal(), fatal);
+            assert!(!error.connection_lost());
+            assert_eq!(error.user_message(), "original message");
+            let AgentError::Protocol {
+                code: actual_code,
+                fields: actual_fields,
+                ..
+            } = error
+            else {
+                panic!("expected a protocol error");
+            };
+            assert_eq!(actual_code, code);
+            assert_eq!(*actual_fields, fields);
+        }
+    }
 
     #[test]
     fn client_cancellation_and_local_deadline_are_not_agent_loss() {
@@ -431,7 +471,7 @@ fn response_value(result: ResponseResult) -> Result<Value, AgentError> {
         } => Err(AgentError::Protocol {
             code,
             message,
-            fields,
+            fields: fields.into(),
         }),
     }
 }
@@ -1110,13 +1150,13 @@ fn load_profile_catalog_progress(
 }
 
 fn error_blocks_profile_catalog(error: &AgentError) -> bool {
-    match error {
+    matches!(
+        error,
         AgentError::Protocol {
             code: ErrorCode::RollbackDetected | ErrorCode::CheckpointResetRequired,
             ..
-        } => true,
-        _ => false,
-    }
+        }
+    )
 }
 
 /// Reads the exact catalog version selected by the user. Large files are
@@ -2897,7 +2937,8 @@ mod tests {
                     fields: ErrorFields {
                         capability: Some("kv".to_owned()),
                         ..ErrorFields::default()
-                    },
+                    }
+                    .into(),
                 }),
                 operation => panic!("unexpected catalog operation: {operation:?}"),
             }
@@ -3078,7 +3119,7 @@ mod tests {
             assert!(error_blocks_profile_catalog(&AgentError::Protocol {
                 code,
                 message: "changed wording".into(),
-                fields: ErrorFields::default()
+                fields: Box::default()
             }));
         }
         for capability in ["kv", "chat", "teams"] {
@@ -3088,7 +3129,8 @@ mod tests {
                 fields: ErrorFields {
                     capability: Some(capability.into()),
                     ..ErrorFields::default()
-                },
+                }
+                .into(),
             }));
         }
     }
@@ -3241,7 +3283,7 @@ mod tests {
                 2 => Err(AgentError::Protocol {
                     code: ErrorCode::CatalogSnapshotChanged,
                     message: "wording is deliberately irrelevant".to_owned(),
-                    fields: ErrorFields::default(),
+                    fields: Box::default(),
                 }),
                 3 => Ok(serde_json::to_value(KvPage {
                     snapshot_version: 8,
@@ -3388,7 +3430,7 @@ mod tests {
                     return Err(AgentError::Protocol {
                         code: ErrorCode::ProfileBusy,
                         message: "same-profile overlap".to_owned(),
-                        fields: ErrorFields::default(),
+                        fields: Box::default(),
                     });
                 }
             }
@@ -3700,7 +3742,7 @@ mod tests {
         let deadline = AgentError::Protocol {
             code: ErrorCode::DeadlineExceeded,
             message: "late".to_owned(),
-            fields: ErrorFields::default(),
+            fields: Box::default(),
         };
         assert!(deadline.transient());
         assert!(deadline.ambiguous());
@@ -3708,20 +3750,20 @@ mod tests {
         assert!(AgentError::Protocol {
             code: ErrorCode::RateLimited,
             message: "wait".to_owned(),
-            fields: ErrorFields::default(),
+            fields: Box::default(),
         }
         .transient());
         assert!(!AgentError::Protocol {
             code: ErrorCode::QuotaExceeded,
             message: "full".to_owned(),
-            fields: ErrorFields::default(),
+            fields: Box::default(),
         }
         .transient());
 
         let mismatch = AgentError::Protocol {
             code: ErrorCode::VersionMismatch,
             message: "upgrade".to_owned(),
-            fields: ErrorFields::default(),
+            fields: Box::default(),
         };
         assert!(mismatch.fatal());
         assert!(!mismatch.transient());

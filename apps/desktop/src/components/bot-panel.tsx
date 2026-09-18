@@ -12,11 +12,16 @@ type BotPane = 'enroll' | 'load' | 'revoke';
 
 export function botWorkflow(action: BotAction['action']): WorkflowOperation {
   switch (action) {
-    case 'list': return 'bot-list';
-    case 'unload': return 'bot-unload';
-    case 'load-file': return 'bot-load';
-    case 'revoke': return 'bot-revoke';
-    default: return 'bot-enroll';
+    case 'list':
+      return 'bot-list';
+    case 'unload':
+      return 'bot-unload';
+    case 'load-file':
+      return 'bot-load';
+    case 'revoke':
+      return 'bot-revoke';
+    default:
+      return 'bot-enroll';
   }
 }
 
@@ -70,10 +75,16 @@ export function BotPanel({
     const supplied = pin || null;
     setPin('');
     try {
-      const needsHardware = 'operation_id' in action && 'pin' in action &&
-        rows.some((row) => row.operation_id === action.operation_id && row.hardware_required);
+      const needsHardware =
+        'operation_id' in action &&
+        'pin' in action &&
+        rows.some(
+          (row) =>
+            row.operation_id === action.operation_id && row.hardware_required,
+        );
       access.require(botWorkflow(action.action), {
-        profile, account: selected,
+        profile,
+        account: selected,
         ...(needsHardware && !supplied ? { hardware: 'needed' as const } : {}),
       });
       const result = await bridge.botAccount(
@@ -118,7 +129,11 @@ export function BotPanel({
   const paneActions: ReactNode =
     pane === 'enroll' ? (
       <>
-        <Button {...eligibility('list')} disabled={busy || eligibility('list').disabled} onClick={() => void run({ action: 'list' })}>
+        <Button
+          {...eligibility('list')}
+          disabled={busy || eligibility('list').disabled}
+          onClick={() => void run({ action: 'list' })}
+        >
           Show pending enrollments
         </Button>
         <Button
@@ -138,13 +153,21 @@ export function BotPanel({
       </>
     ) : pane === 'load' ? (
       <>
-        <Button {...eligibility('unload')} disabled={busy || eligibility('unload').disabled} onClick={() => void run({ action: 'unload' })}>
+        <Button
+          {...eligibility('unload')}
+          disabled={busy || eligibility('unload').disabled}
+          onClick={() => void run({ action: 'unload' })}
+        >
           Unload
         </Button>
         <Button
           variant="primary"
           title={eligibility('load-file', alias).title}
-          disabled={busy || eligibility('load-file', alias).disabled || !/^[a-zA-Z0-9_-]{1,64}$/.test(alias)}
+          disabled={
+            busy ||
+            eligibility('load-file', alias).disabled ||
+            !/^[a-zA-Z0-9_-]{1,64}$/.test(alias)
+          }
           onClick={() => void run({ action: 'load-file' }, alias)}
         >
           Load from file
@@ -165,7 +188,11 @@ export function BotPanel({
     ) : (
       <Button
         title={eligibility('revoke').title}
-        disabled={busy || eligibility('revoke').disabled || !/^13[0-9a-f]{64}$/.test(target)}
+        disabled={
+          busy ||
+          eligibility('revoke').disabled ||
+          !/^13[0-9a-f]{64}$/.test(target)
+        }
         onClick={() => setRevokeConfirmed(true)}
       >
         Revoke
@@ -291,8 +318,17 @@ export function BotPanel({
               <>
                 <Button
                   variant="primary"
-                  title={eligibility('attempt').title ?? (p.hardware_required && !pin ? 'Enter the security key PIN to continue.' : undefined)}
-                  disabled={busy || eligibility('attempt').disabled || (p.hardware_required && !pin)}
+                  title={
+                    eligibility('attempt').title ??
+                    (p.hardware_required && !pin
+                      ? 'Enter the security key PIN to continue.'
+                      : undefined)
+                  }
+                  disabled={
+                    busy ||
+                    eligibility('attempt').disabled ||
+                    (p.hardware_required && !pin)
+                  }
                   onClick={() =>
                     void run({
                       action: 'attempt',
@@ -316,8 +352,17 @@ export function BotPanel({
             )}
             {!['complete', 'rejected'].includes(p.state) && (
               <Button
-                title={eligibility('status').title ?? (p.hardware_required && !pin ? 'Enter the security key PIN to continue.' : undefined)}
-                disabled={busy || eligibility('status').disabled || (p.hardware_required && !pin)}
+                title={
+                  eligibility('status').title ??
+                  (p.hardware_required && !pin
+                    ? 'Enter the security key PIN to continue.'
+                    : undefined)
+                }
+                disabled={
+                  busy ||
+                  eligibility('status').disabled ||
+                  (p.hardware_required && !pin)
+                }
                 onClick={() =>
                   void run({
                     action: 'status',

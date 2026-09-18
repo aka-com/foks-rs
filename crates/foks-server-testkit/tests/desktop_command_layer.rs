@@ -841,7 +841,54 @@ fn exercise_profile_failure_isolation(backend: &mut BackendRunner) {
     ]));
     let before = fresh_profile_catalog(&backend.socket, "unavailable");
     assert!(before.failures.is_empty(), "{:?}", before.failures);
+    let client = AgentClient::new(&backend.socket);
+    let observed = client
+        .call(Operation::ReconcileProfile {
+            profile: "unavailable".to_owned(),
+        })
+        .unwrap();
+    let ResponseResult::Success { value } = observed.result else {
+        panic!("live profile reconciliation failed");
+    };
+    assert_eq!(
+        value["identity"]["value"]["status"], "connected",
+        "identity observation: {}",
+        value["identity"]
+    );
+    assert_eq!(
+        value["compatibility"]["value"]["status"], "not-required",
+        "compatibility observation: {}",
+        value["compatibility"]
+    );
     server.shutdown().unwrap();
+    let observed = client
+        .call(Operation::ReconcileProfile {
+            profile: "unavailable".to_owned(),
+        })
+        .unwrap();
+    let ResponseResult::Success { value } = observed.result else {
+        panic!("offline observation failed to return scoped results");
+    };
+    assert_eq!(value["identity"]["code"], "server-unavailable");
+    assert_eq!(value["identity"]["fields"]["profile"], "unavailable");
+    assert_eq!(
+        value["compatibility"]["value"]["status"], "not-required",
+        "compatibility observation: {}",
+        value["compatibility"]
+    );
+    let observed = client
+        .call(Operation::ReconcileProfile {
+            profile: "work".to_owned(),
+        })
+        .unwrap();
+    let ResponseResult::Success { value } = observed.result else {
+        panic!("healthy sibling reconciliation failed");
+    };
+    assert_eq!(
+        value["identity"]["value"]["status"], "connected",
+        "identity observation: {}",
+        value["identity"]
+    );
     let failed = fresh_profile_catalog(&backend.socket, "unavailable");
     let store = CatalogStoreRef::Account(foks_agent_proto::AccountStoreRef {
         profile: "unavailable".to_owned(),

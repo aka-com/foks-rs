@@ -430,9 +430,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       leaseExpiresAt:
         'expiresAt' in compatibility ? compatibility.expiresAt : null,
       compatibility,
-      chatSupported: serverHosts.has(server.id)
-        ? server.services.chat
-        : null,
+      chatSupported: serverHosts.has(server.id) ? server.services.chat : null,
     };
   };
   return {

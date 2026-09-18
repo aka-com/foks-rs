@@ -24,7 +24,7 @@ export function LocalAliasPanel({
   onComplete: () => Promise<void>;
 }) {
   const access = useWorkflowAccess();
-  const eligibility = access.props('local-alias', {});
+  const eligibility = access.props('local-alias', { store });
   const [name, setName] = useState(alias);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,7 +55,7 @@ export function LocalAliasPanel({
     setBusy(true);
     setError(null);
     try {
-      access.require('local-alias', {});
+      access.require('local-alias', { store });
       const reply = await bridge.setLocalAccountAlias(store, label);
       if (reply.store !== store || reply.alias !== label)
         throw new Error('Local alias response belongs to a different account.');

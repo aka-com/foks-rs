@@ -66,11 +66,15 @@ export class DeviceCache {
       () =>
         enqueueProfileWork(this.bridge, profile, async () => {
           const snapshot = this.snapshot?.();
-          if (this.snapshot) requireWorkflow(snapshot, 'devices-list', {
-            profile, account: snapshot?.accounts.find((entry) => entry.store === store)?.alias,
-          });
+          if (this.snapshot)
+            requireWorkflow(snapshot, 'devices-list', {
+              profile,
+              account: snapshot?.accounts.find((entry) => entry.store === store)
+                ?.alias,
+            });
           const devices = await this.bridge.listAccountDevices(store);
-          if (this.snapshot) requireWorkflow(this.snapshot(), 'backup-list', { profile });
+          if (this.snapshot)
+            requireWorkflow(this.snapshot(), 'backup-list', { profile });
           const backups = await this.bridge.listBackupEnrollments(store);
           return { devices, backups };
         }),
@@ -82,7 +86,8 @@ export class DeviceCache {
       profileEnrollmentKey(profile),
       () =>
         enqueueProfileWork(this.bridge, profile, () => {
-          if (this.snapshot) requireWorkflow(this.snapshot(), 'yubi-list', { profile });
+          if (this.snapshot)
+            requireWorkflow(this.snapshot(), 'yubi-list', { profile });
           return this.bridge.listYubiAccounts(profile);
         }),
     );
@@ -126,7 +131,10 @@ export const useDeviceCache = (): DeviceCache | null =>
   useContext(DeviceCacheContext);
 
 /** Use one resource owner for profile pages and account pages in this access scope. */
-export function useDeviceQueries(bridge: Bridge, snapshot?: AgentSnapshot): DeviceCache {
+export function useDeviceQueries(
+  bridge: Bridge,
+  snapshot?: AgentSnapshot,
+): DeviceCache {
   const shared = useDeviceCache();
   const repository = useQueryRepository(bridge, shared?.repository);
   const latest = useRef(snapshot);
@@ -135,7 +143,8 @@ export function useDeviceQueries(bridge: Bridge, snapshot?: AgentSnapshot): Devi
     () => shared ?? new DeviceCache(bridge, Date.now, repository),
     [bridge, repository, shared],
   );
-  if (snapshot) cache.snapshot = () => latest.current;
+  if (snapshot && (!shared || !cache.snapshot))
+    cache.snapshot = () => latest.current;
   return cache;
 }
 

@@ -12,6 +12,8 @@ import {
 } from './catalog-state';
 import { CatalogReadGate } from './catalog-read-gate';
 import { DesktopReconciliation } from './desktop-reconciliation';
+import { observeProfileConnection } from './profile-connectivity';
+import { scheduleProfileWork } from './scheduling/profile-work';
 import type { AgentSnapshot } from './model';
 import { discoveryAccounts, reconcileTeamDiscovery } from './team-discovery';
 import type {
@@ -116,6 +118,112 @@ export function useDesktopReconciliation(
         nowSeconds: () => live.current.nowSeconds(),
         profile: (name, context) =>
           options.gate.profile(() => profile(name, context)),
+        connectivity: options.bridge.reconcileServer
+          ? (name, context) =>
+              options.gate.profile(async () => {
+                if (!context.isCurrent()) return;
+                const current = live.current;
+                const before = current
+                  .current()
+                  .servers.find((server) => server.id === name);
+                if (!before || !current.bridge.reconcileServer) return;
+                current.retireBoot?.();
+                try {
+                  const observed = await scheduleProfileWork(
+                    current.bridge,
+                    name,
+                    () => current.bridge.reconcileServer!(name),
+                    {
+                      key: `connectivity:${name}`,
+                      owner: context,
+                      generation: 0,
+                      signal: context.signal,
+                      current: context.isCurrent,
+                      cancel: () => undefined,
+                      preemptible: false,
+                    },
+                  );
+                  if (!context.isCurrent()) return;
+                  const observedAt = live.current.nowSeconds();
+                  const errors = [
+                    observed.identity,
+                    observed.compatibility,
+                  ].flatMap((result) =>
+                    result.status === 'failed' ? [result.error] : [],
+                  );
+                  if (
+                    errors.some(
+                      (error) => error.code === 'profile-configuration-changed',
+                    )
+                  )
+                    throw {
+                      code: 'catalog-read-retired',
+                      message: 'The profile changed during reconciliation.',
+                      retryable: false,
+                      fatal: false,
+                      ambiguous: false,
+                    };
+                  let refreshError: unknown;
+                  try {
+                    await profile(name, context);
+                  } catch (error) {
+                    refreshError = error;
+                  }
+                  if (!context.isCurrent()) return;
+                  if (
+                    refreshError &&
+                    [
+                      'profile-not-found',
+                      'profile-configuration-changed',
+                      'catalog-read-retired',
+                    ].includes(normalizeCommandError(refreshError).code)
+                  )
+                    throw refreshError;
+                  const latest = live.current.current();
+                  const after = latest.servers.find(
+                    (server) => server.id === name,
+                  );
+                  if (
+                    !after ||
+                    before.configuredProbe !== after.configuredProbe ||
+                    (before.host_id &&
+                      after.host_id &&
+                      before.host_id !== after.host_id) ||
+                    (before.host_id &&
+                      after.host_id === null &&
+                      after.trust.status === 'unprobed' &&
+                      observed.identity.status === 'connected')
+                  )
+                    return;
+                  const binding =
+                    after.host_id === null && after.trust.status === 'unknown'
+                      ? { ...after, host_id: before.host_id }
+                      : after;
+                  const connectivity = observeProfileConnection(
+                    binding,
+                    observed,
+                    observedAt,
+                  );
+                  live.current.publish(
+                    {
+                      ...latest,
+                      servers: latest.servers.map((server) =>
+                        server.id === name
+                          ? { ...server, connectivity }
+                          : server,
+                      ),
+                    },
+                    false,
+                  );
+                  if (errors[0]) throw errors[0];
+                  if (refreshError) throw refreshError;
+                } catch (error) {
+                  if (!context.isCurrent()) return;
+                  report(error);
+                  throw error;
+                }
+              })
+          : undefined,
         registry: async (context) => {
           try {
             const catalog = await live.current.bridge.listStores();
@@ -173,7 +281,7 @@ export function useDesktopReconciliation(
       },
       options.clock,
     );
-  }, [options.gate, options.clock]);
+  }, [options.bridge, options.gate, options.clock]);
   useEffect(
     () => service.update(options.snapshot),
     [service, options.snapshot],

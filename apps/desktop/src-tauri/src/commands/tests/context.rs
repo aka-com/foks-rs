@@ -358,7 +358,8 @@ fn kv_denial_does_not_revoke_account_or_chat_target_bindings() {
                 fields: foks_agent_proto::ErrorFields {
                     capability: Some("kv".into()),
                     ..Default::default()
-                },
+                }
+                .into(),
             },
         });
     assert!(state.selected_account(&account).is_ok());

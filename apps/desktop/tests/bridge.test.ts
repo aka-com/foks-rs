@@ -13,6 +13,7 @@ import {
   decodeBackupPhrase,
   decodeGroupDiscovery,
   decodeServerStatus,
+  decodeProfileReconciliation,
   decodeCheckedServer,
   decodeServerLabelResponse,
   decodeAccountDevices,
@@ -461,6 +462,10 @@ test('decoders successfully parse the full wire contract golden fixture', async 
     'a'.repeat(64),
   );
   assert.equal(decodeServerStatus(fixture.serverStatus).profile, 'work');
+  assert.deepEqual(
+    decodeProfileReconciliation(fixture.profileReconciliation, 'work'),
+    fixture.profileReconciliation,
+  );
   assert.equal(
     decodeCheckedServer(fixture.checkedServer).acceptance,
     'advanced',

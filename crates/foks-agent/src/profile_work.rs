@@ -64,9 +64,8 @@ pub(super) fn operation_scope(operation: &Operation) -> Scope {
         | CheckAndAddGoProfile { .. }
         | RemoveProfile { .. }
         | SetProfileLabel { .. }
-        | ResetHardState { .. }
-        | RefreshLease { .. }
-        | ReconcileProfile { .. } => Scope::Root,
+        | ResetHardState { .. } => Scope::Root,
+        RefreshLease { profile } | ReconcileProfile { profile } => Scope::profile(profile),
         DemoteTeamMember { .. }
         | RemoveTeamMember { .. }
         | ResumeTeamMemberEdit { .. }
@@ -759,6 +758,16 @@ mod tests {
 
     #[test]
     fn operation_scopes_cover_pairs_cascades_and_metadata_reads() {
+        for operation in [
+            Operation::RefreshLease {
+                profile: "a".into(),
+            },
+            Operation::ReconcileProfile {
+                profile: "a".into(),
+            },
+        ] {
+            assert_eq!(operation_scope(&operation), Scope::profile("a"));
+        }
         assert_eq!(
             operation_scope(&Operation::ListDevices {
                 profile: "a".into(),

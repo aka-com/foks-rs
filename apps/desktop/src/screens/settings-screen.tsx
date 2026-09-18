@@ -1,6 +1,9 @@
 import { localAliasOf } from '../model';
 import { WorkflowProvider } from '../workflow-context';
-import { workflowAvailability, workflowMessage } from '../model/workflow-availability';
+import {
+  workflowAvailability,
+  workflowMessage,
+} from '../model/workflow-availability';
 /**
  * The Settings tab: a sub-navigation of three pages, held on screen beside
  * whichever one is open.
@@ -228,21 +231,21 @@ export function SettingsScreen({
       </div>
       {sheet === 'passphrase' && passphrase ? (
         <WorkflowProvider snapshot={snapshot}>
-        <PassphraseSheet
-          bridge={bridge}
-          store={passphrase.store}
-          initialMode={passphrase.mode}
-          onClose={() => {
-            setSheet(null);
-            setPassphrase(null);
-          }}
-          onDone={(message) => {
-            setSheet(null);
-            setPassphrase(null);
-            void onRefresh(message).catch((error) => onMutationError(error));
-          }}
-          onError={(error) => void onMutationError(error)}
-        />
+          <PassphraseSheet
+            bridge={bridge}
+            store={passphrase.store}
+            initialMode={passphrase.mode}
+            onClose={() => {
+              setSheet(null);
+              setPassphrase(null);
+            }}
+            onDone={(message) => {
+              setSheet(null);
+              setPassphrase(null);
+              void onRefresh(message).catch((error) => onMutationError(error));
+            }}
+            onError={(error) => void onMutationError(error)}
+          />
         </WorkflowProvider>
       ) : null}
       {sheet === 'reset-mac' ? (
@@ -281,9 +284,13 @@ function PreferencesSection({
         {stores.length ? (
           stores.map((store) => {
             const eligibility = workflowAvailability(snapshot, 'passphrase', {
-              profile: store.server, account: store.account,
+              profile: store.server,
+              account: store.account,
             });
-            const stopped = { stopped: !eligibility.available, reason: workflowMessage(eligibility) ?? '' };
+            const stopped = {
+              stopped: !eligibility.available,
+              reason: workflowMessage(eligibility) ?? '',
+            };
             return (
               <InsetRow
                 key={store.id}

@@ -48,7 +48,7 @@ impl foks_desktop::AgentTransport for SetupProfileTransport {
                     return Err(foks_desktop::AgentError::Protocol {
                         code: foks_agent_proto::ErrorCode::OperationFailed,
                         message: error.clone(),
-                        fields: foks_agent_proto::ErrorFields::default(),
+                        fields: Box::default(),
                     });
                 }
                 let configured = self
@@ -435,15 +435,22 @@ fn reconciliation_observations_are_independent_and_strictly_scoped() {
 fn reconciliation_requires_exact_canonical_host_and_endpoint_bindings() {
     use crate::commands::servers::reconcile_server_response;
     let host_id = format!("02{}", "ab".repeat(32));
-    let observation = |identity| serde_json::json!({
-        "profile":"work",
-        "identity":{"status":"success","value":identity},
-        "compatibility":{"status":"success","value":{"status":"unchanged"}},
-    });
+    let observation = |identity| {
+        serde_json::json!({
+            "profile":"work",
+            "identity":{"status":"success","value":identity},
+            "compatibility":{"status":"success","value":{"status":"unchanged"}},
+        })
+    };
     for probe in ["foks.app:4430", "localhost:9443", "[::1]:4430"] {
-        let value = observation(serde_json::json!({"status":"connected","host_id":host_id,"configured_probe":probe}));
+        let value = observation(
+            serde_json::json!({"status":"connected","host_id":host_id,"configured_probe":probe}),
+        );
         let dto = serde_json::to_value(reconcile_server_response(value, "work").unwrap()).unwrap();
-        assert_eq!(dto["identity"], serde_json::json!({"status":"connected","hostId":host_id,"configuredProbe":probe}));
+        assert_eq!(
+            dto["identity"],
+            serde_json::json!({"status":"connected","hostId":host_id,"configuredProbe":probe})
+        );
     }
     for identity in [
         serde_json::json!({"status":"connected"}),
@@ -454,15 +461,39 @@ fn reconciliation_requires_exact_canonical_host_and_endpoint_bindings() {
         serde_json::json!({"status":"connected","host_id":host_id,"configured_probe":"foks.app:4430","acceptance":"inserted"}),
         serde_json::json!({"status":"connected","hostId":host_id,"configuredProbe":"foks.app:4430"}),
     ] {
-        assert_eq!(reconcile_server_response(observation(identity), "work").unwrap_err().code, "invalid-response");
+        assert_eq!(
+            reconcile_server_response(observation(identity), "work")
+                .unwrap_err()
+                .code,
+            "invalid-response"
+        );
     }
-    for probe in ["foks.app", "FOKS.APP:4430", "foks.app.:4430", " foks.app:4430", "foks.app:04430", "https://foks.app:4430", "[0:0:0:0:0:0:0:1]:4430", "::1"] {
-        let value = observation(serde_json::json!({"status":"connected","host_id":host_id,"configured_probe":probe}));
-        assert_eq!(reconcile_server_response(value, "work").unwrap_err().code, "invalid-response");
+    for probe in [
+        "foks.app",
+        "FOKS.APP:4430",
+        "foks.app.:4430",
+        " foks.app:4430",
+        "foks.app:04430",
+        "https://foks.app:4430",
+        "[0:0:0:0:0:0:0:1]:4430",
+        "::1",
+    ] {
+        let value = observation(
+            serde_json::json!({"status":"connected","host_id":host_id,"configured_probe":probe}),
+        );
+        assert_eq!(
+            reconcile_server_response(value, "work").unwrap_err().code,
+            "invalid-response"
+        );
     }
-    let mut invalid = observation(serde_json::json!({"status":"connected","host_id":host_id,"configured_probe":"foks.app:4430"}));
+    let mut invalid = observation(
+        serde_json::json!({"status":"connected","host_id":host_id,"configured_probe":"foks.app:4430"}),
+    );
     invalid["compatibility"]["value"]["extra"] = serde_json::json!(true);
-    assert_eq!(reconcile_server_response(invalid, "work").unwrap_err().code, "invalid-response");
+    assert_eq!(
+        reconcile_server_response(invalid, "work").unwrap_err().code,
+        "invalid-response"
+    );
 }
 
 #[test]

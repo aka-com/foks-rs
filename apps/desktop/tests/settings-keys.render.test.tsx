@@ -1037,11 +1037,15 @@ test('PIN status on a key’s own page acts on that key, not on card or list ord
       },
     }),
   });
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Refresh connected keys' }));
+  ui.fireEvent.click(
+    rendered.getByRole('button', { name: 'Refresh connected keys' }),
+  );
   const pinStatus = await rendered.findByRole('button', {
     name: 'PIN status',
   });
-  await ui.waitFor(() => assert.equal(pinStatus.hasAttribute('disabled'), false));
+  await ui.waitFor(() =>
+    assert.equal(pinStatus.hasAttribute('disabled'), false),
+  );
   ui.fireEvent.click(pinStatus);
   const dialog = rendered.getByRole('dialog');
   assert.ok(ui.within(dialog).getAllByText('second').length);
