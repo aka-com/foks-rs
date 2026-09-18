@@ -4,6 +4,7 @@ import {
   array,
   bool,
   integer,
+  nullableInteger,
   nullableString,
   optionalString,
   record,
@@ -61,30 +62,21 @@ export interface AgentProcessInfo {
 }
 export function decodeAgentProcessInfo(value: unknown): AgentProcessInfo {
   const item = record(value, 'agent_process_info response');
-  const pid = item.pid;
-  const executable = item.executable;
-  const startedAt = item.startedAt;
-  if (
-    !(pid === null || pid === undefined || typeof pid === 'number') ||
-    !(
-      executable === null ||
-      executable === undefined ||
-      typeof executable === 'string'
-    ) ||
-    !(
-      startedAt === null ||
-      startedAt === undefined ||
-      typeof startedAt === 'number'
-    ) ||
-    typeof item.owned !== 'boolean'
-  )
-    throw new Error('Invalid agent process info');
-  return {
-    pid: pid ?? null,
-    executable: executable ?? null,
-    startedAt: startedAt ?? null,
-    owned: item.owned,
-  };
+  const pid = nullableInteger(item.pid, 'agent_process_info.pid');
+  const executable = nullableString(
+    item.executable,
+    'agent_process_info.executable',
+  );
+  const startedAt = nullableInteger(
+    item.startedAt,
+    'agent_process_info.startedAt',
+  );
+  const owned = bool(item.owned, 'agent_process_info.owned');
+  if (pid !== null && pid > 0xffff_ffff)
+    throw new Error('agent_process_info.pid must fit a u32');
+  if (pid === null && (executable !== null || startedAt !== null || owned))
+    throw new Error('agent_process_info metadata requires a process');
+  return { pid, executable, startedAt, owned };
 }
 
 export interface AppInfo {
@@ -124,6 +116,17 @@ export function decodeConnectionLoss(value: unknown): string | null {
   return nullableString(value, 'take_agent_connection_loss response');
 }
 
+function rejectVariantFields(
+  item: Record<string, unknown>,
+  fields: string[],
+  at: string,
+): void {
+  for (const field of fields) {
+    if (field in item)
+      throw new Error(`${at}.${field} is invalid for this variant`);
+  }
+}
+
 export function decodeMaintenanceSnapshot(value: unknown): MaintenanceSnapshot {
   const at = 'maintenance snapshot';
   const item = record(value, at);
@@ -132,12 +135,16 @@ export function decodeMaintenanceSnapshot(value: unknown): MaintenanceSnapshot {
   const revision = integer(item.revision, `${at}.revision`);
   if (generation < 0) throw new Error(`${at}.generation must be nonnegative`);
   if (revision < 0) throw new Error(`${at}.revision must be nonnegative`);
-  if (state === 'idle') return { state, generation, revision };
+  if (state === 'idle') {
+    rejectVariantFields(item, ['kind', 'phase', 'operation', 'disposition'], at);
+    return { state, generation, revision };
+  }
   const kind = string(item.kind, `${at}.kind`);
   if (!['export', 'import', 'verify', 'relocate', 'restart'].includes(kind))
     throw new Error(`${at}.kind is invalid`);
   const typedKind = kind as MaintenanceKind;
   if (state === 'active') {
+    rejectVariantFields(item, ['operation', 'disposition'], at);
     const phase = string(item.phase, `${at}.phase`);
     if (
       ![
@@ -158,6 +165,7 @@ export function decodeMaintenanceSnapshot(value: unknown): MaintenanceSnapshot {
     };
   }
   if (state !== 'complete') throw new Error(`${at}.state is invalid`);
+  rejectVariantFields(item, ['phase'], at);
   const operationItem = record(item.operation, `${at}.operation`);
   const operationStatus = string(
     operationItem.status,
@@ -165,6 +173,7 @@ export function decodeMaintenanceSnapshot(value: unknown): MaintenanceSnapshot {
   );
   let operation: MaintenanceOperationOutcome;
   if (operationStatus === 'cancelled' || operationStatus === 'completed') {
+    rejectVariantFields(operationItem, ['error'], `${at}.operation`);
     operation = { status: operationStatus };
   } else if (operationStatus === 'failed') {
     operation = {
@@ -181,11 +190,13 @@ export function decodeMaintenanceSnapshot(value: unknown): MaintenanceSnapshot {
   );
   let disposition: MaintenanceDisposition;
   if (dispositionStatus === 'continue-current-root') {
+    rejectVariantFields(dispositionItem, ['root', 'error'], `${at}.disposition`);
     disposition = { status: dispositionStatus };
   } else if (
     dispositionStatus === 'restart-selected-root' ||
     dispositionStatus === 'recovery-required'
   ) {
+    rejectVariantFields(dispositionItem, ['error'], `${at}.disposition`);
     disposition = {
       status: dispositionStatus,
       root: string(dispositionItem.root, `${at}.disposition.root`),
@@ -282,7 +293,10 @@ export function decodeWindowState(value: unknown): WindowStateEvent {
 export function decodeAgentStatus(value: unknown): AgentStatus {
   const item = record(value, 'agent_status response');
   const state = string(item.state, 'agent_status.state');
-  if (state === 'ready') return { state: 'ready' };
+  if (state === 'ready') {
+    rejectVariantFields(item, ['step'], 'agent_status');
+    return { state: 'ready' };
+  }
   if (state === 'bootstrap') {
     return {
       state: 'bootstrap',

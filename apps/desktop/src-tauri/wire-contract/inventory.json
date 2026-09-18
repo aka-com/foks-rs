@@ -8,7 +8,13 @@
     "scope": "Existing golden records only. A record demonstrates selected values, not every field, variant, public DTO, or bridge method. No claim of complete RuntimeBridge coverage."
   },
   "domains": {
-    "application": ["appInfo"],
+    "application": [
+      "appInfo",
+      "agentStatusCases",
+      "agentProcessInfoCases",
+      "appLockStateCases",
+      "maintenanceCases"
+    ],
     "commands": [
       "commandError",
       "commandAck",
@@ -73,6 +79,10 @@
   },
   "representedShapes": {
     "AppInfo": ["appInfo"],
+    "AgentStatus / AgentStatusDto": ["agentStatusCases"],
+    "AgentProcessInfo": ["agentProcessInfoCases"],
+    "AppLockState / LockStateDto": ["appLockStateCases"],
+    "MaintenanceSnapshot / MaintenanceOperationOutcome / MaintenanceDisposition": ["maintenanceCases"],
     "CommandError": [
       "commandError",
       "alreadyExistsError",
@@ -126,14 +136,8 @@
   },
   "uncoveredPublicShapes": {
     "application": [
-      "AgentProcessInfo",
-      "AgentStatus",
-      "AppLockState",
       "WindowStateEvent",
-      "DropHoverEvent",
-      "MaintenanceSnapshot",
-      "MaintenanceOperationOutcome",
-      "MaintenanceDisposition"
+      "DropHoverEvent"
     ],
     "vault": [
       "CatalogFailureDto",
@@ -179,8 +183,20 @@
       "YubiCommand request variants"
     ]
   },
+  "lifecycleCoverage": {
+    "caseFormat": "valid maps case names to native-serialized payloads; invalid clones the named base and replaces the field at path with value, or removes that field when value is absent.",
+    "AgentStatus": "Both wire variants, including bootstrap step and rejection of contradictory ready/step payloads; bootstrap step strings are not enumerated.",
+    "AgentProcessInfo": "Required nullable fields, absent/owned/external processes, independently unavailable executable and start time, numeric validation and metadata/ownership requiring a PID.",
+    "AppLockState": "All mechanism/locked/available combinations emitted by native code, unavailable reason requirements, and selected malformed fields.",
+    "MaintenanceSnapshot": "All state, kind, phase, operation and disposition variants represented; variant-specific field requirements and contradictions checked. Operation failure and service restoration remain independent.",
+    "nativeAssertions": "Production AgentStatusDto conversion, AgentProcessInfo, LockStateDto, MaintenanceSnapshot, MaintenanceOperationOutcome, MaintenanceDisposition and AgentError serialization match every positive lifecycle case. Negative mutations exercise frontend semantic decoders, not native deserialization."
+  },
   "partialCoverage": {
-    "application": ["AppInfo.computerName and absent optional fields"],
+    "application": [
+      "AppInfo.computerName and absent optional fields",
+      "Lifecycle cases cover variants, not all values, kind/phase cross-products, temporal generation/revision ordering, native state transitions, CommandError codes/details, or every operation/disposition combination.",
+      "WindowStateEvent and DropHoverEvent lack shared native serialization fixtures; their production payload constructors are private. Unknown extension fields remain tolerated except contradictory fields belonging to another known lifecycle variant."
+    ],
     "vault": [
       "CatalogDto.localMetadata, fullItemReads, nonempty storeReads, failures, blockedProfiles, team stores, absent generation, node-kind and role variants"
     ],

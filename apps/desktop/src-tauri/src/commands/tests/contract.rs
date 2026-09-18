@@ -1,9 +1,13 @@
-use crate::agent::AgentError;
+use crate::agent::{
+    AgentError, AgentProcessInfo, MaintenanceDisposition, MaintenanceKind,
+    MaintenanceOperationOutcome, MaintenancePhase, MaintenanceSnapshot,
+};
+use crate::applock::LockStateDto;
 use crate::commands::accounts::{
     backup_enrollment_dtos, device_dtos, device_removal_response, AccountDto, BackupEnrollmentDto,
     BackupPhraseDto, DeviceDto, DeviceRemovalDto, PassphraseReportDto,
 };
-use crate::commands::application::AppInfo;
+use crate::commands::application::{AgentStatusDto, AppInfo};
 use crate::commands::enrollment::{
     device_provision_response, pairing_offer_response, DeviceProvisionDto, GoProfileCandidateDto,
     GoProfileDiscoveryDto, PairingOfferDto, PendingOperationDto,
@@ -31,6 +35,262 @@ use crate::commands::yubikey::{
 };
 use foks_agent_proto::{KvRole, Operation};
 use zeroize::Zeroizing;
+
+fn assert_lifecycle_cases<T: serde::Serialize, const N: usize>(
+    fixture: &serde_json::Value,
+    key: &str,
+    cases: [(&str, T); N],
+) {
+    let values: serde_json::Map<String, serde_json::Value> = cases
+        .into_iter()
+        .map(|(name, value)| (name.to_owned(), serde_json::to_value(value).unwrap()))
+        .collect();
+    assert_eq!(values.len(), N);
+    assert_eq!(
+        serde_json::Value::Object(values),
+        fixture[key]["valid"],
+        "{key}"
+    );
+}
+
+#[test]
+fn shared_agent_lifecycle_contract_matches_native_dtos() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../../../wire-contract.json")).unwrap();
+    assert_lifecycle_cases(
+        &fixture,
+        "agentStatusCases",
+        [
+            (
+                "ready",
+                AgentStatusDto::from(foks_agent_proto::AgentStatus::Ready),
+            ),
+            (
+                "bootstrap",
+                AgentStatusDto::from(foks_agent_proto::AgentStatus::Bootstrap {
+                    step: "unlock".to_owned(),
+                }),
+            ),
+        ],
+    );
+    assert_lifecycle_cases(
+        &fixture,
+        "agentProcessInfoCases",
+        [
+            ("absent", AgentProcessInfo::default()),
+            (
+                "owned",
+                AgentProcessInfo {
+                    pid: Some(42),
+                    executable: Some("/opt/foks-agent".to_owned()),
+                    started_at: Some(1_700_000_000),
+                    owned: true,
+                },
+            ),
+            (
+                "external",
+                AgentProcessInfo {
+                    pid: Some(43),
+                    executable: Some("/usr/local/bin/foks-agent".to_owned()),
+                    started_at: Some(1_700_000_001),
+                    owned: false,
+                },
+            ),
+            (
+                "uninspectable",
+                AgentProcessInfo {
+                    pid: Some(44),
+                    executable: None,
+                    started_at: None,
+                    owned: true,
+                },
+            ),
+            (
+                "pathOnly",
+                AgentProcessInfo {
+                    pid: Some(45),
+                    executable: Some("/opt/foks-agent".to_owned()),
+                    started_at: None,
+                    owned: false,
+                },
+            ),
+            (
+                "timeOnly",
+                AgentProcessInfo {
+                    pid: Some(46),
+                    executable: None,
+                    started_at: Some(0),
+                    owned: false,
+                },
+            ),
+        ],
+    );
+}
+
+#[test]
+fn shared_app_lock_contract_matches_native_dtos() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../../../wire-contract.json")).unwrap();
+    let available = |locked, mechanism| LockStateDto {
+        locked,
+        available: true,
+        mechanism,
+        unavailable_reason: None,
+    };
+    assert_lifecycle_cases(
+        &fixture,
+        "appLockStateCases",
+        [
+            ("biometryLocked", available(true, "biometry")),
+            ("biometryUnlocked", available(false, "biometry")),
+            ("passwordLocked", available(true, "password")),
+            ("passwordUnlocked", available(false, "password")),
+            (
+                "unavailable",
+                LockStateDto {
+                    locked: false,
+                    available: false,
+                    mechanism: "none",
+                    unavailable_reason: Some("OS authentication unavailable".to_owned()),
+                },
+            ),
+        ],
+    );
+}
+
+#[test]
+fn shared_maintenance_contract_preserves_operation_and_restoration_outcomes() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../../../wire-contract.json")).unwrap();
+    let active = |revision, kind, phase| MaintenanceSnapshot::Active {
+        generation: 1,
+        revision,
+        kind,
+        phase,
+    };
+    let complete = |kind, operation, disposition| MaintenanceSnapshot::Complete {
+        generation: 1,
+        revision: 6,
+        kind,
+        operation,
+        disposition,
+    };
+    let failed = || MaintenanceOperationOutcome::Failed {
+        error: AgentError::new("io", "Destination full", false),
+    };
+    let restart = || MaintenanceDisposition::RestartSelectedRoot {
+        root: "/private/foks/selected".to_owned(),
+    };
+    let recovery = || MaintenanceDisposition::RecoveryRequired {
+        root: "/private/foks/selected".to_owned(),
+    };
+    let restoration_failed = || MaintenanceDisposition::RestorationFailed {
+        root: "/private/foks/current".to_owned(),
+        error: AgentError {
+            ambiguous: true,
+            fatal: true,
+            ..AgentError::new("agent-lost", "Restore failed", true)
+        },
+    };
+    assert_lifecycle_cases(
+        &fixture,
+        "maintenanceCases",
+        [
+            (
+                "idle",
+                MaintenanceSnapshot::Idle { generation: 0, revision: 0 },
+            ),
+            (
+                "selecting",
+                active(1, MaintenanceKind::Export, MaintenancePhase::Selecting),
+            ),
+            (
+                "confirming",
+                active(2, MaintenanceKind::Import, MaintenancePhase::Confirming),
+            ),
+            (
+                "quiescing",
+                active(3, MaintenanceKind::Relocate, MaintenancePhase::Quiescing),
+            ),
+            (
+                "running",
+                active(4, MaintenanceKind::Verify, MaintenancePhase::Running),
+            ),
+            (
+                "restoring",
+                active(5, MaintenanceKind::Restart, MaintenancePhase::Restoring),
+            ),
+            (
+                "cancelled",
+                complete(
+                    MaintenanceKind::Export,
+                    MaintenanceOperationOutcome::Cancelled,
+                    MaintenanceDisposition::ContinueCurrentRoot,
+                ),
+            ),
+            (
+                "completed",
+                complete(
+                    MaintenanceKind::Verify,
+                    MaintenanceOperationOutcome::Completed,
+                    MaintenanceDisposition::ContinueCurrentRoot,
+                ),
+            ),
+            (
+                "failed",
+                complete(
+                    MaintenanceKind::Import,
+                    failed(),
+                    MaintenanceDisposition::ContinueCurrentRoot,
+                ),
+            ),
+            (
+                "restart",
+                complete(
+                    MaintenanceKind::Relocate,
+                    MaintenanceOperationOutcome::Completed,
+                    restart(),
+                ),
+            ),
+            (
+                "recovery",
+                complete(
+                    MaintenanceKind::Import,
+                    MaintenanceOperationOutcome::Completed,
+                    recovery(),
+                ),
+            ),
+            (
+                "failedRestart",
+                complete(MaintenanceKind::Relocate, failed(), restart()),
+            ),
+            (
+                "failedRecovery",
+                complete(MaintenanceKind::Import, failed(), recovery()),
+            ),
+            (
+                "restorationFailed",
+                complete(
+                    MaintenanceKind::Restart,
+                    MaintenanceOperationOutcome::Completed,
+                    restoration_failed(),
+                ),
+            ),
+            (
+                "cancelledRestorationFailed",
+                complete(
+                    MaintenanceKind::Export,
+                    MaintenanceOperationOutcome::Cancelled,
+                    restoration_failed(),
+                ),
+            ),
+            (
+                "failedRestorationFailed",
+                complete(MaintenanceKind::Import, failed(), restoration_failed()),
+            ),
+        ],
+    );
+}
 
 #[test]
 fn server_status_requires_consistent_explicit_policy_facts() {
