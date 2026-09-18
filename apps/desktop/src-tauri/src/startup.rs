@@ -125,11 +125,9 @@ fn reset_warning(root: &Path) -> String {
 
 fn takeover_message(socket: &Path, pid: u32, executable: &Path) -> String {
     format!(
-        "A different FOKS version is using {}.\n\nProcess: {}\nExecutable: {}\n\n\
+        "A different FOKS version is using {}.\n\n    Process: {}\n    Executable: {}\n\n\
          Terminate this agent and let this application take over the socket? \
-         Other clients using this agent will be disconnected. Your accounts and vault data will not be deleted.\n\n\
-         FOKS will start its matching background service and continue startup. \
-         If another process claims the socket, FOKS will ask again before terminating it.",
+         Other clients using this agent will be disconnected. Your accounts and vault data will not be deleted.",
         socket.display(), pid, executable.display(),
     )
 }
@@ -204,12 +202,11 @@ mod tests {
             Path::new("/tmp/old/foks-agent"),
         );
         assert!(message.contains("/tmp/foks/agent.sock"));
-        assert!(message.contains("Process: 12345"));
-        assert!(message.contains("/tmp/old/foks-agent"));
+        assert!(message.contains("    Process: 12345\n    Executable: /tmp/old/foks-agent"));
         assert!(message.contains("will be disconnected"));
         assert!(message.contains("vault data will not be deleted"));
-        assert!(message.contains("continue startup"));
-        assert!(message.contains("ask again"));
+        assert!(!message.contains("continue startup"));
+        assert!(!message.contains("ask again"));
     }
 
     #[test]

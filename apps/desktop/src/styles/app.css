@@ -1948,9 +1948,7 @@ body {
   gap: 10px;
   padding: 8px 0;
   font-size: 13px;
-}
-.go-account-options.nested .go-account-option:has(input:checked) {
-  background: none;
+  cursor: default;
 }
 .go-account-options.nested .go-account-option:first-child {
   border-top: 1px solid var(--line-soft);

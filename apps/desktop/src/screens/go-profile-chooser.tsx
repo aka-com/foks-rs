@@ -1,6 +1,7 @@
 import { useId } from 'react';
 import type { ReactNode } from 'react';
 import type { GoProfileCandidate } from '../bridge';
+import { Button } from '../components';
 
 interface Props {
   candidates: GoProfileCandidate[];
@@ -26,21 +27,15 @@ export function GoProfileChooser({
   return (
     <div
       className={nested ? 'go-account-options nested' : 'go-account-options'}
-      role="radiogroup"
+      role={nested ? 'group' : 'radiogroup'}
       aria-label="FOKS accounts"
     >
       {candidates.map((candidate) => {
         const unavailable = !candidate.pairable && !candidate.copyable;
-        return (
-          <label className="go-account-option" key={candidate.candidateId}>
-            <input
-              type="radio"
-              name={group}
-              aria-label={`Select account ${candidate.username ?? shortId(candidate.userId)} on device ${shortId(candidate.deviceId)}`}
-              checked={selected === candidate.candidateId}
-              disabled={unavailable}
-              onChange={() => onSelect(candidate)}
-            />
+        const chosen = selected === candidate.candidateId;
+        const account = candidate.username ?? shortId(candidate.userId);
+        const text = (
+          <>
             {/* Two-line row layout matching radio card title and detail:
                 account name followed by server, role, and storage type.
                 Profiles without a username display the account ID in the
@@ -66,6 +61,33 @@ export function GoProfileChooser({
                   : 'Local storage'}
               </small>
             </span>
+          </>
+        );
+        if (nested)
+          return (
+            <div className="go-account-option" key={candidate.candidateId}>
+              {text}
+              <Button
+                size="sm"
+                aria-label={`${chosen ? 'Selected' : 'Select'} account ${account} on device ${shortId(candidate.deviceId)}`}
+                disabled={unavailable || chosen}
+                onClick={() => onSelect(candidate)}
+              >
+                {chosen ? 'Selected' : 'Select'}
+              </Button>
+            </div>
+          );
+        return (
+          <label className="go-account-option" key={candidate.candidateId}>
+            <input
+              type="radio"
+              name={group}
+              aria-label={`Select account ${account} on device ${shortId(candidate.deviceId)}`}
+              checked={chosen}
+              disabled={unavailable}
+              onChange={() => onSelect(candidate)}
+            />
+            {text}
           </label>
         );
       })}

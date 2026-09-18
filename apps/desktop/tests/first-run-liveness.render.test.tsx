@@ -771,7 +771,9 @@ for (const method of ['copy', 'pair', 'resume-pair'] as const) {
       },
     });
     await rendered.view.findByText('Set up FOKS');
-    ui.fireEvent.click(rendered.view.getByRole('radio', { name: /personal/ }));
+    await rendered.view.findByRole('button', {
+      name: /Selected account personal/,
+    });
     ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Continue' }));
     ui.fireEvent.click(
       rendered.view.getByRole('button', {
