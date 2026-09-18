@@ -623,7 +623,10 @@ export function PairSheet({
             <b>On this device</b>
             {offer ? (
               <>
-                <p>Type this phrase on the other device. It is shown once.</p>
+                <p>
+                  Type this phrase on the other device. Use Resume offer to show
+                  it again while pairing is pending.
+                </p>
                 <CopyBox text={offer.phrase} onCopy={onCopy}>
                   <span className="mono">{offer.phrase}</span>
                 </CopyBox>
@@ -672,7 +675,7 @@ export function PairSheet({
             <b>On the other device</b>
             <p>
               Open FOKS there, choose Add a device › Pair another device, and
-              start a pairing. It shows a phrase once.
+              start or resume a pairing to show its phrase.
             </p>
           </li>
           <li>

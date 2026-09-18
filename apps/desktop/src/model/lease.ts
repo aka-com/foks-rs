@@ -577,9 +577,10 @@ export function chatAvailable(
 export function canCreateInStore(
   snapshot: AgentSnapshot,
   ref: StoreRef,
+  options: AvailabilityOptions = {},
 ): boolean {
   const store = storeOf(snapshot, ref);
-  if (!store || !storeReadable(snapshot, store.id)) return false;
+  if (!store || !storeReadable(snapshot, store.id, options)) return false;
   if (store.kind === 'account') return true;
   const own = partiesOf(snapshot, store.id).filter(
     (party) =>
@@ -592,9 +593,13 @@ export function canCreateInStore(
 }
 
 /** Returns whether the local authenticated user has permission to edit the specified item. */
-export function canChangeItem(snapshot: AgentSnapshot, item: Item): boolean {
+export function canChangeItem(
+  snapshot: AgentSnapshot,
+  item: Item,
+  options: AvailabilityOptions = {},
+): boolean {
   const store = storeOf(snapshot, item.store);
-  if (!store || !canCreateInStore(snapshot, store.id)) return false;
+  if (!store || !canCreateInStore(snapshot, store.id, options)) return false;
   if (store.kind === 'account') return true;
   const own = partiesOf(snapshot, store.id).filter(
     (party) =>

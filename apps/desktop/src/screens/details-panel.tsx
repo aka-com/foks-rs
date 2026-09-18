@@ -2,7 +2,14 @@
  * Details panel displaying item metadata, content preview, sharing roster, and item actions.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useToast } from '/kit/toasts';
 import type { ReactNode } from 'react';
 import {
@@ -17,7 +24,6 @@ import {
 } from '../components';
 import type { FilterKind } from '../components';
 import {
-  canChangeItem,
   fmtSize,
   formatRole,
   isLogin,
@@ -29,7 +35,6 @@ import {
   partyName,
   peopleLabel,
   readersOf,
-  storeAvailability,
   storeOf,
 } from '../model';
 import type { Item, Party, RoleWire, AgentSnapshot } from '../model';
@@ -40,6 +45,7 @@ import type { Bridge, ItemRequest, ReadItemResponse } from '../bridge';
 import { useFileDrop } from '../file-drop';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { editableValue } from './edit-value';
+import { itemActionProblem } from './store-access';
 
 const FIELD_LABELS: Readonly<Record<string, string>> = {
   user: 'User name',
@@ -247,6 +253,7 @@ export function DetailsPanel({
     | null
   >(null);
   const toasts = useToast();
+  const accessDescriptionId = useId();
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
   const [editPasswordShown, setEditPasswordShown] = useState(false);
@@ -290,16 +297,33 @@ export function DetailsPanel({
   const localAccessSession = useRef<object>({});
   const activeAccessSession = accessSession ?? localAccessSession.current;
 
-  const accessAvailable = useCallback((): boolean => {
-    const currentStore = item ? storeOf(snapshot, item.store) : undefined;
-    return Boolean(
-      (accessTicket?.isCurrent() ?? true) &&
-      currentStore &&
-      storeAvailability(snapshot, currentStore, {
-        nowSeconds: accessNow(),
-      }).available,
-    );
-  }, [accessNow, accessTicket, item, snapshot]);
+  const accessProblem = useCallback(
+    (write = false): string | undefined => {
+      if (accessTicket && !accessTicket.isCurrent())
+        return 'Access changed. Refresh this item before continuing.';
+      return item
+        ? itemActionProblem(snapshot, item, write, accessNow())
+        : 'This item is no longer available. Refresh the vault before continuing.';
+    },
+    [accessNow, accessTicket, item, snapshot],
+  );
+  const accessProblemRef = useRef(accessProblem);
+  accessProblemRef.current = accessProblem;
+  const accessAvailable = useCallback(() => !accessProblemRef.current(), []);
+  const requireAccess = useCallback((write = false): boolean => {
+    const message = accessProblemRef.current(write);
+    if (!message) return true;
+    if (write) setEditError(message);
+    else setRead({ key: keyRef.current, state: 'error', message });
+    return false;
+  }, []);
+  const readProblem = accessProblem();
+  const writeProblem = accessProblem(true);
+  useEffect(() => {
+    if (!readProblem) return;
+    setRead(null);
+    setEditPasswordShown(false);
+  }, [readProblem]);
 
   const request = useMemo<ItemRequest | null>(
     () =>
@@ -314,7 +338,7 @@ export function DetailsPanel({
     const requestKey = key;
     const epoch = concealEpoch.current;
     const generation = accessGeneration;
-    if (!accessAvailable()) return;
+    if (!requireAccess()) return;
     setRead({ key: requestKey, state: 'loading' });
     try {
       const response = await readOnce(
@@ -327,20 +351,20 @@ export function DetailsPanel({
       if (
         epoch !== concealEpoch.current ||
         keyRef.current !== requestKey ||
-        accessGenerationRef.current !== generation ||
-        !accessAvailable()
+        accessGenerationRef.current !== generation
       )
         return;
+      if (!requireAccess()) return;
       setRead({ key: requestKey, state: 'shown', value: response.value });
       return response.value;
     } catch (error) {
       if (
         epoch !== concealEpoch.current ||
         keyRef.current !== requestKey ||
-        accessGenerationRef.current !== generation ||
-        !accessAvailable()
+        accessGenerationRef.current !== generation
       )
         return;
+      if (!requireAccess()) return;
       const typed = normalizeCommandError(error);
       if (typed.code === 'agent-lost') {
         onCommandError(error, item);
@@ -358,7 +382,7 @@ export function DetailsPanel({
       });
     }
   }, [
-    accessAvailable,
+    requireAccess,
     accessGeneration,
     activeAccessSession,
     bridge,
@@ -556,15 +580,23 @@ export function DetailsPanel({
   const fileMode = item.kind === 'File' || binaryFile;
   const displayKind: FilterKind = kind;
   const team = store?.kind === 'team';
-  const canChange = canChangeItem(snapshot, item);
+  const saveProblem =
+    writeProblem ??
+    (editTarget.current &&
+    editScope.current === scopeIdentity &&
+    editGeneration.current === accessGeneration
+      ? undefined
+      : 'Access changed. Reopen the editor before saving.');
+  const blockingReason = readProblem ?? (editing ? saveProblem : writeProblem);
   const readers = readersOf(snapshot, item);
   const parties = store ? partiesOf(snapshot, store.id) : [];
   const activeRead = read?.key === key ? read : null;
-  const shownValue = activeRead?.state === 'shown' ? activeRead.value : null;
+  const shownValue =
+    !readProblem && activeRead?.state === 'shown' ? activeRead.value : null;
   const readError = activeRead?.state === 'error' ? activeRead.message : null;
   const reading = activeRead?.state === 'loading';
   const copyValue = async (): Promise<void> => {
-    if (!request || !accessAvailable()) return;
+    if (!request || !requireAccess()) return;
     try {
       await bridge.copyItemValue(request);
       toasts.show(`${kind === 'Password' ? 'Password' : 'Value'} copied`);
@@ -577,7 +609,8 @@ export function DetailsPanel({
   };
 
   const beginEdit = async (): Promise<void> => {
-    if (!request || !accessAvailable()) return;
+    if (!request || !requireAccess(true)) return;
+    setEditError(null);
     if (fileMode) {
       editBaseline.current = '';
       editTarget.current = item;
@@ -634,15 +667,18 @@ export function DetailsPanel({
   };
 
   const saveEdit = async (): Promise<void> => {
+    if (saving || !requireAccess(true)) return;
     const target = editTarget.current;
     if (
       !request ||
       !target ||
       editScope.current !== scopeIdentity ||
-      editGeneration.current !== accessGeneration ||
-      !accessAvailable()
-    )
+      editGeneration.current !== accessGeneration
+    ) {
+      setEditError('Access changed. Reopen the editor before saving.');
       return;
+    }
+    setEditError(null);
     const editRequest = {
       storeId: target.store,
       path: target.path,
@@ -719,7 +755,17 @@ export function DetailsPanel({
                 secret ? (
                   <button
                     type="button"
-                    onClick={() => setEditPasswordShown((shown) => !shown)}
+                    disabled={!editPasswordShown && Boolean(readProblem)}
+                    title={!editPasswordShown ? readProblem : undefined}
+                    aria-describedby={
+                      !editPasswordShown && readProblem
+                        ? accessDescriptionId
+                        : undefined
+                    }
+                    onClick={() => {
+                      if (editPasswordShown || requireAccess())
+                        setEditPasswordShown((shown) => !shown);
+                    }}
                   >
                     <Icon name={editPasswordShown ? 'eyeoff' : 'eye'} />
                     {editPasswordShown ? 'Hide' : 'Show'}
@@ -753,13 +799,25 @@ export function DetailsPanel({
                     <>
                       <button
                         type="button"
-                        disabled={reading}
+                        disabled={reading || Boolean(readProblem)}
+                        title={readProblem}
+                        aria-describedby={
+                          readProblem ? accessDescriptionId : undefined
+                        }
                         onClick={() => void show()}
                       >
                         <Icon name="eye" />
                         {reading ? 'Reading…' : 'Show'}
                       </button>
-                      <button type="button" onClick={() => void copyValue()}>
+                      <button
+                        type="button"
+                        disabled={Boolean(readProblem)}
+                        title={readProblem}
+                        aria-describedby={
+                          readProblem ? accessDescriptionId : undefined
+                        }
+                        onClick={() => void copyValue()}
+                      >
                         <Icon name="copy" />
                         Copy
                       </button>
@@ -776,7 +834,15 @@ export function DetailsPanel({
                         <Icon name="eyeoff" />
                         Hide
                       </button>
-                      <button type="button" onClick={() => void copyValue()}>
+                      <button
+                        type="button"
+                        disabled={Boolean(readProblem)}
+                        title={readProblem}
+                        aria-describedby={
+                          readProblem ? accessDescriptionId : undefined
+                        }
+                        onClick={() => void copyValue()}
+                      >
                         <Icon name="copy" />
                         Copy
                       </button>
@@ -804,13 +870,25 @@ export function DetailsPanel({
               <>
                 <button
                   type="button"
-                  disabled={reading}
+                  disabled={reading || Boolean(readProblem)}
+                  title={readProblem}
+                  aria-describedby={
+                    readProblem ? accessDescriptionId : undefined
+                  }
                   onClick={() => void show()}
                 >
                   <Icon name="eye" />
                   {reading ? 'Reading…' : 'Show'}
                 </button>
-                <button type="button" onClick={() => void copyValue()}>
+                <button
+                  type="button"
+                  disabled={Boolean(readProblem)}
+                  title={readProblem}
+                  aria-describedby={
+                    readProblem ? accessDescriptionId : undefined
+                  }
+                  onClick={() => void copyValue()}
+                >
                   <Icon name="copy" />
                   Copy
                 </button>
@@ -827,7 +905,15 @@ export function DetailsPanel({
                   <Icon name="eyeoff" />
                   Hide
                 </button>
-                <button type="button" onClick={() => void copyValue()}>
+                <button
+                  type="button"
+                  disabled={Boolean(readProblem)}
+                  title={readProblem}
+                  aria-describedby={
+                    readProblem ? accessDescriptionId : undefined
+                  }
+                  onClick={() => void copyValue()}
+                >
                   <Icon name="copy" />
                   Copy
                 </button>
@@ -854,8 +940,11 @@ export function DetailsPanel({
             <Button
               variant="primary"
               icon="download"
+              disabled={Boolean(readProblem)}
+              title={readProblem}
+              aria-describedby={readProblem ? accessDescriptionId : undefined}
               onClick={() => {
-                if (!request) return;
+                if (!request || !requireAccess()) return;
                 void bridge.downloadFile(request).then(
                   ({ saved }) =>
                     toasts.show(
@@ -911,18 +1000,23 @@ export function DetailsPanel({
                 : kindLabel(displayKind)}
           </SectionLabel>
         ) : null}
+        {blockingReason ? (
+          <p id={accessDescriptionId} className="action-error" role="status">
+            {blockingReason}
+          </p>
+        ) : null}
         {preview}
         {editing ? (
           <div className="pfn">
             {`This item will save as version ${item.version + 1}. If it was modified elsewhere, refresh to review updates before saving.`}
           </div>
         ) : null}
-        {readError ? (
+        {readError && readError !== blockingReason ? (
           <p className="action-error" role="alert">
             {readError}
           </p>
         ) : null}
-        {editError ? (
+        {editError && editError !== blockingReason ? (
           <p className="action-error" role="alert">
             {editError}
           </p>
@@ -936,7 +1030,9 @@ export function DetailsPanel({
               </Button>
               <Button
                 variant="primary"
-                disabled={saving}
+                disabled={saving || Boolean(saveProblem)}
+                title={saveProblem}
+                aria-describedby={saveProblem ? accessDescriptionId : undefined}
                 onClick={() => void saveEdit()}
               >
                 {saving ? 'Saving…' : 'Save changes'}
@@ -946,11 +1042,10 @@ export function DetailsPanel({
             <>
               <Button
                 icon="pencil"
-                disabled={!canChange || saving}
-                title={
-                  !canChange
-                    ? `You need ${roleText(item.write)} permissions to edit this item.`
-                    : 'Edit this item'
+                disabled={Boolean(writeProblem) || saving}
+                title={writeProblem ?? 'Edit this item'}
+                aria-describedby={
+                  writeProblem ? accessDescriptionId : undefined
                 }
                 onClick={() => void beginEdit()}
               >
@@ -959,14 +1054,13 @@ export function DetailsPanel({
               <Button
                 variant="danger"
                 icon="trash"
-                disabled={!canChange}
-                title={
-                  canChange
-                    ? 'Delete this item'
-                    : `You need ${roleText(item.write)} permissions to delete this item.`
+                disabled={Boolean(writeProblem)}
+                title={writeProblem ?? 'Delete this item'}
+                aria-describedby={
+                  writeProblem ? accessDescriptionId : undefined
                 }
                 onClick={() => {
-                  if (accessAvailable()) onDelete(item);
+                  if (requireAccess(true)) onDelete(item);
                 }}
               >
                 Delete

@@ -7,6 +7,7 @@ import test from 'node:test';
 
 import { FIXTURE } from '../src/fixture';
 import {
+  PROTOCOL_CAPABILITIES,
   admissionActive,
   storeDescription,
   storeDescriptionState,
@@ -513,6 +514,36 @@ test('a group-detail failure changes its caption without stopping item access', 
   assert.ok(store);
   assert.equal(storeDescription(snapshot, store), 'Roster unavailable');
   assert.equal(storeReadable(snapshot, store.id), true);
+});
+
+test('write eligibility uses the same availability clock as dispatch', () => {
+  const staging = item(FIXTURE, 'team:eng|/deploy/staging-token');
+  const snapshot: AgentSnapshot = {
+    ...FIXTURE,
+    observedExpiredLeases: [],
+    servers: FIXTURE.servers.map((server) =>
+      server.id === 'acme'
+        ? {
+            ...server,
+            compatibility: {
+              status: 'required',
+              capabilities: PROTOCOL_CAPABILITIES,
+              expiresAt: 10,
+            },
+          }
+        : server,
+    ),
+  };
+  assert.equal(canChangeItem(snapshot, staging, { nowSeconds: 5 }), true);
+  assert.equal(
+    canCreateInStore(snapshot, staging.store, { nowSeconds: 5 }),
+    true,
+  );
+  assert.equal(canChangeItem(snapshot, staging, { nowSeconds: 11 }), false);
+  assert.equal(
+    canCreateInStore(snapshot, staging.store, { nowSeconds: 11 }),
+    false,
+  );
 });
 
 test('group item changes require one authenticated local party that admits the write role', () => {

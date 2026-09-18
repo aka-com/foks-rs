@@ -115,8 +115,8 @@ function ToastItem({
       className={`toast toast-owned${visible ? ' show' : ''}`}
       data-toast-id={entry.id}
       data-toast-tone={warning ? 'warning' : 'info'}
-      role={warning ? 'alert' : undefined}
-      aria-live={warning ? 'assertive' : undefined}
+      role={warning ? 'alert' : 'status'}
+      aria-atomic="true"
     >
       <span className="toast-message">{entry.message}</span>
       {entry.action ? (
@@ -188,13 +188,7 @@ export function ToastProvider({
   );
 
   const host = (
-    <div
-      id="toasts"
-      className="toasts"
-      role="status"
-      aria-live="polite"
-      aria-atomic="false"
-    >
+    <div id="toasts" className="toasts">
       {entries.map((entry) => (
         <ToastItem key={entry.id} entry={entry} dismiss={dismiss} />
       ))}

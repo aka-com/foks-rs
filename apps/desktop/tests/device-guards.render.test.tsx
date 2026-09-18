@@ -204,9 +204,51 @@ function pairSheet(
 
 test('an untouched accept form answers nothing', async () => {
   const h = await harness();
-  const { store } = h.mount(pairSheet(h, 'accept', h.bridge()));
+  const { store, rendered } = h.mount(pairSheet(h, 'accept', h.bridge()));
   assert.equal(h.verdict(store), null);
+  assert.match(
+    rendered.baseElement.textContent ?? '',
+    /start or resume a pairing/,
+  );
+  assert.doesNotMatch(
+    rendered.baseElement.textContent ?? '',
+    /shown once|shows a phrase once/,
+  );
 });
+
+for (const action of ['Start', 'Resume offer']) {
+  test(`${action} explains that a pending pairing phrase can be shown again`, async () => {
+    const h = await harness();
+    const offer = {
+      accountAlias: h.account.account,
+      phrase: 'alpha bravo charlie delta',
+    };
+    const { rendered } = h.mount(
+      pairSheet(
+        h,
+        'offer',
+        h.bridge({
+          startDevicePairing: async () => offer,
+          resumeDevicePairingOffer: async () => offer,
+        }),
+      ),
+    );
+    ui.fireEvent.click(rendered.getByRole('button', { name: action }));
+    await ui.waitFor(() => assert.ok(rendered.getByText(offer.phrase)));
+    assert.match(
+      rendered.baseElement.textContent ?? '',
+      /Use Resume offer to show it again while pairing is pending/,
+    );
+    assert.doesNotMatch(
+      rendered.baseElement.textContent ?? '',
+      /shown once|shows a phrase once/,
+    );
+    if (action === 'Resume offer')
+      assert.ok(
+        rendered.getByText('The phrase below is the one already issued.'),
+      );
+  });
+}
 
 test('a pairing the agent is holding refuses the move', async () => {
   const h = await harness();

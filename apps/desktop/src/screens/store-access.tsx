@@ -4,18 +4,46 @@ import type { ReactNode } from 'react';
 import { Band, Button, Notice } from '../components';
 import {
   serverName as displayServerName,
+  canChangeItem,
+  storeAvailability,
+  storeOf,
   serverOf,
   storeDescriptionState,
   storeHeadingDescription,
 } from '../model';
 import type {
   AccountStore,
+  Item,
   Store,
   StoreDescriptionState,
   AgentSnapshot,
   StoreOperation,
 } from '../model';
 import { PageHeader } from '../shell/page-header';
+
+export function itemActionProblem(
+  snapshot: AgentSnapshot,
+  item: Item,
+  write: boolean,
+  nowSeconds: number,
+): string | undefined {
+  const current = snapshot.items.find(
+    (entry) => entry.store === item.store && entry.path === item.path,
+  );
+  if (!current)
+    return 'This item is no longer available. Refresh the vault before continuing.';
+  const store = storeOf(snapshot, current.store);
+  if (!store)
+    return 'This vault is unavailable. Refresh the vault before continuing.';
+  const options = { nowSeconds };
+  const access = storeAvailability(snapshot, store, options);
+  if (!access.available)
+    return accessCopy(access.reason, store, displayServerName(snapshot, store))
+      .detail;
+  if (write && !canChangeItem(snapshot, current, options))
+    return 'You do not have permission to change this item.';
+  return undefined;
+}
 
 export type AccessProblem = Exclude<StoreDescriptionState, 'normal'>;
 

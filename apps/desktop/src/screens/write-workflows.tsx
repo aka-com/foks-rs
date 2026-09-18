@@ -1,5 +1,5 @@
 import { useTabSheetState } from '../navigation-guard';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useId, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { Dialog, DismissibleDialog } from '/kit/overlay-primitives';
 import {
@@ -27,7 +27,6 @@ import {
   kindLabel,
   kindOf,
   canCreateInStore,
-  canChangeItem,
   defaultCreateStore,
   leaseLapsed,
   nameOf,
@@ -40,7 +39,6 @@ import {
   storeNavigationOrder,
   storeAvailability,
   storeOf,
-  storeReadable,
 } from '../model';
 import type {
   Item,
@@ -58,6 +56,7 @@ import { useFileDrop } from '../file-drop';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { useToast } from '/kit/toasts';
 import { editableValue } from './edit-value';
+import { itemActionProblem } from './store-access';
 
 export type NewKind = Exclude<ItemKind, 'Folder'>;
 
@@ -1087,6 +1086,9 @@ function DeleteSheet({
 }): ReactNode {
   const toasts = useToast();
   const [deleting, setDeleting] = useState(false);
+  const [, recheckAccess] = useState(0);
+  const accessDescriptionId = useId();
+  const problem = itemActionProblem(snapshot, workflow.item, true, accessNow());
   return (
     <SheetDialog
       danger
@@ -1103,19 +1105,17 @@ function DeleteSheet({
           <Button
             variant="primary"
             danger
-            disabled={deleting}
+            disabled={deleting || Boolean(problem)}
+            title={problem}
+            aria-describedby={problem ? accessDescriptionId : undefined}
             onClick={() => {
-              const store = storeOf(snapshot, workflow.item.store);
+              if (deleting) return;
               if (
-                deleting ||
-                !store ||
-                !storeAvailability(snapshot, store, {
-                  nowSeconds: accessNow(),
-                }).available ||
-                !storeReadable(snapshot, workflow.item.store) ||
-                !canChangeItem(snapshot, workflow.item)
-              )
+                itemActionProblem(snapshot, workflow.item, true, accessNow())
+              ) {
+                recheckAccess((revision) => revision + 1);
                 return;
+              }
               setDeleting(true);
               void (async () => {
                 try {
@@ -1149,6 +1149,11 @@ function DeleteSheet({
         </>
       }
     >
+      {problem ? (
+        <p id={accessDescriptionId} className="action-error" role="status">
+          {problem}
+        </p>
+      ) : null}
       <p>This cannot be undone.</p>
     </SheetDialog>
   );

@@ -269,6 +269,19 @@ test('shell stylesheet contains required grid and flexbox layout rules', async (
   assert.match(shell, /\.toasts\{[^}]*position:fixed;[^}]*z-index:20/);
 });
 
+test('disabled detail actions stay visible without active hover or pointer styling', async () => {
+  const shell = await readSource(SHELL, import.meta.url);
+  assert.match(
+    shell,
+    /\.details \.prev \.irow \.a button\[disabled\],\.details \.inset\.edit \.fr \.a button\[disabled\]\{opacity:\.5;cursor:default\}/,
+  );
+  assert.match(shell, /\.prev \.irow \.a button:hover:not\(:disabled\)/);
+  assert.match(
+    shell,
+    /\.details \.inset\.edit \.fr \.a button:hover:not\(:disabled\)/,
+  );
+});
+
 test('app stylesheet uses design tokens and declares no hardcoded colors', async () => {
   const app = await readSource('../src/styles/app.css', import.meta.url);
   // Enforce CSS variables for all color values to prevent design drift.

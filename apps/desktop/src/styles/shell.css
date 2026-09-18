@@ -543,7 +543,7 @@ details.dd li b{color:var(--ink-2)}
 .prev .irow.rev{flex-wrap:wrap;row-gap:2px}.prev .irow.rev .a{margin-left:auto}
 .prev .irow.rev .v{flex-basis:100%;order:3;padding-bottom:3px;white-space:normal;overflow-wrap:anywhere}
 .prev .irow .a button{height:24px;padding:0 8px;border-radius:var(--radius-pill);background:var(--chip-bg);font-size:12px;font-weight:600;color:var(--chip-ink);display:inline-flex;align-items:center;gap:4px}
-.prev .irow .a button:hover{background:rgba(0,0,0,.1)}.prev .irow .a button .ic{font-size:13px}
+.prev .irow .a button:hover:not(:disabled){background:rgba(0,0,0,.1)}.prev .irow .a button .ic{font-size:13px}
 .prev .pad{padding:12px}
 .prev .row2{display:flex;gap:8px;margin-top:10px}.prev .row2 .btn{height:30px;padding:0 11px;font-size:13px}
 .prev .fileglyph{display:flex;align-items:center;gap:12px}
@@ -559,8 +559,9 @@ details.dd li b{color:var(--ink-2)}
 .details .inset.edit .fr input[type=password]{font:13px var(--mono);letter-spacing:.08em}
 .details .inset.edit .fr .a{display:flex;gap:4px;flex:none}
 .details .inset.edit .fr .a button{height:24px;padding:0 8px;border-radius:var(--radius-pill);background:var(--chip-bg);font-size:12px;font-weight:600;color:var(--chip-ink);display:inline-flex;align-items:center;gap:4px}
-.details .inset.edit .fr .a button:hover{background:rgba(0,0,0,.1)}
+.details .inset.edit .fr .a button:hover:not(:disabled){background:rgba(0,0,0,.1)}
 .details .inset.edit .fr .a button .ic{font-size:13px}
+.details .prev .irow .a button[disabled],.details .inset.edit .fr .a button[disabled]{opacity:.5;cursor:default}
 .eact{display:flex;gap:8px;justify-content:flex-end;margin:12px 0 6px}
 .eact .btn{height:30px;font-size:13px}
 .pfn{font-size:12px;color:var(--muted);margin:8px 2px 0;line-height:1.5}

@@ -81,6 +81,250 @@ async function setup(
   return { props, draw, subject, bridge };
 }
 
+for (const kind of ['Secret', 'File'] as const) {
+  test(`${kind} actions remain visible but disabled after vault access is lost`, async () => {
+    const p = await setup(undefined, (item) => item.kind === kind);
+    const rendered = ui.render(p.draw());
+    p.props.snapshot = {
+      ...p.props.snapshot,
+      storeInventory: p.props.snapshot.storeInventory.map((entry) =>
+        entry.store === p.subject.store
+          ? { ...entry, status: 'unavailable' as const }
+          : entry,
+      ),
+    };
+    rendered.rerender(p.draw());
+    for (const name of kind === 'File'
+      ? ['Download', 'Edit', 'Delete']
+      : ['Show', 'Copy', 'Edit', 'Delete']) {
+      const button = rendered.getByRole('button', {
+        name,
+      }) as HTMLButtonElement;
+      assert.equal(button.disabled, true, name);
+      assert.match(button.title, /unavailable|could not be loaded/i);
+      const description = button.getAttribute('aria-describedby');
+      assert.ok(
+        description && document.getElementById(description)?.textContent,
+      );
+    }
+    assert.equal(
+      (rendered.getByRole('button', { name: 'Close' }) as HTMLButtonElement)
+        .disabled,
+      false,
+    );
+  });
+}
+
+test('an open edit disables Save after access loss without discarding the draft or removing controls', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
+  let writes = 0;
+  p.bridge.editTextItem = async () => {
+    writes++;
+    return { applied: true };
+  };
+  const original = p.props.snapshot;
+  const rendered = ui.render(p.draw());
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
+  const username = await rendered.findByLabelText('User name');
+  ui.fireEvent.change(username, { target: { value: 'retained-draft' } });
+  p.props.snapshot = {
+    ...original,
+    storeInventory: original.storeInventory.map((entry) =>
+      entry.store === p.subject.store
+        ? { ...entry, status: 'unavailable' as const }
+        : entry,
+    ),
+  };
+  rendered.rerender(p.draw());
+  const save = rendered.getByRole('button', {
+    name: 'Save changes',
+  }) as HTMLButtonElement;
+  assert.equal(save.disabled, true);
+  assert.match(save.title, /unavailable|could not be loaded/i);
+  assert.equal(
+    (rendered.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement)
+      .disabled,
+    false,
+  );
+  assert.equal(
+    (rendered.getByLabelText('User name') as HTMLInputElement).value,
+    'retained-draft',
+  );
+  ui.fireEvent.click(save);
+  assert.equal(writes, 0);
+  p.props.snapshot = original;
+  rendered.rerender(p.draw());
+  assert.equal(
+    (
+      rendered.getByRole('button', {
+        name: 'Save changes',
+      }) as HTMLButtonElement
+    ).disabled,
+    false,
+  );
+});
+
+test('an open team edit disables Save when its write authorization is revoked', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/deploy/staging-token',
+  );
+  const rendered = ui.render(p.draw());
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
+  await rendered.findByRole('button', { name: 'Save changes' });
+  p.props.snapshot = {
+    ...p.props.snapshot,
+    parties: p.props.snapshot.parties.filter(
+      (party) => party.store !== p.subject.store || party.label !== 'you',
+    ),
+  };
+  rendered.rerender(p.draw());
+  const save = rendered.getByRole('button', {
+    name: 'Save changes',
+  }) as HTMLButtonElement;
+  assert.equal(save.disabled, true);
+  assert.match(save.title, /permission to change/);
+  assert.equal(
+    (rendered.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement)
+      .disabled,
+    false,
+  );
+});
+
+test('access expiring between render and click disables Show and explains the refusal', async () => {
+  let reads = 0;
+  const p = await setup(async () => {
+    reads++;
+    throw new Error('must not read');
+  });
+  let now = 1;
+  p.props.accessNow = () => now;
+  const store = p.props.snapshot.stores.find(
+    (entry) => entry.id === p.subject.store,
+  )!;
+  p.props.snapshot = {
+    ...p.props.snapshot,
+    observedExpiredLeases: [],
+    servers: p.props.snapshot.servers.map((server) =>
+      server.id === store.server
+        ? {
+            ...server,
+            compatibility: {
+              status: 'required' as const,
+              expiresAt: 2,
+              capabilities: PROTOCOL_CAPABILITIES,
+            },
+          }
+        : server,
+    ),
+  };
+  const rendered = ui.render(p.draw());
+  now = 3;
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Show' }));
+  await ui.waitFor(() =>
+    assert.equal(
+      (rendered.getByRole('button', { name: 'Show' }) as HTMLButtonElement)
+        .disabled,
+      true,
+    ),
+  );
+  assert.match(rendered.container.textContent ?? '', /expired/);
+  assert.equal(reads, 0);
+});
+
+test('an already-open Delete sheet disables its action when access is lost and re-enables after recovery', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
+  const { WriteOverlay } = (await vite.ssrLoadModule(
+    '/src/screens/write-workflows.tsx',
+  )) as typeof import('../src/screens/write-workflows');
+  const { OverlayProvider } = (await vite.ssrLoadModule(
+    '/kit/overlay-primitives.tsx',
+  )) as typeof import('../kit/overlay-primitives');
+  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
+    '/kit/toasts.tsx',
+  )) as typeof import('../kit/toasts');
+  let snapshot = p.props.snapshot;
+  let writes = 0;
+  p.bridge.removeItem = async () => {
+    writes++;
+    return { applied: true };
+  };
+  const controller = new ToastController();
+  const portalRoot = document.getElementById('overlays');
+  assert.ok(portalRoot);
+  const draw = () =>
+    createElement(OverlayProvider, {
+      backgroundRef: { current: null },
+      portalRoot,
+      children: createElement(ToastProvider, {
+        controller,
+        children: createElement(WriteOverlay, {
+          snapshot,
+          bridge: p.bridge,
+          workflow: { kind: 'delete', item: p.subject },
+          setWorkflow: () => {},
+          onApplied: async () => {},
+          onError: () => {},
+          onMutationError: async () => {},
+          onRefreshConflict: async () => {},
+          onDiscardConflict: () => {},
+          onOpenExisting: async () => {},
+        }),
+      }),
+    });
+  const rendered = ui.render(draw());
+  snapshot = {
+    ...snapshot,
+    storeInventory: snapshot.storeInventory.map((entry) =>
+      entry.store === p.subject.store
+        ? { ...entry, status: 'unavailable' as const }
+        : entry,
+    ),
+  };
+  rendered.rerender(draw());
+  const remove = rendered.getByRole('button', {
+    name: 'Delete',
+  }) as HTMLButtonElement;
+  assert.equal(remove.disabled, true);
+  assert.match(remove.title, /unavailable|could not be loaded/i);
+  assert.equal(
+    (rendered.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement)
+      .disabled,
+    false,
+  );
+  ui.fireEvent.click(remove);
+  assert.equal(writes, 0);
+  snapshot = p.props.snapshot;
+  rendered.rerender(draw());
+  assert.equal(
+    (rendered.getByRole('button', { name: 'Delete' }) as HTMLButtonElement)
+      .disabled,
+    false,
+  );
+  snapshot = {
+    ...snapshot,
+    items: snapshot.items.filter(
+      (item) => item.store !== p.subject.store || item.path !== p.subject.path,
+    ),
+  };
+  rendered.rerender(draw());
+  assert.equal(
+    (rendered.getByRole('button', { name: 'Delete' }) as HTMLButtonElement)
+      .disabled,
+    true,
+  );
+  assert.match(
+    rendered.baseElement.textContent ?? '',
+    /item is no longer available/,
+  );
+});
+
 test('a retired access ticket rejects a late secret read without relying on component remount', async () => {
   const { AccessLifetime } = await import('../src/app/access-lifetime');
   const lifetime = new AccessLifetime();
