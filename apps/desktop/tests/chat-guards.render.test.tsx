@@ -425,6 +425,9 @@ test('local intent persistence survives navigation and retains the next draft', 
   write('keep this until saved');
   await click(ui.screen.getByRole('button', { name: 'Send' }));
   await ui.screen.findByText('Sending…', { selector: '[role="status"]' });
+  const sending = document.querySelector<HTMLElement>('.chat-outgoing');
+  assert.ok(sending);
+  assert.equal(ui.within(sending).queryByText('Details'), null);
   assert.equal(composer().value, '');
   assert.equal(composer().disabled, false);
   write('the next draft');

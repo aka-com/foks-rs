@@ -681,7 +681,8 @@
 }
 .chat-message header time {
   flex: none;
-  font: 12px var(--mono);
+  font-family: inherit;
+  font-size: 12px;
   color: var(--faint);
 }
 .chat-message p {
@@ -757,35 +758,8 @@
   gap: 10px;
   margin-top: 8px;
 }
-/* Dimmed, inert controls for agents. */
-.chat-composer-tools {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex: none;
-}
-.chat-composer-tools .btn.icon {
-  width: 26px;
-  height: 26px;
-  border: 0;
-  box-shadow: none;
-  background: transparent;
-  color: var(--faint);
-}
-.chat-composer-tools .btn.icon[aria-disabled='true'] {
-  opacity: 1;
-  cursor: default;
-}
-.chat-mdhint {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin: 6px 0 0;
-  font-size: 12px;
-  color: var(--faint);
-}
-.chat-mdhint .mono {
-  font: 12px var(--mono);
+.chat-composer-row .btn {
+  margin-left: auto;
 }
 .chat-composer-row small {
   flex: 1;

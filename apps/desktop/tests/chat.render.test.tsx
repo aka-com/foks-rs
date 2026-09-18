@@ -196,8 +196,11 @@ test('the composer exposes only supported actions', async () => {
     'Set an exploding timer',
   ])
     assert.equal(ui.screen.queryByRole('button', { name: label }), null);
-  // The hint offers only markup the thread actually renders.
-  assert.ok(ui.screen.getByText('**bold**'));
+  assert.equal(ui.screen.queryByText('**bold**'), null);
+  assert.equal(
+    ui.screen.queryByText('Enter to send · Shift+Enter for a new line'),
+    null,
+  );
   assert.equal(ui.screen.queryByText('@user'), null);
 });
 
@@ -216,6 +219,8 @@ test('renders channel descriptions, message times, and bounded inbox previews', 
   const time = document.querySelector<HTMLTimeElement>('.chat-message time');
   assert.equal(time?.dateTime, '2023-11-14T22:13:20.001Z');
   assert.match(time?.title ?? '', /inserted as message 1/);
+  assert.match(time?.textContent ?? '', /ago|yesterday|just now/);
+  assert.doesNotMatch(time?.textContent ?? '', /2023/);
 });
 
 test('conversation inbox wakes, refreshes history, and shows unread state', async () => {

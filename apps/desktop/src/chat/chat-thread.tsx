@@ -13,7 +13,12 @@ import { useChatReadIntent } from './use-chat-read-intent';
 import { useChatViewport } from './use-chat-viewport';
 import { useChatHistory } from './use-chat-history';
 import { PendingRow } from './pending-row';
-import { channelTitle, messageDate, messageTime } from './presentation';
+import {
+  channelTitle,
+  messageDate,
+  messageTime,
+  relativeMessageTime,
+} from './presentation';
 export function ChatThread({
   channel,
   teamName,
@@ -116,6 +121,7 @@ export function ChatThread({
     outgoing.flatMap((m) => (m.operation ? [m.operation.id] : [])),
   );
   const hintId = useId();
+  const waitingForSavedWork = !canSend && Boolean(draft.trim());
   const newFrom = useChatReadIntent(
     channel.id,
     messages,
@@ -294,7 +300,7 @@ export function ChatThread({
                           dateTime={messageDate(m.insert_time)?.toISOString()}
                           title={`Sent ${messageTime(m.send_time)} · inserted as message ${m.sequence}`}
                         >
-                          {messageTime(m.insert_time)}
+                          {relativeMessageTime(m.insert_time)}
                         </time>
                       </header>
                       {m.content.kind === 'text' ? (
@@ -385,7 +391,7 @@ export function ChatThread({
               )}
               <textarea
                 aria-label="Message"
-                aria-describedby={hintId}
+                aria-describedby={waitingForSavedWork ? hintId : undefined}
                 value={draft}
                 placeholder={`Message ${title}`}
                 rows={2}
@@ -403,11 +409,11 @@ export function ChatThread({
                 }}
               />
               <div className="chat-composer-row">
-                <small id={hintId}>
-                  {!canSend && draft.trim()
-                    ? 'Waiting for saved work. You can keep typing.'
-                    : 'Enter to send · Shift+Enter for a new line'}
-                </small>
+                {waitingForSavedWork ? (
+                  <small id={hintId}>
+                    Waiting for saved work. You can keep typing.
+                  </small>
+                ) : null}
                 {nearLimit && (
                   <small
                     className={overLimit ? 'chat-meter over' : 'chat-meter'}
@@ -424,15 +430,6 @@ export function ChatThread({
                   Send
                 </Button>
               </div>
-              {/* Only the markup the thread actually renders is advertised. */}
-              <p className="chat-mdhint">
-                <span className="mono">**bold**</span>
-                <span className="mono">*italics*</span>
-                <span className="mono">`code`</span>
-                <span className="mono">&gt; quote</span>
-                <span className="mono">- list</span>
-                <span className="mono">[label](https://…)</span>
-              </p>
             </form>
           ) : (
             <p className="chat-quiet">

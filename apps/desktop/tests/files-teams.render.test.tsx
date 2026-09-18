@@ -144,6 +144,24 @@ async function teams(
   return rendered;
 }
 
+test('Teams centers a spinner while the initial catalog is loading', async () => {
+  const snapshot = {
+    ...(await fixture()),
+    servers: [],
+    accounts: [],
+    stores: [],
+    profileInventory: [],
+    catalogProfiles: [],
+    profileInventoryStatus: 'unavailable' as const,
+  };
+  const rendered = await teams(() => {}, { snapshot });
+  const loading = rendered.getByRole('status', { name: 'Loading teams' });
+  assert.ok(loading.classList.contains('app-loading'));
+  assert.ok(loading.classList.contains('body'));
+  assert.ok(loading.querySelector('.spin'));
+  assert.equal(rendered.queryByText('No teams yet'), null);
+});
+
 test('a Teams row in an abnormal state carries the same chip, and opens team settings', async () => {
   const journal: Location[] = [];
   await teams((location) => journal.push(location));

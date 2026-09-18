@@ -6,6 +6,7 @@ import { createServer, type ViteDevServer } from 'vite';
 let vite: ViteDevServer;
 let MessageText: typeof import('../src/chat/message-text').MessageText;
 let safeChatLink: typeof import('../src/chat/message-text').safeChatLink;
+let relativeMessageTime: typeof import('../src/chat/presentation').relativeMessageTime;
 test.before(async () => {
   vite = await createServer({
     configFile: new URL('../vite.config.ts', import.meta.url).pathname,
@@ -14,6 +15,9 @@ test.before(async () => {
   });
   ({ MessageText, safeChatLink } = await vite.ssrLoadModule(
     '/src/chat/message-text.tsx',
+  ));
+  ({ relativeMessageTime } = await vite.ssrLoadModule(
+    '/src/chat/presentation.ts',
   ));
 });
 test.after(async () => {
@@ -35,8 +39,18 @@ test('Basic source renders safe bounded Markdown without HTML or image fetching'
   assert.match(html, /&lt;x&gt;/);
   assert.doesNotMatch(html, /<img|href="javascript/);
   assert.match(html, /Copy code/);
-  assert.match(html, /Copy message/);
+  assert.doesNotMatch(html, /Copy message/);
 });
+test('message timestamps are relative to the current time', () => {
+  const now = Date.UTC(2026, 8, 18, 12);
+  assert.equal(relativeMessageTime(String(now), now), 'just now');
+  assert.equal(
+    relativeMessageTime(String(now - 120_000), now),
+    '2 minutes ago',
+  );
+  assert.equal(relativeMessageTime(String(now - 86_400_000), now), 'yesterday');
+});
+
 test('unsafe and disguised links remain inert', () => {
   for (const value of [
     'javascript:alert(1)',

@@ -172,6 +172,10 @@ export function ChatTab({
   const channel = wanted ? openChannel(listed, wanted) : undefined;
   const loading =
     Boolean(open) && (!entry || (entry.state === 'loading' && !entry.error));
+  const catalogLoading =
+    snapshot.profileInventoryStatus !== 'complete' &&
+    !snapshot.servers.length &&
+    !snapshot.stores.length;
   useEffect(() => {
     if (info && open && !loading && !channel) setInfo(false);
   }, [channel, info, loading, open]);
@@ -248,6 +252,14 @@ export function ChatTab({
               search.current?.select();
             }}
           />
+        ) : catalogLoading || opening === 'pending' ? (
+          <div
+            className="app-loading"
+            role="status"
+            aria-label="Loading conversations"
+          >
+            <span className="spin" aria-hidden="true" />
+          </div>
         ) : location.ref ? (
           <NoChatForTeam
             snapshot={snapshot}
@@ -255,10 +267,6 @@ export function ChatTab({
             accessOptions={accessOptions}
             onNavigate={onNavigate}
           />
-        ) : opening === 'pending' ? (
-          <div className="empty" aria-busy="true">
-            <p role="status">Loading conversations…</p>
-          </div>
         ) : (
           <NoTeamWithChat onNavigate={onNavigate} />
         )}

@@ -1608,7 +1608,7 @@ function FirstRunSession({
         <h1>{busy ? 'Connecting your account' : 'Check account setup'}</h1>
         <p className="lead">
           {busy
-            ? 'Account setup is running. You can finish later while it completes.'
+            ? 'Account setup is running.'
             : operationProblem !== 'profile-missing' && operationStatus
               ? operationStatus
               : 'Checking account status…'}
@@ -2226,6 +2226,7 @@ function FirstRunSession({
     // "Sign in to an existing account" selected and the sign-in method group
     // drawn as the next section.
     const signingIn = state === 'existing';
+    const cliAccountSelected = signingIn && goCandidateExplicit.current;
     // Organization sign-up is a third choice in the same radio group. It is
     // offered only while the server is known and no account exists yet, and
     // its own panel carries the primary action.
@@ -2309,7 +2310,8 @@ function FirstRunSession({
                 title="Create a new account"
                 detail="Set up a new FOKS account on this device."
                 selected={!signingIn && !ssoSelected}
-                disabled={Boolean(checkpoint.sso)}
+                disabled={Boolean(checkpoint.sso) || cliAccountSelected}
+                off={cliAccountSelected}
                 onSelect={() => {
                   go('account');
                 }}
@@ -2345,6 +2347,8 @@ function FirstRunSession({
                   title="Sign up with your organization"
                   detail="Create the account through your organization’s identity provider."
                   selected={ssoSelected}
+                  disabled={cliAccountSelected}
+                  off={cliAccountSelected}
                   onSelect={() => {
                     clearSecrets();
                     send({
@@ -2761,28 +2765,25 @@ function FirstRunSession({
         ) : null}
         <Inset className="checklist">
           <InsetRow label="✓">
-            <b>{checkpoint.path === 'invited' ? 'Their server' : 'A server'}</b>
-            <span className="hint">
-              <code>{profile?.canonicalName}</code>
-            </span>
+            <b>
+              {checkpoint.path === 'invited'
+                ? 'Their server'
+                : 'Select a server'}
+            </b>
+            <span className="hint">Using {profile?.canonicalName}</span>
           </InsetRow>
           <InsetRow label="✓">
             <b>Your account</b>
             <span className="hint">
-              <code>{checkpoint.account?.username}</code> ·{' '}
-              {checkpoint.account?.deviceName}
+              {checkpoint.accountMethod === 'recover'
+                ? 'Restored account as'
+                : 'Created as'}{' '}
+              {checkpoint.account?.username}
             </span>
           </InsetRow>
           <InsetRow
             className={recoverySet ? undefined : 'skipped'}
             label={recoverySet ? '✓' : '!'}
-            action={
-              recoverySet ? (
-                <Button size="sm" onClick={() => go('protect')}>
-                  Review
-                </Button>
-              ) : undefined
-            }
           >
             <b>Save recovery phrase</b>
             <span className="hint">

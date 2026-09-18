@@ -346,8 +346,12 @@ export function ChatScreen({
         // but the team is actively resynchronizing (such as immediately after
         // channel creation), avoiding premature 'unavailable' warnings.
         loading || (location.channel && resyncing) ? (
-          <div className="empty" aria-busy="true">
-            <p>Loading {team.name}…</p>
+          <div
+            className="app-loading"
+            role="status"
+            aria-label={`Loading ${team.name}`}
+          >
+            <span className="spin" aria-hidden="true" />
           </div>
         ) : location.channel ? (
           <div className="empty">

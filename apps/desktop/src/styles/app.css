@@ -714,6 +714,14 @@ body {
   padding-bottom: 24px;
 }
 
+.first-run-main > .path + .body {
+  padding-top: 0;
+}
+
+.first-run-main > .path + .body > .pane {
+  padding-top: 0;
+}
+
 /* Setup rail */
 
 .local-server-card {

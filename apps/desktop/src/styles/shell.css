@@ -128,7 +128,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side.rail .side-bottom>.nav .ic{font-size:20px;width:20px}
 .side.rail .side-bottom>.nav .badge{flex:none;padding:0 5px;font-size:12px}
 /* Bottom nav spacing */
-.side.rail .side-bottom>.nav:last-of-type{margin-bottom:4px}
+.side.rail .side-bottom>.nav:last-of-type{margin-bottom:10px}
 .side.rail .side-note{margin:2px 14px 8px 55px;font-size:12px;line-height:1.45;color:var(--rail-ink);opacity:.85}
 .side.rail .foot{border-top:1px solid var(--rail-line);padding-top:0}
 .side.rail h6{color:rgba(255,255,255,.7);padding-left:16px}
@@ -160,7 +160,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .rail-account-menu .cap{font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rail-account-menu .cap .host{font-weight:500;letter-spacing:0;text-transform:none;color:var(--faint)}
 .rail-account-menu .acct{align-items:flex-start;gap:9px}
-.rail-account-menu .acct .av{border-color:#fff;margin-top:1px}
+.rail-account-menu .acct .av{align-self:center;border-color:#fff;margin-top:0}
 .rail-account-menu .acct .t{flex:1;min-width:0;line-height:1.3}
 .rail-account-menu .acct .t small{display:block;font-size:12px;font-weight:400;color:var(--muted)}
 .rail-account-menu .acct.on .t small{color:inherit;opacity:.8}
@@ -666,6 +666,7 @@ details.dd li b{color:var(--ink-2)}
 /* Shared utility classes */
 .action-error{margin-top:8px;font-size:12.5px;line-height:1.45;color:var(--danger-ink)}
 .said{margin:2px 0 10px;font-size:13px;line-height:1.5;color:var(--muted)}
+.metadata-status{margin:2px 2px 6px;font-size:12.5px;line-height:1.45;color:var(--muted)}
 .sheet.mid{width:510px}
 .col{display:flex;flex-direction:column;gap:10px;min-width:0}
 .checkrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}

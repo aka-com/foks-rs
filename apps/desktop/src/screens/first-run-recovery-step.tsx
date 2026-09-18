@@ -163,9 +163,8 @@ export function RecoveryStep({
       >
         <h1>Save recovery phrase</h1>
         <p className="lead">
-          The keys controlling this account are only saved on this device. Add
-          at least one recovery method now. You can manage recovery methods
-          later in Settings.
+          The keys controlling this account are only saved on this device. We
+          recommend adding at least one recovery method now.
         </p>
         <div className="two">
           <div className="pcard">
@@ -234,7 +233,7 @@ export function RecoveryStep({
             <>
               <p>
                 Anyone with these words can access your account. Store them
-                somewhere other than this device.
+                somewhere safe, like an offline vault, or your password manager.
               </p>
               {backupPhrase ? (
                 <div className="words">

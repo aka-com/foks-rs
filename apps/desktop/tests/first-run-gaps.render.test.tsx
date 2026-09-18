@@ -322,6 +322,31 @@ test('shows why the Personal vault is unavailable and provides a link to server 
   );
 });
 
+test('checklist names whether the account was created or restored', async () => {
+  const h = await harness();
+  const created = h.render(
+    {
+      ...h.checkpoint,
+      state: 'checklist-own',
+      accountMethod: 'create',
+    },
+    { snapshot: h.complete },
+  );
+  assert.ok(created.view.getByText('Select a server'));
+  assert.ok(created.view.getByText('Using localhost'));
+  assert.ok(created.view.getByText('Created as satoshi'));
+  ui.cleanup();
+  const restored = h.render(
+    {
+      ...h.checkpoint,
+      state: 'checklist-own',
+      accountMethod: 'recover',
+    },
+    { snapshot: h.complete },
+  );
+  assert.ok(restored.view.getByText('Restored account as satoshi'));
+});
+
 test('checklist allows retrying Personal vault loading while the account is not yet loaded', async () => {
   const h = await harness();
   let refreshes = 0;

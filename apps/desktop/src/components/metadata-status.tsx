@@ -15,7 +15,7 @@ export function MetadataStatus({
   )
     return null;
   return (
-    <p className="fn" aria-label={`${label} freshness`}>
+    <p className="metadata-status" aria-label={`${label} freshness`}>
       {label}:{' '}
       {freshness.stale
         ? freshness.complete

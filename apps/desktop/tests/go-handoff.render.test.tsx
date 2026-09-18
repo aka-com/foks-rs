@@ -906,33 +906,20 @@ test('first-run account navigation, server edits, and connection errors stay sco
   });
   ui.fireEvent.click(view.getByRole('button', { name: 'Recover' }));
   await view.findByText('Recovery failed');
-  // Both choices live on Set up your account: switching the radio swaps the
-  // sections under it without leaving the page, and returning to sign-in
-  // starts the method choice over.
-  ui.fireEvent.click(view.getByRole('radio', { name: /Create a new account/ }));
-  assert.ok(view.getByPlaceholderText('yourname'));
-  assert.ok(view.getByPlaceholderText('Your device'));
-  assert.equal(
-    view.queryByRole('radiogroup', { name: 'Sign-in method' }),
-    null,
-  );
-  assert.deepEqual(
-    [...view.container.querySelectorAll('.sec.step')].map(
-      (el) => el.textContent,
-    ),
-    ['1Setup method', '2Account and device'],
-  );
-  ui.fireEvent.click(
-    view.getByRole('radio', { name: /Sign in to an existing account/ }),
-  );
-  assert.ok(view.getByRole('heading', { name: 'Set up your account' }));
-  assert.equal(
-    view
-      .getByRole('radio', { name: /Recover with your backup phrase/ })
-      .getAttribute('aria-checked'),
-    'false',
-  );
-  assert.equal(view.queryByLabelText('Backup phrase'), null);
+  // Choosing a CLI account at the start fixes the account setup path. The
+  // creation alternatives stay visible for context but cannot replace it.
+  const create = view.getByRole('radio', {
+    name: /Create a new account/,
+  }) as HTMLButtonElement;
+  const organization = view.getByRole('radio', {
+    name: /Sign up with your organization/,
+  }) as HTMLButtonElement;
+  assert.equal(create.disabled, true);
+  assert.equal(organization.disabled, true);
+  assert.equal(create.classList.contains('off'), true);
+  assert.equal(organization.classList.contains('off'), true);
+  ui.fireEvent.click(create);
+  assert.ok(view.getByRole('radiogroup', { name: 'Sign-in method' }));
   ui.fireEvent.click(
     view.getByRole('radio', { name: /Use the CLI to approve/ }),
   );

@@ -579,24 +579,30 @@ export function DevicesScreen({
       </>
     );
 
+  const metadataStatus = (
+    <MetadataStatus label="Device metadata" freshness={freshness} />
+  );
+  const refreshConnectedKeys = (
+    <Button
+      size="sm"
+      {...access.props('yubi-scan', { profile: selected.server })}
+      onClick={() =>
+        void refreshConnectedCards(
+          bridge,
+          access,
+          selected.server,
+          hardware.capture(),
+          setCards,
+          onError,
+        )
+      }
+    >
+      Refresh connected keys
+    </Button>
+  );
+
   return (
     <WorkflowProvider snapshot={snapshot}>
-      <MetadataStatus label="Device metadata" freshness={freshness} />
-      <Button
-        {...access.props('yubi-scan', { profile: selected.server })}
-        onClick={() =>
-          void refreshConnectedCards(
-            bridge,
-            access,
-            selected.server,
-            hardware.capture(),
-            setCards,
-            onError,
-          )
-        }
-      >
-        Refresh connected keys
-      </Button>
       {/* One key's own page: the full id, and the one destructive action for
           that kind. It reads the page's own lists, so a sheet opened from it
           is the sheet the row would have opened. */}
@@ -613,6 +619,8 @@ export function DevicesScreen({
           loading={loading}
           stopped={stopped}
           cards={cards}
+          metadataStatus={metadataStatus}
+          refreshConnectedKeys={refreshConnectedKeys}
           onBack={backToList}
           onNavigate={onNavigate}
           onCopy={(text) => copyText(text, 'Key id copied')}
@@ -720,7 +728,13 @@ export function DevicesScreen({
                     computers (and any device key on a card among them), then
                     paper keys, then security key enrollments — the order
                     `deviceEntries` already reads the three lists in. */}
-                <SectionLabel id="devices-all-label">Devices</SectionLabel>
+                <SectionLabel
+                  id="devices-all-label"
+                  action={refreshConnectedKeys}
+                >
+                  Devices
+                </SectionLabel>
+                {metadataStatus}
                 <Inset className="settings-inset middle wide">
                   {loading ? (
                     <InsetRow label="Devices">
@@ -993,6 +1007,8 @@ function DeviceDetail({
   loading,
   stopped,
   cards,
+  metadataStatus,
+  refreshConnectedKeys,
   onBack,
   onNavigate,
   onCopy,
@@ -1011,6 +1027,8 @@ function DeviceDetail({
   stopped: { stopped: boolean; reason: string };
   /** The cards in this Mac's ports right now. */
   cards: { serial: number }[];
+  metadataStatus: ReactNode;
+  refreshConnectedKeys: ReactNode;
   onBack: () => void;
   onNavigate: (location: Location) => void;
   onCopy: (text: string) => void;
@@ -1032,6 +1050,7 @@ function DeviceDetail({
         />
         <div className="body">
           <div className="settings-main">
+            {metadataStatus}
             <Notice
               severity={loading || stopped.stopped ? 'info' : 'crit'}
               title={
@@ -1042,9 +1061,12 @@ function DeviceDetail({
                     : 'This key is not on this account'
               }
               actions={
-                <Button variant="primary" onClick={onBack}>
-                  Back to Devices
-                </Button>
+                <>
+                  <Button variant="primary" onClick={onBack}>
+                    Back to Devices
+                  </Button>
+                  {refreshConnectedKeys}
+                </>
               }
             >
               <p>
@@ -1101,7 +1123,10 @@ function DeviceDetail({
             role="region"
             aria-labelledby="device-facts-label"
           >
-            <SectionLabel id="device-facts-label">This key</SectionLabel>
+            <SectionLabel id="device-facts-label" action={refreshConnectedKeys}>
+              This key
+            </SectionLabel>
+            {metadataStatus}
             <Inset className="settings-inset middle wide">
               {entry.scope === 'profile' ? (
                 <InsetRow label="Server">

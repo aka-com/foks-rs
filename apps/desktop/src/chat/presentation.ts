@@ -263,3 +263,27 @@ export function messageTime(milliseconds: string): string {
     timeStyle: 'short',
   }).format(date);
 }
+
+export function relativeMessageTime(
+  milliseconds: string,
+  nowMilliseconds: number = Date.now(),
+): string {
+  const date = messageDate(milliseconds);
+  if (!date) return `Time ${milliseconds}`;
+  const difference = date.valueOf() - nowMilliseconds;
+  const absolute = Math.abs(difference);
+  if (absolute < 60_000) return 'just now';
+  const units: [Intl.RelativeTimeFormatUnit, number][] = [
+    ['year', 31_536_000_000],
+    ['month', 2_592_000_000],
+    ['week', 604_800_000],
+    ['day', 86_400_000],
+    ['hour', 3_600_000],
+    ['minute', 60_000],
+  ];
+  const [unit, size] = units.find(([, size]) => absolute >= size) ?? units[5];
+  return new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(
+    Math.round(difference / size),
+    unit,
+  );
+}

@@ -276,6 +276,10 @@ export function TeamsScreen({
 }: TeamsScreenProps): ReactNode {
   const toasts = useToast();
   const stores = storeNavigationOrder(snapshot);
+  const catalogLoading =
+    snapshot.profileInventoryStatus !== 'complete' &&
+    !snapshot.servers.length &&
+    !snapshot.stores.length;
   // Named teams and ad-hoc shares are one list here; a row's own pill says
   // which it is, so nothing above the list needs to split them.
   // A team whose setup never finished is listed after every team that works;
@@ -574,38 +578,48 @@ export function TeamsScreen({
           })}
         </div>
       ) : null}
-      <div className="body nav-rows">
-        <div className="list-window">
-          <div className="virtual-rows">
-            {teams.length ? (
-              teamRows(teams)
-            ) : (
-              <div className="empty">
-                <div className="big">
-                  <Icon name="people" />
+      {catalogLoading ? (
+        <div
+          className="body app-loading"
+          role="status"
+          aria-label="Loading teams"
+        >
+          <span className="spin" aria-hidden="true" />
+        </div>
+      ) : (
+        <div className="body nav-rows">
+          <div className="list-window">
+            <div className="virtual-rows">
+              {teams.length ? (
+                teamRows(teams)
+              ) : (
+                <div className="empty">
+                  <div className="big">
+                    <Icon name="people" />
+                  </div>
+                  <h2>No teams yet</h2>
+                  <p>Share files and channels with a team.</p>
+                  <Button
+                    variant="primary"
+                    icon="plus"
+                    disabled={!canCreate || !acting}
+                    title={
+                      canCreate
+                        ? undefined
+                        : 'No available account can create a team'
+                    }
+                    onClick={() => {
+                      if (acting) setSheet({ kind: 'create', store: acting });
+                    }}
+                  >
+                    Create a team
+                  </Button>
                 </div>
-                <h2>No teams yet</h2>
-                <p>Share files and channels with a team.</p>
-                <Button
-                  variant="primary"
-                  icon="plus"
-                  disabled={!canCreate || !acting}
-                  title={
-                    canCreate
-                      ? undefined
-                      : 'No available account can create a team'
-                  }
-                  onClick={() => {
-                    if (acting) setSheet({ kind: 'create', store: acting });
-                  }}
-                >
-                  Create a team
-                </Button>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
       {sheet ? (
         <GroupSheet
           // Each half of the add sheet answers for itself: the band and the

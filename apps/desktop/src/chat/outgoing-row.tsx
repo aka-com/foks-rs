@@ -4,6 +4,7 @@ import { Button } from '../components';
 import type { ChatSendService, OutgoingMessage } from './send-service';
 import { MessageText } from './message-text';
 import { failure } from './actions';
+import { messageTime, relativeMessageTime } from './presentation';
 
 const labels = {
   saving: 'Sending…',
@@ -37,6 +38,7 @@ export function OutgoingRow({
     }
   };
   const sent = message.phase === 'sent';
+  const sending = ['saving', 'preparing', 'sending'].includes(message.phase);
   const retryable =
     ['not-sent', 'unconfirmed', 'paused'].includes(message.phase) &&
     !['rejected', 'cancelled'].includes(message.operation?.state ?? '');
@@ -54,11 +56,11 @@ export function OutgoingRow({
       <div className="chat-outgoing-content">
         <header>
           <span className="chat-sender you">You</span>
-          <time dateTime={new Date(message.createdAt).toISOString()}>
-            {new Date(message.createdAt).toLocaleTimeString([], {
-              hour: 'numeric',
-              minute: '2-digit',
-            })}
+          <time
+            dateTime={new Date(message.createdAt).toISOString()}
+            title={messageTime(String(message.createdAt))}
+          >
+            {relativeMessageTime(String(message.createdAt))}
           </time>
         </header>
         {message.text !== undefined && (
@@ -87,25 +89,27 @@ export function OutgoingRow({
           </span>
         )}
         {error && <span role="alert">{error}</span>}
-        <details>
-          <summary>Details</summary>
-          {message.submission && <div>Submission: {message.submission}</div>}
-          {message.operation && (
-            <div>
-              Operation: {message.operation.id} · {message.operation.state}
-            </div>
-          )}
-          {message.error && <div>{message.error}</div>}
-          {message.cleanupError && (
-            <Button
-              size="sm"
-              disabled={message.running}
-              onClick={() => void run(false)}
-            >
-              Retry local cleanup
-            </Button>
-          )}
-        </details>
+        {!sending ? (
+          <details>
+            <summary>Details</summary>
+            {message.submission && <div>Submission: {message.submission}</div>}
+            {message.operation && (
+              <div>
+                Operation: {message.operation.id} · {message.operation.state}
+              </div>
+            )}
+            {message.error && <div>{message.error}</div>}
+            {message.cleanupError && (
+              <Button
+                size="sm"
+                disabled={message.running}
+                onClick={() => void run(false)}
+              >
+                Retry local cleanup
+              </Button>
+            )}
+          </details>
+        ) : null}
       </div>
     </article>
   );

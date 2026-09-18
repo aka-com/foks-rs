@@ -296,6 +296,39 @@ test('the tab with no conversation opens the most recent one', async () => {
   assert.equal(head('Engineering').getAttribute('aria-current'), null);
 });
 
+test('message copy is available only from the right-click menu', async () => {
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  const copied: string[] = [];
+  await mount(
+    snapshot,
+    {
+      kind: 'chat',
+      ref: 'team:household',
+      channel: 'ab'.repeat(16),
+    },
+    (base) => ({
+      ...base,
+      copyText: async (text) => {
+        copied.push(text);
+        return { ok: true };
+      },
+    }),
+  );
+  const message = await ui.waitFor(() => {
+    const node = document.querySelector<HTMLElement>('.chat-message-text');
+    assert.ok(node);
+    return node;
+  });
+  const text = message.querySelector('p')?.textContent;
+  assert.ok(text);
+  assert.equal(ui.screen.queryByRole('button', { name: 'Copy message' }), null);
+  ui.fireEvent.contextMenu(message, { clientX: 120, clientY: 80 });
+  const copy = await ui.screen.findByRole('menuitem', { name: 'Copy message' });
+  ui.fireEvent.click(copy);
+  await ui.waitFor(() => assert.deepEqual(copied, [text]));
+  assert.equal(ui.screen.queryByRole('menu'), null);
+});
+
 test('with no message anywhere the tab opens the first team that has chat', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   const journal = await mount(snapshot, { kind: 'chat' }, (base) => ({
@@ -1038,7 +1071,11 @@ test('the pane waits while every reachable team is on its first synchronization'
   }));
   // Nothing has answered, so the answer is not knowable yet: the tab says so
   // rather than opening a team it would have to leave.
-  await ui.screen.findByText('Loading conversations…');
+  const loading = await ui.screen.findByRole('status', {
+    name: 'Loading conversations',
+  });
+  assert.ok(loading.classList.contains('app-loading'));
+  assert.ok(loading.querySelector('.spin'));
   assert.equal(journal.length, 0);
   assert.equal(ui.screen.queryByRole('heading', { name: /has no chat/ }), null);
   release();
@@ -1046,7 +1083,10 @@ test('the pane waits while every reachable team is on its first synchronization'
   await ui.waitFor(() => assert.ok(journal.length));
   assert.equal(journal.at(-1)?.kind, 'chat');
   await ui.waitFor(() =>
-    assert.equal(ui.screen.queryByText('Loading conversations…'), null),
+    assert.equal(
+      ui.screen.queryByRole('status', { name: 'Loading conversations' }),
+      null,
+    ),
   );
 });
 
@@ -1622,7 +1662,11 @@ test('a channel created before its synchronization lands reads as loading', asyn
   // The channel exists; the team's next synchronization is what lists it. A
   // pane that said it was unavailable would be calling the reader's own work
   // missing.
-  await ui.screen.findByText('Loading Engineering…');
+  const loading = await ui.screen.findByRole('status', {
+    name: 'Loading Engineering',
+  });
+  assert.ok(loading.classList.contains('app-loading'));
+  assert.ok(loading.querySelector('.spin'));
   assert.equal(
     ui.screen.queryByRole('heading', { name: 'Channel unavailable' }),
     null,
