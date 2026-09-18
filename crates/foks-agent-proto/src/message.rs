@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 23;
+pub const PROTOCOL_VERSION: u32 = 24;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -245,13 +245,35 @@ pub struct BackupEnrollmentSummary {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum CompatibilityStatus {
+    NotRequired,
+    Missing,
+    Incompatible {
+        reason: CompatibilityFailure,
+        expires_at: u64,
+    },
+    Validated {
+        expires_at: u64,
+        capabilities: std::collections::BTreeSet<String>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CompatibilityFailure {
+    Drift,
+    ProtocolMismatch,
+    UnknownCapability,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ServerStatusSnapshot {
     pub profile: String,
     pub configured_probe: String,
     pub host: Option<StoredHostStatus>,
-    pub lease_required: bool,
-    pub lease_expires_at: Option<u64>,
-    pub chat_available: bool,
+    pub compatibility: CompatibilityStatus,
+    pub chat_supported: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -2350,9 +2372,11 @@ mod tests {
                     host_chain_sequence: 9,
                     merkle_epoch: 4,
                 }),
-                lease_required: true,
-                lease_expires_at: Some(1_800_000_000),
-                chat_available: true,
+                chat_supported: Some(true),
+                compatibility: CompatibilityStatus::Validated {
+                    expires_at: 1_800_000_000,
+                    capabilities: ["chat".to_owned()].into_iter().collect(),
+                },
             })
             .unwrap(),
             serde_json::json!({
@@ -2365,9 +2389,8 @@ mod tests {
                     "host_chain_sequence": 9,
                     "merkle_epoch": 4
                 },
-                "lease_required": true,
-                "lease_expires_at": 1_800_000_000_u64,
-                "chat_available": true
+                "chat_supported": true,
+                "compatibility": {"status":"validated", "expires_at":1_800_000_000_u64, "capabilities":["chat"]}
             })
         );
         assert_eq!(

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { PROTOCOL_CAPABILITIES } from '../src/model/types';
 import { cancelled } from '../src/chat/client';
 import { ChatInboxService } from '../src/chat/inbox-service';
 import type { ChatClock } from '../src/chat/inbox-service';
@@ -348,7 +349,11 @@ test('eligibility follows the service clock, not the wall clock', async () => {
     ...f.snapshot,
     servers: f.snapshot.servers.map((server) => ({
       ...server,
-      compatibility: { status: 'required' as const, expiresAt },
+      compatibility: {
+        status: 'required' as const,
+        capabilities: PROTOCOL_CAPABILITIES,
+        expiresAt,
+      },
     })),
   };
   f.service.updateStores(lapsing);

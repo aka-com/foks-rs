@@ -130,6 +130,10 @@ impl PinnedHost {
         &self.host_id
     }
 
+    pub fn supports_chat(&self) -> bool {
+        self.realtime.is_some()
+    }
+
     /// Delegated CA certificates authenticated by this pinned host identity.
     pub fn tls_ca_certificates(&self) -> &[Vec<u8>] {
         &self.tls_ca_certificates

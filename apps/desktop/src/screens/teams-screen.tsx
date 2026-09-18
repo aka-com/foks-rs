@@ -19,7 +19,7 @@ import { InvitationPanel } from '../components/invitation-panel';
 import { teamRequestRegistry } from './team-requests';
 import { enqueueProfileWork } from '../bridge';
 import {
-  canCreateInStore,
+  storeOperationAvailability,
   groupDetailFailure,
   parseRole,
   partiesOf,
@@ -201,17 +201,23 @@ function TeamRow({
   menu: ReactNode;
   onOpen: () => void;
 }): ReactNode {
-  const state = storeDescriptionState(snapshot, store);
-  const description = storeDescription(snapshot, store);
+  const state = storeDescriptionState(snapshot, store, { operation: 'teams' });
+  const description = storeDescription(snapshot, store, { operation: 'teams' });
   // The abnormal state is a chip at the end of the row.
-  const abnormal = storeAttentionState(snapshot, store) !== 'normal';
+  const abnormal =
+    storeAttentionState(snapshot, store, { operation: 'teams' }) !== 'normal';
   const mine = partiesOf(snapshot, store.id).find(
     (party) => party.label === 'you',
   );
   const role = mine ? parseRole(mine.destination_role) : null;
   // A roster the agent could not read is not a member count of zero; the
   // clause is dropped rather than stating a count that may be wrong.
-  const rosterKnown = !groupDetailFailure(snapshot, store.id, 'roster');
+  const rosterKnown =
+    ![
+      'loading',
+      'server-status-unavailable',
+      'capability-unavailable',
+    ].includes(state) && !groupDetailFailure(snapshot, store.id, 'roster');
   const caption = [
     displayServerName(snapshot, store),
     rosterKnown ? plural(partiesOf(snapshot, store.id).length, 'member') : null,
@@ -316,8 +322,8 @@ export function TeamsScreen({
     (store) =>
       store.team_kind === 'named' && (requestCounts.get(store.id) ?? 0) > 0,
   );
-  const canCreate = accounts.some((store) =>
-    canCreateInStore(snapshot, store.id),
+  const canCreate = accounts.some(
+    (store) => storeOperationAvailability(snapshot, store, 'teams').available,
   );
   const servers = new Set(accounts.map((store) => store.server));
   // A check's result belongs to the row it was run from. The rows themselves

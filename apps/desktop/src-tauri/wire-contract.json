@@ -91,7 +91,7 @@
     "fatal": false
   },
   "capabilityUnavailableError": {
-    "code": "capability-unavailable",
+    "code": "capability-denied",
     "message": "This server is not granting vault access. Check its compatibility status before reading or writing.",
     "retryable": false,
     "ambiguous": false,
@@ -194,9 +194,12 @@
       "chain": 11,
       "epoch": 42
     },
-    "leaseRequired": true,
-    "leaseExpiresAt": 1900000000,
-    "chatAvailable": true
+    "chatSupported": true,
+    "compatibility": {
+      "status": "validated",
+      "expires_at": 1900000000,
+      "capabilities": ["chat", "kv"]
+    }
   },
   "addedServer": {
     "profile": "partner",

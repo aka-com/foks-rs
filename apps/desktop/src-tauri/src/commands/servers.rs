@@ -279,10 +279,42 @@ pub(super) fn server_status_response(
 ) -> Result<ServerStatusSnapshotDto, AgentError> {
     let report: ServerStatusResponse =
         serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
+    let lease_required = match &report.compatibility {
+        foks_agent_proto::CompatibilityStatus::NotRequired => false,
+        foks_agent_proto::CompatibilityStatus::Missing
+        | foks_agent_proto::CompatibilityStatus::Incompatible { .. } => true,
+        foks_agent_proto::CompatibilityStatus::Validated { capabilities, .. } => {
+            if capabilities.is_empty()
+                || capabilities.iter().any(|name| {
+                    !matches!(
+                        name.as_str(),
+                        "signup"
+                            | "user-sync"
+                            | "kv"
+                            | "device-administration"
+                            | "recovery"
+                            | "passphrases"
+                            | "teams"
+                            | "chat"
+                            | "federation"
+                    )
+                })
+            {
+                return Err(invalid_response(
+                    "The agent returned invalid compatibility grants.",
+                ));
+            }
+            true
+        }
+    };
+    if report.host.is_some() != report.chat_supported.is_some() {
+        return Err(invalid_response(
+            "The agent returned inconsistent server facts.",
+        ));
+    }
     if report.profile != expected_profile
         || report.configured_probe != expected_probe
-        || report.lease_required != expected_lease_required
-        || (!report.lease_required && report.lease_expires_at.is_some())
+        || lease_required != expected_lease_required
         || !valid_probe_target(&report.configured_probe)
     {
         return Err(invalid_response(
@@ -315,9 +347,8 @@ pub(super) fn server_status_response(
         profile: report.profile,
         configured_probe: report.configured_probe,
         host,
-        lease_required: report.lease_required,
-        lease_expires_at: report.lease_expires_at,
-        chat_available: report.chat_available,
+        compatibility: report.compatibility,
+        chat_supported: report.chat_supported,
     })
 }
 
@@ -487,9 +518,8 @@ pub struct ServerStatusSnapshotDto {
     pub profile: String,
     pub configured_probe: String,
     pub host: Option<StoredHostDto>,
-    pub lease_required: bool,
-    pub lease_expires_at: Option<u64>,
-    pub chat_available: bool,
+    pub compatibility: foks_agent_proto::CompatibilityStatus,
+    pub chat_supported: Option<bool>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -551,9 +581,8 @@ struct ServerStatusResponse {
     profile: String,
     configured_probe: String,
     host: Option<StoredHostResponse>,
-    lease_required: bool,
-    lease_expires_at: Option<u64>,
-    chat_available: bool,
+    compatibility: foks_agent_proto::CompatibilityStatus,
+    chat_supported: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -1250,7 +1279,7 @@ pub async fn list_servers(
                     epoch: None,
                     lease: None,
                     accounts,
-                    state: if blocked { "blocked" } else { "never-probed" },
+                    state: if blocked { "blocked" } else { "unknown" },
                     chat_available: false,
                 }
             })

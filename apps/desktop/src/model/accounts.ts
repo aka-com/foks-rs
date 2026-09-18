@@ -6,14 +6,11 @@
  * than re-derived on each screen.
  */
 
-import {
-  serverAvailability,
-  storeAvailability,
-  storeDescription,
-} from './lease';
+import { storeOperationAvailability, storeDescription } from './lease';
 import { serverName } from './server-name';
 export { serverName } from './server-name';
 import type { AccountStore, AgentSnapshot } from './types';
+import type { StoreOperation } from './lease';
 
 /** The account stores on this Mac, in catalog order. */
 export function accountStores(snapshot: AgentSnapshot): AccountStore[] {
@@ -51,17 +48,14 @@ export function accountSubtitle(
 export function accountStopped(
   snapshot: AgentSnapshot,
   store: AccountStore,
+  operation: StoreOperation = 'metadata',
 ): { stopped: boolean; reason: string } {
-  const server = snapshot.servers.find((entry) => entry.id === store.server);
-  const serverState = server
-    ? serverAvailability(snapshot, server)
-    : { available: false as const };
-  const stopped =
-    !storeAvailability(snapshot, store).available || !serverState.available;
+  const stopped = !storeOperationAvailability(snapshot, store, operation)
+    .available;
   return {
     stopped,
     reason: stopped
-      ? `Account access is stopped · ${storeDescription(snapshot, store)}`
+      ? `Account access is stopped · ${storeDescription(snapshot, store, { operation })}`
       : '',
   };
 }

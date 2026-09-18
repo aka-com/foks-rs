@@ -2757,7 +2757,7 @@ fn dispatch_result(
                     Ok(accounts)
                 })();
                 let teams = (|| -> Result<_, Box<dyn std::error::Error>> {
-                    let teams = session.list_teams(vault)?;
+                    let teams = session.list_local_teams(vault)?;
                     let known = teams
                         .iter()
                         .map(|team| KnownTeamStore {
@@ -4691,9 +4691,41 @@ fn wire_server_status(status: foks_client_app::ServerStatusSnapshot) -> WireServ
             host_chain_sequence: host.host_chain_sequence,
             merkle_epoch: host.merkle_epoch,
         }),
-        lease_required: status.lease_required,
-        lease_expires_at: status.lease_expires_at,
-        chat_available: status.chat_available,
+        chat_supported: status.chat_supported,
+        compatibility: match status.compatibility {
+            foks_client_app::CompatibilityStatus::NotRequired => {
+                foks_agent_proto::CompatibilityStatus::NotRequired
+            }
+            foks_client_app::CompatibilityStatus::Missing => {
+                foks_agent_proto::CompatibilityStatus::Missing
+            }
+            foks_client_app::CompatibilityStatus::Validated {
+                expires_at,
+                capabilities,
+            } => foks_agent_proto::CompatibilityStatus::Validated {
+                expires_at,
+                capabilities: capabilities
+                    .into_iter()
+                    .map(|capability| capability.as_str().to_owned())
+                    .collect(),
+            },
+            foks_client_app::CompatibilityStatus::Incompatible { expires_at, reason } => {
+                foks_agent_proto::CompatibilityStatus::Incompatible {
+                    expires_at,
+                    reason: match reason {
+                        foks_client_app::CompatibilityFailure::Drift => {
+                            foks_agent_proto::CompatibilityFailure::Drift
+                        }
+                        foks_client_app::CompatibilityFailure::ProtocolMismatch => {
+                            foks_agent_proto::CompatibilityFailure::ProtocolMismatch
+                        }
+                        foks_client_app::CompatibilityFailure::UnknownCapability => {
+                            foks_agent_proto::CompatibilityFailure::UnknownCapability
+                        }
+                    },
+                }
+            }
+        },
     }
 }
 

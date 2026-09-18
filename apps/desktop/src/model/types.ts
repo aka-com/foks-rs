@@ -151,17 +151,39 @@ export interface ServerFailure {
 }
 
 export type ServerTrust =
+  | { status: 'unknown' }
   | { status: 'verified' }
   | { status: 'unprobed' }
   | { status: 'blocked'; error: ServerFailure };
 
+export const PROTOCOL_CAPABILITIES = [
+  'signup',
+  'user-sync',
+  'kv',
+  'device-administration',
+  'recovery',
+  'passphrases',
+  'teams',
+  'chat',
+  'federation',
+] as const;
+export type ProtocolCapability = (typeof PROTOCOL_CAPABILITIES)[number];
+export type CompatibilityFailure =
+  'drift' | 'protocol-mismatch' | 'unknown-capability';
+
 export type CompatibilityLease =
   | { status: 'not-required' }
-  | { status: 'required'; expiresAt: number }
+  | {
+      status: 'required';
+      expiresAt: number;
+      capabilities: readonly ProtocolCapability[];
+    }
+  | { status: 'incompatible'; expiresAt: number; reason: CompatibilityFailure }
   | { status: 'required-unavailable' }
   | { status: 'requirement-unknown'; error: ServerFailure };
 
 export type PassiveServerStatus =
+  | { status: 'loading' }
   | { status: 'available'; source: 'signed-server-status' }
   | {
       status: 'failed';
@@ -176,12 +198,17 @@ export type ConnectivityObservation =
   | { status: 'failed'; error: ServerFailure };
 
 export interface ServerCapabilities {
-  chat: boolean;
+  chat: boolean | null;
 }
 
 export type ServerRestriction =
   | { kind: 'schema-incompatible'; error: ServerFailure }
-  | { kind: 'import-verification-required'; error: ServerFailure };
+  | { kind: 'import-verification-required'; error: ServerFailure }
+  | {
+      kind: 'capability-denied';
+      capability: ProtocolCapability;
+      error: ServerFailure;
+    };
 
 /** Independent facts about one configured server. */
 export interface Server {
@@ -274,6 +301,7 @@ export type GroupDetailSource = 'roster' | 'federation';
 export interface GroupDetailFailure {
   store: StoreRef;
   source: GroupDetailSource;
+  details?: ServerFailure['details'];
   code: string;
   message: string;
   retryable: boolean;
@@ -286,7 +314,7 @@ export interface AgentSnapshot {
   stores: readonly Store[];
   storeInventory: readonly {
     store: StoreRef;
-    status: 'available' | 'unavailable';
+    status: 'available' | 'unavailable' | 'loading';
     error?: ServerFailure;
     restrictions: readonly ServerRestriction[];
   }[];

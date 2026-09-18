@@ -218,7 +218,7 @@ export function DevicesScreen({
     ? stores.find((store) => store.id === requested)
     : stores[0];
   const stopped = selected
-    ? accountStopped(snapshot, selected)
+    ? accountStopped(snapshot, selected, 'devices')
     : { stopped: true, reason: 'No account on this device' };
   const [pairMode, setPairMode] = useTabSheetState<'offer' | 'accept'>(
     'devices.pairMode',

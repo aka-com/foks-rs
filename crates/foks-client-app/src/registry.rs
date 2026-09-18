@@ -80,6 +80,12 @@ pub enum Capability {
     Federation,
 }
 
+impl Capability {
+    pub fn as_str(self) -> &'static str {
+        capability_canary_name(self)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "generation", rename_all = "kebab-case")]
 pub enum ProtocolPolicy {
@@ -99,20 +105,96 @@ pub enum ProtocolPolicy {
     },
 }
 
-impl ProtocolPolicy {
-    fn permits_at(&self, capability: Capability, now: u64) -> bool {
-        capability == Capability::Probe
-            || match self {
-                Self::V019 => true,
-                Self::CurrentProbeOnly { .. } => false,
-                Self::CurrentValidated { artifact, .. } => {
-                    now < artifact.artifact.expires_at
-                        && artifact
-                            .artifact
-                            .capabilities
-                            .contains(capability_canary_name(capability))
-                }
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum CompatibilityStatus {
+    NotRequired,
+    Missing,
+    Incompatible {
+        reason: CompatibilityFailure,
+        expires_at: u64,
+    },
+    Validated {
+        expires_at: u64,
+        capabilities: std::collections::BTreeSet<Capability>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CompatibilityFailure {
+    Drift,
+    ProtocolMismatch,
+    UnknownCapability,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CapabilityDenial {
+    Missing,
+    Incompatible,
+    Expired,
+    NotGranted,
+}
+
+impl CompatibilityStatus {
+    pub fn denial_at(&self, capability: Capability, now: u64) -> Option<CapabilityDenial> {
+        if capability == Capability::Probe {
+            return None;
+        }
+        match self {
+            Self::NotRequired => None,
+            Self::Missing => Some(CapabilityDenial::Missing),
+            Self::Incompatible { .. } => Some(CapabilityDenial::Incompatible),
+            Self::Validated { expires_at, .. } if now >= *expires_at => {
+                Some(CapabilityDenial::Expired)
             }
+            Self::Validated { capabilities, .. } if !capabilities.contains(&capability) => {
+                Some(CapabilityDenial::NotGranted)
+            }
+            Self::Validated { .. } => None,
+        }
+    }
+}
+
+impl ProtocolPolicy {
+    pub fn compatibility_status(&self) -> CompatibilityStatus {
+        match self {
+            Self::V019 => CompatibilityStatus::NotRequired,
+            Self::CurrentProbeOnly {
+                last_artifact: None,
+                ..
+            } => CompatibilityStatus::Missing,
+            Self::CurrentProbeOnly {
+                last_artifact: Some(artifact),
+                ..
+            } => CompatibilityStatus::Incompatible {
+                reason: if artifact.artifact.outcome == CanaryOutcome::Drift {
+                    CompatibilityFailure::Drift
+                } else if artifact.artifact.protocol_metadata_sha256
+                    != PINNED_PROTOCOL_METADATA_SHA256
+                {
+                    CompatibilityFailure::ProtocolMismatch
+                } else {
+                    CompatibilityFailure::UnknownCapability
+                },
+                expires_at: artifact.artifact.expires_at,
+            },
+            Self::CurrentValidated { artifact, .. } => CompatibilityStatus::Validated {
+                expires_at: artifact.artifact.expires_at,
+                capabilities: artifact
+                    .artifact
+                    .capabilities
+                    .iter()
+                    .filter_map(|name| capability_from_canary(name).ok())
+                    .collect(),
+            },
+        }
+    }
+
+    fn permits_at(&self, capability: Capability, now: u64) -> bool {
+        self.compatibility_status()
+            .denial_at(capability, now)
+            .is_none()
     }
 
     fn canary_public_key(&self) -> Option<&str> {
@@ -1151,9 +1233,8 @@ pub struct ServerStatusSnapshot {
     pub profile: String,
     pub configured_probe: String,
     pub host: Option<StoredHostStatus>,
-    pub lease_required: bool,
-    pub lease_expires_at: Option<u64>,
-    pub chat_available: bool,
+    pub compatibility: CompatibilityStatus,
+    pub chat_supported: Option<bool>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1390,7 +1471,13 @@ impl CheckedProfileSession<'_> {
             host_chain_sequence: stored.chain_seqno,
             merkle_epoch: stored.merkle_root.epoch,
         });
-        server_status_snapshot(&self.profile, host)
+        let chat_supported = host
+            .as_ref()
+            .map(|_| self.pinned_host().map(|host| host.supports_chat()))
+            .transpose()?;
+        let mut status = server_status_snapshot(&self.profile, host)?;
+        status.chat_supported = chat_supported;
+        Ok(status)
     }
 
     pub fn pinned_host(&self) -> Result<foks_client::PinnedHost> {
@@ -1412,12 +1499,8 @@ fn server_status_snapshot(
         profile: profile.name.clone(),
         configured_probe: profile.probe.clone(),
         host,
-        lease_required: !matches!(profile.protocol, ProtocolPolicy::V019),
-        lease_expires_at: profile
-            .protocol
-            .last_artifact()
-            .map(|artifact| artifact.artifact.expires_at),
-        chat_available: profile.require(Capability::Chat).is_ok(),
+        compatibility: profile.protocol.compatibility_status(),
+        chat_supported: None,
     })
 }
 
@@ -1619,6 +1702,40 @@ mod tests {
     }
 
     #[test]
+    fn compatibility_facts_preserve_grants_and_explain_denials() {
+        let validated = CompatibilityStatus::Validated {
+            expires_at: 200,
+            capabilities: [Capability::Kv, Capability::Chat].into_iter().collect(),
+        };
+        assert_eq!(validated.denial_at(Capability::Kv, 199), None);
+        assert_eq!(
+            validated.denial_at(Capability::Teams, 199),
+            Some(CapabilityDenial::NotGranted)
+        );
+        assert_eq!(
+            validated.denial_at(Capability::Kv, 200),
+            Some(CapabilityDenial::Expired)
+        );
+        assert_eq!(validated.denial_at(Capability::Probe, 200), None);
+        assert_eq!(
+            CompatibilityStatus::Missing.denial_at(Capability::Kv, 100),
+            Some(CapabilityDenial::Missing)
+        );
+        assert_eq!(
+            CompatibilityStatus::Incompatible {
+                reason: CompatibilityFailure::Drift,
+                expires_at: 200
+            }
+            .denial_at(Capability::Kv, 100),
+            Some(CapabilityDenial::Incompatible)
+        );
+        assert_eq!(
+            CompatibilityStatus::NotRequired.denial_at(Capability::Federation, 200),
+            None
+        );
+    }
+
+    #[test]
     fn server_status_distinguishes_lease_free_and_leased_protocols() {
         let v019 = Profile {
             name: "v019".to_owned(),
@@ -1639,13 +1756,11 @@ mod tests {
         };
 
         let v019_status = server_status_snapshot(&v019, None).unwrap();
-        assert!(!v019_status.lease_required);
-        assert!(v019_status.lease_expires_at.is_none());
-        assert!(v019_status.chat_available);
+        assert_eq!(v019_status.compatibility, CompatibilityStatus::NotRequired);
+        assert_eq!(v019_status.chat_supported, None);
         let current_status = server_status_snapshot(&current, None).unwrap();
-        assert!(current_status.lease_required);
-        assert!(current_status.lease_expires_at.is_none());
-        assert!(!current_status.chat_available);
+        assert_eq!(current_status.compatibility, CompatibilityStatus::Missing);
+        assert_eq!(current_status.chat_supported, None);
     }
 
     fn assert_no_pending_publication(registry: &ProfileRegistry, name: &str) {

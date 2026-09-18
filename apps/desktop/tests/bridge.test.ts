@@ -49,6 +49,7 @@ import {
 import type { Bridge, CatalogDto } from '../src/bridge';
 import {
   canCreateInStore,
+  PROTOCOL_CAPABILITIES,
   signedLeaseState,
   serverAvailability,
   storeReadable,
@@ -143,7 +144,11 @@ function listedServer(
           : { status: 'verified' },
     compatibility:
       state === 'lease-lapsed'
-        ? { status: 'required', expiresAt: 0 }
+        ? {
+            status: 'required',
+            expiresAt: 0,
+            capabilities: PROTOCOL_CAPABILITIES,
+          }
         : state === 'lease-unavailable'
           ? { status: 'required-unavailable' }
           : { status: 'not-required' },
@@ -630,7 +635,8 @@ test('decoders reject invalid server status, malformed reset tokens, and invalid
         },
         leaseRequired: false,
         leaseExpiresAt: null,
-        chatAvailable: false,
+        chatSupported: null,
+        compatibility: { status: 'not-required' },
       }),
     /canonical 02 entity id/,
   );
@@ -640,10 +646,9 @@ test('decoders reject invalid server status, malformed reset tokens, and invalid
         profile: 'p',
         configuredProbe: 'x',
         host: null,
-        leaseExpiresAt: null,
-        chatAvailable: false,
+        chatSupported: null,
       }),
-    /leaseRequired must be a boolean/,
+    /compatibility must be an object/,
   );
   assert.throws(
     () =>
@@ -651,11 +656,10 @@ test('decoders reject invalid server status, malformed reset tokens, and invalid
         profile: 'p',
         configuredProbe: 'x',
         host: null,
-        leaseRequired: false,
-        leaseExpiresAt: 100,
-        chatAvailable: false,
+        chatSupported: null,
+        compatibility: { status: 'not-required', expires_at: 100 },
       }),
-    /protocol that does not use leases/,
+    /Unexpected compatibility fields/,
   );
   assert.throws(
     () =>
@@ -1204,7 +1208,7 @@ test('discoverUnboundTeams discovers teams only for accounts with no binding', a
         store: 'acct:personal',
         alias: 'personal',
         username: 'satoshi',
-        server: 'foks.example.net',
+        server: 'personal',
       },
       {
         store: 'acct:work',
@@ -1214,6 +1218,7 @@ test('discoverUnboundTeams discovers teams only for accounts with no binding', a
       },
     ],
     stores: [
+      FIXTURE.stores.find((store) => store.id === 'acct:personal')!,
       {
         id: 'acct:work',
         kind: 'account',
@@ -1235,7 +1240,7 @@ test('discoverUnboundTeams discovers teams only for accounts with no binding', a
     ],
   };
   assert.equal(await discoverUnboundTeams(bridge, snapshot), true);
-  assert.deepEqual(calls, [{ profile: 'foks.example.net', alias: 'personal' }]);
+  assert.deepEqual(calls, [{ profile: 'personal', alias: 'personal' }]);
 });
 
 test('startup discovery requests a catalog reload even for empty or failed discovery', async () => {
@@ -1302,7 +1307,12 @@ test('loadSnapshot makes a single catalog call and does not leak fixture data in
       host: checkedHost,
       leaseRequired: true,
       leaseExpiresAt: 2_000_000_000,
-      chatAvailable: true,
+      chatSupported: true,
+      compatibility: {
+        status: 'required',
+        expiresAt: 2_000_000_000,
+        capabilities: PROTOCOL_CAPABILITIES,
+      },
     }),
     listAccounts: async () => [
       {
@@ -1356,7 +1366,8 @@ test('loadSnapshot makes a single catalog call and does not leak fixture data in
         host: null,
         leaseRequired: false,
         leaseExpiresAt: null,
-        chatAvailable: false,
+        chatSupported: null,
+        compatibility: { status: 'not-required' },
       }),
     },
     snapshot,
@@ -1427,7 +1438,12 @@ test('loadSnapshot keeps known stores visible while revoking access to unavailab
       host: checkedHost,
       leaseRequired: true,
       leaseExpiresAt: 2_000_000_000,
-      chatAvailable: true,
+      chatSupported: true,
+      compatibility: {
+        status: 'required',
+        expiresAt: 2_000_000_000,
+        capabilities: PROTOCOL_CAPABILITIES,
+      },
     }),
     listAccounts: async () => [],
     listParties: async () => [],
@@ -1471,7 +1487,8 @@ test('creates a notification when a server cannot be described instead of omitti
       host: null,
       leaseRequired: false,
       leaseExpiresAt: null,
-      chatAvailable: false,
+      chatSupported: null,
+      compatibility: { status: 'not-required' },
     }),
     listAccounts: async () => [
       {
@@ -1614,7 +1631,12 @@ test('loadSnapshot does not fetch members for an inactive team', async () => {
       host: checkedHost,
       leaseRequired: true,
       leaseExpiresAt: 2_000_000_000,
-      chatAvailable: true,
+      chatSupported: true,
+      compatibility: {
+        status: 'required',
+        expiresAt: 2_000_000_000,
+        capabilities: PROTOCOL_CAPABILITIES,
+      },
     }),
     listAccounts: async () => [
       {
@@ -1707,7 +1729,17 @@ test('loadSnapshot evaluates store access based on server lease validity and pro
         leaseRequired: profile !== 'v019',
         leaseExpiresAt:
           profile === 'fresh' ? 200 : profile === 'expired' ? 99 : null,
-        chatAvailable: profile === 'fresh' || profile === 'v019',
+        chatSupported: profile === 'fresh' || profile === 'v019',
+        compatibility:
+          profile === 'v019'
+            ? { status: 'not-required' }
+            : profile === 'missing'
+              ? { status: 'required-unavailable' }
+              : {
+                  status: 'required',
+                  expiresAt: profile === 'fresh' ? 200 : 99,
+                  capabilities: PROTOCOL_CAPABILITIES,
+                },
       };
     },
     listAccounts: async () =>
@@ -1858,7 +1890,21 @@ test('loadSnapshot only imports accounts belonging to active profiles', async ()
 });
 
 test('loadSnapshot omits rosters for lapsed servers and enriches active member and team labels', async () => {
-  const base = mockBridge(FIXTURE);
+  const base = mockBridge({
+    ...FIXTURE,
+    servers: FIXTURE.servers.map((server) =>
+      server.id === 'acme'
+        ? {
+            ...server,
+            compatibility: {
+              status: 'required',
+              expiresAt: 1,
+              capabilities: PROTOCOL_CAPABILITIES,
+            },
+          }
+        : server,
+    ),
+  });
   let rosterCalls = 0;
   const bridge: Bridge = {
     ...base,
@@ -1945,7 +1991,15 @@ test('loadSnapshot omits rosters for lapsed servers and enriches active member a
           : { ...checkedHost, lookupName: profile, canonicalName: profile },
       leaseRequired: true,
       leaseExpiresAt: profile === 'partner' ? null : 2_000_000_000,
-      chatAvailable: profile !== 'partner',
+      chatSupported: profile === 'partner' ? null : true,
+      compatibility:
+        profile === 'partner'
+          ? { status: 'required-unavailable' as const }
+          : {
+              status: 'required' as const,
+              expiresAt: 2_000_000_000,
+              capabilities: PROTOCOL_CAPABILITIES,
+            },
     }),
     listGroupDetails: async (storeId: string) => {
       const current = await bridge.listGroupDetails(storeId);
@@ -2083,6 +2137,7 @@ test('loadSnapshot handles disabled group capabilities gracefully without leakin
         code: 'capability-denied',
         message: 'Teams are disabled.',
         retryable: false,
+        details: { capability: 'teams' },
       },
     ],
   );

@@ -16,3 +16,9 @@ with `cargo build --locked -p foks-agent`. CLI integration tests launch the
 sibling `target/debug/foks-agent` binary, which `cargo test` can leave stale
 when the hard-state schema changes. Use limited Cargo job concurrency and run
 Rust and UI suites separately when disk space is constrained.
+
+Run native desktop unit tests serially with
+`cargo test --locked -j 2 -p foks-desktop-app --lib -- --test-threads=1`.
+A parallel run can intermittently fail the first-run receipt-lock release
+assertion; rerun that test in isolation and the native suite serially before
+attributing the failure to a code change.

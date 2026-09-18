@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { PROTOCOL_CAPABILITIES } from '../src/model/types';
 
 import { FIXTURE } from '../src/fixture';
 import type { Server } from '../src/model';
@@ -42,7 +43,11 @@ function leased(id: string, expiresAt: number): Server {
     ...base,
     id,
     name: `${id}.example.test`,
-    compatibility: { status: 'required', expiresAt },
+    compatibility: {
+      status: 'required',
+      expiresAt,
+      capabilities: PROTOCOL_CAPABILITIES,
+    },
   };
 }
 

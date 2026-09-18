@@ -912,8 +912,9 @@ fn load_profile_catalog_progress(
                 })),
             Err(error) => {
                 let blocks_profile = error_blocks_profile_catalog(&error);
+                let denies_kv = matches!(&error, AgentError::Protocol { code: ErrorCode::CapabilityDenied, fields, .. } if fields.capability.as_deref() == Some("kv"));
                 snapshot.failures.push(CatalogFailure {
-                    scope: if blocks_profile {
+                    scope: if blocks_profile || denies_kv {
                         CatalogFailureScope::Profile {
                             profile: profile.clone(),
                             source: "KV catalog".to_owned(),
@@ -923,9 +924,11 @@ fn load_profile_catalog_progress(
                     },
                     error,
                 });
-                if blocks_profile {
+                if blocks_profile || denies_kv {
                     snapshot.items.clear();
-                    snapshot.blocked_profiles.push(profile.clone());
+                    if blocks_profile {
+                        snapshot.blocked_profiles.push(profile.clone());
+                    }
                     break;
                 }
             }
@@ -944,11 +947,6 @@ fn error_blocks_profile_catalog(error: &AgentError) -> bool {
             code: ErrorCode::RollbackDetected | ErrorCode::CheckpointResetRequired,
             ..
         } => true,
-        AgentError::Protocol {
-            code: ErrorCode::CapabilityDenied,
-            fields,
-            ..
-        } => fields.capability.as_deref() == Some("kv"),
         _ => false,
     }
 }
@@ -2662,8 +2660,8 @@ mod tests {
                     "profile": profile,
                     "configured_probe": "localhost:4430",
                     "host": null,
-                    "lease_required": false,
-                    "lease_expires_at": null
+                    "compatibility": {"status":"not-required"},
+                    "chat_supported": null
                 }),
             },
         })
@@ -2861,7 +2859,7 @@ mod tests {
         .unwrap();
         assert_eq!(catalog.profiles, ["local"]);
         assert_eq!(catalog.stores.len(), 2);
-        assert_eq!(catalog.blocked_profiles, ["local"]);
+        assert!(catalog.blocked_profiles.is_empty());
         transport.0.lock().unwrap().clear();
         assert!(load_profile_catalog_cancellable(
             transport.clone(),
@@ -2884,12 +2882,36 @@ mod tests {
     }
 
     #[test]
-    fn kv_capability_failure_blocks_every_store_in_the_profile() {
+    fn security_failures_still_block_profiles_independently_of_capabilities() {
+        for code in [
+            ErrorCode::RollbackDetected,
+            ErrorCode::CheckpointResetRequired,
+        ] {
+            assert!(error_blocks_profile_catalog(&AgentError::Protocol {
+                code,
+                message: "changed wording".into(),
+                fields: ErrorFields::default()
+            }));
+        }
+        for capability in ["kv", "chat", "teams"] {
+            assert!(!error_blocks_profile_catalog(&AgentError::Protocol {
+                code: ErrorCode::CapabilityDenied,
+                message: "changed wording".into(),
+                fields: ErrorFields {
+                    capability: Some(capability.into()),
+                    ..ErrorFields::default()
+                },
+            }));
+        }
+    }
+
+    #[test]
+    fn kv_capability_failure_restricts_vaults_without_blocking_profile_trust() {
         let catalog = load_catalog(Arc::new(CatalogTransport)).unwrap();
         assert_eq!(catalog.full_item_reads, Some(vec![]));
         assert_eq!(catalog.stores.len(), 2);
         assert!(catalog.items.is_empty());
-        assert_eq!(catalog.blocked_profiles, ["local"]);
+        assert!(catalog.blocked_profiles.is_empty());
         assert_eq!(catalog.failures.len(), 1);
         assert!(matches!(
             catalog.failures[0].scope,

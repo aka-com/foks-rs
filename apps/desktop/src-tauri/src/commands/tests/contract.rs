@@ -32,6 +32,41 @@ use foks_agent_proto::{KvRole, Operation};
 use zeroize::Zeroizing;
 
 #[test]
+fn server_status_requires_consistent_explicit_policy_facts() {
+    let status = serde_json::json!({
+        "profile":"work", "configured_probe":"foks.example", "host":null,
+        "chat_supported":null,
+        "compatibility":{"status":"incompatible","reason":"drift","expires_at":200}
+    });
+    assert!(server_status_response(status.clone(), "work", "foks.example", true).is_ok());
+    for (key, value) in [
+        (
+            "compatibility",
+            serde_json::json!({"status":"not-required"}),
+        ),
+        (
+            "compatibility",
+            serde_json::json!({"status":"validated","expires_at":200,"capabilities":["invented"]}),
+        ),
+        (
+            "compatibility",
+            serde_json::json!({"status":"validated","expires_at":200,"capabilities":[]}),
+        ),
+        ("compatibility", serde_json::Value::Null),
+        ("chat_supported", serde_json::json!(true)),
+    ] {
+        let mut invalid = status.clone();
+        invalid[key] = value;
+        assert_eq!(
+            server_status_response(invalid, "work", "foks.example", true)
+                .unwrap_err()
+                .code,
+            "invalid-response"
+        );
+    }
+}
+
+#[test]
 fn wire_contract_fixture_matches_serialized_shapes() {
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("../../../wire-contract.json")).unwrap();
@@ -273,9 +308,11 @@ fn wire_contract_fixture_matches_serialized_shapes() {
             chain: 11,
             epoch: 42,
         }),
-        lease_required: true,
-        lease_expires_at: Some(1_900_000_000),
-        chat_available: true,
+        chat_supported: Some(true),
+        compatibility: foks_agent_proto::CompatibilityStatus::Validated {
+            expires_at: 1_900_000_000,
+            capabilities: ["chat".to_owned(), "kv".to_owned()].into_iter().collect(),
+        },
     };
     assert_eq!(
         serde_json::to_value(status).unwrap(),
@@ -541,9 +578,8 @@ fn phase_six_wire_responses_are_exact_bounded_and_request_bound() {
                 "host_chain_sequence":4,
                 "merkle_epoch":8
             },
-            "lease_required":true,
-            "lease_expires_at":1_900_000_000u64,
-            "chat_available":true
+            "chat_supported":true,
+            "compatibility":{"status":"validated","expires_at":1_900_000_000u64,"capabilities":["chat","kv"]}
         }),
         "work",
         "foks.example",

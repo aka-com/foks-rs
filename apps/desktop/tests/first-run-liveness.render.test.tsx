@@ -397,7 +397,8 @@ test('local-server retry probes again despite a stale failed connectivity snapsh
           host: h.checkpoint.profile!,
           leaseRequired: false,
           leaseExpiresAt: null,
-          chatAvailable: false,
+          chatSupported: false,
+          compatibility: { status: 'not-required' },
         };
       },
     },

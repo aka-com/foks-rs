@@ -118,6 +118,57 @@ async function renderPeople(
   return { rendered, refreshed, reported, showAccount };
 }
 
+test('an ungranted device capability does not invent a missing backup key', async () => {
+  const base = await fixture();
+  const snapshot: AgentSnapshot = {
+    ...base,
+    servers: base.servers.map((server) =>
+      server.id === 'personal'
+        ? {
+            ...server,
+            compatibility: {
+              status: 'required',
+              expiresAt: 4e9,
+              capabilities: ['kv'],
+            },
+          }
+        : server,
+    ),
+  };
+  let reads = 0;
+  let observed!: Bridge;
+  const { rendered } = await renderPeople(
+    snapshot,
+    'acct:personal',
+    undefined,
+    {
+      decorate: (bridge) => {
+        observed = {
+          ...bridge,
+          listAccountDevices: async () => {
+            reads++;
+            return [];
+          },
+        };
+        return observed;
+      },
+    },
+  );
+  const { deviceAlertRegistry } = (await vite.ssrLoadModule(
+    '/src/screens/device-alert.ts',
+  )) as typeof import('../src/screens/device-alert');
+  assert.equal(reads, 0);
+  assert.equal(
+    deviceAlertRegistry(observed).getSnapshot().paperKeys.has('acct:personal'),
+    false,
+  );
+  assert.equal(
+    (rendered.getByRole('button', { name: 'Devices ›' }) as HTMLButtonElement)
+      .disabled,
+    true,
+  );
+});
+
 test('the account panel keeps every workflow row from the accounts pane', async () => {
   const { rendered } = await renderPeople(await fixture());
 

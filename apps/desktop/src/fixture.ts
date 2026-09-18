@@ -4,6 +4,7 @@
  */
 
 import { applyLease } from './model/lease';
+import { PROTOCOL_CAPABILITIES } from './model/types';
 import type { AgentSnapshot } from './model/types';
 
 /** Base fixture data prior to applying lease configuration. */
@@ -36,7 +37,11 @@ const RAW: AgentSnapshot = {
       epoch: 90417,
       accounts: ['work'],
       trust: { status: 'verified' },
-      compatibility: { status: 'required', expiresAt: 0 },
+      compatibility: {
+        status: 'required',
+        expiresAt: 0,
+        capabilities: PROTOCOL_CAPABILITIES,
+      },
       passiveStatus: { status: 'available', source: 'signed-server-status' },
       connectivity: { status: 'unknown' },
       capabilities: { chat: false },

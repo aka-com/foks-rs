@@ -120,6 +120,7 @@ type ServerUiState =
   | 'unavailable'
   | 'blocked'
   | 'schema'
+  | 'incompatible'
   | 'import-verification'
   | 'pending';
 
@@ -130,6 +131,7 @@ const STATE_LABEL: Readonly<Record<ServerUiState, string>> = {
   unavailable: 'Status unknown',
   blocked: 'Untrusted',
   schema: 'Schema incompatible',
+  incompatible: 'Protocol incompatible',
   'import-verification': 'Verification required',
   pending: 'Checking status',
 };
@@ -140,6 +142,7 @@ const isLocked = (state: ServerUiState): boolean =>
   state === 'unavailable' ||
   state === 'blocked' ||
   state === 'schema' ||
+  state === 'incompatible' ||
   state === 'import-verification';
 
 const markTone = (state: ServerUiState): string =>
@@ -151,6 +154,9 @@ function resolveServerUiState(
 ): ServerUiState {
   const availability = serverAvailability(agentSnapshot, server);
   if (availability.available) return 'checked';
+  if (availability.reason === 'loading') return 'pending';
+  if (availability.reason === 'compatibility-incompatible')
+    return 'incompatible';
   if (availability.reason === 'verification-required') return 'unprobed';
   if (availability.reason === 'check-in-expired') return 'lapsed';
   if (availability.reason === 'verification-failed') return 'blocked';
@@ -805,7 +811,8 @@ function StatusBand({
           </Button>
         }
       >
-        The signed check-in expired {expires(expiry)}. Check the server to renew
+        Signed compatibility verification expired {expires(expiry)}. A newer
+        signed result is required; checking the server identity does not renew
         it.
       </Band>
     );
@@ -830,6 +837,13 @@ function StatusBand({
       >
         The server certificate or security history does not match the pinned
         identity on this device. Access has been blocked for your security.
+      </Band>
+    );
+  if (state === 'incompatible')
+    return (
+      <Band severity="crit" label="Protocol incompatible">
+        Compatibility verification does not permit operations with this server.
+        This is not an identity mismatch; resetting trust will not resolve it.
       </Band>
     );
   if (state === 'schema')

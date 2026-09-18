@@ -29,7 +29,7 @@ import {
 import {
   actionableGroupMember,
   catalog,
-  canCreateInStore,
+  storeOperationAvailability,
   groupDetailFailure,
   hue,
   isMachine,
@@ -46,7 +46,6 @@ import {
   shortId,
   storeDescriptionState,
   storeOf,
-  storeReadable,
   visibilityOf,
 } from '../model';
 import type {
@@ -1272,7 +1271,8 @@ export function GroupSheet({
   );
   const creationAccounts = snapshot.stores.filter(
     (candidate): candidate is AccountStore =>
-      candidate.kind === 'account' && canCreateInStore(snapshot, candidate.id),
+      candidate.kind === 'account' &&
+      storeOperationAvailability(snapshot, candidate, 'teams').available,
   );
   // Creating acts as the account the page acts as: the sheet's own store when
   // that store is an account that can create, else this Mac's first such one.
@@ -1288,7 +1288,7 @@ export function GroupSheet({
       candidate.kind === 'team' &&
       candidate.active &&
       candidate.team_kind === 'named' &&
-      storeReadable(snapshot, candidate.id) &&
+      storeOperationAvailability(snapshot, candidate, 'federation').available &&
       candidate.server !== store.server,
   );
   const [remoteStoreId, setRemoteStoreId] = useTabSheetState(
@@ -2000,7 +2000,9 @@ export function GroupSettingsScreen({
   } = usePendingGroupOperations(
     bridge,
     store?.kind === 'team' ? store : null,
-    Boolean(store && storeDescriptionState(snapshot, store) === 'normal'),
+    Boolean(
+      store && storeOperationAvailability(snapshot, store, 'teams').available,
+    ),
   );
   // Both successful changes and reconciled failures can change the durable
   // pending records. Refresh them for every membership action and manual refresh.
@@ -2142,11 +2144,18 @@ export function GroupSettingsScreen({
       </>
     );
   }
-  const access = storeDescriptionState(snapshot, store);
+  const access = storeDescriptionState(snapshot, store, {
+    operation: 'metadata',
+  });
   const unavailable = access !== 'normal' && access !== 'setup-incomplete';
   const inactive = store.active === false;
   const rosterReason = manageReason(snapshot, store, 'roster');
   const federationReason = manageReason(snapshot, store, 'federation');
+  const canReadRoster = storeOperationAvailability(
+    snapshot,
+    store,
+    'teams',
+  ).available;
   const canManageRoster = rosterReason === undefined;
   const named = store.team_kind === 'named';
   const serverName = displayServerName(snapshot, store);
@@ -2156,7 +2165,9 @@ export function GroupSettingsScreen({
   // tab's own count.
   const headerChip = [
     serverName,
-    rosterFailure || federationFailure ? null : plural(memberCount, 'member'),
+    !canReadRoster || rosterFailure || federationFailure
+      ? null
+      : plural(memberCount, 'member'),
   ]
     .filter(Boolean)
     .join(' · ');
@@ -2347,6 +2358,7 @@ export function GroupSettingsScreen({
       </div>
       {unavailable ? (
         <StoreAccessTakeover
+          operation="metadata"
           snapshot={snapshot}
           store={store}
           noHeader
@@ -2432,7 +2444,7 @@ export function GroupSettingsScreen({
                 ? {
                     id,
                     label: 'Members',
-                    ...(rosterFailure || federationFailure
+                    ...(!canReadRoster || rosterFailure || federationFailure
                       ? {}
                       : { count: memberCount }),
                   }
@@ -2450,7 +2462,10 @@ export function GroupSettingsScreen({
                     ? {
                         id,
                         label: 'Files',
-                        count: itemCountOf(snapshot, store),
+                        ...(storeOperationAvailability(snapshot, store, 'vault')
+                          .available
+                          ? { count: itemCountOf(snapshot, store) }
+                          : {}),
                       }
                     : id === 'requests'
                       ? {
@@ -2472,7 +2487,23 @@ export function GroupSettingsScreen({
             aria-labelledby={tabId(GROUP_TABS, tab)}
           >
             <div className="groups-wrap">
-              {tab === 'people' ? (
+              {tab === 'people' && !canReadRoster ? (
+                <StoreAccessTakeover
+                  snapshot={snapshot}
+                  store={store}
+                  operation="teams"
+                  noHeader
+                  variant="band"
+                  onOpenServer={(profile) =>
+                    onNavigate({
+                      kind: 'settings',
+                      section: 'servers',
+                      profile,
+                    })
+                  }
+                  onFinishSetup={finishSetup}
+                />
+              ) : tab === 'people' ? (
                 <MembersTab
                   snapshot={snapshot}
                   store={store}

@@ -261,9 +261,10 @@ pub use kv::{
     KvMutationPrecondition, KvReadReport, KvRoleSummary, KvWriteReport,
 };
 pub use registry::{
-    normalize_profile_label, Capability, CheckedProfileSession, ProbeAcceptance, ProbeReport,
-    Profile, ProfilePaths, ProfilePublicationReport, ProfileRegistry, ProfileSession,
-    ProtocolPolicy, ServerStatusSnapshot, ServerVersionReport, StoredHostStatus, TrustRoot,
+    normalize_profile_label, Capability, CapabilityDenial, CheckedProfileSession,
+    CompatibilityFailure, CompatibilityStatus, ProbeAcceptance, ProbeReport, Profile, ProfilePaths,
+    ProfilePublicationReport, ProfileRegistry, ProfileSession, ProtocolPolicy,
+    ServerStatusSnapshot, ServerVersionReport, StoredHostStatus, TrustRoot,
     PROFILE_LABEL_MAX_BYTES,
 };
 #[cfg(test)]
@@ -1361,6 +1362,29 @@ mod tests {
     }
 
     #[test]
+    fn local_team_inventory_is_independent_of_remote_team_permission() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let credentials =
+            ClientCredentials::initialize(&root, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        registry.add(profile("hosted", probe_only())).unwrap();
+        let session = ProfileSession::open(&registry, "hosted").unwrap();
+        credentials
+            .with_checked_session(&session, |checked| {
+                let mut secrets = MemorySecretStore::default();
+                let mut vault = AccountVault::new(&mut secrets);
+                assert!(checked.list_local_teams(&mut vault)?.is_empty());
+                assert!(matches!(
+                    checked.list_teams(&mut vault),
+                    Err(Error::CapabilityDenied(Capability::Teams))
+                ));
+                Ok::<_, Error>(())
+            })
+            .unwrap();
+    }
+
+    #[test]
     fn current_hosted_policy_fails_closed_until_validated() {
         let probe_only = profile("hosted", probe_only());
         assert!(probe_only.require(Capability::Probe).is_ok());
@@ -1410,6 +1434,16 @@ mod tests {
         let mut registry = ProfileRegistry::open(temporary.path()).unwrap();
         assert_eq!(registry.profile("hosted").unwrap(), &granted);
         assert_eq!(granted.apply_canary(&signed, 101).unwrap(), granted);
+        let grants = granted.protocol.compatibility_status();
+        assert_eq!(grants.denial_at(Capability::Kv, 199), None);
+        assert_eq!(
+            grants.denial_at(Capability::Federation, 199),
+            Some(CapabilityDenial::NotGranted)
+        );
+        assert_eq!(
+            grants.denial_at(Capability::Kv, 200),
+            Some(CapabilityDenial::Expired)
+        );
         assert!(granted.require_at(Capability::Kv, 199).is_ok());
         assert!(granted.require_at(Capability::Passphrases, 199).is_ok());
         assert!(granted.require_at(Capability::Teams, 199).is_ok());
@@ -1446,6 +1480,13 @@ mod tests {
         let drift = SignedCanaryArtifact::sign(artifact, &seed).unwrap();
         let revoked = granted.apply_canary(&drift, 102).unwrap();
         assert_eq!(
+            revoked.protocol.compatibility_status(),
+            CompatibilityStatus::Incompatible {
+                reason: CompatibilityFailure::Drift,
+                expires_at: 200,
+            }
+        );
+        assert_eq!(
             registry.apply_canary("hosted", &drift, 102).unwrap(),
             revoked
         );
@@ -1474,6 +1515,13 @@ mod tests {
         artifact.protocol_metadata_sha256 = "44".repeat(32);
         let mismatched = SignedCanaryArtifact::sign(artifact, &seed).unwrap();
         let still_revoked = revoked.apply_canary(&mismatched, 103).unwrap();
+        assert_eq!(
+            still_revoked.protocol.compatibility_status(),
+            CompatibilityStatus::Incompatible {
+                reason: CompatibilityFailure::ProtocolMismatch,
+                expires_at: 200,
+            }
+        );
         assert!(matches!(
             still_revoked.protocol,
             ProtocolPolicy::CurrentProbeOnly { .. }
@@ -1544,8 +1592,8 @@ mod tests {
         assert_eq!(empty.profile, "hosted");
         assert_eq!(empty.configured_probe, "foks.app");
         assert!(empty.host.is_none());
-        assert!(!empty.lease_required);
-        assert!(empty.lease_expires_at.is_none());
+        assert_eq!(empty.compatibility, CompatibilityStatus::NotRequired);
+        assert_eq!(empty.chat_supported, None);
 
         let verified = foks_verify::verify_public_host(
             "foks.app",

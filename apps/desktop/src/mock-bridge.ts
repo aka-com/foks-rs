@@ -1150,20 +1150,20 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       const server = servers.find((entry) => entry.id === profile);
       if (!server)
         throw failure('store-not-found', 'That server is not configured.');
+      const compatibility = server.compatibility;
+      if (compatibility.status === 'requirement-unknown')
+        throw compatibility.error;
       return {
         profile: server.id,
         configuredProbe: serverProbes.get(server.id) ?? server.name,
         host: serverHosts.get(server.id) ?? null,
-        leaseRequired: true,
+        leaseRequired: compatibility.status !== 'not-required',
         leaseExpiresAt:
-          server.id === 'personal'
-            ? Math.floor(Date.now() / 1000) + 6 * 24 * 60 * 60
-            : server.id === 'acme'
-              ? Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60
-              : serverHosts.has(server.id)
-                ? Math.floor(Date.now() / 1000) + 6 * 24 * 60 * 60
-                : null,
-        chatAvailable: server.capabilities.chat,
+          'expiresAt' in compatibility ? compatibility.expiresAt : null,
+        compatibility,
+        chatSupported: serverHosts.has(server.id)
+          ? server.capabilities.chat
+          : null,
       };
     },
     checkServer: async (profile) => {

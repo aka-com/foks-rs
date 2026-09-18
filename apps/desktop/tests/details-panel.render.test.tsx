@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { PROTOCOL_CAPABILITIES } from '../src/model/types';
 import { createElement, StrictMode } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 import type { Bridge, ReadItemResponse } from '../src/bridge';
@@ -126,7 +127,11 @@ test('an access generation quarantines old read flights across expiry and renewa
       server.id === store.server
         ? {
             ...server,
-            compatibility: { status: 'required' as const, expiresAt: 1 },
+            compatibility: {
+              status: 'required' as const,
+              capabilities: PROTOCOL_CAPABILITIES,
+              expiresAt: 1,
+            },
           }
         : server,
     ),
@@ -152,6 +157,7 @@ test('an access generation quarantines old read flights across expiry and renewa
             ...server,
             compatibility: {
               status: 'required' as const,
+              capabilities: PROTOCOL_CAPABILITIES,
               expiresAt: Math.floor(Date.now() / 1000) + 3_600,
             },
           }

@@ -15,7 +15,7 @@ import {
   chatAvailable,
   partiesOf,
   serverName,
-  storeAvailability,
+  storeOperationAvailability,
   storeDescription,
   storeDescriptionState,
   storeOf,
@@ -70,9 +70,12 @@ export function ChatScreen({
   const access = useCallback(
     () =>
       store
-        ? storeAvailability(agentSnapshot, store, { nowSeconds: accessNow() })
+        ? storeOperationAvailability(agentSnapshot, store, 'chat', {
+            ...accessOptions,
+            nowSeconds: accessNow(),
+          })
         : ({ available: false, reason: 'vault-unavailable' } as const),
-    [accessNow, store, agentSnapshot],
+    [accessNow, accessOptions, store, agentSnapshot],
   );
   const {
     channels,
@@ -162,9 +165,13 @@ export function ChatScreen({
         : Promise.reject(cancelled()),
     [accessAvailable, markRead],
   );
-  const describeOptions = accessOptions ?? { nowSeconds: accessNow() };
+  const describeOptions = {
+    ...(accessOptions ?? { nowSeconds: accessNow() }),
+    operation: 'chat' as const,
+  };
   const available = store
-    ? storeAvailability(agentSnapshot, store, describeOptions).available
+    ? storeOperationAvailability(agentSnapshot, store, 'chat', describeOptions)
+        .available
     : false;
   // The reason the locked pane states is read off the clock the lock decision
   // used, so the two cannot disagree about a check-in that expired this second.

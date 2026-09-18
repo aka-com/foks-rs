@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { PROTOCOL_CAPABILITIES } from '../src/model/types';
 import { createElement } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 
@@ -77,7 +78,11 @@ test('an expiring open vault conceals details while a healthy neighbor stays usa
       server.id === 'acme'
         ? {
             ...server,
-            compatibility: { status: 'required' as const, expiresAt },
+            compatibility: {
+              status: 'required' as const,
+              expiresAt,
+              capabilities: PROTOCOL_CAPABILITIES,
+            },
           }
         : server,
     ),
@@ -151,7 +156,11 @@ test('expiry on one profile preserves a healthy neighboring editor draft', async
       server.id === 'acme'
         ? {
             ...server,
-            compatibility: { status: 'required' as const, expiresAt },
+            compatibility: {
+              status: 'required' as const,
+              expiresAt,
+              capabilities: PROTOCOL_CAPABILITIES,
+            },
           }
         : server,
     ),
@@ -203,7 +212,11 @@ test('foreground retries authenticated reconciliation after an expiry refresh fa
       server.id === 'acme'
         ? {
             ...server,
-            compatibility: { status: 'required' as const, expiresAt },
+            compatibility: {
+              status: 'required' as const,
+              expiresAt,
+              capabilities: PROTOCOL_CAPABILITIES,
+            },
           }
         : server,
     ),
@@ -293,7 +306,11 @@ test('expiry during native maintenance waits for lifecycle restoration to refres
       server.id === 'acme'
         ? {
             ...server,
-            compatibility: { status: 'required' as const, expiresAt },
+            compatibility: {
+              status: 'required' as const,
+              expiresAt,
+              capabilities: PROTOCOL_CAPABILITIES,
+            },
           }
         : server,
     ),
@@ -371,7 +388,11 @@ test('a forced expiry refresh waits for the in-flight foreground load', async ()
       server.id === 'acme'
         ? {
             ...server,
-            compatibility: { status: 'required' as const, expiresAt },
+            compatibility: {
+              status: 'required' as const,
+              expiresAt,
+              capabilities: PROTOCOL_CAPABILITIES,
+            },
           }
         : server,
     ),

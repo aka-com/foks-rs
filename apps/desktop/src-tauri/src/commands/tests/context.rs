@@ -10,6 +10,53 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 #[test]
+fn kv_denial_does_not_revoke_account_or_chat_target_bindings() {
+    let state = phase_four_state(vec![]);
+    let account = store_id(&CatalogStoreRef::Account(account_ref(
+        "work.example",
+        "personal",
+    )));
+    let team = store_id(&CatalogStoreRef::Team(team_ref(
+        "work.example",
+        "personal",
+        "engineering",
+    )));
+    state
+        .catalog
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .failures
+        .push(foks_desktop::CatalogFailure {
+            scope: foks_desktop::CatalogFailureScope::Profile {
+                profile: "work.example".into(),
+                source: "KV catalog".into(),
+            },
+            error: foks_desktop::AgentError::Protocol {
+                code: foks_agent_proto::ErrorCode::CapabilityDenied,
+                message: "KV unavailable".into(),
+                fields: foks_agent_proto::ErrorFields {
+                    capability: Some("kv".into()),
+                    ..Default::default()
+                },
+            },
+        });
+    assert!(state.selected_account(&account).is_ok());
+    assert!(state.selected_store(&team).is_ok());
+    state
+        .catalog
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .blocked_profiles
+        .push("work.example".into());
+    assert!(state.selected_account(&account).is_err());
+    assert!(state.selected_store(&team).is_err());
+}
+
+#[test]
 fn mutation_gate_refuses_a_second_write_until_the_first_finishes() {
     let state = AppState::new(Arc::new(AgentHandle::new(
         "/tmp/unused-foks-agent.sock".into(),

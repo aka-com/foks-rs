@@ -21,7 +21,7 @@ import {
   catalog,
   chatAvailable,
   plural,
-  serverAvailability,
+  storeOperationAvailability,
   serverDisplayName,
   serverName as displayServerName,
   serverOf,
@@ -63,7 +63,7 @@ function noChannelsReason(
     return 'Chat is only available in teams, not shared folders.';
   const server = serverOf(snapshot, store.id);
   if (!server) return 'This team’s server is not configured on this device.';
-  if (!server.capabilities.chat)
+  if (server.capabilities.chat === false)
     return `Chat is not enabled on ${serverDisplayName(server)}.`;
   return undefined;
 }
@@ -79,11 +79,12 @@ function unreachableReason(
   store: TeamStore,
   options: AvailabilityOptions,
 ): AvailabilityReason | undefined {
-  const state = storeDescriptionState(snapshot, store, options);
-  if (state !== 'normal') return state;
-  const server = serverOf(snapshot, store.id);
-  if (!server) return 'vault-unavailable';
-  const availability = serverAvailability(snapshot, server, options);
+  const availability = storeOperationAvailability(
+    snapshot,
+    store,
+    'chat',
+    options,
+  );
   return availability.available ? undefined : availability.reason;
 }
 
@@ -123,7 +124,9 @@ export function ChannelsTab({
     // to once nothing is wrong with it.
     const state = unreachableReason(snapshot, store, accessOptions);
     const serverName = displayServerName(snapshot, store);
-    const copy = state ? accessCopy(state, store, serverName) : undefined;
+    const copy = state
+      ? accessCopy(state, store, serverName, 'chat')
+      : undefined;
     return (
       <div className="roster">
         <Band label={copy?.title ?? 'Channels unavailable'}>
@@ -277,6 +280,17 @@ export function FilesTab({
   onNavigate: (location: Location) => void;
 }): ReactNode {
   const items = itemCountOf(snapshot, store);
+  const state = storeDescriptionState(snapshot, store);
+  if (state !== 'normal') {
+    const copy = accessCopy(state, store, displayServerName(snapshot, store));
+    return (
+      <div className="roster">
+        <Band severity="warn" label={copy.title}>
+          {copy.detail}
+        </Band>
+      </div>
+    );
+  }
   return (
     <div className="roster">
       <Inset className="settings-inset">

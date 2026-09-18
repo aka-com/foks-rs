@@ -31,9 +31,16 @@ import { decodeChatReply } from './chat-contract';
 import type { ChatAction, ChatReply } from './chat-contract';
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { itemKey, parseRole, serverDisplayName } from './model';
+import {
+  itemKey,
+  parseRole,
+  serverDisplayName,
+  PROTOCOL_CAPABILITIES,
+} from './model';
 import type {
   AgentStatus,
+  CompatibilityLease,
+  ProtocolCapability,
   Account,
   AvailabilityReason,
   GroupDetailFailure,
@@ -433,7 +440,8 @@ export interface ServerStatusSnapshot {
   leaseRequired: boolean;
   /** Expiration timestamp of the signed lease in Unix seconds, or null if unleased. */
   leaseExpiresAt: number | null;
-  chatAvailable: boolean;
+  compatibility: Exclude<CompatibilityLease, { status: 'requirement-unknown' }>;
+  chatSupported: boolean | null;
 }
 
 export interface ServerLabelResponse {
@@ -1226,6 +1234,7 @@ function decodeServer(value: unknown, at: string): Server {
       'lease-lapsed',
       'lease-unavailable',
       'never-probed',
+      'unknown',
       'blocked',
     ].includes(state)
   ) {
@@ -1254,23 +1263,20 @@ function decodeServer(value: unknown, at: string): Server {
               fatal: false,
             },
           }
-        : state === 'never-probed'
-          ? { status: 'unprobed' }
-          : { status: 'verified' },
-    compatibility:
-      state === 'lease-lapsed'
-        ? { status: 'required', expiresAt: 0 }
-        : state === 'lease-unavailable'
-          ? { status: 'required-unavailable' }
-          : { status: 'not-required' },
-    passiveStatus: {
-      status: 'available',
-      source: 'signed-server-status',
+        : { status: 'unknown' },
+    compatibility: {
+      status: 'requirement-unknown',
+      error: {
+        code: 'catalog-loading',
+        message: 'Server facts have not been loaded.',
+        retryable: false,
+        ambiguous: false,
+        fatal: false,
+      },
     },
+    passiveStatus: { status: 'loading' },
     connectivity: { status: 'unknown' },
-    capabilities: {
-      chat: bool(item.chat_available, `${at}.chat_available`),
-    },
+    capabilities: { chat: null },
     restrictions: [],
   };
 }
@@ -1747,8 +1753,65 @@ function decodeStoredHost(value: unknown, at: string): StoredHost {
   };
 }
 
+export function decodeCompatibility(
+  value: unknown,
+): ServerStatusSnapshot['compatibility'] {
+  const item = record(value, 'compatibility');
+  const status = string(item.status, 'compatibility.status');
+  if (status === 'not-required' || status === 'missing') {
+    if (Object.keys(item).some((key) => key !== 'status'))
+      throw new Error('Unexpected compatibility fields');
+    return {
+      status: status === 'missing' ? 'required-unavailable' : 'not-required',
+    };
+  }
+  const expiresAt = integer(item.expires_at, 'compatibility.expires_at');
+  if (status === 'incompatible') {
+    const reason = string(item.reason, 'compatibility.reason');
+    if (
+      !['drift', 'protocol-mismatch', 'unknown-capability'].includes(reason) ||
+      Object.keys(item).some(
+        (key) => !['status', 'expires_at', 'reason'].includes(key),
+      )
+    )
+      throw new Error('Invalid compatibility failure');
+    return {
+      status,
+      expiresAt,
+      reason: reason as 'drift' | 'protocol-mismatch' | 'unknown-capability',
+    };
+  }
+  if (
+    status !== 'validated' ||
+    Object.keys(item).some(
+      (key) => !['status', 'expires_at', 'capabilities'].includes(key),
+    )
+  )
+    throw new Error('Invalid compatibility status');
+  const capabilities = array(
+    item.capabilities,
+    'compatibility.capabilities',
+    string,
+  );
+  if (
+    !capabilities.length ||
+    new Set(capabilities).size !== capabilities.length ||
+    capabilities.some(
+      (capability) =>
+        !PROTOCOL_CAPABILITIES.includes(capability as ProtocolCapability),
+    )
+  )
+    throw new Error('Invalid compatibility capabilities');
+  return {
+    status: 'required',
+    expiresAt,
+    capabilities: capabilities as ProtocolCapability[],
+  };
+}
+
 export function decodeServerStatus(value: unknown): ServerStatusSnapshot {
   const item = record(value, 'describe_server_status response');
+  const compatibility = decodeCompatibility(item.compatibility);
   const status = {
     profile: string(item.profile, 'describe_server_status.profile'),
     configuredProbe: string(
@@ -1756,25 +1819,20 @@ export function decodeServerStatus(value: unknown): ServerStatusSnapshot {
       'describe_server_status.configuredProbe',
     ),
     host: nullable(item.host, 'describe_server_status.host', decodeStoredHost),
-    leaseRequired: bool(
-      item.leaseRequired,
-      'describe_server_status.leaseRequired',
-    ),
-    leaseExpiresAt: nullable(
-      item.leaseExpiresAt,
-      'describe_server_status.leaseExpiresAt',
-      integer,
-    ),
-    chatAvailable: bool(
-      item.chatAvailable,
-      'describe_server_status.chatAvailable',
+    compatibility,
+    leaseRequired: compatibility.status !== 'not-required',
+    leaseExpiresAt:
+      'expiresAt' in compatibility ? compatibility.expiresAt : null,
+    chatSupported: nullable(
+      item.chatSupported,
+      'describe_server_status.chatSupported',
+      bool,
     ),
   };
-  if (!status.leaseRequired && status.leaseExpiresAt !== null) {
+  if ((status.host !== null) !== (status.chatSupported !== null))
     throw new Error(
-      'describe_server_status returned an expiration timestamp for a protocol that does not use leases',
+      'describe_server_status returned inconsistent host support',
     );
-  }
   return status;
 }
 
@@ -2299,6 +2357,14 @@ function restrictionFromError(
     return { kind: 'schema-incompatible', error };
   if (error.code === 'import-verification-required')
     return { kind: 'import-verification-required', error };
+  const capability = error.details?.capability as
+    ProtocolCapability | undefined;
+  if (
+    ['capability-denied', 'capability-unavailable'].includes(error.code) &&
+    capability &&
+    PROTOCOL_CAPABILITIES.includes(capability)
+  )
+    return { kind: 'capability-denied', capability, error };
   return undefined;
 }
 
@@ -2987,6 +3053,15 @@ function recoverableGroupDetailFailure(
     code: typed.code,
     message: typed.message,
     retryable: typed.retryable,
+    ...(typed.details
+      ? {
+          details: Object.fromEntries(
+            Object.entries(typed.details).filter(
+              ([, value]) => value !== undefined,
+            ),
+          ),
+        }
+      : {}),
   };
 }
 
@@ -3015,6 +3090,29 @@ export async function discoverUnboundTeams(
   for (const account of snapshot.accounts) {
     if (!isCurrent()) break;
     if (bound.has(`${account.server}\u0000${account.alias}`)) continue;
+    if (
+      !snapshot.stores.some(
+        (store) =>
+          store.kind === 'account' &&
+          store.id === account.store &&
+          store.server === account.server &&
+          store.account === account.alias,
+      )
+    )
+      continue;
+    const server = snapshot.servers.find(
+      (entry) => entry.id === account.server,
+    );
+    if (
+      !server ||
+      !serverFactAvailability(
+        server,
+        snapshot.observedExpiredLeases,
+        { agentReady: snapshot.agent.state === 'ready' },
+        ['teams'],
+      ).available
+    )
+      continue;
     attempted = true;
     try {
       await enqueueProfileWork(bridge, account.server, async () => {
@@ -3174,7 +3272,7 @@ async function projectCatalog(
       return restriction ? [restriction] : [];
     });
     const failure = failures[0];
-    return liveStoreIds.has(store.id)
+    return liveStoreIds.has(store.id) && !failure
       ? {
           store: store.id,
           status: 'available' as const,
@@ -3182,7 +3280,10 @@ async function projectCatalog(
         }
       : {
           store: store.id,
-          status: 'unavailable' as const,
+          status:
+            partial && !failure
+              ? ('loading' as const)
+              : ('unavailable' as const),
           restrictions,
           ...(failure ? { error: failure.error } : {}),
         };
@@ -3245,7 +3346,7 @@ async function projectCatalog(
             .map((store) => store.account),
           trust: blockedProfiles.has(profile)
             ? { status: 'blocked', error: loadingError }
-            : { status: 'unprobed' },
+            : { status: 'unknown' },
           compatibility: { status: 'requirement-unknown', error: loadingError },
           passiveStatus: {
             status: 'failed',
@@ -3253,7 +3354,7 @@ async function projectCatalog(
             error: loadingError,
           },
           connectivity: { status: 'unknown' },
-          capabilities: { chat: false },
+          capabilities: { chat: null },
           restrictions: previous?.restrictions ?? [],
         };
       })
@@ -3318,7 +3419,6 @@ async function projectCatalog(
   );
   const servers = listedServers.map((server) => {
     if (!bridge.native && !partial) return server;
-    const previous = base?.servers.find((entry) => entry.id === server.id);
     const scopedFailures = response.failures.filter(
       (failure) => failure.scope === 'profile' && failure.profile === server.id,
     );
@@ -3335,10 +3435,12 @@ async function projectCatalog(
       ? [...restrictions, statusRestriction]
       : restrictions;
     if (server.trust.status === 'blocked' || blockedProfiles.has(server.id)) {
-      const trustFailure = scopedFailures.find(
-        (failure) =>
-          failure.error.code !== 'unsupported-schema' &&
-          failure.error.code !== 'import-verification-required',
+      const trustFailure = scopedFailures.find((failure) =>
+        [
+          'rollback-detected',
+          'checkpoint-reset-required',
+          'server-verification-failed',
+        ].includes(failure.error.code),
       )?.error;
       return {
         ...server,
@@ -3352,26 +3454,28 @@ async function projectCatalog(
     if (!status || statusError)
       return {
         ...server,
-        passiveStatus: {
-          status: 'failed' as const,
-          source: 'describe-server-status' as const,
-          error:
-            statusError ??
-            normalizeCommandError(new Error('Server status was not returned.')),
-        },
-        compatibility:
-          previous?.compatibility.status === 'required' ||
-          previous?.compatibility.status === 'not-required'
-            ? previous.compatibility
+        trust: { status: 'unknown' as const },
+        passiveStatus:
+          statusError?.code === 'catalog-loading'
+            ? { status: 'loading' as const }
             : {
-                status: 'requirement-unknown' as const,
+                status: 'failed' as const,
+                source: 'describe-server-status' as const,
                 error:
                   statusError ??
                   normalizeCommandError(
-                    new Error('Lease requirement is unknown.'),
+                    new Error('Server status was not returned.'),
                   ),
               },
-        capabilities: previous?.capabilities ?? { chat: false },
+        compatibility: {
+          status: 'requirement-unknown' as const,
+          error:
+            statusError ??
+            normalizeCommandError(
+              new Error('Compatibility status is unknown.'),
+            ),
+        },
+        capabilities: { chat: null },
         restrictions: allRestrictions,
       };
     return {
@@ -3382,16 +3486,12 @@ async function projectCatalog(
       trust: status.host
         ? { status: 'verified' as const }
         : { status: 'unprobed' as const },
-      compatibility: status.leaseRequired
-        ? status.leaseExpiresAt === null
-          ? { status: 'required-unavailable' as const }
-          : { status: 'required' as const, expiresAt: status.leaseExpiresAt }
-        : { status: 'not-required' as const },
+      compatibility: status.compatibility,
       passiveStatus: {
         status: 'available' as const,
         source: 'signed-server-status' as const,
       },
-      capabilities: { chat: status.chatAvailable },
+      capabilities: { chat: status.chatSupported },
       restrictions: allRestrictions,
     };
   });
@@ -3414,7 +3514,13 @@ async function projectCatalog(
       store.kind === 'team' &&
       store.active &&
       !blockedProfiles.has(store.server) &&
-      !unavailableServers.has(store.server),
+      !unavailableServers.has(store.server) &&
+      servers.some(
+        (server) =>
+          server.id === store.server &&
+          serverFactAvailability(server, [], { nowSeconds }, ['teams'])
+            .available,
+      ),
   );
   const rosters = await Promise.all(
     teams.map(async (store) => {
@@ -3574,7 +3680,22 @@ async function projectCatalog(
   const items: Item[] = response.items
     .filter((item) => {
       const store = liveStores.find((candidate) => candidate.id === item.store);
-      return Boolean(store && !unavailableServers.has(store.server));
+      return Boolean(
+        store &&
+        !unavailableServers.has(store.server) &&
+        servers.some(
+          (server) =>
+            server.id === store.server &&
+            serverFactAvailability(
+              server,
+              [],
+              { nowSeconds },
+              store.kind === 'team' ? ['teams', 'kv'] : ['kv'],
+            ).available,
+        ) &&
+        storeInventory.find((entry) => entry.store === store.id)?.status ===
+          'available',
+      );
     })
     .map((item) => ({
       ...(bridge.native ? {} : baseItems.get(itemKey(item))),
@@ -3622,17 +3743,19 @@ async function projectCatalog(
             (profile) => note.id === `server-status-unavailable-${profile}`,
           ),
       ),
-      ...[...statusFailures].map(([profile, error]) => ({
-        id: `status-unavailable-${profile}`,
-        severity: 'crit' as const,
-        title: `Status for ${profile} is unavailable`,
-        detail: `${error.message} Server contents are unavailable until the connection status is verified.${
-          incompatibleSchemaProfiles.has(profile)
-            ? ` ${schemaInstruction(profile)}`
-            : ''
-        }`,
-        action: 'Inspect',
-      })),
+      ...[...statusFailures]
+        .filter(([, error]) => error.code !== 'catalog-loading')
+        .map(([profile, error]) => ({
+          id: `status-unavailable-${profile}`,
+          severity: 'crit' as const,
+          title: `Status for ${profile} is unavailable`,
+          detail: `${error.message} Server contents are unavailable until the connection status is verified.${
+            incompatibleSchemaProfiles.has(profile)
+              ? ` ${schemaInstruction(profile)}`
+              : ''
+          }`,
+          action: 'Inspect',
+        })),
       ...groupDetailFailures.map((failure) => ({
         id: `group-${failure.source}-unavailable-${failure.store}`,
         severity: 'warn' as const,

@@ -11,7 +11,7 @@ import {
   roleRank,
   serverDisplayName,
   serverName,
-  storeReadable,
+  storeOperationAvailability,
 } from '../model';
 import type {
   Account,
@@ -63,7 +63,7 @@ export function discoveryContext(
     account,
     store,
     server,
-    available: storeReadable(snapshot, store.id),
+    available: storeOperationAvailability(snapshot, store, 'teams').available,
   };
 }
 
@@ -94,7 +94,13 @@ export function manageReason(
   if (store.team_kind !== 'named')
     return 'Memberships can’t be changed in an ad-hoc team.';
   if (store.active === false) return 'Finish setting up this team first.';
-  if (!storeReadable(snapshot, store.id))
+  if (
+    !storeOperationAvailability(
+      snapshot,
+      store,
+      source === 'roster' ? 'teams' : 'federation',
+    ).available
+  )
     return `Restore access to ${serverName(snapshot, store)} first.`;
   if (groupDetailFailure(snapshot, store.id, source))
     return source === 'roster'

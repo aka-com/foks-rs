@@ -93,9 +93,17 @@ test('partial projection publishes healthy items without any unfinished metadata
   );
   assert.deepEqual(snapshot.parties, []);
   assert.equal(
+    snapshot.servers.find((server) => server.id === 'unfinished')?.trust.status,
+    'unknown',
+  );
+  assert.equal(
+    snapshot.notifications.some((note) => note.id.includes('unfinished')),
+    false,
+  );
+  assert.equal(
     snapshot.servers.find((server) => server.id === 'unfinished')?.passiveStatus
       .status,
-    'failed',
+    'loading',
   );
   current = false;
   gate.resolve(catalog);

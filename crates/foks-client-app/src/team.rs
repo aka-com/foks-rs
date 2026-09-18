@@ -235,6 +235,10 @@ impl CheckedProfileSession<'_> {
 
     pub fn list_teams(&self, vault: &mut AccountVault<'_>) -> Result<Vec<TeamSummary>> {
         self.profile.require(Capability::Teams)?;
+        self.list_local_teams(vault)
+    }
+
+    pub fn list_local_teams(&self, vault: &mut AccountVault<'_>) -> Result<Vec<TeamSummary>> {
         let journal = HardStateStore::open(&self.paths.hard_database)?;
         vault
             .team_aliases()?

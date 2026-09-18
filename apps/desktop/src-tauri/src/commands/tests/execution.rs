@@ -169,7 +169,8 @@ fn mutation_failures_have_stable_ui_codes() {
         },
         MutationKind::Guarded,
     );
-    assert_eq!(lease.code, "capability-unavailable");
+    assert_eq!(lease.code, "capability-denied");
+    assert_eq!(lease.details.unwrap().capability.as_deref(), Some("kv"));
     assert_eq!(
         map_mutation_error(
             foks_desktop::AgentError::Transport("gone".to_owned()),

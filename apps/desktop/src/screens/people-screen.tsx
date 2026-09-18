@@ -335,6 +335,8 @@ export function PeopleScreen({
   const stopped = selected
     ? accountStopped(snapshot, selected)
     : { stopped: true, reason: '' };
+  const keysStopped =
+    !selected || accountStopped(snapshot, selected, 'devices').stopped;
   const {
     lists,
     loading: loadingKeys,
@@ -343,14 +345,14 @@ export function PeopleScreen({
     bridge,
     profile: selected?.server,
     store: selected?.id,
-    enabled: !stopped.stopped,
+    enabled: !keysStopped,
     recovery: { refresh: onRefreshSnapshot },
     onError,
   });
   // The Devices rail indicator initiates no background request; it reflects
   // cached results from the account key list query.
   useEffect(() => {
-    if (!selected || stopped.stopped || loadingKeys || keysFailed) return;
+    if (!selected || keysStopped || loadingKeys || keysFailed) return;
     deviceAlertRegistry(bridge).reportPaperKey(
       selected.id,
       lists.backups.length > 0,
@@ -358,7 +360,7 @@ export function PeopleScreen({
   }, [
     bridge,
     selected,
-    stopped.stopped,
+    keysStopped,
     loadingKeys,
     keysFailed,
     lists.backups.length,
@@ -631,6 +633,7 @@ function AccountPanel({
 }): ReactNode {
   const username = usernameOf(snapshot, store);
   const reason = stopped.stopped ? stopped.reason : undefined;
+  const devicesStopped = accountStopped(snapshot, store, 'devices');
   const deviceCount = deviceEntries(lists).length;
   const teams = teamsOnAccount(snapshot, store);
   const server = snapshot.servers.find((entry) => entry.id === store.server);
@@ -668,8 +671,8 @@ function AccountPanel({
           action={
             <Button
               size="sm"
-              disabled={stopped.stopped}
-              title={reason}
+              disabled={devicesStopped.stopped}
+              title={devicesStopped.stopped ? devicesStopped.reason : undefined}
               onClick={() => onSheet('rename')}
             >
               Change…
@@ -725,15 +728,15 @@ function AccountPanel({
             <Button
               size="sm"
               className="account-fact-link"
-              disabled={stopped.stopped}
-              title={reason}
+              disabled={devicesStopped.stopped}
+              title={devicesStopped.stopped ? devicesStopped.reason : undefined}
               onClick={() => onNavigate({ kind: 'devices', store: store.id })}
             >
               Devices ›
             </Button>
           }
         >
-          {stopped.stopped
+          {devicesStopped.stopped
             ? 'Not listed while access is stopped'
             : loading
               ? 'Reading this account’s keys…'

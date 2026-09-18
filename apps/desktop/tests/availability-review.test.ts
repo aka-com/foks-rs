@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { PROTOCOL_CAPABILITIES } from '../src/model/types';
 
 import { FIXTURE } from '../src/fixture';
 import {
@@ -56,7 +57,11 @@ test('missing inventory for a catalog profile remains incomplete', () => {
 test('store schema restriction takes priority over lease expiry without blocking a neighbor', () => {
   const store = FIXTURE.stores[0];
   const snapshot = snapshotWithServer({
-    compatibility: { status: 'required', expiresAt: 10 },
+    compatibility: {
+      status: 'required',
+      expiresAt: 10,
+      capabilities: PROTOCOL_CAPABILITIES,
+    },
   });
   const restricted: AgentSnapshot = {
     ...snapshot,
@@ -82,7 +87,11 @@ test('store schema restriction takes priority over lease expiry without blocking
 test('expiry is exact and an observed expired lease stays closed after a backward clock jump', () => {
   const store = FIXTURE.stores[0];
   const snapshot = snapshotWithServer({
-    compatibility: { status: 'required', expiresAt: 10 },
+    compatibility: {
+      status: 'required',
+      expiresAt: 10,
+      capabilities: PROTOCOL_CAPABILITIES,
+    },
   });
   assert.deepEqual(storeAvailability(snapshot, store, { nowSeconds: 9 }), {
     available: true,

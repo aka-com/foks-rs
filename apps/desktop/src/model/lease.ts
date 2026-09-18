@@ -9,7 +9,7 @@ import { storeNavigationOrder } from './order';
 import { admissionActive, partiesOf, peopleGroups, storeOf } from './readers';
 import { admits } from './roles';
 import { serverName } from './server-name';
-import { serverDisplayName } from './types';
+import { serverDisplayName, PROTOCOL_CAPABILITIES } from './types';
 import type {
   AccountStore,
   CompatibilityLease,
@@ -17,6 +17,7 @@ import type {
   GroupDetailSource,
   Item,
   Notification,
+  ProtocolCapability,
   Server,
   Store,
   StoreRef,
@@ -36,6 +37,11 @@ export interface ServerLeaseStatus {
 
 export type AvailabilityReason =
   | 'agent-unavailable'
+  | 'loading'
+  | 'compatibility-incompatible'
+  | 'capability-unavailable'
+  | 'chat-unsupported'
+  | 'store-metadata-unavailable'
   | 'verification-required'
   | 'verification-failed'
   | 'schema-incompatible'
@@ -47,9 +53,18 @@ export type AvailabilityReason =
   | 'setup-incomplete';
 
 export type Availability =
-  { available: true } | { available: false; reason: AvailabilityReason };
+  | { available: true }
+  | {
+      available: false;
+      reason: AvailabilityReason;
+      capability?: ProtocolCapability;
+    };
+
+export type StoreOperation =
+  'vault' | 'chat' | 'teams' | 'federation' | 'devices' | 'metadata';
 
 export interface AvailabilityOptions {
+  operation?: StoreOperation;
   nowSeconds?: number;
   agentReady?: boolean;
   catalogReady?: boolean;
@@ -103,20 +118,33 @@ export function serverFactAvailability(
   server: Server,
   observedExpiredLeases: readonly { profile: string; expiresAt: number }[],
   options: AvailabilityOptions = {},
+  capabilities: readonly ProtocolCapability[] = [],
 ): Availability {
-  if (options.agentReady === false || options.catalogReady === false)
+  if (options.agentReady === false)
     return { available: false, reason: 'agent-unavailable' };
-  return (
+  if (options.catalogReady === false)
+    return { available: false, reason: 'store-metadata-unavailable' };
+  const common =
     serverSecurityAvailability(server) ??
-    serverOperationalAvailability(server, observedExpiredLeases, options)
-  );
+    serverOperationalAvailability(server, observedExpiredLeases, options);
+  if (!common.available) return common;
+  for (const capability of capabilities) {
+    if (
+      server.restrictions.some(
+        (entry) =>
+          entry.kind === 'capability-denied' && entry.capability === capability,
+      ) ||
+      (server.compatibility.status === 'required' &&
+        !server.compatibility.capabilities.includes(capability))
+    )
+      return { available: false, reason: 'capability-unavailable', capability };
+  }
+  return { available: true };
 }
 
 function serverSecurityAvailability(server: Server): Availability | null {
   if (server.trust.status === 'blocked')
     return { available: false, reason: 'verification-failed' };
-  if (server.trust.status === 'unprobed')
-    return { available: false, reason: 'verification-required' };
   if (server.restrictions.some((entry) => entry.kind === 'schema-incompatible'))
     return { available: false, reason: 'schema-incompatible' };
   if (
@@ -125,6 +153,16 @@ function serverSecurityAvailability(server: Server): Availability | null {
     )
   )
     return { available: false, reason: 'import-verification-required' };
+  if (server.trust.status === 'unknown')
+    return {
+      available: false,
+      reason:
+        server.passiveStatus.status === 'loading'
+          ? 'loading'
+          : 'server-status-unavailable',
+    };
+  if (server.trust.status === 'unprobed')
+    return { available: false, reason: 'verification-required' };
   return null;
 }
 
@@ -134,6 +172,10 @@ function serverOperationalAvailability(
   options: AvailabilityOptions,
 ): Availability {
   const lease = server.compatibility;
+  if (lease.status === 'incompatible')
+    return { available: false, reason: 'compatibility-incompatible' };
+  if (server.passiveStatus.status === 'loading')
+    return { available: false, reason: 'loading' };
   if (lease.status === 'requirement-unknown')
     return { available: false, reason: 'server-status-unavailable' };
   if (lease.status === 'required-unavailable')
@@ -154,24 +196,61 @@ function serverOperationalAvailability(
   return { available: true };
 }
 
+function requiredCapabilities(
+  store: Store,
+  operation: StoreOperation,
+): readonly ProtocolCapability[] {
+  switch (operation) {
+    case 'vault':
+      return store.kind === 'team' ? ['teams', 'kv'] : ['kv'];
+    case 'federation':
+      return ['teams', 'federation'];
+    case 'devices':
+      return ['device-administration'];
+    case 'metadata':
+      return [];
+    default:
+      return [operation];
+  }
+}
+
+export function serverCapabilityAvailability(
+  snapshot: AgentSnapshot,
+  server: Server,
+  capabilities: readonly ProtocolCapability[],
+  options: AvailabilityOptions = {},
+): Availability {
+  if (snapshot.agent.state !== 'ready')
+    return { available: false, reason: 'agent-unavailable' };
+  return serverFactAvailability(
+    server,
+    snapshot.observedExpiredLeases,
+    options,
+    capabilities,
+  );
+}
+
 /** The single access decision shared by navigation, views, and dispatch. */
 export function storeAvailability(
   snapshot: AgentSnapshot,
   store: Store,
   options: AvailabilityOptions = {},
 ): Availability {
-  if (
-    snapshot.agent.state !== 'ready' ||
-    options.agentReady === false ||
-    options.catalogReady === false
-  )
+  return storeOperationAvailability(snapshot, store, 'vault', options);
+}
+
+export function storeOperationAvailability(
+  snapshot: AgentSnapshot,
+  store: Store,
+  operation: StoreOperation,
+  options: AvailabilityOptions = {},
+): Availability {
+  if (snapshot.agent.state !== 'ready' || options.agentReady === false)
     return { available: false, reason: 'agent-unavailable' };
   const server = snapshot.servers.find(
     (candidate) => candidate.id === store.server,
   );
   if (!server) return { available: false, reason: 'vault-unavailable' };
-  const serverSecurity = serverSecurityAvailability(server);
-  if (serverSecurity) return serverSecurity;
   const inventory = snapshot.storeInventory.find(
     (entry) => entry.store === store.id,
   );
@@ -187,16 +266,56 @@ export function storeAvailability(
     )
   )
     return { available: false, reason: 'import-verification-required' };
-  const serverAccess = serverOperationalAvailability(
+  const capabilities = requiredCapabilities(store, operation);
+  const serverAccess = serverCapabilityAvailability(
+    snapshot,
     server,
-    snapshot.observedExpiredLeases,
+    capabilities,
     options,
   );
   if (!serverAccess.available) return serverAccess;
-  if (!inventory || inventory.status === 'unavailable')
-    return { available: false, reason: 'vault-unavailable' };
+  for (const capability of capabilities) {
+    if (
+      inventory?.restrictions.some(
+        (entry) =>
+          entry.kind === 'capability-denied' && entry.capability === capability,
+      )
+    )
+      return { available: false, reason: 'capability-unavailable', capability };
+  }
   if (store.kind === 'team' && !store.active)
     return { available: false, reason: 'setup-incomplete' };
+  if (operation === 'chat') {
+    if (
+      store.kind !== 'team' ||
+      store.team_kind !== 'named' ||
+      server.capabilities.chat === false
+    )
+      return { available: false, reason: 'chat-unsupported' };
+    if (server.capabilities.chat === null)
+      return { available: false, reason: 'server-status-unavailable' };
+  }
+  if (operation === 'vault') {
+    if (inventory?.status === 'loading')
+      return { available: false, reason: 'loading' };
+    if (inventory?.status !== 'available')
+      return { available: false, reason: 'vault-unavailable' };
+  } else {
+    const metadata = snapshot.profileInventory.find(
+      (entry) => entry.profile === store.server,
+    );
+    if (
+      metadata?.[store.kind === 'team' ? 'teams' : 'accounts'] !== 'complete' &&
+      inventory?.status !== 'available'
+    )
+      return {
+        available: false,
+        reason:
+          inventory?.status === 'loading'
+            ? 'loading'
+            : 'store-metadata-unavailable',
+      };
+  }
   return { available: true };
 }
 
@@ -256,7 +375,12 @@ export function storeDescriptionState(
   store: Store,
   options: AvailabilityOptions = {},
 ): StoreDescriptionState {
-  const availability = storeAvailability(snapshot, store, options);
+  const availability = storeOperationAvailability(
+    snapshot,
+    store,
+    options.operation ?? 'vault',
+    options,
+  );
   return availability.available ? 'normal' : availability.reason;
 }
 
@@ -339,6 +463,12 @@ export function storeDescription(
   options: AvailabilityOptions = {},
 ): string {
   const state = storeDescriptionState(snapshot, store, options);
+  if (state === 'chat-unsupported') return 'Chat not supported';
+  if (state === 'store-metadata-unavailable')
+    return 'Store information unavailable';
+  if (state === 'loading') return 'Loading';
+  if (state === 'compatibility-incompatible') return 'Protocol incompatible';
+  if (state === 'capability-unavailable') return 'Operation not permitted';
   if (state === 'setup-incomplete') return 'Setup incomplete';
   if (state === 'verification-required') return 'Verification required';
   if (state === 'verification-failed') return 'Verification failed';
@@ -414,8 +544,8 @@ export function serverChatAvailable(
   options: AvailabilityOptions = {},
 ): boolean {
   return (
-    server.capabilities.chat &&
-    serverAvailability(snapshot, server, options).available
+    server.capabilities.chat === true &&
+    serverCapabilityAvailability(snapshot, server, ['chat'], options).available
   );
 }
 
@@ -425,17 +555,7 @@ export function chatAvailable(
   store: Store,
   options: AvailabilityOptions = {},
 ): boolean {
-  return (
-    store.kind === 'team' &&
-    store.team_kind === 'named' &&
-    store.active !== false &&
-    storeReadable(snapshot, store.id, options) &&
-    snapshot.servers.some(
-      (server) =>
-        server.id === store.server &&
-        serverChatAvailable(snapshot, server, options),
-    )
-  );
+  return storeOperationAvailability(snapshot, store, 'chat', options).available;
 }
 
 /** Returns whether the current user has permission to create items in this store. */
@@ -581,6 +701,10 @@ export function applyLease(
             compatibility: {
               status: 'required',
               expiresAt,
+              capabilities:
+                server.compatibility.status === 'required'
+                  ? server.compatibility.capabilities
+                  : PROTOCOL_CAPABILITIES,
             } satisfies CompatibilityLease,
           },
     ),

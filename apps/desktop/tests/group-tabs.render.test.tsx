@@ -8,6 +8,7 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { PROTOCOL_CAPABILITIES } from '../src/model/types';
 import { createElement, useState } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 
@@ -138,6 +139,52 @@ function addPeopleChoice(
   ui.fireEvent.click(node);
 }
 
+test('chat-only compatibility keeps Channels usable without a KV inventory or team grant', async () => {
+  const base = await fixture();
+  const snapshot: AgentSnapshot = {
+    ...base,
+    servers: base.servers.map((server) =>
+      server.id === 'personal'
+        ? {
+            ...server,
+            compatibility: {
+              status: 'required',
+              expiresAt: 4e9,
+              capabilities: ['chat'],
+            },
+          }
+        : server,
+    ),
+    storeInventory: base.storeInventory.map((entry) =>
+      entry.store === 'team:household'
+        ? { ...entry, status: 'unavailable' }
+        : entry,
+    ),
+  };
+  const rendered = await group('team:household', 'channels', { snapshot });
+  await ui.waitFor(() =>
+    assert.ok(rendered.getByRole('button', { name: 'Add channel' })),
+  );
+  assert.equal(rendered.queryByText('Server identity mismatch'), null);
+  const members = rendered.getByRole('tab', { name: 'Members' });
+  assert.equal(members.querySelector('.n'), null);
+});
+
+test('unavailable files do not appear as an empty vault on the group page', async () => {
+  const base = await fixture();
+  const snapshot: AgentSnapshot = {
+    ...base,
+    storeInventory: base.storeInventory.map((entry) =>
+      entry.store === 'team:household'
+        ? { ...entry, status: 'unavailable' }
+        : entry,
+    ),
+  };
+  const rendered = await group('team:household', 'files', { snapshot });
+  assert.ok(rendered.getByText('Vault unavailable'));
+  assert.equal(rendered.queryByText(/No items yet/), null);
+});
+
 test('the Channels tab says why a group on a chatless server has none', async () => {
   // Chat is not enabled for Engineering's server, Acme.
   const rendered = await group('team:eng', 'channels');
@@ -165,7 +212,11 @@ test('the Channels tab reads the clock afresh, so a lapse closes it', async () =
       server.id === 'personal'
         ? {
             ...server,
-            compatibility: { status: 'required' as const, expiresAt: 4e9 },
+            compatibility: {
+              status: 'required' as const,
+              capabilities: PROTOCOL_CAPABILITIES,
+              expiresAt: 4e9,
+            },
           }
         : server,
     ),
@@ -199,7 +250,7 @@ test('the Channels tab reads the clock afresh, so a lapse closes it', async () =
   assert.equal(band.querySelector('b')?.textContent, 'Check-in expired');
   assert.match(
     band.textContent ?? '',
-    /The session for Personal server has expired\./,
+    /Compatibility verification for Personal server has expired\./,
   );
   assert.equal(rendered.queryByRole('button', { name: 'Add channel' }), null);
 });

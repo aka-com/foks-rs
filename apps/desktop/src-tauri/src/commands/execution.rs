@@ -75,7 +75,6 @@ pub(super) fn map_mutation_error(
     {
         // The protocol indicates KV is unavailable without distinguishing
         // between an expired lease or an ungranted capability.
-        error.code = "capability-unavailable".to_owned();
         error.message =
             "This server is not granting vault access. Check its compatibility status before reading or writing."
                 .to_owned();

@@ -44,7 +44,7 @@ fn progressive_metadata_uses_only_completed_overviews_and_preserves_scoped_error
                 ),
                 teams: success(serde_json::json!([])),
                 server_status: success(
-                    serde_json::json!({"profile":"healthy.example", "configured_probe":"healthy.example", "host":null,"lease_required":false,"lease_expires_at":null,"chat_available":false}),
+                    serde_json::json!({"profile":"healthy.example", "configured_probe":"healthy.example", "host":null,"chat_supported":null,"compatibility":{"status":"not-required"}}),
                 ),
             },
             ProfileOverview {
