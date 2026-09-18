@@ -226,19 +226,22 @@ test('the chat tab opens a conversation and lists every team at once', async () 
     assert.ok(node, 'the chat tab draws its team column');
     return node;
   });
-  const rows = [
-    ...column.querySelectorAll<HTMLElement>('.chat-conv, .chat-team-head'),
-  ];
+  const rows = [...column.querySelectorAll<HTMLElement>('.chat-team-head')];
   const name = (row: HTMLElement) => row.querySelector('b')?.textContent;
   const household = rows.find((row) => name(row) === 'Household');
   const engineering = rows.find((row) => name(row) === 'Engineering');
   assert.ok(household, 'a team whose server offers chat is listed');
   assert.ok(engineering, 'a team whose server offers no chat is still listed');
-  // `chat` with no conversation resolves to one, and its row is the current
-  // one. Household's channels are the general channel alone, so it is a single
-  // row rather than a heading with a list.
+  // `chat` with no conversation resolves to one, and that channel's row under
+  // Household's heading is the current one.
   await testingLibrary.waitFor(() =>
-    assert.equal(household.getAttribute('aria-current'), 'page'),
+    assert.equal(
+      household
+        .closest('.chat-team')
+        ?.querySelector('.chat-channel')
+        ?.getAttribute('aria-current'),
+      'page',
+    ),
   );
   // Chat follows the server capability grant, as the rail's chat rows did:
   // Engineering's server offers none, so it sits under "Chat unavailable", dimmed and

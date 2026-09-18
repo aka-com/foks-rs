@@ -7,6 +7,8 @@ let vite: ViteDevServer;
 let MessageText: typeof import('../src/chat/message-text').MessageText;
 let safeChatLink: typeof import('../src/chat/message-text').safeChatLink;
 let relativeMessageTime: typeof import('../src/chat/presentation').relativeMessageTime;
+let ToastProvider: typeof import('../kit/toasts').ToastProvider;
+let ToastController: typeof import('../kit/toasts').ToastController;
 test.before(async () => {
   vite = await createServer({
     configFile: new URL('../vite.config.ts', import.meta.url).pathname,
@@ -19,6 +21,8 @@ test.before(async () => {
   ({ relativeMessageTime } = await vite.ssrLoadModule(
     '/src/chat/presentation.ts',
   ));
+  ({ ToastProvider, ToastController } =
+    await vite.ssrLoadModule('/kit/toasts.tsx'));
 });
 test.after(async () => {
   await vite.close();
@@ -27,12 +31,17 @@ const actions = {
   copyText: async () => ({ ok: true as const }),
   openChatLink: async () => ({ ok: true as const }),
 };
+const messageMarkup = (text: string): string =>
+  renderToStaticMarkup(
+    createElement(ToastProvider, {
+      controller: new ToastController(),
+      children: createElement(MessageText, { text, actions }),
+    }),
+  );
 test('Basic source renders safe bounded Markdown without HTML or image fetching', () => {
   const text =
     '**bold** *em* `code`\n- first\n- second\n> quote\n```\n<x>\n```\n<img src="https://evil"> ![image](https://example.com/a) [bad](javascript:alert)';
-  const html = renderToStaticMarkup(
-    createElement(MessageText, { text, actions }),
-  );
+  const html = messageMarkup(text);
   assert.match(html, /<strong>bold<\/strong>/);
   assert.match(html, /<ul>/);
   assert.match(html, /<blockquote>/);
@@ -67,9 +76,7 @@ test('unsafe and disguised links remain inert', () => {
 });
 test('oversized line sets fall back to literal source', () => {
   const text = '**x**\n'.repeat(513);
-  const html = renderToStaticMarkup(
-    createElement(MessageText, { text, actions }),
-  );
+  const html = messageMarkup(text);
   assert.doesNotMatch(html, /<strong>/);
   assert.match(html, /\*\*x\*\*/);
 });

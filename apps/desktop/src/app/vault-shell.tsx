@@ -61,7 +61,6 @@ import {
 } from '../screens/write-workflows';
 import { useSearchShortcut } from '../shell/search-palette';
 import { Sidebar } from '../shell/sidebar';
-import { SyncStatus } from '../shell/sync-status';
 import { Topbar } from '../shell/topbar';
 import { useAccessRuntime } from './access-runtime';
 import { AccessLifetime } from './access-lifetime';
@@ -485,17 +484,15 @@ export function VaultShell({
                       ]);
                     }, commandError)
                   }
+                  syncService={bridge.native ? reconciliation : undefined}
+                  onOpenServers={(profile) =>
+                    locations.navigate({
+                      kind: 'settings',
+                      section: 'servers',
+                      profile,
+                    })
+                  }
                 />
-                {bridge.native ? (
-                  <SyncStatus
-                    snapshot={shown}
-                    service={reconciliation}
-                    storeId={
-                      state.selection?.store ??
-                      (here.kind === 'store' ? here.ref : undefined)
-                    }
-                  />
-                ) : null}
                 <ScreenRouter
                   shown={shown}
                   bridge={bridge}

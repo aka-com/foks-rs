@@ -51,12 +51,13 @@
   padding: 22px 16px;
   text-align: center;
 }
-.chat-conv {
+/* A team: a heading row that folds its channels, which are indented under it. */
+.chat-team-head {
   display: flex;
   align-items: center;
   gap: 9px;
   width: 100%;
-  padding: 6px 12px;
+  padding: 6px 8px 6px 12px;
   border: 0;
   background: none;
   font: inherit;
@@ -64,81 +65,35 @@
   text-align: left;
   cursor: pointer;
 }
-.chat-conv:hover {
+.chat-team-head:hover {
   background: var(--hover);
 }
-.chat-conv:focus-visible,
 .chat-team-head:focus-visible {
   outline: 2px solid var(--accent-border);
   outline-offset: -2px;
 }
-.chat-conv.on {
+/* A team with no channel rows opens its own pane, and is drawn current the way
+   a channel row is. */
+.chat-team-head.on {
   background: var(--accent);
   color: var(--main-surface);
 }
-.chat-conv .t {
-  flex: 1;
-  min-width: 0;
-}
-.chat-conv .t b {
-  display: block;
-  font-size: 13px;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.chat-conv.unread .t b {
-  font-weight: 700;
-}
-.chat-conv .t small,
-.chat-conv .when {
-  display: block;
-  font-size: 12px;
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.chat-conv .t small.chat-row-note,
-.chat-team-head .t small.chat-row-note {
-  font-size: 12px;
-  color: var(--faint);
-}
-.chat-conv.on .t small.chat-row-note {
+.chat-team-head.on .t small,
+.chat-team-head.on .t small.chat-row-note {
   color: var(--main-surface);
   opacity: 0.85;
 }
-.chat-conv .when {
-  flex: none;
-  align-self: flex-start;
-  margin-top: 2px;
-  font-variant-numeric: tabular-nums;
-}
-.chat-conv.on .t small,
-.chat-conv.on .when {
-  color: var(--main-surface);
-}
-.chat-conv.on .chat-unread {
+.chat-team-head.on .chat-unread {
   background: var(--main-surface);
   color: var(--accent-ink);
-}
-/* Team with multiple channels. Channels are indented under the heading. */
-.chat-team-head {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  width: 100%;
-  padding: 8px 8px 2px 12px;
-  border: 0;
-  background: none;
-  font: inherit;
-  color: inherit;
-  text-align: left;
 }
 .chat-team-head.off {
   padding: 6px 8px 6px 12px;
   opacity: 0.55;
+  cursor: default;
+}
+.chat-team-head.off:hover {
+  background: none;
 }
 .chat-team-head.off .lnk {
   font-size: inherit;
@@ -165,45 +120,22 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.chat-team-head .btn.icon {
-  width: 24px;
-  height: 24px;
+.chat-team-head .t small.chat-row-note {
+  font-size: 12px;
+  color: var(--faint);
+}
+/* The fold indicator: part of the row, not a control of its own. */
+.chat-team-chev {
   flex: none;
-  border: 0;
-  box-shadow: none;
-  background: transparent;
-  color: var(--muted);
-}
-.chat-team-head .btn.icon:hover {
-  background: var(--btn-hover);
-  color: var(--ink);
-}
-/* Collapses and expands a multi-channel team's channel list. */
-.chat-twist {
   width: 20px;
   height: 20px;
-  flex: none;
   display: grid;
   place-items: center;
-  border: 0;
-  padding: 0;
-  background: none;
   color: var(--muted);
-  border-radius: 4px;
-  cursor: pointer;
-  transform: rotate(-90deg);
   transition: transform 0.12s ease;
 }
-.chat-twist.open {
-  transform: none;
-}
-.chat-twist:hover {
-  background: var(--btn-hover);
-  color: var(--ink);
-}
-.chat-twist:focus-visible {
-  outline: 2px solid var(--accent-border);
-  outline-offset: -2px;
+.chat-team.collapsed .chat-team-chev {
+  transform: rotate(-90deg);
 }
 .chat-nochat-label {
   border-top: 1px solid var(--line-soft);
@@ -280,12 +212,21 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Hidden or muted conversations shown in the column as dimmed rows. */
-.chat-conv.hidden .t,
+/* Hidden or muted channels shown in the column as dimmed rows. */
 .chat-channel.hidden .t,
-.chat-conv.muted .t,
 .chat-channel.muted .t {
   opacity: 0.6;
+}
+.chat-channel .when {
+  flex: none;
+  align-self: flex-start;
+  margin-top: 1px;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.chat-channel.on .when {
+  color: var(--main-surface);
 }
 .chat-channel .lock {
   flex: none;
@@ -552,7 +493,7 @@
 .chat-conversation .empty p + p {
   margin-top: -8px;
 }
-.chat-outgoing:not(.sent) .chat-outgoing-content {
+.chat-outgoing.sending .chat-message-text {
   opacity: 0.8;
 }
 .chat-send-status {

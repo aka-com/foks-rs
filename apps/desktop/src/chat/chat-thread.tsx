@@ -25,6 +25,7 @@ export function ChatThread({
   memberCount,
   onFiles,
   onSearch,
+  onSettings,
   onInfo,
   infoOpen = false,
   infoRef,
@@ -61,6 +62,8 @@ export function ChatThread({
   onFiles?: () => void;
   /** Moves to the inbox column's search field; the header's search button. */
   onSearch?: () => void;
+  /** Opens the team's settings; the header's gear. */
+  onSettings?: () => void;
   /** Opens the channel info panel; the header's ⓘ button. */
   onInfo?: () => void;
   infoOpen?: boolean;
@@ -201,6 +204,15 @@ export function ChatThread({
             aria-label="Team files"
             title="Team files"
             onClick={onFiles}
+          />
+        )}
+        {onSettings && (
+          <Button
+            variant="quiet"
+            icon="gear"
+            aria-label={`Team settings for ${teamName ?? 'this team'}`}
+            title="Team settings"
+            onClick={onSettings}
           />
         )}
         {onInfo && (

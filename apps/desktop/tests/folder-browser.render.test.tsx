@@ -227,8 +227,24 @@ test('the toolbar contains only the kind filter, scoped search, and New button',
   assert.equal(search.placeholder, 'Search all items');
   // ⌘K belongs to the global palette; the scoped field shows no badge.
   assert.equal(document.querySelector('.toolbar .search kbd'), null);
+  // The toolbar spans both columns: it is a sibling above the split, not a
+  // child of the list pane, with the filter in the tree-width cell and the
+  // rest over the list.
+  const toolbar = document.querySelector('.toolbar');
+  assert.ok(toolbar);
+  assert.equal(toolbar.closest('.lpane'), null);
+  assert.equal(
+    toolbar.parentElement?.classList.contains('folder-layout'),
+    true,
+  );
+  assert.ok(toolbar.nextElementSibling?.classList.contains('folder-split'));
+  assert.ok(
+    toolbar.querySelector(
+      '.toolbar-filter [aria-label="Filter items by kind"]',
+    ),
+  );
   // Search sits immediately before New.
-  const controls = [...document.querySelectorAll('.toolbar > *')];
+  const controls = [...document.querySelectorAll('.toolbar-rest > *')];
   const searchIndex = controls.findIndex((node) =>
     node.classList.contains('search'),
   );

@@ -388,8 +388,14 @@ test('a draft is dropped when its channel stops being listed', async () => {
   });
   listed = false;
   await click(ui.screen.getByRole('button', { name: 'Refresh messages' }));
+  // Only the general channel's row remains under the team's heading.
   await ui.waitFor(() => {
-    assert.equal(document.querySelectorAll('.chat-channel').length, 0);
+    assert.deepEqual(
+      [...document.querySelectorAll('.chat-channel .n')].map(
+        (node) => node.textContent,
+      ),
+      ['#general'],
+    );
   });
   listed = true;
   await click(ui.screen.getByRole('button', { name: 'Refresh messages' }));
@@ -424,9 +430,13 @@ test('local intent persistence survives navigation and retains the next draft', 
   });
   write('keep this until saved');
   await click(ui.screen.getByRole('button', { name: 'Send' }));
-  await ui.screen.findByText('Sending…', { selector: '[role="status"]' });
-  const sending = document.querySelector<HTMLElement>('.chat-outgoing');
-  assert.ok(sending);
+  const sending = await ui.waitFor(() => {
+    const row = document.querySelector<HTMLElement>('.chat-outgoing.sending');
+    assert.ok(row);
+    return row;
+  });
+  assert.ok(ui.within(sending).getByText('keep this until saved'));
+  assert.equal(ui.within(sending).queryByText('Sending…'), null);
   assert.equal(ui.within(sending).queryByText('Details'), null);
   assert.equal(composer().value, '');
   assert.equal(composer().disabled, false);
@@ -548,7 +558,10 @@ test('a message being sent is neither prompted about nor refused', async () => {
     ui.fireEvent.keyDown(composer(), { key: 'Enter' });
     await Promise.resolve();
   });
-  await ui.screen.findByText('Sending…', { selector: '[role="status"]' });
+  await ui.waitFor(() =>
+    assert.ok(document.querySelector('.chat-outgoing.sending')),
+  );
+  assert.equal(ui.screen.queryByText('Sending…'), null);
   const submission = document
     .querySelector('.chat-outgoing')
     ?.getAttribute('data-submission');
@@ -562,7 +575,10 @@ test('a message being sent is neither prompted about nor refused', async () => {
   assert.deepEqual(refusals, []);
   assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
   await leave(store, IN_CHAT);
-  await ui.screen.findByText('Sending…', { selector: '[role="status"]' });
+  await ui.waitFor(() =>
+    assert.ok(document.querySelector('.chat-outgoing.sending')),
+  );
+  assert.equal(ui.screen.queryByText('Sending…'), null);
   assert.equal(
     document.querySelector('.chat-outgoing')?.getAttribute('data-submission'),
     submission,

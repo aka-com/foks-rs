@@ -11,9 +11,12 @@
  * title, the page actions and the per-page search field.
  */
 
+import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import { Button, Icon } from '../components';
+import type { DesktopReconciliation } from '../desktop-reconciliation';
+import { SyncPopover, useSyncSummary } from './sync-popover';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { channelTitle } from '../chat/presentation';
 import { serverLocalAlias, storeOf } from '../model';
@@ -131,8 +134,94 @@ export interface TopbarProps {
   onToggleCollapsed?: () => void;
   refreshing?: boolean;
   onRefresh?: () => void;
+  /**
+   * The reconciliation service, when the shell has one. With it the refresh
+   * button carries a state badge and a Refresh status popover; without it the
+   * button is the plain manual refresh.
+   */
+  syncService?: DesktopReconciliation;
+  /** Opens Settings › Servers on one server, from the popover. */
+  onOpenServers?: (profile: string) => void;
   /** A blocking state: the bar is drawn, and nothing on it acts. */
   blocked?: boolean;
+}
+
+/**
+ * The refresh button with its status: a spinner badge while any server is
+ * refreshing, an amber dot when one could not be refreshed, and a chevron that
+ * opens the per-server popover. The badge is decorative; the popover trigger
+ * carries the accessible name.
+ */
+function SyncControls({
+  snapshot,
+  service,
+  refreshing,
+  blocked,
+  onRefresh,
+  onOpenServers,
+}: {
+  snapshot: AgentSnapshot;
+  service: DesktopReconciliation;
+  refreshing: boolean;
+  blocked: boolean;
+  onRefresh?: () => void;
+  onOpenServers?: (profile: string) => void;
+}): ReactNode {
+  const summary = useSyncSummary(snapshot, service);
+  const wrapRef = useRef<HTMLSpanElement>(null);
+  const [open, setOpen] = useState(false);
+  const badge = summary.failed
+    ? 'failed'
+    : summary.refreshing || refreshing
+      ? 'refreshing'
+      : null;
+  return (
+    <span className="global-refresh-wrap" ref={wrapRef}>
+      <Button
+        variant="quiet"
+        className="global-refresh"
+        icon="again"
+        aria-label={refreshing ? 'Refreshing vaults and teams' : 'Refresh'}
+        title={
+          refreshing
+            ? 'Refreshing vaults and teams'
+            : 'Refresh vaults and teams'
+        }
+        disabled={refreshing || blocked}
+        onClick={onRefresh}
+      />
+      {badge ? (
+        <span className={`sync-badge ${badge}`} aria-hidden="true" />
+      ) : null}
+      <Button
+        variant="quiet"
+        className="sync-details"
+        icon="chev"
+        aria-label="Refresh status"
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        title={
+          summary.failed
+            ? 'Some data could not be refreshed'
+            : summary.refreshing
+              ? 'Refreshing data'
+              : 'Refresh status'
+        }
+        disabled={blocked}
+        onClick={() => setOpen((was) => !was)}
+      />
+      {open ? (
+        <SyncPopover
+          snapshot={snapshot}
+          service={service}
+          summary={summary}
+          anchorRef={wrapRef}
+          onClose={() => setOpen(false)}
+          onOpenServers={onOpenServers}
+        />
+      ) : null}
+    </span>
+  );
 }
 
 export function Topbar({
@@ -147,6 +236,8 @@ export function Topbar({
   onToggleCollapsed,
   refreshing = false,
   onRefresh,
+  syncService,
+  onOpenServers,
   blocked = false,
 }: TopbarProps): ReactNode {
   const inbox = useSidebarInbox();
@@ -229,7 +320,16 @@ export function Topbar({
           onClick={onToggleCollapsed}
         />
       ) : null}
-      {onRefresh ? (
+      {onRefresh && syncService && snapshot ? (
+        <SyncControls
+          snapshot={snapshot}
+          service={syncService}
+          refreshing={refreshing}
+          blocked={blocked}
+          onRefresh={onRefresh}
+          onOpenServers={onOpenServers}
+        />
+      ) : onRefresh ? (
         <Button
           variant="quiet"
           className="global-refresh"

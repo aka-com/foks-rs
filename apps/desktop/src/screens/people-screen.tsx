@@ -1,7 +1,8 @@
 import { useDeviceMetadata } from '../device-cache';
+import type { metadataFreshness } from '../device-cache';
 import { WorkflowProvider, useWorkflowAccess } from '../workflow-context';
 import { workflowAvailability } from '../model/workflow-availability';
-import { MetadataStatus } from '../components/metadata-status';
+import { FreshnessCaption } from '../components/metadata-status';
 import { deviceAlertRegistry } from './device-alert';
 import { LocalAliasPanel } from '../components/local-alias-panel';
 import { localAliasOf } from '../model';
@@ -506,9 +507,10 @@ export function PeopleScreen({
             </>
           ) : selected ? (
             <>
-              <MetadataStatus label="Device metadata" freshness={freshness} />
               <AccountPanel
                 notices={notices}
+                freshness={freshness}
+                onRetry={() => void onRefreshSnapshot().catch(onError)}
                 snapshot={snapshot}
                 store={selected}
                 lists={lists}
@@ -629,11 +631,16 @@ function AccountPanel({
   onNavigate,
   onSheet,
   notices,
+  freshness,
+  onRetry,
 }: {
   snapshot: AgentSnapshot;
   store: AccountStore;
   /** The keys this account holds, once the agent has answered. */
   lists: DeviceLists;
+  /** Whether the keys behind the counts are current, stale or on their way. */
+  freshness: ReturnType<typeof metadataFreshness>;
+  onRetry: () => void;
   loading: boolean;
   /** Whether the read failed, which is not the same as holding no keys. */
   failed: boolean;
@@ -682,7 +689,9 @@ function AccountPanel({
         </Band>
       ) : null}
       {notices}
-      <Inset className="settings-inset middle wide">
+      <Inset
+        className={`settings-inset middle wide${freshness.stale ? ' stale' : ''}`}
+      >
         <InsetRow
           label="Username"
           action={
@@ -774,6 +783,11 @@ function AccountPanel({
           {plural(teams.length, 'team')}
         </InsetRow>
       </Inset>
+      <FreshnessCaption
+        label="device metadata"
+        freshness={freshness}
+        onRetry={onRetry}
+      />
       <div className="fn account-more">
         <Button
           variant="plain"

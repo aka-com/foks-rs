@@ -1,5 +1,5 @@
 import { useDeviceQueries, metadataFreshness } from '../device-cache';
-import { MetadataStatus } from '../components/metadata-status';
+import { FreshnessCaption } from '../components/metadata-status';
 import { useMetadataQuery } from '../query-hooks';
 import { useEffect, useState } from 'react';
 import type { Bridge } from '../bridge';
@@ -36,6 +36,7 @@ export function ProfileKeys({
   const failed =
     available && state.data === undefined && state.error !== undefined;
   const loading = available && state.data === undefined && !failed;
+  const freshness = metadataFreshness([state]);
   useEffect(() => {
     const conceal = () => setAction(null);
     const hidden = () => {
@@ -52,12 +53,7 @@ export function ProfileKeys({
     <WorkflowProvider snapshot={snapshot}>
       <section aria-label="Security keys">
         <SectionLabel>Security keys</SectionLabel>
-        <MetadataStatus
-          label="Security key metadata"
-          freshness={metadataFreshness([state])}
-        />
-
-        <Inset>
+        <Inset className={freshness.stale ? 'stale' : undefined}>
           {!available ? (
             <InsetRow label="Unavailable">
               Restore access to this server to manage security keys.
@@ -150,6 +146,13 @@ export function ProfileKeys({
             ))
           )}
         </Inset>
+        <FreshnessCaption
+          label="security key metadata"
+          freshness={freshness}
+          onRetry={
+            query ? () => void query.load().catch(() => undefined) : undefined
+          }
+        />
         {action && available && action.profile === server.id && (
           <YubiActionSheet
             bridge={bridge}

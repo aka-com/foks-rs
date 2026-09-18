@@ -195,10 +195,26 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 
 /* Main content area */
 .main{position:relative;min-width:0;min-height:0;display:flex;flex-direction:column;background:#fff;container-type:inline-size}
-.sync-status{flex:none;padding:4px 16px;border-bottom:1px solid var(--line-soft);font-size:12px;color:var(--muted);max-height:160px;overflow:auto}
-.sync-status summary{cursor:pointer}
-.sync-status ul{padding:6px 0 4px 18px}
-.sync-status li+li{margin-top:4px}
+/* Refresh status: a badge over the top bar's refresh button, and the per-server popover its chevron opens. */
+.global-refresh-wrap{position:relative;display:inline-flex;align-items:center;flex:none}
+.sync-badge{position:absolute;top:3px;left:21px;width:8px;height:8px;border-radius:50%;box-shadow:0 0 0 2px #fff;pointer-events:none}
+.sync-badge.failed{background:var(--warning-dot)}
+.sync-badge.refreshing{box-sizing:border-box;border:1.5px solid var(--line-mid);border-top-color:var(--accent);background:#fff;animation:btn-spin .9s linear infinite}
+@media (prefers-reduced-motion:reduce){.sync-badge.refreshing{animation:none}}
+.topbar .btn.icon.sync-details{width:18px;margin-left:-4px;font-size:12px}
+.sync-popover{padding:10px 12px;font-size:12.5px}
+.sync-row{display:flex;align-items:flex-start;gap:8px;padding:4px 0}
+.sync-row+.sync-row{border-top:1px solid var(--line-soft);margin-top:4px;padding-top:8px}
+.sync-dot{flex:none;width:8px;height:8px;margin-top:5px;border-radius:50%;background:var(--faint)}
+.sync-dot.ok{background:var(--ok-solid)}
+.sync-dot.failed{background:var(--warning-dot)}
+.sync-dot.refreshing{box-sizing:border-box;background:none;border:1.5px solid var(--line-mid);border-top-color:var(--accent);animation:btn-spin .9s linear infinite}
+.sync-body{flex:1;min-width:0}
+.sync-body b{display:block;font-weight:600;color:var(--ink)}
+.sync-body p{margin:2px 0 0;color:var(--muted);line-height:1.45}
+.sync-actions{display:flex;align-items:center;gap:8px;margin-top:8px}
+.sync-empty{color:var(--muted)}
+.sync-foot{display:flex;justify-content:flex-end;margin-top:8px;padding-top:8px;border-top:1px solid var(--line-soft)}
 /* Topbar */
 .topbar{height:var(--topbar-h);flex:none;display:flex;align-items:center;gap:8px;padding:0 20px 0 16px;border-bottom:1px solid var(--line-soft);user-select:none}
 .topbar .back{width:28px;height:28px;flex:none;border-radius:var(--radius-sm);display:grid;place-items:center;color:var(--muted);font-size:17px}
@@ -244,10 +260,18 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .search .ic{position:absolute;left:10px;top:8px;font-size:16px;color:var(--muted)}
 .search.no-shortcut input{padding-right:12px}
 .search kbd{position:absolute;right:8px;top:7px;font:12px var(--sans);color:var(--faint);border:1px solid var(--line);border-radius:5px;padding:1px 5px;background:#fff}
-.toolbar{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;row-gap:6px;gap:6px;padding:6px 20px 10px;min-width:0;border-bottom:1px solid var(--line-soft)}
+/* The toolbar spans the folder browser: a filter cell the tree column's width
+   (`--tree-w`, set on .folder-layout) and a cell over the list for search and
+   New. The 6px left inset matches .tpane's own padding, so the filter's edges
+   line up with the tree rows below it. */
+.toolbar{display:flex;align-items:center;flex-wrap:wrap;row-gap:6px;gap:0;padding:6px 12px 6px 6px;min-width:0;border-bottom:1px solid var(--line-soft)}
+.toolbar-filter{flex:none;width:var(--tree-w,236px);min-width:0;padding:0 6px 0 0}
+.toolbar-filter .seg{display:flex;width:100%;overflow:hidden}
+.toolbar-filter .seg button,.toolbar-filter .seg.txt button{flex:1 1 0;width:auto;min-width:0;justify-content:center;padding:0 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.toolbar-rest{flex:1 1 200px;min-width:0;display:flex;align-items:center;gap:6px;padding-left:14px}
+.toolbar .spacer{flex:1 1 8px}
 .toolbar .btn,.toolbar .seg{height:32px}.toolbar .btn,.toolbar .seg.txt button{font-size:13px}
 .toolbar .btn.primary,.empty .btn.primary{height:30px}
-.toolbar .spacer{flex:1 1 8px}
 .scope{font-size:13px;color:var(--muted)}.toolbar .scope{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.path .loc>.scope{flex:1;min-width:0;margin-left:auto;overflow:hidden;text-align:right;text-overflow:ellipsis;white-space:nowrap}
 .btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border:1px solid var(--line-mid);border-radius:var(--radius-md);background:var(--btn-bg);font-weight:500;box-shadow:var(--shadow-xs);white-space:nowrap}
 .btn:hover{background:var(--btn-hover)}.btn.primary{background:var(--accent);border-color:color-mix(in srgb,var(--accent) 58%,#fff);color:#fff;font-weight:600}
@@ -283,6 +307,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .menu button .menu-choice small{font-weight:400;color:var(--muted);white-space:normal}
 /* Scoped search */
 .toolbar .search{width:160px;flex:0 1 160px}
+.toolbar-rest .search{width:auto;flex:1 1 auto;max-width:none}
 .toolbar .search input{display:block;padding-left:34px;border-color:transparent;font-size:13px;color:var(--ink);transition:background .12s ease,border-color .12s ease}
 .toolbar .search input::placeholder{color:var(--muted)}
 .toolbar .search input:hover:not(:focus){background:var(--btn-hover);border-color:var(--line-mid)}
@@ -425,7 +450,9 @@ details.dd ol{padding-left:1.25em;display:flex;flex-direction:column;gap:10px}
 details.dd li b{color:var(--ink-2)}
 
 /* Folder browser */
-.folder-layout{flex:1;min-height:0;display:flex;flex-direction:column}
+/* `--tree-w` is the tree column's width; .folder-split repeats the value
+   literally and .toolbar-filter reads it, so the two stay in step. */
+.folder-layout{flex:1;min-height:0;display:flex;flex-direction:column;--tree-w:236px}
 .bandstrip{padding:8px 20px 0}
 .folder-split{flex:1;min-height:0;display:grid;grid-template-columns:236px minmax(0,1fr)}
 .tpane{border-right:1px solid var(--line-soft);background:var(--main-surface);overflow:auto;padding:6px 6px 8px}
@@ -666,7 +693,13 @@ details.dd li b{color:var(--ink-2)}
 /* Shared utility classes */
 .action-error{margin-top:8px;font-size:12.5px;line-height:1.45;color:var(--danger-ink)}
 .said{margin:2px 0 10px;font-size:13px;line-height:1.5;color:var(--muted)}
-.metadata-status{margin:2px 2px 6px;font-size:12.5px;line-height:1.45;color:var(--muted)}
+/* Freshness caption: under the list it describes, only while that list is stale or refreshing. */
+.freshness{display:flex;align-items:center;gap:7px;margin:6px 2px 0;font-size:12px;line-height:1.35;color:var(--muted)}
+.freshness .dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--warning-dot)}
+.freshness .spin{width:11px;height:11px;box-sizing:border-box;border:1.5px solid var(--line-mid);border-top-color:var(--accent);border-radius:50%;animation:btn-spin .9s linear infinite}
+@media (prefers-reduced-motion:reduce){.freshness .spin{animation:none}}
+.freshness .lnk{font-size:12px}
+.inset.stale,.settings-inset.stale{opacity:.75}
 .sheet.mid{width:510px}
 .col{display:flex;flex-direction:column;gap:10px;min-width:0}
 .checkrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}

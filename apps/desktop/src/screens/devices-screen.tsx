@@ -7,7 +7,7 @@ import {
   workflowAvailability,
   workflowMessage,
 } from '../model/workflow-availability';
-import { MetadataStatus } from '../components/metadata-status';
+import { FreshnessCaption } from '../components/metadata-status';
 import { useTabSheetState } from '../navigation-guard';
 /**
  * The Devices tab: one page per account, with no sub-navigation.
@@ -579,12 +579,21 @@ export function DevicesScreen({
       </>
     );
 
+  // Under the list it describes, never at the top of the page: a stale read
+  // is a fact about the list, and the caption says so where the list is.
   const metadataStatus = (
-    <MetadataStatus label="Device metadata" freshness={freshness} />
+    <FreshnessCaption
+      label="device metadata"
+      freshness={freshness}
+      onRetry={() => void onRefreshSnapshot().catch(onError)}
+    />
   );
+  const staleClass = freshness.stale ? ' stale' : '';
+  // A scan of the Mac's own ports, so it sits with the page's actions rather
+  // than beside a list.
   const refreshConnectedKeys = (
     <Button
-      size="sm"
+      icon="key"
       {...access.props('yubi-scan', { profile: selected.server })}
       onClick={() =>
         void refreshConnectedCards(
@@ -620,6 +629,7 @@ export function DevicesScreen({
           stopped={stopped}
           cards={cards}
           metadataStatus={metadataStatus}
+          stale={freshness.stale}
           refreshConnectedKeys={refreshConnectedKeys}
           onBack={backToList}
           onNavigate={onNavigate}
@@ -646,15 +656,18 @@ export function DevicesScreen({
             title="Devices"
             subtitle={subtitle}
             action={
-              <Button
-                variant="primary"
-                icon="plus"
-                disabled={!canAdd}
-                title={addReason}
-                onClick={() => setSheet('add')}
-              >
-                Add a device
-              </Button>
+              <>
+                {refreshConnectedKeys}
+                <Button
+                  variant="primary"
+                  icon="plus"
+                  disabled={!canAdd}
+                  title={addReason}
+                  onClick={() => setSheet('add')}
+                >
+                  Add a device
+                </Button>
+              </>
             }
           />
           <div className="body">
@@ -728,14 +741,8 @@ export function DevicesScreen({
                     computers (and any device key on a card among them), then
                     paper keys, then security key enrollments — the order
                     `deviceEntries` already reads the three lists in. */}
-                <SectionLabel
-                  id="devices-all-label"
-                  action={refreshConnectedKeys}
-                >
-                  Devices
-                </SectionLabel>
-                {metadataStatus}
-                <Inset className="settings-inset middle wide">
+                <SectionLabel id="devices-all-label">Devices</SectionLabel>
+                <Inset className={`settings-inset middle wide${staleClass}`}>
                   {loading ? (
                     <InsetRow label="Devices">
                       Loading devices, paper keys and security keys…
@@ -774,6 +781,7 @@ export function DevicesScreen({
                     </InsetRow>
                   )}
                 </Inset>
+                {metadataStatus}
               </div>
               {/* The two actions that make an account rather than act on a
                   device in the list above. */}
@@ -1008,6 +1016,7 @@ function DeviceDetail({
   stopped,
   cards,
   metadataStatus,
+  stale,
   refreshConnectedKeys,
   onBack,
   onNavigate,
@@ -1028,6 +1037,8 @@ function DeviceDetail({
   /** The cards in this Mac's ports right now. */
   cards: { serial: number }[];
   metadataStatus: ReactNode;
+  /** The lists this page reads could not be refreshed. */
+  stale: boolean;
   refreshConnectedKeys: ReactNode;
   onBack: () => void;
   onNavigate: (location: Location) => void;
@@ -1050,7 +1061,6 @@ function DeviceDetail({
         />
         <div className="body">
           <div className="settings-main">
-            {metadataStatus}
             <Notice
               severity={loading || stopped.stopped ? 'info' : 'crit'}
               title={
@@ -1077,6 +1087,7 @@ function DeviceDetail({
                     : 'This key is no longer associated with this account on this device.'}
               </p>
             </Notice>
+            {metadataStatus}
           </div>
         </div>
       </>
@@ -1103,17 +1114,20 @@ function DeviceDetail({
             : `${kindLabel(entry.kind)} · ${accountSubtitle(snapshot, store)}`
         }
         action={
-          entry.current ? (
-            <Chip tone="you">
-              {entry.kind === 'Key on a card'
-                ? 'Current key on a card'
-                : 'This device'}
-            </Chip>
-          ) : enrollment ? (
-            <Chip tone={enrollment.state === 'complete' ? 'ok' : 'warn'}>
-              {enrollment.state === 'complete' ? 'Enrolled' : 'Incomplete'}
-            </Chip>
-          ) : undefined
+          <>
+            {refreshConnectedKeys}
+            {entry.current ? (
+              <Chip tone="you">
+                {entry.kind === 'Key on a card'
+                  ? 'Current key on a card'
+                  : 'This device'}
+              </Chip>
+            ) : enrollment ? (
+              <Chip tone={enrollment.state === 'complete' ? 'ok' : 'warn'}>
+                {enrollment.state === 'complete' ? 'Enrolled' : 'Incomplete'}
+              </Chip>
+            ) : null}
+          </>
         }
       />
       <div className="body">
@@ -1123,11 +1137,10 @@ function DeviceDetail({
             role="region"
             aria-labelledby="device-facts-label"
           >
-            <SectionLabel id="device-facts-label" action={refreshConnectedKeys}>
-              This key
-            </SectionLabel>
-            {metadataStatus}
-            <Inset className="settings-inset middle wide">
+            <SectionLabel id="device-facts-label">This key</SectionLabel>
+            <Inset
+              className={`settings-inset middle wide${stale ? ' stale' : ''}`}
+            >
               {entry.scope === 'profile' ? (
                 <InsetRow label="Server">
                   <b>{serverName(snapshot, store)}</b>
@@ -1171,6 +1184,7 @@ function DeviceDetail({
                 </InsetRow>
               ) : null}
             </Inset>
+            {metadataStatus}
           </div>
           {enrollment ? (
             <CardOperations

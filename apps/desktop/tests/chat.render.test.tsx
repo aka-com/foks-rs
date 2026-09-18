@@ -117,11 +117,12 @@ async function setup(
 /** A team row's unread badge: the count belongs to the row that names the team. */
 async function teamBadge(team: string): Promise<HTMLElement> {
   return ui.waitFor(() => {
-    const badge = [
-      ...document.querySelectorAll<HTMLElement>('.chat-conv, .chat-team-head'),
-    ]
+    // A team's count is on its channel rows; the heading carries only what
+    // the channels cannot say, or their total while folded.
+    const badge = [...document.querySelectorAll<HTMLElement>('.chat-team-head')]
       .find((row) => row.querySelector('b')?.textContent === team)
-      ?.querySelector<HTMLElement>('.chat-unread');
+      ?.closest('.chat-team')
+      ?.querySelector<HTMLElement>('.chat-channel .chat-unread');
     assert.ok(badge, `${team} carries an unread badge`);
     return badge;
   });
@@ -268,9 +269,8 @@ test('conversation inbox wakes, refreshes history, and shows unread state', asyn
     });
     await ui.screen.findByText('Arrived through live sync');
     assert.ok(polls > 0);
-    // Engineering's channels are the general channel alone, so it is one row,
-    // and that row carries the count. The label states the count alone: the row
-    // it sits in says which conversation it belongs to.
+    // Engineering's general channel row carries the count. The label states
+    // the count alone: the row it sits in says which channel it belongs to.
     assert.equal(
       (await teamBadge('Engineering')).getAttribute('aria-label'),
       '1 unread',
@@ -1208,7 +1208,15 @@ test('opening chat from a populated shell establishes history ownership before c
     (await teamBadge('Engineering')).getAttribute('aria-label'),
     '1 unread',
   );
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: /^Engineering/ }));
+  // Opening a channel is a click on the channel's own row under the heading.
+  const heading = [
+    ...document.querySelectorAll<HTMLElement>('.chat-team-head'),
+  ].find((row) => row.querySelector('b')?.textContent === 'Engineering');
+  const general = heading
+    ?.closest('.chat-team')
+    ?.querySelector<HTMLElement>('.chat-channel');
+  assert.ok(general);
+  ui.fireEvent.click(general);
   await ui.screen.findByText('Team chat is ready.');
   assert.equal(ui.screen.queryByText('Conversation closed.'), null);
 });

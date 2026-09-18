@@ -320,6 +320,13 @@ export function ChatScreen({
             memberCount={memberCount}
             onFiles={() => onNavigate({ kind: 'store', ref: team.id })}
             onSearch={onSearch}
+            onSettings={() =>
+              onNavigate({
+                kind: 'group-settings',
+                ref: team.id,
+                tab: 'settings',
+              })
+            }
             onInfo={onToggleInfo}
             infoOpen={infoOpen}
             infoRef={infoRef}

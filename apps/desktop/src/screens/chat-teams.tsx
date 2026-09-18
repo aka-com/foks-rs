@@ -1,16 +1,14 @@
 /**
  * The Chat tab's inbox column: every team with chat, at once.
  *
- * A team whose only channel is the general channel is a single row — its mark,
- * its name, the last message, when that message arrived and its unread count,
- * all taken from that one channel so the row and a channel row cannot disagree.
- * These single-channel rows sit together under a "Conversations" heading. A
- * team with any named channel is a heading with its `#channels` indented under
- * it, because a name is not something a team's row can carry for it; these
- * headings sit together under a "Teams" heading, in a collapsible group whose
- * open or closed state is local to the column and keyed by team id — it does
- * not persist. A collapsed team keeps its unread total on the heading, so
- * folding the channel list away loses no information about what is unread.
+ * Every team is a heading with its `#channels` indented under it, the general
+ * channel included, so a team's row means the same thing whether it has one
+ * channel or ten: clicking it folds or unfolds the channel list, and clicking a
+ * channel opens that channel. The fold state is local to the column and keyed
+ * by team id — it does not persist. A collapsed team keeps its unread total on
+ * the heading, so folding the channel list away loses no information about
+ * what is unread. Each channel row carries its own unread count and, when it
+ * has nothing else to say, the last message and when it arrived.
  * The rows are built from `useSidebarInbox()` — the per-team projections
  * `ChatInboxService` already keeps for the rail's badge — so a team is listed,
  * previewed and counted without a conversation being mounted for it. Named
@@ -288,7 +286,6 @@ export interface ChatTeamColumnProps {
   searchRef?: Ref<HTMLInputElement>;
   onOpen: (ref: StoreRef, channel?: string) => void;
   onNewChat: () => void;
-  onSettings: (ref: StoreRef) => void;
   /** Opens a team's page on the Teams tab, where its setup is finished. */
   onTeams: (ref: StoreRef) => void;
 }
@@ -301,11 +298,10 @@ export function ChatTeamColumn({
   searchRef,
   onOpen,
   onNewChat,
-  onSettings,
   onTeams,
 }: ChatTeamColumnProps): ReactNode {
   const inbox = useSidebarInbox();
-  // Which multi-channel teams have their channel list folded away, by team id.
+  // Which teams have their channel list folded away, by team id.
   // This is local to the column and does not persist: a team reopens expanded
   // the next time the column mounts.
   const [collapsedTeams, setCollapsedTeams] = useState<ReadonlySet<string>>(
@@ -353,11 +349,6 @@ export function ChatTeamColumn({
     (store) => !query || store.name.toLowerCase().includes(query),
   );
   let listed = 0;
-  // Two headings, not one interleaved list: a team with one channel is a
-  // conversation and joins the others under "Conversations", a team with
-  // several channels is a heading and joins the others under "Teams". Each
-  // group keeps the relative order `chatTeams` already gave it.
-  const conversationRows: ReactNode[] = [];
   const teamRows: ReactNode[] = [];
   rows.forEach((row) => {
     const named = row.store.name.toLowerCase().includes(query);
@@ -367,42 +358,23 @@ export function ChatTeamColumn({
     );
     if (query && !named && !matching.length) return;
     listed += 1;
-    // A team whose channels are the general channel alone is one row: there is
-    // no list to indent under a heading, and the general channel has no name
-    // to lose. A team whose one channel is named keeps its heading, so that
-    // "#deploys" is not swallowed by the team's own row.
-    const single =
-      !row.channels ||
-      row.channels.length === 0 ||
-      (row.channels.length === 1 && !row.channels[0].channel.name);
-    if (single) {
-      conversationRows.push(
-        <ConversationRow
-          key={row.store.id}
-          row={row}
-          now={now}
-          current={row.store.id === selected}
-          onOpen={onOpen}
-        />,
-      );
-    } else {
-      teamRows.push(
-        <TeamHeading
-          key={row.store.id}
-          row={row}
-          channels={matching}
-          activeChannel={row.store.id === selected ? activeChannel : undefined}
-          // A search in progress overrides a fold: a channel the query
-          // matched inside a collapsed team has to be seen to explain why its
-          // team matched at all. The fold itself is untouched underneath, and
-          // returns as soon as the query is cleared.
-          collapsed={query ? false : collapsedTeams.has(row.store.id)}
-          onToggleCollapse={() => toggleCollapsed(row.store.id)}
-          onOpen={onOpen}
-          onSettings={onSettings}
-        />,
-      );
-    }
+    teamRows.push(
+      <TeamHeading
+        key={row.store.id}
+        row={row}
+        channels={matching}
+        now={now}
+        selected={selected}
+        activeChannel={row.store.id === selected ? activeChannel : undefined}
+        // A search in progress overrides a fold: a channel the query
+        // matched inside a collapsed team has to be seen to explain why its
+        // team matched at all. The fold itself is untouched underneath, and
+        // returns as soon as the query is cleared.
+        collapsed={query ? false : collapsedTeams.has(row.store.id)}
+        onToggleCollapse={() => toggleCollapsed(row.store.id)}
+        onOpen={onOpen}
+      />,
+    );
   });
   return (
     <aside className="chat-inbox" aria-label="Chat inbox">
@@ -447,14 +419,8 @@ export function ChatTeamColumn({
           : ''}
       </p>
       <div className="chat-inbox-scroll">
-        {/* Each heading draws only over its own group, and only once that
-            group has a row: a search that clears a whole section drops its
-            heading with it, and a Mac with no team of a given shape never
-            shows that heading empty. */}
-        {conversationRows.length > 0 && (
-          <SectionLabel>Conversations</SectionLabel>
-        )}
-        {conversationRows}
+        {/* The heading draws only once there is a team under it: a search
+            that clears every team drops the heading with it. */}
         {teamRows.length > 0 && <SectionLabel>Teams</SectionLabel>}
         {teamRows}
         {query &&
@@ -508,92 +474,6 @@ export function ChatTeamColumn({
   );
 }
 
-/** A team whose channels are the general channel alone: one row. */
-function ConversationRow({
-  row,
-  now,
-  current,
-  onOpen,
-}: {
-  row: TeamRow;
-  now: number;
-  current: boolean;
-  onOpen: (ref: StoreRef, channel?: string) => void;
-}): ReactNode {
-  const only = row.channels?.[0];
-  const preview = only?.conversation?.preview;
-  const line = previewLine(
-    only?.conversation,
-    row.entry?.scope?.actor ?? null,
-    row.names,
-  );
-  // A single-channel team's row is the channel's row: the count, the weight it
-  // draws it in and the caption beside it all come from the one channel, so a
-  // muted or hidden conversation cannot read as a bold row with nothing on it.
-  const count = channelCount(only);
-  const muted = Boolean(only?.conversation?.muted);
-  const meta = only ? channelMeta(only, row.entry?.blockedChannels) : '';
-  // The states `teamUnread` reports — loading, unreachable, degraded, stale —
-  // stay in the team's badge; a bare number is the channel's own.
-  const badge =
-    row.badge && !plainCount(row.badge.label)
-      ? row.badge
-      : count
-        ? { label: count, description: `${count} unread` }
-        : null;
-  return (
-    <button
-      type="button"
-      className={[
-        'chat-conv',
-        current ? 'on' : '',
-        count ? 'unread' : '',
-        // A hidden or muted conversation is listed and says so; it is drawn
-        // dimmed to match, rather than reading as an ordinary row with a
-        // caption.
-        only?.conversation?.hidden ? 'hidden' : '',
-        muted ? 'muted' : '',
-      ]
-        .filter(Boolean)
-        .join(' ')}
-      aria-current={current ? 'page' : undefined}
-      title={[`${row.store.name} · ${row.server}`, badge?.description]
-        .filter(Boolean)
-        .join(' · ')}
-      onClick={() => onOpen(row.store.id, only?.channel.id)}
-    >
-      {/* One group, one mark: the column, the Teams row and the group's own
-          page draw the same initial over the same colour. */}
-      <GroupMark store={row.store} size="sm" />
-      <span className="t">
-        <b>{row.store.name}</b>
-        <small className="chat-row-identity">{row.server}</small>
-        <small>
-          {row.status ||
-            line ||
-            (row.channels?.length ? 'No messages yet' : 'No channels yet')}
-        </small>
-        {(meta || row.note) && (
-          <small className="chat-row-note">
-            {[meta, row.note].filter(Boolean).join(' · ')}
-          </small>
-        )}
-      </span>
-      {preview && !row.status && (
-        <span className="when">{previewTime(preview.insert_time, now)}</span>
-      )}
-      {badge && (
-        <span
-          className={muted ? 'chat-unread muted' : 'chat-unread'}
-          aria-label={badge.description}
-        >
-          {badge.label}
-        </span>
-      )}
-    </button>
-  );
-}
-
 /**
  * The sum of what a team's own channel rows are already carrying, on the same
  * terms `teamUnread` counts by: a hidden or muted channel does not contribute,
@@ -609,32 +489,35 @@ function channelUnreadTotal(channels: readonly ListedChannel[]): number {
   }, 0);
 }
 
-/** A team with a channel of its own name: a heading and its channels. */
+/** A team: a heading that folds its channels, and the channels under it. */
 function TeamHeading({
   row,
   channels,
+  now,
+  selected,
   activeChannel,
   collapsed,
   onToggleCollapse,
   onOpen,
-  onSettings,
 }: {
   row: TeamRow;
   channels: readonly ListedChannel[];
+  now: number;
+  /** The team whose conversation is mounted beside the column. */
+  selected?: StoreRef;
   activeChannel?: string;
   /** The channel list is folded away; local to the column, keyed by team id. */
   collapsed: boolean;
   onToggleCollapse: () => void;
   onOpen: (ref: StoreRef, channel?: string) => void;
-  onSettings: (ref: StoreRef) => void;
 }): ReactNode {
   // A heading's own count is normally the sum of the counts already drawn
   // beside its channels, so only what the channels cannot say is drawn here:
   // that the team cannot be reached, that its count is degraded, that it is
   // going stale. Collapsed, the channels are not drawn at all, so the heading
   // carries their total instead — nothing is lost by folding the list away.
-  // The channel list this team’s twist expands, named so the twist can point
-  // at it rather than leaving the relationship to visual order alone.
+  // The channel list this team's row expands, named so the row can point at
+  // it rather than leaving the relationship to visual order alone.
   const channelListId = useId();
   const state = row.badge && !plainCount(row.badge.label) ? row.badge : null;
   const collapsedTotal = collapsed ? channelUnreadTotal(channels) : 0;
@@ -646,38 +529,51 @@ function TeamHeading({
           description: `${collapsedTotal} unread`,
         }
       : null);
+  // A team whose channel list has arrived empty says so on the heading, since
+  // there is no channel row to say it. The general channel of an otherwise
+  // empty team says the same of its messages, so a fresh team is not two bare
+  // names.
+  const empty = row.channels !== undefined && row.channels.length === 0;
+  const lone =
+    row.channels?.length === 1 && !row.channels[0].channel.name
+      ? row.channels[0]
+      : undefined;
+  // A team with no channel rows — its list has not arrived, or arrived empty —
+  // has nothing to fold, so its row opens the team's own pane, which states
+  // the reason: loading, locked, or no channels yet.
+  const foldable = channels.length > 0;
+  const open = activeChannel !== undefined || row.store.id === selected;
   return (
     <div className={collapsed ? 'chat-team collapsed' : 'chat-team'}>
-      <div
-        className="chat-team-head"
+      {/* The whole row is the fold control: it has no other click to collide
+          with, since opening a channel is a click on the channel's own row. */}
+      <button
+        type="button"
+        className={foldable || !open ? 'chat-team-head' : 'chat-team-head on'}
+        aria-expanded={foldable ? !collapsed : undefined}
+        aria-controls={foldable ? channelListId : undefined}
+        aria-current={!foldable && open ? 'page' : undefined}
+        aria-label={
+          !foldable
+            ? undefined
+            : collapsed
+              ? `Expand ${row.store.name}`
+              : `Collapse ${row.store.name}`
+        }
         title={[`${row.store.name} · ${row.server}`, row.badge?.description]
           .filter(Boolean)
           .join(' · ')}
+        onClick={foldable ? onToggleCollapse : () => onOpen(row.store.id)}
       >
-        {/* Its own control, beside the settings gear rather than wrapping the
-            whole row: the row carries no click of its own to collide with. */}
-        <button
-          type="button"
-          className={collapsed ? 'chat-twist' : 'chat-twist open'}
-          aria-expanded={!collapsed}
-          aria-controls={channelListId}
-          aria-label={
-            collapsed
-              ? `Expand ${row.store.name}`
-              : `Collapse ${row.store.name}`
-          }
-          onClick={onToggleCollapse}
-        >
-          <Icon name="chev" size={14} />
-        </button>
         <GroupMark store={row.store} size="sm" />
         <span className="t">
-          {/* A team is a heading over its channels, and reads as one. */}
-          <b role="heading" aria-level={3}>
-            {row.store.name}
-          </b>
+          <b>{row.store.name}</b>
           <small className="chat-row-identity">{row.server}</small>
-          {row.status && <small>{row.status}</small>}
+          {row.status ? (
+            <small>{row.status}</small>
+          ) : empty ? (
+            <small>No channels yet</small>
+          ) : null}
           {row.note && <small className="chat-row-note">{row.note}</small>}
         </span>
         {badge && (
@@ -685,14 +581,12 @@ function TeamHeading({
             {badge.label}
           </span>
         )}
-        <Button
-          variant="quiet"
-          icon="gear"
-          aria-label={`Team settings for ${row.store.name}`}
-          title={`Team settings for ${row.store.name}`}
-          onClick={() => onSettings(row.store.id)}
-        />
-      </div>
+        {foldable && (
+          <span className="chat-team-chev" aria-hidden="true">
+            <Icon name="chev" size={14} />
+          </span>
+        )}
+      </button>
       {/* The channels belong to the team named above them, and say so rather
           than leaving a screen reader to infer it from the order. Collapsed,
           the group is not rendered at all, so no channel button sits in the
@@ -709,6 +603,20 @@ function TeamHeading({
             const active = channel.id === activeChannel;
             const count = channelCount(listedChannel);
             const meta = channelMeta(listedChannel, row.entry?.blockedChannels);
+            // The caption is the one thing the row has to say beside its
+            // name: why it is quiet, else what was last said in it.
+            const preview = conversation?.preview;
+            const line = meta
+              ? ''
+              : previewLine(
+                  conversation,
+                  row.entry?.scope?.actor ?? null,
+                  row.names,
+                );
+            const caption =
+              meta ||
+              line ||
+              (listedChannel === lone && !preview ? 'No messages yet' : '');
             return (
               <button
                 type="button"
@@ -734,8 +642,13 @@ function TeamHeading({
               >
                 <span className="t">
                   <span className="n">{channelTitle(channel)}</span>
-                  {meta && <small>{meta}</small>}
+                  {caption && <small>{caption}</small>}
                 </span>
+                {preview && !meta && row.reachable && (
+                  <span className="when">
+                    {previewTime(preview.insert_time, now)}
+                  </span>
+                )}
                 {channel.admin && (
                   <span
                     className="lock"

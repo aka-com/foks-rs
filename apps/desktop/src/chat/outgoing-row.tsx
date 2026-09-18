@@ -49,7 +49,7 @@ export function OutgoingRow({
     message.text !== undefined;
   return (
     <article
-      className={`chat-message chat-outgoing${sent ? ' sent' : ''}`}
+      className={`chat-message chat-outgoing${sent ? ' sent' : ''}${sending ? ' sending' : ''}`}
       data-submission={message.submission}
       data-operation={message.operation?.id}
     >
@@ -67,29 +67,29 @@ export function OutgoingRow({
           <MessageText text={message.text} actions={bridge} />
         )}
       </div>
-      <div className="chat-send-status">
-        <span role="status">{labels[message.phase]}</span>
-        {retryable && (
-          <Button
-            size="sm"
-            disabled={message.running}
-            onClick={() => void run(false)}
-          >
-            {message.phase === 'unconfirmed' ? 'Check again' : 'Retry'}
-          </Button>
-        )}
-        {editable && (
-          <Button size="sm" onClick={() => void run(true)}>
-            Edit
-          </Button>
-        )}
-        {message.cleanupError && (
-          <span role="status">
-            Local message storage needs attention. {message.cleanupError}
-          </span>
-        )}
-        {error && <span role="alert">{error}</span>}
-        {!sending ? (
+      {!sending ? (
+        <div className="chat-send-status">
+          <span role="status">{labels[message.phase]}</span>
+          {retryable && (
+            <Button
+              size="sm"
+              disabled={message.running}
+              onClick={() => void run(false)}
+            >
+              {message.phase === 'unconfirmed' ? 'Check again' : 'Retry'}
+            </Button>
+          )}
+          {editable && (
+            <Button size="sm" onClick={() => void run(true)}>
+              Edit
+            </Button>
+          )}
+          {message.cleanupError && (
+            <span role="status">
+              Local message storage needs attention. {message.cleanupError}
+            </span>
+          )}
+          {error && <span role="alert">{error}</span>}
           <details>
             <summary>Details</summary>
             {message.submission && <div>Submission: {message.submission}</div>}
@@ -109,8 +109,8 @@ export function OutgoingRow({
               </Button>
             )}
           </details>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
     </article>
   );
 }

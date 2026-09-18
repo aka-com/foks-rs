@@ -75,6 +75,10 @@ export function useToast(): ToastController {
   return controller;
 }
 
+export function useOptionalToast(): ToastController | null {
+  return useContext(ToastContext);
+}
+
 function ToastItem({
   entry,
   dismiss,

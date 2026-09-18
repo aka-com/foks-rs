@@ -1,9 +1,11 @@
 /**
- * Toolbar displayed above the item list, inside the folder browser's list
- * pane.
+ * Toolbar displayed across the top of the folder browser, above both the
+ * folder tree and the item list.
  *
- * Provides the kind filter, scoped search field, and New control. The list
- * column headers handle sorting, and the inspector is a permanent column.
+ * The kind filter fills a cell the width of the tree column, so it sits over
+ * the counts it changes; the scoped search field and New control take the
+ * list column. The list column headers handle sorting, and the inspector is a
+ * permanent column.
  */
 
 import type { ReactNode } from 'react';
@@ -72,28 +74,34 @@ export function Toolbar({
 }: ToolbarProps): ReactNode {
   return (
     <div className="toolbar">
-      <SegmentedControl<KindFilter>
-        label="Filter items by kind"
-        value={kind}
-        onChange={onKind}
-        items={[
-          { id: 'All', label: 'All' },
-          ...KIND_LIST.map((name) => ({
-            id: name,
-            label: KINDS[name].plural,
-            title: KINDS[name].blurb,
-          })),
-        ]}
-      />
-      <span className="spacer" />
-      {/* The ⌘K shortcut is reserved for the global palette. */}
-      <SearchField
-        value={query}
-        onChange={onQuery}
-        placeholder={searchPlaceholder}
-        shortcut={false}
-      />
-      <NewItemButton onNew={onNew} />
+      {/* The toolbar spans both columns of the folder browser. The filter
+          cell is the tree column's width, so the kind filter sits over the
+          counts it changes; search and New take the list column. */}
+      <div className="toolbar-filter">
+        <SegmentedControl<KindFilter>
+          label="Filter items by kind"
+          value={kind}
+          onChange={onKind}
+          items={[
+            { id: 'All', label: 'All' },
+            ...KIND_LIST.map((name) => ({
+              id: name,
+              label: KINDS[name].plural,
+              title: KINDS[name].blurb,
+            })),
+          ]}
+        />
+      </div>
+      <div className="toolbar-rest">
+        {/* The ⌘K shortcut is reserved for the global palette. */}
+        <SearchField
+          value={query}
+          onChange={onQuery}
+          placeholder={searchPlaceholder}
+          shortcut={false}
+        />
+        <NewItemButton onNew={onNew} />
+      </div>
     </div>
   );
 }

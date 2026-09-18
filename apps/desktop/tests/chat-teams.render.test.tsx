@@ -1,8 +1,8 @@
 /**
- * The Chat tab's inbox column: which teams it lists, which of them are single
- * rows and which are headings with channels, what a row carries, how search
- * narrows the column, what New chat offers, and what the tab shows when no
- * team has chat.
+ * The Chat tab's inbox column: which teams it lists, what a team heading and
+ * its channel rows carry, how a heading folds its channels, how search narrows
+ * the column, what New chat offers, and what the tab shows when no team has
+ * chat.
  */
 
 import assert from 'node:assert/strict';
@@ -113,6 +113,9 @@ async function mount(
   const { OverlayProvider } = (await vite.ssrLoadModule(
     '/kit/overlay-primitives.tsx',
   )) as typeof import('../kit/overlay-primitives');
+  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
+    '/kit/toasts.tsx',
+  )) as typeof import('../kit/toasts');
   const { mockBridge } = (await vite.ssrLoadModule(
     '/src/mock-bridge.ts',
   )) as typeof import('../src/mock-bridge');
@@ -121,6 +124,7 @@ async function mount(
   const portalRoot = document.getElementById('overlays');
   if (!portalRoot) throw new Error('missing overlay root');
   const overlayRoot: HTMLElement = portalRoot;
+  const toastController = new ToastController();
   const journal: Location[] = [];
   function Host() {
     const [location, setLocation] = useState<Location>(start);
@@ -139,21 +143,25 @@ async function mount(
       createElement(OverlayProvider, {
         backgroundRef: { current: null },
         portalRoot: overlayRoot,
-        children: createElement(ChatInboxProvider, {
-          bridge,
-          snapshot: live,
-          clock,
-          accessGenerations: generations,
-          children: createElement(ChatTab, {
-            snapshot: live,
+        children: createElement(ToastProvider, {
+          controller: toastController,
+          portalRoot: overlayRoot,
+          children: createElement(ChatInboxProvider, {
             bridge,
-            location,
-            accessNow: shell?.accessNow,
+            snapshot: live,
+            clock,
             accessGenerations: generations,
-            onNavigate: (next: Location) => {
-              journal.push(next);
-              if (next.kind === 'chat') setLocation(next);
-            },
+            children: createElement(ChatTab, {
+              snapshot: live,
+              bridge,
+              location,
+              accessNow: shell?.accessNow,
+              accessGenerations: generations,
+              onNavigate: (next: Location) => {
+                journal.push(next);
+                if (next.kind === 'chat') setLocation(next);
+              },
+            }),
           }),
         }),
       }),
@@ -163,11 +171,9 @@ async function mount(
   return journal;
 }
 
-/** Every row that names a team, whether a conversation row or a heading. */
+/** Every heading that names a team, the dimmed "Chat unavailable" ones included. */
 function heads(): HTMLElement[] {
-  return [
-    ...document.querySelectorAll<HTMLElement>('.chat-conv, .chat-team-head'),
-  ];
+  return [...document.querySelectorAll<HTMLElement>('.chat-team-head')];
 }
 
 function head(name: string): HTMLElement {
@@ -256,12 +262,27 @@ function withInbox(
 }
 
 /** The channel row drawing `#name`, wherever in the column it sits. */
-function channelRow(name: string): HTMLButtonElement {
+function channelRow(name: string, team?: string): HTMLButtonElement {
+  const scope = team ? head(team).closest('.chat-team') : document;
   const row = [
-    ...document.querySelectorAll<HTMLButtonElement>('.chat-channel'),
+    ...(scope ?? document).querySelectorAll<HTMLButtonElement>('.chat-channel'),
   ].find((node) => node.querySelector('.n')?.textContent === name);
   assert.ok(row, `${name} is in the column`);
   return row;
+}
+
+/** A team's general channel row: what a click on the team used to do. */
+function general(team: string): HTMLButtonElement {
+  return channelRow('#general', team);
+}
+
+/** The channel rows under one team's heading, by the `#name` each draws. */
+function teamChannels(team: string): string[] {
+  return [
+    ...(head(team)
+      .closest('.chat-team')
+      ?.querySelectorAll('.chat-channel .n') ?? []),
+  ].map((node) => node.textContent ?? '');
 }
 
 test('the tab with no conversation opens the most recent one', async () => {
@@ -289,11 +310,12 @@ test('the tab with no conversation opens the most recent one', async () => {
       channel: 'ab'.repeat(16),
     }),
   );
-  // The row a conversation is open in is the current one; the rest are not.
+  // The channel row a conversation is open in is the current one; the rest
+  // are not.
   await ui.waitFor(() =>
-    assert.equal(head('Household').getAttribute('aria-current'), 'page'),
+    assert.equal(general('Household').getAttribute('aria-current'), 'page'),
   );
-  assert.equal(head('Engineering').getAttribute('aria-current'), null);
+  assert.equal(general('Engineering').getAttribute('aria-current'), null);
 });
 
 test('message copy is available only from the right-click menu', async () => {
@@ -325,8 +347,9 @@ test('message copy is available only from the right-click menu', async () => {
   ui.fireEvent.contextMenu(message, { clientX: 120, clientY: 80 });
   const copy = await ui.screen.findByRole('menuitem', { name: 'Copy message' });
   ui.fireEvent.click(copy);
-  await ui.waitFor(() => assert.deepEqual(copied, [text]));
   assert.equal(ui.screen.queryByRole('menu'), null);
+  await ui.waitFor(() => assert.deepEqual(copied, [text]));
+  assert.ok(await ui.screen.findByText('Copied'));
 });
 
 test('with no message anywhere the tab opens the first team that has chat', async () => {
@@ -348,7 +371,7 @@ test('with no message anywhere the tab opens the first team that has chat', asyn
   );
 });
 
-test('every team with chat is listed at once, single channel sets as one row', async () => {
+test('every team with chat is listed at once, each a heading over its channels', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   await mount(snapshot, { kind: 'chat', ref: 'team:eng' }, (base) =>
     withChannels(base, 'team:household', [
@@ -356,18 +379,23 @@ test('every team with chat is listed at once, single channel sets as one row', a
       { id: '22'.repeat(16), name: 'incidents', admin: true },
     ]),
   );
-  // Household has three channels, so it is a heading with its channels under
-  // it; Engineering has only the general channel, so it is one row.
+  // Household has three channels and Engineering one; both are headings with
+  // their channels under them, the general channel included.
   await ui.waitFor(() =>
-    assert.deepEqual(channels(), ['#general', '#chores', '#incidents']),
+    assert.deepEqual(
+      channels().filter((name) => name !== '#general'),
+      ['#chores', '#incidents'],
+    ),
   );
+  assert.equal(channels().filter((name) => name === '#general').length, 2);
   assert.ok(head('Household').classList.contains('chat-team-head'));
-  assert.ok(head('Engineering').classList.contains('chat-conv'));
+  assert.ok(head('Engineering').classList.contains('chat-team-head'));
+  assert.equal(document.querySelector('.chat-twist'), null);
   const household = head('Household').closest('.chat-team');
   assert.ok(
-    [...document.querySelectorAll('.chat-channel')].every((row) =>
-      household?.contains(row),
-    ),
+    [...document.querySelectorAll('.chat-channel')]
+      .filter((row) => row.querySelector('.n')?.textContent !== '#general')
+      .every((row) => household?.contains(row)),
     'channels sit under the team that owns them',
   );
   // The per-channel count is the channel's own, and an admin channel says so.
@@ -394,7 +422,9 @@ test('search narrows the whole column to matching teams and channels', async () 
       { id: '11'.repeat(16), name: 'chores' },
     ]),
   );
-  await ui.waitFor(() => assert.deepEqual(channels(), ['#general', '#chores']));
+  await ui.waitFor(() =>
+    assert.deepEqual(teamChannels('Household'), ['#general', '#chores']),
+  );
   const field = ui.screen.getByRole('searchbox', {
     name: 'Search teams and channels',
   });
@@ -438,21 +468,21 @@ test('switching teams keeps the column and mounts exactly one conversation', asy
   );
   await clock.advance(1000);
   await ui.waitFor(() => assert.ok(heads().length));
-  assert.equal(head('Engineering').getAttribute('aria-current'), null);
+  assert.equal(general('Engineering').getAttribute('aria-current'), null);
   const column = document.querySelector('.chat-inbox');
   await ui.waitFor(() =>
     assert.ok(conversation.some((call) => call.startsWith('team:household'))),
   );
-  ui.fireEvent.click(head('Engineering'));
+  ui.fireEvent.click(general('Engineering'));
   assert.deepEqual(journal.at(-1), {
     kind: 'chat',
     ref: 'team:eng',
     channel: 'ab'.repeat(16),
   });
   await ui.waitFor(() =>
-    assert.equal(head('Engineering').getAttribute('aria-current'), 'page'),
+    assert.equal(general('Engineering').getAttribute('aria-current'), 'page'),
   );
-  assert.equal(head('Household').getAttribute('aria-current'), null);
+  assert.equal(general('Household').getAttribute('aria-current'), null);
   // The column is the tab's, not the conversation's: the switch replaced the
   // conversation beside it without rebuilding it.
   assert.equal(document.querySelector('.chat-inbox'), column);
@@ -487,21 +517,20 @@ test('a team with no conversation mounted carries its preview and unread count',
     },
   }));
   // No conversation is mounted for Household: its preview, its time and its
-  // count all come from the inbox service the rail already reads. The badge
-  // sits inside the row that names the team, so its label is the count alone.
+  // count all come from the inbox service the rail already reads, and sit on
+  // the general channel's row. The badge's label is the count alone.
   const badge = await ui.waitFor(() => {
-    const node = head('Household').querySelector('.chat-unread');
+    const node = general('Household').querySelector('.chat-unread');
     assert.ok(node, 'Household carries an unread badge');
     return node;
   });
   assert.equal(badge.getAttribute('aria-label'), '2 unread');
   assert.equal(badge.textContent, '2');
   assert.equal(
-    head('Household').querySelector('small:not(.chat-row-identity)')
-      ?.textContent,
+    general('Household').querySelector('small')?.textContent,
     'Team member: Team chat is ready.',
   );
-  assert.ok(head('Household').querySelector('.when')?.textContent);
+  assert.ok(general('Household').querySelector('.when')?.textContent);
 });
 
 test('a team whose server offers no chat sits under No chat with the reason', async () => {
@@ -526,7 +555,7 @@ test('a team whose server offers no chat sits under No chat with the reason', as
   const labels = [...document.querySelectorAll('.sec')].map(
     (node) => node.textContent,
   );
-  assert.ok(labels.includes('Conversations'));
+  assert.ok(labels.includes('Teams'));
   assert.ok(labels.includes('Chat unavailable'));
 });
 
@@ -544,9 +573,12 @@ test('a team with a lapsed server check-in remains listed with recovery actions'
   const journal = await mount(snapshot, { kind: 'chat', ref: 'team:eng' });
   await ui.waitFor(() => assert.ok(heads().length));
   const engineering = head('Engineering');
+  // No channel list has arrived for the locked team, so its heading is the
+  // row that opens it and is the current one. It states the reason rather
+  // than a preview it cannot have, in the words the rest of the shell uses
+  // for that store.
   assert.equal(engineering.getAttribute('aria-current'), 'page');
-  // The row states the reason rather than a preview it cannot have, in the
-  // words the rest of the shell uses for that store.
+  assert.equal(engineering.getAttribute('aria-expanded'), null);
   assert.equal(
     engineering.querySelector('small:not(.chat-row-identity)')?.textContent,
     'Check-in expired',
@@ -559,9 +591,9 @@ test('a team with a lapsed server check-in remains listed with recovery actions'
   // A locked team is opened onto the pane that says why it is locked; the
   // channel rows a team keeps while it is out of reach are the next test.
   await ui.screen.findByRole('heading', { name: 'Engineering chat is locked' });
-  ui.fireEvent.click(head('Household'));
+  ui.fireEvent.click(general('Household'));
   await ui.waitFor(() =>
-    assert.equal(head('Household').getAttribute('aria-current'), 'page'),
+    assert.equal(general('Household').getAttribute('aria-current'), 'page'),
   );
   ui.fireEvent.click(head('Engineering'));
   await ui.screen.findByRole('heading', { name: 'Engineering chat is locked' });
@@ -640,17 +672,17 @@ test('the tab opens its chosen conversation without a note, and a pick sticks', 
   // Both teams' only messages arrived at the same moment, so the tie keeps
   // navigation order and Engineering is the conversation that opens.
   await ui.waitFor(() =>
-    assert.equal(head('Engineering').getAttribute('aria-current'), 'page'),
+    assert.equal(general('Engineering').getAttribute('aria-current'), 'page'),
   );
   assert.equal(ui.screen.queryByText(/no conversation was selected/), null);
   assert.equal(ui.screen.queryByRole('button', { name: 'Dismiss' }), null);
-  ui.fireEvent.click(head('Household'));
+  ui.fireEvent.click(general('Household'));
   await ui.waitFor(() =>
-    assert.equal(head('Household').getAttribute('aria-current'), 'page'),
+    assert.equal(general('Household').getAttribute('aria-current'), 'page'),
   );
-  ui.fireEvent.click(head('Engineering'));
+  ui.fireEvent.click(general('Engineering'));
   await ui.waitFor(() =>
-    assert.equal(head('Engineering').getAttribute('aria-current'), 'page'),
+    assert.equal(general('Engineering').getAttribute('aria-current'), 'page'),
   );
 });
 
@@ -865,14 +897,13 @@ test('a synchronization that succeeded but could not finish keeps its preview', 
   );
   await ui.waitFor(() =>
     assert.equal(
-      head('Engineering').querySelector('small:not(.chat-row-identity)')
-        ?.textContent,
+      general('Engineering').querySelector('small')?.textContent,
       'Team member: Team chat is ready.',
     ),
   );
   const engineering = head('Engineering');
-  // The preview stays where it is; what could not be finished is a caption
-  // beside it, not a failure in place of it.
+  // The preview stays where it is, on the channel's row; what could not be
+  // finished is a caption on the heading, not a failure in place of it.
   assert.equal(
     engineering.querySelector('.chat-row-note')?.textContent,
     'Read status will retry.',
@@ -883,11 +914,11 @@ test('a synchronization that succeeded but could not finish keeps its preview', 
     ),
     false,
   );
-  assert.ok(engineering.querySelector('.when')?.textContent);
+  assert.ok(general('Engineering').querySelector('.when')?.textContent);
   // A team that is not the open one keeps its preview just the same.
   const household = head('Household');
   assert.equal(
-    household.querySelector('small:not(.chat-row-identity)')?.textContent,
+    general('Household').querySelector('small')?.textContent,
     'Team member: Team chat is ready.',
   );
   assert.equal(
@@ -935,11 +966,13 @@ test('a heading team whose count is degraded carries the badge that says so', as
     badge.getAttribute('aria-label'),
     '1 known unread; inbox synchronization incomplete',
   );
-  // The team name is a heading over its channels, and the channels say which
-  // team they belong to.
-  const name = heading.querySelector('b');
-  assert.equal(name?.getAttribute('role'), 'heading');
-  assert.equal(name?.getAttribute('aria-level'), '3');
+  // The heading is the fold control for the list it points at, and the
+  // channels say which team they belong to.
+  assert.equal(heading.tagName, 'BUTTON');
+  assert.equal(
+    heading.getAttribute('aria-controls'),
+    heading.closest('.chat-team')?.querySelector('.chat-channel-list')?.id,
+  );
   const group = ui.screen.getByRole('group', { name: 'Household' });
   assert.ok(group.contains(channelRow('#chores')));
 });
@@ -954,8 +987,8 @@ test('muted and hidden conversations stay listed and say what they are', async (
       ]),
       'team:eng',
       (inbox) => {
-        // Engineering's only channel is the general one, so the team is a
-        // single row: the row is the channel, muted count and all.
+        // Engineering's only channel is the general one; its row under the
+        // heading carries the muted count and caption like any other.
         inbox.conversations = inbox.conversations.map((conversation) => ({
           ...conversation,
           muted: true,
@@ -966,7 +999,11 @@ test('muted and hidden conversations stay listed and say what they are', async (
   );
   // A hidden conversation keeps its channel listed rather than taking it away.
   await ui.waitFor(() =>
-    assert.deepEqual(channels(), ['#general', '#chores', '#archive']),
+    assert.deepEqual(teamChannels('Household'), [
+      '#general',
+      '#chores',
+      '#archive',
+    ]),
   );
   const chores = channelRow('#chores');
   assert.equal(
@@ -985,20 +1022,19 @@ test('muted and hidden conversations stay listed and say what they are', async (
       ?.textContent,
     'Hidden',
   );
-  // The single-row team draws the same things its channel row would: the count
-  // it is bold for, and the caption that says why the count is quiet.
-  const engineering = head('Engineering');
-  assert.ok(engineering.classList.contains('chat-conv'));
+  // Engineering's general channel row draws the count it is bold for, and the
+  // caption that says why the count is quiet.
+  const engineering = channelRow('#general', 'Engineering');
   assert.ok(engineering.classList.contains('unread'));
+  assert.ok(engineering.classList.contains('muted'));
   assert.equal(
-    engineering.querySelector('.chat-row-note')?.textContent,
+    engineering.querySelector('small:not(.chat-row-identity)')?.textContent,
     'Muted',
   );
   const badge = engineering.querySelector('.chat-unread');
   assert.equal(badge?.textContent, '2');
   assert.equal(badge?.getAttribute('aria-label'), '2 unread');
   assert.ok(badge?.classList.contains('muted'));
-  assert.ok(engineering.classList.contains('muted'));
 });
 
 test('a conversation opened into a heading team marks the channel row it mounts', async () => {
@@ -1232,7 +1268,7 @@ test('newer messages in other teams do not switch away from the active conversat
   await clock.advance(1000);
   // The tie kept navigation order, so the tab opened Engineering.
   await ui.waitFor(() =>
-    assert.equal(head('Engineering').getAttribute('aria-current'), 'page'),
+    assert.equal(general('Engineering').getAttribute('aria-current'), 'page'),
   );
   const chosen = journal.length;
   // A message arrives in the other team. The tab's choice was provisional only
@@ -1246,7 +1282,7 @@ test('newer messages in other teams do not switch away from the active conversat
     ref: 'team:eng',
     channel: 'ab'.repeat(16),
   });
-  assert.equal(head('Engineering').getAttribute('aria-current'), 'page');
+  assert.equal(general('Engineering').getAttribute('aria-current'), 'page');
 });
 
 test('New chat waits for a team’s channels before either step can be answered', async () => {
@@ -1404,7 +1440,11 @@ test('New chat says what a channel is, and counts only the ones it offers', asyn
     ]),
   );
   await ui.waitFor(() =>
-    assert.deepEqual(channels(), ['#general', '#chores', '#archive']),
+    assert.deepEqual(teamChannels('Household'), [
+      '#general',
+      '#chores',
+      '#archive',
+    ]),
   );
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New chat' }));
   const sheet = ui.screen.getByRole('dialog');
@@ -1453,7 +1493,7 @@ test('a team switch closes the sheet and keeps unresolved creation recoverable',
   // closes it rather than rebinding it to the team that arrives.
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New chat' }));
   await ui.screen.findByRole('dialog', { name: 'New chat' });
-  ui.fireEvent.click(head('Household'));
+  ui.fireEvent.click(general('Household'));
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
   // A submission the agent has already been given is the exception: it has to
   // be settled where it was made, so the switch leaves the sheet standing.
@@ -1462,7 +1502,7 @@ test('a team switch closes the sheet and keeps unresolved creation recoverable',
   ui.fireEvent.change(name, { target: { value: 'design' } });
   ui.fireEvent.click(ui.screen.getByRole('button', { name: /Create channel/ }));
   await ui.screen.findByText('Preparation reply lost');
-  ui.fireEvent.click(head('Engineering'));
+  ui.fireEvent.click(general('Engineering'));
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New chat' }));
   ui.fireEvent.click(
@@ -1702,7 +1742,7 @@ test('a team inbox stays channel-less until a conversation is selected', async (
   await ui.waitFor(() =>
     assert.match(head('Engineering').textContent ?? '', /Engineering/),
   );
-  ui.fireEvent.click(head('Engineering'));
+  ui.fireEvent.click(general('Engineering'));
   await ui.waitFor(() =>
     assert.equal(
       (journal.at(-1) as Extract<Location, { kind: 'chat' }>)?.channel,
@@ -1722,39 +1762,43 @@ test('a team inbox stays channel-less until a conversation is selected', async (
   assert.equal(journal.length, 1, 'returning to the inbox does not redirect');
 });
 
-test('single-channel teams sit under Conversations, multi-channel teams under Teams, and an empty section has no heading', async () => {
+test('every team is a heading under one Teams label, whatever its channel count', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   await mount(snapshot, { kind: 'chat', ref: 'team:eng' });
-  // Both teams start with the general channel alone, so only Conversations
-  // has anything to head.
+  // Both teams have the general channel alone; each is still a heading with
+  // that one channel under it, and there is one label over them all.
   await ui.waitFor(() =>
     assert.deepEqual(
       [...document.querySelectorAll('.sec')].map((node) => node.textContent),
-      ['Conversations'],
+      ['Teams'],
     ),
   );
+  assert.deepEqual(teamChannels('Engineering'), ['#general']);
+  assert.deepEqual(teamChannels('Household'), ['#general']);
   ui.cleanup();
   await mount(snapshot, { kind: 'chat', ref: 'team:eng' }, (base) =>
     withChannels(base, 'team:household', [
       { id: '11'.repeat(16), name: 'chores' },
     ]),
   );
-  // Household now heads its own channel list, so both headings draw, in
-  // that order, and each team sits under the one its shape calls for.
-  await ui.waitFor(() => assert.deepEqual(channels(), ['#general', '#chores']));
+  // A second channel changes nothing about where Household sits or what a
+  // click on its row does: it is one more row under the same heading.
+  await ui.waitFor(() =>
+    assert.deepEqual(teamChannels('Household'), ['#general', '#chores']),
+  );
   assert.deepEqual(
     [...document.querySelectorAll('.sec')].map((node) => node.textContent),
-    ['Conversations', 'Teams'],
+    ['Teams'],
   );
-  assert.ok(head('Engineering').classList.contains('chat-conv'));
+  assert.ok(head('Engineering').classList.contains('chat-team-head'));
   assert.ok(head('Household').classList.contains('chat-team-head'));
 });
 
-test('the collapse control folds a team, keeps its unread total, excludes a muted channel from it, and leaves settings reachable', async () => {
+test('clicking a team heading folds it, keeps its unread total, excludes a muted channel from it, and settings sit in the conversation header', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   const journal = await mount(
     snapshot,
-    { kind: 'chat', ref: 'team:eng' },
+    { kind: 'chat', ref: 'team:household', channel: '11'.repeat(16) },
     (base) =>
       withInbox(
         withChannels(base, 'team:household', [
@@ -1775,25 +1819,40 @@ test('the collapse control folds a team, keeps its unread total, excludes a mute
       ),
   );
   await ui.waitFor(() =>
-    assert.deepEqual(channels(), ['#general', '#chores', '#archive']),
+    assert.deepEqual(teamChannels('Household'), [
+      '#general',
+      '#chores',
+      '#archive',
+    ]),
   );
-  const twist = ui.screen.getByRole('button', { name: 'Collapse Household' });
-  assert.equal(twist.getAttribute('aria-expanded'), 'true');
-  ui.fireEvent.click(twist);
-  // Folded: the channel rows are gone (Engineering's own general channel is a
-  // single-row conversation, not a `.chat-channel`, so nothing else remains),
-  // and the heading's own badge carries the total of what folded away — the
-  // muted channel's 2 excluded, the same way the rail's own unread count
-  // already excludes a muted channel.
-  await ui.waitFor(() => assert.deepEqual(channels(), []));
+  // The heading itself is the fold control: no twist, and the row points at
+  // the list it folds.
+  assert.equal(document.querySelector('.chat-twist'), null);
+  const toggle = ui.screen.getByRole('button', { name: 'Collapse Household' });
+  assert.ok(toggle.classList.contains('chat-team-head'));
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+  assert.equal(
+    toggle.getAttribute('aria-controls'),
+    document.getElementById(toggle.getAttribute('aria-controls') ?? '')?.id,
+  );
+  ui.fireEvent.click(toggle);
+  // Folded: Household's channel rows are gone and the heading's own badge
+  // carries the total of what folded away — the muted channel's 2 excluded,
+  // the same way the rail's own unread count already excludes a muted channel.
+  await ui.waitFor(() => assert.deepEqual(teamChannels('Household'), []));
+  assert.deepEqual(teamChannels('Engineering'), ['#general']);
   const expand = ui.screen.getByRole('button', { name: 'Expand Household' });
   assert.equal(expand.getAttribute('aria-expanded'), 'false');
   const badge = head('Household').querySelector('.chat-unread');
   assert.equal(badge?.textContent, '3');
   assert.equal(badge?.getAttribute('aria-label'), '3 unread');
-  // The gear beside the new control still opens team settings.
+  // Team settings are the conversation header's, beside the channel info.
+  const header = document.querySelector('.chat-thread-header');
+  assert.ok(header);
   ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Team settings for Household' }),
+    ui.within(header as HTMLElement).getByRole('button', {
+      name: 'Team settings for Household',
+    }),
   );
   assert.deepEqual(journal.at(-1), {
     kind: 'group-settings',
@@ -1803,7 +1862,11 @@ test('the collapse control folds a team, keeps its unread total, excludes a mute
   // Expanding restores the channel list exactly as it was.
   ui.fireEvent.click(expand);
   await ui.waitFor(() =>
-    assert.deepEqual(channels(), ['#general', '#chores', '#archive']),
+    assert.deepEqual(teamChannels('Household'), [
+      '#general',
+      '#chores',
+      '#archive',
+    ]),
   );
 });
 
@@ -1814,11 +1877,13 @@ test('a search overrides a fold so a channel it matched inside a collapsed team 
       { id: '11'.repeat(16), name: 'chores' },
     ]),
   );
-  await ui.waitFor(() => assert.deepEqual(channels(), ['#general', '#chores']));
+  await ui.waitFor(() =>
+    assert.deepEqual(teamChannels('Household'), ['#general', '#chores']),
+  );
   ui.fireEvent.click(
     ui.screen.getByRole('button', { name: 'Collapse Household' }),
   );
-  await ui.waitFor(() => assert.deepEqual(channels(), []));
+  await ui.waitFor(() => assert.deepEqual(teamChannels('Household'), []));
   const field = ui.screen.getByRole('searchbox', {
     name: 'Search teams and channels',
   });
@@ -1826,7 +1891,7 @@ test('a search overrides a fold so a channel it matched inside a collapsed team 
   await ui.waitFor(() => assert.deepEqual(channels(), ['#chores']));
   // Clearing the query brings the fold back, unchanged underneath.
   ui.fireEvent.change(field, { target: { value: '' } });
-  await ui.waitFor(() => assert.deepEqual(channels(), []));
+  await ui.waitFor(() => assert.deepEqual(teamChannels('Household'), []));
 });
 
 test('the conversation header states the member count from the roster the team page already loads', async () => {

@@ -758,6 +758,20 @@ export function ItemsScreen({
     <div className="drop-area">
       {dropZone}
       <div className="folder-layout">
+        {/* The toolbar spans both columns: the kind filter sits over the tree
+            whose counts it changes, search and New over the list. */}
+        <Toolbar
+          onNew={createNew}
+          kind={state.kind}
+          onKind={(kind) => {
+            locations.setKind(kind);
+          }}
+          query={state.query}
+          onQuery={(query) => {
+            locations.search(query);
+          }}
+          searchPlaceholder={searchPlaceholder}
+        />
         <div className="folder-split">
           <aside className="tpane" aria-label="Folders">
             {!storePage ? (
@@ -782,18 +796,6 @@ export function ItemsScreen({
             {!storePage ? teamTrees.map(storeRoot) : null}
           </aside>
           <section className="lpane" aria-label="Folder contents">
-            <Toolbar
-              onNew={createNew}
-              kind={state.kind}
-              onKind={(kind) => {
-                locations.setKind(kind);
-              }}
-              query={state.query}
-              onQuery={(query) => {
-                locations.search(query);
-              }}
-              searchPlaceholder={searchPlaceholder}
-            />
             <div
               className="body folder-body"
               ref={bodyRef}

@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
 import { Button } from '../components/button';
 import { ContextMenu, Menu } from '/kit/overlay-primitives';
+import { useOptionalToast } from '/kit/toasts';
 
 /** Literal absolute HTTP(S) only; never decode entities into executable URLs. */
 export function safeChatLink(value: string): string | null {
@@ -130,7 +131,7 @@ export function MessageText({
   const [menuPoint, setMenuPoint] = useState<{ x: number; y: number } | null>(
     null,
   );
-  const [copyStatus, setCopyStatus] = useState('');
+  const toasts = useOptionalToast();
   const lines = text.split('\n');
   const blocks: ReactNode[] = [];
   if (text.length <= 65536 && lines.length <= 512) {
@@ -186,9 +187,6 @@ export function MessageText({
         }}
       >
         {blocks.length ? blocks : <p>{text}</p>}
-        <span className="offscreen" role="status">
-          {copyStatus}
-        </span>
       </div>
       {menuPoint ? (
         <ContextMenu
@@ -207,8 +205,10 @@ export function MessageText({
                 setMenuPoint(null);
                 void actions
                   .copyText(text)
-                  .then(() => setCopyStatus('Copied'))
-                  .catch(() => setCopyStatus('Could not copy'));
+                  .then(() => toasts?.show('Copied'))
+                  .catch(() =>
+                    toasts?.show('Could not copy', { tone: 'warning' }),
+                  );
               }}
             >
               Copy message
