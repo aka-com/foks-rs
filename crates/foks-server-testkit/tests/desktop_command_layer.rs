@@ -5,12 +5,17 @@ use std::ffi::{OsStr, OsString};
 use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use foks_agent_client::AgentClient;
 use foks_agent_proto::{Operation, ProfileProtocol, ProfileTrust, ResponseResult};
 use foks_client_app::{Capability, ProfileRegistry, ProtocolPolicy};
 use foks_compat_artifact::{CanaryArtifact, Outcome, SignedCanaryArtifact};
+use foks_desktop::{
+    CatalogFailureScope, CatalogLoadToken, CatalogSnapshot, CatalogStoreReadState, CatalogStoreRef,
+    KvItemValue,
+};
 use foks_server_testkit::TestEnvironment;
 
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(30);
@@ -560,9 +565,300 @@ fn process_reentry_and_real_kv_conflict_against_testkit() {
     ));
     assert!(String::from_utf8_lossy(&denied_write.stderr).contains("CapabilityDenied"));
 
+    exercise_remote_catalog(
+        &agent_binary,
+        &mut backend,
+        environment.root(),
+        &probe,
+        &certificate,
+        &phrase_file,
+        &team_id,
+    );
+    exercise_profile_failure_isolation(&mut backend);
     exercise_chat(&socket, &team_id, &probe, &certificate);
     agent.assert_running();
     backend.assert_every_invocation_was_a_fresh_process();
+}
+
+fn fresh_profile_catalog(socket: &Path, profile: &str) -> CatalogSnapshot {
+    let snapshot = foks_desktop::load_profile_catalog_cancellable(
+        Arc::new(AgentClient::new(socket)),
+        profile.to_owned(),
+        CatalogLoadToken::default(),
+    )
+    .expect("fresh native profile catalog");
+    assert_eq!(snapshot.profiles, vec![profile]);
+    assert!(snapshot.stores.iter().all(|store| store.profile() == profile));
+    assert!(snapshot
+        .items
+        .iter()
+        .all(|item| item.store.profile() == profile));
+    snapshot
+}
+
+fn healthy_profile_catalog(socket: &Path) -> CatalogSnapshot {
+    let snapshot = fresh_profile_catalog(socket, "work");
+    assert!(snapshot.failures.is_empty(), "{:?}", snapshot.failures);
+    assert_eq!(snapshot.full_item_reads, Some(vec!["work".to_owned()]));
+    assert_eq!(snapshot.inventory.len(), 1);
+    assert!(snapshot.inventory[0].accounts_complete);
+    assert!(snapshot.inventory[0].teams_complete);
+    assert!(!snapshot.store_reads.is_empty());
+    assert!(snapshot
+        .store_reads
+        .iter()
+        .all(|read| read.state == CatalogStoreReadState::Complete));
+    snapshot
+}
+
+fn assert_catalog_value(
+    socket: &Path,
+    snapshot: &CatalogSnapshot,
+    store: &CatalogStoreRef,
+    path: &str,
+    version: u64,
+    expected: &[u8],
+) {
+    let entries = snapshot
+        .items
+        .iter()
+        .filter(|item| &item.store == store && item.metadata.path == path)
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), 1, "one catalog entry for {path}");
+    assert_eq!(entries[0].metadata.version, version);
+    let read = foks_desktop::read_catalog_item(&AgentClient::new(socket), entries[0])
+        .expect("read the freshly catalogued version");
+    let KvItemValue::File(bytes) = read.value else {
+        panic!("expected file value for {path}");
+    };
+    assert_eq!(bytes.as_slice(), expected);
+}
+
+fn exercise_remote_catalog(
+    agent_binary: &Path,
+    backend: &mut BackendRunner,
+    root: &Path,
+    probe: &str,
+    certificate: &Path,
+    phrase_file: &Path,
+    existing_team_id: &str,
+) {
+    let state = root.join("remote-agent-state");
+    private_directory(&state);
+    let socket = state.join("agent.sock");
+    let mut remote_agent = start_agent(agent_binary, &state, &socket);
+    let mut remote = BackendRunner {
+        binary: backend.binary.clone(),
+        socket,
+        process_ids: Vec::new(),
+    };
+    remote.success(words(&["initialize", "--credential-backend", "private-file"]));
+    remote.success(with_file(
+        words(&["check-profile", "remote", probe, "--certificate-der"]),
+        certificate,
+    ));
+    remote.success(with_file(
+        words(&[
+            "recover-account",
+            "remote",
+            "recovered",
+            "--device-name",
+            "Remote laptop",
+            "--phrase-file",
+        ]),
+        phrase_file,
+    ));
+    let accounts = remote.success(words(&["accounts", "remote"]));
+    assert_eq!(accounts[0]["username"], "sol");
+    let store = CatalogStoreRef::Account(foks_agent_proto::AccountStoreRef {
+        profile: "work".to_owned(),
+        account_alias: "personal".to_owned(),
+    });
+    let path = "/remote_catalog_value";
+    let initial = healthy_profile_catalog(&backend.socket);
+    assert!(!initial.items.iter().any(|item| item.metadata.path == path));
+    let original = root.join("remote-original-value");
+    let current = root.join("remote-current-value");
+    private_file(&original, b"remote initial secret");
+    private_file(&current, b"remote updated secret");
+    let created = remote.success(with_file(
+        words(&["kv-create-text", "remote", "recovered", path, "--value-file"]),
+        &original,
+    ));
+    let created_version = created["version"].as_u64().expect("remote create version");
+    assert_catalog_value(
+        &backend.socket,
+        &healthy_profile_catalog(&backend.socket),
+        &store,
+        path,
+        created_version,
+        b"remote initial secret",
+    );
+    let edited = remote.success(with_file(
+        words(&[
+            "kv-edit-text",
+            "remote",
+            "recovered",
+            path,
+            &created_version.to_string(),
+            "--read-role",
+            "owner",
+            "--write-role",
+            "owner",
+            "--value-file",
+        ]),
+        &current,
+    ));
+    let edited_version = edited["version"].as_u64().expect("remote edit version");
+    assert!(edited_version > created_version);
+    for _ in 0..2 {
+        assert_catalog_value(
+            &backend.socket,
+            &healthy_profile_catalog(&backend.socket),
+            &store,
+            path,
+            edited_version,
+            b"remote updated secret",
+        );
+    }
+    remote.success(words(&[
+        "kv-remove",
+        "remote",
+        "recovered",
+        path,
+        &edited_version.to_string(),
+    ]));
+    for _ in 0..2 {
+        let deleted = healthy_profile_catalog(&backend.socket);
+        assert!(!deleted
+            .items
+            .iter()
+            .any(|item| item.store == store && item.metadata.path == path));
+    }
+    let before = backend.success(words(&["discover-teams", "work", "personal"]));
+    assert_eq!(before["teams"].as_array().unwrap().len(), 1);
+    let existing = before["teams"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|team| team["team_id_hex"] == existing_team_id)
+        .expect("existing team remains discoverable");
+    assert_eq!(existing["alias"], "engineering");
+    let additional = remote.success(words(&[
+        "team-create",
+        "remote",
+        "recovered",
+        "research",
+        "--kind",
+        "named",
+        "--name",
+        "Research",
+    ]));
+    let additional_id = additional["team_id_hex"].as_str().unwrap();
+    let mut stable_bindings = None;
+    for _ in 0..2 {
+        let discovered = backend.success(words(&["discover-teams", "work", "personal"]));
+        let teams = discovered["teams"].as_array().unwrap();
+        assert_eq!(teams.len(), 2);
+        let bindings = teams
+            .iter()
+            .map(|team| {
+                (
+                    team["team_id_hex"].as_str().unwrap().to_owned(),
+                    team["alias"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(bindings.len(), 2);
+        assert!(bindings.contains(&(existing_team_id.to_owned(), "engineering".to_owned())));
+        assert!(bindings.iter().any(|(id, _)| id == additional_id));
+        assert_eq!(
+            bindings
+                .iter()
+                .map(|(_, alias)| alias)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            2
+        );
+        if let Some(previous) = &stable_bindings {
+            assert_eq!(&bindings, previous);
+        }
+        let catalog = healthy_profile_catalog(&backend.socket);
+        assert_eq!(catalog.stores.len(), 3);
+        let catalog_bindings = catalog
+            .stores
+            .iter()
+            .filter_map(|summary| match summary.store_ref() {
+                CatalogStoreRef::Team(team) => {
+                    assert_eq!(team.account_alias, "personal");
+                    Some((team.team_id, team.team_alias))
+                }
+                CatalogStoreRef::Account(_) => None,
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(catalog_bindings, bindings);
+        stable_bindings = Some(bindings);
+    }
+    assert_eq!(
+        remote.success(words(&["pending", "remote"])),
+        serde_json::json!([])
+    );
+    remote_agent.assert_running();
+    remote.assert_every_invocation_was_a_fresh_process();
+}
+
+fn exercise_profile_failure_isolation(backend: &mut BackendRunner) {
+    let unavailable = TestEnvironment::new().unwrap();
+    let server = unavailable.start_server().unwrap();
+    let certificate = unavailable.root().join("unavailable-probe-root.der");
+    unavailable.write_probe_root(&certificate).unwrap();
+    let probe = format!("localhost:{}", server.addresses().probe.port());
+    backend.success(with_file(
+        words(&["check-profile", "unavailable", &probe, "--certificate-der"]),
+        &certificate,
+    ));
+    backend.success(words(&[
+        "create-account",
+        "unavailable",
+        "isolated",
+        "--username",
+        "isolated",
+        "--device-name",
+        "Offline laptop",
+    ]));
+    let before = fresh_profile_catalog(&backend.socket, "unavailable");
+    assert!(before.failures.is_empty(), "{:?}", before.failures);
+    server.shutdown().unwrap();
+    let failed = fresh_profile_catalog(&backend.socket, "unavailable");
+    let store = CatalogStoreRef::Account(foks_agent_proto::AccountStoreRef {
+        profile: "unavailable".to_owned(),
+        account_alias: "isolated".to_owned(),
+    });
+    assert!(failed.failures.iter().any(|failure| {
+        matches!(&failure.scope, CatalogFailureScope::Store(failed_store) if failed_store == &store)
+    }));
+    assert!(failed
+        .store_reads
+        .iter()
+        .any(|read| read.store == store && read.state == CatalogStoreReadState::Failed));
+    assert!(failed.full_item_reads.as_ref().is_none_or(Vec::is_empty));
+    assert!(failed.items.is_empty());
+    let healthy = healthy_profile_catalog(&backend.socket);
+    assert!(healthy
+        .items
+        .iter()
+        .any(|item| item.metadata.path == "/acceptance_value"));
+    let cancelled = CatalogLoadToken::default();
+    cancelled.cancel();
+    assert!(matches!(
+        foks_desktop::load_profile_catalog_cancellable(
+            Arc::new(AgentClient::new(&backend.socket)),
+            "work".to_owned(),
+            cancelled,
+        ),
+        Err(foks_desktop::AgentError::Cancelled)
+    ));
+    healthy_profile_catalog(&backend.socket);
 }
 
 fn exercise_chat(socket: &Path, team_id: &str, probe: &str, certificate: &Path) {
@@ -740,6 +1036,15 @@ fn exercise_chat(socket: &Path, team_id: &str, probe: &str, certificate: &Path) 
             panic!("expected replay")
         };
         assert_eq!(replay, receipt);
+        let retry = foks_desktop::chat_request(
+            &AgentClient::new(socket),
+            actor.clone(),
+            A::Attempt {
+                operation: receipt.id.clone(),
+            },
+        )
+        .unwrap();
+        assert!(matches!(retry.result, R::Operation { operation } if operation == receipt));
     }
     for actor in [&owner, &guest] {
         let R::History { messages, .. } = chat(
