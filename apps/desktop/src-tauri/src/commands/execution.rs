@@ -61,11 +61,6 @@ pub(super) fn map_mutation_error(
         error.retryable = false;
         return error;
     }
-    if error.code == "io" {
-        error.code = "agent-lost".to_owned();
-        error.fatal = true;
-        return error;
-    }
     if error.code == "capability-denied"
         && error
             .details

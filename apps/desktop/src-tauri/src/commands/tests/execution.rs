@@ -148,6 +148,71 @@ fn guarded_worker_in_one_profile_does_not_block_another_or_local_aliases() {
 }
 
 #[test]
+fn mutation_io_failures_preserve_connection_health_and_outcome() {
+    use foks_agent_client::Error;
+    use std::io::ErrorKind;
+
+    for kind in [
+        MutationKind::Create,
+        MutationKind::Guarded,
+        MutationKind::Resume,
+    ] {
+        for (cause, code, fatal, ambiguous, retryable) in [
+            (
+                Error::Io(ErrorKind::InvalidInput.into()),
+                "io",
+                false,
+                false,
+                false,
+            ),
+            (
+                Error::Io(ErrorKind::PermissionDenied.into()),
+                "io",
+                false,
+                false,
+                false,
+            ),
+            (
+                Error::UploadSource(ErrorKind::UnexpectedEof.into()),
+                "upload-source",
+                false,
+                false,
+                false,
+            ),
+            (
+                Error::Io(ErrorKind::ConnectionRefused.into()),
+                "agent-lost",
+                true,
+                false,
+                true,
+            ),
+            (
+                Error::Ambiguous(Box::new(Error::Io(ErrorKind::UnexpectedEof.into()))),
+                "ambiguous",
+                true,
+                true,
+                false,
+            ),
+            (
+                Error::Ambiguous(Box::new(Error::DeadlineExceeded)),
+                "ambiguous",
+                false,
+                true,
+                false,
+            ),
+        ] {
+            let mapped = map_mutation_error(foks_desktop::agent_client_error(cause), kind);
+            assert_eq!(mapped.code, code, "{kind:?}");
+            assert_eq!(
+                (mapped.fatal, mapped.ambiguous, mapped.retryable),
+                (fatal, ambiguous, retryable),
+                "{kind:?}: {code}"
+            );
+        }
+    }
+}
+
+#[test]
 fn mutation_failures_have_stable_ui_codes() {
     let conflict = || foks_desktop::AgentError::Protocol {
         code: foks_agent_proto::ErrorCode::Conflict,
