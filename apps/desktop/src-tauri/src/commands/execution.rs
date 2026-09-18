@@ -57,7 +57,9 @@ pub(super) fn map_mutation_error(
 ) -> AgentError {
     let mut error = AgentError::from_desktop(error);
     if error.ambiguous {
-        error.code = "ambiguous".to_owned();
+        if matches!(error.code.as_str(), "cancelled" | "deadline-exceeded") {
+            error.code = "ambiguous".to_owned();
+        }
         error.retryable = false;
         return error;
     }

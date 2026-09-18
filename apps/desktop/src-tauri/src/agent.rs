@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use foks_agent_client::AgentClient;
 use foks_agent_proto::{ErrorCode, ErrorFields, Operation, Response, ResponseResult};
-use foks_desktop::{AgentError as DesktopAgentError, AgentTransport};
+use foks_desktop::{AgentError as DesktopAgentError, AgentTransport, IpcErrorCode};
 use fs2::FileExt as _;
 use serde::Serialize;
 use serde_json::Value;
@@ -89,65 +89,36 @@ impl AgentError {
     }
 
     pub fn from_client(error: &foks_agent_client::Error) -> Self {
-        use foks_agent_client::Error;
-        let mut mapped = match error {
-            Error::Unsupported => Self::new(
-                "unsupported",
-                "Local agent communication is not supported on this platform.",
-                false,
-            ),
-            Error::UnsafeSocket => Self::new(
-                "unsafe-socket",
-                "The agent socket is not private to this user account and cannot be used.",
-                false,
-            ),
-            Error::Cancelled => Self::new("cancelled", "The request was cancelled.", true),
-            Error::DeadlineExceeded => {
-                Self::new("deadline-exceeded", "The request deadline exceeded.", true)
-            }
-            Error::UploadSource(error) => Self::new("upload-source", error.to_string(), false),
-            Error::Io(cause) => {
-                let lost = error.is_connection_loss();
-                let mut mapped = Self::new(
-                    if lost { "agent-lost" } else { "io" },
-                    format!("Local agent I/O failed: {cause}"),
-                    lost,
-                );
-                mapped.fatal = lost;
-                mapped
-            }
-            Error::Protocol(foks_agent_proto::Error::Version) => Self::from_agent(
-                ErrorCode::VersionMismatch,
-                "Desktop and agent protocol versions do not match".to_owned(),
-            ),
-            Error::Protocol(error) => Self::new(
-                "protocol",
-                format!("Unexpected agent protocol response: {error}"),
-                false,
-            ),
-            Error::ResponseBinding => Self::new(
-                "response-binding",
-                "The agent response did not match the request.",
-                false,
-            ),
-            Error::Ambiguous(cause) => {
-                let mut mapped = Self::from_client(cause);
-                if matches!(
-                    mapped.code.as_str(),
-                    "agent-lost" | "cancelled" | "deadline-exceeded"
-                ) {
-                    mapped.code = "ambiguous".to_owned();
-                }
-                mapped.message = error.to_string();
-                mapped.retryable = false;
-                mapped.ambiguous = true;
-                mapped
-            }
+        Self::from_desktop(foks_desktop::agent_client_error(error))
+    }
+
+    fn from_ipc(
+        code: IpcErrorCode,
+        message: String,
+        ambiguous: bool,
+        connection_lost: bool,
+    ) -> Self {
+        let ambiguous = ambiguous || code == IpcErrorCode::Ambiguous;
+        let security = code.security_failure();
+        let slug = if connection_lost && !security {
+            "agent-lost"
+        } else if ambiguous
+            && matches!(
+                code,
+                IpcErrorCode::Cancelled | IpcErrorCode::DeadlineExceeded
+            )
+        {
+            "ambiguous"
+        } else {
+            code.as_str()
         };
-        mapped.fatal |= matches!(
-            mapped.code.as_str(),
-            "unsafe-socket" | "protocol" | "response-binding"
+        let mut mapped = Self::new(
+            slug,
+            message,
+            !ambiguous && !security && (code.retryable() || connection_lost),
         );
+        mapped.ambiguous = ambiguous;
+        mapped.fatal = security || connection_lost;
         mapped
     }
 
@@ -226,9 +197,7 @@ impl AgentError {
                 mapped
             }
             DesktopAgentError::Transport(message) => {
-                let mut mapped = Self::new("agent-lost", message, true);
-                mapped.fatal = true;
-                mapped
+                Self::from_ipc(IpcErrorCode::Io, message, false, true)
             }
             DesktopAgentError::Local(condition) => match condition {
                 foks_desktop::LocalAgentCondition::Maintenance => Self::new(
@@ -253,31 +222,26 @@ impl AgentError {
                 ),
             },
             DesktopAgentError::Ambiguous(message) => {
-                let mut mapped = Self::new("ambiguous", message, false);
-                mapped.ambiguous = true;
-                mapped
+                Self::from_ipc(IpcErrorCode::Ambiguous, message, true, false)
             }
-            DesktopAgentError::Cancelled => {
-                Self::new("cancelled", "The request was cancelled.", true)
-            }
-            DesktopAgentError::DeadlineExceeded => {
-                Self::new("deadline-exceeded", "The request deadline exceeded.", true)
-            }
+            DesktopAgentError::Cancelled => Self::from_ipc(
+                IpcErrorCode::Cancelled,
+                "The request was cancelled.".into(),
+                false,
+                false,
+            ),
+            DesktopAgentError::DeadlineExceeded => Self::from_ipc(
+                IpcErrorCode::DeadlineExceeded,
+                "The request deadline exceeded.".into(),
+                false,
+                false,
+            ),
             DesktopAgentError::Ipc {
                 code,
                 message,
                 ambiguous,
                 connection_lost,
-            } => {
-                let mut mapped = Self::new(code, message, connection_lost && !ambiguous);
-                mapped.ambiguous = ambiguous;
-                mapped.fatal = connection_lost
-                    || matches!(
-                        code,
-                        "unsafe-socket" | "protocol" | "response-binding" | "version-mismatch"
-                    );
-                mapped
-            }
+            } => Self::from_ipc(code, message, ambiguous, connection_lost),
         }
     }
 }
@@ -3152,9 +3116,56 @@ mod tests {
     }
 
     #[test]
+    fn ipc_mapping_uses_code_policy_without_confusing_transience_and_health() {
+        use IpcErrorCode::*;
+        for (code, connection_lost, ambiguous, expected, retryable, fatal) in [
+            (
+                DeadlineExceeded,
+                false,
+                false,
+                "deadline-exceeded",
+                true,
+                false,
+            ),
+            (Cancelled, false, false, "cancelled", true, false),
+            (Io, false, false, "io", false, false),
+            (Io, true, false, "agent-lost", true, true),
+            (Io, true, true, "agent-lost", false, true),
+            (DeadlineExceeded, true, false, "agent-lost", true, true),
+            (DeadlineExceeded, false, true, "ambiguous", false, false),
+            (Protocol, true, false, "protocol", false, true),
+            (
+                ResponseBinding,
+                false,
+                true,
+                "response-binding",
+                false,
+                true,
+            ),
+        ] {
+            let mapped = AgentError::from_desktop(DesktopAgentError::Ipc {
+                code,
+                message: "original cause".into(),
+                ambiguous,
+                connection_lost,
+            });
+            assert_eq!(mapped.code, expected);
+            assert_eq!(mapped.message, "original cause");
+            assert_eq!(
+                (mapped.retryable, mapped.fatal, mapped.ambiguous),
+                (retryable, fatal, ambiguous),
+                "{code:?}"
+            );
+        }
+    }
+
+    #[test]
     fn client_and_desktop_mappings_preserve_health_separately_from_ambiguity() {
         use foks_agent_client::Error;
         let errors = vec![
+            Error::Unsupported,
+            Error::Io(std::io::ErrorKind::InvalidInput.into()),
+            Error::Io(std::io::ErrorKind::PermissionDenied.into()),
             Error::Cancelled,
             Error::DeadlineExceeded,
             Error::UnsafeSocket,
@@ -3171,20 +3182,7 @@ mod tests {
             let desktop = client_to_desktop(error);
             assert_eq!(desktop.connection_lost(), lost);
             let mapped = AgentError::from_desktop(desktop);
-            assert_eq!(
-                (
-                    &mapped.code,
-                    mapped.fatal,
-                    mapped.ambiguous,
-                    mapped.retryable
-                ),
-                (
-                    &direct.code,
-                    direct.fatal,
-                    direct.ambiguous,
-                    direct.retryable
-                )
-            );
+            assert_eq!(mapped, direct);
         }
         for cause in [
             Error::Cancelled,
@@ -3201,7 +3199,7 @@ mod tests {
             assert_eq!(desktop.connection_lost(), lost);
             let mapped = AgentError::from_desktop(desktop);
             assert!(mapped.ambiguous && !mapped.retryable);
-            assert_eq!((&mapped.code, mapped.fatal), (&direct.code, direct.fatal));
+            assert_eq!(mapped, direct);
         }
     }
 

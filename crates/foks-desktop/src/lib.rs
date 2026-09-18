@@ -44,11 +44,53 @@ pub enum AgentError {
     Cancelled,
     DeadlineExceeded,
     Ipc {
-        code: &'static str,
+        code: IpcErrorCode,
         message: String,
         ambiguous: bool,
         connection_lost: bool,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IpcErrorCode {
+    Unsupported,
+    UnsafeSocket,
+    Io,
+    UploadSource,
+    Protocol,
+    ResponseBinding,
+    VersionMismatch,
+    Cancelled,
+    DeadlineExceeded,
+    Ambiguous,
+}
+
+impl IpcErrorCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unsupported => "unsupported",
+            Self::UnsafeSocket => "unsafe-socket",
+            Self::Io => "io",
+            Self::UploadSource => "upload-source",
+            Self::Protocol => "protocol",
+            Self::ResponseBinding => "response-binding",
+            Self::VersionMismatch => "version-mismatch",
+            Self::Cancelled => "cancelled",
+            Self::DeadlineExceeded => "deadline-exceeded",
+            Self::Ambiguous => "ambiguous",
+        }
+    }
+
+    pub const fn retryable(self) -> bool {
+        matches!(self, Self::Cancelled | Self::DeadlineExceeded)
+    }
+
+    pub const fn security_failure(self) -> bool {
+        matches!(
+            self,
+            Self::UnsafeSocket | Self::Protocol | Self::ResponseBinding | Self::VersionMismatch
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,6 +106,15 @@ impl AgentError {
     /// Callers must reconcile an ambiguous mutation or use its explicit
     /// resume operation before issuing it again.
     pub fn transient(&self) -> bool {
+        if let Self::Ipc {
+            code,
+            connection_lost,
+            ..
+        } = self
+        {
+            return !code.security_failure()
+                && (*connection_lost || code.retryable() || *code == IpcErrorCode::Ambiguous);
+        }
         matches!(
             self,
             Self::Protocol {
@@ -74,11 +125,8 @@ impl AgentError {
                 ..
             } | Self::Transport(_)
                 | Self::Ambiguous(_)
+                | Self::Cancelled
                 | Self::DeadlineExceeded
-                | Self::Ipc {
-                    connection_lost: true,
-                    ..
-                }
         )
     }
 
@@ -88,11 +136,8 @@ impl AgentError {
             Self::Protocol {
                 code: ErrorCode::VersionMismatch,
                 ..
-            } | Self::Ipc {
-                code: "unsafe-socket" | "protocol" | "response-binding" | "version-mismatch",
-                ..
             }
-        )
+        ) || matches!(self, Self::Ipc { code, .. } if code.security_failure())
     }
 
     pub fn ambiguous(&self) -> bool {
@@ -104,6 +149,10 @@ impl AgentError {
             } | Self::Ambiguous(_)
                 | Self::Ipc {
                     ambiguous: true,
+                    ..
+                }
+                | Self::Ipc {
+                    code: IpcErrorCode::Ambiguous,
                     ..
                 }
         )
@@ -317,8 +366,9 @@ impl AgentTransport for AgentClient {
     }
 }
 
-pub fn agent_client_error(error: foks_agent_client::Error) -> AgentError {
+pub fn agent_client_error(error: impl std::borrow::Borrow<foks_agent_client::Error>) -> AgentError {
     use foks_agent_client::Error;
+    let error = error.borrow();
     let connection_lost = error.is_connection_loss();
     let message = error.to_string();
     let ipc = |code| AgentError::Ipc {
@@ -331,14 +381,17 @@ pub fn agent_client_error(error: foks_agent_client::Error) -> AgentError {
         Error::Cancelled => AgentError::Cancelled,
         Error::DeadlineExceeded => AgentError::DeadlineExceeded,
         Error::Ambiguous(cause) => {
-            let cause = agent_client_error(*cause);
+            let cause = agent_client_error(cause.as_ref());
             let code = match &cause {
                 AgentError::Ipc { code, .. } => *code,
                 AgentError::Protocol {
                     code: ErrorCode::VersionMismatch,
                     ..
-                } => "version-mismatch",
-                _ => "ambiguous",
+                } => IpcErrorCode::VersionMismatch,
+                AgentError::Transport(_) => IpcErrorCode::Io,
+                AgentError::Cancelled => IpcErrorCode::Cancelled,
+                AgentError::DeadlineExceeded => IpcErrorCode::DeadlineExceeded,
+                _ => IpcErrorCode::Ambiguous,
             };
             AgentError::Ipc {
                 code,
@@ -353,12 +406,12 @@ pub fn agent_client_error(error: foks_agent_client::Error) -> AgentError {
             fields: Box::default(),
         },
         Error::Io(_) if connection_lost => AgentError::Transport(message),
-        Error::Io(_) => ipc("io"),
-        Error::UploadSource(_) => ipc("upload-source"),
-        Error::UnsafeSocket => ipc("unsafe-socket"),
-        Error::Protocol(_) => ipc("protocol"),
-        Error::ResponseBinding => ipc("response-binding"),
-        Error::Unsupported => ipc("unsupported"),
+        Error::Io(_) => ipc(IpcErrorCode::Io),
+        Error::UploadSource(_) => ipc(IpcErrorCode::UploadSource),
+        Error::UnsafeSocket => ipc(IpcErrorCode::UnsafeSocket),
+        Error::Protocol(_) => ipc(IpcErrorCode::Protocol),
+        Error::ResponseBinding => ipc(IpcErrorCode::ResponseBinding),
+        Error::Unsupported => ipc(IpcErrorCode::Unsupported),
     }
 }
 
@@ -454,7 +507,7 @@ mod ipc_error_tests {
         assert!(matches!(
             error,
             AgentError::Ipc {
-                code: "unsafe-socket",
+                code: IpcErrorCode::UnsafeSocket,
                 ..
             }
         ));
@@ -1628,7 +1681,7 @@ fn decode_agent_value<T: DeserializeOwned>(value: Value) -> Result<T, AgentError
 
 fn invalid_agent_response(message: &str) -> AgentError {
     AgentError::Ipc {
-        code: "protocol",
+        code: IpcErrorCode::Protocol,
         message: message.to_owned(),
         ambiguous: false,
         connection_lost: false,

@@ -188,7 +188,7 @@ fn mutation_io_failures_preserve_connection_health_and_outcome() {
             ),
             (
                 Error::Ambiguous(Box::new(Error::Io(ErrorKind::UnexpectedEof.into()))),
-                "ambiguous",
+                "agent-lost",
                 true,
                 true,
                 false,
@@ -209,6 +209,29 @@ fn mutation_io_failures_preserve_connection_health_and_outcome() {
                 "{kind:?}: {code}"
             );
         }
+    }
+}
+
+#[test]
+fn ambiguous_mutations_preserve_security_and_connection_failure_codes() {
+    use foks_agent_client::Error;
+    for (cause, code) in [
+        (Error::ResponseBinding, "response-binding"),
+        (
+            Error::Protocol(foks_agent_proto::Error::Version),
+            "version-mismatch",
+        ),
+        (
+            Error::Io(std::io::ErrorKind::UnexpectedEof.into()),
+            "agent-lost",
+        ),
+    ] {
+        let mapped = map_mutation_error(
+            foks_desktop::agent_client_error(Error::Ambiguous(Box::new(cause))),
+            MutationKind::Guarded,
+        );
+        assert_eq!(mapped.code, code);
+        assert!(mapped.fatal && mapped.ambiguous && !mapped.retryable);
     }
 }
 
