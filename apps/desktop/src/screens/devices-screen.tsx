@@ -1,4 +1,7 @@
 import { useDeviceMetadata } from '../device-cache';
+import { synchronizeApplied } from '../operation-outcome';
+import { refreshConnectedCards } from './devices/hardware-controller';
+import { useDeviceOperation } from './devices/use-device-operation';
 import { WorkflowProvider, useWorkflowAccess } from '../workflow-context';
 import {
   workflowAvailability,
@@ -336,6 +339,7 @@ export function DevicesScreen({
 
   const selectedId = selected?.id;
   const profile = selected?.server;
+  const hardware = useDeviceOperation(JSON.stringify([profile, selectedId]));
 
   // Switching accounts drops what the page was doing with the last one. The
   // first read is not a switch: a scene may have opened a sheet with the page.
@@ -381,7 +385,11 @@ export function DevicesScreen({
           ]
         : [];
     const versions = resources.map((query) => query.getSnapshot().invalidation);
-    await onRefresh(message);
+    const result = await synchronizeApplied(() => onRefresh(message));
+    if (result.synchronization === 'pending') {
+      toasts.show(`${message} Refresh pending.`);
+      onError(result.error);
+    }
     // A forced catalog refresh may already have invalidated these resources.
     // Invalidation since the completed write is sufficient; do not start it twice.
     resources.forEach((query, index) => {
@@ -577,12 +585,14 @@ export function DevicesScreen({
       <Button
         {...access.props('yubi-scan', { profile: selected.server })}
         onClick={() =>
-          void access
-            .run('yubi-scan', { profile: selected.server }, () =>
-              bridge.listYubiCards(selected.server),
-            )
-            .then(setCards)
-            .catch(onError)
+          void refreshConnectedCards(
+            bridge,
+            access,
+            selected.server,
+            hardware.capture(),
+            setCards,
+            onError,
+          )
         }
       >
         Refresh connected keys

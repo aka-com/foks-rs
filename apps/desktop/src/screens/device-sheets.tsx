@@ -1,4 +1,21 @@
 import { useTabSheetState } from '../navigation-guard';
+import {
+  accountPassphrase,
+  credentialCommand,
+} from './devices/credential-workflow';
+import { queuedDeviceWork } from './devices/operation-controller';
+import { useDeviceOperation } from './devices/use-device-operation';
+import {
+  acceptPairing,
+  finishPairing,
+  recoverAccount,
+} from './devices/pairing-workflow';
+import {
+  createEnrollmentCommand,
+  provisionEnrollmentCommand,
+  enrollmentSlot,
+  validEnrollmentAttempts,
+} from './devices/enrollment-workflow';
 import { useWorkflowAccess } from '../workflow-context';
 import type { WorkflowOperation } from '../model/workflow-availability';
 /**
@@ -12,14 +29,17 @@ import type { WorkflowOperation } from '../model/workflow-availability';
 
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { enqueueProfileWork } from '../bridge';
+import {
+  removeDevice,
+  revokePaperKey,
+  revokeSecurityKey,
+} from './devices/revocation-workflow';
 import { useSheetGuard } from '../navigation-guard';
 import type {
   AccountDevice,
   BackupEnrollment,
   Bridge,
   PairingOffer,
-  YubiCommand,
 } from '../bridge';
 import {
   Band,
@@ -249,6 +269,7 @@ export function PhraseSheet({
   const access = useWorkflowAccess();
   const target = { profile, account: accountAlias };
   const eligibility = access.props('backup-create', target);
+  const controller = useDeviceOperation(JSON.stringify([profile, accountAlias]));
   const [phrase, setPhrase] = useState<string | null>(() => seedPhrase ?? null);
   const [alias, setAlias] = useState(seedAlias ?? 'paper-backup');
   const [written, setWritten] = useState(false);
@@ -298,18 +319,13 @@ export function PhraseSheet({
                   const once = phrase;
                   onForget?.();
                   setPhrase(null);
-                  void access
-                    .run('backup-create', target, () =>
-                      bridge.commitOwnerBackup(
-                        profile,
-                        accountAlias,
-                        alias,
-                        once,
-                      ),
-                    )
-                    .then(onDone)
-                    .catch(onError)
-                    .finally(() => setBusy(false));
+                  void controller.run(
+                    () => access.run('backup-create', target, () =>
+                      bridge.commitOwnerBackup(profile, accountAlias, alias, once),
+                    ),
+                    onDone,
+                    onError,
+                  ).finally(controller.settled(() => setBusy(false)));
                 }}
               >
                 Save paper key
@@ -413,6 +429,9 @@ export function PairSheet({
     account: mode === 'offer' ? store.account : undefined,
   };
   const eligibility = access.props(operation, workflowTarget);
+  const controller = useDeviceOperation(
+    JSON.stringify([store?.id, operation, workflowTarget]),
+  );
   const [offer, setOffer] = useState<PairingOffer | null>(null);
   /** Whether the phrase on screen came from an offer the agent still held. */
   const [resumed, setResumed] = useState(false);
@@ -433,9 +452,7 @@ export function PairSheet({
   );
   const [busy, setBusy] = useState(false);
   const queued = <T,>(task: () => Promise<T>): Promise<T> =>
-    enqueueProfileWork(bridge, store.server, () =>
-      access.run(operation, workflowTarget, task),
-    );
+    queuedDeviceWork(bridge, store.server, access, operation, workflowTarget, task);
   const act = (
     task: () => Promise<unknown>,
     message: string,
@@ -444,13 +461,15 @@ export function PairSheet({
     setOffer(null);
     setPhrase('');
     setBusy(true);
-    void queued(task)
-      .then(() => {
+    void controller.run(
+      () => queued(task),
+      async () => {
         onSuccess?.();
-        return onDone(message);
-      })
-      .catch(onError)
-      .finally(() => setBusy(false));
+        await onDone(message);
+      },
+      onError,
+      { kind: 'resumable', operation: 'device-pairing' },
+    ).finally(controller.settled(() => setBusy(false)));
   };
   const revealOffer = (
     task: () => Promise<PairingOffer>,
@@ -459,8 +478,10 @@ export function PairSheet({
     setOffer(null);
     setResumed(held);
     setBusy(true);
+    const isCurrent = controller.capture();
     void queued(task)
       .then((next) => {
+        if (!isCurrent()) return;
         if (next.accountAlias !== store.account)
           throw new Error('pairing offer returned a different account.');
         setOffer(next);
@@ -468,8 +489,8 @@ export function PairSheet({
         // offer is open; this is the one place that ever finds out.
         deviceAlertRegistry(bridge).reportPairingOffer(store.id, true);
       })
-      .catch(onError)
-      .finally(() => setBusy(false));
+      .catch((error) => { if (isCurrent()) onError(error); })
+      .finally(controller.settled(() => setBusy(false)));
   };
   // An offer the agent is holding, and a call already sent, are both a pairing
   // that has to be ended where it was begun. A phrase typed into the accept
@@ -517,14 +538,7 @@ export function PairSheet({
               disabled={!offer || busy || eligibility.disabled}
               onClick={() =>
                 act(
-                  async () => {
-                    const result = await bridge.finishDevicePairing(store.id);
-                    if (result.alias !== store.account)
-                      throw new Error(
-                        'finish_device_pairing returned a different account.',
-                      );
-                    return result;
-                  },
+                  () => finishPairing(bridge, store),
                   'Device paired successfully.',
                   () =>
                     deviceAlertRegistry(bridge).reportPairingOffer(
@@ -542,17 +556,10 @@ export function PairSheet({
                 title={eligibility.title}
                 disabled={busy || eligibility.disabled || !target}
                 onClick={() =>
-                  act(async () => {
-                    const result = await bridge.resumeDevicePairingAcceptance(
-                      store.server,
-                      target,
-                    );
-                    if (result.alias !== target)
-                      throw new Error(
-                        'resume_device_pairing_acceptance returned a different account.',
-                      );
-                    return result;
-                  }, 'Device paired successfully.')
+                  act(
+                    () => acceptPairing(bridge, store.server, target, 'resume'),
+                    'Device paired successfully.',
+                  )
                 }
               >
                 Resume acceptance
@@ -564,19 +571,10 @@ export function PairSheet({
                   busy || eligibility.disabled || !target || !device || !phrase
                 }
                 onClick={() =>
-                  act(async () => {
-                    const result = await bridge.acceptDevicePairing(
-                      store.server,
-                      target,
-                      device,
-                      phrase,
-                    );
-                    if (result.alias !== target)
-                      throw new Error(
-                        'accept_device_pairing returned a different account.',
-                      );
-                    return result;
-                  }, 'Device paired successfully.')
+                  act(
+                    () => acceptPairing(bridge, store.server, target, { device, phrase }),
+                    'Device paired successfully.',
+                  )
                 }
               >
                 Accept
@@ -689,6 +687,7 @@ export function RecoverSheet({
   const access = useWorkflowAccess();
   const workflowTarget = { profile: store.server };
   const eligibility = access.props('account-recover', workflowTarget);
+  const controller = useDeviceOperation(JSON.stringify([store.server, store.id]));
   const [target, setTarget] = useState(store.account);
   const [device, setDevice] = useState('This device');
   const [phrase, setPhrase] = useState('');
@@ -731,19 +730,11 @@ export function RecoverSheet({
               const once = phrase;
               setPhrase('');
               setBusy(true);
-              void enqueueProfileWork(bridge, store.server, () =>
-                access.run('account-recover', workflowTarget, () =>
-                  bridge.recoverOwnerAccount(
-                    store.server,
-                    target,
-                    once,
-                    device,
-                  ),
-                ),
-              )
-                .then(onDone)
-                .catch(onError)
-                .finally(() => setBusy(false));
+              void controller.run(
+                () => recoverAccount(bridge, access, store.server, target, once, device),
+                onDone,
+                onError,
+              ).finally(controller.settled(() => setBusy(false)));
             }}
           >
             Recover
@@ -785,6 +776,9 @@ export function EnrollSheet({
   const workflowTarget = { profile: store.server };
   const operation = 'yubi-create';
   const eligibility = access.props(operation, workflowTarget);
+  const controller = useDeviceOperation(
+    JSON.stringify([store?.id, operation, workflowTarget]),
+  );
   const [alias, setAlias] = useState('work-key');
   const [username, setUsername] = useState('');
   // The card list resolves after the sheet opens, so the default names the
@@ -825,19 +819,9 @@ export function EnrollSheet({
           }
         : null,
   );
-  const slot = (value: string): number | null =>
-    /^0x[0-9a-fA-F]{2}$/.test(value)
-      ? Number.parseInt(value.slice(2), 16)
-      : null;
-  const signing = slot(signingSlot);
-  const pq = slot(pqSlot);
-  const validAttempts =
-    Number.isInteger(pinAttempts) &&
-    pinAttempts > 0 &&
-    pinAttempts <= 255 &&
-    Number.isInteger(pukAttempts) &&
-    pukAttempts > 0 &&
-    pukAttempts <= 255;
+  const signing = enrollmentSlot(signingSlot);
+  const pq = enrollmentSlot(pqSlot);
+  const validAttempts = validEnrollmentAttempts(pinAttempts, pukAttempts);
   return (
     <DeviceSheetFrame
       title="Create a YubiKey account"
@@ -867,31 +851,27 @@ export function EnrollSheet({
             }
             onClick={() => {
               if (signing === null || pq === null) return;
-              const command: YubiCommand = {
-                command: 'create_yubi_account',
-                args: {
-                  profile: store.server,
-                  alias: alias.trim(),
-                  username: username.trim(),
-                  deviceName: shownName.trim(),
-                  email: '',
-                  invite,
-                  cardSerial: card?.serial ?? 0,
-                  signingSlot: signing,
-                  pqSlot: pq,
-                  pin,
-                  puk,
-                  pinAttempts,
-                  pukAttempts,
-                },
-              };
+              const command = createEnrollmentCommand({
+                profile: store.server,
+                alias,
+                username,
+                deviceName: shownName,
+                invite,
+                cardSerial: card?.serial ?? 0,
+                signingSlot: signing,
+                pqSlot: pq,
+                pin,
+                puk,
+                pinAttempts,
+                pukAttempts,
+              });
               clear();
               setBusy(true);
-              void access
-                .run(operation, workflowTarget, () => bridge.runYubi(command))
-                .then(onDone)
-                .catch(onError)
-                .finally(() => setBusy(false));
+              void controller.run(
+                () => access.run(operation, workflowTarget, () => bridge.runYubi(command)),
+                onDone,
+                onError,
+              ).finally(controller.settled(() => setBusy(false)));
             }}
           >
             Create account
@@ -1000,6 +980,9 @@ export function ProvisionSheet({
   const workflowTarget = { profile: store.server, account: store.account };
   const operation = 'yubi-provision';
   const eligibility = access.props(operation, workflowTarget);
+  const controller = useDeviceOperation(
+    JSON.stringify([store?.id, operation, workflowTarget]),
+  );
   const [targetAlias, setTargetAlias] = useState('new-key');
   const [deviceName, setDeviceName] = useState(
     cards[0] ? `YubiKey ${cards[0].serial}` : 'YubiKey',
@@ -1050,28 +1033,21 @@ export function ProvisionSheet({
             variant="primary"
             disabled={!valid || busy || eligibility.disabled}
             onClick={() => {
-              const command: YubiCommand = {
-                command: 'provision_yubi_device',
-                args: {
-                  accountStoreId: store.id,
-                  targetAlias: targetAlias.trim(),
-                  deviceName: deviceName.trim(),
-                  cardSerial: serial,
-                  signingSlot: 0x82,
-                  pqSlot: 0x83,
-                  pin,
-                  puk,
-                  pinAttempts: 3,
-                  pukAttempts: 3,
-                },
-              };
+              const command = provisionEnrollmentCommand({
+                accountStoreId: store.id,
+                targetAlias,
+                deviceName,
+                cardSerial: serial,
+                pin,
+                puk,
+              });
               clear();
               setBusy(true);
-              void access
-                .run(operation, workflowTarget, () => bridge.runYubi(command))
-                .then(onDone)
-                .catch(onError)
-                .finally(() => setBusy(false));
+              void controller.run(
+                () => access.run(operation, workflowTarget, () => bridge.runYubi(command)),
+                onDone,
+                onError,
+              ).finally(controller.settled(() => setBusy(false)));
             }}
           >
             Connect
@@ -1147,6 +1123,9 @@ export function YubiActionSheet({
     account: action === 'recover-management' ? store?.account : alias,
   };
   const eligibility = access.props(operation, workflowTarget);
+  const controller = useDeviceOperation(
+    JSON.stringify([store?.id, action, workflowTarget]),
+  );
   const [pin, setPin] = useState('');
   const [other, setOther] = useState('');
   const [confirmation, setConfirmation] = useState('');
@@ -1204,101 +1183,34 @@ export function YubiActionSheet({
   const submit = (): void => {
     const profileName = store?.server ?? profile;
     if (!profileName) return;
-    let command: YubiCommand;
-    switch (action) {
-      case 'sync':
-        command = {
-          command: 'sync_yubi_account',
-          args: { profile: profileName, alias, pin, withFederation: true },
-        };
-        break;
-      case 'pin-status':
-        command = {
-          command: 'yubi_pin_status',
-          args: { profile: profileName, alias },
-        };
-        break;
-      case 'change-pin':
-        command = {
-          command: 'change_yubi_pin',
-          args: { profile: profileName, alias, oldPin: pin, newPin: other },
-        };
-        break;
-      case 'set-passphrase':
-      case 'change-passphrase':
-        command = {
-          command:
-            action === 'set-passphrase'
-              ? 'set_yubi_passphrase'
-              : 'change_yubi_passphrase',
-          args: {
-            profile: profileName,
-            alias,
-            pin,
-            passphrase: other,
-            confirmation,
-          },
-        };
-        break;
-      case 'verify-passphrase':
-        command = {
-          command: 'verify_yubi_passphrase',
-          args: { profile: profileName, alias, pin, passphrase: other },
-        };
-        break;
-      case 'unblock':
-        command = {
-          command: 'unblock_yubi_pin',
-          args: { profile: profileName, alias, puk: pin, newPin: other },
-        };
-        break;
-      case 'change-puk':
-        command = {
-          command: 'change_yubi_puk',
-          args: { profile: profileName, alias, oldPuk: pin, newPuk: other },
-        };
-        break;
-      case 'recover-management':
-        if (!store) return;
-        command = {
-          command: 'recover_yubi_management_key',
-          args: { accountStoreId: store.id, yubiAlias: alias },
-        };
-        break;
-      case 'recover-subkey':
-        command = {
-          command: 'recover_yubi_subkey',
-          args: { profile: profileName, alias, pin },
-        };
-        break;
-      case 'resume-enrollment':
-        command = {
-          command: 'resume_yubi_account',
-          args: { profile: profileName, alias, pin },
-        };
-        break;
-      case 'resume-rotation':
-        command = {
-          command: 'resume_yubi_management_key',
-          args: { profile: profileName, alias, ...(pin ? { pin } : {}) },
-        };
-        break;
-      case 'rotate':
-        command = {
-          command: 'rotate_yubi_management_key',
-          args: { profile: profileName, alias, pin },
-        };
-        break;
-    }
+    const command = credentialCommand({
+      action,
+      profile: profileName,
+      alias,
+      store,
+      pin,
+      other,
+      confirmation,
+    });
+    if (!command) return;
     setPin('');
     setOther('');
     setConfirmation('');
     setBusy(true);
-    void access
-      .run(operation, workflowTarget, () => bridge.runYubi(command))
-      .then(onDone)
-      .catch(onError)
-      .finally(() => setBusy(false));
+    const task = () => access.run(operation, workflowTarget, () => bridge.runYubi(command));
+    if (action === 'pin-status' || action === 'verify-passphrase') {
+      void controller.read(task, onDone, onError)
+        .finally(controller.settled(() => setBusy(false)));
+      return;
+    }
+    void controller.run(
+      task,
+      onDone,
+      onError,
+      action === 'resume-enrollment' || action === 'resume-rotation'
+        ? { kind: 'resumable', operation: action }
+        : { kind: 'mutation' },
+    ).finally(controller.settled(() => setBusy(false)));
   };
   return (
     <DeviceSheetFrame
@@ -1375,6 +1287,7 @@ export function RevokeSheet({
   const access = useWorkflowAccess();
   const workflowTarget = { profile: store.server, account: store.account };
   const eligibility = access.props('yubi-revoke', workflowTarget);
+  const controller = useDeviceOperation(JSON.stringify([store.id, workflowTarget, alias]));
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
   // A revocation rotates account keys and cannot be taken back, so the sheet
@@ -1404,29 +1317,11 @@ export function RevokeSheet({
             disabled={confirmation !== alias || busy || eligibility.disabled}
             onClick={() => {
               setBusy(true);
-              void access
-                .run('yubi-revoke', workflowTarget, () =>
-                  bridge.runYubi({
-                    command: 'revoke_yubi_device',
-                    args: {
-                      accountStoreId: store.id,
-                      yubiAlias: alias,
-                      confirmation,
-                    },
-                  }),
-                )
-                .then((result) => {
-                  if (
-                    result.alias !== alias ||
-                    result.removedLocalCredential !== true
-                  )
-                    throw new Error(
-                      'revoke_yubi_device returned a different enrollment.',
-                    );
-                  return onDone();
-                })
-                .catch(onError)
-                .finally(() => setBusy(false));
+              void controller.run(
+                () => revokeSecurityKey(bridge, access, store, alias, confirmation),
+                onDone,
+                onError,
+              ).finally(controller.settled(() => setBusy(false)));
             }}
           >
             Revoke {alias}
@@ -1466,6 +1361,9 @@ export function RevokeBackupSheet({
   const access = useWorkflowAccess();
   const workflowTarget = { profile: store.server, account: store.account };
   const eligibility = access.props('backup-revoke', workflowTarget);
+  const controller = useDeviceOperation(
+    JSON.stringify([store.id, workflowTarget, backup.backupId]),
+  );
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
   // Revoking a paper key rotates every account key it could read.
@@ -1497,22 +1395,11 @@ export function RevokeBackupSheet({
             }
             onClick={() => {
               setBusy(true);
-              void access
-                .run('backup-revoke', workflowTarget, () =>
-                  bridge.revokeOwnerBackup(store.id, backup, confirmation),
-                )
-                .then((revoked) => {
-                  if (
-                    revoked.backupAlias !== backup.backupAlias ||
-                    revoked.backupId !== backup.backupId
-                  )
-                    throw new Error(
-                      'revoke_owner_backup returned a different enrollment.',
-                    );
-                  return onDone();
-                })
-                .catch(onError)
-                .finally(() => setBusy(false));
+              void controller.run(
+                () => revokePaperKey(bridge, access, store, backup, confirmation),
+                onDone,
+                onError,
+              ).finally(controller.settled(() => setBusy(false)));
             }}
           >
             Revoke paper key
@@ -1555,6 +1442,9 @@ export function RemoveDeviceSheet({
   const access = useWorkflowAccess();
   const workflowTarget = { profile: store.server, account: store.account };
   const eligibility = access.props('device-remove', workflowTarget);
+  const controller = useDeviceOperation(
+    JSON.stringify([store.id, workflowTarget, device.id]),
+  );
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
   const expected = device.name ?? device.id;
@@ -1589,22 +1479,11 @@ export function RemoveDeviceSheet({
               // The display cache can outlive the native catalog's retained
               // device list. Re-read before a destructive action so native
               // target/current-device validation uses fresh records.
-              void enqueueProfileWork(bridge, store.server, async () => {
-                access.require('devices-list', workflowTarget);
-                await bridge.listAccountDevices(store.id);
-                return access.run('device-remove', workflowTarget, () =>
-                  bridge.removeAccountDevice(store.id, device.id),
-                );
-              })
-                .then((removed) => {
-                  if (removed.deviceId !== device.id)
-                    throw new Error(
-                      'remove_account_device returned a different device.',
-                    );
-                  return onDone();
-                })
-                .catch(onError)
-                .finally(() => setBusy(false));
+              void controller.run(
+                () => removeDevice(bridge, access, store, device.id),
+                onDone,
+                onError,
+              ).finally(controller.settled(() => setBusy(false)));
             }}
           >
             Remove device
@@ -1648,6 +1527,9 @@ export function PassphraseSheet({
   const workflowTarget = { profile: store.server, account: store.account };
   const eligibility = access.props('passphrase', workflowTarget);
   const [mode, setMode] = useState<PassphraseMode>(initialMode);
+  const controller = useDeviceOperation(
+    JSON.stringify([store.id, workflowTarget, mode]),
+  );
   const [passphrase, setPassphrase] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
@@ -1655,25 +1537,22 @@ export function PassphraseSheet({
     const secret = passphrase;
     const repeated = confirmation;
     setBusy(true);
-    const task = access.run('passphrase', workflowTarget, () =>
-      mode === 'set'
-        ? bridge.setAccountPassphrase(store.id, secret, repeated)
-        : mode === 'change'
-          ? bridge.changeAccountPassphrase(store.id, secret, repeated)
-          : bridge.verifyAccountPassphrase(store.id, secret),
-    );
-    void task
-      .then((report) => {
-        setPassphrase('');
-        setConfirmation('');
-        onDone(
-          mode === 'verify'
-            ? `Passphrase verified (generation ${report.generation})`
-            : 'Passphrase updated successfully.',
-        );
-      })
-      .catch(onError)
-      .finally(() => setBusy(false));
+    const task = () => accountPassphrase(bridge, access, store, mode, secret, repeated);
+    const complete = async (
+      report: Awaited<ReturnType<typeof accountPassphrase>>,
+    ): Promise<void> => {
+      setPassphrase('');
+      setConfirmation('');
+      await onDone(
+        mode === 'verify'
+          ? `Passphrase verified (generation ${report.generation})`
+          : 'Passphrase updated successfully.',
+      );
+    };
+    const pending = mode === 'verify'
+      ? controller.read(task, complete, onError)
+      : controller.run(task, complete, onError);
+    void pending.finally(controller.settled(() => setBusy(false)));
   };
   // A passphrase that is being set or changed is a write in flight; one that
   // has only been typed is worth a question, since it was typed twice.

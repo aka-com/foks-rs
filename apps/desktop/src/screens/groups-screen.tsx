@@ -1,4 +1,9 @@
-import { usePendingGroupOperations } from '../operation-queries';
+import { useGroupOperationController } from './groups/operation-controller';
+import {
+  attemptMutation,
+  reportMutationOutcome,
+} from '../commands/command-policy';
+import { synchronizeApplied } from '../operation-outcome';
 import {
   requireWorkflow,
   workflowAvailability,
@@ -8,7 +13,7 @@ import { useTabSheetState } from '../navigation-guard';
 import { InvitationRecovery } from '../components/invitation-recovery';
 import { InvitationPanel } from '../components/invitation-panel';
 import { teamRequestRegistry } from './team-requests';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   Band,
@@ -66,7 +71,7 @@ import type {
   AgentSnapshot,
 } from '../model';
 import { normalizeCommandError } from '../bridge';
-import type { Bridge, PendingOperation } from '../bridge';
+import type { Bridge } from '../bridge';
 import type { RoleDto } from '../bridge';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { listChannels } from '../chat/presentation';
@@ -829,21 +834,23 @@ function FederationRemovalSheet({
 }): ReactNode {
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
+  const toasts = useToast();
   const apply = async (): Promise<void> => {
     if (!confirmed || busy || !entry.active) return;
     setBusy(true);
     try {
-      await bridge.removeFederatedGroup({
-        storeId: store.id,
-        remoteHostIdHex: entry.remote_host_id_hex,
-        remoteTeamIdHex: entry.remote_team_id_hex,
-      });
-      await onApplied(
-        `${entry.remote_team_alias} removed and team keys rotated`,
+      const result = await attemptMutation(
+        { kind: 'resumable', operation: 'remove-admission' },
+        () => bridge.removeFederatedGroup({
+          storeId: store.id,
+          remoteHostIdHex: entry.remote_host_id_hex,
+          remoteTeamIdHex: entry.remote_team_id_hex,
+        }),
+        () => onApplied(`${entry.remote_team_alias} removed and team keys rotated`),
       );
-      onClose();
-    } catch (error) {
-      await onMutationError(error);
+      if (await reportMutationOutcome(result, onMutationError, () => {
+        toasts.show('Admission removed. Refresh pending.');
+      })) onClose();
     } finally {
       setBusy(false);
     }
@@ -1157,6 +1164,7 @@ export function AbandonGroupSheet({
 }): ReactNode {
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
+  const toasts = useToast();
   const serverName = displayServerName(snapshot, store);
   // Only the two phases that prove nothing was accepted are treated as
   // server-clean. Every other phase, including an unknown one, is read as
@@ -1191,11 +1199,15 @@ export function AbandonGroupSheet({
             disabled={confirmation !== store.alias || busy}
             onClick={() => {
               setBusy(true);
-              void bridge
-                .abandonGroupCreation(store.id)
-                .then(() => onRemoved())
-                .catch((error: unknown) => onMutationError(error))
-                .finally(() => setBusy(false));
+              void attemptMutation(
+                { kind: 'mutation' },
+                () => bridge.abandonGroupCreation(store.id),
+                onRemoved,
+              ).then((result) => reportMutationOutcome(
+                result,
+                onMutationError,
+                () => { toasts.show('Team removed. Refresh pending.'); },
+              )).finally(() => setBusy(false));
             }}
           >
             Remove team
@@ -1365,6 +1377,7 @@ export function GroupSheet({
       (party.username ?? '').toLowerCase() === username.trim().toLowerCase(),
   );
   const [refused, setRefused] = useState('');
+  const toasts = useToast();
   const addRefusal = username.trim()
     ? existing
       ? `${partyName(existing)} is already a member of ${store.name}. Change their role from the Members list instead.`
@@ -1407,6 +1420,18 @@ export function GroupSheet({
     if (sheet === 'add' && existing) return;
     setBusy(true);
     setRefused('');
+    const complete = async (
+      created?: { accountStoreId: StoreRef; teamAlias: string },
+    ): Promise<void> => {
+      const result = await synchronizeApplied(() =>
+        created
+          ? onApplied(`${title} completed`, created)
+          : onApplied(`${title} completed`),
+      );
+      if (result.synchronization === 'pending')
+        toasts.show(`${title} completed. Refresh pending.`);
+      onClose();
+    };
     try {
       if (sheet === 'add')
         await bridge.addGroupMember({
@@ -1453,15 +1478,10 @@ export function GroupSheet({
           name: createKind === 'named' ? name : '',
           kind: createKind,
         });
-        await onApplied(`${title} completed`, {
-          accountStoreId: account.id,
-          teamAlias,
-        });
-        onClose();
+        await complete({ accountStoreId: account.id, teamAlias });
         return;
-      }
-      await onApplied(`${title} completed`);
-      onClose();
+      } else return;
+      await complete();
     } catch (error) {
       // The sheet stays open on a refusal and states it where the field is,
       // in the agent's own words, while the shell reconciles as it always has.
@@ -1937,6 +1957,7 @@ export function GroupSettingsScreen({
   onMutationError: MutationFailureHandler;
 }): ReactNode {
   const copy = useCopyText(bridge, onError);
+  const toasts = useToast();
   // The Channels tab reads the same per-group inbox entry the rail and the
   // Chat column read, so the tab's count and its rows cannot disagree.
   const inbox = useSidebarInbox();
@@ -2015,41 +2036,29 @@ export function GroupSettingsScreen({
   // An interrupted member addition or role change leaves durable local state
   // that blocks every later membership mutation until it is resumed. Read the
   // account's pending operations for this group so the UI can finish it.
-  const {
-    operations: membershipPending,
-    refresh: loadMembershipPending,
-    generation: pendingGeneration,
-  } = usePendingGroupOperations(
+  const groupOperations = useGroupOperationController({
     bridge,
-    store?.kind === 'team' ? store : null,
-    Boolean(
+    store: store?.kind === 'team' ? store : null,
+    enabled: Boolean(
       store && storeOperationAvailability(snapshot, store, 'teams').available,
     ),
-  );
+    onSnapshotApplied,
+    onSnapshotMutationError,
+    onRefreshError: (error) => {
+      toasts.show('Change applied. Refresh pending.');
+      onError(error);
+    },
+  });
   // Both successful changes and reconciled failures can change the durable
   // pending records. Refresh them for every membership action and manual refresh.
-  const onApplied = useCallback(
-    async (message: string): Promise<void> => {
-      const observed = pendingGeneration();
-      try {
-        await onSnapshotApplied(message);
-      } finally {
-        await loadMembershipPending(observed);
-      }
-    },
-    [loadMembershipPending, pendingGeneration, onSnapshotApplied],
-  );
-  const onMutationError = useCallback<MutationFailureHandler>(
-    async (error, options) => {
-      const observed = pendingGeneration();
-      try {
-        await onSnapshotMutationError(error, options);
-      } finally {
-        await loadMembershipPending(observed);
-      }
-    },
-    [loadMembershipPending, pendingGeneration, onSnapshotMutationError],
-  );
+  const {
+    operations: membershipPending,
+    onApplied,
+    onMutationError,
+    resumeCreation: finishSetup,
+    resumeAdmission,
+    resumeMembership,
+  } = groupOperations;
   const [target, setTarget] = useState<Party | null>(() => {
     if (initial === 'demote')
       return parties.find((party) => party.username === 'priya.n') ?? null;
@@ -2124,35 +2133,6 @@ export function GroupSettingsScreen({
     }
     seenStore.current = storeId;
   }, [storeId, setAddingChannel, setInviting, setSheet]);
-  const mutate = async (
-    action: () => Promise<unknown>,
-    message: string,
-  ): Promise<void> => {
-    try {
-      await action();
-      await onApplied(message);
-    } catch (error) {
-      await onMutationError(error);
-    }
-  };
-  const resumeMembership = (operation: PendingOperation): void => {
-    if (!store || store.kind !== 'team') return;
-    if (operation.kind === 'team-member-addition') {
-      const username = operation.target;
-      if (!username) return;
-      void mutate(
-        () => bridge.resumeGroupMemberAddition({ storeId: store.id, username }),
-        'Member addition resumed',
-      );
-      return;
-    }
-    if (operation.kind === 'team-member-edit') {
-      void mutate(
-        () => bridge.resumeGroupMemberEdit(store.id),
-        'Member change resumed',
-      );
-    }
-  };
 
   if (!store || store.kind !== 'team') {
     return (
@@ -2210,12 +2190,6 @@ export function GroupSettingsScreen({
       candidate.server === store.server &&
       candidate.account === store.account,
   );
-  const finishSetup = (): void => {
-    void mutate(
-      () => bridge.resumeGroupCreation(store.id),
-      'Team creation resumed',
-    );
-  };
   const inviteSheet = inviting ? (
     <InvitationPanel
       bridge={bridge}
@@ -2350,7 +2324,7 @@ export function GroupSettingsScreen({
                   }
                   onClick={() => {
                     close();
-                    void mutate(() => Promise.resolve(), 'Team refreshed');
+                    void onApplied('Team refreshed').catch(onError);
                   }}
                 >
                   Refresh team
@@ -2539,12 +2513,7 @@ export function GroupSettingsScreen({
                   onRetryFederation={() =>
                     void onApplied('Refreshing external teams…')
                   }
-                  onRerun={(operationId) =>
-                    void mutate(
-                      () => bridge.rerunGroupAdmission(store.id, operationId),
-                      'Team access restored',
-                    )
-                  }
+                  onRerun={resumeAdmission}
                   onRemoveAdmission={setRemovalTarget}
                   onCopy={(text, message) => void copy(text, message)}
                 />
