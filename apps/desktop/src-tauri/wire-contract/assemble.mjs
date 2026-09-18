@@ -24,11 +24,19 @@ export function parseUniqueJson(text, source = 'JSON') {
 export function mergeDomains(domains) {
   const merged = {};
   for (const [domain, records] of Object.entries(domains)) {
-    assert.ok(records && typeof records === 'object' && !Array.isArray(records));
+    assert.ok(
+      records && typeof records === 'object' && !Array.isArray(records),
+    );
     for (const [key, value] of Object.entries(records)) {
-      assert.ok(!Object.hasOwn(merged, key), `${domain}: duplicate record ${key}`);
+      assert.ok(
+        !Object.hasOwn(merged, key),
+        `${domain}: duplicate record ${key}`,
+      );
       Object.defineProperty(merged, key, {
-        value, enumerable: true, configurable: true, writable: true,
+        value,
+        enumerable: true,
+        configurable: true,
+        writable: true,
       });
     }
   }
@@ -36,19 +44,28 @@ export function mergeDomains(domains) {
 }
 
 export async function loadDomains(directory = new URL('./', import.meta.url)) {
-  const read = async (name) => parseUniqueJson(
-    await readFile(new URL(name, directory), 'utf8'), name,
-  );
+  const read = async (name) =>
+    parseUniqueJson(await readFile(new URL(name, directory), 'utf8'), name);
   const inventory = await read('inventory.json');
-  const expectedFiles = Object.keys(inventory.domains).map((name) => `${name}.json`);
-  const files = (await readdir(directory)).filter((name) =>
-    name.endsWith('.json') && name !== 'inventory.json',
+  const expectedFiles = Object.keys(inventory.domains).map(
+    (name) => `${name}.json`,
   );
-  assert.deepEqual(files.sort(), expectedFiles.sort(), 'Domain inventory must list every fixture file');
+  const files = (await readdir(directory)).filter(
+    (name) => name.endsWith('.json') && name !== 'inventory.json',
+  );
+  assert.deepEqual(
+    files.sort(),
+    expectedFiles.sort(),
+    'Domain inventory must list every fixture file',
+  );
   const domains = {};
   for (const [name, keys] of Object.entries(inventory.domains)) {
     const records = await read(`${name}.json`);
-    assert.deepEqual(Object.keys(records).sort(), [...keys].sort(), `${name}: record inventory drift`);
+    assert.deepEqual(
+      Object.keys(records).sort(),
+      [...keys].sort(),
+      `${name}: record inventory drift`,
+    );
     domains[name] = records;
   }
   return { inventory, domains, aggregate: mergeDomains(domains) };
@@ -62,11 +79,21 @@ async function main() {
   if (mode === '--write') {
     await writeFile(target, `${JSON.stringify(aggregate, null, 2)}\n`);
   } else {
-    const existing = parseUniqueJson(await readFile(target, 'utf8'), 'wire-contract.json');
-    assert.deepEqual(aggregate, existing, 'Reassemble wire-contract.json from the domain fixtures');
+    const existing = parseUniqueJson(
+      await readFile(target, 'utf8'),
+      'wire-contract.json',
+    );
+    assert.deepEqual(
+      aggregate,
+      existing,
+      'Reassemble wire-contract.json from the domain fixtures',
+    );
   }
 }
 
-if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+if (
+  process.argv[1] &&
+  pathToFileURL(process.argv[1]).href === import.meta.url
+) {
   await main();
 }

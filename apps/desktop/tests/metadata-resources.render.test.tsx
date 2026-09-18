@@ -34,24 +34,31 @@ test('legacy providers share the canonical resource across views and view remoun
       return { version: `Version ${calls}`, agentSocket: '/agent.sock' };
     },
   };
-  const rendered = ui.render(createElement(
-    QueryRepositoryContext.Provider,
-    { value: repository },
-    createElement(View, { bridge }),
-    createElement(View, { bridge }),
-  ));
+  const rendered = ui.render(
+    createElement(
+      QueryRepositoryContext.Provider,
+      { value: repository },
+      createElement(View, { bridge }),
+      createElement(View, { bridge }),
+    ),
+  );
   await ui.act(async () => {});
   assert.equal(calls, 1);
   assert.equal(rendered.getAllByText('Version 1').length, 2);
   rendered.unmount();
   assert.equal(repository.retired, false);
-  assert.equal(appInfoQuery(repository, bridge).getSnapshot().data?.version, 'Version 1');
+  assert.equal(
+    appInfoQuery(repository, bridge).getSnapshot().data?.version,
+    'Version 1',
+  );
 
-  const remounted = ui.render(createElement(
-    MetadataRepositoryContext.Provider,
-    { value: repository },
-    createElement(View, { bridge }),
-  ));
+  const remounted = ui.render(
+    createElement(
+      MetadataRepositoryContext.Provider,
+      { value: repository },
+      createElement(View, { bridge }),
+    ),
+  );
   await ui.act(async () => {});
   assert.equal(calls, 1);
   assert.ok(remounted.getByText('Version 1'));

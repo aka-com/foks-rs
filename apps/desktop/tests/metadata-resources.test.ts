@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { AppInfo, Bridge } from '../src/bridge';
 import type { TeamStore } from '../src/model';
-import { MetadataRepository, RetiredQueryError } from '../src/metadata-repository';
+import {
+  MetadataRepository,
+  RetiredQueryError,
+} from '../src/metadata-repository';
 import { QueryRepository } from '../src/query-repository';
 import {
   MetadataRepositoryContext,
@@ -113,15 +116,17 @@ test('app info invalidation queues one trailing read and retirement drops metada
 test('pending-operation resources retain only public recovery metadata and coalesce per profile', async () => {
   const repository = new MetadataRepository();
   let calls = 0;
-  const source = [{
-    kind: 'account-recovery' as const,
-    alias: 'account',
-    target: 'owner',
-    phrase: 'private-phrase',
-    token: 'private-token',
-    pin: 'private-pin',
-    state: { running: true },
-  }];
+  const source = [
+    {
+      kind: 'account-recovery' as const,
+      alias: 'account',
+      target: 'owner',
+      phrase: 'private-phrase',
+      token: 'private-token',
+      pin: 'private-pin',
+      state: { running: true },
+    },
+  ];
   const bridge = {
     listPendingOperations: async () => {
       calls++;
@@ -132,11 +137,13 @@ test('pending-operation resources retain only public recovery metadata and coale
   assert.equal(pendingOperationsQuery(repository, bridge, 'profile'), query);
   const pending = query.load();
   assert.equal(query.load(), pending);
-  assert.deepEqual(await pending, [{
-    kind: 'account-recovery',
-    alias: 'account',
-    target: 'owner',
-  }]);
+  assert.deepEqual(await pending, [
+    {
+      kind: 'account-recovery',
+      alias: 'account',
+      target: 'owner',
+    },
+  ]);
   assert.equal(calls, 1);
   assert.notEqual(pendingOperationsQuery(repository, bridge, 'other'), query);
 });
@@ -144,7 +151,9 @@ test('pending-operation resources retain only public recovery metadata and coale
 test('invitation resources publish counts without tokens, phrases, PINs, or reply records', async () => {
   const repository = new MetadataRepository();
   const events: unknown[] = [];
-  repository.observe((event) => { events.push(event); });
+  repository.observe((event) => {
+    events.push(event);
+  });
   let calls = 0;
   const bridge: Pick<Bridge, 'invitation'> = {
     invitation: async (_profile, _account, action, pin) => {
@@ -156,16 +165,32 @@ test('invitation resources publish counts without tokens, phrases, PINs, or repl
             { team_id: 'other', state: 'pending', invite: 'private-token' },
             { team_id: 'team', state: 'cancelled', invite: 'private-token' },
           ]
-        : { rows: [
-            { request_id: 'request', state: 'pending', invite: 'private-token' },
-            { request_id: 'done', state: 'complete', invite: 'private-token' },
-          ] };
+        : {
+            rows: [
+              {
+                request_id: 'request',
+                state: 'pending',
+                invite: 'private-token',
+              },
+              {
+                request_id: 'done',
+                state: 'complete',
+                invite: 'private-token',
+              },
+            ],
+          };
     },
   };
   const store: TeamStore = {
-    id: 'store', kind: 'team', name: 'Team', server: 'profile',
-    account: 'account', alias: 'team', team_id_hex: 'team',
-    active: true, team_kind: 'named',
+    id: 'store',
+    kind: 'team',
+    name: 'Team',
+    server: 'profile',
+    account: 'account',
+    alias: 'team',
+    team_id_hex: 'team',
+    active: true,
+    team_kind: 'named',
   };
   const query = invitationRecoveryQuery(repository, bridge as Bridge, store);
   const pending = query.load();
@@ -175,8 +200,10 @@ test('invitation resources publish counts without tokens, phrases, PINs, or repl
   assert.equal(calls, 2);
   assert.equal(JSON.stringify(events).includes('private-token'), false);
   for (const event of events) {
-    assert.ok(Object.keys(event as object).every((key) =>
-      key === 'kind' || key === 'milliseconds',
-    ));
+    assert.ok(
+      Object.keys(event as object).every(
+        (key) => key === 'kind' || key === 'milliseconds',
+      ),
+    );
   }
 });

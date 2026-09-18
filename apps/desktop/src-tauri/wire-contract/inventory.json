@@ -4,23 +4,81 @@
   "checkCommand": "node apps/desktop/src-tauri/wire-contract/assemble.mjs --check",
   "generation": {
     "status": "deferred",
-    "reason": "Structural DTO generation cannot express semantic normalization, canonical identifiers, compatibility expiry and grants, field rejection, or command-specific unions. Existing handwritten runtime decoders and native golden assertions remain authoritative.",
+    "reason": "Generating raw DTO structures could cover field sets and unions, but would not replace handwritten semantic normalization, current-time eligibility, and request/response binding checks. This pass preserves those decoders and organizes existing fixture coverage before introducing a generator.",
     "scope": "Existing golden records only. A record demonstrates selected values, not every field, variant, public DTO, or bridge method. No claim of complete RuntimeBridge coverage."
   },
   "domains": {
     "application": ["appInfo"],
-    "commands": ["commandError", "commandAck", "appliedMutation", "cancelledMutation", "alreadyExistsError", "capabilityUnavailableError", "agentLostError"],
-    "vault": ["memberRole", "teamItemCreateAccess", "cancelledDownload", "catalog", "readItem"],
-    "groups": ["party", "federationEntry", "federationExpulsionOperation", "groupDiscovery"],
-    "enrollment": ["goProfileDiscovery", "pendingOperation", "pairingOffer", "deviceProvision"],
-    "accounts": ["account", "backupPhrase", "device", "deviceRemoval", "backupEnrollment", "backupRevocation", "passphraseReport"],
-    "servers": ["checkedProfile", "configuredServer", "serverStatusRequiredFields", "serverStatus", "addedServer", "serverLabel", "forgottenServer", "profileReconciliation", "checkedServer", "resetPreview"],
-    "yubikey": ["yubiCard", "yubiEnrollment", "yubiAccount", "yubiSync", "yubiPinStatus", "yubiLifecycle", "yubiSubkeyRecovery", "yubiRevocation", "yubiChanged"],
+    "commands": [
+      "commandError",
+      "commandAck",
+      "appliedMutation",
+      "cancelledMutation",
+      "alreadyExistsError",
+      "capabilityUnavailableError",
+      "agentLostError"
+    ],
+    "vault": [
+      "memberRole",
+      "teamItemCreateAccess",
+      "cancelledDownload",
+      "catalog",
+      "readItem"
+    ],
+    "groups": [
+      "party",
+      "federationEntry",
+      "federationExpulsionOperation",
+      "groupDiscovery"
+    ],
+    "enrollment": [
+      "goProfileDiscovery",
+      "pendingOperation",
+      "pairingOffer",
+      "deviceProvision"
+    ],
+    "accounts": [
+      "account",
+      "backupPhrase",
+      "device",
+      "deviceRemoval",
+      "backupEnrollment",
+      "backupRevocation",
+      "passphraseReport"
+    ],
+    "servers": [
+      "checkedProfile",
+      "configuredServer",
+      "serverStatusRequiredFields",
+      "serverStatus",
+      "addedServer",
+      "serverLabel",
+      "forgottenServer",
+      "profileReconciliation",
+      "checkedServer",
+      "resetPreview"
+    ],
+    "yubikey": [
+      "yubiCard",
+      "yubiEnrollment",
+      "yubiAccount",
+      "yubiSync",
+      "yubiPinStatus",
+      "yubiLifecycle",
+      "yubiSubkeyRecovery",
+      "yubiRevocation",
+      "yubiChanged"
+    ],
     "compatibility": ["protocolCapabilities", "compatibilityCases"]
   },
   "representedShapes": {
     "AppInfo": ["appInfo"],
-    "CommandError": ["commandError", "alreadyExistsError", "capabilityUnavailableError", "agentLostError"],
+    "CommandError": [
+      "commandError",
+      "alreadyExistsError",
+      "capabilityUnavailableError",
+      "agentLostError"
+    ],
     "CommandAck / CopyResponse": ["commandAck"],
     "MutationResponse": ["appliedMutation", "cancelledMutation"],
     "DownloadResponse": ["cancelledDownload"],
@@ -44,7 +102,7 @@
     "BackupRevocation": ["backupRevocation"],
     "PassphraseReport": ["passphraseReport"],
     "CheckedProfileResponse": ["checkedProfile"],
-    "Server": ["configuredServer"],
+    "Configured server metadata / ServerDto": ["configuredServer"],
     "ServerStatusSnapshot / StoredHost": ["serverStatus"],
     "AddedServerDto": ["addedServer"],
     "ServerLabelResponse": ["serverLabel"],
@@ -61,28 +119,90 @@
     "YubiSubkeyRecoveryDto": ["yubiSubkeyRecovery"],
     "YubiRevocationDto": ["yubiRevocation"],
     "YubiChangedDto": ["yubiChanged"],
-    "ProtocolCapability / CompatibilityLease": ["protocolCapabilities", "compatibilityCases"]
+    "ProtocolCapability / CompatibilityLease": [
+      "protocolCapabilities",
+      "compatibilityCases"
+    ]
   },
   "uncoveredPublicShapes": {
-    "application": ["AgentProcessInfo", "AgentStatus", "AppLockState", "WindowStateEvent", "DropHoverEvent", "MaintenanceSnapshot", "MaintenanceOperationOutcome", "MaintenanceDisposition"],
-    "vault": ["CatalogFailureDto", "ItemRequest", "CreateTextRequest", "CreateLinkRequest", "CreateFolderRequest / CreateFileRequest", "EditTextRequest", "RemoveItemRequest", "ImportDroppedFileRequest", "ReplaceDroppedFileRequest"],
-    "groups": ["GroupDetailsDto / GroupDetailResult", "CreateGroupRequest", "GroupMemberRequest", "GroupRoleRequest", "AdmitGroupRequest", "RemoveFederatedGroupRequest"],
-    "enrollment": ["FirstRunAccountRequest", "TrackedAccountAttempt", "TrackedAccountRequest", "FirstRunPassphraseRequest", "firstRunOperationStatus result"],
-    "accounts": ["setLocalAccountAlias result", "RenameAction / RenameProgress"],
-    "invitations": ["InvitationAction", "InvitationRole", "InvitationRow / InvitationReply"],
+    "application": [
+      "AgentProcessInfo",
+      "AgentStatus",
+      "AppLockState",
+      "WindowStateEvent",
+      "DropHoverEvent",
+      "MaintenanceSnapshot",
+      "MaintenanceOperationOutcome",
+      "MaintenanceDisposition"
+    ],
+    "vault": [
+      "CatalogFailureDto",
+      "ItemRequest",
+      "CreateTextRequest",
+      "CreateLinkRequest",
+      "CreateFolderRequest / CreateFileRequest",
+      "EditTextRequest",
+      "RemoveItemRequest",
+      "ImportDroppedFileRequest",
+      "ReplaceDroppedFileRequest"
+    ],
+    "groups": [
+      "GroupDetailsDto / GroupDetailResult",
+      "CreateGroupRequest",
+      "GroupMemberRequest",
+      "GroupRoleRequest",
+      "AdmitGroupRequest",
+      "RemoveFederatedGroupRequest"
+    ],
+    "enrollment": [
+      "FirstRunAccountRequest",
+      "TrackedAccountAttempt",
+      "TrackedAccountRequest",
+      "FirstRunPassphraseRequest",
+      "firstRunOperationStatus result"
+    ],
+    "accounts": [
+      "setLocalAccountAlias result",
+      "RenameAction / RenameProgress"
+    ],
+    "invitations": [
+      "InvitationAction",
+      "InvitationRole",
+      "InvitationRow / InvitationReply"
+    ],
     "bots": ["BotAction / BotReply"],
     "sso": ["SsoAction / SsoProgress"],
     "chat": ["ChatAction / ChatReply", "LocalAction / LocalSession"],
-    "yubikey": ["CreateYubiAccountRequest", "ProvisionYubiDeviceRequest", "YubiCommand request variants"]
+    "yubikey": [
+      "CreateYubiAccountRequest",
+      "ProvisionYubiDeviceRequest",
+      "YubiCommand request variants"
+    ]
   },
   "partialCoverage": {
     "application": ["AppInfo.computerName and absent optional fields"],
-    "vault": ["CatalogDto.localMetadata, fullItemReads, nonempty storeReads, failures, blockedProfiles, team stores, absent generation, node-kind and role variants"],
-    "groups": ["Party and FederationEntry variants, per-detail failures, inactive/adhoc discovered groups"],
-    "servers": ["Nullable host/chat support, checked server version ranges, profile reconciliation identity and compatibility outcomes, reset artifact variants"],
-    "enrollment": ["GoProfileCandidate eligibility variants, pending-operation kinds, incomplete enrollment variants"],
-    "commands": ["CommandError details and codes, ambiguous outcomes, positive download result"],
-    "yubikey": ["Command-specific variants beyond the selected success examples"],
-    "scope": ["Request DTOs, event payloads, primitive responses, and optional bridge methods are not exhaustively inventoried by the native golden fixture.", "Uncovered means absent from this shared golden fixture, not necessarily absent from handwritten unit tests.", "Golden records containing synthetic plaintext, phrases, or tokens validate wire decoding only and are never metadata-cache inputs."]
+    "vault": [
+      "CatalogDto.localMetadata, fullItemReads, nonempty storeReads, failures, blockedProfiles, team stores, absent generation, node-kind and role variants"
+    ],
+    "groups": [
+      "Party and FederationEntry variants, per-detail failures, inactive/adhoc discovered groups"
+    ],
+    "servers": [
+      "Nullable host/chat support, checked server version ranges, profile reconciliation identity and compatibility outcomes, reset artifact variants"
+    ],
+    "enrollment": [
+      "GoProfileCandidate eligibility variants, pending-operation kinds, incomplete enrollment variants"
+    ],
+    "commands": [
+      "CommandError details and codes, ambiguous outcomes, positive download result"
+    ],
+    "yubikey": [
+      "Command-specific variants beyond the selected success examples"
+    ],
+    "scope": [
+      "Request DTOs, event payloads, primitive responses, and optional bridge methods are not exhaustively inventoried by the native golden fixture.",
+      "Uncovered means absent from this shared golden fixture, not necessarily absent from handwritten unit tests.",
+      "Golden records containing synthetic plaintext, phrases, or tokens validate wire decoding only and are never metadata-cache inputs."
+    ]
   }
 }

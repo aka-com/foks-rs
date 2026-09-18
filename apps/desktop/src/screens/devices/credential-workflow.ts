@@ -36,9 +36,10 @@ export function credentialCommand({
     case 'set-passphrase':
     case 'change-passphrase':
       return {
-        command: action === 'set-passphrase'
-          ? 'set_yubi_passphrase'
-          : 'change_yubi_passphrase',
+        command:
+          action === 'set-passphrase'
+            ? 'set_yubi_passphrase'
+            : 'change_yubi_passphrase',
         args: { profile, alias, pin, passphrase: other, confirmation },
       };
     case 'verify-passphrase':
@@ -87,12 +88,17 @@ export function accountPassphrase(
   secret: string,
   repeated: string,
 ) {
-  return access.run('passphrase', {
-    profile: store.server,
-    account: store.account,
-  }, () => mode === 'set'
-    ? bridge.setAccountPassphrase(store.id, secret, repeated)
-    : mode === 'change'
-      ? bridge.changeAccountPassphrase(store.id, secret, repeated)
-      : bridge.verifyAccountPassphrase(store.id, secret));
+  return access.run(
+    'passphrase',
+    {
+      profile: store.server,
+      account: store.account,
+    },
+    () =>
+      mode === 'set'
+        ? bridge.setAccountPassphrase(store.id, secret, repeated)
+        : mode === 'change'
+          ? bridge.changeAccountPassphrase(store.id, secret, repeated)
+          : bridge.verifyAccountPassphrase(store.id, secret),
+  );
 }

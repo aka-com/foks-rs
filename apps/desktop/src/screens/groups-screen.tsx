@@ -841,16 +841,21 @@ function FederationRemovalSheet({
     try {
       const result = await attemptMutation(
         { kind: 'resumable', operation: 'remove-admission' },
-        () => bridge.removeFederatedGroup({
-          storeId: store.id,
-          remoteHostIdHex: entry.remote_host_id_hex,
-          remoteTeamIdHex: entry.remote_team_id_hex,
-        }),
-        () => onApplied(`${entry.remote_team_alias} removed and team keys rotated`),
+        () =>
+          bridge.removeFederatedGroup({
+            storeId: store.id,
+            remoteHostIdHex: entry.remote_host_id_hex,
+            remoteTeamIdHex: entry.remote_team_id_hex,
+          }),
+        () =>
+          onApplied(`${entry.remote_team_alias} removed and team keys rotated`),
       );
-      if (await reportMutationOutcome(result, onMutationError, () => {
-        toasts.show('Admission removed. Refresh pending.');
-      })) onClose();
+      if (
+        await reportMutationOutcome(result, onMutationError, () => {
+          toasts.show('Admission removed. Refresh pending.');
+        })
+      )
+        onClose();
     } finally {
       setBusy(false);
     }
@@ -1203,11 +1208,13 @@ export function AbandonGroupSheet({
                 { kind: 'mutation' },
                 () => bridge.abandonGroupCreation(store.id),
                 onRemoved,
-              ).then((result) => reportMutationOutcome(
-                result,
-                onMutationError,
-                () => { toasts.show('Team removed. Refresh pending.'); },
-              )).finally(() => setBusy(false));
+              )
+                .then((result) =>
+                  reportMutationOutcome(result, onMutationError, () => {
+                    toasts.show('Team removed. Refresh pending.');
+                  }),
+                )
+                .finally(() => setBusy(false));
             }}
           >
             Remove team
@@ -1420,9 +1427,10 @@ export function GroupSheet({
     if (sheet === 'add' && existing) return;
     setBusy(true);
     setRefused('');
-    const complete = async (
-      created?: { accountStoreId: StoreRef; teamAlias: string },
-    ): Promise<void> => {
+    const complete = async (created?: {
+      accountStoreId: StoreRef;
+      teamAlias: string;
+    }): Promise<void> => {
       const result = await synchronizeApplied(() =>
         created
           ? onApplied(`${title} completed`, created)

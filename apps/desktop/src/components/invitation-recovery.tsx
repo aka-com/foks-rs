@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useDeviceCache } from '../device-cache';
-import { useMetadataQuery, useQueryRepository } from '../query-hooks';
+import { useMetadataQuery, useMetadataRepository } from '../query-hooks';
 import { invitationRecoveryQuery } from '../operation-queries';
 import type { Bridge } from '../bridge';
 import type { TeamStore } from '../model';
@@ -19,7 +19,7 @@ export function InvitationRecovery({
   onError: (error: unknown) => void;
 }) {
   const devices = useDeviceCache();
-  const repository = useQueryRepository(bridge, devices?.repository);
+  const repository = useMetadataRepository(bridge, devices?.repository);
   const query = invitationRecoveryQuery(repository, bridge, store);
   const state = useMetadataQuery(query, { onError });
   useEffect(() => {

@@ -1,5 +1,5 @@
 import { useDeviceCache } from '../device-cache';
-import { useQueryRepository } from '../query-hooks';
+import { useMetadataRepository } from '../query-hooks';
 import { useTabSheetState } from '../navigation-guard';
 import { useEffect, useRef, useState } from 'react';
 import { normalizeCommandError, type Bridge } from '../bridge';
@@ -62,7 +62,7 @@ export function InvitationPanel({
   onRowsChange?: (count: number) => void;
 }) {
   const devices = useDeviceCache();
-  const queries = useQueryRepository(bridge, devices?.repository);
+  const queries = useMetadataRepository(bridge, devices?.repository);
   const [invite, setInvite] = useTabSheetState('invitation.invite', '');
   const [remote, setRemote] = useTabSheetState('invitation.remote', '');
   const [sourceTeam, setSourceTeam] = useTabSheetState(

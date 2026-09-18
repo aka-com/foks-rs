@@ -1,6 +1,10 @@
 import type { Bridge } from './contract';
 import { checked } from './transport';
-import { decodeYubiAccounts, decodeYubiCards, decodeYubiResult } from './yubikey';
+import {
+  decodeYubiAccounts,
+  decodeYubiCards,
+  decodeYubiResult,
+} from './yubikey';
 
 export const yubiCommands: Pick<
   Bridge,

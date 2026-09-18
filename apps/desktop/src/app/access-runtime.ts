@@ -10,6 +10,7 @@ import type { useDesktopReconciliation } from '../use-desktop-reconciliation';
 import type { CommandErrorHandler } from './catalog-runtime';
 
 export function useAccessRuntime({
+  lifetime,
   agentSnapshot,
   latest,
   bridge,
@@ -19,6 +20,7 @@ export function useAccessRuntime({
   refreshSnapshotRef,
   commandErrorRef,
 }: {
+  lifetime: import('./access-lifetime').AccessLifetime;
   agentSnapshot: AgentSnapshot;
   latest: AgentSnapshot;
   bridge: Bridge;
@@ -36,7 +38,48 @@ export function useAccessRuntime({
   const [accessGenerations, setAccessGenerations] = useState<
     ReadonlyMap<string, number>
   >(() => new Map());
-  const accessSession = useRef<object>({}).current;
+  const accessSession = lifetime.session;
+  const identities = useRef(new Map<string, string>());
+  useEffect(() => {
+    const next = new Map(identities.current);
+    const changed: string[] = [];
+    for (const server of latest.servers) {
+      const inventory = latest.profileInventory.find(
+        (entry) => entry.profile === server.id,
+      );
+      if (
+        server.passiveStatus.status !== 'available' ||
+        inventory?.accounts !== 'complete'
+      )
+        continue;
+      const identity = JSON.stringify([
+        server.host_id,
+        server.configuredProbe,
+        latest.accounts
+          .filter((account) => account.server === server.id)
+          .map((account) => [account.store, account.alias, account.username])
+          .sort(),
+      ]);
+      if (next.has(server.id) && next.get(server.id) !== identity) {
+        lifetime.retire('access-change', server.id);
+        changed.push(server.id);
+      }
+      next.set(server.id, identity);
+    }
+    if (latest.profileInventoryStatus === 'complete') {
+      lifetime.retainProfiles(latest.catalogProfiles);
+      for (const profile of next.keys())
+        if (!latest.catalogProfiles.includes(profile)) next.delete(profile);
+    }
+    identities.current = next;
+    if (changed.length)
+      setAccessGenerations((current) => {
+        const next = new Map(current);
+        for (const profile of changed)
+          next.set(profile, (next.get(profile) ?? 0) + 1);
+        return next;
+      });
+  }, [latest, lifetime]);
   const expiryCoordinator = useRef<LeaseExpiryCoordinator | null>(null);
   useEffect(() => {
     const coordinator = new LeaseExpiryCoordinator(
@@ -44,6 +87,8 @@ export function useAccessRuntime({
       ({ observed, newlyExpired }) => {
         setObservedExpiredLeases([...observed]);
         if (!newlyExpired.length) return;
+        for (const entry of newlyExpired)
+          lifetime.retire('access-change', entry.profile);
         setAccessGenerations((current) => {
           const next = new Map(current);
           for (const entry of newlyExpired)
@@ -81,6 +126,7 @@ export function useAccessRuntime({
       document.removeEventListener('visibilitychange', reconcileVisible);
     };
   }, [
+    lifetime,
     leaseClock,
     bridge.native,
     foregroundRefreshAllowed,

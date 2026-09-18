@@ -81,6 +81,29 @@ async function setup(
   return { props, draw, subject, bridge };
 }
 
+test('a retired access ticket rejects a late secret read without relying on component remount', async () => {
+  const { AccessLifetime } = await import('../src/app/access-lifetime');
+  const lifetime = new AccessLifetime();
+  let finish!: (value: ReadItemResponse) => void;
+  const response = new Promise<ReadItemResponse>((resolve) => {
+    finish = resolve;
+  });
+  const p = await setup(() => response);
+  p.props.accessTicket = lifetime.capture();
+  const view = ui.render(p.draw());
+  ui.fireEvent.click(view.getByRole('button', { name: 'Show' }));
+  lifetime.retire('lock');
+  await ui.act(async () => {
+    finish({
+      store: p.subject.store,
+      path: p.subject.path,
+      version: p.subject.version,
+      value: 'retired-secret-marker',
+    });
+  });
+  assert.equal(view.queryByText(/retired-secret-marker/), null);
+});
+
 test('a pending read cannot reveal into a different selection', async () => {
   let finish!: (response: ReadItemResponse) => void;
   const pending = new Promise<ReadItemResponse>((resolve) => {

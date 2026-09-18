@@ -58,7 +58,11 @@ export async function attemptRead<T>(
   read: () => Promise<T>,
 ): Promise<
   | { outcome: 'read'; value: T }
-  | { outcome: 'read-failed'; error: CommandError; recovery: typeof policy.kind }
+  | {
+      outcome: 'read-failed';
+      error: CommandError;
+      recovery: typeof policy.kind;
+    }
 > {
   try {
     return { outcome: 'read', value: await read() };

@@ -1,12 +1,26 @@
-import { decodeScene, INITIAL_SCENE } from '../location';
+import { decodeForRuntimeScene, INITIAL_SCENE } from '../location';
+import type { Bridge } from '../bridge';
 import type { Scene } from '../location';
 import { applyLease, isLogin, kindOf, nameOf, storeOf } from '../model';
 import type { AgentSnapshot, Item } from '../model';
 
+export function fixtureScenesAllowed(
+  bridge?: Pick<Bridge, 'native' | 'fixtureSnapshot' | 'firstRunFixture'>,
+): boolean {
+  return Boolean(
+    bridge &&
+    (!bridge.native || bridge.fixtureSnapshot || bridge.firstRunFixture),
+  );
+}
+
 /** The scene the address bar asks for, or the shell's own starting point. */
-export function initialScene(): Scene {
+export function initialScene(
+  bridge?: Pick<Bridge, 'native' | 'fixtureSnapshot' | 'firstRunFixture'>,
+): Scene {
   if (typeof window === 'undefined') return INITIAL_SCENE;
-  return decodeScene(window.location.search);
+  return decodeForRuntimeScene(window.location.search, {
+    fixtures: fixtureScenesAllowed(bridge),
+  });
 }
 
 /** Applies review-scene failures once at the fixture/model boundary. */

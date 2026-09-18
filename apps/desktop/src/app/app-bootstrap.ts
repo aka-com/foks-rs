@@ -140,7 +140,7 @@ export function useAppBootstrap(
           setLoadError(null);
           return;
         }
-        const requested = initialScene().location.kind === 'first-run';
+        const requested = initialScene(selected).location.kind === 'first-run';
         const [status, appInfo] = await Promise.all([
           controller.establish(),
           selected.appInfo(),

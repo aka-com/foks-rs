@@ -23,12 +23,14 @@ export type CommandErrorHandler = (
 ) => void;
 
 export function useCatalogRuntime({
+  lifetime,
   bridge,
   agentSnapshot,
   retireBoot,
   currentBootSnapshot,
   toasts,
 }: {
+  lifetime: import('./access-lifetime').AccessLifetime;
   bridge: Bridge;
   agentSnapshot: AgentSnapshot;
   retireBoot: () => void;
@@ -61,8 +63,10 @@ export function useCatalogRuntime({
   const catalogCoordinator = useMemo(
     () =>
       new CatalogCoordinator<AgentSnapshot>(
-        (onPartial, isCurrent) =>
-          catalogGate.exclusive(async () => {
+        (onPartial, catalogCurrent) => {
+          const ticket = lifetime.capture();
+          const isCurrent = () => ticket.isCurrent() && catalogCurrent();
+          return catalogGate.exclusive(async () => {
             if (!isCurrent())
               throw Object.assign(new Error('Catalog load was retired.'), {
                 code: 'catalog-read-retired',
@@ -89,7 +93,8 @@ export function useCatalogRuntime({
               }
               throw error;
             }
-          }),
+          });
+        },
         (next, forced) => {
           publishSnapshot(next);
           if (forced) {
@@ -98,12 +103,18 @@ export function useCatalogRuntime({
           }
         },
       ),
-    [bridge, catalogGate, publishSnapshot],
+    [bridge, catalogGate, publishSnapshot, lifetime],
   );
   useEffect(() => {
     catalogCoordinator.activate();
-    return () => catalogCoordinator.deactivate();
-  }, [catalogCoordinator]);
+    const stop = lifetime.subscribe((event) => {
+      if (event.profile === undefined) catalogCoordinator.reset();
+    });
+    return () => {
+      stop();
+      catalogCoordinator.deactivate();
+    };
+  }, [catalogCoordinator, lifetime]);
   const refreshSnapshot = useCallback(
     (force = false): Promise<AgentSnapshot> => {
       retireBoot();

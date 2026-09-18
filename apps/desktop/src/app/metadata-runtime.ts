@@ -6,6 +6,7 @@ import { accountStopped, type AgentSnapshot } from '../model';
 import { readRecoveryFor } from '../query-read-recovery';
 
 export function useMetadataRuntime({
+  lifetime,
   bridge,
   shown,
   concealSignal,
@@ -15,6 +16,7 @@ export function useMetadataRuntime({
   foregroundRefreshAllowed,
   refreshSnapshot,
 }: {
+  lifetime: import('./access-lifetime').AccessLifetime;
   bridge: Bridge;
   shown: AgentSnapshot;
   concealSignal: number;
@@ -64,6 +66,14 @@ export function useMetadataRuntime({
       }),
     () => foregroundRefreshAllowed.current,
   );
-  useEffect(() => () => deviceCache.clear(), [deviceCache]);
+  useEffect(() => {
+    const stop = lifetime.subscribe((event) => {
+      if (event.profile === undefined) deviceCache.clear();
+    });
+    return () => {
+      stop();
+      deviceCache.clear();
+    };
+  }, [deviceCache, lifetime]);
   return deviceCache;
 }

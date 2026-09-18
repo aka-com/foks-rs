@@ -203,6 +203,7 @@ export interface DetailsPanelProps {
   accessNow?: () => number;
   /** Unique unlocked-shell identity preventing reads from crossing lock cycles. */
   accessSession?: object;
+  accessTicket?: import('../app/access-lifetime').AccessTicket;
   resumeDraft?: {
     store: string;
     path: string;
@@ -227,6 +228,7 @@ export function DetailsPanel({
   accessGeneration = 0,
   accessNow = systemAccessNow,
   accessSession,
+  accessTicket,
   resumeDraft = null,
 }: DetailsPanelProps): ReactNode {
   const item: Item | undefined = selection
@@ -291,12 +293,13 @@ export function DetailsPanel({
   const accessAvailable = useCallback((): boolean => {
     const currentStore = item ? storeOf(snapshot, item.store) : undefined;
     return Boolean(
+      (accessTicket?.isCurrent() ?? true) &&
       currentStore &&
       storeAvailability(snapshot, currentStore, {
         nowSeconds: accessNow(),
       }).available,
     );
-  }, [accessNow, item, snapshot]);
+  }, [accessNow, accessTicket, item, snapshot]);
 
   const request = useMemo<ItemRequest | null>(
     () =>

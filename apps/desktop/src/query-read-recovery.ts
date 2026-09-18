@@ -1,10 +1,10 @@
 import { normalizeCommandError } from './bridge';
 import type {
-  QueryRepository,
+  MetadataRepository,
   QueryLoadContext,
   QueryLoadOptions,
-} from './query-repository';
-import { RetiredQueryError } from './query-repository';
+} from './metadata-repository';
+import { RetiredQueryError } from './metadata-repository';
 
 export interface CatalogReadRecovery {
   refresh: () => Promise<unknown>;
@@ -50,9 +50,9 @@ export class ReadRecoveryCoordinator {
   }
 }
 
-const coordinators = new WeakMap<QueryRepository, ReadRecoveryCoordinator>();
+const coordinators = new WeakMap<MetadataRepository, ReadRecoveryCoordinator>();
 export function readRecoveryFor(
-  repository: QueryRepository,
+  repository: MetadataRepository,
 ): ReadRecoveryCoordinator {
   let coordinator = coordinators.get(repository);
   if (!coordinator) {

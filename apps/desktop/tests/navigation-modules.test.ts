@@ -28,15 +28,19 @@ test('production codecs and store dependencies do not import acceptance or React
     'chat-tab-memory',
     'location-store',
   ]) {
-    const source = stripComments(await readSource(
-      `../src/navigation/${name}.ts`, import.meta.url,
-    ));
+    const source = stripComments(
+      await readSource(`../src/navigation/${name}.ts`, import.meta.url),
+    );
     assert.doesNotMatch(
       source,
       /from ['"][^'"]*(?:acceptance-codec|runtime-scene|fixture|mock-bridge|react)['"]/,
       name,
     );
     assert.doesNotMatch(source, /\b(?:window|document)\s*[.[]/, name);
-    assert.doesNotMatch(source, /['"](?:team:eng|team:household|team:homelab|acct:personal|acct:work)['"]/, name);
+    assert.doesNotMatch(
+      source,
+      /['"](?:team:eng|team:household|team:homelab|acct:personal|acct:work)['"]/,
+      name,
+    );
   }
 });

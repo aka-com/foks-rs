@@ -16,13 +16,23 @@ export async function acceptPairing(
   target: string,
   submission: { device: string; phrase: string } | 'resume',
 ) {
-  const result = submission === 'resume'
-    ? await bridge.resumeDevicePairingAcceptance(profile, target)
-    : await bridge.acceptDevicePairing(profile, target, submission.device, submission.phrase);
+  const result =
+    submission === 'resume'
+      ? await bridge.resumeDevicePairingAcceptance(profile, target)
+      : await bridge.acceptDevicePairing(
+          profile,
+          target,
+          submission.device,
+          submission.phrase,
+        );
   if (result.alias !== target)
-    throw new Error(`${submission === 'resume'
-      ? 'resume_device_pairing_acceptance'
-      : 'accept_device_pairing'} returned a different account.`);
+    throw new Error(
+      `${
+        submission === 'resume'
+          ? 'resume_device_pairing_acceptance'
+          : 'accept_device_pairing'
+      } returned a different account.`,
+    );
   return result;
 }
 

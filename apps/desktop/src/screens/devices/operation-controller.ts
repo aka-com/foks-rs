@@ -1,8 +1,14 @@
 import { enqueueProfileWork } from '../../bridge';
 import type { Bridge } from '../../bridge';
-import type { WorkflowOperation, WorkflowTarget } from '../../model/workflow-availability';
+import type {
+  WorkflowOperation,
+  WorkflowTarget,
+} from '../../model/workflow-availability';
 import type { useWorkflowAccess } from '../../workflow-context';
-import { attemptMutation, reportMutationOutcome } from '../../commands/command-policy';
+import {
+  attemptMutation,
+  reportMutationOutcome,
+} from '../../commands/command-policy';
 import type { MutationPolicy } from '../../commands/command-policy';
 import type { CommandError } from '../../bridge';
 
@@ -14,7 +20,9 @@ export function queuedDeviceWork<T>(
   target: WorkflowTarget,
   task: () => Promise<T>,
 ): Promise<T> {
-  return enqueueProfileWork(bridge, profile, () => access.run(operation, target, task));
+  return enqueueProfileWork(bridge, profile, () =>
+    access.run(operation, target, task),
+  );
 }
 
 export async function runDeviceMutation<T>(

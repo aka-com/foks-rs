@@ -16,7 +16,11 @@
     "accounts": ["personal"]
   },
   "serverStatusRequiredFields": [
-    "profile", "configuredProbe", "host", "compatibility", "chatSupported"
+    "profile",
+    "configuredProbe",
+    "host",
+    "compatibility",
+    "chatSupported"
   ],
   "serverStatus": {
     "profile": "work",
@@ -36,7 +40,8 @@
     }
   },
   "addedServer": {
-    "profile": "partner", "configuredProbe": "foks.partner.example"
+    "profile": "partner",
+    "configuredProbe": "foks.partner.example"
   },
   "serverLabel": { "profile": "partner", "label": "Partners", "changed": true },
   "forgottenServer": { "profile": "partner", "removed": true },
@@ -58,7 +63,10 @@
     "chain": 12,
     "epoch": 43,
     "serverVersion": {
-      "minimum": null, "newest": null, "message": "", "compatible": true
+      "minimum": null,
+      "newest": null,
+      "message": "",
+      "compatible": true
     }
   },
   "resetPreview": {

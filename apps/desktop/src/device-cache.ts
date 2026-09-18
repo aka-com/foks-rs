@@ -12,9 +12,9 @@ import type {
 import type { StoreRef } from './model';
 import type { DeviceLists } from './screens/device-model';
 import { NO_DEVICES } from './screens/device-model';
-import { QueryRepository } from './query-repository';
-import type { QuerySnapshot } from './query-repository';
-import { useMetadataQuery, useQueryRepository } from './query-hooks';
+import { MetadataRepository } from './metadata-repository';
+import type { QuerySnapshot } from './metadata-repository';
+import { useMetadataQuery, useMetadataRepository } from './query-hooks';
 import { readRecoveryFor } from './query-read-recovery';
 import type { CatalogReadRecovery } from './query-read-recovery';
 
@@ -50,7 +50,7 @@ export class DeviceCache {
   constructor(
     private readonly bridge: Bridge,
     now: () => number = Date.now,
-    readonly repository = new QueryRepository(now),
+    readonly repository = new MetadataRepository(now),
   ) {}
 
   clear(): void {
@@ -136,7 +136,7 @@ export function useDeviceQueries(
   snapshot?: AgentSnapshot,
 ): DeviceCache {
   const shared = useDeviceCache();
-  const repository = useQueryRepository(bridge, shared?.repository);
+  const repository = useMetadataRepository(bridge, shared?.repository);
   const latest = useRef(snapshot);
   latest.current = snapshot;
   const cache = useMemo(

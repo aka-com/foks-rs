@@ -17,7 +17,8 @@ export function membershipResume(
   if (operation.kind === 'team-member-addition' && operation.target) {
     const username = operation.target;
     return {
-      run: () => bridge.resumeGroupMemberAddition({ storeId: store.id, username }),
+      run: () =>
+        bridge.resumeGroupMemberAddition({ storeId: store.id, username }),
       message: 'Member addition resumed',
     };
   }
@@ -87,16 +88,18 @@ export function useGroupOperationController({
     if (resume) void mutate(resume.run, resume.message);
   };
   const resumeCreation = (): void => {
-    if (store) void mutate(
-      () => bridge.resumeGroupCreation(store.id),
-      'Team creation resumed',
-    );
+    if (store)
+      void mutate(
+        () => bridge.resumeGroupCreation(store.id),
+        'Team creation resumed',
+      );
   };
   const resumeAdmission = (operationId: string): void => {
-    if (store) void mutate(
-      () => bridge.rerunGroupAdmission(store.id, operationId),
-      'Team access restored',
-    );
+    if (store)
+      void mutate(
+        () => bridge.rerunGroupAdmission(store.id, operationId),
+        'Team access restored',
+      );
   };
   return {
     operations,

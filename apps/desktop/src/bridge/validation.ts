@@ -74,7 +74,10 @@ export function optionalString(value: unknown, at: string): string | undefined {
   return value === undefined ? undefined : string(value, at);
 }
 
-export function optionalInteger(value: unknown, at: string): number | undefined {
+export function optionalInteger(
+  value: unknown,
+  at: string,
+): number | undefined {
   return value === undefined ? undefined : integer(value, at);
 }
 

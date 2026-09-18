@@ -12,7 +12,11 @@ import {
   transition,
   useLocationState,
 } from '../src/location';
-import type { GuardVerdict, LocationAction, LocationState } from '../src/location';
+import type {
+  GuardVerdict,
+  LocationAction,
+  LocationState,
+} from '../src/location';
 import type { AccountStore } from '../src/model/types';
 import { LocationStore as LeafStore } from '../src/navigation/location-store';
 import { transition as leafTransition } from '../src/navigation/transition';
@@ -20,13 +24,24 @@ import { useLocationState as leafHook } from '../src/navigation/use-location-sta
 import { chatTabLocation as leafChatLocation } from '../src/navigation/chat-tab-memory';
 
 const ACCOUNT_A: AccountStore = {
-  id: 'account-a', kind: 'account', name: 'A', server: 'a', account: 'owner',
+  id: 'account-a',
+  kind: 'account',
+  name: 'A',
+  server: 'a',
+  account: 'owner',
 };
 const ACCOUNT_B: AccountStore = {
-  id: 'account-b', kind: 'account', name: 'B', server: 'b', account: 'owner',
+  id: 'account-b',
+  kind: 'account',
+  name: 'B',
+  server: 'b',
+  account: 'owner',
 };
 const PROMPT: Extract<GuardVerdict, { verdict: 'prompt' }> = {
-  verdict: 'prompt', title: 'Discard?', body: 'Unsaved draft', confirm: 'Discard',
+  verdict: 'prompt',
+  title: 'Discard?',
+  body: 'Unsaved draft',
+  confirm: 'Discard',
 };
 
 test('facade exports the same store, reducer, hook and chat memory as their leaf modules', () => {
@@ -70,7 +85,9 @@ test('external store snapshots and bound subscription methods remain stable', ()
 });
 
 test('storeAtScene preserves decoded navigation without introducing fixture state', () => {
-  const scene = decodeProductionScene('?state=show&sel=live|/key&kind=Password&lease=lapsed');
+  const scene = decodeProductionScene(
+    '?state=show&sel=live|/key&kind=Password&lease=lapsed',
+  );
   const store = storeAtScene(scene);
   const snapshot = store.getSnapshot();
   assert.equal(snapshot.selection, scene.selection);
@@ -96,7 +113,9 @@ test('tab memory restores view state and draft but never a previous selection', 
   assert.equal(store.getSnapshot().query, '');
   store.navigateTab('files');
   assert.deepEqual(store.getSnapshot(), {
-    ...files, selection: null, details: false,
+    ...files,
+    selection: null,
+    details: false,
   });
   const resumed = store.getSnapshot();
   store.navigateTab('files');
@@ -108,7 +127,11 @@ test('tab memory restores view state and draft but never a previous selection', 
 });
 
 test('chat memory is shared with the facade and removed inventory invalidates the target', () => {
-  rememberChatLocation({ kind: 'chat', ref: 'live-team', channel: 'ab'.repeat(16) });
+  rememberChatLocation({
+    kind: 'chat',
+    ref: 'live-team',
+    channel: 'ab'.repeat(16),
+  });
   try {
     assert.equal(rememberedChatRef(), 'live-team');
     const store = new LeafStore();
@@ -136,7 +159,10 @@ test('a refused tab switch does not mutate snapshots, drafts or the acting accou
   const refusals: string[] = [];
   store.setRefusalHandler((reason) => refusals.push(reason));
   store.registerGuard(() => PROMPT);
-  const unregister = store.registerGuard(() => ({ verdict: 'refuse', reason: 'busy' }));
+  const unregister = store.registerGuard(() => ({
+    verdict: 'refuse',
+    reason: 'busy',
+  }));
   store.navigateTab('settings');
   assert.equal(store.getSnapshot(), first);
   assert.equal(store.getAccount(), ACCOUNT_A.id);
@@ -147,7 +173,8 @@ test('a refused tab switch does not mutate snapshots, drafts or the acting accou
   assert.equal(store.getSnapshot().sheet, undefined);
   store.navigateTab('devices', { force: true });
   assert.deepEqual(store.getSnapshot().location, {
-    kind: 'devices', store: ACCOUNT_B.id,
+    kind: 'devices',
+    store: ACCOUNT_B.id,
   });
 });
 
@@ -157,9 +184,13 @@ test('superseded prompts do not run callbacks and navigateAndSelect stays guarde
   let confirmed = 0;
   store.registerGuard(() => ({
     ...PROMPT,
-    onConfirm: () => { confirmed += 1; },
+    onConfirm: () => {
+      confirmed += 1;
+    },
   }));
-  store.setPrompter(() => new Promise<boolean>((resolve) => resolutions.push(resolve)));
+  store.setPrompter(
+    () => new Promise<boolean>((resolve) => resolutions.push(resolve)),
+  );
   const initial = store.getSnapshot();
   store.navigateAndSelect(
     { kind: 'store', ref: 'team-a' },

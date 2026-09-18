@@ -1,4 +1,8 @@
-import type { CreateYubiAccountRequest, ProvisionYubiDeviceRequest, YubiCommand } from '../../bridge';
+import type {
+  CreateYubiAccountRequest,
+  ProvisionYubiDeviceRequest,
+  YubiCommand,
+} from '../../bridge';
 
 export function createEnrollmentCommand(
   draft: Omit<CreateYubiAccountRequest, 'email'>,
@@ -16,7 +20,10 @@ export function createEnrollmentCommand(
 }
 
 export function provisionEnrollmentCommand(
-  draft: Omit<ProvisionYubiDeviceRequest, 'signingSlot' | 'pqSlot' | 'pinAttempts' | 'pukAttempts'>,
+  draft: Omit<
+    ProvisionYubiDeviceRequest,
+    'signingSlot' | 'pqSlot' | 'pinAttempts' | 'pukAttempts'
+  >,
 ): YubiCommand {
   return {
     command: 'provision_yubi_device',
@@ -38,7 +45,10 @@ export function enrollmentSlot(value: string): number | null {
     : null;
 }
 
-export function validEnrollmentAttempts(pinAttempts: number, pukAttempts: number): boolean {
+export function validEnrollmentAttempts(
+  pinAttempts: number,
+  pukAttempts: number,
+): boolean {
   return [pinAttempts, pukAttempts].every(
     (attempts) => Number.isInteger(attempts) && attempts > 0 && attempts <= 255,
   );

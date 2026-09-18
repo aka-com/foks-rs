@@ -35,7 +35,7 @@ import {
   type DeviceLabel,
 } from '../model';
 import { NavigationGuardProvider, useTabSheetState } from '../navigation-guard';
-import { QueryRepositoryContext } from '../query-hooks';
+import { MetadataRepositoryContext } from '../query-hooks';
 import {
   systemLeaseExpiryClock,
   type LeaseExpiryClock,
@@ -64,12 +64,18 @@ import { Sidebar } from '../shell/sidebar';
 import { SyncStatus } from '../shell/sync-status';
 import { Topbar } from '../shell/topbar';
 import { useAccessRuntime } from './access-runtime';
+import { AccessLifetime } from './access-lifetime';
 import { shellBlock, shellChrome } from './blocking-shell';
 import { useCatalogRuntime, useMutationError } from './catalog-runtime';
 import type { MaintenanceOwnership } from './maintenance-ownership';
 import { useMetadataRuntime } from './metadata-runtime';
 import { useShellNavigation } from './navigation-runtime';
-import { demoAvailabilityFacts, demoSelection, initialScene } from './scenes';
+import {
+  demoAvailabilityFacts,
+  demoSelection,
+  initialScene,
+  fixtureScenesAllowed,
+} from './scenes';
 import { ScreenRouter } from './screen-router';
 import {
   ShellOverlays,
@@ -115,15 +121,28 @@ export function VaultShell({
   store,
   firstRunStart = null,
   managedProfile = null,
-  onLock,
+  onLock: requestLock,
   retireBoot,
   currentBootSnapshot,
   agentController,
   maintenanceOwnership,
   leaseClock = systemLeaseExpiryClock,
 }: VaultShellProps): ReactNode {
+  const lifetime = useMemo(() => new AccessLifetime(bridge), [bridge]);
+  useSyncExternalStore(
+    lifetime.subscribe,
+    lifetime.getSnapshot,
+    lifetime.getSnapshot,
+  );
+  useEffect(() => () => lifetime.retire('access-change'), [lifetime]);
+  const onLock = useCallback(async () => {
+    const locked = await requestLock();
+    if (locked) lifetime.retire('lock');
+    return locked;
+  }, [lifetime, requestLock]);
+  const fixtures = fixtureScenesAllowed(bridge);
   const [{ scene, automaticFirstRun }] = useState(() => {
-    const decoded = initialScene();
+    const decoded = initialScene(bridge);
     const automatic = Boolean(
       firstRunStart && decoded.location.kind !== 'first-run',
     );
@@ -163,15 +182,18 @@ export function VaultShell({
   const [workflow, setWorkflow] = useTabSheetState<WriteWorkflow>(
     'write.workflow',
     () =>
-      initialWriteWorkflow(
-        typeof window === 'undefined' ? '' : window.location.search,
-        agentSnapshot,
-      ),
+      fixtures
+        ? initialWriteWorkflow(
+            typeof window === 'undefined' ? '' : window.location.search,
+            agentSnapshot,
+          )
+        : null,
     (value) => value?.kind === 'new',
     locations,
   );
   const [toasts] = useState(() => new ToastController());
   const catalog = useCatalogRuntime({
+    lifetime,
     bridge,
     agentSnapshot,
     retireBoot,
@@ -189,6 +211,7 @@ export function VaultShell({
     refreshAll,
   } = catalog;
   const runtime = useShellRuntime({
+    lifetime,
     bridge,
     agentController,
     maintenanceOwnership,
@@ -217,6 +240,7 @@ export function VaultShell({
     accessNow,
     chatClock,
   } = useAccessRuntime({
+    lifetime,
     agentSnapshot,
     latest,
     bridge,
@@ -234,7 +258,7 @@ export function VaultShell({
   );
   // Captured once because the canonical URL rewrite removes fixture-only intent.
   const [namedState] = useState(() =>
-    typeof window === 'undefined'
+    !fixtures || typeof window === 'undefined'
       ? ''
       : (new URLSearchParams(window.location.search).get('state') ?? ''),
   );
@@ -254,8 +278,12 @@ export function VaultShell({
   const shown = useMemo(() => {
     const reconciled = { ...latest, observedExpiredLeases };
     const leased =
-      scene.lease === 'lapsed' ? applyLease(reconciled, 'lapsed') : reconciled;
-    const demonstrated = demoAvailabilityFacts(leased, namedState);
+      fixtures && scene.lease === 'lapsed'
+        ? applyLease(reconciled, 'lapsed')
+        : reconciled;
+    const demonstrated = fixtures
+      ? demoAvailabilityFacts(leased, namedState)
+      : leased;
     if (fixtureFirstRunBoot) {
       return {
         ...demonstrated,
@@ -264,6 +292,7 @@ export function VaultShell({
     }
     return demonstrated;
   }, [
+    fixtures,
     fixtureFirstRunBoot,
     latest,
     namedState,
@@ -516,6 +545,11 @@ export function VaultShell({
               accessGeneration={selectedAccessGeneration}
               accessNow={accessNow}
               accessSession={accessSession}
+              accessTicket={lifetime.capture(
+                state.selection
+                  ? storeOf(shown, state.selection.store)?.server
+                  : undefined,
+              )}
               resumeDraft={resumeDraft}
             />
           ) : null}
@@ -557,6 +591,7 @@ export function VaultShell({
   );
 
   const deviceCache = useMetadataRuntime({
+    lifetime,
     bridge,
     shown,
     concealSignal,
@@ -569,11 +604,11 @@ export function VaultShell({
   const withToasts = (
     <ToastProvider controller={toasts} portalRoot={portalRoot}>
       <NavigationGuardProvider store={locations}>
-        <QueryRepositoryContext.Provider value={deviceCache.repository}>
+        <MetadataRepositoryContext.Provider value={deviceCache.repository}>
           <DeviceCacheContext.Provider value={deviceCache}>
             {shell}
           </DeviceCacheContext.Provider>
-        </QueryRepositoryContext.Provider>
+        </MetadataRepositoryContext.Provider>
       </NavigationGuardProvider>
     </ToastProvider>
   );

@@ -25,6 +25,7 @@ import type { CatalogRuntime } from './catalog-runtime';
 import type { MaintenanceOwnership } from './maintenance-ownership';
 
 export function useShellRuntime({
+  lifetime,
   bridge,
   agentController,
   maintenanceOwnership,
@@ -36,6 +37,7 @@ export function useShellRuntime({
   setWorkflow,
   leaseClock,
 }: {
+  lifetime: import('./access-lifetime').AccessLifetime;
   bridge: Bridge;
   agentController: AgentLifecycleController;
   maintenanceOwnership: MaintenanceOwnership;
@@ -50,7 +52,6 @@ export function useShellRuntime({
   const {
     latest,
     latestRef,
-    catalogCoordinator,
     catalogGate,
     publishSnapshot,
     refreshSnapshot,
@@ -89,7 +90,7 @@ export function useShellRuntime({
       if (!agentController.disconnect(message)) return;
       foregroundRefreshAllowed.current = false;
       retireBoot();
-      catalogCoordinator.reset();
+      lifetime.retire('disconnect');
       setAgentCatalogReady(false);
       setConcealSignal((value) => value + 1);
       if (bridge.autoRecoverAgent)
@@ -106,7 +107,7 @@ export function useShellRuntime({
     [
       agentController,
       bridge,
-      catalogCoordinator,
+      lifetime,
       retireBoot,
       setAgentCatalogReady,
       commandErrorRef,
@@ -199,7 +200,7 @@ export function useShellRuntime({
       ) {
         recoveryRef.current?.cancel();
         agentController.fail(typed);
-        catalogCoordinator.reset();
+        lifetime.retire('access-change');
         setAgentCatalogReady(false);
         setConcealSignal((value) => value + 1);
         return;
@@ -221,7 +222,7 @@ export function useShellRuntime({
     },
     [
       agentController,
-      catalogCoordinator,
+      lifetime,
       checkAgentHealth,
       disconnectAgent,
       toasts,
@@ -267,6 +268,14 @@ export function useShellRuntime({
     nowSeconds: () => leaseClock.now(),
   });
   reconciliationRef.current = reconciliation;
+  useEffect(
+    () =>
+      lifetime.subscribe((event) => {
+        if (event.profile === undefined)
+          reconciliation.scheduler.setEnabled(false);
+      }),
+    [lifetime, reconciliation],
+  );
 
   useEffect(() => {
     return agentController.subscribe(setAgentLifecycle);
@@ -283,7 +292,7 @@ export function useShellRuntime({
       if (snapshot.state === 'idle') return;
       foregroundRefreshAllowed.current = false;
       retireBoot();
-      catalogCoordinator.reset();
+      lifetime.retire('maintenance');
       setAgentCatalogReady(false);
       setConcealSignal((value) => value + 1);
       if (snapshot.state !== 'complete') return;
@@ -313,12 +322,12 @@ export function useShellRuntime({
   }, [
     agentController,
     bridge,
-    catalogCoordinator,
     commandError,
     refreshSnapshot,
     retireBoot,
     toasts,
     maintenanceOwnership,
+    lifetime,
     setAgentCatalogReady,
   ]);
 
@@ -339,7 +348,7 @@ export function useShellRuntime({
       }
       foregroundRefreshAllowed.current = false;
       retireBoot();
-      catalogCoordinator.reset();
+      lifetime.retire('access-change');
       setAgentCatalogReady(false);
       if (error.code === 'version-mismatch') {
         agentController.fail(error);
@@ -355,11 +364,11 @@ export function useShellRuntime({
     },
     [
       agentController,
-      catalogCoordinator,
       commandError,
       disconnectAgent,
       recoverAgentReadiness,
       retireBoot,
+      lifetime,
       locationKind,
       setAgentCatalogReady,
     ],

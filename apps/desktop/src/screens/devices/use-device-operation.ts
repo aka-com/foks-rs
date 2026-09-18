@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { AccessLifetime } from '../../app/access-lifetime';
 import { useToast } from '/kit/toasts';
 import { runDeviceMutation } from './operation-controller';
 import { attemptRead } from '../../commands/command-policy';
@@ -6,42 +7,49 @@ import type { MutationPolicy } from '../../commands/command-policy';
 
 export function useDeviceOperation(scope: string) {
   const toasts = useToast();
-  const current = useRef({ scope, live: true });
+  const current = useRef({ scope, live: true, lifetime: new AccessLifetime() });
   if (current.current.scope !== scope) {
     current.current.live = false;
-    current.current = { scope, live: true };
+    current.current.lifetime.retire('access-change');
+    current.current = { scope, live: true, lifetime: new AccessLifetime() };
   }
   useEffect(() => {
     const generation = current.current;
     generation.live = true;
     return () => {
       generation.live = false;
+      generation.lifetime.retire('access-change');
     };
   }, [scope]);
   const capture = (): (() => boolean) => {
     const generation = current.current;
-    return () => generation.live && current.current === generation;
+    const ticket = generation.lifetime.capture();
+    return () =>
+      ticket.isCurrent() && generation.live && current.current === generation;
   };
-  const run = <T,>(
+  const run = <T>(
     write: () => Promise<T>,
     onApplied: (value: T) => Promise<void>,
     onError: (error: unknown) => void,
     policy?: MutationPolicy,
-  ) => runDeviceMutation(
-    write,
-    onApplied,
-    onError,
-    () => { toasts.show('Change applied. Refresh pending.'); },
-    capture(),
-    policy,
-  );
+  ) =>
+    runDeviceMutation(
+      write,
+      onApplied,
+      onError,
+      () => {
+        toasts.show('Change applied. Refresh pending.');
+      },
+      capture(),
+      policy,
+    );
   const settled = (callback: () => void): (() => void) => {
     const isCurrent = capture();
     return () => {
       if (isCurrent()) callback();
     };
   };
-  const read = async <T,>(
+  const read = async <T>(
     task: () => Promise<T>,
     onRead: (value: T) => Promise<void>,
     onError: (error: unknown) => void,

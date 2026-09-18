@@ -12,13 +12,18 @@ export async function revokeSecurityKey(
   alias: string,
   confirmation: string,
 ) {
-  const result = await access.run('yubi-revoke', {
-    profile: store.server,
-    account: store.account,
-  }, () => bridge.runYubi({
-    command: 'revoke_yubi_device',
-    args: { accountStoreId: store.id, yubiAlias: alias, confirmation },
-  }));
+  const result = await access.run(
+    'yubi-revoke',
+    {
+      profile: store.server,
+      account: store.account,
+    },
+    () =>
+      bridge.runYubi({
+        command: 'revoke_yubi_device',
+        args: { accountStoreId: store.id, yubiAlias: alias, confirmation },
+      }),
+  );
   if (result.alias !== alias || result.removedLocalCredential !== true)
     throw new Error('revoke_yubi_device returned a different enrollment.');
   return result;
@@ -31,11 +36,18 @@ export async function revokePaperKey(
   backup: BackupEnrollment,
   confirmation: string,
 ) {
-  const revoked = await access.run('backup-revoke', {
-    profile: store.server,
-    account: store.account,
-  }, () => bridge.revokeOwnerBackup(store.id, backup, confirmation));
-  if (revoked.backupAlias !== backup.backupAlias || revoked.backupId !== backup.backupId)
+  const revoked = await access.run(
+    'backup-revoke',
+    {
+      profile: store.server,
+      account: store.account,
+    },
+    () => bridge.revokeOwnerBackup(store.id, backup, confirmation),
+  );
+  if (
+    revoked.backupAlias !== backup.backupAlias ||
+    revoked.backupId !== backup.backupId
+  )
     throw new Error('revoke_owner_backup returned a different enrollment.');
   return revoked;
 }
