@@ -398,6 +398,134 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn hosted_pipeline_bounds_parallelism_without_waiting_for_an_unhealthy_profile() {
+        let release_slow = Arc::new(Semaphore::new(0));
+        let release_fast = Arc::new(Semaphore::new(0));
+        let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (started, mut observed) = tokio::sync::mpsc::unbounded_channel();
+        let worker_slow = release_slow.clone();
+        let worker_fast = release_fast.clone();
+        let worker_peak = peak.clone();
+        let task = tokio::spawn(run_hosted_refreshes(
+            (0..8).map(|index| index.to_string()).collect(),
+            CancellationToken::new(),
+            move |profile| {
+                let release = if profile == "0" {
+                    worker_slow.clone()
+                } else {
+                    worker_fast.clone()
+                };
+                let active = active.clone();
+                let peak = worker_peak.clone();
+                let started = started.clone();
+                async move {
+                    let count = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(count, Ordering::SeqCst);
+                    started.send(profile).unwrap();
+                    release.acquire().await.unwrap().forget();
+                    active.fetch_sub(1, Ordering::SeqCst);
+                }
+            },
+        ));
+        let mut first = Vec::new();
+        for _ in 0..MAXIMUM_CANARY_FETCHES {
+            first.push(
+                tokio::time::timeout(Duration::from_secs(5), observed.recv())
+                    .await
+                    .unwrap()
+                    .unwrap(),
+            );
+        }
+        first.sort();
+        assert_eq!(first, ["0", "1", "2", "3"]);
+        assert!(observed.try_recv().is_err());
+        release_fast.add_permits(1);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), observed.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            "4"
+        );
+        release_fast.add_permits(8);
+        let mut remaining = Vec::new();
+        for _ in 0..3 {
+            remaining.push(
+                tokio::time::timeout(Duration::from_secs(5), observed.recv())
+                    .await
+                    .unwrap()
+                    .unwrap(),
+            );
+        }
+        remaining.sort();
+        assert_eq!(remaining, ["5", "6", "7"]);
+        assert!(!task.is_finished());
+        release_slow.add_permits(1);
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(peak.load(Ordering::SeqCst), MAXIMUM_CANARY_FETCHES);
+    }
+
+    #[tokio::test]
+    async fn cancelling_the_hosted_pipeline_retains_active_common_worker_permits() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().to_owned();
+        let workers = Arc::new(Semaphore::new(MAXIMUM_CANARY_FETCHES));
+        let release = Arc::new(Semaphore::new(0));
+        let cancellation = CancellationToken::new();
+        let (started, mut observed) = tokio::sync::mpsc::unbounded_channel();
+        let (finished, mut completed) = tokio::sync::mpsc::unbounded_channel();
+        let worker_slots = workers.clone();
+        let worker_release = release.clone();
+        let task = tokio::spawn(run_hosted_refreshes(
+            (0..8).map(|index| index.to_string()).collect(),
+            cancellation.clone(),
+            move |profile| {
+                let key = (root.clone(), profile, false);
+                let workers = worker_slots.clone();
+                let release = worker_release.clone();
+                let started = started.clone();
+                let finished = finished.clone();
+                async move {
+                    coalesce(key, Duration::from_secs(10), move || async move {
+                        let permit = workers.acquire_owned().await.unwrap();
+                        started.send(()).unwrap();
+                        release.acquire().await.unwrap().forget();
+                        drop(permit);
+                        finished.send(()).unwrap();
+                        success("unchanged")
+                    })
+                    .await;
+                }
+            },
+        ));
+        for _ in 0..MAXIMUM_CANARY_FETCHES {
+            tokio::time::timeout(Duration::from_secs(5), observed.recv())
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        cancellation.cancel();
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(workers.available_permits(), 0);
+        assert!(observed.try_recv().is_err());
+        release.add_permits(MAXIMUM_CANARY_FETCHES);
+        for _ in 0..MAXIMUM_CANARY_FETCHES {
+            tokio::time::timeout(Duration::from_secs(5), completed.recv())
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        assert_eq!(workers.available_permits(), MAXIMUM_CANARY_FETCHES);
+    }
+
+    #[tokio::test]
     async fn concurrent_renewal_callers_share_one_result() {
         let directory = tempfile::tempdir().unwrap();
         let key = (directory.path().to_owned(), "saved".to_owned(), false);

@@ -497,21 +497,49 @@ async fn refresh_hosted_profiles(
     };
     let profiles = registry
         .profiles()
-        .filter_map(|profile| {
-            profile
-                .compatibility_lease_url()
-                .map(|url| (profile.name.clone(), url.to_owned()))
-        })
+        .filter(|profile| profile.compatibility_lease_url().is_some())
+        .map(|profile| profile.name.clone())
         .collect::<Vec<_>>();
     drop(registry);
 
-    for (profile, _) in profiles {
+    let state_dir = state_dir.to_owned();
+    run_hosted_refreshes(profiles, cancellation, move |profile| {
+        let state_dir = state_dir.clone();
+        let client = client.clone();
+        async move {
+            let result = connectivity::renew(&state_dir, &profile, client, timeout).await;
+            if let ResponseResult::Error { code, .. } = result {
+                eprintln!("foks-agent compatibility renewal failed for {profile}: {code:?}");
+            }
+        }
+    }).await;
+}
+
+async fn run_hosted_refreshes<F, Fut>(
+    profiles: Vec<String>,
+    cancellation: CancellationToken,
+    renew: F,
+) where
+    F: Fn(String) -> Fut + Send,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    let mut profiles = profiles.into_iter();
+    let mut pending = tokio::task::JoinSet::new();
+    loop {
         if cancellation.is_cancelled() {
+            pending.abort_all();
             break;
         }
-        let result = connectivity::renew(state_dir, &profile, client.clone(), timeout).await;
-        if let ResponseResult::Error { code, .. } = result {
-            eprintln!("foks-agent compatibility renewal failed for {profile}: {code:?}");
+        while pending.len() < MAXIMUM_CANARY_FETCHES {
+            let Some(profile) = profiles.next() else { break; };
+            pending.spawn(renew(profile));
+        }
+        if pending.is_empty() {
+            break;
+        }
+        tokio::select! {
+            _ = pending.join_next() => {},
+            _ = tokio::time::sleep(Duration::from_millis(20)) => {},
         }
     }
 }
@@ -1312,6 +1340,10 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
     }
     let mut source = Some(error);
     while let Some(candidate) = source {
+        if matches!(candidate.downcast_ref::<foks_keystore::Error>(), Some(foks_keystore::Error::CredentialsRequired)) {
+            return Response::error(id, ErrorCode::CredentialsRequired,
+                "Native credentials require user interaction before this operation can continue.");
+        }
         if matches!(
             candidate.downcast_ref::<foks_rpc::Error>(),
             Some(foks_rpc::Error::RemoteStatus { code: 1069, .. })
@@ -2362,7 +2394,63 @@ fn wire_reset_artifact_kind(kind: foks_client_app::ResetArtifactKind) -> WireRes
     }
 }
 
+fn operation_is_noninteractive(operation: &Operation) -> bool {
+    match operation {
+        Operation::ListProfiles
+        | Operation::ListKnownStores { .. }
+        | Operation::ListProfileOverview { .. }
+        | Operation::ListAccounts { .. }
+        | Operation::ListPendingOperations { .. }
+        | Operation::ListDevices { .. }
+        | Operation::ListBackupEnrollments { .. }
+        | Operation::DescribeServerStatus { .. }
+        | Operation::ListYubiAccounts { .. }
+        | Operation::ListKv { .. }
+        | Operation::ListTeamKv { .. }
+        | Operation::ReadKv { .. }
+        | Operation::ReadKvChunk { .. }
+        | Operation::ReadData { .. }
+        | Operation::BindDataAccount { .. }
+        | Operation::ListTeams { .. }
+        | Operation::ListTeamDetails { .. }
+        | Operation::ListTeamMembers { .. }
+        | Operation::ListFederatedTeams { .. }
+        | Operation::ListAccountRenames { .. }
+        | Operation::DataWriteStatus { .. }
+        | Operation::PendingDataWrites { .. } => true,
+        Operation::Chat { action, .. } => matches!(action,
+            foks_agent_proto::chat::ChatAction::Channels
+            | foks_agent_proto::chat::ChatAction::History { .. }
+            | foks_agent_proto::chat::ChatAction::NotificationHistory { .. }
+            | foks_agent_proto::chat::ChatAction::Inbox
+            | foks_agent_proto::chat::ChatAction::SyncInbox { .. }
+            | foks_agent_proto::chat::ChatAction::PollInbox { .. }
+            | foks_agent_proto::chat::ChatAction::Pending
+            | foks_agent_proto::chat::ChatAction::CleanupPending
+            | foks_agent_proto::chat::ChatAction::Status { .. }
+            | foks_agent_proto::chat::ChatAction::OperationBody { .. }
+        ),
+        _ => false,
+    }
+}
+
 fn dispatch_result(
+    state_dir: &Path,
+    operation: Operation,
+    timeout: Duration,
+    cancellation: CancellationToken,
+    ready: bool,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let noninteractive = operation_is_noninteractive(&operation);
+    let dispatch = || dispatch_result_inner(state_dir, operation, timeout, cancellation, ready);
+    if noninteractive {
+        foks_keystore::without_user_interaction(dispatch)
+    } else {
+        dispatch()
+    }
+}
+
+fn dispatch_result_inner(
     state_dir: &Path,
     operation: Operation,
     timeout: Duration,
@@ -5971,6 +6059,88 @@ mod tests {
         let records = environment.invites().unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].use_count, 1);
+    }
+
+    #[test]
+    fn metadata_reads_are_noninteractive_without_changing_explicit_workflows() {
+        let profile = "saved".to_owned();
+        let account = AccountStoreRef { profile: profile.clone(), account_alias: "owner".into() };
+        let data_scope = foks_agent_proto::data::DataScope { profile: profile.clone(), account_alias: "owner".into(), host_id: "host".into(), user_id: "user".into(), team_id: None };
+        for operation in [
+            Operation::ListProfiles,
+            Operation::ListKnownStores { profile: profile.clone() },
+            Operation::ListProfileOverview { profile: profile.clone() },
+            Operation::ListAccounts { profile: profile.clone() },
+            Operation::ListPendingOperations { profile: profile.clone() },
+            Operation::DescribeServerStatus { profile: profile.clone() },
+            Operation::ListYubiAccounts { profile: profile.clone() },
+            Operation::ListDevices { profile: profile.clone(), alias: "owner".into() },
+            Operation::ListBackupEnrollments { profile: profile.clone(), account_alias: "owner".into() },
+            Operation::ListTeams { profile: profile.clone() },
+            Operation::ListTeamDetails { profile: profile.clone(), team_alias: "team".into() },
+            Operation::ListTeamMembers { profile: profile.clone(), team_alias: "team".into() },
+            Operation::ListFederatedTeams { profile: profile.clone(), team_alias: "team".into() },
+            Operation::ListAccountRenames { profile: profile.clone(), account_alias: "owner".into() },
+            Operation::ListKv { store: account.clone(), cursor: None, limit: 10 },
+            Operation::ReadKv { store: KvStoreRef::Account(account.clone()), path: "/entry".into(), version: 1 },
+            Operation::ReadKvChunk { store: KvStoreRef::Account(account), path: "/entry".into(), version: 1, offset: 0, length: 10 },
+            Operation::BindDataAccount { profile: profile.clone(), account_alias: "owner".into() },
+            Operation::ReadData { scope: data_scope.clone(), query: foks_agent_proto::data::DataRead::Catalog },
+            Operation::DataWriteStatus { submission: foks_agent_proto::data::DataSubmission { scope: data_scope.clone(), submission_id: "pending".into() } },
+            Operation::PendingDataWrites { scope: data_scope },
+            Operation::ListTeamKv { store: TeamStoreRef { profile: profile.clone(), account_alias: "owner".into(), team_alias: "team".into(), team_id: "team-id".into() }, cursor: None, limit: 10 },
+        ] {
+            assert!(operation_is_noninteractive(&operation), "{operation:?}");
+        }
+        for operation in [
+            Operation::RunDueJobs { profile: profile.clone() },
+            Operation::ListYubiCards { profile: profile.clone() },
+            Operation::YubiPinStatus { profile: profile.clone(), alias: "owner".into() },
+            Operation::Probe { profile: profile.clone() },
+            Operation::CreateAccount { profile: profile.clone(), alias: "owner".into(), username: "owner".into(), device_name: "device".into(), email: String::new(), invite: foks_agent_proto::SecretString::new(""), passphrase: None },
+            Operation::SyncYubiAccount { profile: profile.clone(), alias: "owner".into(), pin: foks_agent_proto::SecretString::new("123456"), with_federation: false },
+            Operation::ResetHardState { profile, token: foks_agent_proto::SecretString::new("token") },
+        ] {
+            assert!(!operation_is_noninteractive(&operation), "{operation:?}");
+        }
+    }
+
+    #[test]
+    fn chat_background_reads_are_noninteractive_but_submissions_are_not() {
+        use foks_agent_proto::chat::ChatAction;
+        let store = TeamStoreRef { profile: "saved".into(), account_alias: "owner".into(), team_alias: "team".into(), team_id: "team-id".into() };
+        for action in [
+            ChatAction::Channels,
+            ChatAction::History { channel: "channel".into(), before: None },
+            ChatAction::NotificationHistory { channel: "channel".into(), before: None },
+            ChatAction::Inbox,
+            ChatAction::SyncInbox { blocked_channels: Vec::new() },
+            ChatAction::PollInbox { since: "0".into(), timeout_milliseconds: 100 },
+            ChatAction::Pending,
+            ChatAction::CleanupPending,
+            ChatAction::Status { operation: "pending".into() },
+            ChatAction::OperationBody { operation: "pending".into(), channel: "channel".into() },
+        ] {
+            assert!(operation_is_noninteractive(&Operation::Chat { store: store.clone(), action }));
+        }
+        for action in [
+            ChatAction::PrepareMessage { submission: "pending".into(), channel: "channel".into(), text: foks_agent_proto::SecretString::new("message") },
+            ChatAction::Attempt { operation: "pending".into() },
+            ChatAction::Reconcile { operation: "pending".into() },
+            ChatAction::MarkRead { channel: "channel".into(), sequence: "1".into() },
+        ] {
+            assert!(!operation_is_noninteractive(&Operation::Chat { store: store.clone(), action }));
+        }
+    }
+
+    #[test]
+    fn interaction_required_credentials_have_a_distinct_typed_response() {
+        let wrapped = foks_client_app::Error::Keystore(foks_keystore::Error::CredentialsRequired);
+        for error in [&wrapped as &dyn std::error::Error, &foks_keystore::Error::CredentialsRequired] {
+            assert!(matches!(dispatch_error_response(17, error).result, ResponseResult::Error { code: ErrorCode::CredentialsRequired, .. }));
+        }
+        let unrelated = foks_keystore::Error::Native("native credentials require user interaction".into());
+        assert!(matches!(dispatch_error_response(17, &unrelated).result, ResponseResult::Error { code: ErrorCode::OperationFailed, .. }));
     }
 
     #[test]

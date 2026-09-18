@@ -2012,6 +2012,7 @@ impl std::fmt::Debug for ResponseResult {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ErrorCode {
+    CredentialsRequired,
     SavedTrustMissing,
     ServerUnavailable,
     ServerIdentityRejected,

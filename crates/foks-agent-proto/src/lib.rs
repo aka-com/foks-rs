@@ -338,6 +338,14 @@ mod tests {
     }
 
     #[test]
+    fn credentials_required_is_a_distinct_local_wire_error() {
+        let response = Response::error(19, ErrorCode::CredentialsRequired, "native credentials locked");
+        let encoded = serde_json::to_value(&response).unwrap();
+        assert_eq!(encoded["code"], "credentials-required");
+        assert_eq!(serde_json::from_value::<Response>(encoded).unwrap(), response);
+    }
+
+    #[test]
     fn reconcile_is_a_local_v25_mutation_with_no_initial_trust_inputs() {
         assert_eq!(PROTOCOL_VERSION, 25);
         let operation = Operation::ReconcileProfile { profile: "saved".into() };

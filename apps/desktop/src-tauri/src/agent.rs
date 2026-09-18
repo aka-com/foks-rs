@@ -153,6 +153,7 @@ impl AgentError {
 
     pub fn from_agent(code: ErrorCode, message: String) -> Self {
         let (slug, retryable) = match code {
+            ErrorCode::CredentialsRequired => ("credentials-required", false),
             ErrorCode::SavedTrustMissing => ("saved-trust-missing", false),
             ErrorCode::ServerUnavailable => ("server-unavailable", true),
             ErrorCode::ServerIdentityRejected => ("server-identity-rejected", false),
@@ -3443,6 +3444,10 @@ mod tests {
 
     #[test]
     fn classifications_preserve_ambiguity_and_fatality() {
+        let credentials = AgentError::from_agent(ErrorCode::CredentialsRequired, "locked".to_owned());
+        assert_eq!(credentials.code, "credentials-required");
+        assert!(!credentials.retryable && !credentials.ambiguous && !credentials.fatal);
+        assert_ne!(credentials.code, AgentError::from_agent(ErrorCode::ReauthenticationRequired, "sign in".to_owned()).code);
         let timeout = AgentError::from_agent(ErrorCode::DeadlineExceeded, "slow".to_owned());
         assert!(timeout.retryable && timeout.ambiguous);
         assert!(AgentError::from_agent(ErrorCode::VersionMismatch, "old".to_owned()).fatal);
