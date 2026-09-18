@@ -280,6 +280,7 @@ export type Severity = 'info' | 'warn' | 'crit';
 
 export interface Notification {
   id: string;
+  profile?: string;
   severity: Severity;
   title: string;
   detail: string;
@@ -307,7 +308,20 @@ export interface GroupDetailFailure {
   retryable: boolean;
 }
 
+export interface CatalogFreshnessEntry {
+  lastSuccessAt?: number;
+  lastAttemptAt?: number;
+  refreshing: boolean;
+  error?: ServerFailure;
+}
+
+export interface CatalogFreshness {
+  profiles: Readonly<Record<string, CatalogFreshnessEntry>>;
+  stores: Readonly<Record<StoreRef, CatalogFreshnessEntry>>;
+}
+
 export interface AgentSnapshot {
+  catalogFreshness?: CatalogFreshness;
   agent: AgentStatus;
   servers: readonly Server[];
   accounts: readonly Account[];

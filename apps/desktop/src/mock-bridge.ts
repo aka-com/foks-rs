@@ -465,6 +465,23 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       restoreFirstRunAccount();
       return Promise.resolve(catalogResponse());
     },
+    listProfileCatalog: async (profile) => {
+      restoreFirstRunAccount();
+      if (!servers.some((server) => server.id === profile))
+        throw failure('profile-not-found', 'The profile was not found.');
+      const response = catalogResponse();
+      const scopedStores = response.stores.filter((store) => store.server === profile);
+      const ids = new Set(scopedStores.map((store) => store.id));
+      return {
+        ...response,
+        profiles: [profile],
+        fullItemReads: [profile],
+        stores: scopedStores,
+        knownStores: response.knownStores.filter((store) => store.server === profile),
+        inventory: response.inventory.filter((entry) => entry.profile === profile),
+        items: response.items.filter((item) => ids.has(item.store)),
+      };
+    },
     listStores: () => Promise.resolve({ ...catalogResponse(), items: [] }),
     listServers: () =>
       Promise.resolve(servers.map((server) => ({ ...server }))),

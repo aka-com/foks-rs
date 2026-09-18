@@ -38,6 +38,7 @@ import {
   decodeGroupDetails,
   discoverUnboundTeams,
   loadSnapshot,
+  loadProfileSnapshot,
   enqueueProfileWork,
   normalizeCommandError,
   onAgentReadinessRequired,
@@ -2737,4 +2738,105 @@ test('local alias changes preserve StoreRefs and command aliases and reset to th
       ?.localAlias,
     undefined,
   );
+});
+
+test('scoped catalog refresh preserves other profiles and root inventory authority', async () => {
+  const bridge = mockBridge(FIXTURE);
+  const previous = await loadSnapshot(bridge, FIXTURE, 1);
+  const profile = previous.stores.find((store) => store.id === 'acct:personal')!.server;
+  const otherIds = new Set(previous.stores.filter((store) => store.server !== profile).map((store) => store.id));
+  const response = await bridge.listProfileCatalog(profile);
+  const snapshot = await loadProfileSnapshot({
+    ...bridge,
+    listProfileCatalog: async () => ({ ...response, items: [] }),
+  }, profile, previous, 2);
+  assert.deepEqual(snapshot.catalogProfiles, previous.catalogProfiles);
+  assert.equal(snapshot.profileInventoryStatus, previous.profileInventoryStatus);
+  assert.deepEqual(snapshot.servers.filter((server) => server.id !== profile), previous.servers.filter((server) => server.id !== profile));
+  assert.deepEqual(snapshot.accounts.filter((account) => account.server !== profile), previous.accounts.filter((account) => account.server !== profile));
+  for (const key of ['stores', 'storeInventory', 'items', 'parties', 'federation', 'groupDetailFailures'] as const) {
+    const outside = (entry: { store?: string; id?: string }) => otherIds.has(entry.store ?? entry.id!);
+    assert.deepEqual(snapshot[key].filter(outside), previous[key].filter(outside));
+  }
+  assert.equal(snapshot.items.some((item) => !otherIds.has(item.store)), false);
+  assert.equal(snapshot.catalogFreshness?.profiles[profile].lastSuccessAt, 2);
+  const other = previous.servers.find((server) => server.id !== profile)!;
+  assert.deepEqual(snapshot.catalogFreshness?.profiles[other.id], previous.catalogFreshness?.profiles[other.id]);
+});
+
+test('scoped native projection uses embedded metadata without querying root lists', async () => {
+  const bridge = mockBridge(FIXTURE);
+  const previous = await loadSnapshot(bridge, FIXTURE, 1);
+  const profile = previous.stores.find((store) => store.id === 'acct:personal')!.server;
+  const response = await bridge.listProfileCatalog(profile);
+  response.localMetadata = {
+    accounts: (await bridge.listAccounts()).filter((account) => account.server === profile),
+    profiles: [{
+      profile, label: null, configuredProbe: profile,
+      status: await bridge.describeServerStatus(profile), error: null,
+    }],
+  };
+  const forbidden = async (): Promise<never> => { throw new Error('unscoped enrichment'); };
+  const scoped: Bridge = {
+    ...bridge, native: true,
+    listProfileCatalog: async () => response,
+    listServers: forbidden, listAccounts: forbidden, describeServerStatus: forbidden,
+  };
+  const snapshot = await loadProfileSnapshot(scoped, profile, previous, 2);
+  assert.equal(snapshot.servers.find((server) => server.id === profile)!.trust.status, 'verified');
+  await assert.rejects(loadProfileSnapshot({
+    ...scoped, listProfileCatalog: async () => ({ ...response, profiles: [] }),
+  }, profile, previous), /different scope/);
+  await assert.rejects(loadProfileSnapshot({
+    ...scoped, listProfileCatalog: async () => ({ ...response, localMetadata: undefined }),
+  }, profile, previous), /omitted scoped metadata/);
+});
+
+test('retired scoped work cannot publish its result', async () => {
+  const bridge = mockBridge(FIXTURE);
+  const profile = FIXTURE.servers[0].id;
+  let current = true;
+  await assert.rejects(loadProfileSnapshot({
+    ...bridge,
+    listProfileCatalog: async () => {
+      current = false;
+      return bridge.listProfileCatalog(profile);
+    },
+  }, profile, FIXTURE, 1, () => current), /retired/);
+});
+
+test('terminal scoped failure preserves failed metadata while accepting a healthy empty store', async () => {
+  const bridge = mockBridge(FIXTURE);
+  const previous = await loadSnapshot(bridge, FIXTURE, 1);
+  const profile = previous.stores.find((store) => store.id === 'acct:personal')!.server;
+  const response = await bridge.listProfileCatalog(profile);
+  const failed = response.stores.find((store) =>
+    store.id !== 'acct:personal' && previous.items.some((item) => item.store === store.id),
+  )!;
+  const failure = {
+    code: 'deadline-exceeded', message: 'Timed out', retryable: true,
+    ambiguous: false, fatal: false,
+  };
+  const snapshot = await loadProfileSnapshot({
+    ...bridge,
+    listProfileCatalog: async () => ({
+      ...response,
+      fullItemReads: [],
+      items: [],
+      failures: [{ scope: 'store', profile, store: failed.id, error: failure }],
+    }),
+  }, profile, previous, 2);
+  assert.ok(snapshot.items.some((item) => item.store === failed.id));
+  assert.equal(snapshot.items.some((item) => item.store === 'acct:personal'), false);
+  assert.equal(snapshot.storeInventory.find((entry) => entry.store === failed.id)!.status, 'unavailable');
+  assert.equal(snapshot.storeInventory.find((entry) => entry.store === 'acct:personal')!.status, 'available');
+  assert.equal(snapshot.catalogFreshness?.stores[failed.id].lastSuccessAt, 1);
+  assert.equal(snapshot.catalogFreshness?.stores['acct:personal'].lastSuccessAt, 2);
+  assert.equal(snapshot.catalogFreshness?.profiles[profile].lastSuccessAt, 1);
+});
+
+test('catalog decoding preserves explicit item-read completion provenance', () => {
+  assert.deepEqual(decodeCatalog({ ...catalog, fullItemReads: [] }).fullItemReads, []);
+  assert.deepEqual(decodeCatalog({ ...catalog, fullItemReads: catalog.profiles }).fullItemReads, catalog.profiles);
+  assert.throws(() => decodeCatalog({ ...catalog, fullItemReads: [1] }));
 });
