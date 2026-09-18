@@ -17,6 +17,7 @@ import {
   serverFactAvailability,
   storeAvailability,
   type Server,
+  type ProtocolCapability,
 } from '../src/model';
 
 const failure = {
@@ -307,7 +308,12 @@ test('shared wire contract separates metadata, service support, and compatibilit
     assert.throws(() => decodeServers([incomplete]), field);
   }
   for (const field of [
-    'host_id', 'chain', 'epoch', 'lease', 'state', 'chat_available',
+    'host_id',
+    'chain',
+    'epoch',
+    'lease',
+    'state',
+    'chat_available',
   ]) {
     assert.throws(
       () => decodeServers([{ ...fixture.configuredServer, [field]: null }]),
@@ -345,7 +351,7 @@ test('shared wire contract separates metadata, service support, and compatibilit
       compatibility: status.compatibility,
       services: { chat: status.chatSupported },
     };
-    for (const capability of PROTOCOL_CAPABILITIES) {
+    PROTOCOL_CAPABILITIES.forEach((capability: ProtocolCapability) => {
       assert.equal(
         serverFactAvailability(server, [], { nowSeconds: entry.nowSeconds }, [
           capability,
@@ -353,7 +359,7 @@ test('shared wire contract separates metadata, service support, and compatibilit
         entry.granted.includes(capability),
         `${entry.name}: ${capability}`,
       );
-    }
+    });
     assert.equal(server.services.chat, true, entry.name);
     assert.equal(server.trust.status, 'verified', entry.name);
   }

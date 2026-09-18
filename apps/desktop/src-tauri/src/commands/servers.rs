@@ -272,8 +272,10 @@ pub(super) fn server_label_response(
 }
 
 fn is_compatibility_grant(name: &str) -> bool {
-    serde_json::from_value::<foks_client_app::Capability>(serde_json::Value::String(name.to_owned()))
-        .is_ok_and(|capability| capability != foks_client_app::Capability::Probe)
+    serde_json::from_value::<foks_client_app::Capability>(serde_json::Value::String(
+        name.to_owned(),
+    ))
+    .is_ok_and(|capability| capability != foks_client_app::Capability::Probe)
 }
 
 pub(super) fn validate_compatibility(
@@ -282,6 +284,18 @@ pub(super) fn validate_compatibility(
     use foks_agent_proto::CompatibilityStatus;
     let status: CompatibilityStatus = serde_json::from_value(value.clone())
         .map_err(|error| invalid_response(error.to_string()))?;
+    let fields: &[&str] = match &status {
+        CompatibilityStatus::NotRequired | CompatibilityStatus::Missing => &["status"],
+        CompatibilityStatus::Validated { .. } => &["status", "expires_at", "capabilities"],
+        CompatibilityStatus::Incompatible { .. } => &["status", "expires_at", "reason"],
+    };
+    if !value.as_object().is_some_and(|object| {
+        object.len() == fields.len() && fields.iter().all(|field| object.contains_key(*field))
+    }) {
+        return Err(invalid_response(
+            "The agent returned inconsistent compatibility fields.",
+        ));
+    }
     match &status {
         CompatibilityStatus::Validated {
             expires_at,
@@ -290,7 +304,9 @@ pub(super) fn validate_compatibility(
             if *expires_at > 9_007_199_254_740_991
                 || capabilities.is_empty()
                 || value["capabilities"].as_array().map(Vec::len) != Some(capabilities.len())
-                || capabilities.iter().any(|name| !is_compatibility_grant(name))
+                || capabilities
+                    .iter()
+                    .any(|name| !is_compatibility_grant(name))
             {
                 return Err(invalid_response(
                     "The agent returned invalid compatibility grants.",

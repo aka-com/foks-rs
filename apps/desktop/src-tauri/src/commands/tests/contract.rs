@@ -98,14 +98,22 @@ fn shared_compatibility_contract_validates_grants_and_preserves_service_support(
                 serde_json::from_value(case["wire"].clone()).unwrap();
             assert_eq!(result.compatibility, expected, "{}", case["name"]);
         } else {
-            assert_eq!(result.unwrap_err().code, "invalid-response", "{}", case["name"]);
+            assert_eq!(
+                result.unwrap_err().code,
+                "invalid-response",
+                "{}",
+                case["name"]
+            );
         }
     }
     for capability in fixture["protocolCapabilities"].as_array().unwrap() {
         let compatibility = serde_json::json!({
             "status": "validated", "expires_at": 200, "capabilities": [capability]
         });
-        assert!(validate_compatibility(compatibility).is_ok(), "{capability}");
+        assert!(
+            validate_compatibility(compatibility).is_ok(),
+            "{capability}"
+        );
     }
     for field in fixture["serverStatusRequiredFields"].as_array().unwrap() {
         let key = match field.as_str().unwrap() {

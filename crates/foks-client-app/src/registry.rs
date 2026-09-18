@@ -1558,8 +1558,7 @@ mod tests {
             if case.get("decoded").is_none() {
                 continue;
             }
-            let status: CompatibilityStatus =
-                serde_json::from_value(case["wire"].clone()).unwrap();
+            let status: CompatibilityStatus = serde_json::from_value(case["wire"].clone()).unwrap();
             let now = case["nowSeconds"].as_u64().unwrap();
             let granted = case["granted"].as_array().unwrap();
             for name in names {
