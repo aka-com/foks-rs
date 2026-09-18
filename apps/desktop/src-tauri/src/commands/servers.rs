@@ -1335,14 +1335,22 @@ fn reconcile_observation(
 ) -> Result<Result<String, AgentError>, AgentError> {
     match result {
         foks_agent_proto::ResponseResult::Success { value } => {
-            let status = value.get("status").and_then(serde_json::Value::as_str)
+            let status = value
+                .get("status")
+                .and_then(serde_json::Value::as_str)
                 .ok_or_else(|| invalid_response("Invalid connectivity observation."))?;
             if value != serde_json::json!({"status": status}) {
-                return Err(invalid_response("Unexpected connectivity observation fields."));
+                return Err(invalid_response(
+                    "Unexpected connectivity observation fields.",
+                ));
             }
             Ok(Ok(status.to_owned()))
         }
-        foks_agent_proto::ResponseResult::Error { code, message, fields } => {
+        foks_agent_proto::ResponseResult::Error {
+            code,
+            message,
+            fields,
+        } => {
             if fields.profile.as_deref() != Some(profile)
                 || !valid_response_text(&message, 4096)
                 || [&fields.reason, &fields.capability, &fields.state_dir]
@@ -1352,11 +1360,13 @@ fn reconcile_observation(
             {
                 return Err(invalid_response("Invalid connectivity error scope."));
             }
-            Ok(Err(AgentError::from_desktop(foks_desktop::AgentError::Protocol {
-                code,
-                message,
-                fields,
-            })))
+            Ok(Err(AgentError::from_desktop(
+                foks_desktop::AgentError::Protocol {
+                    code,
+                    message,
+                    fields,
+                },
+            )))
         }
     }
 }
@@ -1368,9 +1378,13 @@ pub(super) fn reconcile_server_response(
     let response: ReconcileServerResponse = serde_json::from_value(value.clone())
         .map_err(|_| invalid_response("Invalid connectivity response."))?;
     if response.profile != profile
-        || serde_json::to_value(&response).map_err(|_| invalid_response("Invalid connectivity response."))? != value
+        || serde_json::to_value(&response)
+            .map_err(|_| invalid_response("Invalid connectivity response."))?
+            != value
     {
-        return Err(invalid_response("Connectivity response did not match the requested profile."));
+        return Err(invalid_response(
+            "Connectivity response did not match the requested profile.",
+        ));
     }
     let identity = match reconcile_observation(response.identity, profile)? {
         Ok(status) if status == "connected" => IdentityObservationDto::Connected,
@@ -1384,7 +1398,11 @@ pub(super) fn reconcile_server_response(
         Err(error) => CompatibilityObservationDto::Failed { error },
         _ => return Err(invalid_response("Invalid compatibility observation.")),
     };
-    Ok(ReconcileServerDto { profile: response.profile, identity, compatibility })
+    Ok(ReconcileServerDto {
+        profile: response.profile,
+        identity,
+        compatibility,
+    })
 }
 
 #[tauri::command]
@@ -1402,8 +1420,12 @@ pub async fn reconcile_server(
     let worker_app = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         crate::applock::require_unlocked_generation(&worker_app, generation)?;
-        transport.call(Operation::ReconcileProfile { profile }).map_err(AgentError::from_desktop)
-    }).await.map_err(|_| AgentError::new("operation-failed", "Connectivity worker stopped.", false))?;
+        transport
+            .call(Operation::ReconcileProfile { profile })
+            .map_err(AgentError::from_desktop)
+    })
+    .await
+    .map_err(|_| AgentError::new("operation-failed", "Connectivity worker stopped.", false))?;
     crate::applock::require_unlocked_generation(&app, generation)?;
     reconcile_server_response(result?, &expected)
 }

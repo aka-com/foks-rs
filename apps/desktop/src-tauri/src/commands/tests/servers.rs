@@ -389,9 +389,13 @@ fn reconciliation_observations_are_independent_and_strictly_scoped() {
     let success = |status| serde_json::json!({"status":"success","value":{"status":status}});
     let error = |code| serde_json::json!({"status":"error","code":code,"message":"Observation failed","fields":{"profile":"work"}});
     let value = serde_json::json!({"profile":"work","identity":success("connected"),"compatibility":error("server-unavailable")});
-    let result = serde_json::to_value(reconcile_server_response(value.clone(), "work").unwrap()).unwrap();
+    let result =
+        serde_json::to_value(reconcile_server_response(value.clone(), "work").unwrap()).unwrap();
     assert_eq!(result["identity"]["status"], "connected");
-    assert_eq!(result["compatibility"]["error"]["code"], "server-unavailable");
+    assert_eq!(
+        result["compatibility"]["error"]["code"],
+        "server-unavailable"
+    );
     assert_eq!(result["compatibility"]["error"]["retryable"], true);
     assert_eq!(result["compatibility"]["error"]["fatal"], false);
     let missing = serde_json::json!({"profile":"work","identity":error("saved-trust-missing"),"compatibility":success("renewed")});
@@ -404,11 +408,17 @@ fn reconciliation_observations_are_independent_and_strictly_scoped() {
         serde_json::json!({"profile":"work","identity":success("connected"),"compatibility":success("connected")}),
         serde_json::json!({"profile":"work","identity":success("connected"),"compatibility":success("renewed"),"allServicesConnected":true}),
     ] {
-        assert_eq!(reconcile_server_response(invalid, "work").unwrap_err().code, "invalid-response");
+        assert_eq!(
+            reconcile_server_response(invalid, "work").unwrap_err().code,
+            "invalid-response"
+        );
     }
     let mut invalid = value;
     invalid["compatibility"]["fields"]["profile"] = serde_json::json!("other");
-    assert_eq!(reconcile_server_response(invalid, "work").unwrap_err().code, "invalid-response");
+    assert_eq!(
+        reconcile_server_response(invalid, "work").unwrap_err().code,
+        "invalid-response"
+    );
 }
 
 #[test]

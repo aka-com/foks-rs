@@ -485,7 +485,11 @@ impl HostedLeaseRenewal {
         self.profile.compatibility_lease_url().unwrap_or_default()
     }
 
-    pub fn apply(self, signed: &SignedCanaryArtifact, now: u64) -> Result<(bool, CompatibilityStatus)> {
+    pub fn apply(
+        self,
+        signed: &SignedCanaryArtifact,
+        now: u64,
+    ) -> Result<(bool, CompatibilityStatus)> {
         self.lease.validate()?;
         let root = self.lease.root();
         let _lock = RegistryMutationLock::acquire_with_wait(root, false)?;
@@ -1861,35 +1865,56 @@ mod tests {
         let _server = environment.start_server().unwrap();
         let addresses = environment.addresses().unwrap();
         let state = environment.client_path("saved-reconcile", "state").unwrap();
-        let credentials = ClientCredentials::initialize(&state, CredentialBackend::PrivateFile).unwrap();
+        let credentials =
+            ClientCredentials::initialize(&state, CredentialBackend::PrivateFile).unwrap();
         let mut registry = ProfileRegistry::open(&state).unwrap();
-        registry.add(local_profile(&environment, "saved", format!("localhost:{}", addresses.probe.port()))).unwrap();
+        registry
+            .add(local_profile(
+                &environment,
+                "saved",
+                format!("localhost:{}", addresses.probe.port()),
+            ))
+            .unwrap();
         let session = ProfileSession::open(&registry, "saved").unwrap();
-        credentials.with_checked_session(&session, |checked| {
-            assert!(matches!(checked.reconcile_saved_host(), Err(Error::SavedTrustMissing)));
-            assert!(checked.server_status()?.host.is_none());
-            checked.probe_and_pin()?;
-            let before = checked.server_status()?.host.unwrap();
-            _server.shutdown().unwrap();
-            environment.rotate_host_key().unwrap();
-            let _rotated_server = environment.start_server().unwrap();
-            checked.reconcile_saved_host()?;
-            let after = checked.server_status()?.host.unwrap();
-            assert_eq!(after.host_id_hex, before.host_id_hex);
-            assert!(after.host_chain_sequence > before.host_chain_sequence);
-            Ok::<_, Error>(())
-        }).unwrap();
+        credentials
+            .with_checked_session(&session, |checked| {
+                assert!(matches!(
+                    checked.reconcile_saved_host(),
+                    Err(Error::SavedTrustMissing)
+                ));
+                assert!(checked.server_status()?.host.is_none());
+                checked.probe_and_pin()?;
+                let before = checked.server_status()?.host.unwrap();
+                _server.shutdown().unwrap();
+                environment.rotate_host_key().unwrap();
+                let _rotated_server = environment.start_server().unwrap();
+                checked.reconcile_saved_host()?;
+                let after = checked.server_status()?.host.unwrap();
+                assert_eq!(after.host_id_hex, before.host_id_hex);
+                assert!(after.host_chain_sequence > before.host_chain_sequence);
+                Ok::<_, Error>(())
+            })
+            .unwrap();
         let other = TestEnvironment::new().unwrap();
         let _other_server = other.start_server().unwrap();
-        let hostile = local_profile(&other, "saved", format!("localhost:{}", other.addresses().unwrap().probe.port()));
+        let hostile = local_profile(
+            &other,
+            "saved",
+            format!("localhost:{}", other.addresses().unwrap().probe.port()),
+        );
         registry.replace(hostile).unwrap();
         let hostile_session = ProfileSession::open(&registry, "saved").unwrap();
-        credentials.with_checked_session(&hostile_session, |checked| {
-            let before = checked.server_status()?.host.unwrap();
-            assert!(checked.reconcile_saved_host().is_err());
-            assert_eq!(checked.server_status()?.host.unwrap().host_id_hex, before.host_id_hex);
-            Ok::<_, Error>(())
-        }).unwrap();
+        credentials
+            .with_checked_session(&hostile_session, |checked| {
+                let before = checked.server_status()?.host.unwrap();
+                assert!(checked.reconcile_saved_host().is_err());
+                assert_eq!(
+                    checked.server_status()?.host.unwrap().host_id_hex,
+                    before.host_id_hex
+                );
+                Ok::<_, Error>(())
+            })
+            .unwrap();
     }
 
     #[test]
