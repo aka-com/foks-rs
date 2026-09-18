@@ -1,0 +1,391 @@
+import type { Store, StoreRef } from '../model/types';
+import { chatTabLocation } from './chat-tab-memory';
+import { accountAtLocation, railTabOf } from './routes';
+import { transition } from './transition';
+import { INITIAL_STATE } from './types';
+import type {
+  GuardedOptions,
+  GuardVerdict,
+  KindFilter,
+  Location,
+  LocationAction,
+  LocationState,
+  NavigateOptions,
+  NavigationGuard,
+  NavigationIntent,
+  NavigationPrompter,
+  RailTab,
+  Scene,
+  Selection,
+  SortKey,
+} from './types';
+
+/* ----------------------------------------------------------------- store -- */
+
+/**
+ * External navigation store satisfying React's `useSyncExternalStore` contract.
+ */
+export class LocationStore {
+  private current: LocationState;
+  private stores: readonly Store[] = [];
+  private actingAccount?: StoreRef;
+  private hasInventory = false;
+  private readonly tabs = new Map<RailTab, LocationState>();
+
+  clearTabMemory(): void {
+    this.clearSheet();
+    this.tabs.clear();
+  }
+
+  private readonly sheetRestoration = new Map<symbol, boolean>();
+  setSheetRestorable(id: symbol, restorable: boolean | undefined): void {
+    if (restorable === undefined) this.sheetRestoration.delete(id);
+    else this.sheetRestoration.set(id, restorable);
+  }
+
+  setSheetField(key: string, value: unknown): void {
+    if (Object.is(this.current.sheet?.[key], value)) return;
+    this.publish({
+      ...this.current,
+      sheet: { ...this.current.sheet, [key]: value },
+    });
+  }
+
+  clearSheet(): void {
+    if (this.current.sheet) this.publish({ ...this.current, sheet: undefined });
+  }
+
+  /**
+   * Where a rail tab goes, and the state it resumes there, without moving.
+   * `null` when the tab already owns the current page. Pure: the acting
+   * account is recorded by the navigation itself, not by working out its
+   * destination, so a guard can be asked before anything changes.
+   */
+  private tabTarget(
+    tab: RailTab,
+  ): { location: Location; saved?: LocationState } | null {
+    if (railTabOf(this.current.location) === tab) return null;
+    const defaults: Record<RailTab, Location> = {
+      people: { kind: 'people' },
+      chat: chatTabLocation(),
+      files: { kind: 'files' },
+      teams: { kind: 'teams' },
+      devices: { kind: 'devices' },
+      settings: { kind: 'settings' },
+    };
+    let saved = this.tabs.get(tab);
+    let location = saved?.location ?? defaults[tab];
+    const target = 'ref' in location ? location.ref : undefined;
+    if (
+      this.hasInventory &&
+      target &&
+      !this.stores.some((store) => store.id === target)
+    ) {
+      saved = undefined;
+      location = tab === 'chat' ? { kind: 'chat' } : defaults[tab];
+    }
+    if (
+      location.kind === 'people' ||
+      location.kind === 'teams' ||
+      location.kind === 'devices' ||
+      location.kind === 'settings'
+    ) {
+      const account = this.getAccount();
+      const changed = location.store !== account;
+      if (changed && saved) saved = { ...saved, sheet: undefined };
+      location = { ...location, store: account };
+      if (changed && location.kind === 'devices') delete location.device;
+      if (changed && location.kind === 'settings') delete location.profile;
+    }
+    return {
+      location: this.resolvedLocation(location),
+      ...(saved ? { saved } : {}),
+    };
+  }
+
+  /** Rail tabs resume their last page; explicit home links still open roots. */
+  navigateTab(tab: RailTab, options: GuardedOptions = {}): void {
+    const target = this.tabTarget(tab);
+    if (!target) return;
+    const apply = (): void => {
+      const location = this.accountLocation(target.location);
+      const next = transition(this.current, { type: 'navigate', location });
+      this.publish(
+        target.saved
+          ? { ...target.saved, location, selection: null, details: false }
+          : { ...next, query: '', details: false },
+      );
+    };
+    this.guarded(
+      { kind: 'navigate', location: target.location, tab: true },
+      apply,
+      options,
+    );
+  }
+
+  /** Inventory is refreshed by the shell; a removed account is never reused. */
+  setAccountStores(stores: readonly Store[]): void {
+    this.hasInventory = true;
+    this.stores = stores;
+    this.actingAccount = accountAtLocation(
+      stores,
+      this.current.location,
+      this.actingAccount,
+    )?.id;
+  }
+
+  getAccount(): StoreRef | undefined {
+    return accountAtLocation(
+      this.stores,
+      this.current.location,
+      this.actingAccount,
+    )?.id;
+  }
+
+  private readonly listeners = new Set<() => void>();
+
+  constructor(initial: LocationState = INITIAL_STATE) {
+    this.current = initial;
+  }
+
+  readonly getSnapshot = (): LocationState => this.current;
+
+  readonly subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  };
+
+  /** Apply an action. Publishes only when the state actually changed. */
+  dispatch(action: LocationAction): LocationState {
+    const next = transition(this.current, action);
+    return this.publish(next);
+  }
+
+  private publish(next: LocationState): LocationState {
+    if (next === this.current) return next;
+    const tab = railTabOf(this.current.location);
+    if (tab) this.tabs.set(tab, this.current);
+    this.current = next;
+    for (const listener of this.listeners) listener();
+    return next;
+  }
+
+  /**
+   * The address a navigation lands on, with the account it is read through
+   * filled in. Pure — `accountLocation` is the same resolution, and also
+   * records that account as the acting one.
+   */
+  private resolvedLocation(location: Location): Location {
+    const account = accountAtLocation(this.stores, location, this.getAccount());
+    if (
+      account &&
+      (location.kind === 'people' ||
+        location.kind === 'devices' ||
+        location.kind === 'settings' ||
+        location.kind === 'teams') &&
+      !location.store
+    )
+      return { ...location, store: account.id };
+    return location;
+  }
+
+  private accountLocation(location: Location): Location {
+    const account = accountAtLocation(this.stores, location, this.getAccount());
+    if (account) this.actingAccount = account.id;
+    return this.resolvedLocation(location);
+  }
+
+  /* ------------------------------------------------------------- guards -- */
+
+  private readonly guards: NavigationGuard[] = [];
+  private prompter: NavigationPrompter | null = null;
+  private refusalHandler: ((reason: string) => void) | null = null;
+  /**
+   * The prompt on screen, if any. Every guarded operation replaces it: the
+   * newer intent is the one the reader is asking for, so the older prompt's
+   * answer, whenever it arrives, is discarded.
+   */
+  private pendingPrompt: object | null = null;
+
+  /**
+   * Registers a guard, returning the function that takes it off again. Guards
+   * are asked in registration order and the first non-null verdict decides.
+   */
+  registerGuard(guard: NavigationGuard): () => void {
+    this.guards.push(guard);
+    return () => {
+      const at = this.guards.indexOf(guard);
+      if (at >= 0) this.guards.splice(at, 1);
+    };
+  }
+
+  /**
+   * What the guards say about an intent, without acting on it. A caller that
+   * must stay inert rather than raise a prompt — the trackpad's back swipe —
+   * asks this first.
+   */
+  navigationVerdict(intent: NavigationIntent): GuardVerdict {
+    // A refusal terminates validation immediately. Prompts remain provisional
+    // until every guard has been evaluated because a subsequent guard may
+    // still reject navigation.
+    let prompt: GuardVerdict = null;
+    for (const guard of [...this.guards]) {
+      const verdict = guard(intent);
+      if (verdict?.verdict === 'refuse') return verdict;
+      if (verdict && !prompt) prompt = verdict;
+    }
+    return prompt;
+  }
+
+  /** The dialog a `prompt` verdict is put to the reader through. */
+  setPrompter(prompter: NavigationPrompter | null): void {
+    this.prompter = prompter;
+  }
+
+  /** Where a `refuse` verdict's reason is shown. */
+  setRefusalHandler(handler: ((reason: string) => void) | null): void {
+    this.refusalHandler = handler;
+  }
+
+  /**
+   * Runs the guards over `intent` and applies `apply` once they are satisfied:
+   * now for an allowed or forced move, and when the prompt is confirmed for a
+   * prompted one. The caller's signature stays synchronous either way.
+   */
+  private guarded(
+    intent: NavigationIntent,
+    applyRequested: () => void,
+    options: GuardedOptions,
+  ): void {
+    const apply = (): void => {
+      if ([...this.sheetRestoration.values()].includes(false))
+        this.clearSheet();
+      applyRequested();
+    };
+    const verdict = options.force ? null : this.navigationVerdict(intent);
+    // A refusal changes nothing, including an open prompt about another move.
+    if (verdict?.verdict === 'refuse') {
+      this.refusalHandler?.(verdict.reason);
+      return;
+    }
+    // Anything else supersedes that prompt: its answer no longer applies.
+    this.pendingPrompt = null;
+    if (!verdict) {
+      apply();
+      return;
+    }
+    const prompter = this.prompter;
+    if (!prompter) {
+      apply();
+      return;
+    }
+    const token = {};
+    this.pendingPrompt = token;
+    void prompter(verdict).then(
+      (confirmed) => {
+        if (this.pendingPrompt !== token) return;
+        this.pendingPrompt = null;
+        if (!confirmed) return;
+        verdict.onConfirm?.();
+        this.clearSheet();
+        apply();
+      },
+      () => {
+        if (this.pendingPrompt === token) this.pendingPrompt = null;
+      },
+    );
+  }
+
+  navigate(location: Location, options: NavigateOptions = {}): void {
+    const apply = (): void => {
+      this.dispatch({
+        type: 'navigate',
+        location: this.accountLocation(location),
+        ...(options.replace ? { replace: true } : {}),
+      });
+    };
+    this.guarded(
+      { kind: 'navigate', location: this.resolvedLocation(location) },
+      apply,
+      options,
+    );
+  }
+
+  /**
+   * Opens `location` with `selection` showing on it, as one guarded move. The
+   * ⌘K palette's item results go through this: a guard that holds the
+   * navigation back must hold the selection with it, or the reader would be
+   * left on the page they were on with another page's item in the details
+   * panel. The guards see the navigation; the selection arrives with it.
+   */
+  navigateAndSelect(
+    location: Location,
+    selection: Selection,
+    options: NavigateOptions = {},
+  ): void {
+    const apply = (): void => {
+      this.dispatch({
+        type: 'navigate',
+        location: this.accountLocation(location),
+        ...(options.replace ? { replace: true } : {}),
+      });
+      this.dispatch({ type: 'select', selection });
+    };
+    this.guarded(
+      { kind: 'navigate', location: this.resolvedLocation(location) },
+      apply,
+      options,
+    );
+  }
+
+  select(selection: Selection, options: GuardedOptions = {}): void {
+    this.guarded(
+      { kind: 'select', selection },
+      () => {
+        this.dispatch({ type: 'select', selection });
+      },
+      options,
+    );
+  }
+
+  search(query: string): void {
+    this.dispatch({ type: 'search', query });
+  }
+
+  setDetails(open: boolean): void {
+    this.dispatch({ type: 'details', open });
+  }
+
+  setKind(kind: KindFilter): void {
+    this.dispatch({ type: 'kind', kind });
+  }
+
+  setSort(sort: SortKey): void {
+    this.dispatch({ type: 'sort', sort });
+  }
+
+  setFolder(folder: string): void {
+    this.dispatch({ type: 'folder', folder });
+  }
+
+  toggleFolder(folder: string): void {
+    this.dispatch({ type: 'toggle-folder', folder });
+  }
+}
+
+/** Initializes a LocationStore populated with state from a decoded Scene. */
+export function storeAtScene(scene: Scene): LocationStore {
+  return new LocationStore({
+    ...INITIAL_STATE,
+    location: scene.location,
+    selection: scene.selection,
+    details: scene.selection !== null,
+    view: scene.view,
+    kind: scene.kind,
+    sort: scene.sort,
+    folder: scene.folder,
+    closedFolders: scene.closedFolders,
+  });
+}
