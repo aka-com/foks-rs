@@ -165,39 +165,56 @@ pub(super) fn device_dtos(value: serde_json::Value) -> Result<Vec<DeviceDto>, Ag
         serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
     let mut ids = std::collections::HashSet::new();
     let mut current_count = 0usize;
-    let devices = rows
-        .into_iter()
-        .map(|row| {
-            if !valid_device_member_id_hex(&row.id_hex)
-                || !ids.insert(row.id_hex.clone())
-                || row
-                    .name
-                    .as_ref()
-                    .is_some_and(|name| !valid_response_text(name, 256))
-            {
+    let mut devices = Vec::with_capacity(rows.len());
+    for row in rows {
+        let is_device = valid_device_member_id_hex(&row.id_hex);
+        if !is_device
+            && !valid_typed_entity_id_hex(&row.id_hex, BACKUP_ID_PREFIX)
+            && !valid_typed_entity_id_hex(&row.id_hex, "13")
+        {
+            return Err(invalid_response(
+                "The agent returned an unsupported or malformed account key identifier.",
+            ));
+        }
+        if !ids.insert(row.id_hex.clone()) {
+            return Err(invalid_response(
+                "The agent returned a duplicate account key identifier.",
+            ));
+        }
+        if row
+            .name
+            .as_ref()
+            .is_some_and(|name| !valid_response_text(name, 256))
+        {
+            return Err(invalid_response(
+                "The agent returned an invalid device name.",
+            ));
+        }
+        let role = match row.role.as_str() {
+            "owner" => "owner",
+            "admin" => "admin",
+            "member" => "member",
+            _ => {
                 return Err(invalid_response(
-                    "The agent response contains an invalid or duplicate device.",
-                ));
+                    "The agent returned an unknown device role.",
+                ))
             }
-            let role = match row.role.as_str() {
-                "owner" => "owner",
-                "admin" => "admin",
-                "member" => "member",
-                _ => {
-                    return Err(invalid_response(
-                        "The agent returned an unknown device role.",
-                    ))
-                }
-            };
-            current_count += usize::from(row.current);
-            Ok(DeviceDto {
+        };
+        if row.current && !is_device {
+            return Err(invalid_response(
+                "The agent returned an invalid current device state.",
+            ));
+        }
+        current_count += usize::from(row.current);
+        if is_device {
+            devices.push(DeviceDto {
                 id: row.id_hex,
                 name: row.name,
                 role,
                 current: row.current,
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+            });
+        }
+    }
     if current_count != 1 {
         return Err(invalid_response(
             "The agent returned an invalid current device state.",

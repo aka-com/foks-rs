@@ -36,6 +36,93 @@ use crate::commands::yubikey::{
 use foks_agent_proto::{KvRole, Operation};
 use zeroize::Zeroizing;
 
+#[test]
+fn device_list_accepts_new_account_with_backup_enrollment() {
+    let device_id = format!("04{}", "01".repeat(32));
+    let backup_id = format!("10{}", "02".repeat(32));
+    let devices = device_dtos(serde_json::json!([
+        {"id_hex": device_id, "name": "This Mac", "role": "owner", "current": true},
+        {"id_hex": backup_id, "name": "cage 32", "role": "owner", "current": false}
+    ]))
+    .unwrap();
+    assert_eq!(devices.len(), 1);
+    assert_eq!(devices[0].id, device_id);
+    assert!(devices[0].current);
+    let backups = backup_enrollment_dtos(
+        serde_json::json!([
+            {"backup_alias": "paper", "account_alias": "personal", "backup_id_hex": backup_id}
+        ]),
+        "personal",
+    )
+    .unwrap();
+    assert_eq!(backups.len(), 1);
+    assert_eq!(backups[0].backup_id, backup_id);
+}
+
+#[test]
+fn device_list_separates_device_keys_from_other_account_members() {
+    let device_id = format!("04{}", "01".repeat(32));
+    let card_id = format!("08{}", "02".repeat(33));
+    let devices = device_dtos(serde_json::json!([
+        {"id_hex": device_id, "name": "This Mac", "role": "owner", "current": true},
+        {"id_hex": "10".repeat(33), "name": null, "role": "owner", "current": false},
+        {"id_hex": "13".repeat(33), "name": "Automation", "role": "admin", "current": false},
+        {"id_hex": card_id, "name": "Security key", "role": "owner", "current": false}
+    ]))
+    .unwrap();
+    assert_eq!(devices.len(), 2);
+    assert_eq!(devices[0].id, device_id);
+    assert_eq!(devices[1].id, card_id);
+}
+
+#[test]
+fn device_list_validates_non_device_members_before_excluding_them() {
+    let device = serde_json::json!({
+        "id_hex": "04".repeat(33), "name": "This Mac", "role": "owner", "current": true
+    });
+    let backup = serde_json::json!({
+        "id_hex": "10".repeat(33), "name": "cage 32", "role": "owner", "current": false
+    });
+    for malformed in [
+        serde_json::json!([device, backup, backup]),
+        serde_json::json!([device, {"id_hex": "10", "role": "owner", "current": false}]),
+        serde_json::json!([device, {"id_hex": "13".repeat(32), "role": "admin", "current": false}]),
+        serde_json::json!([device, {"id_hex": "01".repeat(33), "role": "owner", "current": false}]),
+        serde_json::json!([device, {"id_hex": "10".repeat(33), "role": "robot", "current": false}]),
+        serde_json::json!([device, {"id_hex": "10".repeat(33), "name": "bad\nname", "role": "owner", "current": false}]),
+        serde_json::json!([device, {"id_hex": "10".repeat(33), "role": "owner", "current": true}]),
+        serde_json::json!([{"id_hex": "10".repeat(33), "role": "owner", "current": true}]),
+        serde_json::json!([backup]),
+    ] {
+        assert_eq!(device_dtos(malformed).unwrap_err().code, "invalid-response");
+    }
+}
+
+#[test]
+fn device_list_distinguishes_invalid_ids_duplicates_and_names() {
+    let device = serde_json::json!({
+        "id_hex": "04".repeat(33), "name": "This Mac", "role": "owner", "current": true
+    });
+    for (rows, expected) in [
+        (
+            serde_json::json!([{ "id_hex": "04", "role": "owner", "current": true }]),
+            "The agent returned an unsupported or malformed account key identifier.",
+        ),
+        (
+            serde_json::json!([device, device]),
+            "The agent returned a duplicate account key identifier.",
+        ),
+        (
+            serde_json::json!([{
+                "id_hex": "04".repeat(33), "name": "bad\nname", "role": "owner", "current": true
+            }]),
+            "The agent returned an invalid device name.",
+        ),
+    ] {
+        assert_eq!(device_dtos(rows).unwrap_err().message, expected);
+    }
+}
+
 fn assert_lifecycle_cases<T: serde::Serialize, const N: usize>(
     fixture: &serde_json::Value,
     key: &str,
