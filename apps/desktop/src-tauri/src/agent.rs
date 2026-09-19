@@ -1,11 +1,11 @@
 //! Blocking local-agent transport, managed launch, and connection observation.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::sync::{mpsc, Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
 
 use foks_agent_client::AgentClient;
@@ -288,6 +288,14 @@ pub struct AgentProcessInfo {
     /// Whether this app launched — or adopted — the process, so maintenance
     /// can stop it and quitting terminates it.
     pub owned: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StaleAgentProcess {
+    pub pid: u32,
+    pub executable: PathBuf,
+    pub started_at: u64,
+    pub(crate) state_dir: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -763,7 +771,7 @@ impl AgentHandle {
             Err(error) if error.code == "agent-lost" => self.require_missing_agent_endpoint()?,
             Err(error) => return Err(error),
         }
-        launch_agent(&binary, root, &self.socket)?;
+        let mut launch = launch_agent(&binary, root, &self.socket)?;
         let mut last_error = initial_error;
         for _ in 0..50 {
             std::thread::sleep(Duration::from_millis(100));
@@ -774,6 +782,9 @@ impl AgentHandle {
                 }
                 Err(error) if error.code == "agent-lost" => last_error = error,
                 Err(error) => return Err(error),
+            }
+            if let Some(error) = launch.early_exit_error() {
+                return Err(error);
             }
         }
         Err(last_error)
@@ -1086,7 +1097,7 @@ impl AgentHandle {
                 }
                 Err(_) => {}
             }
-            launch_agent(binary, state_dir, &self.socket)?;
+            let mut launch = launch_agent(binary, state_dir, &self.socket)?;
             let mut replaced = false;
             for _ in 0..50 {
                 std::thread::sleep(Duration::from_millis(100));
@@ -1101,6 +1112,9 @@ impl AgentHandle {
                         break;
                     }
                     Err(error) => last_error = Some(error),
+                }
+                if let Some(error) = launch.early_exit_error() {
+                    return Err(error);
                 }
             }
             if !replaced {
@@ -1557,6 +1571,48 @@ impl AgentHandle {
         }
     }
 
+    pub fn stale_agent_processes(&self) -> Vec<StaleAgentProcess> {
+        #[cfg(unix)]
+        {
+            self.socket
+                .parent()
+                .and_then(|state_dir| matching_agent_processes(state_dir).ok())
+                .unwrap_or_default()
+        }
+        #[cfg(not(unix))]
+        {
+            Vec::new()
+        }
+    }
+
+    pub fn terminate_stale_agent(&self, target: &StaleAgentProcess) -> Result<(), AgentError> {
+        #[cfg(unix)]
+        {
+            if !agent_process_matches(target) {
+                return Err(AgentError::new(
+                    "agent-cleanup-changed",
+                    "The agent process changed after confirmation and was not terminated.",
+                    false,
+                ));
+            }
+            let result = unsafe { libc::kill(target.pid as i32, libc::SIGTERM) };
+            if result != 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH) {
+                return Err(AgentError::new(
+                    "agent-cleanup-failed",
+                    format!(
+                        "Failed to terminate foks-agent process {}: {}",
+                        target.pid,
+                        std::io::Error::last_os_error()
+                    ),
+                    false,
+                ));
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = target;
+        Ok(())
+    }
+
     /// Takes ownership of a foks-agent this app did not start, on the reader's
     /// say-so, so that a restart can stop it. Refused when the socket's owner
     /// is not a foks-agent at all.
@@ -1736,7 +1792,7 @@ pub fn smoke_test_packaged_startup() -> Result<(), String> {
     let socket = state.path().join("agent.sock");
     prepare_state_directory(state.path()).map_err(|error| error.message)?;
     // The same launch routine validates ownership/permissions and passes state/socket.
-    launch_agent(&binary, state.path(), &socket).map_err(|error| error.message)?;
+    let mut launch = launch_agent(&binary, state.path(), &socket).map_err(|error| error.message)?;
     let handle = AgentHandle::new(socket);
     let result = (|| {
         let mut last_error = "agent did not become ready".to_owned();
@@ -1745,6 +1801,9 @@ pub fn smoke_test_packaged_startup() -> Result<(), String> {
             match handle.call_blocking(Operation::AgentStatus) {
                 Ok(response) => return success_value(response).map(|_| ()).map_err(|e| e.message),
                 Err(error) => last_error = error.message,
+            }
+            if let Some(error) = launch.early_exit_error() {
+                return Err(error.message);
             }
         }
         Err(last_error)
@@ -1915,11 +1974,74 @@ fn managed_agent_arguments(state_dir: &Path, socket: &Path) -> [std::ffi::OsStri
     ]
 }
 
-fn launch_agent(binary: &Path, state_dir: &Path, socket: &Path) -> Result<(), AgentError> {
+const MAX_AGENT_STARTUP_DIAGNOSTIC_BYTES: u64 = 4096;
+
+struct ManagedAgentLaunch {
+    pid: u32,
+    exit: mpsc::Receiver<std::io::Result<ExitStatus>>,
+    log: File,
+    log_offset: u64,
+}
+
+impl ManagedAgentLaunch {
+    fn early_exit_error(&mut self) -> Option<AgentError> {
+        match self.exit.try_recv() {
+            Ok(Ok(status)) => {
+                let mut message = format!(
+                    "The local background service process {} exited before FOKS could connect to its socket ({status}).",
+                    self.pid
+                );
+                if let Some(diagnostic) = self.diagnostic() {
+                    message.push_str("\n\nAgent output:\n");
+                    message.push_str(&diagnostic);
+                }
+                Some(AgentError::new("agent-start-failed", message, true))
+            }
+            Ok(Err(error)) => Some(AgentError::new(
+                "agent-start-failed",
+                format!(
+                    "Failed to supervise local background service process {}: {error}",
+                    self.pid
+                ),
+                true,
+            )),
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => Some(AgentError::new(
+                "agent-start-failed",
+                format!(
+                    "Lost supervision of local background service process {} before FOKS could connect to its socket.",
+                    self.pid
+                ),
+                true,
+            )),
+        }
+    }
+
+    fn diagnostic(&mut self) -> Option<String> {
+        use std::io::{Read as _, Seek as _, SeekFrom};
+
+        self.log.seek(SeekFrom::Start(self.log_offset)).ok()?;
+        let mut bytes = Vec::new();
+        self.log
+            .by_ref()
+            .take(MAX_AGENT_STARTUP_DIAGNOSTIC_BYTES)
+            .read_to_end(&mut bytes)
+            .ok()?;
+        let diagnostic = String::from_utf8_lossy(&bytes).trim().to_owned();
+        (!diagnostic.is_empty()).then_some(diagnostic)
+    }
+}
+
+fn launch_agent(
+    binary: &Path,
+    state_dir: &Path,
+    socket: &Path,
+) -> Result<ManagedAgentLaunch, AgentError> {
     use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
     validate_agent_binary(binary)?;
     let log = OpenOptions::new()
         .create(true)
+        .read(true)
         .append(true)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
@@ -1943,6 +2065,9 @@ fn launch_agent(binary: &Path, state_dir: &Path, socket: &Path) -> Result<(), Ag
     }
     log.set_permissions(std::fs::Permissions::from_mode(0o600))
         .map_err(|error| AgentError::new("agent-log", error.to_string(), false))?;
+    let diagnostic_log = log
+        .try_clone()
+        .map_err(|error| AgentError::new("agent-log", error.to_string(), false))?;
     let stderr = log
         .try_clone()
         .map_err(|error| AgentError::new("agent-log", error.to_string(), false))?;
@@ -1963,16 +2088,18 @@ fn launch_agent(binary: &Path, state_dir: &Path, socket: &Path) -> Result<(), Ag
     *MANAGED_AGENT_PID
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(pid);
+    let (exit_sender, exit) = mpsc::channel();
     std::thread::Builder::new()
         .name("foks-agent-reaper".to_owned())
         .spawn(move || {
-            let _ = child.wait();
+            let status = child.wait();
             let mut guard = MANAGED_AGENT_PID
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if *guard == Some(pid) {
                 *guard = None;
             }
+            let _ = exit_sender.send(status);
         })
         .map_err(|error| {
             AgentError::new(
@@ -1981,7 +2108,12 @@ fn launch_agent(binary: &Path, state_dir: &Path, socket: &Path) -> Result<(), Ag
                 false,
             )
         })?;
-    Ok(())
+    Ok(ManagedAgentLaunch {
+        pid,
+        exit,
+        log: diagnostic_log,
+        log_offset: log_metadata.len(),
+    })
 }
 
 static MANAGED_AGENT_PID: Mutex<Option<u32>> = Mutex::new(None);
@@ -2186,6 +2318,213 @@ fn terminate_takeover_target(target: &AgentTakeover) -> Result<(), AgentError> {
         "version-mismatch",
         "The incompatible local agent did not exit after SIGTERM.",
         true,
+    ))
+}
+
+#[cfg(unix)]
+fn matching_agent_processes(state_dir: &Path) -> std::io::Result<Vec<StaleAgentProcess>> {
+    let state_dir = state_dir.canonicalize()?;
+    let mut processes = process_ids()?
+        .into_iter()
+        .filter(|pid| *pid > 1 && *pid != std::process::id())
+        .filter_map(|pid| {
+            if process_owner_uid(pid).ok()? != unsafe { libc::geteuid() }
+                || !is_foks_agent_executable(&process_executable_path(pid).ok()?)
+            {
+                return None;
+            }
+            let configured = agent_state_dir(&process_arguments(pid).ok()?)?;
+            let configured = configured.canonicalize().ok()?;
+            if !same_file(&configured, &state_dir) {
+                return None;
+            }
+            Some(StaleAgentProcess {
+                pid,
+                executable: process_executable_path(pid).ok()?,
+                started_at: process_start_time(pid).ok()?,
+                state_dir: configured,
+            })
+        })
+        .collect::<Vec<_>>();
+    processes.sort_by_key(|process| process.pid);
+    Ok(processes)
+}
+
+#[cfg(unix)]
+fn agent_process_matches(target: &StaleAgentProcess) -> bool {
+    process_owner_uid(target.pid).ok() == Some(unsafe { libc::geteuid() })
+        && process_start_time(target.pid).ok() == Some(target.started_at)
+        && process_executable_path(target.pid).ok().as_ref() == Some(&target.executable)
+        && process_arguments(target.pid)
+            .ok()
+            .and_then(|arguments| agent_state_dir(&arguments))
+            .and_then(|state_dir| state_dir.canonicalize().ok())
+            .is_some_and(|state_dir| same_file(&state_dir, &target.state_dir))
+}
+
+#[cfg(unix)]
+fn agent_state_dir(arguments: &[OsString]) -> Option<PathBuf> {
+    arguments.iter().enumerate().find_map(|(index, argument)| {
+        if argument == "--state-dir" {
+            return arguments.get(index + 1).map(PathBuf::from);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+            argument
+                .as_os_str()
+                .as_bytes()
+                .strip_prefix(b"--state-dir=")
+                .map(|path| PathBuf::from(OsString::from_vec(path.to_vec())))
+        }
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn process_ids() -> std::io::Result<Vec<u32>> {
+    let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    if count < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut pids = vec![0 as libc::pid_t; count as usize + 64];
+    let listed = unsafe {
+        libc::proc_listallpids(
+            pids.as_mut_ptr().cast(),
+            std::mem::size_of_val(pids.as_slice()) as libc::c_int,
+        )
+    };
+    if listed < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    pids.truncate(listed as usize);
+    Ok(pids
+        .into_iter()
+        .filter_map(|pid| u32::try_from(pid).ok())
+        .collect())
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn process_ids() -> std::io::Result<Vec<u32>> {
+    Ok(std::fs::read_dir("/proc")?
+        .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
+        .collect())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
+fn process_ids() -> std::io::Result<Vec<u32>> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "process enumeration is unavailable on this platform",
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn process_owner_uid(pid: u32) -> std::io::Result<libc::uid_t> {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::c_int,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            (&raw mut info).cast(),
+            size,
+        )
+    };
+    if written != size {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(info.pbi_uid)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn process_owner_uid(pid: u32) -> std::io::Result<libc::uid_t> {
+    use std::os::unix::fs::MetadataExt as _;
+    Ok(std::fs::metadata(format!("/proc/{pid}"))?.uid())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
+fn process_owner_uid(_pid: u32) -> std::io::Result<libc::uid_t> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "process ownership is unavailable on this platform",
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn process_arguments(pid: u32) -> std::io::Result<Vec<OsString>> {
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
+    let mut size = 0;
+    if unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            mib.len() as u32,
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut bytes = vec![0u8; size];
+    if unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            mib.len() as u32,
+            bytes.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    bytes.truncate(size);
+    if bytes.len() < std::mem::size_of::<libc::c_int>() {
+        return Err(std::io::Error::other("malformed process arguments"));
+    }
+    let argc = libc::c_int::from_ne_bytes(
+        bytes[..std::mem::size_of::<libc::c_int>()]
+            .try_into()
+            .map_err(|_| std::io::Error::other("malformed process arguments"))?,
+    );
+    let mut offset = std::mem::size_of::<libc::c_int>();
+    offset += bytes[offset..]
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or_else(|| std::io::Error::other("malformed process arguments"))?;
+    while bytes.get(offset) == Some(&0) {
+        offset += 1;
+    }
+    Ok(bytes[offset..]
+        .split(|byte| *byte == 0)
+        .filter(|argument| !argument.is_empty())
+        .take(argc.max(0) as usize)
+        .map(|argument| OsString::from_vec(argument.to_vec()))
+        .collect())
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn process_arguments(pid: u32) -> std::io::Result<Vec<OsString>> {
+    use std::os::unix::ffi::OsStringExt as _;
+
+    Ok(std::fs::read(format!("/proc/{pid}/cmdline"))?
+        .split(|byte| *byte == 0)
+        .filter(|argument| !argument.is_empty())
+        .map(|argument| OsString::from_vec(argument.to_vec()))
+        .collect())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
+fn process_arguments(_pid: u32) -> std::io::Result<Vec<OsString>> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "process arguments are unavailable on this platform",
     ))
 }
 
@@ -3082,6 +3421,56 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn managed_launch_reports_only_bounded_output_from_the_failed_process() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let binary = temporary.path().join("foks-agent");
+        let socket = temporary.path().join("agent.sock");
+        let log = temporary.path().join("agent.log");
+        std::fs::write(&log, "stale failure from an earlier launch\n").unwrap();
+        let output = format!(
+            "foks-agent: bind failed: Address already in use (os error 48)\n{}",
+            "x".repeat(5000)
+        );
+        std::fs::write(
+            &binary,
+            format!("#!/bin/sh\nprintf '%s' '{output}' >&2\nexit 23\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let mut launch = launch_agent(&binary, temporary.path(), &socket).unwrap();
+        let error = (0..100)
+            .find_map(|_| {
+                std::thread::sleep(Duration::from_millis(10));
+                launch.early_exit_error()
+            })
+            .expect("failed agent should exit promptly");
+        assert_eq!(error.code, "agent-start-failed");
+        assert!(error.retryable);
+        assert!(!error.fatal);
+        assert!(error.message.contains("exit status: 23"));
+        assert!(!error.message.contains("stale failure"));
+        let diagnostic = error.message.split_once("Agent output:\n").unwrap().1;
+        assert!(diagnostic.starts_with("foks-agent: bind failed: Address already in use"));
+        assert!(diagnostic.len() <= MAX_AGENT_STARTUP_DIAGNOSTIC_BYTES as usize);
+
+        std::fs::write(&binary, "#!/bin/sh\nexit 7\n").unwrap();
+        let mut launch = launch_agent(&binary, temporary.path(), &socket).unwrap();
+        let error = (0..100)
+            .find_map(|_| {
+                std::thread::sleep(Duration::from_millis(10));
+                launch.early_exit_error()
+            })
+            .expect("silent failed agent should exit promptly");
+        assert!(error.message.contains("exit status: 7"));
+        assert!(!error.message.contains("Agent output:"));
+        assert!(!error.message.contains("bind failed"));
+    }
+
     #[test]
     fn packaged_agent_discovery_matches_the_platform_bundle_layout() {
         #[cfg(target_os = "macos")]
@@ -3485,6 +3874,38 @@ mod tests {
         assert!(!is_replaceable_agent_process(0));
         assert!(!is_replaceable_agent_process(1));
         assert!(!is_replaceable_agent_process(std::process::id()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agent_state_directory_requires_an_explicit_argument() {
+        assert_eq!(
+            agent_state_dir(&[
+                "foks-agent".into(),
+                "--state-dir".into(),
+                "/private/foks".into(),
+            ]),
+            Some(PathBuf::from("/private/foks"))
+        );
+        assert_eq!(
+            agent_state_dir(&["foks-agent".into(), "--state-dir=/private/other".into(),]),
+            Some(PathBuf::from("/private/other"))
+        );
+        assert_eq!(agent_state_dir(&["foks-agent".into()]), None);
+        assert_eq!(
+            agent_state_dir(&["foks-agent".into(), "--state-dir".into()]),
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_inspection_identifies_the_current_invocation() {
+        let pid = std::process::id();
+        assert_eq!(process_owner_uid(pid).unwrap(), unsafe { libc::geteuid() });
+        assert!(!process_arguments(pid).unwrap().is_empty());
+        assert!(process_ids().unwrap().contains(&pid));
+        assert!(process_start_time(pid).is_ok());
     }
 
     #[cfg(unix)]

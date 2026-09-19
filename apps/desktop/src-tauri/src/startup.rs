@@ -15,6 +15,11 @@ use crate::{
 /// Invoked from the startup thread to display a fatal error dialog before a
 /// non-zero exit.
 pub fn fatal_startup(app: &tauri::AppHandle, title: &str, body: &str) -> ! {
+    show_fatal_startup(app, title, body);
+    std::process::exit(1);
+}
+
+fn show_fatal_startup(app: &tauri::AppHandle, title: &str, body: &str) {
     let window = app
         .get_webview_window(MAIN)
         .expect("main window unavailable during startup");
@@ -24,7 +29,62 @@ pub fn fatal_startup(app: &tauri::AppHandle, title: &str, body: &str) -> ! {
         .kind(MessageDialogKind::Error)
         .title(title)
         .blocking_show();
+}
+
+fn quit_after_agent_startup_error(app: &tauri::AppHandle, agent: &AgentHandle) -> ! {
+    let candidates = agent.stale_agent_processes();
+    if !candidates.is_empty() {
+        let window = app
+            .get_webview_window(MAIN)
+            .expect("main window unavailable during startup");
+        let confirmed = app
+            .dialog()
+            .message(stale_agent_cleanup_message(agent, &candidates))
+            .parent(&window)
+            .kind(MessageDialogKind::Warning)
+            .title("Terminate Existing FOKS Agents?")
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Terminate Agents and Quit".into(),
+                "Leave Running and Quit".into(),
+            ))
+            .blocking_show();
+        if confirmed {
+            for candidate in &candidates {
+                let _ = agent.terminate_stale_agent(candidate);
+            }
+        }
+    }
     std::process::exit(1);
+}
+
+fn fatal_agent_startup(app: &tauri::AppHandle, agent: &AgentHandle, title: &str, body: &str) -> ! {
+    show_fatal_startup(app, title, body);
+    quit_after_agent_startup_error(app, agent)
+}
+
+fn stale_agent_cleanup_message(
+    agent: &AgentHandle,
+    candidates: &[crate::agent::StaleAgentProcess],
+) -> String {
+    let processes = candidates
+        .iter()
+        .map(|candidate| {
+            format!(
+                "    Process: {}\n    Executable: {}\n    Started: {}",
+                candidate.pid,
+                candidate.executable.display(),
+                candidate.started_at,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    format!(
+        "FOKS found {} foks-agent process{} configured to use {}. They may continue accessing that data directory after this application quits.\n\n{}\n\nTerminate these processes before quitting?",
+        candidates.len(),
+        if candidates.len() == 1 { "" } else { "es" },
+        agent.socket().parent().unwrap_or_else(|| Path::new(".")).display(),
+        processes,
+    )
 }
 
 /// Confirms the agent is reachable before the first request.
@@ -79,7 +139,7 @@ pub fn require_agent(app: &tauri::AppHandle, agent: &AgentHandle) {
                     ))
                     .blocking_show();
                 if !reset {
-                    std::process::exit(1);
+                    quit_after_agent_startup_error(app, agent);
                 }
                 let confirmed = app
                     .dialog()
@@ -93,7 +153,7 @@ pub fn require_agent(app: &tauri::AppHandle, agent: &AgentHandle) {
                     ))
                     .blocking_show();
                 if !confirmed {
-                    std::process::exit(1);
+                    quit_after_agent_startup_error(app, agent);
                 }
                 if let Err(error) = agent.reset_startup_state(&root) {
                     let body = format!(
@@ -101,11 +161,11 @@ pub fn require_agent(app: &tauri::AppHandle, agent: &AgentHandle) {
                          Deletion may be incomplete. Close other FOKS clients and agents before trying again.",
                         root.display(), error.message,
                     );
-                    fatal_startup(app, "Local State Reset Failed", &body);
+                    fatal_agent_startup(app, agent, "Local State Reset Failed", &body);
                 }
                 continue;
             }
-            fatal_startup(app, "Agent Connection Failed", &body);
+            fatal_agent_startup(app, agent, "Agent Connection Failed", &body);
         }
         break;
     }
@@ -192,6 +252,34 @@ mod tests {
         ] {
             assert!(warning.contains(text), "missing warning: {text}");
         }
+    }
+
+    #[test]
+    fn stale_agent_prompt_identifies_every_confirmed_target() {
+        let agent = AgentHandle::new(std::path::PathBuf::from("/private/foks/foks-rs.sock"));
+        let message = stale_agent_cleanup_message(
+            &agent,
+            &[
+                crate::agent::StaleAgentProcess {
+                    pid: 123,
+                    executable: "/tmp/old/foks-agent".into(),
+                    started_at: 456,
+                    state_dir: "/private/foks".into(),
+                },
+                crate::agent::StaleAgentProcess {
+                    pid: 789,
+                    executable: "/Applications/FOKS.app/Contents/MacOS/foks-agent".into(),
+                    started_at: 999,
+                    state_dir: "/private/foks".into(),
+                },
+            ],
+        );
+        assert!(message.contains("2 foks-agent processes"));
+        assert!(message.contains("/private/foks"));
+        assert!(message.contains("Process: 123"));
+        assert!(message.contains("Executable: /tmp/old/foks-agent"));
+        assert!(message.contains("Process: 789"));
+        assert!(message.contains("Terminate these processes before quitting?"));
     }
 
     #[test]

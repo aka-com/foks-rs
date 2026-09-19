@@ -191,7 +191,7 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     {
         return Err("agent limits are outside supported bounds".into());
     }
-    let _root_lease = foks_client_app::ClientStateLease::acquire(&arguments.state_dir)?;
+    let root_lease = foks_client_app::ClientStateLease::acquire(&arguments.state_dir)?;
     drop(ProfileRegistry::open(&arguments.state_dir)?);
     let state_dir = arguments.state_dir.canonicalize()?;
     let initialized = ClientCredentials::is_initialized(&state_dir)?;
@@ -217,10 +217,10 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     if !parent.canonicalize()?.starts_with(&state_dir) {
         return Err("agent socket must be below the explicit state root".into());
     }
-    let _agent_lock = AgentLock::acquire(&state_dir)?;
+    let agent_lock = AgentLock::acquire(&state_dir)?;
     remove_stale_agent_socket(&socket)?;
     let listener = bind_private_agent_socket(&socket)?;
-    let _socket_guard = SocketGuard::new(socket.clone())?;
+    let socket_guard = SocketGuard::new(socket.clone())?;
     let active = Arc::new(Semaphore::new(arguments.maximum_connections));
     let recovery = Arc::new(Semaphore::new(1));
     let blocking = Arc::new(Semaphore::new(arguments.blocking_workers));
@@ -241,6 +241,8 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     let mut compatibility =
         tokio::time::interval(Duration::from_secs(arguments.compatibility_poll_seconds));
     compatibility.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut ownership = tokio::time::interval(Duration::from_secs(5));
+    ownership.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let compatibility_client = compatibility_http_client(timeout)?;
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     eprintln!("FOKS agent ready: {}", socket.display());
@@ -255,6 +257,13 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
             _ = terminate.recv() => {
                 scheduler_cancellation.cancel();
                 break;
+            }
+            _ = ownership.tick() => {
+                if !agent_ownership_is_current(&root_lease, &agent_lock, &socket_guard, &state_dir) {
+                    eprintln!("foks-agent ownership was displaced; exiting");
+                    scheduler_cancellation.cancel();
+                    break;
+                }
             }
             accepted = listener.accept() => {
                 let (stream, _) = accepted?;
@@ -300,6 +309,11 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                 });
             }
             _ = retention_timer.tick() => {
+                if !agent_ownership_is_current(&root_lease, &agent_lock, &socket_guard, &state_dir) {
+                    eprintln!("foks-agent ownership was displaced; exiting");
+                    scheduler_cancellation.cancel();
+                    break;
+                }
                 if !ready.load(Ordering::Acquire) { continue; }
                 let Ok(permit) = retention_gate.clone().try_acquire_owned() else { continue; };
                 let state=state_dir.clone();
@@ -309,6 +323,11 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                 });
             }
             _ = scheduler.tick() => {
+                if !agent_ownership_is_current(&root_lease, &agent_lock, &socket_guard, &state_dir) {
+                    eprintln!("foks-agent ownership was displaced; exiting");
+                    scheduler_cancellation.cancel();
+                    break;
+                }
                 if !ready.load(Ordering::Acquire) {
                     continue;
                 }
@@ -324,6 +343,11 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                 });
             }
             _ = compatibility.tick() => {
+                if !agent_ownership_is_current(&root_lease, &agent_lock, &socket_guard, &state_dir) {
+                    eprintln!("foks-agent ownership was displaced; exiting");
+                    scheduler_cancellation.cancel();
+                    break;
+                }
                 if !ready.load(Ordering::Acquire) {
                     continue;
                 }
@@ -5070,6 +5094,18 @@ fn bind_private_agent_socket(path: &Path) -> std::io::Result<tokio::net::UnixLis
 struct AgentLock(std::fs::File);
 
 #[cfg(unix)]
+fn agent_ownership_is_current(
+    root: &foks_client_app::ClientStateLease,
+    lock: &AgentLock,
+    socket: &SocketGuard,
+    state_dir: &Path,
+) -> bool {
+    root.validate().is_ok()
+        && lock.owns_named_file(state_dir).unwrap_or(false)
+        && socket.owns_named_socket().unwrap_or(false)
+}
+
+#[cfg(unix)]
 impl AgentLock {
     fn acquire(state_dir: &Path) -> std::io::Result<Self> {
         use fs2::FileExt as _;
@@ -5104,6 +5140,17 @@ impl AgentLock {
             }
         })?;
         Ok(Self(file))
+    }
+
+    fn owns_named_file(&self, state_dir: &Path) -> std::io::Result<bool> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let held = self.0.metadata()?;
+        match std::fs::symlink_metadata(state_dir.join(AGENT_LOCK_NAME)) {
+            Ok(named) => Ok(held.dev() == named.dev() && held.ino() == named.ino()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -5176,6 +5223,16 @@ impl SocketGuard {
             device: metadata.dev(),
             inode: metadata.ino(),
         })
+    }
+
+    fn owns_named_socket(&self) -> std::io::Result<bool> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        match std::fs::symlink_metadata(&self.path) {
+            Ok(metadata) => Ok(metadata.dev() == self.device && metadata.ino() == self.inode),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -5302,13 +5359,41 @@ mod tests {
     fn agent_lifetime_lock_is_exclusive_and_reusable() {
         let directory = tempfile::tempdir().unwrap();
         let first = AgentLock::acquire(directory.path()).unwrap();
-        assert!(directory.path().join(AGENT_LOCK_NAME).is_file());
+        let path = directory.path().join(AGENT_LOCK_NAME);
+        assert!(path.is_file());
+        assert!(first.owns_named_file(directory.path()).unwrap());
         assert_eq!(
             AgentLock::acquire(directory.path()).unwrap_err().kind(),
             std::io::ErrorKind::AddrInUse
         );
+        std::fs::remove_file(&path).unwrap();
+        assert!(!first.owns_named_file(directory.path()).unwrap());
         drop(first);
         AgentLock::acquire(directory.path()).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ownership_check_rejects_a_replaced_lock() {
+        let directory = tempfile::tempdir().unwrap();
+        let lease = foks_client_app::ClientStateLease::acquire(directory.path()).unwrap();
+        let lock = AgentLock::acquire(directory.path()).unwrap();
+        let socket = directory.path().join("agent.sock");
+        let listener = bind_private_agent_socket(&socket).unwrap();
+        let guard = SocketGuard::new(socket).unwrap();
+        assert!(agent_ownership_is_current(
+            &lease,
+            &lock,
+            &guard,
+            directory.path()
+        ));
+        std::fs::remove_file(directory.path().join(AGENT_LOCK_NAME)).unwrap();
+        assert!(!agent_ownership_is_current(
+            &lease,
+            &lock,
+            &guard,
+            directory.path()
+        ));
+        drop(listener);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -5361,8 +5446,10 @@ mod tests {
         let path = directory.path().join("agent.sock");
         let original = std::os::unix::net::UnixListener::bind(&path).unwrap();
         let guard = SocketGuard::new(path.clone()).unwrap();
+        assert!(guard.owns_named_socket().unwrap());
         std::fs::remove_file(&path).unwrap();
         let replacement = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        assert!(!guard.owns_named_socket().unwrap());
         drop(guard);
         assert!(path.exists());
         assert!(std::os::unix::net::UnixStream::connect(&path).is_ok());
