@@ -197,8 +197,8 @@ export function ChatTab({
               : { kind: 'chat', ref: next },
           );
         }}
-        // The column's button searches conversations across every team;
-        // creating a channel is a separate form with its own team choice.
+        // The column's button opens the creation form with no team chosen:
+        // it belongs to the column rather than to any one team's row.
         onNewChat={() =>
           setNewChat({ originRef: ref, originChannel: location.channel })
         }

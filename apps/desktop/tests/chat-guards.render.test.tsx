@@ -308,7 +308,9 @@ async function channelRow(title: string): Promise<HTMLButtonElement> {
 
 /** The create-a-channel form, reached the way the tab offers it. */
 async function openChannelSheet(): Promise<HTMLInputElement> {
-  ui.fireEvent.click(ui.screen.getAllByRole('button', { name: 'New chat' })[0]);
+  ui.fireEvent.click(
+    ui.screen.getAllByRole('button', { name: 'New channel' })[0],
+  );
   await click(ui.screen.getByRole('button', { name: 'Team' }));
   await click(await ui.screen.findByRole('option', { name: /^Engineering/ }));
   return ui.screen.getByRole<HTMLInputElement>('textbox', {

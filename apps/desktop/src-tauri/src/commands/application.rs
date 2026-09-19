@@ -143,20 +143,22 @@ fn macos_computer_name() -> Option<String> {
     None
 }
 
+/// The short account name, which seeds the first-run username field.
+///
+/// `NSUserName` is the login name; `NSFullUserName` is the display name, which
+/// is usually the person's real name. A FOKS username is published to the
+/// server and shared with the people they talk to, so the short name is the
+/// only one offered here: a full name reaches that field only if the person
+/// types it.
 fn macos_user_name() -> Option<String> {
     #[cfg(target_os = "macos")]
     {
-        for value in [
-            objc2_foundation::NSFullUserName(),
-            objc2_foundation::NSUserName(),
-        ] {
-            let name = value.to_string();
-            let name = name.trim();
-            if !name.is_empty() && name.len() <= 256 {
-                return Some(name.to_owned());
-            }
+        let name = objc2_foundation::NSUserName().to_string();
+        let name = name.trim();
+        if name.is_empty() || name.len() > 256 {
+            return None;
         }
-        None
+        Some(name.to_owned())
     }
     #[cfg(not(target_os = "macos"))]
     None

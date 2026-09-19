@@ -394,11 +394,13 @@ export function ChatTeamColumn({
         <Button
           variant="primary"
           icon="plus"
-          aria-label="New chat"
+          // The sheet this opens creates a channel; existing conversations
+          // open from the column below it, so the button names what it does.
+          aria-label="New channel"
           disabled={!teams.length}
           title={
             teams.length
-              ? 'New chat'
+              ? 'New channel'
               : 'Chat requires a team on a server with chat enabled'
           }
           onClick={onNewChat}

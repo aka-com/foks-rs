@@ -518,7 +518,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
         agent_socket: "/private/foks/agent.sock".to_owned(),
         managed_profile: Some("local".to_owned()),
         computer_name: None,
-        user_name: Some("Example User".to_owned()),
+        user_name: Some("example".to_owned()),
     };
     assert_eq!(serde_json::to_value(app_info).unwrap(), fixture["appInfo"]);
     let discovery = GoProfileDiscoveryDto {

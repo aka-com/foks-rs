@@ -138,7 +138,7 @@ async function mount(override?: (base: Bridge) => Bridge, tabbed = false) {
       }),
     ),
   );
-  if (tabbed) await ui.screen.findByRole('button', { name: 'New chat' });
+  if (tabbed) await ui.screen.findByRole('button', { name: 'New channel' });
   else await ui.screen.findByRole('heading', { name: 'Create channel' });
   return { opened, team, navigation };
 }
@@ -422,7 +422,7 @@ test('uncertain creation reopens original inputs and Check again does not create
 
 test('unsubmitted name, description, audience and chosen team survive a rail tab round trip', async () => {
   const { team, navigation } = await mount(undefined, true);
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New chat' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New channel' }));
   await form(team);
   ui.fireEvent.change(
     ui.screen.getByRole('textbox', { name: 'Channel description' }),
@@ -476,7 +476,7 @@ test('submitted work never restores a redirect or raw draft after changing rail 
     }),
     true,
   );
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New chat' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New channel' }));
   await form(team);
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create channel' }));
   await ui.waitFor(() => assert.ok(finish));

@@ -86,6 +86,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 /* Rail item tail indicator */
 .side.rail .nav .rail-tail{margin-left:auto;flex:none;min-width:20px;height:20px;display:grid;place-items:center;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;color:rgba(255,255,255,.62)}
 .side.rail .nav.on .rail-tail{color:rgba(255,255,255,.85)}
+.side.rail .nav .rail-tail.count.warn{color:var(--warning-dot)}
 .side.rail .nav .rail-tail.dot::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--unread)}
 .side.rail .nav .rail-tail.dot.warn::before{background:var(--warning-dot)}
 .side.rail .nav .rail-tail .spin{width:12px;height:12px;border-radius:50%;border:1.5px solid rgba(255,255,255,.28);border-top-color:rgba(255,255,255,.9);animation:rail-spin .8s linear infinite}
@@ -151,6 +152,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side.rail.is-narrow .nav>.rail-tail{position:absolute;top:9px;left:calc(50% + 8px);margin:0;min-width:0;width:6px;height:6px;border-radius:50%;font-size:0;box-shadow:0 0 0 2px var(--rail)}
 .side.rail.is-narrow .nav>.rail-tail.dot::before{width:6px;height:6px}
 .side.rail.is-narrow .nav>.rail-tail.count{background:var(--unread)}
+.side.rail.is-narrow .nav>.rail-tail.count.warn{background:var(--warning-dot)}
 .side.rail.is-narrow .nav>.rail-tail.loading{box-shadow:none}
 .side.rail.is-narrow .nav>.rail-tail .spin{width:6px;height:6px}
 .side.rail.is-narrow .status{justify-content:center;padding-left:0;padding-right:0;gap:0;border-right:3px solid transparent}

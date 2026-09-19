@@ -842,7 +842,7 @@ test('New chat opens creation directly and the team selector states unavailable 
   const snapshot = await snapshotWithChat(['personal']);
   const journal = await mount(snapshot, { kind: 'chat' });
   await ui.waitFor(() => assert.ok(heads().length));
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New chat' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New channel' }));
   const sheet = await ui.screen.findByRole('dialog', {
     name: 'Create channel',
   });
@@ -1243,7 +1243,9 @@ test('the saved-creation check is announced while it runs and offered again once
   await ui.waitFor(() => assert.ok(heads().length));
   // The sheet reads every team's saved creations as it opens.
   armed = true;
-  ui.fireEvent.click(ui.screen.getAllByRole('button', { name: 'New chat' })[0]);
+  ui.fireEvent.click(
+    ui.screen.getAllByRole('button', { name: 'New channel' })[0],
+  );
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Team' }));
   ui.fireEvent.click(
     await ui.screen.findByRole('option', { name: /^Engineering/ }),
@@ -1291,7 +1293,9 @@ test('the saved-creation check is announced while it runs and offered again once
 
 /** New chat → a team → Create a channel, the way the column offers it. */
 async function openCreateForm(team: RegExp): Promise<HTMLElement> {
-  ui.fireEvent.click(ui.screen.getAllByRole('button', { name: 'New chat' })[0]);
+  ui.fireEvent.click(
+    ui.screen.getAllByRole('button', { name: 'New channel' })[0],
+  );
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Team' }));
   ui.fireEvent.click(await ui.screen.findByRole('option', { name: team }));
   await ui.waitFor(() =>
@@ -1403,7 +1407,7 @@ test('New chat waits for a team’s channels before either step can be answered'
     },
   }));
   await ui.waitFor(() => assert.ok(heads().length));
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New chat' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New channel' }));
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Team' }));
   ui.fireEvent.click(
     await ui.screen.findByRole('option', { name: /^Engineering/ }),
@@ -1461,7 +1465,7 @@ test('New chat focuses the name directly and Cancel closes it without a precedin
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   await mount(snapshot, { kind: 'chat', ref: 'team:eng' });
   await ui.waitFor(() => assert.ok(heads().length));
-  const opener = ui.screen.getByRole('button', { name: 'New chat' });
+  const opener = ui.screen.getByRole('button', { name: 'New channel' });
   opener.focus();
   ui.fireEvent.click(opener);
   assert.equal(
@@ -1545,7 +1549,7 @@ test('New chat counts visible channels in its team selector without listing conv
       '#archive',
     ]),
   );
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New chat' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New channel' }));
   const sheet = ui.screen.getByRole('dialog');
   // Three channels are known, but the hidden one is not one the selector's
   // count line offers.
@@ -1590,7 +1594,7 @@ test('a team switch closes the sheet and keeps unresolved creation recoverable',
   await ui.waitFor(() => assert.ok(heads().length));
   // A half-finished New chat belongs to the team it was opened in: a switch
   // closes it rather than rebinding it to the team that arrives.
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New chat' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New channel' }));
   await ui.screen.findByRole('dialog', { name: 'Create channel' });
   ui.fireEvent.click(general('Household'));
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
@@ -1603,7 +1607,7 @@ test('a team switch closes the sheet and keeps unresolved creation recoverable',
   await ui.screen.findByText('Preparation reply lost');
   ui.fireEvent.click(general('Engineering'));
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New chat' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New channel' }));
   ui.fireEvent.click(
     await ui.screen.findByRole('button', { name: /Engineering · #design/ }),
   );

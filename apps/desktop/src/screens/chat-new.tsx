@@ -1,7 +1,7 @@
 import { useChannelCreation } from '../chat/channel-creation-provider';
 import './chat-picker.css';
 /**
- * New chat opens a channel-creation form directly.
+ * New channel opens a channel-creation form directly.
  *
  * Chat supports channels in named teams, not one-to-one conversations. The
  * team selector, name, and description share one field group. Existing chats

@@ -135,7 +135,9 @@ async function teamBadge(team: string): Promise<HTMLElement> {
  * team, then Create a channel.
  */
 async function openChannelSheet() {
-  ui.fireEvent.click(ui.screen.getAllByRole('button', { name: 'New chat' })[0]);
+  ui.fireEvent.click(
+    ui.screen.getAllByRole('button', { name: 'New channel' })[0],
+  );
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Team' }));
   ui.fireEvent.click(
     await ui.screen.findByRole('option', { name: /^Engineering/ }),
@@ -534,7 +536,7 @@ test('ambiguous channel preparation keeps its submission after the sheet closes'
   );
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Close' }));
   assert.equal(ui.screen.queryByRole('dialog'), null);
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New chat' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New channel' }));
   ui.fireEvent.click(
     await ui.screen.findByRole('button', {
       name: /Engineering · #recoverable/,

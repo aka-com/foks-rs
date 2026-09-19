@@ -86,6 +86,7 @@ export interface AppInfo {
   managedProfile?: string;
   /** macOS Computer Name configured in System Settings. */
   computerName?: string;
+  /** macOS short account name (the login name), not the full display name. */
   userName?: string;
 }
 

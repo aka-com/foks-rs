@@ -535,6 +535,13 @@ export function AccountHeader({
  * reports one team at a time, including the states that have no number
  * (loading, unavailable); those contribute nothing to the sum but do keep the
  * badge from disappearing while a team is still loading.
+ *
+ * A team whose synchronization failed or arrived incomplete marks the badge
+ * rather than replacing it: an inbox poll fails and retries on a backoff, and
+ * a count that vanished on each failed poll would read as messages going away.
+ * The count that is known is still drawn, in the warning colour, and the
+ * description says what is unaccounted for. Only when no team could be counted
+ * at all does the badge fall back to a warning dot with nothing to show.
  */
 function railChatUnread(
   snapshot: AgentSnapshot,
@@ -572,30 +579,32 @@ function railChatUnread(
       known = true;
     }
   }
-  if (warnings.size)
-    return {
-      warning: true,
-      description: `${known ? `${total} known unread; ` : ''}${[...warnings].join('; ')}`,
-    };
+  if (warnings.size) {
+    const description = `${known ? `${total} known unread; ` : ''}${[...warnings].join('; ')}`;
+    return known
+      ? { label: String(total), description, warning: true }
+      : { warning: true, description };
+  }
   if (known) return { label: String(total), description: `${total} unread` };
   return pending
     ? { loading: true, description: 'Loading unread counts' }
     : null;
 }
 
-type RailCount = { label: string; description: string };
+type RailCount = { label: string; description: string; warning?: boolean };
 
 /**
  * Standard trailing status slot for each tab. Unread counts use neutral text,
  * dots indicate actionable status without a numeric value, `warn` uses amber,
- * and `loading` renders a ring spinner.
+ * and `loading` renders a ring spinner. A count carrying `warn` is a total
+ * that is known to be short of something, drawn in amber rather than dropped.
  */
 function RailTail({
   kind,
   description,
   children,
 }: {
-  kind: 'count' | 'dot' | 'dot warn' | 'loading';
+  kind: 'count' | 'count warn' | 'dot' | 'dot warn' | 'loading';
   description: string;
   children?: ReactNode;
 }): ReactNode {
@@ -649,10 +658,13 @@ export function Sidebar({
       if (!unread) return undefined;
       if ('loading' in unread)
         return <RailTail kind="loading" description={unread.description} />;
-      if ('warning' in unread)
+      if (!('label' in unread))
         return <RailTail kind="dot warn" description={unread.description} />;
       return (
-        <RailTail kind="count" description={unread.description}>
+        <RailTail
+          kind={unread.warning ? 'count warn' : 'count'}
+          description={unread.description}
+        >
           {unread.label}
         </RailTail>
       );

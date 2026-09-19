@@ -234,10 +234,11 @@ async function personaWalks(context, origin) {
       .getByRole('button', { name: /^Household/ })
       .click();
     await page.getByText('Team chat is ready.', { exact: true }).waitFor();
-    await page.getByRole('button', { name: 'New chat', exact: true }).click();
-    await page.getByRole('radio', { name: /^Household/ }).click();
-    await page.getByRole('button', { name: 'Continue', exact: true }).click();
-    await page.getByRole('radio', { name: /Create a channel/ }).click();
+    // The sheet opens straight onto the creation form, with the team chosen
+    // from its own selector rather than from a step in front of the form.
+    await page.getByRole('button', { name: 'New channel', exact: true }).click();
+    await page.getByRole('button', { name: 'Team', exact: true }).click();
+    await page.getByRole('option', { name: /^Household/ }).click();
     await page
       .getByRole('textbox', { name: 'Channel name' })
       .fill('design-chat');

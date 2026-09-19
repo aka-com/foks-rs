@@ -213,11 +213,11 @@ export function ChatScreen({
     disabled: loading,
     run: () => void guardedRefresh(),
   };
-  // A failure over a channel list that was read, or over an open channel,
-  // joins the thread's own alerts below its header. Without a channel,
-  // the failure owns the empty pane instead of being repeated above it.
-  const alerts: ChatAlert[] = [
-    failureAlert(failure, store?.name, [retryInbox]),
+  // What a synchronization reports about the team as a whole, apart from the
+  // read of the channel list itself: these stand wherever the pane does, since
+  // a paused or partial synchronization is worth saying even when the list
+  // could not be read at all.
+  const syncAlerts: ChatAlert[] = [
     {
       message: syncError,
       severity: 'warn',
@@ -233,6 +233,14 @@ export function ChatScreen({
         : '',
       severity: 'info',
     },
+  ];
+  // A failure over a channel list that was read, or over an open channel,
+  // joins the thread's own alerts below its header. Without a channel,
+  // the failure owns the empty pane instead of being repeated above it —
+  // but only the failure: the synchronization alerts beside it stay.
+  const alerts: ChatAlert[] = [
+    failureAlert(failure, store?.name, [retryInbox]),
+    ...syncAlerts,
   ];
   const pane =
     !available && store ? (
@@ -294,7 +302,7 @@ export function ChatScreen({
       </div>
     ) : (
       <>
-        {!channel && !error && <ChatAlerts alerts={alerts} />}
+        {!channel && <ChatAlerts alerts={error ? syncAlerts : alerts} />}
         {channel && blockedChannels.has(channel.id) ? (
           <div className="empty">
             <h2>Channel stopped</h2>

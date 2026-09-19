@@ -164,7 +164,7 @@ async function harness() {
   };
 }
 
-test('account name defaults to the macOS user display name', async () => {
+test('account name defaults to the macOS short account name', async () => {
   const h = await harness();
   const r = h.render(
     {
@@ -178,7 +178,7 @@ test('account name defaults to the macOS user display name', async () => {
         appInfo: async () => ({
           version: '0.3.0',
           agentSocket: '/private/foks/agent.sock',
-          userName: 'Example User',
+          userName: 'example',
         }),
       },
     },
@@ -186,7 +186,7 @@ test('account name defaults to the macOS user display name', async () => {
   await ui.waitFor(() =>
     assert.equal(
       (r.view.getByLabelText('Your name') as HTMLInputElement).value,
-      'Example User',
+      'example',
     ),
   );
 });

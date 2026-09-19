@@ -142,7 +142,7 @@ const NOTHING_BLOCKED: ReadonlySet<string> = new Set();
 
 /**
  * What a channel says about itself beside its name: the column's rows, a
- * single-channel team's row and New chat's channel picker all draw this, so
+ * single-channel team's row and the group tab's channel list all draw this, so
  * none of them can disagree about a channel being stopped, restricted, hidden
  * or muted. `blocked` is the team's quarantined channels, which only the inbox
  * service knows.

@@ -225,7 +225,7 @@ for (const collapsed of [false, true]) {
   }
 }
 
-test('Chat does not hide a failed team behind another team’s unread count', async () => {
+test('Chat keeps a countable total and marks it when a team fails', async () => {
   await rail({ kind: 'all' }, (base) => async (store, action, view) => {
     if (store === 'team:eng')
       throw {
@@ -243,10 +243,15 @@ test('Chat does not hide a failed team behind another team’s unread count', as
     return reply;
   });
   await ui.waitFor(() => {
-    const warning = tabs()[1].querySelector('.rail-tail.dot.warn');
+    // The count that could be read is still drawn: a failing team marks the
+    // badge amber rather than taking the number away, which on a retrying
+    // poll would read as the unread messages themselves going away.
+    const warning = tabs()[1].querySelector('.rail-tail.count.warn');
     assert.ok(warning);
+    assert.equal(warning.textContent, '2');
     assert.match(warning.getAttribute('aria-label') ?? '', /2 known unread/);
     assert.match(warning.getAttribute('aria-label') ?? '', /unavailable/i);
+    assert.equal(tabs()[1].querySelector('.rail-tail.dot.warn'), null);
     assert.equal(tabs()[1].querySelector('.rail-tail.loading'), null);
   });
 });

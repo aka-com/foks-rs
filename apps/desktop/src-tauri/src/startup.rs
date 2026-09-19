@@ -49,8 +49,24 @@ fn quit_after_agent_startup_error(app: &tauri::AppHandle, agent: &AgentHandle) -
             ))
             .blocking_show();
         if confirmed {
-            for candidate in &candidates {
-                let _ = agent.terminate_stale_agent(candidate);
+            // A confirmation that quietly did nothing is worse than no offer
+            // at all: the reader was told these processes would be stopped, so
+            // the ones that were not are named before the app goes away.
+            let refused = candidates
+                .iter()
+                .filter_map(|candidate| {
+                    agent
+                        .terminate_stale_agent(candidate)
+                        .err()
+                        .map(|error| (candidate.pid, error))
+                })
+                .collect::<Vec<_>>();
+            if !refused.is_empty() {
+                show_fatal_startup(
+                    app,
+                    "Agents Could Not Be Terminated",
+                    &stale_agent_cleanup_failure_message(agent, &refused),
+                );
             }
         }
     }
@@ -60,6 +76,10 @@ fn quit_after_agent_startup_error(app: &tauri::AppHandle, agent: &AgentHandle) -
 fn fatal_agent_startup(app: &tauri::AppHandle, agent: &AgentHandle, title: &str, body: &str) -> ! {
     show_fatal_startup(app, title, body);
     quit_after_agent_startup_error(app, agent)
+}
+
+fn agent_state_directory(agent: &AgentHandle) -> &Path {
+    agent.socket().parent().unwrap_or_else(|| Path::new("."))
 }
 
 fn stale_agent_cleanup_message(
@@ -82,7 +102,31 @@ fn stale_agent_cleanup_message(
         "FOKS found {} foks-agent process{} configured to use {}. They may continue accessing that data directory after this application quits.\n\n{}\n\nTerminate these processes before quitting?",
         candidates.len(),
         if candidates.len() == 1 { "" } else { "es" },
-        agent.socket().parent().unwrap_or_else(|| Path::new(".")).display(),
+        agent_state_directory(agent).display(),
+        processes,
+    )
+}
+
+fn stale_agent_cleanup_failure_message(
+    agent: &AgentHandle,
+    refused: &[(u32, AgentError)],
+) -> String {
+    let processes = refused
+        .iter()
+        .map(|(pid, error)| format!("    Process {}: {}", pid, error.message))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let (plural, pronoun) = if refused.len() == 1 {
+        ("", "It is")
+    } else {
+        ("es", "They are")
+    };
+    format!(
+        "FOKS could not terminate {} foks-agent process{}. {} still running and may continue accessing {}.\n\n{}\n\nQuit the remaining processes yourself before starting FOKS again.",
+        refused.len(),
+        plural,
+        pronoun,
+        agent_state_directory(agent).display(),
         processes,
     )
 }
@@ -280,6 +324,48 @@ mod tests {
         assert!(message.contains("Executable: /tmp/old/foks-agent"));
         assert!(message.contains("Process: 789"));
         assert!(message.contains("Terminate these processes before quitting?"));
+    }
+
+    #[test]
+    fn stale_agent_cleanup_reports_every_process_it_could_not_terminate() {
+        let agent = AgentHandle::new(std::path::PathBuf::from("/private/foks/foks-rs.sock"));
+        let message = stale_agent_cleanup_failure_message(
+            &agent,
+            &[
+                (
+                    123,
+                    AgentError::new(
+                        "agent-cleanup-changed",
+                        "The agent process changed after confirmation and was not terminated.",
+                        false,
+                    ),
+                ),
+                (
+                    789,
+                    AgentError::new(
+                        "agent-cleanup-failed",
+                        "Failed to terminate foks-agent process 789: Operation not permitted",
+                        false,
+                    ),
+                ),
+            ],
+        );
+        assert!(message.contains("could not terminate 2 foks-agent processes"));
+        assert!(message.contains("They are still running"));
+        assert!(message.contains("/private/foks"));
+        assert!(message.contains("Process 123: The agent process changed after confirmation"));
+        assert!(message.contains("Process 789: Failed to terminate foks-agent process 789"));
+        assert!(message.contains("before starting FOKS again"));
+
+        let single = stale_agent_cleanup_failure_message(
+            &agent,
+            &[(
+                123,
+                AgentError::new("agent-cleanup-failed", "Operation not permitted", false),
+            )],
+        );
+        assert!(single.contains("could not terminate 1 foks-agent process."));
+        assert!(single.contains("It is still running"));
     }
 
     #[test]
