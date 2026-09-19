@@ -1083,6 +1083,11 @@ pub(super) fn profile_publication_checkpoint_binding(
     }))
 }
 
+/// Where a profile's publication marker lives while its publication is pending.
+pub(super) fn profile_publication_marker(session: &ProfileSession) -> PathBuf {
+    session.paths.directory.join(PROFILE_PUBLICATION_MARKER)
+}
+
 pub(super) fn profile_publication_is_pending(session: &ProfileSession) -> Result<bool> {
     read_profile_publication_marker(&session.paths.directory.join(PROFILE_PUBLICATION_MARKER))
         .map(|marker| marker.is_some())

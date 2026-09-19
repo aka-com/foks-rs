@@ -144,6 +144,12 @@ export interface ResetPreview {
   /** Single-use confirmation token valid only for this reset preview. */
   token: string;
   expiresInSeconds: number;
+  /**
+   * Why this Mac's credentials could not be read, when the preview lists only
+   * what is on disk and the reset will leave the credential records it cannot
+   * reach. Absent when the credentials were read.
+   */
+  credentialsUnavailable?: string;
 }
 
 /** Mock fixtures used for local development and testing. */
@@ -416,5 +422,13 @@ export function decodeResetPreview(value: unknown): ResetPreview {
       item.expiresInSeconds,
       'describe_reset.expiresInSeconds',
     ),
+    ...(item.credentialsUnavailable === undefined
+      ? {}
+      : {
+          credentialsUnavailable: string(
+            item.credentialsUnavailable,
+            'describe_reset.credentialsUnavailable',
+          ),
+        }),
   };
 }

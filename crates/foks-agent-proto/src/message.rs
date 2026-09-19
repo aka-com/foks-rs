@@ -235,6 +235,10 @@ pub struct ResetStatePreview {
     pub artifacts: Vec<ResetArtifactSummary>,
     pub token: SecretString,
     pub expires_in_seconds: u64,
+    /// Why the client's credentials could not be read, when the preview went
+    /// ahead without them and lists only what is on disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials_unavailable: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

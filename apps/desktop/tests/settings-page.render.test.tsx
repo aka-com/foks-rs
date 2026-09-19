@@ -668,6 +668,137 @@ test('the reset consumes each profile’s single-use confirmation token', async 
   );
 });
 
+test('one server whose preview fails does not hold the reset of the others', async () => {
+  let acmeAnswers = false;
+  const spent: string[] = [];
+  const rendered = await renderSettings(await fixture(), {
+    where: { section: 'mac' },
+    decorate: (bridge) => ({
+      ...bridge,
+      describeReset: async (profile) => {
+        if (profile === 'acme' && !acmeAnswers)
+          throw {
+            code: 'operation-failed',
+            message:
+              'Native credential service failed: An invalid record was encountered.',
+            retryable: true,
+            fatal: false,
+            ambiguous: false,
+          };
+        return bridge.describeReset(profile);
+      },
+      resetServer: async (profile, confirmation, token) => {
+        spent.push(profile);
+        return bridge.resetServer(profile, confirmation, token);
+      },
+    }),
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      rendered.getByRole('button', { name: 'Reset this Mac…' }),
+    );
+  });
+  const dialog = await ui.waitFor(() => rendered.getByRole('alertdialog'));
+  await ui.waitFor(() => {
+    assert.ok(ui.within(dialog).getByText(/Not every server answered/));
+  });
+  // The failed server says so and is left out; the run is the other two.
+  assert.ok(ui.within(dialog).getByText(/An invalid record was encountered/));
+  assert.ok(ui.within(dialog).getByText(/Not included in this reset/));
+  const run = ui
+    .within(dialog)
+    .getByRole('button', { name: 'Reset 2 of 3 servers' });
+  assert.equal(run.hasAttribute('disabled'), true);
+  const confirms = ui.within(dialog).getAllByPlaceholderText(/to confirm$/);
+  assert.equal(confirms.length, 3);
+  assert.equal((confirms[1] as HTMLInputElement).disabled, true);
+  for (const [index, profile] of [
+    [0, 'personal'],
+    [2, 'partner'],
+  ] as const)
+    await ui.act(async () => {
+      ui.fireEvent.change(confirms[index], { target: { value: profile } });
+    });
+  assert.equal(run.hasAttribute('disabled'), false);
+
+  // Its own retry brings the failed server back into the run.
+  acmeAnswers = true;
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(dialog).getByRole('button', { name: 'Retry preview' }),
+    );
+  });
+  await ui.waitFor(() =>
+    assert.ok(
+      ui.within(dialog).getByRole('button', { name: 'Reset this Mac' }),
+    ),
+  );
+  assert.equal(
+    ui.within(dialog).queryByText(/Not every server answered/),
+    null,
+  );
+  await ui.act(async () => {
+    ui.fireEvent.change(confirms[1], { target: { value: 'acme' } });
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(dialog).getByRole('button', { name: 'Reset this Mac' }),
+    );
+  });
+  assert.deepEqual(spent, ['personal', 'acme', 'partner']);
+});
+
+test('a preview that could not read this Mac’s credentials still authorizes the reset', async () => {
+  const spent: string[] = [];
+  const rendered = await renderSettings(await fixture(), {
+    where: { section: 'mac' },
+    decorate: (bridge) => ({
+      ...bridge,
+      describeReset: async (profile) => {
+        const preview = await bridge.describeReset(profile);
+        return profile === 'personal'
+          ? {
+              ...preview,
+              resumables: [],
+              credentialsUnavailable:
+                'Native credential service failed: An invalid record was encountered.',
+            }
+          : preview;
+      },
+      resetServer: async (profile, confirmation, token) => {
+        spent.push(profile);
+        return bridge.resetServer(profile, confirmation, token);
+      },
+    }),
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      rendered.getByRole('button', { name: 'Reset this Mac…' }),
+    );
+  });
+  const dialog = await ui.waitFor(() => rendered.getByRole('alertdialog'));
+  await ui.waitFor(() => {
+    assert.ok(ui.within(dialog).getByText(/An invalid record was encountered/));
+  });
+  // The row says what the reset will and will not reach, and the server is
+  // in the run like any other.
+  assert.ok(
+    ui.within(dialog).getByText(/leaves the credential records it cannot read/),
+  );
+  assert.equal(ui.within(dialog).queryByText(/Not included/), null);
+  const confirms = ui.within(dialog).getAllByPlaceholderText(/to confirm$/);
+  for (const [index, profile] of ['personal', 'acme', 'partner'].entries())
+    await ui.act(async () => {
+      ui.fireEvent.change(confirms[index], { target: { value: profile } });
+    });
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(dialog).getByRole('button', { name: 'Reset this Mac' }),
+    );
+  });
+  assert.deepEqual(spent, ['personal', 'acme', 'partner']);
+});
+
 test('a reset that fails part way reloads every preview', async () => {
   let attempts = 0;
   let previews = 0;

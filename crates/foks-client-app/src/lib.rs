@@ -1173,6 +1173,74 @@ mod tests {
     }
 
     #[test]
+    fn best_effort_reset_goes_ahead_when_the_credentials_cannot_be_read() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let credentials =
+            ClientCredentials::initialize(&root, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        registry
+            .add(profile("local", ProtocolPolicy::V019))
+            .unwrap();
+        let session = ProfileSession::open(&registry, "local").unwrap();
+        HardStateStore::open(&session.paths().hard_database).unwrap();
+        std::fs::create_dir_all(&session.paths().credential_store).unwrap();
+        std::fs::write(
+            session.paths().credential_store.join("account.personal"),
+            b"sealed",
+        )
+        .unwrap();
+
+        // The master key is unreadable. The exact preview refuses; the
+        // best-effort one describes what is on disk and says why the
+        // resumables inside the credential store could not be listed.
+        std::fs::write(root.join("master.key"), b"short").unwrap();
+        assert!(matches!(
+            credentials.describe_reset_state(&session),
+            Err(Error::Keystore(foks_keystore::Error::InvalidMasterKey))
+        ));
+        let preview = credentials
+            .describe_reset_state_best_effort(&session)
+            .unwrap();
+        assert!(preview.credentials_unavailable.is_some());
+        assert!(preview.resumables.is_empty());
+        for kind in [
+            ResetArtifactKind::HardState,
+            ResetArtifactKind::CredentialsAndResumables,
+        ] {
+            assert!(preview
+                .artifacts
+                .iter()
+                .any(|artifact| artifact.kind == kind));
+        }
+
+        // The preview still binds the reset to the state it described.
+        std::fs::write(session.paths().credential_store.join("late"), b"x").unwrap();
+        assert!(matches!(
+            credentials.reset_hard_state_best_effort_if_matches(&session, preview.state_digest()),
+            Err(Error::ResetPreviewChanged)
+        ));
+        assert!(session.paths().hard_database.exists());
+
+        let preview = credentials
+            .describe_reset_state_best_effort(&session)
+            .unwrap();
+        let outcome = credentials
+            .reset_hard_state_best_effort_if_matches(&session, preview.state_digest())
+            .unwrap();
+        // A private-file state keeps no records outside the profile directory,
+        // so nothing was left behind.
+        assert_eq!(outcome.credential_records_retained, None);
+        assert!(!session.paths().hard_database.exists());
+        assert!(!session.paths().credential_store.exists());
+        assert!(!session
+            .paths()
+            .directory
+            .join(".reset-credentials")
+            .exists());
+    }
+
+    #[test]
     fn rollback_checkpoint_requires_both_authenticated_histories() {
         let public = foks_verify::verify_public_host(
             "foks.app",

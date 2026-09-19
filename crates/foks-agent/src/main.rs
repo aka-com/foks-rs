@@ -2738,10 +2738,11 @@ fn dispatch_result_inner(
             }))
         }
         Operation::DescribeResetHardState { profile } => {
+            // A reset is the way out of credentials this Mac cannot read, so
+            // the preview goes as far as it can without them and says so.
             let credentials = ClientCredentials::open(state_dir)?;
-            credentials.master_key()?;
             let session = ProfileSession::open(&registry, &profile)?;
-            let preview = credentials.describe_reset_state(&session)?;
+            let preview = credentials.describe_reset_state_best_effort(&session)?;
             let token = issue_reset_ticket(state_dir, &profile, preview.state_digest())?;
             Ok(serde_json::to_value(WireResetStatePreview {
                 profile: preview.profile,
@@ -2761,17 +2762,19 @@ fn dispatch_result_inner(
                     .collect(),
                 token,
                 expires_in_seconds: RESET_TOKEN_LIFETIME.as_secs(),
+                credentials_unavailable: preview.credentials_unavailable,
             })?)
         }
         Operation::ResetHardState { profile, token } => {
             let state_digest = consume_reset_ticket(state_dir, &profile, token.expose())?;
             let credentials = ClientCredentials::open(state_dir)?;
-            credentials.master_key()?;
             let session = ProfileSession::open(&registry, &profile)?;
-            credentials.reset_hard_state_if_matches(&session, state_digest)?;
+            let outcome =
+                credentials.reset_hard_state_best_effort_if_matches(&session, state_digest)?;
             Ok(serde_json::json!({
                 "profile": profile,
                 "hard_state_reset": true,
+                "credential_records_retained": outcome.credential_records_retained,
             }))
         }
         Operation::ListProfiles => Ok(serde_json::to_value(
@@ -5796,6 +5799,62 @@ mod tests {
         let token = issue_reset_ticket(&state, "local", [9; 32]).unwrap();
         assert!(consume_reset_ticket(&state, "other", token.expose()).is_err());
         assert!(consume_reset_ticket(&state, "local", token.expose()).is_err());
+    }
+
+    #[test]
+    fn reset_goes_ahead_when_the_credentials_cannot_be_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = directory.path().join("state");
+        ClientCredentials::initialize(&state, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&state).unwrap();
+        registry
+            .add(Profile {
+                name: "local".to_owned(),
+                label: None,
+                probe: "foks.app".to_owned(),
+                protocol: ProtocolPolicy::V019,
+                trust: TrustRoot::WebPki,
+            })
+            .unwrap();
+        let session = ProfileSession::open(&registry, "local").unwrap();
+        foks_client_db::HardStateStore::open(&session.paths().soft_database).unwrap();
+        // The master key is damaged: a reset is the way out of that, so the
+        // preview answers with what it can see and says what it could not.
+        std::fs::write(state.join("master.key"), b"short").unwrap();
+
+        let described = dispatch(
+            &state,
+            Request::new(
+                20,
+                Operation::DescribeResetHardState {
+                    profile: "local".to_owned(),
+                },
+            ),
+        );
+        let foks_agent_proto::ResponseResult::Success { value } = described.result else {
+            panic!("best-effort reset preview failed");
+        };
+        let preview: WireResetStatePreview = serde_json::from_value(value).unwrap();
+        assert!(preview
+            .credentials_unavailable
+            .as_deref()
+            .is_some_and(|reason| reason.contains("master key")));
+        let reset = dispatch(
+            &state,
+            Request::new(
+                21,
+                Operation::ResetHardState {
+                    profile: "local".to_owned(),
+                    token: preview.token,
+                },
+            ),
+        );
+        assert!(matches!(
+            reset.result,
+            foks_agent_proto::ResponseResult::Success { value }
+                if value["hard_state_reset"] == true
+        ));
+        assert!(!session.paths().soft_database.exists());
     }
 
     #[test]

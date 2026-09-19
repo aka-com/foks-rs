@@ -57,7 +57,7 @@ import {
   serverName,
   usernameOf,
 } from '../model';
-import type { AccountStore, AgentSnapshot } from '../model';
+import type { AccountStore, AgentSnapshot, Server } from '../model';
 import { PageHeader } from '../shell/page-header';
 import {
   RAIL_COLORS,
@@ -812,6 +812,12 @@ function RestartAgentSheet({
  * There is no command that spans profiles, so each server answers with its own
  * one-use token and each profile name is typed. A run that fails part way says
  * how far it got rather than pretending the rest happened.
+ *
+ * A reset is the way out of local state that no longer works, so one server's
+ * preview failing does not hold the others: the run covers every server whose
+ * preview answered, says which it left out, and offers each of those its own
+ * retry. A preview that could not read this Mac's credentials still answers,
+ * saying so, and the reset it authorizes erases what is on disk.
  */
 function ResetMacSheet({
   snapshot,
@@ -835,6 +841,19 @@ function ResetMacSheet({
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  const [retrying, setRetrying] = useState<Set<string>>(new Set());
+
+  const preview = useCallback(
+    async (server: Server): Promise<ResetPreview> => {
+      const preview = await enqueueProfileWork(bridge, server.id, () =>
+        bridge.describeReset(server.id),
+      );
+      if (preview.profile !== server.id)
+        throw new Error('describe_reset returned a different profile.');
+      return preview;
+    },
+    [bridge],
+  );
   const load = useCallback((): void => {
     setLoading(true);
     setPreviews(new Map());
@@ -844,12 +863,7 @@ function ResetMacSheet({
       const failed = new Map<string, string>();
       for (const server of servers) {
         try {
-          const preview = await enqueueProfileWork(bridge, server.id, () =>
-            bridge.describeReset(server.id),
-          );
-          if (preview.profile !== server.id)
-            throw new Error('describe_reset returned a different profile.');
-          found.set(server.id, preview);
+          found.set(server.id, await preview(server));
         } catch (error) {
           failed.set(server.id, normalizeCommandError(error).message);
         }
@@ -858,8 +872,34 @@ function ResetMacSheet({
       setFailures(failed);
       setLoading(false);
     })();
-  }, [bridge, servers]);
+  }, [preview, servers]);
   useEffect(load, [load]);
+  // One server's preview again, leaving the others' answers and typed names
+  // where they are.
+  const retry = (server: Server): void => {
+    setRetrying((current) => new Set(current).add(server.id));
+    void (async () => {
+      try {
+        const answer = await preview(server);
+        setPreviews((current) => new Map(current).set(server.id, answer));
+        setFailures((current) => {
+          const next = new Map(current);
+          next.delete(server.id);
+          return next;
+        });
+      } catch (error) {
+        setFailures((current) =>
+          new Map(current).set(server.id, normalizeCommandError(error).message),
+        );
+      } finally {
+        setRetrying((current) => {
+          const next = new Set(current);
+          next.delete(server.id);
+          return next;
+        });
+      }
+    })();
+  };
 
   // Reset executes sequentially per server using single-use confirmation
   // tokens. Navigating away during execution would prevent status updates.
@@ -870,29 +910,34 @@ function ResetMacSheet({
       : null,
   );
 
+  // The servers whose preview answered are the run; a server whose preview
+  // did not is left out and said so, not a reason to hold the rest.
+  const included = servers.filter((server) => previews.has(server.id));
+  const excluded = servers.filter((server) => !previews.has(server.id));
   const ready =
     !loading &&
-    servers.length > 0 &&
-    servers.every(
-      (server) => previews.has(server.id) && typed[server.id] === server.id,
-    );
+    retrying.size === 0 &&
+    included.length > 0 &&
+    included.every((server) => typed[server.id] === server.id);
   const stores = accountStores(snapshot);
 
   // Each server may configure a different reset preview token TTL. Display the
   // expiration notice only after all server previews have responded, without
   // assuming a fallback duration.
-  const lifetimes = servers.map(
+  const lifetimes = included.map(
     (server) => previews.get(server.id)?.expiresInSeconds,
   );
   const answered =
-    servers.length > 0 && lifetimes.every((seconds) => seconds !== undefined);
+    !loading &&
+    included.length > 0 &&
+    lifetimes.every((seconds) => seconds !== undefined);
   const agreed =
     answered && new Set(lifetimes).size === 1 ? lifetimes[0] : undefined;
   const expiry = !answered
     ? null
     : agreed !== undefined
       ? `Confirmations expire in ${agreed} seconds.`
-      : `Confirmations expire per server: ${servers
+      : `Confirmations expire per server: ${included
           .map(
             (server) =>
               `${serverDisplayName(server)} (${previews.get(server.id)?.expiresInSeconds} seconds)`,
@@ -927,9 +972,9 @@ function ResetMacSheet({
               void (async () => {
                 let done = 0;
                 try {
-                  for (const server of servers) {
+                  for (const server of included) {
                     const preview = previews.get(server.id);
-                    if (!preview) break;
+                    if (!preview) continue;
                     await bridge.resetServer(
                       server.id,
                       server.id,
@@ -948,7 +993,9 @@ function ResetMacSheet({
               })();
             }}
           >
-            Reset this Mac
+            {excluded.length && included.length
+              ? `Reset ${included.length} of ${servers.length} servers`
+              : 'Reset this Mac'}
           </Button>
         </>
       }
@@ -984,11 +1031,33 @@ function ResetMacSheet({
             </SectionLabel>
             <Inset>
               {failure ? (
-                <InsetRow label="Preview">
-                  <span className="danger-title">{failure}</span>
+                <InsetRow
+                  label="Preview"
+                  action={
+                    <Button
+                      size="sm"
+                      disabled={busy || retrying.has(server.id)}
+                      busy={retrying.has(server.id)}
+                      onClick={() => retry(server)}
+                    >
+                      Retry preview
+                    </Button>
+                  }
+                >
+                  <span className="danger-title">{failure}</span>{' '}
+                  {loading ? null : 'Not included in this reset.'}
                 </InsetRow>
               ) : preview ? (
                 <>
+                  {preview.credentialsUnavailable ? (
+                    <InsetRow label="Credentials">
+                      <span className="danger-title">
+                        {preview.credentialsUnavailable}
+                      </span>{' '}
+                      The reset erases this server’s local data and leaves the
+                      credential records it cannot read.
+                    </InsetRow>
+                  ) : null}
                   <InsetRow label="Discarded operations">
                     {preview.resumables.length
                       ? preview.resumables
@@ -1035,6 +1104,13 @@ function ResetMacSheet({
           There is nothing for this reset to erase.
         </Band>
       )}
+      {!loading && excluded.length ? (
+        <Band label="Not every server answered">
+          {included.length
+            ? `${plural(excluded.length, 'server')} could not be previewed and ${excluded.length === 1 ? 'is' : 'are'} not included. Retry ${excluded.length === 1 ? 'its' : 'their'} preview, or reset the rest now and ${excluded.length === 1 ? 'that server' : 'those servers'} later.`
+            : 'No server could be previewed. Retry each preview to reset it.'}
+        </Band>
+      ) : null}
       {expiry ? <p className="hint">{expiry}</p> : null}
     </SheetDialog>
   );

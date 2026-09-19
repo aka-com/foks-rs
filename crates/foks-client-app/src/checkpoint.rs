@@ -225,6 +225,12 @@ pub struct ResetStatePreview {
     pub profile: String,
     pub resumables: Vec<PendingOperationSummary>,
     pub artifacts: Vec<ResetArtifactSummary>,
+    /// Why this Mac's credentials could not be read, when a best-effort
+    /// preview went ahead without them. Such a preview lists only what is on
+    /// disk; the reset it authorizes erases that and leaves whatever
+    /// credential records it cannot reach.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials_unavailable: Option<String>,
     #[serde(skip)]
     state_digest: [u8; 32],
 }
@@ -232,6 +238,37 @@ pub struct ResetStatePreview {
 impl ResetStatePreview {
     pub fn state_digest(&self) -> [u8; 32] {
         self.state_digest
+    }
+}
+
+/// What a completed reset could not do, when it went ahead best-effort.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ResetOutcome {
+    /// Why credential records outside the profile directory were left in
+    /// place: the native credential service could not be used to remove them.
+    pub credential_records_retained: Option<String>,
+}
+
+/// Whether a reset insists on describing and erasing everything exactly, or
+/// goes as far as it can when this Mac's credentials cannot be read.
+///
+/// A reset is the way out of a client state whose credentials are unreadable
+/// or whose profile publication never completed, so the interactive reset
+/// must not depend on either; the CLI's explicit reset keeps the exact rule.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResetMode {
+    Exact,
+    BestEffort,
+}
+
+/// A failure to read this Mac's credentials at all, as opposed to one the user
+/// can answer (a credential prompt) or one about the state's location.
+fn credentials_unreadable(error: &Error) -> bool {
+    match error {
+        Error::Keystore(foks_keystore::Error::CredentialsRequired) => false,
+        Error::Keystore(_) => true,
+        Error::InvalidConfig("native client manifest is missing") => true,
+        _ => false,
     }
 }
 
@@ -1198,15 +1235,34 @@ impl ClientCredentials {
     /// successful rollback check. Every resumable record is decrypted and
     /// validated before it is advertised.
     pub fn describe_reset_state(&self, session: &ProfileSession) -> Result<ResetStatePreview> {
+        self.describe_reset_state_in(session, ResetMode::Exact)
+    }
+
+    /// Describes the reset scope as far as it can be seen. When this Mac's
+    /// credentials cannot be read, the preview says so and lists what is on
+    /// disk rather than refusing; a pending profile publication is part of
+    /// what the reset will discard rather than a reason not to.
+    pub fn describe_reset_state_best_effort(
+        &self,
+        session: &ProfileSession,
+    ) -> Result<ResetStatePreview> {
+        self.describe_reset_state_in(session, ResetMode::BestEffort)
+    }
+
+    fn describe_reset_state_in(
+        &self,
+        session: &ProfileSession,
+        mode: ResetMode,
+    ) -> Result<ResetStatePreview> {
         self.ensure_session_root(session)?;
-        if registry::profile_publication_is_pending(session)? {
+        if mode == ResetMode::Exact && registry::profile_publication_is_pending(session)? {
             return Err(Error::InvalidConfig(
                 "profile publication checkpoint is still pending",
             ));
         }
         let operation = runtime::ProfileLock::operation(session.paths())?;
         let scheduler = runtime::ProfileLock::scheduler(session.paths())?;
-        let result = self.reset_state_preview_locked(session);
+        let result = self.reset_state_preview_in(session, mode);
         let scheduler_release = scheduler.release();
         let operation_release = operation.release();
         scheduler_release?;
@@ -1223,50 +1279,66 @@ impl ClientCredentials {
         session: &ProfileSession,
         expected_digest: [u8; 32],
     ) -> Result<()> {
-        self.erase_profile_state(session, Some(expected_digest))
+        self.erase_profile_state(session, Some(expected_digest), ResetMode::Exact)
+            .map(|_| ())
+    }
+
+    /// Removes every profile-local state artifact that matches a best-effort
+    /// preview's digest. Credential records the native service cannot reach
+    /// are left in place and named in the outcome; a pending profile
+    /// publication is abandoned along with the rest.
+    pub fn reset_hard_state_best_effort_if_matches(
+        &self,
+        session: &ProfileSession,
+        expected_digest: [u8; 32],
+    ) -> Result<ResetOutcome> {
+        self.erase_profile_state(session, Some(expected_digest), ResetMode::BestEffort)
     }
 
     /// Erases the same artifacts as a reset without checking against a preview.
     /// Used during profile removal, where intermediate state changes do not
     /// constitute a conflict.
     pub(super) fn erase_profile_state_for_removal(&self, session: &ProfileSession) -> Result<()> {
-        self.erase_profile_state(session, None)
+        self.erase_profile_state(session, None, ResetMode::Exact)
+            .map(|_| ())
     }
 
     fn erase_profile_state(
         &self,
         session: &ProfileSession,
         expected_digest: Option<[u8; 32]>,
-    ) -> Result<()> {
+        mode: ResetMode,
+    ) -> Result<ResetOutcome> {
         self.ensure_session_root(session)?;
-        if registry::profile_publication_is_pending(session)? {
+        if mode == ResetMode::Exact && registry::profile_publication_is_pending(session)? {
             return Err(Error::InvalidConfig(
                 "profile publication checkpoint is still pending",
             ));
         }
         let operation = runtime::ProfileLock::operation(session.paths())?;
         let scheduler = runtime::ProfileLock::scheduler(session.paths())?;
-        let database_ids = self.reset_database_ids(session)?;
+        let database_ids = self.reset_database_ids(session, mode)?;
         let mut database_locks = Vec::with_capacity(database_ids.len());
         for database_id in &database_ids {
             database_locks.push(runtime::DatabaseLock::acquire(&self.root, database_id)?);
         }
         let result = (|| {
             if let Some(expected_digest) = expected_digest {
-                let preview = self.reset_state_preview_locked(session)?;
+                let preview = self.reset_state_preview_in(session, mode)?;
                 if preview.state_digest != expected_digest {
                     return Err(Error::ResetPreviewChanged);
                 }
             }
-            self.reset_profile_state_locked(session, &database_ids)
+            self.reset_profile_state_locked(session, &database_ids, mode)
         })();
         let database_release = release_database_locks(database_locks);
         let scheduler_release = scheduler.release();
         let operation_release = operation.release();
-        result?;
+        let outcome = result?;
         database_release?;
         scheduler_release?;
-        operation_release
+        operation_release?;
+        Ok(outcome)
     }
 
     /// Compatibility helper for explicit CLI confirmation. Agent callers use
@@ -1292,7 +1364,11 @@ impl ClientCredentials {
         Ok(())
     }
 
-    fn reset_database_ids(&self, session: &ProfileSession) -> Result<Vec<[u8; 16]>> {
+    fn reset_database_ids(
+        &self,
+        session: &ProfileSession,
+        mode: ResetMode,
+    ) -> Result<Vec<[u8; 16]>> {
         let mut ids = Vec::new();
         if session.paths.hard_database.exists() {
             if let Ok(current) = session.rollback_checkpoint() {
@@ -1301,22 +1377,26 @@ impl ClientCredentials {
         }
         if self.backend == CredentialBackend::Native {
             let key = rollback_record_key(&session.profile.name)?;
-            if let Some(database_id) =
-                self.with_native_manifest(|manifest| match manifest.get(&key) {
-                    Ok(bytes) => {
-                        let checkpoint: RollbackCheckpoint = serde_json::from_slice(&bytes)?;
-                        if checkpoint.profile != session.profile.name {
-                            return Err(Error::InvalidConfig(
-                                "external checkpoint profile binding changed",
-                            ));
-                        }
-                        Ok(Some(checkpoint.database_id))
+            let external = self.with_native_manifest(|manifest| match manifest.get(&key) {
+                Ok(bytes) => {
+                    let checkpoint: RollbackCheckpoint = serde_json::from_slice(&bytes)?;
+                    if checkpoint.profile != session.profile.name {
+                        return Err(Error::InvalidConfig(
+                            "external checkpoint profile binding changed",
+                        ));
                     }
-                    Err(foks_keystore::Error::Missing) => Ok(None),
-                    Err(error) => Err(error.into()),
-                })?
-            {
-                ids.push(database_id);
+                    Ok(Some(checkpoint.database_id))
+                }
+                Err(foks_keystore::Error::Missing) => Ok(None),
+                Err(error) => Err(error.into()),
+            });
+            match external {
+                Ok(Some(database_id)) => ids.push(database_id),
+                Ok(None) => {}
+                // Without the credential service the external checkpoint
+                // cannot be read; the reset then locks what it can see.
+                Err(error) if mode == ResetMode::BestEffort && credentials_unreadable(&error) => {}
+                Err(error) => return Err(error),
             }
         }
         ids.sort_unstable();
@@ -1328,10 +1408,33 @@ impl ClientCredentials {
         let master = self.master_key()?;
         if self.backend == CredentialBackend::Native {
             self.with_native_manifest(|manifest| {
-                reset_state_preview(session, &master, Some((&session.profile.name, manifest)))
+                reset_state_preview(
+                    session,
+                    Some(&master),
+                    Some((&session.profile.name, manifest)),
+                    None,
+                )
             })
         } else {
-            reset_state_preview(session, &master, None)
+            reset_state_preview(session, Some(&master), None, None)
+        }
+    }
+
+    /// The exact preview, or, best-effort, the on-disk preview when this
+    /// Mac's credentials cannot be read. The two hash under different domains,
+    /// so a reset authorized by one does not match state described by the
+    /// other: credentials that come back, or go away, between the preview and
+    /// the reset are a change to describe again.
+    fn reset_state_preview_in(
+        &self,
+        session: &ProfileSession,
+        mode: ResetMode,
+    ) -> Result<ResetStatePreview> {
+        match self.reset_state_preview_locked(session) {
+            Err(error) if mode == ResetMode::BestEffort && credentials_unreadable(&error) => {
+                reset_state_preview(session, None, None, Some(error.to_string()))
+            }
+            result => result,
         }
     }
 
@@ -1339,7 +1442,8 @@ impl ClientCredentials {
         &self,
         session: &ProfileSession,
         database_ids: &[[u8; 16]],
-    ) -> Result<()> {
+        mode: ResetMode,
+    ) -> Result<ResetOutcome> {
         stage_reset_directory(
             &session.paths.credential_store,
             &session.paths.directory.join(RESET_CREDENTIAL_QUARANTINE),
@@ -1353,16 +1457,33 @@ impl ClientCredentials {
         if TEST_FAIL_AFTER_RESET_STAGING.swap(false, std::sync::atomic::Ordering::SeqCst) {
             return Err(Error::InvalidConfig("injected reset interruption"));
         }
+        let mut outcome = ResetOutcome::default();
         if self.backend == CredentialBackend::Native {
-            self.with_native_manifest(|manifest| {
+            let removed = self.with_native_manifest(|manifest| {
                 remove_external_reset_records(manifest, &session.profile.name, database_ids)
-            })?;
+            });
+            match removed {
+                Ok(()) => {}
+                // The records this Mac cannot reach stay where they are; the
+                // profile's own state is still erased, which is what the user
+                // asked for, and the outcome says what was left behind.
+                Err(error) if mode == ResetMode::BestEffort && credentials_unreadable(&error) => {
+                    outcome.credential_records_retained = Some(error.to_string());
+                }
+                Err(error) => return Err(error),
+            }
         }
         for path in reset_local_artifact_paths(session) {
             remove_reset_artifact(&path)?;
         }
+        if mode == ResetMode::BestEffort {
+            // A publication that never completed is abandoned with the state
+            // it was publishing; its marker would otherwise refuse the next
+            // preview too.
+            registry::complete_profile_publication(session)?;
+        }
         File::open(&session.paths.directory)?.sync_all()?;
-        Ok(())
+        Ok(outcome)
     }
 }
 
@@ -1381,13 +1502,21 @@ fn reset_local_artifact_paths(session: &ProfileSession) -> Vec<PathBuf> {
 
 fn reset_state_preview(
     session: &ProfileSession,
-    master_key: &[u8; 32],
+    master_key: Option<&[u8; 32]>,
     native: Option<(&str, &mut dyn CheckpointStore)>,
+    credentials_unavailable: Option<String>,
 ) -> Result<ResetStatePreview> {
     let mut digest = Sha256::new();
-    digest.update(b"foks-reset-state-preview-v1\0");
+    digest.update(if master_key.is_some() {
+        b"foks-reset-state-preview-v1\0".as_slice()
+    } else {
+        b"foks-reset-state-preview-on-disk-v1\0".as_slice()
+    });
     digest.update(session.profile.name.as_bytes());
 
+    // Resumable operations are read out of the encrypted credential store,
+    // which the master key opens; without it the store's files are still
+    // described and erased below as bytes on disk.
     let mut resumables = Vec::new();
     for credential_directory in [
         session.paths.credential_store.clone(),
@@ -1400,6 +1529,9 @@ fn reset_state_preview(
                         "credential reset artifact path is unsafe",
                     ));
                 }
+                let Some(master_key) = master_key else {
+                    continue;
+                };
                 let mut store = foks_keystore::EncryptedFileSecretStore::open(
                     &credential_directory,
                     derive_vault_key(master_key),
@@ -1439,6 +1571,10 @@ fn reset_state_preview(
             vec![
                 session.paths.credential_store.clone(),
                 session.paths.directory.join(RESET_CREDENTIAL_QUARANTINE),
+                // A publication that never completed is discarded with the
+                // credentials it was publishing, so its marker is part of what
+                // the preview describes.
+                registry::profile_publication_marker(session),
             ],
         ),
     ];
@@ -1473,6 +1609,7 @@ fn reset_state_preview(
         profile: session.profile.name.clone(),
         resumables,
         artifacts,
+        credentials_unavailable,
         state_digest: digest.finalize().into(),
     })
 }

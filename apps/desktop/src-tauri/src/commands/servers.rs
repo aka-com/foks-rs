@@ -396,6 +396,10 @@ pub(super) fn reset_preview_response(
         || response.token.contains(['\0', '\r', '\n'])
         || response.expires_in_seconds == 0
         || response.expires_in_seconds > 24 * 60 * 60
+        || response
+            .credentials_unavailable
+            .as_deref()
+            .is_some_and(|reason| reason.is_empty() || reason.len() > 1024)
     {
         return Err(invalid_response("The server reset preview is invalid."));
     }
@@ -450,6 +454,7 @@ pub(super) fn reset_preview_response(
         artifacts,
         token: response.token,
         expires_in_seconds: response.expires_in_seconds,
+        credentials_unavailable: response.credentials_unavailable,
     })
 }
 
@@ -583,6 +588,11 @@ pub struct ResetPreviewDto {
     #[serde(serialize_with = "serialize_secret")]
     pub token: Zeroizing<String>,
     pub expires_in_seconds: u64,
+    /// Why this Mac's credentials could not be read, when the preview lists
+    /// only what is on disk and the reset will leave the credential records
+    /// it cannot reach.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credentials_unavailable: Option<String>,
 }
 
 impl std::fmt::Debug for ResetPreviewDto {
@@ -594,6 +604,7 @@ impl std::fmt::Debug for ResetPreviewDto {
             .field("artifacts", &self.artifacts)
             .field("token", &"[REDACTED]")
             .field("expires_in_seconds", &self.expires_in_seconds)
+            .field("credentials_unavailable", &self.credentials_unavailable)
             .finish()
     }
 }
@@ -644,6 +655,8 @@ struct ResetPreviewResponse {
     #[serde(deserialize_with = "deserialize_secret")]
     token: Zeroizing<String>,
     expires_in_seconds: u64,
+    #[serde(default)]
+    credentials_unavailable: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -659,6 +672,11 @@ struct ResetArtifactResponse {
 struct ResetResultResponse {
     profile: String,
     hard_state_reset: bool,
+    /// Records the reset left behind because this Mac's credential service
+    /// could not remove them; the preview already said the reset would.
+    #[serde(default)]
+    #[allow(dead_code)]
+    credential_records_retained: Option<String>,
 }
 
 pub(super) fn require_transport_profile(

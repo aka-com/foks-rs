@@ -1300,7 +1300,29 @@ fn phase_six_wire_responses_are_exact_bounded_and_request_bound() {
         ]
     );
     assert!(!format!("{preview:?}").contains("one-use-token"));
+    assert_eq!(preview.credentials_unavailable, None);
+    // A preview that could not read this Mac's credentials says why, and the
+    // reason reaches the page as it was stated.
+    let degraded = reset_preview_response(
+        serde_json::json!({
+            "profile":"work","resumables":[],
+            "artifacts":[{"kind":"hard-state","entries":1,"bytes":25}],
+            "token":"one-use-token","expires_in_seconds":300,
+            "credentials_unavailable":"native credential service failed: An invalid record was encountered."
+        }),
+        "work",
+    )
+    .unwrap();
+    assert_eq!(
+        degraded.credentials_unavailable.as_deref(),
+        Some("native credential service failed: An invalid record was encountered.")
+    );
     for malformed in [
+        serde_json::json!({
+            "profile":"work","resumables":[],"artifacts":[],
+            "token":"token","expires_in_seconds":300,
+            "credentials_unavailable":""
+        }),
         serde_json::json!({
             "profile":"work","resumables":[],
             "artifacts":[
