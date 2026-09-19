@@ -305,7 +305,7 @@ tabs retain that account when switching tabs. Opening a group, chat or vault
 uses the account through which that object is held. Files, Chat and Teams
 still list all accounts on this Mac. The header opens a menu of the accounts on
 this Mac grouped by server, then "Add an account or server…" (the first-run
-flow) and "Lock" (the command Settings › This Mac also offers). The account the
+flow) and "Lock" (the command Settings › Device also offers). The account the
 window is acting as carries a check at the right end of its row; an account
 whose access has stopped is dimmed and carries an amber line under its caption
 with the one link that would restore it — "Check in" for a lapsed or missing
@@ -314,7 +314,7 @@ place attention is advertised; it is a button, and it opens the Accounts tab.
 
 The foot holds the agent light and nothing else: a 7px dot and a label in four
 states — green "Agent ready", amber pulsing "Starting agent…", red "Agent
-stopped" and grey "Locked". It never names an internal step.
+stopped" and gray "Locked". It never names an internal step.
 
 The rail collapses to a 56px icon-only track. Collapsing is CSS alone —
 `nav.side` gains `is-narrow`, and every row stays in the document — so the
@@ -338,8 +338,13 @@ decides where it goes), the crumbs — the tab in bold, then the page under it
 when the address names one, such as "Files › Engineering", "Chat › Household
 #general" or "Settings › Servers" — a flexible gap, the "Search everything"
 trigger with its ⌘K hint, the rail's collapse toggle and the catalog refresh.
-Its empty parts carry `data-tauri-drag-region`, because the rail's strip alone
-does not reach across the window. First run draws no topbar.
+The refresh is one square button: it refreshes on click, carries a spinner
+badge while any server is refreshing and an amber dot when one could not be
+refreshed, and pointing at it opens the per-server Refresh status popover
+(`SyncPopover`), which stays up while the pointer is on the button or on the
+popover itself. Its empty parts carry `data-tauri-drag-region`, because the
+rail's strip alone does not reach across the window. First run draws no
+topbar.
 
 Swiping right with two fingers on the trackpad navigates to the parent location
 of the current page, matching the back chevron (`src/shell/swipe-back.ts`). The webview's own back/forward gestures stay off —
@@ -367,7 +372,7 @@ rail's light says which one is in force.
   maintenance uses the same presentation as the first connection.
 - **Stopped** (`restart-required`, `recovery-required`, `restoration-failed`).
   The page remains visible behind a light veil below the topbar (`.stopveil`).
-  A centred `.card.stopcard` displays the outcome, details, any copyable
+  A centered `.card.stopcard` displays the outcome, details, any copyable
   `foks-rs` recovery commands, and the available actions. `restart-required`
   adds: "Your vaults remain on this Mac and on their configured servers." The
   same card appears at startup over the empty frame.
@@ -381,7 +386,7 @@ rail's light says which one is in force.
 
 Accounts is the list of what needs attention — the page that used to be called
 Alerts — over one account. Each attention card keeps its severity — as a
-colour and as an accessible name — its title and its detail, and displays the
+color and as an accessible name — its title and its detail, and displays the
 exact action label reported by the agent (formatted as "Required action: …")
 alongside an action button at the right. The catalog note retries in place, and
 a note whose id names a server or a group opens that server's page or that
@@ -392,7 +397,7 @@ the action as a chip instead and omits the caption that would repeat it. Under
 the cards, a switcher lists every account on this Mac — username, alias,
 server, and a dot and the visible reason for one whose access has stopped — and
 choosing one rewrites the address to that account's StoreRef. The chosen
-account is a profile band — a coloured band with the account's mark half over
+account is a profile band — a colored band with the account's mark half over
 it, the username, and the server line the alias chip and the availability chip
 sit on — followed
 by three sections of what that account holds and then the rows the Accounts
@@ -425,7 +430,7 @@ Settings › Preferences, followed by Bot accounts, Open web admin panel, Sign i
 via SSO, and Import from FOKS CLI, each opening its corresponding panel. If
 account access is suspended, username changes are disabled with an explanatory
 reason while the remaining recovery actions stay available. An account's mark is the
-initial of the username, over a colour derived from it, on the account band
+initial of the username, over a color derived from it, on the account band
 and in the switcher: those surfaces name the account by the username the
 server knows it by, while a store elsewhere keeps its `GroupMark`. There is no
 people search because the bridge has no directory lookup. New people can be
@@ -438,7 +443,10 @@ columns. A permanent tree lists All items followed by vaults, teams, and their
 folders, including item counts and team initials badges. Selecting a store or
 folder filters the table, omits Location for single-store views, and updates the
 toolbar search placeholder to "Search this vault", "Search this team", or
-"Search this folder". The topbar breadcrumb displays the active folder, and Back
+"Search this folder". That field is the width of the topbar's own "Search
+everything" trigger rather than the width of the list column, and the kind
+filter beside it sizes each of All / Passwords / Documents to its own label
+rather than to an equal share of the tree column. The topbar breadcrumb displays the active folder, and Back
 navigates up the hierarchy to All items. Teams lists the groups and
 shares — the group mark, name, server, the roster summary the per-group
 `list_group_details` call loaded on the last refresh, the role this Mac's
@@ -564,7 +572,7 @@ Verify in place; the row of an account whose access has stopped says why the
 button is disabled), then Desktop alerts — this device's desktop-alert and
 message-preview preferences, which the desktop persists locally; channel
 overrides stay in Chat's info panel, with a link here, and none of these
-preferences sync between devices. This Mac: Application (version, Lock now),
+preferences sync between devices. Device: Application (version, Lock now),
 Agent (status with Retry connection while it is not ready, socket with Copy),
 FOKS data (export, import, verify online, move the data folder) and a danger
 zone whose Reset this Mac runs the per-server reset once per profile, each with
@@ -594,7 +602,7 @@ decides it for all four, so a group whose roster could not be read draws the
 chip rather than printing "Roster unavailable" where the roster summary goes;
 `storeDescriptionState`, which knows only whether the store can be reached, is
 what dims the row. A group carries one mark everywhere it
-is listed — the same initial over the same colour on Files, on Teams, in the
+is listed — the same initial over the same color on Files, on Teams, in the
 Chat inbox column and on its own page — while an account vault keeps its vault
 glyph.
 
@@ -659,7 +667,7 @@ heading with nested channels. Each channel carries its own unread count and, for
 an admins-only channel, a lock; nothing folds away, so a heading selects nothing
 and its gear, which opens that team's group settings, is the one control it
 carries. The team's name is a heading of level 3 and its channels are a `group`
-labelled by it. The open channel's row carries `aria-current="page"`, from the
+labeled by it. The open channel's row carries `aria-current="page"`, from the
 first render that resolves it: the column and the pane resolve the open channel
 through the same `openChannel` helper, so neither marks a row the other did not
 mount.
@@ -917,13 +925,17 @@ The unit and render-test layers live in `tests/`:
   mechanism: verdict order, what `force` skips, and a prompt superseded by a
   second navigation.
 - `navigation-guard.render.test.tsx` — the confirmation a `prompt` verdict
-  raises, and what confirming, cancelling and Escape each do behind it.
+  raises, and what confirming, canceling and Escape each do behind it.
 - `react-boundary.test.ts` — the negative invariants: no raw-HTML sink
   (the mock's whole render layer is `innerHTML`, and none of it came along), no
   `window.__TAURI__`, the Tauri API imported in one file, the model free of the
   DOM, the mock bundled out.
 - `styles-geometry.test.ts` — the token split, the light-only rule and the
   shell's grid, read off the CSS since jsdom computes no layout.
+- `sync-status.render.test.tsx` — the topbar's refresh control: one button, and
+  the Refresh status popover it opens on hover. The popover is portaled, so the
+  pointer leaves the button's wrapper on the way into it; the test holds that
+  the crossing does not close it and that leaving both does.
 - `app-root.render.test.tsx` — jsdom plus Vite `ssrLoadModule`, the same boot
   as `ui/tests/app-root.render.test.tsx`: the app mounts itself into `#root`
   from `src/main.tsx`, exactly as it does in the browser.
@@ -1013,7 +1025,7 @@ kept so deep links defined in the design specification resolve to this location.
 | `settings-keys` · `settings-enrol`                                                   | Devices                                 | the Security key enrollments section and the YubiKey account sheet                                      |
 | `devices&store=<StoreRef>&device=<key>`                                              | Devices › one key                       | that key's own page; `device=` is the key id, or `yubi:<alias>` for an enrollment                       |
 | `settings-account`                                                                   | Accounts                                | the account panel and its workflows                                                                     |
-| `settings-agent` · `settings-about`                                                  | Settings › This Mac                     | the application version and lock, the agent status and socket                                           |
+| `settings-agent` · `settings-about`                                                  | Settings › Device                       | the application version and lock, the agent status and socket                                           |
 
 `decodeLocation` returns `null` for display mode, item selection, or lease
 modifiers because those properties represent presentation options or environmental

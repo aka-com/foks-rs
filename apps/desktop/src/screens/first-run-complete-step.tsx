@@ -69,7 +69,7 @@ export function LocalCompleteStep({
                   onNavigate({ kind: 'store', ref: accountStore });
               }}
             >
-              Open Personal
+              Continue to my vault
             </Button>
           )}
         </Foot>

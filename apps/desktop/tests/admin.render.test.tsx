@@ -44,7 +44,7 @@ const presentation = {
   onClose: () => {},
 };
 
-test('admin acknowledgements cannot return bearer URLs to the main webview', () => {
+test('admin acknowledgments cannot return bearer URLs to the main webview', () => {
   assert.deepEqual(decodeCommandAck({ ok: true }), { ok: true });
   assert.throws(() => decodeCommandAck({ ok: true, url: 'secret' }));
 });

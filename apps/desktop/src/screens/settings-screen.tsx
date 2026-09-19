@@ -12,7 +12,7 @@ import {
  * Teams holds the groups, in three pages. Servers: the servers this Mac talks
  * to, each with its own page, where its security keys are managed.
  * Preferences contains account passphrases and local desktop alert settings.
- * This Mac contains the application version and lock, the agent and its socket,
+ * Device contains the application version and lock, the agent and its socket,
  * local FOKS data operations, and the device-wide reset. A `section=` address
  * opens its
  * page; `profile=` opens a server's own page, which is the Servers page's, so
@@ -168,7 +168,7 @@ export function SettingsScreen({
         }}
       />
     ) : (
-      <ThisMacSection
+      <DeviceSection
         snapshot={snapshot}
         bridge={bridge}
         appInfo={appInfo ?? null}
@@ -334,7 +334,7 @@ function PreferencesSection({
 }
 
 /**
- * The rail colour picker. Applies each choice at once, so the rail beside
+ * The rail color picker. Applies each choice at once, so the rail beside
  * this page shows it.
  */
 function RailColorPicker(): ReactNode {
@@ -346,8 +346,8 @@ function RailColorPicker(): ReactNode {
   };
   return (
     <Inset className="settings-inset middle wide">
-      <InsetRow label="Rail colour">
-        <div className="swatches" role="radiogroup" aria-label="Rail colour">
+      <InsetRow label="Sidebar color">
+        <div className="swatches" role="radiogroup" aria-label="Sidebar color">
           {RAIL_COLORS.map((entry) => (
             <button
               key={entry.id}
@@ -370,12 +370,12 @@ function RailColorPicker(): ReactNode {
 }
 
 /**
- * This Mac: what the application and its agent are, the local FOKS data
+ * Device: what the application and its agent are, the local FOKS data
  * operations, and the one reset that acts on this Mac rather than on an
  * account. The reset stays visually marked as destructive, in its own danger
  * zone at the foot of this page rather than of everything Settings holds.
  */
-function ThisMacSection({
+function DeviceSection({
   snapshot,
   bridge,
   appInfo,

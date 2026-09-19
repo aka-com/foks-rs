@@ -13,7 +13,7 @@ export interface BackgroundHistoryWork {
   signal: AbortSignal;
   current(): boolean;
   cancel(this: void): void;
-  // Native cancellation currently has no agent-lock-release acknowledgement.
+  // Native cancellation currently has no agent-lock-release acknowledgment.
   preemptible: false;
 }
 type Observer = (event: WorkTiming) => void;

@@ -1,18 +1,9 @@
 /**
  * Implements two-finger swipe-back navigation from horizontal wheel events.
  *
- * The webview's own back/forward gestures stay off. The app records its scene
- * with `history.replaceState` only, so the webview's back-forward list holds a
- * single entry and a native gesture would have nowhere to go; wry can enable
- * those gestures, but Tauri does not expose the switch in any case. With them
- * off, macOS delivers a two-finger horizontal swipe to the page as `wheel`
- * events carrying `deltaX`, and WebKitGTK and WebView2 do the same, so the
- * gesture is read out of the wheel stream here.
- *
- * A completed swipe opens the current page's parent — the destination the
- * topbar's back chevron offers, `parentLocation` in `src/location.ts`. There
- * is no animation and no rubber-band preview of the page behind: the page
- * changes once, when the fingers have travelled far enough.
+ * Native webview history gestures are disabled because the application uses
+ * `history.replaceState` and maintains its own navigation state. A completed
+ * gesture navigates to `parentLocation`, matching the topbar Back action.
  */
 
 import type { Location } from '../location';
@@ -75,7 +66,7 @@ export class SwipeBackTracker {
   private readonly options: SwipeBackOptions;
   private readonly now: () => number;
   /** Back-directed distance accumulated in the current gesture, in pixels. */
-  private travelled = 0;
+  private traveled = 0;
   /** When the last wheel event was read, or null before the first one. */
   private lastEventAt: number | null = null;
   /** Set once a gesture is decided: the rest of its events are ignored. */
@@ -100,29 +91,29 @@ export class SwipeBackTracker {
       // every event in it postpones that quiet.
       if (gap <= QUIET_MS) return;
       this.spent = false;
-      this.travelled = 0;
+      this.traveled = 0;
     } else if (gap > GESTURE_GAP_MS) {
-      this.travelled = 0;
+      this.traveled = 0;
     }
     // A vertical scroll that carries a little sideways drift is not a swipe.
     if (Math.abs(event.deltaX) <= 2 * Math.abs(event.deltaY)) {
-      this.travelled = 0;
+      this.traveled = 0;
       return;
     }
     if (absorbsScroll(event.target, event.deltaX)) {
-      this.travelled = 0;
+      this.traveled = 0;
       return;
     }
     // Two fingers moving right report a negative `deltaX`; that is back.
     // Clamping at zero keeps a forward swipe from counting as back distance
     // when the fingers reverse.
-    this.travelled = Math.max(0, this.travelled - event.deltaX);
-    if (this.travelled < BACK_DISTANCE_PX) return;
+    this.traveled = Math.max(0, this.traveled - event.deltaX);
+    if (this.traveled < BACK_DISTANCE_PX) return;
     // Consume the gesture after it reaches the threshold, even when navigation is
     // disabled. Set the latch before calling `navigate` so exceptions cannot allow
     // subsequent momentum events to retry navigation.
     this.spent = true;
-    this.travelled = 0;
+    this.traveled = 0;
     const destination = this.options.enabled() ? this.options.target() : null;
     if (destination) this.options.navigate(destination);
   }

@@ -705,7 +705,7 @@ test('confirming the discard closes the editor and makes the move', async () => 
   assert.equal(r.queryByLabelText('User name'), null);
 });
 
-test('cancelling the discard keeps the draft and the reader in place', async () => {
+test('canceling the discard keeps the draft and the reader in place', async () => {
   const store = await guardStore();
   const { answer, prompter } = prompts();
   store.setPrompter(prompter);

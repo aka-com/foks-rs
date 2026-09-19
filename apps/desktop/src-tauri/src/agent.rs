@@ -2292,7 +2292,7 @@ fn process_parent_pid(pid: u32) -> std::io::Result<u32> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         // `/proc/<pid>/stat`: the parent pid is the field after the
-        // parenthesised command name, which may itself contain spaces.
+        // parenthesized command name, which may itself contain spaces.
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
         let rest = stat
             .rsplit_once(')')

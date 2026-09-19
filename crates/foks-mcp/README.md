@@ -83,14 +83,14 @@ Normal KV mode adds two recovery tools:
   preparation or result reply was lost.
 
 Prepared means remote delivery has not begun; the same input and ID may execute
-once. Committed means the operation has sufficient acknowledgement or exact
+once. Committed means the operation has sufficient acknowledgment or exact
 namespace evidence. Rejected means it cannot execute under that ID. Submission
 unknown means delivery may have occurred: inspect status instead of issuing the
 write with a new ID. A partial result means ancillary namespace work committed
 while final completion is unproven. Cancellation does not undo remote work.
 
 An interrupted upload may leave an unreferenced encrypted object. A lost delete
-acknowledgement can remain unknown: current absence alone cannot prove which
+acknowledgment can remain unknown: current absence alone cannot prove which
 delete committed. A recovered write retains its node ID when authenticated evidence proves it;
 unproven fields remain absent. None of these results automatically repeats a mutation.
 

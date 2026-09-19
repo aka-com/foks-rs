@@ -1,5 +1,5 @@
 /**
- * The rail's persisted colour preference.
+ * The rail's persisted color preference.
  *
  * Persisted in `localStorage` as `railColor` and applied as `data-rail` on the
  * document. Rules in `kit/tokens.css` map it to `--rail` for dependent
@@ -31,7 +31,7 @@ function known(id: string | null | undefined): string {
     : DEFAULT_RAIL_COLOR;
 }
 
-/** The stored colour id; the default when unset or unreadable. */
+/** The stored color id; the default when unset or unreadable. */
 export function storedRailColor(): string {
   try {
     return known(
@@ -42,7 +42,7 @@ export function storedRailColor(): string {
   }
 }
 
-/** Persists the colour id. */
+/** Persists the color id. */
 export function rememberRailColor(id: string): void {
   try {
     if (typeof window !== 'undefined') window.localStorage.setItem(KEY, id);
@@ -51,7 +51,7 @@ export function rememberRailColor(id: string): void {
   }
 }
 
-/** Draws the colour: `data-rail` on the document, which the tokens read. */
+/** Draws the color: `data-rail` on the document, which the tokens read. */
 export function applyRailColor(id: string): void {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;

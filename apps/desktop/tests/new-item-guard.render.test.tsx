@@ -153,7 +153,7 @@ test('confirming the discard closes the sheet and makes the move', async () => {
   );
 });
 
-test('cancelling the discard keeps the draft and the reader in place', async () => {
+test('canceling the discard keeps the draft and the reader in place', async () => {
   const { rendered, store } = await mount();
   await openSheet(rendered, 'Password');
   ui.fireEvent.change(rendered.getByLabelText('Site'), {

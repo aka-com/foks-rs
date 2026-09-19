@@ -15,7 +15,7 @@ pub const MINIMUM_HOST_KEY_OBSERVATION_MICROS: u64 = 24 * 60 * 60 * 1_000_000;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HostKeyRotationObservation {
     /// The add-key hostchain sequence observed by an independently syncing
-    /// client or canary. This explicit acknowledgement prevents an operator
+    /// client or canary. This explicit acknowledgment prevents an operator
     /// from accidentally completing an unobserved rotation.
     pub add_link_seqno: u64,
 }

@@ -8,7 +8,7 @@
 /* ---------------------------------------------------------------- roles -- */
 
 /**
- * A role, normalised.
+ * A role, normalized.
  *
  * Protocol roles are Member (with visibility band), Admin, and Owner.
  * The optional visibility level applies only to Member roles.
@@ -21,7 +21,7 @@ export interface Role {
 /**
  * A role as the fixture (and the agent) writes it: either the display string
  * `"Owner"` / `"Member · visibility 0"`, or the structured
- * `{ role, visibility }`. `parseRole` normalises both.
+ * `{ role, visibility }`. `parseRole` normalizes both.
  */
 export type RoleWire = string | { role: string; visibility?: number };
 

@@ -7,9 +7,10 @@ import type { LeaseState, StoreRef } from '../model/types';
  * a page of its own, with the sub-navigation staying on screen while any one
  * of them is open. `servers` lists the servers this Mac talks to and holds
  * each server's own page, security keys included. `preferences` contains
- * account passphrases and local desktop alert settings. `mac` is This Mac: the
- * application version and lock,
- * the agent, the local FOKS data operations and the Mac-wide reset.
+ * account passphrases and local desktop alert settings. `mac` is Device: the
+ * application version and lock, the agent, the local FOKS data operations and
+ * the Mac-wide reset. The section keeps its `mac` id, so older addresses that
+ * name it still resolve.
  *
  * Older addresses name sections that folded into these three; `decodeLocation`
  * maps them (`SETTINGS_SECTION_ALIASES`).
@@ -31,7 +32,7 @@ export const SETTINGS_SECTION_LABEL: Readonly<Record<SettingsSection, string>> =
   {
     servers: 'Servers',
     preferences: 'Preferences',
-    mac: 'This Mac',
+    mac: 'Device',
   };
 
 /** Which pane of the Devices tab is open. */

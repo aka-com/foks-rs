@@ -76,7 +76,7 @@ export function Band({
   children,
 }: BandProps): ReactNode {
   // A band mounted in response to an action is announced — a critical one
-  // interrupts, the rest are polite. One the page always draws is a labelled
+  // interrupts, the rest are polite. One the page always draws is a labeled
   // group instead, reachable by its label without announcing itself.
   const role = live
     ? severity === 'crit'

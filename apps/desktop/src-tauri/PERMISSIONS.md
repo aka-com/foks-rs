@@ -47,7 +47,7 @@ sub-defaults and 92 individual commands. Key omitted permissions include:
 | `core:menu:default` | 22 menu-construction commands. FOKS builds no menu from JS. |
 | `core:tray:default` | 12 tray commands. |
 | `core:app:default` | `version`, `name`, `tauri_version`, `identifier`, `bundle_type`, and the listener registry. FOKS answers all of this through its own `app_info` command. |
-| `core:window:default` | 28 read-only window queries plus `internal_toggle_maximize`, the double-click-titlebar behaviour. If double-click-to-maximize is ever wanted, add `core:window:allow-internal-toggle-maximize` deliberately — see below — rather than restoring the set. |
+| `core:window:default` | 28 read-only window queries plus `internal_toggle_maximize`, the double-click-titlebar behavior. If double-click-to-maximize is ever wanted, add `core:window:allow-internal-toggle-maximize` deliberately — see below — rather than restoring the set. |
 | `core:resources:default` | `close` on resource-table handles. |
 | `core:event:default` | `emit` and `emit_to`, alongside the listen/unlisten that were kept. |
 

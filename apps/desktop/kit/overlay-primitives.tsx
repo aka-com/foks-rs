@@ -451,6 +451,8 @@ export function Popover({
   matchAnchorWidth = false,
   minWidth,
   onClose,
+  onPointerEnter,
+  onPointerLeave,
 }: {
   anchorRef: RefObject<HTMLElement | null>;
   children: ReactNode;
@@ -460,6 +462,9 @@ export function Popover({
   matchAnchorWidth?: boolean;
   minWidth?: number;
   onClose: () => void;
+  /** Pointer handlers on the portaled box, for hover-held popovers. */
+  onPointerEnter?: () => void;
+  onPointerLeave?: () => void;
 }): ReactNode {
   const blocking = useDismissOnOverlayBlock(onClose);
   const { dialogs, portalRoot } = useOverlayEnvironment();
@@ -510,7 +515,12 @@ export function Popover({
 
   if (blocking) return null;
   return createPortal(
-    <div ref={popoverRef} className={className}>
+    <div
+      ref={popoverRef}
+      className={className}
+      onPointerEnter={onPointerEnter}
+      onPointerLeave={onPointerLeave}
+    >
       {children}
     </div>,
     portalRoot,

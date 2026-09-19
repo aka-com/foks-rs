@@ -223,7 +223,7 @@ test('a username with no usable characters blocks account creation', async () =>
   });
   assert.ok(
     rendered.view.getByText(
-      'Account alias must contain at least one letter or number.',
+      'Your name must contain at least one letter or number.',
     ),
   );
   const create = rendered.view.getByRole('button', {
@@ -304,7 +304,7 @@ test('shows why the Personal vault is unavailable and provides a link to server 
     ),
   );
   assert.equal(
-    rendered.view.queryByRole('button', { name: 'Open Personal' }),
+    rendered.view.queryByRole('button', { name: 'Continue to my vault' }),
     null,
   );
   ui.fireEvent.click(
@@ -363,7 +363,7 @@ test('checklist allows retrying Personal vault loading while the account is not 
   assert.equal(
     (
       rendered.view.getByRole('button', {
-        name: 'Open Personal',
+        name: 'Continue to my vault',
       }) as HTMLButtonElement
     ).disabled,
     true,
@@ -396,9 +396,7 @@ test('allows leaving setup during server verification, but disables leaving duri
       },
     },
   );
-  ui.fireEvent.click(
-    address.view.getByRole('button', { name: 'Continue' }),
-  );
+  ui.fireEvent.click(address.view.getByRole('button', { name: 'Continue' }));
   const leave = address.view.getByRole('button', {
     name: 'Leave setup',
   }) as HTMLButtonElement;

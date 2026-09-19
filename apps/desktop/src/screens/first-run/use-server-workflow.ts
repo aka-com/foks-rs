@@ -78,7 +78,7 @@ export async function runServerCheck({
   if (!isCurrent()) return null;
   if (candidate && report.hostId !== candidate.hostId)
     throw new Error('The server response does not match the selected profile.');
-  // A profile made here is labelled with the server's own name, so the rail
+  // A profile made here is labeled with the server's own name, so the rail
   // reads "foks.app" rather than the identifier derived from the address.
   if (!fixtureProfile && report.canonicalName) {
     try {

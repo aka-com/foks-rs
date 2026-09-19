@@ -1,9 +1,9 @@
 /**
  * The Settings tab as a sub-navigation of three pages — Servers, Preferences,
- * This Mac: the `section=` address that opens one of them, the `profile=`
+ * Device: the `section=` address that opens one of them, the `profile=`
  * address that opens a server on the Servers page without hiding the
  * sub-navigation, and the Mac-wide reset that composes the per-server one, on
- * the This Mac page.
+ * the Device page.
  */
 
 import assert from 'node:assert/strict';
@@ -134,7 +134,7 @@ test('the sub-navigation lists every section, and Servers opens first', async ()
     .within(nav)
     .getAllByRole('tab')
     .map((tab) => tab.textContent);
-  assert.deepEqual(tabs, ['Servers', 'Preferences', 'This Mac']);
+  assert.deepEqual(tabs, ['Servers', 'Preferences', 'Device']);
   assert.equal(
     ui
       .within(nav)
@@ -167,14 +167,14 @@ test('choosing a sub-navigation section replaces the page, dropping any open ser
     onNavigate: (location) => chosen.push(location),
   });
 
-  ui.fireEvent.click(rendered.getByRole('tab', { name: 'This Mac' }));
+  ui.fireEvent.click(rendered.getByRole('tab', { name: 'Device' }));
   assert.deepEqual(chosen.at(-1), { kind: 'settings', section: 'mac' });
 });
 
 test('a section address opens that page, each with the sub-navigation beside it', async () => {
   for (const [section, heading] of [
     ['preferences', 'Preferences'],
-    ['mac', 'This Mac'],
+    ['mac', 'Device'],
   ] as const) {
     ui.cleanup();
     const rendered = await renderSettings(await fixture(), {
@@ -194,7 +194,7 @@ test('a section address opens that page, each with the sub-navigation beside it'
   }
 });
 
-test('Preferences holds one passphrase row per account, the desktop alert preferences and the rail colour', async () => {
+test('Preferences holds one passphrase row per account, the desktop alert preferences and the rail color', async () => {
   const snapshot = await fixture();
   const rendered = await renderSettings(snapshot, {
     where: { section: 'preferences' },
@@ -271,7 +271,7 @@ test('a server address keeps the sub-navigation on screen, Servers still selecte
   );
   // The other two sections are still one click away, not hidden behind the
   // server the reader opened.
-  assert.ok(ui.within(nav).getByRole('tab', { name: 'This Mac' }));
+  assert.ok(ui.within(nav).getByRole('tab', { name: 'Device' }));
 });
 
 test('the passphrase sheet defaults to Change and provides Set and Verify', async () => {
@@ -347,13 +347,13 @@ test('a profile address opens that server instead of the page', async () => {
   // danger zone keeps two rows.
   assert.ok(rendered.getByRole('button', { name: 'Remove local data…' }));
   assert.ok(rendered.getByRole('button', { name: 'Erase and reset…' }));
-  // The sub-navigation stays on screen — "This Mac" is one of its labels —
+  // The sub-navigation stays on screen — "Device" is one of its labels —
   // but that page's own content is not drawn behind a server: the danger
   // zone here is this server's, and the Mac-wide reset is not on it.
   assert.ok(
     ui
       .within(rendered.getByRole('navigation', { name: 'Settings sections' }))
-      .getByRole('tab', { name: 'This Mac' }),
+      .getByRole('tab', { name: 'Device' }),
   );
   assert.equal(
     rendered.queryByRole('button', { name: 'Reset this Mac…' }),
@@ -551,7 +551,7 @@ test('a lapsed server can be checked from its row in the list', async () => {
   assert.ok(rendered.getAllByText('Check-in expired').length);
 });
 
-test('This Mac displays application, agent, and data sections above local reset', async () => {
+test('Device displays application, agent, and data sections above local reset', async () => {
   const rendered = await renderSettings(await fixture(), {
     where: { section: 'mac' },
   });
@@ -583,7 +583,7 @@ test('This Mac displays application, agent, and data sections above local reset'
   const agentInset = status.closest('.settings-inset');
   assert.ok(agentInset);
   assert.equal(agentInset.classList.contains('middle'), false);
-  // The one-line Socket row in the same inset centres itself instead.
+  // The one-line Socket row in the same inset centers itself instead.
   const socket = rendered.getByText('Socket').closest('.fr');
   assert.ok(socket);
   assert.equal(socket.classList.contains('line'), true);
@@ -797,7 +797,7 @@ test('server security-key actions name the selected enrollment across accounts',
   });
 });
 
-test('This Mac offers to restart the agent, and names the process it would stop', async () => {
+test('Device offers to restart the agent, and names the process it would stop', async () => {
   const snapshot = await fixture();
   const calls: boolean[] = [];
   const rendered = await renderSettings(snapshot, {

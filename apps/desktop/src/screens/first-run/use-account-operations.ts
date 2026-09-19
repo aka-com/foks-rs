@@ -98,7 +98,7 @@ export function useAccountOperations({
       alias,
       deviceName: deviceName.trim(),
     });
-    // Persist the acknowledgement before any fallible inventory read.
+    // Persist the acknowledgment before any fallible inventory read.
     commit(saved);
     void refreshAccountIdentity(saved);
   };

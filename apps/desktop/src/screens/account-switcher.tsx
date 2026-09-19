@@ -13,7 +13,7 @@ import { accountStopped, hue, serverName, usernameOf } from '../model';
 import type { AccountStore, AgentSnapshot } from '../model';
 
 /**
- * An account's mark: the initial of the username, over a colour derived from
+ * An account's mark: the initial of the username, over a color derived from
  * it. These surfaces name the account by the username the server knows it by,
  * so the mark stands for that name; a store elsewhere keeps `GroupMark`.
  */

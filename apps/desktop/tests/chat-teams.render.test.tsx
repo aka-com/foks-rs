@@ -1273,7 +1273,7 @@ test('newer messages in other teams do not switch away from the active conversat
   const chosen = journal.length;
   // A message arrives in the other team. The tab's choice was provisional only
   // while the inbox it was made from was still filling in; it has landed, and
-  // is not a licence to move the reader.
+  // is not a license to move the reader.
   newer = true;
   await clock.advance(60_000);
   assert.equal(journal.length, chosen);

@@ -1,7 +1,7 @@
 /**
  * The navigation guard as the reader meets it: a screen registering a guard
  * through the context, the confirmation a `prompt` verdict raises, and what
- * confirming, cancelling and Escape each do to the navigation behind it.
+ * confirming, canceling and Escape each do to the navigation behind it.
  *
  * The host below is the shell's wiring in miniature — the prompter that turns
  * a verdict into the dialog, and the answer that settles the store's promise.

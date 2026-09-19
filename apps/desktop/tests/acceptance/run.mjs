@@ -264,7 +264,7 @@ async function personaWalks(context, origin) {
       'chat overflowed the viewport',
     );
     await page.screenshot({ path: join(SHOTS, 'team-chat.png') });
-    // The header's folder icon is where "Files" used to be a labelled button.
+    // The header's folder icon is where "Files" used to be a labeled button.
     await page.getByRole('button', { name: 'Team files', exact: true }).click();
     check(
       !new URL(page.url()).searchParams.has('channel'),

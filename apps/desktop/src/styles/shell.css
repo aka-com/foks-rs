@@ -195,13 +195,12 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 
 /* Main content area */
 .main{position:relative;min-width:0;min-height:0;display:flex;flex-direction:column;background:#fff;container-type:inline-size}
-/* Refresh status: a badge over the top bar's refresh button, and the per-server popover its chevron opens. */
+/* Refresh status: a badge over the top bar's refresh button, and the per-server popover the button opens on hover. */
 .global-refresh-wrap{position:relative;display:inline-flex;align-items:center;flex:none}
 .sync-badge{position:absolute;top:3px;left:21px;width:8px;height:8px;border-radius:50%;box-shadow:0 0 0 2px #fff;pointer-events:none}
 .sync-badge.failed{background:var(--warning-dot)}
 .sync-badge.refreshing{box-sizing:border-box;border:1.5px solid var(--line-mid);border-top-color:var(--accent);background:#fff;animation:btn-spin .9s linear infinite}
 @media (prefers-reduced-motion:reduce){.sync-badge.refreshing{animation:none}}
-.topbar .btn.icon.sync-details{width:18px;margin-left:-4px;font-size:12px}
 .sync-popover{padding:10px 12px;font-size:12.5px}
 .sync-row{display:flex;align-items:flex-start;gap:8px;padding:4px 0}
 .sync-row+.sync-row{border-top:1px solid var(--line-soft);margin-top:4px;padding-top:8px}
@@ -266,9 +265,12 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
    line up with the tree rows below it. */
 .toolbar{display:flex;align-items:center;flex-wrap:wrap;row-gap:6px;gap:0;padding:6px 12px 6px 6px;min-width:0;border-bottom:1px solid var(--line-soft)}
 .toolbar-filter{flex:none;width:var(--tree-w,236px);min-width:0;padding:0 6px 0 0}
-.toolbar-filter .seg{display:flex;width:100%;overflow:hidden}
-.toolbar-filter .seg button,.toolbar-filter .seg.txt button{flex:1 1 0;width:auto;min-width:0;justify-content:center;padding:0 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Each option is as wide as its own label, not an equal share of the cell. */
+.toolbar-filter .seg{display:inline-flex;max-width:100%;overflow:hidden}
+.toolbar-filter .seg button,.toolbar-filter .seg.txt button{flex:0 1 auto;width:auto;min-width:0;justify-content:center;padding:0 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .toolbar-rest{flex:1 1 200px;min-width:0;display:flex;align-items:center;gap:6px;padding-left:14px}
+/* New stays at the right edge now that search no longer fills the cell. */
+.toolbar-rest>:last-child{margin-left:auto}
 .toolbar .spacer{flex:1 1 8px}
 .toolbar .btn,.toolbar .seg{height:32px}.toolbar .btn,.toolbar .seg.txt button{font-size:13px}
 .toolbar .btn.primary,.empty .btn.primary{height:30px}
@@ -307,7 +309,8 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .menu button .menu-choice small{font-weight:400;color:var(--muted);white-space:normal}
 /* Scoped search */
 .toolbar .search{width:160px;flex:0 1 160px}
-.toolbar-rest .search{width:auto;flex:1 1 auto;max-width:none}
+/* Matches the .topsearch field in the topbar above it. */
+.toolbar-rest .search{width:240px;flex:0 1 240px;min-width:120px;max-width:none}
 .toolbar .search input{display:block;padding-left:34px;border-color:transparent;font-size:13px;color:var(--ink);transition:background .12s ease,border-color .12s ease}
 .toolbar .search input::placeholder{color:var(--muted)}
 .toolbar .search input:hover:not(:focus){background:var(--btn-hover);border-color:var(--line-mid)}

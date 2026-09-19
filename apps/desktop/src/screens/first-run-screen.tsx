@@ -894,7 +894,7 @@ function FirstRunSession({
   /**
    * Why the sidebar's Leave setup is inert: a write is out that this screen is
    * the only report of. A provisioning that has been acknowledged is not one
-   * of them — that is what Finish later leaves behind.
+   * of them. That is what Finish later leaves behind.
    */
   const leaveDisabled =
     mutationBusy &&
@@ -1377,9 +1377,9 @@ function FirstRunSession({
      rows. On the sign-in path the chosen method's own row joins them. */
   const identityRows = (
     <>
-      <InsetRow label="Account alias">
+      <InsetRow label="Your name">
         <input
-          aria-label="Account alias"
+          aria-label="Your name"
           value={checkpoint.account?.username ?? username}
           placeholder="yourname"
           disabled={Boolean(checkpoint.account)}
@@ -1398,7 +1398,7 @@ function FirstRunSession({
   );
   const aliasInvalidNotice = usernameAliasInvalid ? (
     <p className="crit" role="alert">
-      Account alias must contain at least one letter or number.
+      Your name must contain at least one letter or number.
     </p>
   ) : null;
   /* Sign-in authentication methods: backup phrase recovery, or credential
@@ -1471,7 +1471,7 @@ function FirstRunSession({
      draws its setup-method group before these. */
   const signinSections = (first: number): ReactNode => (
     <>
-      <StepLabel n={first}>How do you want to sign in?</StepLabel>
+      <StepLabel n={first}>Sign in method</StepLabel>
       <Inset>
         <RadioGroup label="Sign-in method">
           <RadioCard
@@ -2011,12 +2011,12 @@ function FirstRunSession({
             : 'Select a server'}
         </h1>
         <p className="lead">
-          FOKS stores your account, teams, and encrypted vaults on a server.{' '}
+          FOKS synchronizes your account, teams, and encrypted vaults through a
+          server.{' '}
           {checkpoint.path === 'invited'
             ? `Enter the server address provided by ${adminShort}.`
             : null}
         </p>
-        <SectionLabel>Server</SectionLabel>
         <Inset
           className={state === 'error' || addressInvalid ? 'err' : undefined}
         >
@@ -2751,7 +2751,7 @@ function FirstRunSession({
                 right away; items in Personal are never shared with {group}.
               </p>
               <Button onClick={() => go('checklist-invited')}>
-                Open Personal
+                Continue to my vault
               </Button>
             </div>
           </div>
@@ -2813,7 +2813,7 @@ function FirstRunSession({
                   ]
                     .filter(Boolean)
                     .join(' · ')
-                : 'Skipped — backup method not configured'}
+                : 'Backup method not configured'}
             </span>
           </InsetRow>
           {checkpoint.path === 'invited' ? (
@@ -2886,7 +2886,7 @@ function FirstRunSession({
                 onNavigate({ kind: 'store', ref: accountStore });
             }}
           >
-            Open Personal
+            Continue to my vault
           </Button>
         </div>
       </Pane>

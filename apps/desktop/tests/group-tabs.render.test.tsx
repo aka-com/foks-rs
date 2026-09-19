@@ -140,7 +140,7 @@ function addPeopleChoice(
     (candidate) =>
       candidate.querySelector('.menu-choice b')?.textContent === label,
   );
-  assert.ok(node, `no Add people choice labelled ${label}`);
+  assert.ok(node, `no Add people choice labeled ${label}`);
   ui.fireEvent.click(node);
 }
 

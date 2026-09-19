@@ -404,7 +404,7 @@ function menuItem(owner: string, label: string): HTMLButtonElement {
   const node = [...menu.querySelectorAll<HTMLButtonElement>('button')].find(
     (candidate) => (candidate.textContent ?? '').trim().endsWith(label),
   );
-  assert.ok(node, `no menu item labelled ${label} for ${owner}`);
+  assert.ok(node, `no menu item labeled ${label} for ${owner}`);
   return node;
 }
 
@@ -421,7 +421,7 @@ function choiceItem(owner: string, label: string): HTMLButtonElement {
     (candidate) =>
       candidate.querySelector('.menu-choice > span')?.textContent === label,
   );
-  assert.ok(node, `no Add people choice labelled ${label} for ${owner}`);
+  assert.ok(node, `no Add people choice labeled ${label} for ${owner}`);
   return node;
 }
 

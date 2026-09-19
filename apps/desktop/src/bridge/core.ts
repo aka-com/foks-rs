@@ -51,7 +51,7 @@ export interface WindowStateEvent {
   fullscreen: boolean;
 }
 
-/** The process answering on the agent socket, as Settings › This Mac shows it. */
+/** The process answering on the agent socket, as Settings › Device shows it. */
 export interface AgentProcessInfo {
   pid: number | null;
   executable: string | null;
@@ -108,7 +108,7 @@ export function decodeCommandAck(value: unknown): CommandAck {
     !('ok' in value) ||
     value.ok !== true
   )
-    throw new Error('Invalid command acknowledgement');
+    throw new Error('Invalid command acknowledgment');
   return { ok: true };
 }
 

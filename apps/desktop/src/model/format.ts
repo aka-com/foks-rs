@@ -42,7 +42,7 @@ export const HUES = [
 ] as const;
 
 /**
- * A stable avatar colour for a name.
+ * A stable avatar color for a name.
  *
  * Returns a deterministic avatar color based on the sum of character codes in the name.
  */

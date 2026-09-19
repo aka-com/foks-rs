@@ -5,7 +5,7 @@
  * Assertions read the DOM and `localStorage` rather than shell state, because
  * both are the contract: collapsing is CSS driven by `.side.is-narrow`, and the
  * preference outlives the process. The rail no longer expands on hover or on
- * focus, so the width in the DOM is the whole of the behaviour.
+ * focus, so the width in the DOM is the whole of the behavior.
  */
 
 import assert from 'node:assert/strict';

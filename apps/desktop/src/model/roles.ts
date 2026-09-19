@@ -15,7 +15,7 @@ const KINDS: Readonly<Record<string, Role['kind']>> = {
 };
 
 /**
- * Normalise a role off the wire.
+ * Normalize a role off the wire.
  *
  * Accepts display strings (`"Owner"`, `"Member · visibility 0"`) or structured
  * `{ role, visibility }` objects. Returns `null` for unparseable or unknown roles.

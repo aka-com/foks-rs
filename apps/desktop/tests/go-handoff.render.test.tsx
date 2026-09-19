@@ -875,9 +875,9 @@ test('first-run account navigation, server edits, and connection errors stay sco
     [...view.container.querySelectorAll('.sec.step')].map(
       (el) => el.textContent,
     ),
-    ['1Setup method', '2How do you want to sign in?'],
+    ['1Setup method', '2Sign in method'],
   );
-  assert.equal(view.queryByLabelText('Account alias'), null);
+  assert.equal(view.queryByLabelText('Your name'), null);
   assert.ok(
     (view.getByRole('button', { name: 'Continue' }) as HTMLButtonElement)
       .disabled,
@@ -889,7 +889,7 @@ test('first-run account navigation, server edits, and connection errors stay sco
     view.container.querySelectorAll('.sec.step')[2]?.textContent,
     '3Account and device',
   );
-  assert.ok(view.getByLabelText('Account alias'));
+  assert.ok(view.getByLabelText('Your name'));
   assert.equal(view.queryByLabelText('Backup phrase'), null);
   ui.fireEvent.click(view.getByRole('button', { name: 'Import credentials' }));
   await view.findByText('Copy failed');
@@ -984,7 +984,7 @@ test('personal recovery puts backup first and completes without creating a group
   assert.ok(view.queryByText(/YubiKey/) === null);
   assert.ok(view.queryByText('Create a group') === null);
   ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));
-  await view.findByRole('button', { name: 'Open Personal' });
+  await view.findByRole('button', { name: 'Continue to my vault' });
   assert.ok(view.queryByText('Create a group') === null);
   assert.equal(creations, 0);
   const checkpoint = JSON.parse(
@@ -1094,12 +1094,12 @@ test('resumed sign-in step rediscovers the CLI profile for the verified server',
   rendered.getByText('Use the CLI to approve this as a new device');
   assert.equal(scans, 1);
   // The account rows follow the method choice.
-  assert.equal(rendered.queryByLabelText('Account alias'), null);
+  assert.equal(rendered.queryByLabelText('Your name'), null);
   ui.fireEvent.click(
     rendered.getByRole('radio', { name: /Recover with your backup phrase/ }),
   );
   assert.equal(
-    (rendered.getByLabelText('Account alias') as HTMLInputElement).value,
+    (rendered.getByLabelText('Your name') as HTMLInputElement).value,
     'cli-owner',
     'the CLI username is suggested as the local alias, as the chooser does',
   );

@@ -601,7 +601,7 @@ test('pending-ledger overflow stays bounded without evicting ambiguous records o
   controller.dispose();
 });
 
-test('completion destinations require fresh access and cannot redirect after acknowledgement', async () => {
+test('completion destinations require fresh access and cannot redirect after acknowledgment', async () => {
   const { controller, store, denyAccess } = await setup(async (action) =>
     reply(action.action === 'prepare-channel' ? prepared : confirmed),
   );

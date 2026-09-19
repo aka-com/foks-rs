@@ -538,7 +538,7 @@ test('the settings crumb always names the sub-navigation’s open page', async (
   assert.deepEqual(crumbTrail({ kind: 'settings' }), ['Settings', 'Servers']);
   assert.deepEqual(crumbTrail({ kind: 'settings', section: 'mac' }), [
     'Settings',
-    'This Mac',
+    'Device',
   ]);
   // A server's own page reads three deep: the tab, the Servers page it
   // belongs to, and the server itself.

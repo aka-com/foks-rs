@@ -17,7 +17,7 @@ pub enum InvitationIntent {
 }
 pub struct InvitationProgress {
     pub operation: MutationOperation,
-    /// Delivery acknowledgement only; never proof of membership.
+    /// Delivery acknowledgment only; never proof of membership.
     pub receipt: Option<TeamRsvp>,
     pub invite: Option<String>,
 }
@@ -218,7 +218,7 @@ impl FoksClient {
                 "remote invitation requires its destination profile",
             ));
         }
-        // A durable acknowledgement survives a crash before RemoteVerified.
+        // A durable acknowledgment survives a crash before RemoteVerified.
         let receipt_key = crate::ProtectedRecordKey::InvitationAck(&id).encoded();
         let ack = match protected.get(&receipt_key) {
             Ok(bytes) => Some(bytes),

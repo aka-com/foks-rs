@@ -418,7 +418,7 @@ three-party consent protocol. The coordinating operator holds both profiles'
 credentials, the source role is fixed to `ADMIN`, and a client-constructed join
 RSVP satisfies the local server tuple. The permission-token hash prefix
 `0x45cf32f37d38a811` is only a Rust-local storage/journal domain separator; it
-is never placed on the wire and must not be catalogued as an upstream protocol
+is never placed on the wire and must not be cataloged as an upstream protocol
 type ID.
 
 The separate invitation workflow implements the Go-compatible consent model for

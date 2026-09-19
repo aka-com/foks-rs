@@ -549,7 +549,7 @@ mod tests {
 
     #[test]
     fn protected_material_is_retained_until_application_acknowledged_finalization() {
-        // Regression guard for the application-acknowledgement boundary added in
+        // Regression guard for the application-acknowledgment boundary added in
         // 43a3119e8: protected retry material must survive every pre-`Finalized`
         // state, and neither `finalize` (before remote verification) nor
         // `rejected` (after it) may erase it early.

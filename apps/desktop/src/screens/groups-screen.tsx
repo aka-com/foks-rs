@@ -1517,7 +1517,7 @@ export function GroupSheet({
       dismissible={!busy}
       glyph={
         sheet === 'create' || store.kind !== 'team' ? (
-          // The group does not exist yet, so it has no mark: a group's colour
+          // The group does not exist yet, so it has no mark: a group's color
           // and initial are earned at creation, not previewed over an account.
           <span className="kico md neutral">
             <Icon name="people" />

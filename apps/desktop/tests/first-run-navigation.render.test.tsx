@@ -196,7 +196,7 @@ test('the account pages are numbered sections and a lone sign-in method is prese
   });
   assert.deepEqual(steps(r.view), [
     ['1', 'Setup method'],
-    ['2', 'How do you want to sign in?'],
+    ['2', 'Sign in method'],
     ['3', 'Account and device'],
   ]);
   const methods = r.view.getByRole('radiogroup', { name: 'Sign-in method' });
@@ -211,7 +211,7 @@ test('the account pages are numbered sections and a lone sign-in method is prese
     .getByLabelText('Backup phrase')
     .closest<HTMLElement>('.inset');
   assert.ok(form);
-  assert.ok(ui.within(form).getByLabelText('Account alias'));
+  assert.ok(ui.within(form).getByLabelText('Your name'));
   assert.ok(ui.within(form).getByLabelText('This device’s name'));
   assert.ok(r.view.getByRole('button', { name: 'Recover' }));
   assert.equal(r.view.queryByRole('button', { name: 'Continue' }), null);
@@ -243,7 +243,7 @@ test('the account pages are numbered sections and a lone sign-in method is prese
     }),
   );
   assert.deepEqual(steps(local.view), [
-    ['1', 'How do you want to sign in?'],
+    ['1', 'Sign in method'],
     ['2', 'Account and device'],
   ]);
   assert.ok(local.view.getByLabelText('Backup phrase'));
@@ -346,7 +346,7 @@ test('resumable recovery without its phrase can start a different setup', async 
   );
 });
 
-test('cancelling organization signup releases ordinary account creation', async () => {
+test('canceling organization signup releases ordinary account creation', async () => {
   const h = await harness();
   let cancelled = false;
   const operationId = 'a'.repeat(32);

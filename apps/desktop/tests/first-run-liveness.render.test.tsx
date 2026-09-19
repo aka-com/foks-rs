@@ -215,7 +215,7 @@ test('completed local setup explains unavailable inventory and offers a retry th
       name: 'Retry loading Personal vault',
     }),
   );
-  await rendered.view.findByRole('button', { name: 'Open Personal' });
+  await rendered.view.findByRole('button', { name: 'Continue to my vault' });
   assert.equal(refreshes, 2);
   assert.equal(h.saved()?.account?.alias, 'personal');
 });
@@ -709,7 +709,7 @@ test('acknowledged signup is persisted before refresh and resumes read-only afte
 });
 
 for (const method of ['recovery', 'sso'] as const) {
-  test(`${method} acknowledgement survives a failed identity refresh without offering the mutation again`, async () => {
+  test(`${method} acknowledgment survives a failed identity refresh without offering the mutation again`, async () => {
     const h = await harness();
     let mutations = 0;
     const bridge: Bridge = {
@@ -745,7 +745,7 @@ for (const method of ['recovery', 'sso'] as const) {
       target: { value: 'Mac' },
     });
     if (method === 'recovery') {
-      ui.fireEvent.change(rendered.view.getByLabelText('Account alias'), {
+      ui.fireEvent.change(rendered.view.getByLabelText('Your name'), {
         target: { value: 'personal' },
       });
       ui.fireEvent.change(rendered.view.getByLabelText('Backup phrase'), {
@@ -785,7 +785,7 @@ for (const method of ['recovery', 'sso'] as const) {
 }
 
 for (const method of ['copy', 'pair', 'resume-pair'] as const) {
-  test(`CLI ${method} acknowledgement is retained when identity inventory stays unavailable`, async () => {
+  test(`CLI ${method} acknowledgment is retained when identity inventory stays unavailable`, async () => {
     const h = await harness();
     let mutations = 0;
     const refreshForces: Array<boolean | undefined> = [];

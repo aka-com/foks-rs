@@ -98,7 +98,7 @@ type Sheet =
   | 'pair'
   | 'phrase'
   | 'recover'
-  | 'enrol'
+  | 'enroll'
   | 'provision'
   | 'yubi'
   | 'revoke'
@@ -251,7 +251,7 @@ export function DevicesScreen({
       enteredScene === 'settings-phrase'
         ? 'phrase'
         : enteredScene === 'settings-enrol'
-          ? 'enrol'
+          ? 'enroll'
           : null,
     (value) => value === 'pair' && pairMode === 'accept',
   );
@@ -804,7 +804,7 @@ export function DevicesScreen({
                   size="sm"
                   className="lnk"
                   {...access.props('yubi-create', { profile: selected.server })}
-                  onClick={() => setSheet('enrol')}
+                  onClick={() => setSheet('enroll')}
                 >
                   Create an account on a YubiKey…
                 </Button>
@@ -892,7 +892,7 @@ export function DevicesScreen({
           onError={(error) => void onMutationError(error)}
         />
       ) : null}
-      {sheet === 'enrol' && selected ? (
+      {sheet === 'enroll' && selected ? (
         <EnrollSheet
           bridge={bridge}
           store={selected}

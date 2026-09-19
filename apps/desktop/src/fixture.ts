@@ -65,7 +65,7 @@ const RAW: AgentSnapshot = {
     },
   ],
   // `store` is the exact identity and matches the `stores` entry below; the
-  // alias is only what the row is labelled with.
+  // alias is only what the row is labeled with.
   accounts: [
     {
       store: 'acct:personal',

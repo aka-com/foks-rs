@@ -207,7 +207,7 @@ export interface StoreAccessTakeoverProps {
   noHeader?: boolean;
   /**
    * `band` draws the message as a full-width alert with its one action at the
-   * right end, on the alert's centre line — the group page's treatment.
+   * right end, on the alert's center line — the group page's treatment.
    */
   variant?: 'notice' | 'band';
   /** Omitted where the header is suppressed; the header's own subtitle is the

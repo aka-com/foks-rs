@@ -72,7 +72,7 @@ const CONTROL_TAGS = new Set(['input', 'textarea', 'select']);
  *
  * The walk is shallow on purpose: every caller writes the control as a direct
  * child of `InsetRow`, and a row that nests one deeper than its own value
- * wrapper is not a labelled field. A control that already carries an `id` is
+ * wrapper is not a labeled field. A control that already carries an `id` is
  * left alone — the caller has provided the intended identifier.
  */
 function adoptControl(
@@ -113,7 +113,7 @@ export function InsetRow({
   const controlId = useId();
 
   let body = children;
-  let labelled = false;
+  let labeled = false;
   if (children !== undefined && label !== undefined) {
     let found = false;
     body = Children.map(children, (child) => {
@@ -122,7 +122,7 @@ export function InsetRow({
       found = result.found;
       return result.node;
     });
-    labelled = found;
+    labeled = found;
   }
 
   return (
@@ -137,7 +137,7 @@ export function InsetRow({
           ?.focus();
       }}
     >
-      {label === undefined ? null : labelled ? (
+      {label === undefined ? null : labeled ? (
         <label className="k" htmlFor={controlId}>
           {label}
         </label>

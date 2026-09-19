@@ -242,12 +242,17 @@ export function useSyncSummary(
   return summarizeSync(snapshot, service);
 }
 
+/** Names the popover as the refresh button's description while it is up. */
+export const SYNC_STATUS_ID = 'sync-status-popover';
+
 export function SyncPopover({
   snapshot,
   service,
   summary,
   anchorRef,
   onClose,
+  onPointerEnter,
+  onPointerLeave,
   onOpenServers,
 }: {
   snapshot: AgentSnapshot;
@@ -255,6 +260,9 @@ export function SyncPopover({
   summary: SyncSummary;
   anchorRef: RefObject<HTMLElement | null>;
   onClose: () => void;
+  /** Keeps a hover-held popover up while the pointer is over it. */
+  onPointerEnter?: () => void;
+  onPointerLeave?: () => void;
   /** Opens Settings › Servers on one server, when the shell can navigate. */
   onOpenServers?: (profile: string) => void;
 }): ReactNode {
@@ -269,8 +277,10 @@ export function SyncPopover({
       align="end"
       minWidth={340}
       onClose={onClose}
+      onPointerEnter={onPointerEnter}
+      onPointerLeave={onPointerLeave}
     >
-      <div role="group" aria-label="Refresh status">
+      <div id={SYNC_STATUS_ID} role="group" aria-label="Refresh status">
         {summary.servers.length ? (
           summary.servers.map((server) => (
             <div className="sync-row" key={server.id ?? 'local'}>

@@ -9,7 +9,7 @@ import type {
 /**
  * Former `section=` values that are pages of one of the three sections now.
  * `credentials` (the passphrase rows) and `notifications` are Preferences;
- * `device`, `about` and the older `agent` are This Mac; `security-keys` was a
+ * `device`, `about` and the older `agent` are Device; `security-keys` was a
  * list of links to each server's page, so it is Servers.
  */
 export const SETTINGS_SECTION_ALIASES: Readonly<
@@ -63,7 +63,7 @@ export const PUBLIC_LOCATION_ALIASES: Readonly<Record<string, Location>> = {
   'settings-keys': { kind: 'devices', section: 'keys' },
   'settings-enrol': { kind: 'devices', section: 'keys' },
   'settings-account': { kind: 'people' },
-  // The agent and About content is the This Mac page.
+  // The agent and About content is the Device page.
   'settings-agent': { kind: 'settings', section: 'mac' },
   'settings-about': { kind: 'settings', section: 'mac' },
 };

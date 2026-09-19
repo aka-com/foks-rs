@@ -638,7 +638,7 @@ fn assert_catalog_value(
     assert_eq!(entries.len(), 1, "one catalog entry for {path}");
     assert_eq!(entries[0].metadata.version, version);
     let read = foks_desktop::read_catalog_item(&AgentClient::new(socket), entries[0])
-        .expect("read the freshly catalogued version");
+        .expect("read the freshly cataloged version");
     let KvItemValue::File(bytes) = read.value else {
         panic!("expected file value for {path}");
     };
@@ -1544,7 +1544,7 @@ fn exercise_chat(
     let cancel_socket = socket.to_owned();
     let cancel_store = owner.clone();
     let cancel_since = inbox_version.clone();
-    let cancelling = std::thread::spawn(move || {
+    let canceling = std::thread::spawn(move || {
         foks_desktop::chat_request_cancellable(
             &AgentClient::new(cancel_socket),
             cancel_store,
@@ -1558,7 +1558,7 @@ fn exercise_chat(
     });
     std::thread::sleep(Duration::from_millis(100));
     cancelled.store(true, std::sync::atomic::Ordering::Release);
-    assert!(cancelling.join().unwrap());
+    assert!(canceling.join().unwrap());
     std::thread::sleep(Duration::from_millis(1_100));
     let R::Poll { bumped, .. } = chat(
         &owner,

@@ -333,7 +333,7 @@ export function AccountHeader({
   };
   const servers = [...new Set(accounts.map((store) => store.server))];
   // The same hue the Files and Teams rows draw each store's mark in, so an
-  // account's initial is white on its own colour rather than on nothing.
+  // account's initial is white on its own color rather than on nothing.
   const hues = storeHues(storeNavigationOrder(snapshot));
   const close = (): void => setOpen(false);
   return (

@@ -884,7 +884,7 @@ pub(crate) fn federated_refresh_accepts_software_and_yubi_credentials_on_both_si
     for (index, (remote_credential, local_credential)) in combinations.into_iter().enumerate() {
         // Each combination starts from fresh sockets. A pooled connection the
         // server has already timed out would otherwise surface as a transport
-        // error and hide the credential behaviour under test.
+        // error and hide the credential behavior under test.
         pair.local.client.foks().clear_connection_pool().unwrap();
         let refreshed = pair
             .local

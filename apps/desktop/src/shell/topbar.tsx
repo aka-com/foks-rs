@@ -11,12 +11,12 @@
  * title, the page actions and the per-page search field.
  */
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import { Button, Icon } from '../components';
 import type { DesktopReconciliation } from '../desktop-reconciliation';
-import { SyncPopover, useSyncSummary } from './sync-popover';
+import { SYNC_STATUS_ID, SyncPopover, useSyncSummary } from './sync-popover';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { channelTitle } from '../chat/presentation';
 import { serverLocalAlias, storeOf } from '../model';
@@ -146,11 +146,20 @@ export interface TopbarProps {
   blocked?: boolean;
 }
 
+/** How long the status popover survives the pointer leaving it. */
+const SYNC_HOVER_CLOSE_MS = 180;
+
 /**
- * The refresh button with its status: a spinner badge while any server is
- * refreshing, an amber dot when one could not be refreshed, and a chevron that
- * opens the per-server popover. The badge is decorative; the popover trigger
- * carries the accessible name.
+ * The refresh button with its status: one square button that refreshes on
+ * click, a spinner badge while any server is refreshing and an amber dot when
+ * one could not be refreshed. Pointing at the button — or reaching it with the
+ * keyboard — opens the per-server popover; there is no separate trigger for
+ * it. The badge is decorative; the button carries the accessible name.
+ *
+ * The popover is portaled, so it is not a descendant of the button's wrapper:
+ * the pointer and the focus are tracked on both, and the popover only closes
+ * once neither is on either of them. Closing is deferred by
+ * `SYNC_HOVER_CLOSE_MS` so the pointer can cross the gap between the two.
  */
 function SyncControls({
   snapshot,
@@ -169,54 +178,75 @@ function SyncControls({
 }): ReactNode {
   const summary = useSyncSummary(snapshot, service);
   const wrapRef = useRef<HTMLSpanElement>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  // Whether the pointer or the focus is still on the button or the popover.
+  const on = useRef({ pointer: false, focus: false });
   const [open, setOpen] = useState(false);
+  const cancelClose = (): void => {
+    if (closeTimer.current !== undefined) clearTimeout(closeTimer.current);
+    closeTimer.current = undefined;
+  };
+  useEffect(
+    () => () => {
+      if (closeTimer.current !== undefined) clearTimeout(closeTimer.current);
+    },
+    [],
+  );
+  /** Opens or schedules the close, from whatever the two flags now say. */
+  const settle = (): void => {
+    cancelClose();
+    if ((on.current.pointer || on.current.focus) && !blocked) {
+      setOpen(true);
+      return;
+    }
+    closeTimer.current = setTimeout(() => setOpen(false), SYNC_HOVER_CLOSE_MS);
+  };
+  const track = (key: 'pointer' | 'focus', value: boolean) => (): void => {
+    on.current[key] = value;
+    settle();
+  };
+  const hideNow = (): void => {
+    cancelClose();
+    on.current = { pointer: false, focus: false };
+    setOpen(false);
+  };
   const badge = summary.failed
     ? 'failed'
     : summary.refreshing || refreshing
       ? 'refreshing'
       : null;
   return (
-    <span className="global-refresh-wrap" ref={wrapRef}>
+    <span
+      className="global-refresh-wrap"
+      ref={wrapRef}
+      onMouseEnter={track('pointer', true)}
+      onMouseLeave={track('pointer', false)}
+      onFocus={track('focus', true)}
+      onBlur={track('focus', false)}
+    >
       <Button
         variant="quiet"
         className="global-refresh"
         icon="again"
         aria-label={refreshing ? 'Refreshing vaults and teams' : 'Refresh'}
-        title={
-          refreshing
-            ? 'Refreshing vaults and teams'
-            : 'Refresh vaults and teams'
-        }
+        aria-describedby={open ? SYNC_STATUS_ID : undefined}
         disabled={refreshing || blocked}
         onClick={onRefresh}
       />
       {badge ? (
         <span className={`sync-badge ${badge}`} aria-hidden="true" />
       ) : null}
-      <Button
-        variant="quiet"
-        className="sync-details"
-        icon="chev"
-        aria-label="Refresh status"
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        title={
-          summary.failed
-            ? 'Some data could not be refreshed'
-            : summary.refreshing
-              ? 'Refreshing data'
-              : 'Refresh status'
-        }
-        disabled={blocked}
-        onClick={() => setOpen((was) => !was)}
-      />
       {open ? (
         <SyncPopover
           snapshot={snapshot}
           service={service}
           summary={summary}
           anchorRef={wrapRef}
-          onClose={() => setOpen(false)}
+          onClose={hideNow}
+          onPointerEnter={track('pointer', true)}
+          onPointerLeave={track('pointer', false)}
           onOpenServers={onOpenServers}
         />
       ) : null}

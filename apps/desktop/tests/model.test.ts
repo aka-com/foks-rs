@@ -347,7 +347,7 @@ test('initials drop the mail domain and take at most two words', () => {
   assert.equal(initials('satoshi'), 'S');
 });
 
-test('a name always gets the same avatar colour', () => {
+test('a name always gets the same avatar color', () => {
   assert.equal(hue('sam.ortiz'), '#a2845e');
   assert.equal(hue('vitalik'), '#34c759');
   assert.equal(hue('deploy-bot'), '#a2845e');
@@ -359,7 +359,7 @@ function refs(ids: string[]): Store[] {
   return ids.map((id) => ({ id }) as Store);
 }
 
-test('store marks keep their colour and never repeat one while the palette holds', () => {
+test('store marks keep their color and never repeat one while the palette holds', () => {
   const stores = storeNavigationOrder(FIXTURE);
   const colors = storeHues(stores);
   assert.equal(colors.size, stores.length);
@@ -367,7 +367,7 @@ test('store marks keep their colour and never repeat one while the palette holds
   // The palette has eight entries; the fixture has fewer stores than that.
   assert.ok(stores.length <= 8);
   assert.equal(new Set(colors.values()).size, stores.length);
-  // A store keyed on its reference takes the hashed colour when it is free.
+  // A store keyed on its reference takes the hashed color when it is free.
   const first = stores[0];
   assert.equal(colors.get(first.id), hue(first.id));
 });
@@ -386,7 +386,7 @@ test('a colliding store takes the first free palette entry, and only that store 
   );
 });
 
-test('store marks fall back to the hashed colour once the palette is spent', () => {
+test('store marks fall back to the hashed color once the palette is spent', () => {
   const ids = Array.from(
     { length: HUES.length + 2 },
     (_, index) => `s${index}`,
@@ -431,7 +431,7 @@ test("storeHeadingDescription omits the server on the active account's own serve
   );
   assert.ok(personal && work && household);
 
-  // With no active account supplied, behaviour is unchanged: never names a
+  // With no active account supplied, behavior is unchanged: never names a
   // server for a normal team, and never suppresses less than before.
   assert.equal(storeHeadingDescription(FIXTURE, household), '2 people');
 

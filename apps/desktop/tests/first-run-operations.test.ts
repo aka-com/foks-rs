@@ -57,7 +57,7 @@ function readIntent(value: FirstRunCheckpoint) {
   return decodeFirstRunCheckpoint(encodeFirstRunCheckpoint(value));
 }
 
-test('acknowledgement is durably recorded after the initiating screen has gone away', async () => {
+test('acknowledgment is durably recorded after the initiating screen has gone away', async () => {
   const bridge = {} as Bridge;
   let complete!: () => void;
   const result = executeProvisioning(
@@ -120,7 +120,7 @@ test('unclassified failures cannot authorize another initial mutation', async ()
   assert.equal(read()?.state, 'operation-pending');
 });
 
-test('restarting the wizard preserves a late acknowledgement without restoring the old wizard', async () => {
+test('restarting the wizard preserves a late acknowledgment without restoring the old wizard', async () => {
   window.localStorage.clear();
   let complete!: () => void;
   const pending = executeProvisioning(

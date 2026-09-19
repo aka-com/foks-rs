@@ -297,7 +297,7 @@ test('a typed pairing phrase is asked about, and confirming discards it', async 
   assert.equal((field as HTMLInputElement).value, '');
 });
 
-test('cancelling the question keeps the phrase and the page', async () => {
+test('canceling the question keeps the phrase and the page', async () => {
   const h = await harness();
   const closed: boolean[] = [];
   const { store, asked, rendered } = h.mount(

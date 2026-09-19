@@ -1,6 +1,6 @@
 /**
- * A group's mark: its initial over a colour derived from its name, or the
- * inactive grey. One mark for a group everywhere it is listed, so the Teams
+ * A group's mark: its initial over a color derived from its name, or the
+ * inactive gray. One mark for a group everywhere it is listed, so the Teams
  * row, the Files row, the Chat column and the group's own page agree.
  *
  * It lives in its own module because every list that draws a group draws it,

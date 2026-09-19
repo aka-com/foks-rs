@@ -541,7 +541,7 @@ impl CheckedProfileSession<'_> {
                 Ok(()) | Err(foks_client::ProtectedStoreError::Missing) => {}
                 Err(_) => {
                     return Err(Error::InvalidAccount(
-                        "invitation acknowledgement cleanup failed",
+                        "invitation acknowledgment cleanup failed",
                     ))
                 }
             }

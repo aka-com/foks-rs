@@ -109,7 +109,7 @@ function menuItem(label: string): HTMLButtonElement {
   const node = [
     ...document.querySelectorAll<HTMLButtonElement>('.menu button'),
   ].find((candidate) => (candidate.textContent ?? '').trim().endsWith(label));
-  assert.ok(node, `no menu item labelled ${label}`);
+  assert.ok(node, `no menu item labeled ${label}`);
   return node;
 }
 
@@ -136,7 +136,7 @@ function addPeopleItem(label: string): HTMLButtonElement {
     (candidate) =>
       candidate.querySelector('.menu-choice b')?.textContent === label,
   );
-  assert.ok(node, `no Add people choice labelled ${label}`);
+  assert.ok(node, `no Add people choice labeled ${label}`);
   return node;
 }
 
@@ -411,7 +411,7 @@ test('a single-action alert puts its action at the right end of the alert', asyn
   // is a group the reader can reach by its label.
   assert.equal(alert.getAttribute('role'), 'group');
   assert.equal(alert.getAttribute('aria-label'), 'Roster unavailable');
-  // The action sits in the band's own action cell, which centres it at the
+  // The action sits in the band's own action cell, which centers it at the
   // right end rather than inline in the sentence.
   const refresh = rendered.getByRole('button', { name: 'Refresh' });
   assert.equal(refresh.closest('.band .a') !== null, true);
