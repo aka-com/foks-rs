@@ -1906,6 +1906,7 @@ test('loading and failed channel lists do not claim No channels', async () => {
     await ui.waitFor(() =>
       assert.match(head('Household').textContent ?? '', /Loading channels/),
     );
+    assert.equal(head('Household').querySelector('.chat-unread'), null);
     assert.equal(ui.screen.queryByText('No channels'), null);
     release();
     await ui.waitFor(() =>

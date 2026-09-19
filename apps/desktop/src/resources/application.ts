@@ -10,13 +10,14 @@ export function appInfoQuery(
   return repository.query(
     appInfoKey,
     async () => {
-      const { version, agentSocket, managedProfile, computerName } =
+      const { version, agentSocket, managedProfile, computerName, userName } =
         await bridge.appInfo();
       return {
         version,
         agentSocket,
         ...(managedProfile === undefined ? {} : { managedProfile }),
         ...(computerName === undefined ? {} : { computerName }),
+        ...(userName === undefined ? {} : { userName }),
       };
     },
     60_000,

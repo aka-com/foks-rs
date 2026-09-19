@@ -336,6 +336,19 @@ test('app stylesheet uses design tokens and declares no hardcoded colors', async
   assert.match(app, /\.inset\.danger\s*\{[^}]*overflow: visible/);
 });
 
+test('refresh status uses a fixed overlay and an opaque bounded surface', async () => {
+  const app = await readSource('../src/styles/app.css', import.meta.url);
+  const shell = await readSource(SHELL, import.meta.url);
+  assert.match(app, /\.menu-portal\s*\{[^}]*position: fixed;/);
+  assert.match(app, /\.menu-portal\s*\{[^}]*z-index: 16;/);
+  const popover = /\.sync-popover\{([^}]*)\}/.exec(shell)?.[1] ?? '';
+  assert.match(popover, /background:var\(--main-surface\)/);
+  assert.match(popover, /border:1px solid var\(--line\)/);
+  assert.match(popover, /box-shadow:var\(--shadow-menu\)/);
+  assert.match(popover, /max-height:calc\(100vh - 16px\)/);
+  assert.match(popover, /overflow:auto/);
+});
+
 test('the rail reserves the strip macOS draws its window controls on', async () => {
   const app = await readSource('../src/styles/app.css', import.meta.url);
   // There is no title bar: the rail's own drag strip is where the controls go.

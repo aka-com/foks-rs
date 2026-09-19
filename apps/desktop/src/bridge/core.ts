@@ -86,6 +86,7 @@ export interface AppInfo {
   managedProfile?: string;
   /** macOS Computer Name configured in System Settings. */
   computerName?: string;
+  userName?: string;
 }
 
 export interface AppLockState {
@@ -241,11 +242,13 @@ export function decodeAppInfo(value: unknown): AppInfo {
     item.computerName,
     'app_info.computerName',
   );
+  const userName = optionalString(item.userName, 'app_info.userName');
   return {
     version: string(item.version, 'app_info.version'),
     agentSocket: string(item.agentSocket, 'app_info.agentSocket'),
     ...(managedProfile ? { managedProfile } : {}),
     ...(computerName ? { computerName } : {}),
+    ...(userName ? { userName } : {}),
   };
 }
 

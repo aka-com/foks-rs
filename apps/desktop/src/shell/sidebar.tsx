@@ -544,21 +544,44 @@ export function AccountHeader({
 function railChatUnread(
   snapshot: AgentSnapshot,
   inbox: ReturnType<typeof useSidebarInbox>,
-): RailCount | { loading: true; description: string } | null {
+):
+  | RailCount
+  | { loading: true; description: string }
+  | { warning: true; description: string }
+  | null {
   let total = 0;
   let known = false;
   let pending = false;
+  const warnings = new Set<string>();
   for (const store of storeNavigationOrder(snapshot)) {
     if (!chatAvailable(snapshot, store)) continue;
-    const unread = teamUnread(inbox.get(store.id));
+    const entry = inbox.get(store.id);
+    if (!entry || (entry.state === 'loading' && !entry.data && !entry.error)) {
+      pending = true;
+      continue;
+    }
+    const unread = teamUnread(entry);
     if (!unread) continue;
+    if (
+      !entry.data ||
+      entry.state === 'blocked' ||
+      entry.state === 'unavailable' ||
+      entry.stale ||
+      entry.error ||
+      entry.data.degraded
+    )
+      warnings.add(unread.description);
     const count = Number.parseInt(unread.label, 10);
-    if (Number.isNaN(count)) pending = true;
-    else {
+    if (!Number.isNaN(count)) {
       total += count;
       known = true;
     }
   }
+  if (warnings.size)
+    return {
+      warning: true,
+      description: `${known ? `${total} known unread; ` : ''}${[...warnings].join('; ')}`,
+    };
   if (known) return { label: String(total), description: `${total} unread` };
   return pending
     ? { loading: true, description: 'Loading unread counts' }
@@ -631,6 +654,8 @@ export function Sidebar({
       if (!unread) return undefined;
       if ('loading' in unread)
         return <RailTail kind="loading" description={unread.description} />;
+      if ('warning' in unread)
+        return <RailTail kind="dot warn" description={unread.description} />;
       return (
         <RailTail kind="count" description={unread.description}>
           {unread.label}

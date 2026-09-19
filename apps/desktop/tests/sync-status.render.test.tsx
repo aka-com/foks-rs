@@ -128,6 +128,7 @@ test('the refresh control is one button, and pointing at it opens the status', a
   });
   const popover = document.querySelector('.sync-popover');
   assert.ok(popover);
+  assert.ok(popover.classList.contains('menu-portal'));
   // The open popover describes the button it belongs to.
   assert.equal(
     wrap.querySelector('button')?.getAttribute('aria-describedby'),

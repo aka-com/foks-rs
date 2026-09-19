@@ -43,7 +43,7 @@ interface Journal {
 /** Renders the rail over the fixture, with every team's chat reporting `unread`. */
 async function rail(
   location: Location = { kind: 'all' },
-  unread = '0',
+  unread: string | ((base: Bridge) => Bridge['chat']) = '0',
   attention = 0,
   collapsed = false,
   /** Mount a modal dialog beside the rail, as a sheet or the palette would. */
@@ -77,14 +77,17 @@ async function rail(
   const base: Bridge = mockBridge(snapshot);
   const bridge: Bridge = {
     ...base,
-    chat: async (store, action, view) => {
-      const reply = await base.chat(store, action, view);
-      if (reply.result.kind === 'inbox')
-        reply.result.conversations = reply.result.conversations.map(
-          (conversation) => ({ ...conversation, unread }),
-        );
-      return reply;
-    },
+    chat:
+      typeof unread === 'function'
+        ? unread(base)
+        : async (store, action, view) => {
+            const reply = await base.chat(store, action, view);
+            if (reply.result.kind === 'inbox')
+              reply.result.conversations = reply.result.conversations.map(
+                (conversation) => ({ ...conversation, unread }),
+              );
+            return reply;
+          },
   };
   const journal: Journal = { navigations: [], locks: 0 };
   const portalRoot = document.getElementById('overlays');
@@ -180,6 +183,72 @@ test('no unread and nothing to attend to leaves both marks off', async () => {
   });
   assert.equal(document.querySelector('.side.rail .rail-tail'), null);
   assert.equal(document.querySelector('.side.rail .attn'), null);
+});
+
+for (const collapsed of [false, true]) {
+  for (const state of ['failed', 'degraded'] as const) {
+    test(`Chat shows a warning instead of loading for ${state} counts, collapsed=${collapsed}`, async () => {
+      await rail(
+        { kind: 'all' },
+        (base) => async (store, action, view) => {
+          if (state === 'failed')
+            throw {
+              code: 'profile-busy',
+              message: 'The inbox could not be read.',
+              retryable: true,
+              fatal: false,
+              ambiguous: false,
+            };
+          const reply = await base.chat(store, action, view);
+          if (reply.result.kind === 'inbox') {
+            reply.result.degraded = true;
+            reply.result.conversations = reply.result.conversations.map(
+              (conversation) => ({ ...conversation, unread: '0' }),
+            );
+          }
+          return reply;
+        },
+        0,
+        collapsed,
+      );
+      await ui.waitFor(() => {
+        const chat = tabs()[1];
+        assert.ok(!chat.querySelector('.rail-tail.loading'));
+        const warning = chat.querySelector('.rail-tail.dot.warn');
+        assert.ok(warning);
+        assert.match(
+          warning.getAttribute('aria-label') ?? '',
+          state === 'failed' ? /unavailable/i : /incomplete/i,
+        );
+      });
+    });
+  }
+}
+
+test('Chat does not hide a failed team behind another team’s unread count', async () => {
+  await rail({ kind: 'all' }, (base) => async (store, action, view) => {
+    if (store === 'team:eng')
+      throw {
+        code: 'profile-busy',
+        message: 'The inbox could not be read.',
+        retryable: true,
+        fatal: false,
+        ambiguous: false,
+      };
+    const reply = await base.chat(store, action, view);
+    if (reply.result.kind === 'inbox')
+      reply.result.conversations = reply.result.conversations.map(
+        (conversation) => ({ ...conversation, unread: '2' }),
+      );
+    return reply;
+  });
+  await ui.waitFor(() => {
+    const warning = tabs()[1].querySelector('.rail-tail.dot.warn');
+    assert.ok(warning);
+    assert.match(warning.getAttribute('aria-label') ?? '', /2 known unread/);
+    assert.match(warning.getAttribute('aria-label') ?? '', /unavailable/i);
+    assert.equal(tabs()[1].querySelector('.rail-tail.loading'), null);
+  });
 });
 
 test('renders a Teams count, Devices and Settings dots, and no empty indicators', async () => {

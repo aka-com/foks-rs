@@ -201,7 +201,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .sync-badge.failed{background:var(--warning-dot)}
 .sync-badge.refreshing{box-sizing:border-box;border:1.5px solid var(--line-mid);border-top-color:var(--accent);background:#fff;animation:btn-spin .9s linear infinite}
 @media (prefers-reduced-motion:reduce){.sync-badge.refreshing{animation:none}}
-.sync-popover{padding:10px 12px;font-size:12.5px}
+.sync-popover{padding:10px 12px;font-size:12.5px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto;background:var(--main-surface);border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-menu)}
 .sync-row{display:flex;align-items:flex-start;gap:8px;padding:4px 0}
 .sync-row+.sync-row{border-top:1px solid var(--line-soft);margin-top:4px;padding-top:8px}
 .sync-dot{flex:none;width:8px;height:8px;margin-top:5px;border-radius:50%;background:var(--faint)}

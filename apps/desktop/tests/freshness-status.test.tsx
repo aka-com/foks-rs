@@ -94,6 +94,42 @@ test('the freshness caption names a retained failure, spins while loading, and i
   );
 });
 
+test('background metadata refreshes stay quiet only when every query has data', () => {
+  const cached = {
+    data: [],
+    error: undefined,
+    fetching: true,
+    invalidation: 0,
+    lastSuccessAt: 1000,
+  };
+  const render = (freshness: ReturnType<typeof metadataFreshness>) =>
+    renderToStaticMarkup(
+      createElement(FreshnessCaption, {
+        label: 'device metadata',
+        freshness,
+        onRetry: () => {},
+      }),
+    );
+  assert.equal(render(metadataFreshness([cached, cached])), '');
+  assert.match(
+    render(
+      metadataFreshness([
+        cached,
+        { ...cached, data: undefined, lastSuccessAt: undefined },
+      ]),
+    ),
+    /class="freshness refreshing"/,
+  );
+  const failed = render(
+    metadataFreshness([
+      cached,
+      { ...cached, fetching: false, error: new Error('offline') },
+    ]),
+  );
+  assert.match(failed, /device metadata could not be refreshed/);
+  assert.match(failed, />Retry</);
+});
+
 const FAILURE = {
   code: 'operation-failed',
   message: 'Keystore record is missing',

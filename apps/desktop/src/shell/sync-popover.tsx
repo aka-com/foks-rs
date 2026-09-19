@@ -273,7 +273,7 @@ export function SyncPopover({
   return (
     <Popover
       anchorRef={anchorRef}
-      className="sync-popover"
+      className="menu-portal sync-popover"
       align="end"
       minWidth={340}
       onClose={onClose}

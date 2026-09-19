@@ -48,7 +48,7 @@ export function FreshnessCaption({
       </p>
     );
   }
-  if (freshness.refreshing)
+  if (freshness.refreshing && !freshness.complete)
     return (
       <p
         className="freshness refreshing"

@@ -549,21 +549,37 @@ function FirstRunSession({
   } = accountOperations;
 
   useEffect(() => {
-    if (checkpoint.account?.deviceName || facts?.deviceName) return;
+    const hasUserName = Boolean(checkpoint.account?.username || facts?.username);
+    const hasDeviceName = Boolean(
+      checkpoint.account?.deviceName || facts?.deviceName,
+    );
+    if (hasUserName && hasDeviceName) return;
     const fallback = suggestedDeviceName();
     let alive = true;
     void bridge
       .appInfo()
       .then((info) => {
-        const name = info.computerName?.trim();
-        if (!alive || !name) return;
-        setDeviceName((current) => (current === fallback ? name : current));
+        if (!alive) return;
+        const userName = info.userName?.trim();
+        const computerName = info.computerName?.trim();
+        if (!hasUserName && userName)
+          setUsername((current) => current || userName);
+        if (!hasDeviceName && computerName)
+          setDeviceName((current) =>
+            current === fallback ? computerName : current,
+          );
       })
       .catch(() => {});
     return () => {
       alive = false;
     };
-  }, [bridge, checkpoint.account?.deviceName, facts?.deviceName]);
+  }, [
+    bridge,
+    checkpoint.account?.deviceName,
+    checkpoint.account?.username,
+    facts?.deviceName,
+    facts?.username,
+  ]);
 
   // CLI profiles are discovered on the joining step for the chooser, and again
   // on the account steps when no result is loaded: a resumed checkpoint skips

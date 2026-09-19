@@ -164,6 +164,33 @@ async function harness() {
   };
 }
 
+test('account name defaults to the macOS user display name', async () => {
+  const h = await harness();
+  const r = h.render(
+    {
+      ...h.checkpoint,
+      account: undefined,
+      state: 'existing',
+    },
+    {
+      bridge: {
+        ...h.bridge,
+        appInfo: async () => ({
+          version: '0.3.0',
+          agentSocket: '/private/foks/agent.sock',
+          userName: 'Example User',
+        }),
+      },
+    },
+  );
+  await ui.waitFor(() =>
+    assert.equal(
+      (r.view.getByLabelText('Your name') as HTMLInputElement).value,
+      'Example User',
+    ),
+  );
+});
+
 test('resumed sign-in and create share a deterministic server Back destination', async () => {
   const h = await harness();
   const r = h.render({

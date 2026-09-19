@@ -55,7 +55,7 @@ block2 = "0.6"
 objc2-user-notifications = { version = "0.3.2", default-features = false, features = ["std", "block2", "UNUserNotificationCenter", "UNNotification", "UNNotificationResponse", "UNNotificationContent", "UNNotificationRequest", "UNNotificationTrigger"] }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSPasteboard"] }
-objc2-foundation = { version = "0.3", features = ["NSString"] }
+objc2-foundation = { version = "0.3", features = ["NSPathUtilities", "NSString"] }
 objc2-local-authentication = { version = "0.3.2", default-features = false, features = ["LAContext", "LAError", "LAPublicDefines", "block2", "std"] }
 
 [lints]

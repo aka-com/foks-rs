@@ -39,6 +39,8 @@ pub struct AppInfo {
     pub managed_profile: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub computer_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_name: Option<String>,
 }
 
 #[tauri::command]
@@ -141,6 +143,25 @@ fn macos_computer_name() -> Option<String> {
     None
 }
 
+fn macos_user_name() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        for value in [
+            objc2_foundation::NSFullUserName(),
+            objc2_foundation::NSUserName(),
+        ] {
+            let name = value.to_string();
+            let name = name.trim();
+            if !name.is_empty() && name.len() <= 256 {
+                return Some(name.to_owned());
+            }
+        }
+        None
+    }
+    #[cfg(not(target_os = "macos"))]
+    None
+}
+
 #[tauri::command]
 pub fn app_info(
     app: tauri::AppHandle,
@@ -161,6 +182,7 @@ pub fn app_info(
                         .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
             }),
         computer_name: macos_computer_name(),
+        user_name: macos_user_name(),
     })
 }
 

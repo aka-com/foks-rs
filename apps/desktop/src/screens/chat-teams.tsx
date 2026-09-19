@@ -247,15 +247,13 @@ function teamRow(
   const unavailable = reachable
     ? ''
     : storeDescription(snapshot, store, options);
-  const unread = reachable ? teamUnread(entry) : null;
+  const loading = firstSynchronization(entry);
+  const unread = reachable && !loading ? teamUnread(entry) : null;
   return {
     store,
     entry,
     reachable,
-    status:
-      unavailable ||
-      failure ||
-      (firstSynchronization(entry) ? 'Loading channels…' : ''),
+    status: unavailable || failure || (loading ? 'Loading channels…' : ''),
     note: !failed && reachable && entry?.data ? entry.error || entry.note : '',
     channels: entry?.data
       ? listChannels(entry.data.channels, entry.data.conversations)
