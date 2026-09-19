@@ -6,6 +6,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useSyncExternalStore,
 } from 'react';
@@ -43,13 +44,15 @@ export function ChatInboxProvider({
     () => new ChatInboxService(bridge, clock),
     [bridge, clock],
   );
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (enabled)
       service.updateStores(
         snapshot,
         accessNow ? { nowSeconds: accessNow() } : {},
+        accessGenerations,
       );
-  }, [service, snapshot, accessNow, enabled]);
+    else service.histories.clear();
+  }, [service, snapshot, accessNow, accessGenerations, enabled]);
   useEffect(() => {
     if (enabled) service.start();
     return () => service.stop();

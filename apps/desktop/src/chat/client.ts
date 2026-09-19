@@ -45,16 +45,19 @@ type ResultFor<A extends ChatAction> = Extract<
 export type ReplyFor<A extends ChatAction> = Omit<ChatReply, 'result'> & {
   result: ResultFor<A>;
 };
+export type ChatWorkPriority = 'foreground' | 'background';
 
 /** One request lifetime. Disposing cannot cancel a different owner or a later generation. */
 export function chatClient(bridge: Bridge, profile: string, storeId: string) {
   const view = submissionId();
   let closed = false;
+  const lifetime = new AbortController();
   let scope: ChatScope | null = null;
   const request = async <A extends ChatAction>(
     action: A,
     background?: BackgroundHistoryWork,
     authorize?: (phase: 'before' | 'after') => void,
+    priority: ChatWorkPriority = 'foreground',
   ): Promise<ReplyFor<A>> => {
     if (background && action.action !== 'notification-history')
       throw integrity(
@@ -79,10 +82,23 @@ export function chatClient(bridge: Bridge, profile: string, storeId: string) {
       // Both scope and the action/result correlation have been checked above.
       return reply as ReplyFor<A>;
     };
+    const scheduling =
+      background ??
+      (priority === 'background' || action.action === 'sync-inbox'
+        ? {
+            key: JSON.stringify([storeId, action.action]),
+            owner: {},
+            generation: 0,
+            signal: lifetime.signal,
+            current: () => !closed,
+            cancel: () => {},
+            preemptible: false as const,
+          }
+        : undefined);
     return action.action === 'poll-inbox'
       ? work()
-      : background
-        ? scheduleProfileWork(bridge, profile, work, background)
+      : scheduling
+        ? scheduleProfileWork(bridge, profile, work, scheduling)
         : enqueueProfileWork(bridge, profile, work);
   };
   return {
@@ -93,6 +109,7 @@ export function chatClient(bridge: Bridge, profile: string, storeId: string) {
     dispose() {
       if (closed) return;
       closed = true;
+      lifetime.abort();
       void bridge.cancelChat(view).catch(() => {});
     },
   };

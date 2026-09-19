@@ -198,6 +198,73 @@ test('shell synchronizes all teams with one poll and cancels while Chat is absen
   assert.equal(f.service.getSnapshot().size, 0);
   assert.equal(f.clock.tasks.size, 0);
 });
+for (const change of [
+  'stop',
+  'generation',
+  'host',
+  'probe',
+  'removed',
+] as const) {
+  test(`inbox lifecycle clears retained histories after ${change}`, async () => {
+    const f = fixture(1);
+    try {
+      await f.clock.advance(500);
+      const entry = f.service.getSnapshot().get('t0')!;
+      f.service.histories.update(
+        't0',
+        {
+          ...entry,
+          data: {
+            ...entry.data!,
+            channels: [
+              {
+                id: 'a',
+                name: 'a',
+                description: null,
+                admin: false,
+                readable: true,
+                writable: true,
+                read_role: 'Member (0)',
+                write_role: 'Member (0)',
+              },
+            ],
+          },
+        },
+        0,
+      );
+      const binding = f.service.histories.binding('t0', 'a', 0)!;
+      f.service.histories.accept(
+        binding,
+        {
+          kind: 'history',
+          channel: 'a',
+          before: null,
+          messages: [],
+          missing_predecessors: [],
+        },
+        null,
+      );
+      assert.ok(f.service.histories.get(binding));
+      if (change === 'stop') f.service.stop();
+      else {
+        const snapshot = structuredClone(f.snapshot);
+        if (change === 'host') snapshot.servers[0].host_id = 'other-host';
+        if (change === 'probe')
+          snapshot.servers[0].configuredProbe = 'other-probe';
+        if (change === 'removed') snapshot.stores = [];
+        f.service.updateStores(
+          snapshot,
+          {},
+          new Map([['p', change === 'generation' ? 1 : 0]]),
+        );
+      }
+      assert.equal(f.service.histories.get(binding), null);
+    } finally {
+      f.service.stop();
+    }
+  });
+}
+
 test('failed team retries independently and observed poll head advances before sync succeeds', async () => {
   const f = fixture();
   f.fail.add('t1');

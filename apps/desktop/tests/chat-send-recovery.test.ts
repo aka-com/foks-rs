@@ -194,6 +194,34 @@ function count(calls: ChatAction[], action: ChatAction['action']) {
   return calls.filter((call) => call.action === action).length;
 }
 
+test('automatic recovery yields queued profile work to an explicit history request', async () => {
+  const { chatClient } = await import('../src/chat/client');
+  const h = await setup();
+  const gate = deferred();
+  const hold = enqueueProfileWork(h.bridge, 'acme', () => gate.promise);
+  const client = chatClient(h.bridge, 'acme', STORE);
+  try {
+    await settle();
+    await h.clock.advance(1000);
+    const history = client.request({
+      action: 'history',
+      channel: h.channel,
+      before: null,
+    });
+    assert.equal(h.calls.length, 0);
+    gate.resolve();
+    await hold;
+    await history;
+    await settle();
+    assert.equal(h.calls[0]?.action, 'history');
+    assert.ok(h.calls.some((action) => action.action === 'pending'));
+  } finally {
+    gate.resolve();
+    client.dispose();
+    h.service.stop();
+  }
+});
+
 test('fresh message persists its intent before a single submit request', async () => {
   const order: string[] = [];
   const h = await setup({

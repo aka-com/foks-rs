@@ -4,6 +4,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react';
 import { normalizeCommandError } from '../bridge';
 import type { Bridge } from '../bridge';
@@ -19,11 +20,10 @@ import {
   sameScope,
   integrity,
   channelIntegrity,
+  type ChatWorkPriority,
 } from './client';
-import { conversationResult, emptyConversation } from './conversation-model';
-import { eventFromReply } from './conversation-events';
 import { useChatSends } from './send-provider';
-import type { ConversationEvent } from './conversation-events';
+import type { HistoryBinding } from './history-cache';
 import { useChatInbox } from './inbox-provider';
 import type { Availability } from '../model';
 
@@ -38,12 +38,12 @@ export function useChatConversation(
   const { service, snapshot } = useChatInbox();
   const { service: sends } = useChatSends();
   const inbox = snapshot.get(storeId);
-  const [model, setModel] = useState(emptyConversation);
-  const current = useRef(model);
-  const dispatch = useCallback((event: ConversationEvent) => {
-    current.current = conversationResult(current.current, event);
-    setModel(current.current);
-  }, []);
+  useSyncExternalStore(
+    service.histories.subscribe,
+    service.histories.getSnapshot,
+    service.histories.getSnapshot,
+  );
+  const historyBindings = useRef(new WeakMap<ChatResult, HistoryBinding>());
   const [error, setError] = useState('');
   const [blocked, setBlocked] = useState('');
   const fatal = useRef('');
@@ -64,17 +64,22 @@ export function useChatConversation(
       }
     }
   }, []);
-  const update = useCallback(
-    (action: ChatAction, result: ChatResult) => {
-      dispatch(eventFromReply(action, result));
-    },
-    [dispatch],
-  );
   const performRequest = useCallback(
     async (action: ChatAction): Promise<ChatReply> => {
       if (action.action !== 'history') return sends.request(storeId, action);
       const generation = accessGenerationRef.current;
+      const binding = service.histories.binding(
+        storeId,
+        action.channel,
+        generation,
+      );
       const assertAccess = (phase: 'before' | 'after'): void => {
+        if (
+          !binding ||
+          service.histories.binding(storeId, action.channel, generation) !==
+            binding
+        )
+          throw cancelled();
         const availability = accessRef.current();
         if (
           generation !== accessGenerationRef.current ||
@@ -131,6 +136,7 @@ export function useChatConversation(
         resolvedScope.current = reply.scope;
         checkChannel();
         // History acknowledgment happens only after the history model accepts a page.
+        historyBindings.current.set(reply.result, binding!);
         return reply;
       } catch (cause) {
         if (owner.current === client) {
@@ -145,7 +151,7 @@ export function useChatConversation(
             owner.current = null;
             fatal.current = typed.message;
             setBlocked(typed.message);
-            dispatch({ kind: 'reset' });
+            service.histories.clear(storeId);
           }
           if (typed.code === 'chat-access-denied') service.invalidate(storeId);
         }
@@ -155,7 +161,7 @@ export function useChatConversation(
         if (historyClient) historyClients.current.delete(historyClient);
       }
     },
-    [bridge, profile, storeId, service, sends, dispatch, cancelHistory],
+    [bridge, profile, storeId, service, sends, cancelHistory],
   );
   // Automatic recovery admits one RPC at a time. Explicit requests enter the
   // profile queue before the next automatic item, bypassing scheduler backoff.
@@ -164,20 +170,23 @@ export function useChatConversation(
     () => sends.refresh(storeId),
     [sends, storeId],
   );
-  const refresh = useCallback(async () => {
-    const client = owner.current;
-    setError('');
-    service.invalidate(storeId);
-    try {
-      await refreshPending();
-    } catch (cause) {
-      if (
-        owner.current === client &&
-        normalizeCommandError(cause).code !== 'cancelled'
-      )
-        setError(normalizeCommandError(cause).message);
-    }
-  }, [refreshPending, service, storeId]);
+  const refresh = useCallback(
+    async (priority: ChatWorkPriority = 'foreground') => {
+      const client = owner.current;
+      setError('');
+      service.invalidate(storeId);
+      try {
+        await sends.refresh(storeId, priority);
+      } catch (cause) {
+        if (
+          owner.current === client &&
+          normalizeCommandError(cause).code !== 'cancelled'
+        )
+          setError(normalizeCommandError(cause).message);
+      }
+    },
+    [sends, service, storeId],
+  );
   const markRead = useCallback(
     async (channel: string, sequence: string) => {
       try {
@@ -200,10 +209,17 @@ export function useChatConversation(
       result: Extract<ChatResult, { kind: 'history' }>,
       before: string | null,
     ) => {
-      update({ action: 'history', channel: result.channel, before }, result);
+      const binding = historyBindings.current.get(result);
+      if (
+        !binding ||
+        binding.generation !== accessGenerationRef.current ||
+        !accessRef.current().available
+      )
+        throw cancelled();
+      service.histories.accept(binding, result, before);
       sends.observeHistory(storeId, result.channel, result.messages);
     },
-    [update, sends, storeId],
+    [service, sends, storeId],
   );
   // Cached channels can mount a child history effect immediately. Establish
   // request ownership before passive effects in that child run.
@@ -214,25 +230,18 @@ export function useChatConversation(
       owner.current = null;
       client.dispose();
       cancelHistory();
-      dispatch({ kind: 'reset' });
+      historyBindings.current = new WeakMap();
       resolvedScope.current = null;
     };
-  }, [bridge, profile, storeId, cancelHistory, dispatch]);
+  }, [bridge, profile, storeId, cancelHistory]);
   useEffect(() => {
-    void refresh();
+    void refresh('background');
   }, [refresh]);
   useEffect(() => {
     if (inbox?.data) {
       for (const channel of inbox.blockedChannels) cancelHistory(channel);
-      const readable = new Set(
-        inbox.data.channels
-          .filter((c) => c.readable && !inbox.blockedChannels.has(c.id))
-          .map((c) => c.id),
-      );
-      dispatch({ kind: 'access', readable });
-      dispatch({ kind: 'channels', channels: inbox.data.channels });
     }
-  }, [inbox?.data, inbox?.blockedChannels, dispatch, cancelHistory]);
+  }, [inbox?.data, inbox?.blockedChannels, cancelHistory]);
   useEffect(() => {
     if (inbox?.state === 'blocked') {
       owner.current?.dispose();
@@ -240,18 +249,21 @@ export function useChatConversation(
       cancelHistory();
       fatal.current = inbox.error;
       setBlocked(inbox.error);
-      dispatch({ kind: 'reset' });
     }
-    if (inbox?.state === 'unavailable' || inbox?.state === 'loading') {
-      dispatch({ kind: 'access', readable: new Set() });
-    }
-  }, [inbox?.state, inbox?.error, dispatch, cancelHistory]);
+    if (inbox?.state === 'unavailable' || inbox?.state === 'loading')
+      cancelHistory();
+  }, [inbox?.state, inbox?.error, cancelHistory]);
   return {
     channels: inbox?.data?.channels ?? [],
     channelsKnown: inbox?.state === 'ready' && Boolean(inbox.data),
     conversations: inbox?.data?.conversations ?? [],
     pending: sends.operations(storeId),
-    history: model.history,
+    history: (channel: string) =>
+      access().available
+        ? service.histories.get(
+            service.histories.binding(storeId, channel, accessGeneration),
+          )
+        : null,
     error:
       error ||
       (!inbox?.data || inbox?.state === 'unavailable'

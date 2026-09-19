@@ -346,7 +346,7 @@ export function ChatScreen({
             revision={channelRevisions?.get(channel.id) ?? 0}
             readThrough={activeConversation?.read_through ?? null}
             markRead={guardedMarkRead}
-            history={history}
+            history={history(channel.id)}
             acceptHistory={acceptHistory}
             blockHistory={blockHistory}
             pending={pending.filter(

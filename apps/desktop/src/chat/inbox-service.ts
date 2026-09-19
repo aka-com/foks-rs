@@ -5,6 +5,7 @@ import type { ChatReply, ChatResult, ChatScope } from '../chat-contract';
 import { chatAvailable } from '../model';
 import type { AvailabilityOptions, TeamStore, AgentSnapshot } from '../model';
 import { cancelled as cancelledAccess, chatClient, integrity } from './client';
+import { ChatHistoryCache } from './history-cache';
 import {
   accountKey,
   teamIdentity,
@@ -50,6 +51,7 @@ export const systemChatClock: ChatClock = {
 };
 interface Team {
   generation: number;
+  binding: string;
   quarantine?: CommandError;
   blocked: Set<string>;
   store: TeamStore;
@@ -87,6 +89,8 @@ const initial = (): TeamInbox => ({
 
 /** Main-window owner. Finite jobs, account poll scope, and one background job per profile. */
 export class ChatInboxService {
+  readonly histories = new ChatHistoryCache();
+  private accessGenerations: ReadonlyMap<string, number> = new Map();
   private accounts = new Map<string, Account>();
   private snapshot: ReadonlyMap<string, TeamInbox> = readonlyMap([]);
   private listeners = new Set<() => void>();
@@ -123,6 +127,11 @@ export class ChatInboxService {
       ),
     });
     this.snapshot = readonlyMap(new Map(this.snapshot).set(id, accepted));
+    this.histories.update(
+      id,
+      accepted,
+      this.accessGenerations.get(accepted.scope?.store.profile ?? '') ?? 0,
+    );
     for (const listener of this.listeners) listener();
   }
   start() {
@@ -141,6 +150,7 @@ export class ChatInboxService {
     this.profiles.clear();
     this.polls = 0;
     this.snapshot = readonlyMap([]);
+    this.histories.clear();
     for (const listener of this.listeners) listener();
   }
   /**
@@ -155,7 +165,20 @@ export class ChatInboxService {
   updateStores(
     agentSnapshot: AgentSnapshot,
     options: AvailabilityOptions = {},
+    accessGenerations: ReadonlyMap<string, number> = new Map(),
   ) {
+    this.accessGenerations = accessGenerations;
+    const binding = (store: TeamStore): string => {
+      const server = agentSnapshot.servers.find(
+        (entry) => entry.id === store.server,
+      );
+      return JSON.stringify([
+        identity(store),
+        server?.host_id,
+        server?.configuredProbe,
+        accessGenerations.get(store.server) ?? 0,
+      ]);
+    };
     const timed: AvailabilityOptions = {
       ...options,
       nowSeconds: options.nowSeconds ?? this.clock.now() / 1000,
@@ -170,8 +193,9 @@ export class ChatInboxService {
     for (const account of [...this.accounts.values()]) {
       for (const [id, team] of account.teams) {
         const store = wanted.get(id);
-        if (!store || identity(store) !== identity(team.store)) {
+        if (!store || binding(store) !== team.binding) {
           account.teams.delete(id);
+          this.histories.clear(id);
           const next = new Map(this.snapshot);
           next.delete(id);
           this.snapshot = readonlyMap(next);
@@ -201,6 +225,7 @@ export class ChatInboxService {
         );
         account.teams.set(store.id, {
           generation: 0,
+          binding: binding(store),
           store,
           blocked: new Set(),
           dirty: true,

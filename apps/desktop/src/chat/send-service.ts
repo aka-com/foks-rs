@@ -15,7 +15,12 @@ import {
 import { chatAvailable, storeOf } from '../model';
 import type { AgentSnapshot } from '../model';
 import { failure, preparationCanChange, submissionId } from './actions';
-import { chatClient, channelIntegrity, integrity } from './client';
+import {
+  chatClient,
+  channelIntegrity,
+  integrity,
+  type ChatWorkPriority,
+} from './client';
 import { cancelled } from './errors';
 import { eventFromReply } from './conversation-events';
 import { reconcileOperations, observeMessages } from './operations';
@@ -383,7 +388,12 @@ export class ChatSendService {
       channel,
     );
   }
-  open(storeId: string, channel: string, retry = false): Promise<void> {
+  open(
+    storeId: string,
+    channel: string,
+    retry = false,
+    priority: ChatWorkPriority = 'foreground',
+  ): Promise<void> {
     const team = this.ensure(storeId);
     if (team.loading.has(channel)) return team.loading.get(channel)!;
     if (team.loaded.has(channel) && !retry) return Promise.resolve();
@@ -416,7 +426,7 @@ export class ChatSendService {
           );
           message.ambiguousPreparation = true;
           team.messages.push(message);
-          void this.drive(team, message);
+          void this.drive(team, message, priority);
         }
       } catch (error) {
         if (this.current(team, epoch))
@@ -584,7 +594,11 @@ export class ChatSendService {
     }
     this.publish();
   }
-  request(storeId: string, action: ChatAction): Promise<ChatReply> {
+  request(
+    storeId: string,
+    action: ChatAction,
+    priority: ChatWorkPriority = 'foreground',
+  ): Promise<ChatReply> {
     const team = this.ensure(storeId);
     const key = [
       'status',
@@ -596,7 +610,7 @@ export class ChatSendService {
       ? JSON.stringify(action)
       : undefined;
     if (key && team.requests.has(key)) return team.requests.get(key)!;
-    const work = this.perform(team, action);
+    const work = this.perform(team, action, priority);
     if (key) {
       team.requests.set(key, work);
       void work
@@ -607,7 +621,11 @@ export class ChatSendService {
     }
     return work;
   }
-  private async perform(team: Team, action: ChatAction): Promise<ChatReply> {
+  private async perform(
+    team: Team,
+    action: ChatAction,
+    priority: ChatWorkPriority,
+  ): Promise<ChatReply> {
     const epoch = team.epoch;
     const generation = this.generations.get(team.profile) ?? 0;
     const channel =
@@ -649,7 +667,12 @@ export class ChatSendService {
         throw channelIntegrity();
     };
     try {
-      const reply = await team.client.request(action, undefined, authorize);
+      const reply = await team.client.request(
+        action,
+        undefined,
+        authorize,
+        priority,
+      );
       if (!this.current(team, epoch)) throw cancelled();
       const trusted = this.inbox.getSnapshot().get(team.storeId)?.scope;
       if (
@@ -705,7 +728,13 @@ export class ChatSendService {
     }
     if (this.current(team, epoch)) this.publish();
   }
-  private async drive(team: Team, message: OutgoingMessage) {
+  private async drive(
+    team: Team,
+    message: OutgoingMessage,
+    priority: ChatWorkPriority = 'foreground',
+  ) {
+    const request = (action: ChatAction) =>
+      this.request(team.storeId, action, priority);
     if (message.running || !this.current(team)) return;
     if (
       !message.operation &&
@@ -743,7 +772,7 @@ export class ChatSendService {
           ? 'prepare-message'
           : 'submit-message';
         if (action === 'submit-message') message.ambiguousPreparation = true;
-        const reply = await this.request(team.storeId, {
+        const reply = await request({
           action,
           submission: message.submission,
           channel: message.channel,
@@ -769,7 +798,7 @@ export class ChatSendService {
       this.publish();
       void this.clearIntent(team, message);
       if (op.state === 'prepared' || op.state === 'uncertain') {
-        const reply = await this.request(team.storeId, {
+        const reply = await request({
           action: checking ? 'reconcile' : 'attempt',
           operation: op.id,
         });
@@ -794,7 +823,7 @@ export class ChatSendService {
           await this.clearIntent(team, message);
       } else {
         message.phase = message.observed ? 'sent' : 'unconfirmed';
-        void this.request(team.storeId, {
+        void request({
           action: 'status',
           operation: message.operation.id,
         })
@@ -936,10 +965,13 @@ export class ChatSendService {
         ?.messages.find((m) => m.operation?.id === operation)?.id ?? operation
     );
   }
-  refresh(storeId: string): Promise<void> {
+  refresh(
+    storeId: string,
+    priority: ChatWorkPriority = 'foreground',
+  ): Promise<void> {
     const team = this.ensure(storeId);
     if (team.refresh) return team.refresh;
-    const work = this.recover(team);
+    const work = this.recover(team, priority);
     team.refresh = work;
     void work
       .finally(() => {
@@ -969,12 +1001,14 @@ export class ChatSendService {
         (failed ? Math.min(1000 * 2 ** failures, 30000) : 2000),
     });
   }
-  private async recover(team: Team) {
+  private async recover(team: Team, priority: ChatWorkPriority) {
     if (!this.current(team)) return;
     const epoch = team.epoch;
-    await this.request(team.storeId, { action: 'pending' });
+    const request = (action: ChatAction) =>
+      this.request(team.storeId, action, priority);
+    await request({ action: 'pending' });
     if (!this.current(team, epoch)) return;
-    const cleanup = await this.request(team.storeId, {
+    const cleanup = await request({
       action: 'cleanup-pending',
     });
     if (!this.current(team, epoch)) return;
@@ -993,7 +1027,7 @@ export class ChatSendService {
           jobs.push({
             key: `status:${op.id}`,
             run: () =>
-              this.request(team.storeId, {
+              request({
                 action:
                   this.available(team) && this.readable(team, op.channel)
                     ? 'reconcile'
@@ -1014,7 +1048,7 @@ export class ChatSendService {
           jobs.push({
             key: `body:${op.id}`,
             run: () =>
-              this.request(team.storeId, {
+              request({
                 action: 'operation-body',
                 operation: op.id,
                 channel: op.channel,
@@ -1033,13 +1067,13 @@ export class ChatSendService {
                 this.available(team) &&
                 this.readable(team, op.channel)
               ) {
-                await this.request(team.storeId, {
+                await request({
                   action: 'operation-body',
                   operation: op.id,
                   channel: op.channel,
                 });
               }
-              await this.request(team.storeId, {
+              await request({
                 action: 'finalize',
                 operation: op.id,
               });
@@ -1073,7 +1107,7 @@ export class ChatSendService {
           jobs.push({
             key: `send:${message.id}`,
             run: async () => {
-              await this.drive(team, message);
+              await this.drive(team, message, priority);
               if (!message.operation)
                 throw new Error('Preparation is still pending.');
             },
@@ -1137,11 +1171,11 @@ export class ChatSendService {
           for (const channel of channels
             .filter((c) => c.readable && !team.loaded.has(c.id))
             .slice(0, 4))
-            await this.open(team.storeId, channel.id);
+            await this.open(team.storeId, channel.id, false, 'background');
         }
         if (!this.current(team)) return;
         try {
-          await this.refresh(team.storeId);
+          await this.refresh(team.storeId, 'background');
         } catch {
           team.due = this.clock.now() + 5000;
         }

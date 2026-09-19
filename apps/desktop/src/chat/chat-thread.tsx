@@ -110,16 +110,25 @@ export function ChatThread({
     history?.channel === channel.id ? history.messages : EMPTY_MESSAGES,
     pendingKey,
   );
-  const { messages, before, missing, error, setError, busy, load } =
-    useChatHistory(
-      channel,
-      request,
-      revision,
-      acceptHistory,
-      history,
-      blockHistory,
-      capture,
-    );
+  const {
+    messages,
+    before,
+    missing,
+    error,
+    setError,
+    busy,
+    loaded,
+    initialLoading,
+    load,
+  } = useChatHistory(
+    channel,
+    request,
+    revision,
+    acceptHistory,
+    history,
+    blockHistory,
+    capture,
+  );
   const outgoingIds = new Set(
     outgoing.flatMap((m) => (m.operation ? [m.operation.id] : [])),
   );
@@ -272,11 +281,24 @@ export function ChatThread({
                   <small>Beginning of the conversation</small>
                 ) : null}
               </div>
-              {!messages.length && !pending.length && !busy && !error && (
-                <p className="chat-quiet chat-messages-empty">
-                  No messages yet. Send a message to start the conversation.
+              {initialLoading && (
+                <p
+                  className="chat-quiet chat-messages-empty"
+                  role="status"
+                  aria-label="Loading messages"
+                >
+                  Loading messages…
                 </p>
               )}
+              {loaded &&
+                !messages.length &&
+                !pending.length &&
+                !busy &&
+                !error && (
+                  <p className="chat-quiet chat-messages-empty">
+                    No messages yet. Send a message to start the conversation.
+                  </p>
+                )}
               {messages.map((m, index) => {
                 const own = actor !== null && m.sender === actor;
                 const isNew =

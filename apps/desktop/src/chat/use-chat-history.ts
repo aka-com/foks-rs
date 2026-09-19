@@ -96,6 +96,8 @@ export function useChatHistory(
     error,
     setError,
     busy,
+    loaded: accepted !== null,
+    initialLoading: !accepted && !error,
     load,
   };
 }

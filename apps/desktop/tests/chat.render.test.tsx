@@ -63,8 +63,10 @@ async function setup(
   const portalRoot = document.getElementById('overlays');
   if (!portalRoot) throw new Error('missing overlay root');
   const overlayRoot = portalRoot;
+  let toggleChat = () => {};
   function Host() {
     const [visible, setVisible] = useState(showChat);
+    toggleChat = () => setVisible((value) => !value);
     const [location, setLocation] = useState<Location>({
       kind: 'chat',
       ref: 'team:eng',
@@ -112,7 +114,7 @@ async function setup(
   }
   const rendered = ui.render(createElement(Host));
   if (waitForHistory) await ui.screen.findByText('Team chat is ready.');
-  return rendered;
+  return { ...rendered, toggleChat: () => ui.act(() => toggleChat()) };
 }
 /** A team row's unread badge: the count belongs to the row that names the team. */
 async function teamBadge(team: string): Promise<HTMLElement> {
@@ -1274,6 +1276,87 @@ test('opening chat from a populated shell establishes history ownership before c
   ui.fireEvent.click(general);
   await ui.screen.findByText('Team chat is ready.');
   assert.equal(ui.screen.queryByText('Conversation closed.'), null);
+});
+
+test('initial history loading is visible and never claims the conversation is empty', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  try {
+    await setup(
+      (base) => ({
+        ...base,
+        chat: async (store, action, view) => {
+          if (action.action === 'history') await gate;
+          return base.chat(store, action, view);
+        },
+      }),
+      false,
+    );
+    await ui.screen.findByRole('status', { name: 'Loading messages' });
+    assert.equal(
+      ui.screen.queryByText(
+        'No messages yet. Send a message to start the conversation.',
+      ),
+      null,
+    );
+    release();
+    await ui.screen.findByText('Team chat is ready.');
+    assert.equal(
+      ui.screen.queryByRole('status', { name: 'Loading messages' }),
+      null,
+    );
+  } finally {
+    release();
+  }
+});
+
+test('reopening a conversation retains verified messages during a delayed or failed refresh', async () => {
+  let delay = false;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  try {
+    const view = await setup((base) => ({
+      ...base,
+      chat: async (store, action, owner) => {
+        if (action.action === 'history' && delay) {
+          await gate;
+          throw {
+            code: 'io',
+            message: 'History refresh failed',
+            retryable: true,
+            fatal: false,
+            ambiguous: false,
+          };
+        }
+        return base.chat(store, action, owner);
+      },
+    }));
+    view.toggleChat();
+    delay = true;
+    view.toggleChat();
+    assert.ok(
+      document
+        .querySelector('.chat-message')
+        ?.textContent?.includes('Team chat is ready.'),
+    );
+    assert.equal(
+      ui.screen.queryByRole('status', { name: 'Loading messages' }),
+      null,
+    );
+    release();
+    await ui.screen.findByRole('alert');
+    assert.ok(
+      document
+        .querySelector('.chat-message')
+        ?.textContent?.includes('Team chat is ready.'),
+    );
+  } finally {
+    release();
+  }
 });
 
 test('channel info keeps channel overrides and links to device notification settings', async () => {

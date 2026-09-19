@@ -114,6 +114,57 @@ test('poll bypasses queued work and only bounded notification history may reques
   client.dispose();
 });
 
+test('foreground history overtakes queued inbox and recovery work without overlapping active work', async () => {
+  const { scheduleProfileWork } =
+    await import('../src/scheduling/profile-work');
+  const order: string[] = [];
+  let release!: () => void;
+  const bridge = {
+    chat: async (_store: string, action: { action: string }) => {
+      order.push(action.action);
+      return {
+        scope: reply.scope,
+        result: {
+          kind: action.action === 'sync-inbox' ? 'inbox' : action.action,
+        },
+      };
+    },
+    cancelChat: async () => {},
+  } as unknown as Bridge;
+  const active = scheduleProfileWork(
+    bridge,
+    'p',
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  const client = chatClient(bridge, 'p', 't');
+  const inbox = client.request({ action: 'sync-inbox', blocked_channels: [] });
+  const recovery = client.request(
+    { action: 'pending' },
+    undefined,
+    undefined,
+    'background',
+  );
+  const history = client.request({
+    action: 'history',
+    channel: 'a',
+    before: null,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, []);
+  release();
+  await Promise.all([active, inbox, recovery, history]);
+  assert.equal(order[0], 'history');
+  assert.deepEqual(
+    new Set(order),
+    new Set(['history', 'sync-inbox', 'pending']),
+  );
+  client.dispose();
+});
+
 test('queued chat work rechecks access at actual RPC dispatch', async () => {
   const { scheduleProfileWork } =
     await import('../src/scheduling/profile-work');
