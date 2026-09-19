@@ -529,19 +529,20 @@ function TeamHeading({
           description: `${collapsedTotal} unread`,
         }
       : null);
-  // A team whose channel list has arrived empty says so on the heading, since
-  // there is no channel row to say it. The general channel of an otherwise
-  // empty team says the same of its messages, so a fresh team is not two bare
-  // names.
-  const empty = row.channels !== undefined && row.channels.length === 0;
+  // A team whose channel list has arrived empty says so inside its disclosure.
+  // The general channel of an otherwise empty team says the same of its
+  // messages, so a fresh team is not two bare names. Unknown or inaccessible
+  // channel lists are not treated as empty.
+  const empty =
+    row.reachable && row.entry?.state === 'ready' && row.channels?.length === 0;
   const lone =
     row.channels?.length === 1 && !row.channels[0].channel.name
       ? row.channels[0]
       : undefined;
-  // A team with no channel rows — its list has not arrived, or arrived empty —
-  // has nothing to fold, so its row opens the team's own pane, which states
-  // the reason: loading, locked, or no channels yet.
-  const foldable = channels.length > 0;
+  // A known empty list folds its placeholder row just like a channel list.
+  // A team whose list has not arrived opens its own pane, which states
+  // the reason: loading, locked, or unavailable.
+  const foldable = channels.length > 0 || empty;
   const open = activeChannel !== undefined || row.store.id === selected;
   return (
     <div className={collapsed ? 'chat-team collapsed' : 'chat-team'}>
@@ -569,11 +570,7 @@ function TeamHeading({
         <span className="t">
           <b>{row.store.name}</b>
           <small className="chat-row-identity">{row.server}</small>
-          {row.status ? (
-            <small>{row.status}</small>
-          ) : empty ? (
-            <small>No channels yet</small>
-          ) : null}
+          {row.status && <small>{row.status}</small>}
           {row.note && <small className="chat-row-note">{row.note}</small>}
         </span>
         {badge && (
@@ -598,6 +595,19 @@ function TeamHeading({
           role="group"
           aria-label={row.store.name}
         >
+          {empty && (
+            <button
+              type="button"
+              className={open ? 'chat-channel on' : 'chat-channel'}
+              aria-label={`No channels in ${row.store.name}`}
+              aria-current={open ? 'page' : undefined}
+              onClick={() => onOpen(row.store.id)}
+            >
+              <span className="t">
+                <span className="n">No channels</span>
+              </span>
+            </button>
+          )}
           {channels.map((listedChannel) => {
             const { channel, conversation } = listedChannel;
             const active = channel.id === activeChannel;

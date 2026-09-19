@@ -1,6 +1,7 @@
 .chat-picker {
   display: grid;
   gap: 12px;
+  padding-block: 4px;
 }
 
 .chat-picker > input {

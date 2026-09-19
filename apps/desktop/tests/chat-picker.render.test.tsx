@@ -3,6 +3,7 @@ import test from 'node:test';
 import { createElement, StrictMode, useState } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
+import { readSource } from './lib/source';
 import type { Bridge } from '../src/bridge';
 import type { AgentSnapshot, TeamStore } from '../src/model';
 import type { ChatReply } from '../src/chat-contract';
@@ -26,6 +27,14 @@ test.before(async () => {
 test.afterEach(() => ui.cleanup());
 test.after(async () => {
   await vite.close();
+});
+
+test('the picker reserves vertical focus-ring clearance inside the scrolling sheet body', async () => {
+  const css = await readSource(
+    '../src/screens/chat-picker.css',
+    import.meta.url,
+  );
+  assert.match(css, /\.chat-picker\s*\{[^}]*padding-block: 4px;/);
 });
 
 async function mount(override?: (base: Bridge) => Bridge, tabbed = false) {

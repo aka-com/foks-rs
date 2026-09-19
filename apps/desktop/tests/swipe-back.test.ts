@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { installDom } from './lib/dom-harness';
+import { readSource } from './lib/source';
 import {
   BACK_DISTANCE_PX,
   SwipeBackTracker,
@@ -13,6 +14,42 @@ import type { SwipeBackOptions } from '../src/shell/swipe-back';
 import type { Location } from '../src/location';
 
 installDom({ url: 'http://localhost/', body: '<div id="root"></div>' });
+
+test('the viewport and nested scroll containers suppress elastic overscroll without disabling scrolling', async () => {
+  const css = await readSource('../src/styles/app.css', import.meta.url);
+  const rule = /(?:^|\n)\*\s*\{([^}]*)\}/.exec(css);
+  assert.ok(rule);
+  assert.match(rule[1], /overscroll-behavior: none;/);
+  assert.doesNotMatch(rule[1], /overflow:\s*hidden|touch-action:\s*none/);
+  const style = document.createElement('style');
+  style.textContent = rule[0];
+  const nested = document.createElement('div');
+  nested.className = 'sb';
+  nested.style.overflow = 'auto';
+  const input = document.createElement('textarea');
+  nested.append(input);
+  document.head.append(style);
+  document.getElementById('root')!.append(nested);
+  try {
+    for (const element of [
+      document.documentElement,
+      document.body,
+      nested,
+      input,
+    ]) {
+      assert.equal(
+        window
+          .getComputedStyle(element)
+          .getPropertyValue('overscroll-behavior'),
+        'none',
+      );
+    }
+    assert.equal(window.getComputedStyle(nested).overflow, 'auto');
+  } finally {
+    nested.remove();
+    style.remove();
+  }
+});
 
 /** The destination the fixtures navigate to. */
 const PARENT: Location = { kind: 'files' };

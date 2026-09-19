@@ -1794,6 +1794,136 @@ test('every team is a heading under one Teams label, whatever its channel count'
   assert.ok(head('Household').classList.contains('chat-team-head'));
 });
 
+test('an empty team folds normally and exposes No channels inside its expanded list', async () => {
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  const journal = await mount(
+    snapshot,
+    { kind: 'chat', ref: 'team:eng' },
+    (base) =>
+      withInbox(base, 'team:household', (inbox) => {
+        inbox.channels = [];
+        inbox.conversations = [];
+      }),
+  );
+  const toggle = await ui.screen.findByRole('button', {
+    name: 'Collapse Household',
+  });
+  assert.ok(toggle.classList.contains('chat-team-head'));
+  assert.ok(!toggle.classList.contains('on'));
+  assert.ok(toggle.querySelector('.chat-team-chev'));
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+  assert.ok(!toggle.textContent?.includes('No channels'));
+  assert.equal(ui.screen.queryByText('No channels yet'), null);
+  const list = document.getElementById(
+    toggle.getAttribute('aria-controls') ?? '',
+  );
+  assert.ok(list);
+  const empty = ui
+    .within(list)
+    .getByRole('button', { name: 'No channels in Household' });
+  assert.ok(empty.classList.contains('chat-channel'));
+  assert.equal(empty.textContent, 'No channels');
+  const navigations = journal.length;
+  ui.fireEvent.click(toggle);
+  assert.equal(
+    ui.screen.queryByRole('button', { name: 'No channels in Household' }),
+    null,
+  );
+  const expand = ui.screen.getByRole('button', { name: 'Expand Household' });
+  assert.equal(expand.getAttribute('aria-expanded'), 'false');
+  assert.equal(journal.length, navigations);
+  ui.fireEvent.click(expand);
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', { name: 'No channels in Household' }),
+  );
+  await ui.screen.findByRole('heading', { name: 'No conversations yet' });
+  assert.deepEqual(journal.at(-1), { kind: 'chat', ref: 'team:household' });
+  assert.equal(head('Household').getAttribute('aria-current'), null);
+  assert.equal(
+    ui.screen
+      .getByRole('button', { name: 'No channels in Household' })
+      .getAttribute('aria-current'),
+    'page',
+  );
+});
+
+test('a collapsed empty team keeps its fold when its first channel arrives', async () => {
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  const clock = new Clock();
+  let empty = true;
+  await mount(
+    snapshot,
+    { kind: 'chat', ref: 'team:eng' },
+    (base) =>
+      withInbox(base, 'team:household', (inbox) => {
+        if (empty) {
+          inbox.channels = [];
+          inbox.conversations = [];
+        }
+      }),
+    clock,
+  );
+  await ui.act(async () => {
+    await clock.advance(500);
+  });
+  ui.fireEvent.click(
+    await ui.screen.findByRole('button', { name: 'Collapse Household' }),
+  );
+  empty = false;
+  await ui.act(async () => {
+    await clock.advance(26000);
+  });
+  assert.equal(
+    ui.screen
+      .getByRole('button', { name: 'Expand Household' })
+      .getAttribute('aria-expanded'),
+    'false',
+  );
+  assert.deepEqual(teamChannels('Household'), []);
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', { name: 'Expand Household' }),
+  );
+  assert.deepEqual(teamChannels('Household'), ['#general']);
+  assert.equal(ui.screen.queryByText('No channels'), null);
+});
+
+test('loading and failed channel lists do not claim No channels', async () => {
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  try {
+    await mount(snapshot, { kind: 'chat', ref: 'team:eng' }, (base) => ({
+      ...base,
+      chat: async (store, action, view) => {
+        if (store === 'team:household' && action.action === 'sync-inbox') {
+          await gate;
+          throw {
+            code: 'io',
+            message: 'Channel list failed',
+            fatal: false,
+            retryable: true,
+            ambiguous: false,
+          };
+        }
+        return base.chat(store, action, view);
+      },
+    }));
+    await ui.waitFor(() =>
+      assert.match(head('Household').textContent ?? '', /Loading channels/),
+    );
+    assert.equal(ui.screen.queryByText('No channels'), null);
+    release();
+    await ui.waitFor(() =>
+      assert.match(head('Household').textContent ?? '', /Channel list failed/),
+    );
+    assert.equal(ui.screen.queryByText('No channels'), null);
+  } finally {
+    release();
+  }
+});
+
 test('clicking a team heading folds it, keeps its unread total, excludes a muted channel from it, and settings sit in the conversation header', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   const journal = await mount(

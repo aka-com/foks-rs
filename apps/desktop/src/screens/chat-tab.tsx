@@ -172,6 +172,8 @@ export function ChatTab({
   const channel = wanted ? openChannel(listed, wanted) : undefined;
   const loading =
     Boolean(open) && (!entry || (entry.state === 'loading' && !entry.error));
+  const channelsEmpty =
+    entry?.state === 'ready' && entry.data !== undefined && listed.length === 0;
   const catalogLoading =
     snapshot.profileInventoryStatus !== 'complete' &&
     !snapshot.servers.length &&
@@ -218,6 +220,7 @@ export function ChatTab({
         {ref &&
         !wanted &&
         open &&
+        !channelsEmpty &&
         chatAvailable(snapshot, open, accessOptions) ? (
           <div className="empty" role="status">
             <p>Choose a channel to open a conversation.</p>
