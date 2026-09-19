@@ -225,7 +225,10 @@ export class ChannelCreationController {
         'Review or dismiss saved channel creations before submitting another.',
       );
     const id = submissionId();
-    const frozen = Object.freeze({ ...input });
+    const frozen = Object.freeze({
+      ...input,
+      name: normalizeChannelName(input.name),
+    });
     const record: OwnedCreation = {
       id,
       store: structuredClone(store),

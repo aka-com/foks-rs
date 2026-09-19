@@ -299,10 +299,8 @@ async function channelRow(title: string): Promise<HTMLButtonElement> {
 /** The create-a-channel form, reached the way the tab offers it. */
 async function openChannelSheet(): Promise<HTMLInputElement> {
   ui.fireEvent.click(ui.screen.getAllByRole('button', { name: 'New chat' })[0]);
-  await click(await ui.screen.findByRole('button', { name: 'Create channel' }));
-  ui.fireEvent.change(ui.screen.getByRole('combobox', { name: 'Team' }), {
-    target: { value: 'team:eng' },
-  });
+  await click(ui.screen.getByRole('button', { name: 'Team' }));
+  await click(await ui.screen.findByRole('option', { name: /^Engineering/ }));
   return ui.screen.getByRole<HTMLInputElement>('textbox', {
     name: 'Channel name',
   });
@@ -694,5 +692,5 @@ test('a new channel resumes its name after a rail tab switch', async () => {
     store.navigateTab('chat');
   });
   const restored = await ui.screen.findByLabelText('Channel name');
-  assert.equal((restored as HTMLInputElement).value, 'Design notes');
+  assert.equal((restored as HTMLInputElement).value, 'design notes');
 });

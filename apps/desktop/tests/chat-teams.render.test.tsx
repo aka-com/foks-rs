@@ -810,33 +810,36 @@ test('the rail returns to the chat the tab last had open', async () => {
   await ui.waitFor(() => assert.deepEqual(railChat(), { kind: 'chat' }));
 });
 
-test('New chat lists cross-team conversations, states unavailable reasons, and opens directly', async () => {
+test('New chat opens creation directly and the team selector states unavailable reasons', async () => {
   const snapshot = await snapshotWithChat(['personal']);
   const journal = await mount(snapshot, { kind: 'chat' });
   await ui.waitFor(() => assert.ok(heads().length));
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New chat' }));
-  const sheet = await ui.screen.findByRole('dialog', { name: 'New chat' });
+  const sheet = await ui.screen.findByRole('dialog', {
+    name: 'Create channel',
+  });
   assert.ok(sheet);
+  const navigations = journal.length;
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Team' }));
   // A team whose server offers no chat is offered inert with its reason, not
-  // hidden: the reason is what the reader needs, so the card is marked
-  // `aria-disabled` rather than `disabled` and the keyboard still reaches it.
-  const engineering = ui.screen.getByText(
-    /^Engineering: Chat is not enabled on /,
-  );
+  // hidden: the reason is what the reader needs, so the option carries both
+  // its disabled state and the explanation in the styled listbox.
+  const engineering = ui.screen.getByRole('option', { name: /^Engineering/ });
   assert.match(engineering.textContent ?? '', /Chat is not enabled on /);
+  assert.equal(engineering.getAttribute('aria-disabled'), 'true');
   // Inert means inert: pressing it does not choose the team.
   ui.fireEvent.click(engineering);
   assert.ok(ui.screen.getByRole('dialog'));
   assert.equal(ui.screen.queryByRole('button', { name: 'Continue' }), null);
   ui.fireEvent.click(
-    await ui.screen.findByRole('button', { name: /Household · #general/ }),
+    await ui.screen.findByRole('option', { name: /^Household/ }),
   );
-  await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
-  assert.deepEqual(journal.at(-1), {
-    kind: 'chat',
-    ref: 'team:household',
-    channel: 'ab'.repeat(16),
-  });
+  assert.ok(ui.screen.getByRole('dialog'));
+  assert.match(
+    ui.screen.getByRole('button', { name: 'Team' }).textContent ?? '',
+    /Household/,
+  );
+  assert.equal(journal.length, navigations);
 });
 
 test('New chat creates a channel, refusing a name the agent would refuse', async () => {
@@ -847,25 +850,23 @@ test('New chat creates a channel, refusing a name the agent would refuse', async
   const name = ui.screen.getByRole('textbox', { name: 'Channel name' });
   const create = () =>
     ui.screen.getByRole('button', { name: /Create channel/ });
-  // A length outside the limits is said by the field's border alone: the
-  // hint stays, and no sentence appears.
+  // A length outside the limits is stated beside the field as well as by
+  // its invalid border, without a persistent instructional hint.
   ui.fireEvent.change(name, { target: { value: 'ab' } });
   await ui.waitFor(() => assert.equal(name.classList.contains('over'), true));
   assert.equal(name.getAttribute('aria-invalid'), 'true');
-  assert.equal(ui.screen.queryByText(/at least 3 characters/), null);
-  assert.ok(ui.screen.getByText(/Lowercase, 3–32 characters\./));
+  assert.ok(ui.screen.getByText('Must be at least 3 characters.'));
+  assert.equal(ui.screen.queryByText(/Lowercase, 3–32 characters\./), null);
   assert.equal((create() as HTMLButtonElement).disabled, true);
   ui.fireEvent.change(name, { target: { value: 'x'.repeat(33) } });
   await ui.waitFor(() => assert.equal(name.classList.contains('over'), true));
-  assert.equal(ui.screen.queryByText(/at most 32 characters/), null);
-  // The channel picker gives way to the form once Create is chosen.
+  assert.ok(ui.screen.getByText('Cannot be more than 32 characters.'));
+  // Creation opens the form without an existing-channel picker.
   assert.equal(ui.screen.queryByRole('radio', { name: /#general/ }), null);
-  // The general channel has no name of its own, so "general" is refused with
-  // the instruction that works.
+  // The general alias denotes the unnamed channel, so an existing general
+  // channel is reported as a duplicate rather than a reserved name.
   ui.fireEvent.change(name, { target: { value: 'general' } });
-  await ui.screen.findByText(
-    'Leave the name empty to create the general channel.',
-  );
+  await ui.screen.findByText('This team already has a general channel.');
   ui.fireEvent.change(name, { target: { value: 'design' } });
   await ui.waitFor(() => assert.equal(name.classList.contains('over'), false));
   assert.equal(ui.screen.queryByText('Created as #design.'), null);
@@ -1185,13 +1186,8 @@ test('an interrupted attempt recovers the same preparation rather than a second'
 /** New chat → a team → Create a channel, the way the column offers it. */
 async function openCreateForm(team: RegExp): Promise<HTMLElement> {
   ui.fireEvent.click(ui.screen.getAllByRole('button', { name: 'New chat' })[0]);
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create channel' }));
-  const option = await ui.screen.findByRole<HTMLOptionElement>('option', {
-    name: team,
-  });
-  ui.fireEvent.change(ui.screen.getByRole('combobox', { name: 'Team' }), {
-    target: { value: option.value },
-  });
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Team' }));
+  ui.fireEvent.click(await ui.screen.findByRole('option', { name: team }));
   await ui.waitFor(() =>
     assert.equal(
       ui.screen.queryByRole('button', { name: 'Check saved creations' }),
@@ -1302,10 +1298,10 @@ test('New chat waits for a team’s channels before either step can be answered'
   }));
   await ui.waitFor(() => assert.ok(heads().length));
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New chat' }));
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create channel' }));
-  ui.fireEvent.change(ui.screen.getByRole('combobox', { name: 'Team' }), {
-    target: { value: 'team:eng' },
-  });
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Team' }));
+  ui.fireEvent.click(
+    await ui.screen.findByRole('option', { name: /^Engineering/ }),
+  );
   // An empty name is the general channel, and whether the team already has one
   // is the difference between creating it and being refused: until the channel
   // list arrives the step cannot be answered.
@@ -1355,29 +1351,26 @@ test('a team that goes out of reach while step two is open refuses it and says w
   );
 });
 
-test('each step of New chat takes focus, and Back returns it to the step', async () => {
+test('New chat focuses the name directly and Cancel closes it without a preceding step', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   await mount(snapshot, { kind: 'chat', ref: 'team:eng' });
   await ui.waitFor(() => assert.ok(heads().length));
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New chat' }));
-  const search = ui.screen.getByRole('searchbox', {
-    name: 'Search conversations',
-  });
-  await ui.waitFor(() => assert.equal(document.activeElement, search));
-  // A step replaces the whole body, so focus follows it rather than staying on
-  // a control that is no longer there.
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create channel' }));
-  const name = ui.screen.getByRole('textbox', { name: 'Channel name' });
-  await ui.waitFor(() => assert.equal(document.activeElement, name));
-  // Back out of the create form is a step change too: focus lands in the step
-  // it returns to rather than on the document.
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Back' }));
-  await ui.waitFor(() =>
-    assert.equal(
-      document.activeElement,
-      ui.screen.getByRole('searchbox', { name: 'Search conversations' }),
-    ),
+  const opener = ui.screen.getByRole('button', { name: 'New chat' });
+  opener.focus();
+  ui.fireEvent.click(opener);
+  assert.equal(
+    ui.screen.queryByRole('searchbox', { name: 'Search conversations' }),
+    null,
   );
+  // The direct form takes focus on its name field rather than a search field
+  // from the removed picker step.
+  const name = ui.screen.getByRole('textbox', { name: 'Channel name' });
+  await ui.waitFor(() => assert.ok(document.activeElement === name));
+  // Cancelling leaves the dialog instead of returning to a preceding picker
+  // step. Existing conversations remain in the main inbox.
+  assert.equal(ui.screen.queryByRole('button', { name: 'Back' }), null);
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Cancel' }));
+  await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
 });
 
 test('New chat refuses what the agent would refuse, by the button and by Enter', async () => {
@@ -1431,7 +1424,7 @@ test('New chat refuses what the agent would refuse, by the button and by Enter',
   await ui.waitFor(() => assert.equal(create().disabled, false));
 });
 
-test('New chat says what a channel is, and counts only the ones it offers', async () => {
+test('New chat counts visible channels in its team selector without listing conversations', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   await mount(snapshot, { kind: 'chat', ref: 'team:eng' }, (base) =>
     withChannels(base, 'team:household', [
@@ -1448,25 +1441,25 @@ test('New chat says what a channel is, and counts only the ones it offers', asyn
   );
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New chat' }));
   const sheet = ui.screen.getByRole('dialog');
-  // Three channels are listed in the picker; the hidden one is not one the
+  // Three channels are known, but the hidden one is not one the selector's
   // count line offers.
   assert.equal(
-    ui.within(sheet).getAllByRole('button', { name: /Household · #/ }).length,
-    3,
+    ui.within(sheet).queryAllByRole('button', { name: /Household · #/ }).length,
+    0,
   );
-  // A channel the column draws as hidden or muted says the same thing here.
-  const archive = await ui
-    .within(sheet)
-    .findByRole('button', { name: /#archive/ });
-  assert.match(archive.textContent ?? '', /Hidden/);
+  // Hidden and muted channel details stay in the column, not in this form.
   assert.match(
-    ui.within(sheet).getByRole('button', { name: /#chores/ }).textContent ?? '',
+    document.querySelector('.chat-channel.hidden')?.textContent ?? '',
+    /Hidden/,
+  );
+  assert.match(
+    document.querySelector('.chat-channel.muted')?.textContent ?? '',
     /Muted/,
   );
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create channel' }));
-  ui.fireEvent.change(ui.screen.getByRole('combobox', { name: 'Team' }), {
-    target: { value: 'team:household' },
-  });
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Team' }));
+  ui.fireEvent.click(
+    await ui.screen.findByRole('option', { name: /^Household/ }),
+  );
   assert.ok(ui.screen.getByText(/2 channels · /));
 });
 
@@ -1492,7 +1485,7 @@ test('a team switch closes the sheet and keeps unresolved creation recoverable',
   // A half-finished New chat belongs to the team it was opened in: a switch
   // closes it rather than rebinding it to the team that arrives.
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New chat' }));
-  await ui.screen.findByRole('dialog', { name: 'New chat' });
+  await ui.screen.findByRole('dialog', { name: 'Create channel' });
   ui.fireEvent.click(general('Household'));
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
   // A submission the agent has already been given is the exception: it has to

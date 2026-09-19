@@ -29,12 +29,12 @@ test.after(async () => {
   await vite.close();
 });
 
-test('the picker reserves vertical focus-ring clearance inside the scrolling sheet body', async () => {
+test('the creation form reserves vertical focus-ring clearance inside the scrolling sheet body', async () => {
   const css = await readSource(
     '../src/screens/chat-picker.css',
     import.meta.url,
   );
-  assert.match(css, /\.chat-picker\s*\{[^}]*padding-block: 4px;/);
+  assert.match(css, /\.chat-create\s*\{[^}]*padding-block: 4px;/);
 });
 
 async function mount(override?: (base: Bridge) => Bridge, tabbed = false) {
@@ -139,15 +139,15 @@ async function mount(override?: (base: Bridge) => Bridge, tabbed = false) {
     ),
   );
   if (tabbed) await ui.screen.findByRole('button', { name: 'New chat' });
-  else await ui.screen.findByRole('button', { name: /Household · #general/ });
+  else await ui.screen.findByRole('heading', { name: 'Create channel' });
   return { opened, team, navigation };
 }
 
 async function form(team: TeamStore) {
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create channel' }));
-  ui.fireEvent.change(ui.screen.getByRole('combobox', { name: 'Team' }), {
-    target: { value: team.id },
-  });
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Team' }));
+  ui.fireEvent.click(
+    await ui.screen.findByRole('option', { name: new RegExp(`^${team.name}`) }),
+  );
   ui.fireEvent.change(
     ui.screen.getByRole('textbox', { name: 'Channel name' }),
     { target: { value: 'design' } },
@@ -162,24 +162,129 @@ async function form(team: TeamStore) {
   );
 }
 
-test('one searchable picker opens a conversation across teams with no confirmation steps', async () => {
-  const { opened, team } = await mount();
-  assert.equal(ui.screen.queryByRole('button', { name: 'Continue' }), null);
-  assert.equal(ui.screen.queryByRole('button', { name: 'Open chat' }), null);
-  ui.fireEvent.change(
-    ui.screen.getByRole('searchbox', { name: 'Search conversations' }),
-    { target: { value: 'household' } },
-  );
+test('New chat opens one grouped creation form with a styled team selector', async () => {
+  const { opened } = await mount();
   assert.equal(
-    ui.screen.queryByRole('button', { name: /Engineering · #general/ }),
+    ui.screen.queryByRole('searchbox', { name: 'Search conversations' }),
     null,
   );
-  ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: /Household · #general/ }),
+  assert.equal(ui.screen.queryByRole('button', { name: 'Back' }), null);
+  const team = ui.screen.getByRole('button', { name: 'Team' });
+  const name = ui.screen.getByRole<HTMLInputElement>('textbox', {
+    name: 'Channel name',
+  });
+  const description = ui.screen.getByRole('textbox', {
+    name: 'Channel description',
+  });
+  assert.ok(team.classList.contains('card-select-trigger'));
+  assert.equal(name.closest('.inset'), team.closest('.inset'));
+  assert.equal(description.closest('.inset'), team.closest('.inset'));
+  assert.equal(description.tagName, 'INPUT');
+  assert.equal(name.placeholder, 'general');
+  assert.equal(document.querySelector('.chat-create select'), null);
+  assert.equal(ui.screen.queryByText(/Lowercase, 3–32/), null);
+  assert.equal(ui.screen.queryByText(/Optional\. Lowercase/), null);
+  assert.equal(opened.length, 0);
+});
+
+test('typing is lowercased without moving the caret or selection', async () => {
+  await mount();
+  for (const label of ['Channel name', 'Channel description']) {
+    const field = ui.screen.getByRole<HTMLInputElement>('textbox', {
+      name: label,
+    });
+    field.focus();
+    ui.fireEvent.change(field, {
+      target: {
+        value: 'deSIGN-room',
+        selectionStart: 4,
+        selectionEnd: 7,
+        selectionDirection: 'backward',
+      },
+    });
+    assert.equal(field.value, 'design-room');
+    assert.equal(field.selectionStart, 4);
+    assert.equal(field.selectionEnd, 7);
+    assert.equal(field.selectionDirection, 'backward');
+    ui.fireEvent.change(field, {
+      target: { value: 'deSİgn-room', selectionStart: 4, selectionEnd: 4 },
+    });
+    assert.equal(field.value, 'design-room');
+    assert.equal(field.selectionStart, 4);
+    ui.fireEvent.change(field, {
+      target: { value: 'design-rooM', selectionStart: 6, selectionEnd: 6 },
+    });
+    assert.equal(field.value, 'design-room');
+    assert.equal(field.selectionStart, 6);
+  }
+});
+
+test('composition is not rewritten until it finishes, then preserves the caret', async () => {
+  await mount();
+  const field = ui.screen.getByRole<HTMLInputElement>('textbox', {
+    name: 'Channel name',
+  });
+  field.focus();
+  ui.fireEvent.compositionStart(field);
+  ui.fireEvent.input(field, { target: { value: 'ABC' }, isComposing: true });
+  assert.equal(field.value, 'ABC');
+  field.setSelectionRange(1, 1);
+  ui.fireEvent.compositionEnd(field);
+  assert.equal(field.value, 'abc');
+  assert.equal(field.selectionStart, 1);
+  assert.equal(field.selectionEnd, 1);
+});
+
+test('pasted description line breaks become spaces without moving the insertion point', async () => {
+  await mount();
+  const field = ui.screen.getByRole<HTMLInputElement>('textbox', {
+    name: 'Channel description',
+  });
+  ui.fireEvent.change(field, { target: { value: 'before after' } });
+  field.focus();
+  field.setSelectionRange(7, 7);
+  ui.fireEvent.paste(field, {
+    clipboardData: { getData: () => 'ONE\r\nTWO ' },
+  });
+  assert.equal(field.value, 'before one two after');
+  assert.equal(field.selectionStart, 15);
+  assert.equal(field.selectionEnd, 15);
+});
+
+test('invalid lengths show concise field errors instead of instructional hints', async () => {
+  await mount();
+  const name = ui.screen.getByRole<HTMLInputElement>('textbox', {
+    name: 'Channel name',
+  });
+  const description = ui.screen.getByRole<HTMLInputElement>('textbox', {
+    name: 'Channel description',
+  });
+  ui.fireEvent.change(name, { target: { value: 'ab' } });
+  assert.equal(
+    document.getElementById(name.getAttribute('aria-describedby')!)
+      ?.textContent,
+    'Must be at least 3 characters.',
   );
-  assert.equal(opened.length, 1);
-  assert.equal(opened[0].store, team.id);
-  assert.equal(ui.screen.queryByRole('dialog'), null);
+  ui.fireEvent.change(name, { target: { value: 'a'.repeat(33) } });
+  assert.equal(
+    document.getElementById(name.getAttribute('aria-describedby')!)
+      ?.textContent,
+    'Cannot be more than 32 characters.',
+  );
+  ui.fireEvent.change(description, { target: { value: 'a'.repeat(513) } });
+  assert.equal(
+    document.getElementById(description.getAttribute('aria-describedby')!)
+      ?.textContent,
+    'Cannot be more than 512 characters.',
+  );
+  ui.fireEvent.change(description, { target: { value: 'ab' } });
+  assert.equal(
+    document.getElementById(description.getAttribute('aria-describedby')!)
+      ?.textContent,
+    'Must be at least 3 characters.',
+  );
+  ui.fireEvent.change(description, { target: { value: '' } });
+  assert.equal(description.getAttribute('aria-invalid'), null);
 });
 
 test('creation is one team/name/description/audience form with protocol validation', async () => {
@@ -230,7 +335,7 @@ test('closing an in-flight creation keeps application-owned work and never redir
   await ui.waitFor(() => assert.equal(submitted, 1));
   assert.equal(opened.length, 0);
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Show picker' }));
-  await ui.screen.findByRole('button', { name: /Household · #design/ });
+  await ui.screen.findByRole('heading', { name: 'Create channel' });
   assert.equal(opened.length, 0);
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Cancel' }));
   const completion = ui.screen.getByRole('region', {
@@ -299,7 +404,7 @@ test('uncertain creation reopens original inputs and Check again does not create
     'design',
   );
   assert.equal(
-    ui.screen.getByRole<HTMLTextAreaElement>('textbox', {
+    ui.screen.getByRole<HTMLInputElement>('textbox', {
       name: 'Channel description',
     }).value,
     'design discussion',
@@ -339,14 +444,14 @@ test('unsubmitted name, description, audience and chosen team survive a rail tab
     'design',
   );
   assert.equal(
-    ui.screen.getByRole<HTMLTextAreaElement>('textbox', {
+    ui.screen.getByRole<HTMLInputElement>('textbox', {
       name: 'Channel description',
     }).value,
     'unsubmitted details',
   );
-  assert.equal(
-    ui.screen.getByRole<HTMLSelectElement>('combobox', { name: 'Team' }).value,
-    team.id,
+  assert.match(
+    ui.screen.getByRole('button', { name: 'Team' }).textContent ?? '',
+    new RegExp(team.name),
   );
   assert.equal(
     ui.screen

@@ -135,12 +135,10 @@ async function teamBadge(team: string): Promise<HTMLElement> {
  */
 async function openChannelSheet() {
   ui.fireEvent.click(ui.screen.getAllByRole('button', { name: 'New chat' })[0]);
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Team' }));
   ui.fireEvent.click(
-    await ui.screen.findByRole('button', { name: 'Create channel' }),
+    await ui.screen.findByRole('option', { name: /^Engineering/ }),
   );
-  ui.fireEvent.change(ui.screen.getByRole('combobox', { name: 'Team' }), {
-    target: { value: 'team:eng' },
-  });
   await ui.waitFor(() =>
     assert.equal(
       ui.screen.queryByText('Checking saved channel creations…'),
@@ -503,7 +501,7 @@ test('ambiguous channel preparation keeps its submission after the sheet closes'
   ui.fireEvent.change(description, { target: { value: 'Team Decisions' } });
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create channel' }));
   await ui.screen.findByText('Preparation reply lost');
-  assert.equal((description as HTMLTextAreaElement).disabled, true);
+  assert.equal((description as HTMLInputElement).disabled, true);
   // The application retains the submission when the sheet is dismissed.
   assert.equal(
     ui.screen.getByRole('button', { name: 'Close' }).hasAttribute('disabled'),
@@ -524,7 +522,7 @@ test('ambiguous channel preparation keeps its submission after the sheet closes'
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
   assert.equal(new Set(submissions).size, 1);
   assert.equal(submissions.length, 2);
-  assert.deepEqual(descriptions, ['Team Decisions', 'Team Decisions']);
+  assert.deepEqual(descriptions, ['team decisions', 'team decisions']);
 });
 
 test('team members opens the existing membership workflow in the same window', async () => {
@@ -579,8 +577,13 @@ test('channel creation opens in a sheet, selects the new channel, and needs no m
   await setup(undefined, true, (location) => navigations.push(location));
   assert.equal(ui.screen.queryByRole('dialog'), null);
   const name = await openChannelSheet();
-  // Choosing to create rather than to join puts the caret in the name field.
-  assert.equal(document.activeElement === name, true);
+  // Choosing a team returns focus to the custom selector's trigger.
+  await ui.waitFor(() =>
+    assert.ok(
+      document.activeElement ===
+        ui.screen.getByRole('button', { name: 'Team' }),
+    ),
+  );
   const audience = ui.screen.getByRole('radiogroup', {
     name: 'Channel audience',
   });

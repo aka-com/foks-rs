@@ -787,8 +787,17 @@
   resize: none;
   color: var(--ink);
 }
+.chat-create .card-select-trigger {
+  border: 1px solid var(--line-field);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: 6px 10px;
+  font-size: 13px;
+  line-height: 1.4;
+}
 .chat-create .inset .fr input:focus,
-.chat-create .inset .fr textarea:focus {
+.chat-create .inset .fr textarea:focus,
+.chat-create .card-select-trigger:focus-visible {
   border-color: var(--accent-border);
   background: var(--main-surface);
   box-shadow: 0 0 0 3px var(--accent-wash);

@@ -360,6 +360,20 @@ test('the channel name and description bands are the ones the agent admits', () 
   assert.equal(channelDescriptionProblem(''), null);
 });
 
+test('general is an alias for the unnamed channel and still detects duplicates', () => {
+  assert.equal(normalizeChannelName('  GENERAL  '), '');
+  assert.equal(channelNameProblem('general'), null);
+  assert.equal(channelNameProblem('GeNeRaL', ['design']), null);
+  assert.equal(
+    channelNameProblem('general', ['']),
+    'This team already has a general channel.',
+  );
+  assert.equal(
+    channelNameProblem('', ['']),
+    'This team already has a general channel.',
+  );
+});
+
 test('lowercasing follows the agent, which keeps one scalar per character', () => {
   // The agent lowercases per character and keeps the first scalar of the
   // mapping, so a name at the bound stays at the bound. JavaScript's own

@@ -1,21 +1,22 @@
 import { useChannelCreation } from '../chat/channel-creation-provider';
 import './chat-picker.css';
 /**
- * New chat: search existing conversations or open one channel-creation form.
+ * New chat opens a channel-creation form directly.
  *
- * Chat supports channels in named teams, not one-to-one conversations. Search
- * results open directly across teams. A team-specific entry opens the create
- * form and shows Cancel instead of Back. Unavailable teams remain listed with
- * an explanation. Unsubmitted forms survive same-session rail tab changes.
+ * Chat supports channels in named teams, not one-to-one conversations. The
+ * team selector, name, and description share one field group. Existing chats
+ * open from the inbox. Unavailable teams remain listed with an explanation.
+ * Unsubmitted forms survive same-session rail tab changes.
  * Channel creation uses the agent's durable preparation: one submission
  * identifier is retried rather than repeated, with the fields and audience
  * accepted by `prepare-channel`.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   Button,
+  CardSelect,
   Inset,
   InsetRow,
   RadioCard,
@@ -45,21 +46,35 @@ import type {
 import { failure } from '../chat/actions';
 import { useChatInbox } from '../chat/inbox-provider';
 import {
-  accessSummary,
   channelDescriptionProblem,
-  channelMeta,
   channelNameProblem,
-  channelTitle,
   listChannels,
+  lowercaseChatText,
   normalizeChannelName,
 } from '../chat/presentation';
-import {
-  chatTeams,
-  noChatReason,
-  noChatTeams,
-  pickerConversations,
-} from './chat-teams';
-import { GroupMark } from './group-mark';
+import { chatTeams, noChatReason, noChatTeams } from './chat-teams';
+
+const fieldText = (value: string): string =>
+  lowercaseChatText(value.replace(/\r\n?|\n/g, ' '));
+
+function updateField(
+  input: HTMLInputElement,
+  setValue: (value: string) => void,
+): void {
+  const raw = input.value;
+  const start = input.selectionStart;
+  const end = input.selectionEnd;
+  const direction = input.selectionDirection;
+  const value = fieldText(raw);
+  if (value !== raw) input.value = value;
+  setValue(value);
+  if (value !== raw && start !== null && end !== null)
+    input.setSelectionRange(
+      fieldText(raw.slice(0, start)).length,
+      fieldText(raw.slice(0, end)).length,
+      direction ?? undefined,
+    );
+}
 
 /** A team the sheet offers, and why it cannot be offered. */
 interface TeamChoice {
@@ -73,7 +88,6 @@ interface ChannelFormDraft {
   team?: StoreRef;
   chosen?: StoreRef;
   scope?: ChatScope;
-  creating: boolean;
   name: string;
   description: string;
   admin: boolean;
@@ -110,10 +124,9 @@ export function NewChatSheet({
   onUnresolved?: (unresolved: boolean) => void;
 }): ReactNode {
   const { snapshot: inbox } = useChatInbox();
-  // A sheet opened on a team is that team's: there is no step behind it to go
-  // back to, so it opens on the channel it was asked for — the create step —
-  // and leaves by being cancelled.
-  const fixedTeam = team !== undefined;
+  // A sheet opened on a team starts with that team selected. There is no
+  // picker step behind the form: existing channels open from the inbox,
+  // and this sheet leaves by being cancelled.
   const [saved, setSaved] = useTabSheetState<ChannelFormDraft | null>(
     'channel.form',
     null,
@@ -122,16 +135,18 @@ export function NewChatSheet({
   const [chosen, setChosen] = useState<StoreRef | undefined>(
     restored?.chosen ?? team,
   );
-  const [creating, setCreating] = useState(restored?.creating ?? fixedTeam);
-  const [name, setName] = useState(restored?.name ?? '');
-  const [description, setDescription] = useState(restored?.description ?? '');
+  const [name, setName] = useState(fieldText(restored?.name ?? ''));
+  const [description, setDescription] = useState(
+    fieldText(restored?.description ?? ''),
+  );
+  const nameErrorId = useId();
+  const descriptionErrorId = useId();
   const [admin, setAdmin] = useState(restored?.admin ?? false);
   const formScope = useRef({ store: restored?.chosen, scope: restored?.scope });
   const closing = useRef(false);
   const autoOpen = useRef(false);
   const submittedRef = useRef(onSubmitted);
   submittedRef.current = onSubmitted;
-  const [filter, setFilter] = useState('');
   const [error, setError] = useState('');
   const { controller, creations } = useChannelCreation();
   const [creationId, setCreationId] = useState<string>();
@@ -177,7 +192,6 @@ export function NewChatSheet({
     setSaved({
       team,
       chosen,
-      creating,
       name,
       description,
       admin,
@@ -185,17 +199,7 @@ export function NewChatSheet({
         ? structuredClone(formScope.current.scope)
         : undefined,
     });
-  }, [
-    team,
-    chosen,
-    creating,
-    name,
-    description,
-    admin,
-    creationId,
-    inbox,
-    setSaved,
-  ]);
+  }, [team, chosen, name, description, admin, creationId, inbox, setSaved]);
   const close = () => {
     closing.current = true;
     autoOpen.current = false;
@@ -221,8 +225,6 @@ export function NewChatSheet({
   // out is to re-issue the same one. A later refusal — of a request that never
   // reached the agent, say — does not make it discardable.
   const nameField = useRef<HTMLInputElement | null>(null);
-  const body = useRef<HTMLDivElement | null>(null);
-  const opened = useRef(false);
   // The controller checks current access around each request. This sheet
   // observes a confirmed result only while the initiating interaction is
   // still active; restoring an unsubmitted form never restores a redirect
@@ -253,25 +255,10 @@ export function NewChatSheet({
   useEffect(() => {
     for (const store of chatTeams(snapshot)) void controller?.discover(store);
   }, [controller, snapshot, inbox, accessGenerations]);
-  // A step replaces the whole body, so focus follows it rather than staying on
-  // a control that is no longer there — and the create form is a step of its
-  // own, whose field is the name rather than its first control. The dialog
-  // places focus when it opens, so only an actual change moves it.
-  useEffect(() => {
-    if (!opened.current) {
-      opened.current = true;
-      return;
-    }
-    if (creating) {
-      nameField.current?.focus();
-      return;
-    }
-    const region = body.current;
-    const first = region?.querySelector<HTMLElement>(
-      'input:not([disabled]), textarea:not([disabled]), button:not([disabled])',
-    );
-    first?.focus();
-  }, [creating]);
+  // The dialog places focus on the channel name when it opens. Keeping the
+  // form mounted means inbox updates do not move focus out of the field
+  // being edited; choosing a team uses the selector's own focus handling.
+  // The fields and the selector remain in the dialog's keyboard order.
   const choices: TeamChoice[] = [
     ...chatTeams(snapshot).map((store) => {
       const reachable =
@@ -318,14 +305,23 @@ export function NewChatSheet({
     listed.map(({ channel }) => channel.name),
   );
   const descriptionProblem = channelDescriptionProblem(description);
-  // A length outside the limits is shown by the field alone — its border —
-  // and the hint stays as it is; every other refusal is a sentence, since a
-  // border cannot say that a name is taken.
+  // Invalid fields show their specific error instead of persistent format
+  // hints. Empty names denote the general channel; empty descriptions are
+  // optional and do not produce a length error.
   const nameLength = [...normalizeChannelName(name)].length;
-  const nameOverLimit =
-    nameLength > CHAT_NAME_MAX_CHARS ||
-    (nameLength > 0 && nameLength < CHAT_NAME_MIN_CHARS);
-  const descriptionOverLimit = descriptionProblem !== null;
+  const descriptionLength = [...description].length;
+  const nameError =
+    nameLength > CHAT_NAME_MAX_CHARS
+      ? `Cannot be more than ${CHAT_NAME_MAX_CHARS} characters.`
+      : nameLength > 0 && nameLength < CHAT_NAME_MIN_CHARS
+        ? `Must be at least ${CHAT_NAME_MIN_CHARS} characters.`
+        : problem;
+  const descriptionError =
+    descriptionLength > CHAT_DESCRIPTION_MAX_CHARS
+      ? `Cannot be more than ${CHAT_DESCRIPTION_MAX_CHARS} characters.`
+      : descriptionLength > 0 && descriptionLength < CHAT_DESCRIPTION_MIN_CHARS
+        ? `Must be at least ${CHAT_DESCRIPTION_MIN_CHARS} characters.`
+        : descriptionProblem;
   // Creation cannot be submitted until the team's channels are known: an empty
   // name is the general channel, and whether the team already has one is the
   // difference between creating it and being refused.
@@ -351,8 +347,7 @@ export function NewChatSheet({
   // can ask for discard; submitted work never holds navigation open.
   const guardState = useRef({ typed: false, name: '', locked: false });
   guardState.current = {
-    typed:
-      creating && !submission && Boolean(name.trim() || description.trim()),
+    typed: !submission && Boolean(name.trim() || description.trim()),
     name: name.trim(),
     locked,
   };
@@ -367,7 +362,7 @@ export function NewChatSheet({
       verdict: 'prompt',
       title: 'Discard the new channel?',
       body: typedName
-        ? `#${normalizeChannelName(typedName)} has not been created and will be lost.`
+        ? `#${normalizeChannelName(typedName) || 'general'} has not been created and will be lost.`
         : 'This channel has not been created and will be lost.',
       confirm: 'Discard',
       // Discard the saved tab form as well as allowing navigation, so a
@@ -400,32 +395,24 @@ export function NewChatSheet({
       setError(failure(cause));
     }
   };
-  const back = () => {
-    setCreating(false);
-    setCreationId(undefined);
-    setError('');
-  };
   const recover = (id: string) => {
     const record = creations.find((candidate) => candidate.id === id);
     if (!record) return;
     setChosen(record.store.id);
-    setName(record.input?.name ?? '');
-    setDescription(record.input?.description ?? '');
+    setName(fieldText(record.input?.name ?? ''));
+    setDescription(fieldText(record.input?.description ?? ''));
     setAdmin(record.input?.admin ?? false);
     setCreationId(id);
     setSaved(null);
     autoOpen.current = true;
     onSubmitted?.();
-    setCreating(true);
     setError('');
   };
   const pending = creations.filter(
     (record) => record.state !== 'confirmed' && record.state !== 'cancelled',
   );
-  const query = filter.trim().toLowerCase();
-  const results = pickerConversations(snapshot, inbox, query, accessOptions);
   useEffect(() => {
-    if (!creating || creationId) return;
+    if (creationId) return;
     const saved = creations.find(
       (record) =>
         record.store.id === chosen &&
@@ -433,125 +420,256 @@ export function NewChatSheet({
         record.state !== 'cancelled',
     );
     if (!saved) return;
-    setName(saved.input?.name ?? '');
-    setDescription(saved.input?.description ?? '');
+    setName(fieldText(saved.input?.name ?? ''));
+    setDescription(fieldText(saved.input?.description ?? ''));
     setAdmin(saved.input?.admin ?? false);
     setCreationId(saved.id);
     setSaved(null);
     submittedRef.current?.();
-  }, [creating, creationId, chosen, creations, setSaved]);
+  }, [creationId, chosen, creations, setSaved]);
   return (
     <SheetDialog
-      title={creating ? 'Create channel' : 'New chat'}
+      title="Create channel"
       onClose={close}
       dismissible
       footer={
         <>
-          {/* Back belongs to the step behind this one. A sheet opened on one
-              team has none — the cross-team picker is not where it came
-              from — so its left button leaves instead. */}
+          {/* Creation has no preceding picker step. The left button leaves
+              the form; submitted work remains owned by the controller
+              after this sheet closes. */}
+          <Button onClick={close}>{outstanding ? 'Close' : 'Cancel'}</Button>
           <Button
-            onClick={!creating || fixedTeam || outstanding ? close : back}
+            variant="primary"
+            busy={busy}
+            disabled={createDisabled}
+            onClick={create}
           >
-            {outstanding ? 'Close' : !creating || fixedTeam ? 'Cancel' : 'Back'}
+            {busy
+              ? 'Creating…'
+              : outstanding
+                ? active?.operation
+                  ? active.operation.state === 'prepared' && active.input
+                    ? 'Retry creation'
+                    : 'Check again'
+                  : 'Retry channel creation'
+                : 'Create channel'}
           </Button>
-          {creating ? (
-            <Button
-              variant="primary"
-              busy={busy}
-              disabled={createDisabled}
-              onClick={create}
-            >
-              {busy
-                ? 'Creating…'
-                : outstanding
-                  ? active?.operation
-                    ? active.operation.state === 'prepared' && active.input
-                      ? 'Retry creation'
-                      : 'Check again'
-                    : 'Retry channel creation'
-                  : 'Create channel'}
-            </Button>
-          ) : (
-            <Button
-              variant="primary"
-              onClick={() => {
-                setCreating(true);
-                setCreationId(undefined);
-                setChosen(team);
-                setName('');
-                setDescription('');
-                setAdmin(false);
-              }}
-            >
-              Create channel
-            </Button>
-          )}
         </>
       }
     >
-      <div ref={body}>
-        {!creating ? (
-          <div className="chat-picker">
-            <input
-              type="search"
-              aria-label="Search conversations"
-              placeholder="Search teams and channels"
-              value={filter}
-              onChange={(event) => setFilter(event.target.value)}
-              data-sheet-autofocus="true"
-            />
-            <div className="chat-picker-results" aria-label="Conversations">
-              {results.map(({ store, entry: teamEntry, option, available }) => {
-                // A channel the column draws as stopped, restricted, hidden or
-                // muted says the same thing here: a picker that offered it as
-                // an ordinary channel would be offering something else.
-                const meta = channelMeta(option, teamEntry?.blockedChannels);
-                const about =
-                  option.channel.description || accessSummary(option.channel);
-                return (
-                  <button
-                    type="button"
-                    className="chat-picker-result"
-                    key={`${store.id}:${option.channel.id}`}
-                    disabled={!available}
-                    onClick={() => open(store.id, option.channel.id)}
-                  >
-                    <GroupMark store={store} size="sm" />
-                    <span>
-                      <b>
-                        {store.name} · {channelTitle(option.channel)}
-                      </b>
-                      <small>{meta ? `${meta} · ${about}` : about}</small>
-                    </span>
-                  </button>
-                );
-              })}
-              {!results.length && (
-                <p role="status">
-                  No conversations match{query ? ` “${filter}”` : ''}.
-                </p>
-              )}
-              {choices
-                .filter(
-                  (choice) =>
-                    (!query ||
-                      choice.store.name.toLowerCase().includes(query)) &&
-                    (choice.reason || !inbox.get(choice.store.id)?.data),
-                )
-                .map((choice) => (
-                  <p className="hint" key={choice.store.id}>
-                    {choice.store.name}:{' '}
-                    {choice.reason ||
-                      inbox.get(choice.store.id)?.error ||
-                      'Loading channels…'}
-                  </p>
-                ))}
-            </div>
-            {pending.length > 0 && (
-              <section aria-label="Pending channel creation">
-                <SectionLabel>Channel creation</SectionLabel>
-                {pending.map((record) => (
+      <div>
+        <form
+          className="chat-create"
+          // Submit on Enter only when the Create button is enabled.
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!createDisabled) void create();
+          }}
+        >
+          {/* A team that loses chat while this step is open is not submitted
+              against: the reason stands where the channels would be. */}
+          {picked?.reason && (
+            <p role="alert" className="action-error">
+              Chat is currently unavailable for {picked.store.name}:{' '}
+              {picked.reason}
+            </p>
+          )}
+          {/* Team, name, and description belong to one field group.
+                Existing conversations remain in the main chat inbox. */}
+          {/* Until the team's channel list has arrived there is nothing to
+                pick from and no way to tell whether a name is already taken. */}
+          {picked && !channelsKnown && (
+            <p className="hint" role="status">
+              {entry?.error || 'Loading channels…'}
+            </p>
+          )}
+          {!controller && (
+            <p role="status" className="action-error">
+              Channel creation is unavailable in this window.
+            </p>
+          )}
+          {controller && picked && !controller.readyFor(picked.store.id) && (
+            <p role="status">
+              Saved channel creations must be checked first.{' '}
+              <Button onClick={() => void controller.discover(picked.store)}>
+                Check saved creations
+              </Button>
+            </p>
+          )}
+          {active && !active.input && outstanding && (
+            <p className="hint">
+              The original channel fields are held by the agent. Check the saved
+              operation or cancel it before creating another channel.
+            </p>
+          )}
+          {active?.operation && outstanding && (
+            <Button
+              disabled={
+                busy || active.blocked || active.operation.state === 'uncertain'
+              }
+              onClick={() => {
+                if (active.operation?.state === 'rejected') {
+                  controller?.review(active.id);
+                  setCreationId(undefined);
+                  autoOpen.current = false;
+                  onDraft?.();
+                } else controller?.cancel(active.id);
+              }}
+            >
+              {active.operation.state === 'rejected'
+                ? 'Review form'
+                : 'Cancel preparation'}
+            </Button>
+          )}
+          <>
+            <Inset>
+              <InsetRow label="Team">
+                {/* A team the column draws as unavailable says so here:
+                        offering it as an ordinary choice would disagree with
+                        the access checks that guard channel creation. */}
+                <CardSelect
+                  label="Team"
+                  placeholder="Choose a team"
+                  value={chosen ?? ''}
+                  disabled={locked}
+                  options={[
+                    ...choices.map((choice) => ({
+                      id: choice.store.id,
+                      title: choice.store.name,
+                      detail: choice.reason || choice.detail,
+                      off: Boolean(choice.reason),
+                    })),
+                    ...(active &&
+                    !choices.some(
+                      (choice) => choice.store.id === active.store.id,
+                    )
+                      ? [
+                          {
+                            id: active.store.id,
+                            title: active.store.name,
+                            detail: 'Unavailable',
+                            off: true,
+                          },
+                        ]
+                      : []),
+                  ]}
+                  onChange={(next) => {
+                    const saved = pending.find(
+                      (record) => record.store.id === next,
+                    );
+                    if (saved) recover(saved.id);
+                    else {
+                      setChosen(next);
+                      setCreationId(undefined);
+                    }
+                  }}
+                />
+              </InsetRow>
+              <InsetRow label="Channel name">
+                <input
+                  aria-label="Channel name"
+                  ref={nameField}
+                  data-sheet-autofocus="true"
+                  className={nameError ? 'over' : undefined}
+                  aria-invalid={Boolean(nameError) || undefined}
+                  aria-describedby={nameError ? nameErrorId : undefined}
+                  value={name}
+                  disabled={locked}
+                  autoCapitalize="none"
+                  onChange={(event) => {
+                    if ((event.nativeEvent as InputEvent).isComposing)
+                      setName(event.currentTarget.value);
+                    else updateField(event.currentTarget, setName);
+                  }}
+                  onCompositionEnd={(event) =>
+                    updateField(event.currentTarget, setName)
+                  }
+                  placeholder="general"
+                />
+                {/* Length and duplicate-name errors belong to the field.
+                      The general alias and an empty name identify the same
+                      channel, so either is refused when the team already
+                      has one. Valid names need no persistent instructional
+                      hint beneath the field. */}
+                {nameError && (
+                  <small id={nameErrorId} className="action-error">
+                    {nameError}
+                  </small>
+                )}
+              </InsetRow>
+              <InsetRow label="Description">
+                <input
+                  aria-label="Channel description"
+                  className={descriptionError ? 'over' : undefined}
+                  aria-invalid={Boolean(descriptionError) || undefined}
+                  aria-describedby={
+                    descriptionError ? descriptionErrorId : undefined
+                  }
+                  value={description}
+                  disabled={locked}
+                  autoCapitalize="none"
+                  onChange={(event) => {
+                    if ((event.nativeEvent as InputEvent).isComposing)
+                      setDescription(event.currentTarget.value);
+                    else updateField(event.currentTarget, setDescription);
+                  }}
+                  onCompositionEnd={(event) =>
+                    updateField(event.currentTarget, setDescription)
+                  }
+                  onPaste={(event) => {
+                    const text = event.clipboardData.getData('text/plain');
+                    if (!/[\r\n]/.test(text)) return;
+                    event.preventDefault();
+                    const input = event.currentTarget;
+                    input.setRangeText(
+                      fieldText(text),
+                      input.selectionStart ?? input.value.length,
+                      input.selectionEnd ?? input.value.length,
+                      'end',
+                    );
+                    updateField(input, setDescription);
+                  }}
+                  placeholder="What this channel is for"
+                />
+                {descriptionError && (
+                  <small id={descriptionErrorId} className="action-error">
+                    {descriptionError}
+                  </small>
+                )}
+              </InsetRow>
+            </Inset>
+            <SectionLabel>Visibility</SectionLabel>
+            <Inset>
+              <RadioGroup label="Channel audience">
+                <RadioCard
+                  title="Everyone on the team"
+                  detail="Members and administrators can view and post messages."
+                  selected={!admin}
+                  disabled={locked}
+                  onSelect={() => setAdmin(false)}
+                />
+                <RadioCard
+                  title="Admins and owners"
+                  detail="Hidden from members."
+                  selected={admin}
+                  disabled={locked}
+                  onSelect={() => setAdmin(true)}
+                />
+              </RadioGroup>
+            </Inset>
+            {outstanding && !busy && (
+              <p className="hint">
+                Channel creation is not confirmed. You can close this form and
+                check the saved creation later.
+              </p>
+            )}
+          </>
+          {pending.some((record) => record.id !== creationId) && (
+            <section aria-label="Pending channel creation">
+              <SectionLabel>Channel creation</SectionLabel>
+              {pending
+                .filter((record) => record.id !== creationId)
+                .map((record) => (
                   <button
                     type="button"
                     className="chat-picker-result"
@@ -573,197 +691,14 @@ export function NewChatSheet({
                     </span>
                   </button>
                 ))}
-              </section>
-            )}
-          </div>
-        ) : (
-          <form
-            className="chat-create"
-            // Submit on Enter only when the Create button is enabled.
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (creating && !createDisabled) void create();
-            }}
-          >
-            {/* A team that loses chat while this step is open is not submitted
-              against: the reason stands where the channels would be. */}
-            {picked?.reason && (
-              <p role="alert" className="action-error">
-                Chat is currently unavailable for {picked.store.name}:{' '}
-                {picked.reason}
-              </p>
-            )}
-            {/* Choosing Create takes the form over: the channel list it was
-                picked from is one Back away, not a second thing on screen. */}
-            <Inset>
-              <InsetRow label="Team">
-                <select
-                  aria-label="Team"
-                  value={chosen ?? ''}
-                  disabled={locked}
-                  onChange={(event) => {
-                    const next = event.target.value || undefined;
-                    const saved = pending.find(
-                      (record) => record.store.id === next,
-                    );
-                    if (saved) recover(saved.id);
-                    else {
-                      setChosen(next);
-                      setCreationId(undefined);
-                    }
-                  }}
-                >
-                  <option value="">Choose a team</option>
-                  {choices.map((choice) => (
-                    <option
-                      key={choice.store.id}
-                      value={choice.store.id}
-                      disabled={Boolean(choice.reason)}
-                    >
-                      {choice.store.name}
-                      {choice.reason ? ` — ${choice.reason}` : ''}
-                    </option>
-                  ))}
-                  {active &&
-                    !choices.some(
-                      (choice) => choice.store.id === active.store.id,
-                    ) && (
-                      <option value={active.store.id}>
-                        {active.store.name} — Unavailable
-                      </option>
-                    )}
-                </select>
-                <small>{picked?.reason || picked?.detail}</small>
-              </InsetRow>
-            </Inset>
-            {/* Until the team's channel list has arrived there is nothing to
-                pick from and no way to tell whether a name is already taken. */}
-            {picked && !channelsKnown && (
-              <p className="hint" role="status">
-                {entry?.error || 'Loading channels…'}
-              </p>
-            )}
-            {!controller && (
-              <p role="status" className="action-error">
-                Channel creation is unavailable in this window.
-              </p>
-            )}
-            {controller && picked && !controller.readyFor(picked.store.id) && (
-              <p role="status">
-                Saved channel creations must be checked first.{' '}
-                <Button onClick={() => void controller.discover(picked.store)}>
-                  Check saved creations
-                </Button>
-              </p>
-            )}
-            {active && !active.input && outstanding && (
-              <p className="hint">
-                The original channel fields are held by the agent. Check the
-                saved operation or cancel it before creating another channel.
-              </p>
-            )}
-            {active?.operation && outstanding && (
-              <Button
-                disabled={
-                  busy ||
-                  active.blocked ||
-                  active.operation.state === 'uncertain'
-                }
-                onClick={() => {
-                  if (active.operation?.state === 'rejected') {
-                    controller?.review(active.id);
-                    setCreationId(undefined);
-                    autoOpen.current = false;
-                    onDraft?.();
-                  } else controller?.cancel(active.id);
-                }}
-              >
-                {active.operation.state === 'rejected'
-                  ? 'Review form'
-                  : 'Cancel preparation'}
-              </Button>
-            )}
-            {creating && (
-              <>
-                <Inset>
-                  <InsetRow label="Channel name">
-                    <input
-                      aria-label="Channel name"
-                      ref={nameField}
-                      data-sheet-autofocus="true"
-                      className={nameOverLimit ? 'over' : undefined}
-                      aria-invalid={nameOverLimit || undefined}
-                      value={name}
-                      disabled={locked}
-                      onChange={(event) => setName(event.target.value)}
-                      placeholder="design"
-                    />
-                    {/* A refusal other than length is drawn in place of the
-                      hint: an empty name is itself refused when the team
-                      already has a general channel, and the hint that
-                      describes an empty name would be saying it can be
-                      created. */}
-                    <small
-                      className={
-                        problem && !nameOverLimit ? 'action-error' : ''
-                      }
-                    >
-                      {problem && !nameOverLimit
-                        ? problem
-                        : `Lowercase, ${CHAT_NAME_MIN_CHARS}–${CHAT_NAME_MAX_CHARS} characters. Leave empty to create the team’s #general channel.`}
-                    </small>
-                  </InsetRow>
-                  <InsetRow label="Description">
-                    <textarea
-                      aria-label="Channel description"
-                      className={descriptionOverLimit ? 'over' : undefined}
-                      aria-invalid={descriptionOverLimit || undefined}
-                      rows={2}
-                      value={description}
-                      disabled={locked}
-                      onChange={(event) => setDescription(event.target.value)}
-                      placeholder="What this channel is for"
-                    />
-                    <small>
-                      Optional. Lowercase, {CHAT_DESCRIPTION_MIN_CHARS}–
-                      {CHAT_DESCRIPTION_MAX_CHARS} characters.
-                    </small>
-                  </InsetRow>
-                </Inset>
-                <SectionLabel>Visibility</SectionLabel>
-                <Inset>
-                  <RadioGroup label="Channel audience">
-                    <RadioCard
-                      title="Everyone on the team"
-                      detail="Members and administrators can view and post messages."
-                      selected={!admin}
-                      disabled={locked}
-                      onSelect={() => setAdmin(false)}
-                    />
-                    <RadioCard
-                      title="Admins and owners"
-                      detail="Hidden from members."
-                      selected={admin}
-                      disabled={locked}
-                      onSelect={() => setAdmin(true)}
-                    />
-                  </RadioGroup>
-                </Inset>
-                {outstanding && !busy && (
-                  <p className="hint">
-                    Channel creation is not confirmed. You can close this form
-                    and check the saved creation later.
-                  </p>
-                )}
-              </>
-            )}
-            {(error || active?.error) && (
-              <p role="alert" className="action-error">
-                {error || active?.error}
-              </p>
-            )}
-          </form>
-        )}
+            </section>
+          )}
+          {(error || active?.error) && (
+            <p role="alert" className="action-error">
+              {error || active?.error}
+            </p>
+          )}
+        </form>
       </div>
     </SheetDialog>
   );

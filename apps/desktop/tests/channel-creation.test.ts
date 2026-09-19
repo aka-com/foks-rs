@@ -622,13 +622,37 @@ test('completion destinations require fresh access and cannot redirect after ack
   controller.dispose();
 });
 
+for (const name of ['general', 'GeNeRaL', '  General  ']) {
+  test(`${JSON.stringify(name)} prepares the protocol’s unnamed general channel`, async () => {
+    const { controller, store, actions } = await setup(async (action) =>
+      reply(action.action === 'prepare-channel' ? prepared : confirmed),
+    );
+    try {
+      const id = controller.submit(store, { ...input, name });
+      assert.equal(
+        controller.getSnapshot().find((record) => record.id === id)?.input
+          ?.name,
+        '',
+      );
+      await tick();
+      const preparation = actions.find(
+        (action) => action.action === 'prepare-channel',
+      );
+      assert.ok(preparation?.action === 'prepare-channel');
+      assert.equal(preparation.name, '');
+    } finally {
+      controller.dispose();
+    }
+  });
+}
+
 test('protocol name and description validation applies before durable preparation', async () => {
   const { controller, store, actions } = await setup(async () =>
     reply(prepared),
   );
   assert.throws(
-    () => controller.submit(store, { ...input, name: 'general' }),
-    /Leave the name empty/,
+    () => controller.submit(store, { ...input, name: 'bad name' }),
+    /cannot contain spaces/,
   );
   assert.throws(
     () => controller.submit(store, { ...input, description: 'a' }),

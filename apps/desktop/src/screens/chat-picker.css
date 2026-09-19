@@ -1,16 +1,5 @@
-.chat-picker {
-  display: grid;
-  gap: 12px;
+.chat-create {
   padding-block: 4px;
-}
-
-.chat-picker > input {
-  width: 100%;
-}
-
-.chat-picker-results {
-  display: grid;
-  gap: 4px;
 }
 
 .chat-picker-result {

@@ -19,22 +19,23 @@ export function channelTitle(channel: ChatChannel): string {
  * "İ" becomes two scalars — and would then count characters the agent never
  * stores.
  */
-function lowercasePerScalar(value: string): string {
+export function lowercaseChatText(value: string): string {
   return [...value]
     .map((scalar) => [...scalar.toLowerCase()][0] ?? scalar)
     .join('');
 }
 
-/** The name the agent stores for what was typed: trimmed and lowercased. */
+/** The protocol name: trimmed, lowercased, and empty for the general channel. */
 export function normalizeChannelName(raw: string): string {
-  return lowercasePerScalar(raw.trim());
+  const name = lowercaseChatText(raw.trim());
+  return name === 'general' ? '' : name;
 }
 
 /**
  * Returns the validation error for a channel name, or `null` when valid. The
  * agent remains authoritative and also enforces a character table that is not
  * duplicated here. This check covers only errors that can be reported before
- * submission: the length range, the reserved "general", consecutive hyphens,
+ * submission: the length range, the general-channel alias, consecutive hyphens,
  * spaces, and a name the team already has. `CHAT_NAME_*_CHARS` defines the
  * range accepted by `ChatLimits`, counted in Unicode scalars to match the
  * agent.
@@ -50,8 +51,6 @@ export function channelNameProblem(
   const taken = new Set(existing.map(normalizeChannelName));
   if (!name)
     return taken.has('') ? 'This team already has a general channel.' : null;
-  if (name === 'general')
-    return 'Leave the name empty to create the general channel.';
   if ([...name].length < CHAT_NAME_MIN_CHARS)
     return `Channel names are at least ${CHAT_NAME_MIN_CHARS} characters.`;
   if ([...name].length > CHAT_NAME_MAX_CHARS)
@@ -65,7 +64,7 @@ export function channelNameProblem(
 
 /** The description the agent stores for what was typed: lowercased. */
 export function normalizeChannelDescription(raw: string): string {
-  return lowercasePerScalar(raw);
+  return lowercaseChatText(raw);
 }
 
 /**

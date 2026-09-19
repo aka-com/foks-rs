@@ -336,9 +336,9 @@ test('Add channel opens the creation form with this group selected', async () =>
   // group, not the channel picker and not the cross-team one.
   assert.ok(rendered.getByRole('heading', { name: 'Create channel' }));
   assert.ok(rendered.getByLabelText('Channel name'));
-  const teamSelect = rendered.getByRole('combobox', { name: 'Team' });
-  assert.ok(teamSelect instanceof window.HTMLSelectElement);
-  assert.equal(teamSelect.value, 'team:household');
+  const teamSelect = rendered.getByRole('button', { name: 'Team' });
+  assert.ok(teamSelect.classList.contains('card-select-trigger'));
+  assert.match(teamSelect.textContent ?? '', /Household/);
   assert.ok(rendered.getByLabelText('Channel description'));
   assert.ok(rendered.getByRole('radiogroup', { name: 'Channel audience' }));
   assert.equal(rendered.queryByRole('button', { name: 'Continue' }), null);
