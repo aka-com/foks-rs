@@ -23,6 +23,11 @@ export interface DeviceLists {
   devices: AccountDevice[];
   /** Per account: the paper-key enrollments this Mac holds for it. */
   backups: BackupEnrollment[];
+  /**
+   * Indicates that `backups` is empty because paper-key data was unavailable,
+   * rather than because the account has no paper keys.
+   */
+  backupsUnavailable?: true;
   /** Per profile: the card enrollments on that server, on any account. */
   yubi: YubiEnrollment[];
   /** Per profile: the cards in this Mac's ports right now. */

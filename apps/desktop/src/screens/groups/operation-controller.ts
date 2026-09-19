@@ -36,18 +36,23 @@ export function useGroupOperationController({
   onSnapshotApplied,
   onSnapshotMutationError,
   onRefreshError,
+  onReadError,
 }: {
   bridge: Bridge;
   store: TeamStore | null;
   enabled: boolean;
   onSnapshotApplied: (message: string) => Promise<void>;
   onSnapshotMutationError: MutationFailureHandler;
+  /** Reports failure to refresh the catalog after a successful mutation. */
   onRefreshError: (error: unknown) => void;
+  /** Reports failure to load pending operations before any mutation occurs. */
+  onReadError: (error: unknown) => void;
 }) {
   const { operations, refresh, generation } = usePendingGroupOperations(
     bridge,
     store,
     enabled,
+    onReadError,
   );
   const onApplied = useCallback(
     async (message: string): Promise<void> => {

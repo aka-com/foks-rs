@@ -148,3 +148,68 @@ for (const kind of ['team-member-addition', 'team-member-edit'] as const) {
     );
   });
 }
+
+test('a failed pending-operation query reports one error and renders no recovery banner', async () => {
+  const { GroupSettingsScreen } = (await vite.ssrLoadModule(
+    '/src/screens/groups-screen.tsx',
+  )) as typeof import('../src/screens/groups-screen');
+  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
+    '/kit/toasts.tsx',
+  )) as typeof import('../kit/toasts');
+  const { OverlayProvider } = (await vite.ssrLoadModule(
+    '/kit/overlay-primitives.tsx',
+  )) as typeof import('../kit/overlay-primitives');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const store = FIXTURE.stores.find((entry) => entry.id === 'team:eng');
+  assert.ok(store?.kind === 'team');
+  const portalRoot = document.getElementById('overlays');
+  assert.ok(portalRoot);
+  const reported: unknown[] = [];
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    listPendingOperations: async () => {
+      throw {
+        code: 'io',
+        message: 'The pending operations could not be read.',
+        retryable: true,
+        ambiguous: false,
+        fatal: false,
+      };
+    },
+  };
+  const rendered = ui.render(
+    createElement(OverlayProvider, {
+      backgroundRef: { current: null },
+      portalRoot,
+      children: createElement(ToastProvider, {
+        controller: new ToastController(),
+        children: createElement(GroupSettingsScreen, {
+          snapshot: FIXTURE,
+          bridge,
+          location: { kind: 'group-settings', ref: store.id, tab: 'people' },
+          onNavigate: () => {},
+          onApplied: async () => {},
+          onError: (error: unknown) => {
+            reported.push(error);
+          },
+          onMutationError: async () => {},
+        }),
+      }),
+    }),
+  );
+  await ui.act(async () => {});
+  await ui.waitFor(() => assert.equal(reported.length, 1));
+  assert.match(
+    (reported[0] as { message: string }).message,
+    /could not be read/,
+  );
+  assert.equal(
+    rendered.queryByText('Finish a pending membership change'),
+    null,
+  );
+});

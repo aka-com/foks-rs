@@ -75,6 +75,8 @@ export function usePendingGroupOperations(
   bridge: Bridge,
   store: TeamStore | null,
   enabled: boolean,
+  /** Reports a pending-operation query failure once to the caller. */
+  onError?: (error: unknown) => void,
 ) {
   const devices = useDeviceCache();
   const repository = useMetadataRepository(bridge, devices?.repository);
@@ -82,7 +84,7 @@ export function usePendingGroupOperations(
     store && enabled
       ? pendingOperationsQuery(repository, bridge, store.server)
       : null;
-  const state = useMetadataQuery(query);
+  const state = useMetadataQuery(query, onError ? { onError } : {});
   const alias = store?.alias;
   const operations = useMemo(
     () =>

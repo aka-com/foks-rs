@@ -1,6 +1,9 @@
 /** Session-only metadata queries. Reader presence, PIN state and secrets are excluded. */
 import { createContext, useCallback, useContext, useMemo, useRef } from 'react';
-import { requireWorkflow } from './model/workflow-availability';
+import {
+  requireWorkflow,
+  workflowAvailability,
+} from './model/workflow-availability';
 import type { AgentSnapshot } from './model/types';
 import { enqueueProfileWork } from './bridge';
 import type {
@@ -41,6 +44,12 @@ export const profileEnrollmentKey = (profile: string) =>
 interface AccountKeys {
   devices: AccountDevice[];
   backups: BackupEnrollment[];
+  /**
+   * Paper-key availability became unknown because the agent or account state
+   * changed after device data loaded. An empty list does not indicate confirmed
+   * absence when this flag is set.
+   */
+  backupsUnavailable?: true;
 }
 
 /** Typed resource service; the repository owns data, lifetimes and subscriptions. */
@@ -73,8 +82,15 @@ export class DeviceCache {
                 ?.alias,
             });
           const devices = await this.bridge.listAccountDevices(store);
-          if (this.snapshot)
-            requireWorkflow(this.snapshot(), 'backup-list', { profile });
+          // Agent or account state may change after the initial availability check.
+          // Return the loaded device data and mark paper keys unavailable instead of
+          // failing the entire device query.
+          if (
+            this.snapshot &&
+            !workflowAvailability(this.snapshot(), 'backup-list', { profile })
+              .available
+          )
+            return { devices, backups: [], backupsUnavailable: true as const };
           const backups = await this.bridge.listBackupEnrollments(store);
           return { devices, backups };
         }),
@@ -86,8 +102,14 @@ export class DeviceCache {
       profileEnrollmentKey(profile),
       () =>
         enqueueProfileWork(this.bridge, profile, () => {
-          if (this.snapshot)
-            requireWorkflow(this.snapshot(), 'yubi-list', { profile });
+          // If security-key listing becomes unavailable after the initial check, return
+          // no enrollments instead of failing the entire device query.
+          if (
+            this.snapshot &&
+            !workflowAvailability(this.snapshot(), 'yubi-list', { profile })
+              .available
+          )
+            return Promise.resolve([]);
           return this.bridge.listYubiAccounts(profile);
         }),
     );
@@ -201,6 +223,8 @@ export function useDeviceMetadata({
     lists,
     loading: available && !complete && !failed,
     failed,
+    /** Whether paper-key data could not be queried for the current account state. */
+    backupsUnknown: accountState.data?.backupsUnavailable === true,
     freshness: metadataFreshness([accountState, enrollmentState]),
     retry,
   };

@@ -77,6 +77,10 @@ import {
 } from './scenes';
 import { ScreenRouter } from './screen-router';
 import {
+  ScreenErrorBoundary,
+  screenBoundaryKey,
+} from './screen-error-boundary';
+import {
   ShellOverlays,
   useDroppedUpload,
   type ResumeDraft,
@@ -493,31 +497,35 @@ export function VaultShell({
                     })
                   }
                 />
-                <ScreenRouter
-                  shown={shown}
-                  bridge={bridge}
-                  state={state}
-                  locations={locations}
-                  enteredScene={enteredScene}
-                  namedState={namedState}
-                  concealSignal={concealSignal}
-                  hardwareRefresh={hardwareRefresh}
-                  setDeviceLabel={setDeviceLabel}
-                  setRevealRequest={setRevealRequest}
-                  workflow={workflow}
-                  setWorkflow={setWorkflow}
-                  refresh={refresh}
-                  refreshSnapshot={refreshSnapshot}
-                  commandError={commandError}
-                  mutationError={mutationError}
-                  onLock={onLock}
-                  lockFromMenu={lockFromMenu}
-                  agentLifecycle={agentLifecycle}
-                  recoverAgentReadiness={recoverAgentReadiness}
-                  uploadDroppedFile={uploadDroppedFile}
-                  accessNow={accessNow}
-                  accessGenerations={accessGenerations}
-                />
+                {/* Reset screen failures when the location changes while keeping
+                    the rail and topbar outside the error boundary. */}
+                <ScreenErrorBoundary key={screenBoundaryKey(here)}>
+                  <ScreenRouter
+                    shown={shown}
+                    bridge={bridge}
+                    state={state}
+                    locations={locations}
+                    enteredScene={enteredScene}
+                    namedState={namedState}
+                    concealSignal={concealSignal}
+                    hardwareRefresh={hardwareRefresh}
+                    setDeviceLabel={setDeviceLabel}
+                    setRevealRequest={setRevealRequest}
+                    workflow={workflow}
+                    setWorkflow={setWorkflow}
+                    refresh={refresh}
+                    refreshSnapshot={refreshSnapshot}
+                    commandError={commandError}
+                    mutationError={mutationError}
+                    onLock={onLock}
+                    lockFromMenu={lockFromMenu}
+                    agentLifecycle={agentLifecycle}
+                    recoverAgentReadiness={recoverAgentReadiness}
+                    uploadDroppedFile={uploadDroppedFile}
+                    accessNow={accessNow}
+                    accessGenerations={accessGenerations}
+                  />
+                </ScreenErrorBoundary>
               </main>
             </>
           )}

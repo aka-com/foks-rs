@@ -279,6 +279,7 @@ export function DevicesScreen({
     lists,
     loading,
     failed,
+    backupsUnknown,
     freshness,
     retry: retryMetadata,
   } = useDeviceMetadata({
@@ -715,7 +716,11 @@ export function DevicesScreen({
                   again here.
                 </Band>
               ) : null}
-              {!stopped.stopped && !loading && !failed && !backups.length ? (
+              {!stopped.stopped &&
+              !loading &&
+              !failed &&
+              !backupsUnknown &&
+              !backups.length ? (
                 <Band
                   label="No paper key"
                   action={

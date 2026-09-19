@@ -3,6 +3,8 @@ import test from 'node:test';
 import { DeviceCache } from '../src/device-cache';
 import { RetiredQueryError } from '../src/query-repository';
 import type { Bridge, AccountDevice } from '../src/bridge';
+import { FIXTURE } from '../src/fixture';
+import type { AgentSnapshot } from '../src/model';
 
 function fixture() {
   let now = 0;
@@ -128,4 +130,24 @@ test('retiring a session clears metadata and late replies cannot refill it', asy
   f.bridge.listAccountDevices = async () => [];
   await cache.load('p', 'a');
   assert.ok(cache.peek('p', 'a'), 'effect replay can reuse an emptied cache');
+});
+
+test('state changes after the device read return devices and mark paper keys unavailable', async () => {
+  const f = fixture();
+  const cache = new DeviceCache(f.bridge, f.clock);
+  // The initial device query is allowed, but subsequent enrollment queries
+  // become unavailable after the device response.
+  const stopped = {
+    ...FIXTURE,
+    agent: { state: 'stopped' },
+  } as unknown as AgentSnapshot;
+  cache.snapshot = () => (f.calls.devices.length ? stopped : FIXTURE);
+  const lists = await cache.load('personal', 'acct:personal');
+  assert.equal(lists.devices[0].name, 'Mac');
+  assert.deepEqual(lists.backups, []);
+  assert.equal(lists.backupsUnavailable, true);
+  assert.deepEqual(lists.yubi, []);
+  // Enrollment queries are skipped after availability changes.
+  assert.deepEqual(f.calls.backups, []);
+  assert.deepEqual(f.calls.enrollments, []);
 });

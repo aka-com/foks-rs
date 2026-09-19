@@ -2067,6 +2067,7 @@ export function GroupSettingsScreen({
       toasts.show('Change applied. Refresh pending.');
       onError(error);
     },
+    onReadError: onError,
   });
   // Both successful changes and reconciled failures can change the durable
   // pending records. Refresh them for every membership action and manual refresh.
