@@ -11,12 +11,12 @@ import { useTabSheetState } from '../navigation-guard';
  * page; the team page returns here.
  */
 
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Menu, Popover } from '/kit/overlay-primitives';
 import type { ReactNode } from 'react';
 import { Band, Button, Chip, Icon, MenuButton, MenuItem } from '../components';
 import { InvitationPanel } from '../components/invitation-panel';
-import { teamRequestRegistry } from './team-requests';
+import { useTeamRequestCounts } from '../operation-queries';
 import {
   commandRecovery,
   enqueueProfileWork,
@@ -320,13 +320,9 @@ export function TeamsScreen({
   const [abandoning, setAbandoning] = useState<TeamStore | null>(null);
   const [discovering, setDiscovering] = useState<StoreRef | null>(null);
   const [results, setResults] = useState<Readonly<Record<string, string>>>({});
-  // The rail's own Teams badge is this same registry, summed across the
-  // whole Mac; here it is drawn per team, for whichever named teams this
-  // list already knows have requests waiting.
-  const requestCounts = useSyncExternalStore(
-    teamRequestRegistry(bridge).subscribe,
-    teamRequestRegistry(bridge).getSnapshot,
-  );
+  // The rail's own Teams badge sums these same shared rows across the whole
+  // Mac; here they are drawn per team.
+  const requestCounts = useTeamRequestCounts(bridge, snapshot, onError);
   const flaggedTeams = teams.filter(
     (store) =>
       store.team_kind === 'named' && (requestCounts.get(store.id) ?? 0) > 0,

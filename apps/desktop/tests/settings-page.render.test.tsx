@@ -13,6 +13,7 @@ import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge } from '../src/bridge';
 import type { Location, SettingsSection } from '../src/location';
+import type { MetadataRepository } from '../src/metadata-repository';
 import type { AgentSnapshot } from '../src/model';
 import { installDom } from './lib/dom-harness';
 
@@ -56,6 +57,8 @@ interface SettingsOptions {
   /** Collects the failures a test expects, instead of raising them. */
   onMutationError?: (error: unknown) => void;
   onRefresh?: (message: string) => Promise<void>;
+  /** The shell's shared metadata repository, for a test that watches its rows. */
+  repository?: MetadataRepository;
 }
 
 async function renderSettings(
@@ -69,6 +72,7 @@ async function renderSettings(
       throw error;
     },
     onRefresh = async () => {},
+    repository,
   }: SettingsOptions = {},
 ) {
   const { SettingsScreen } = (await vite.ssrLoadModule(
@@ -88,20 +92,24 @@ async function renderSettings(
   const { ChatInboxProvider } = await vite.ssrLoadModule(
     '/src/chat/inbox-provider.tsx',
   );
+  const { MetadataRepositoryContext } = (await vite.ssrLoadModule(
+    '/src/query-hooks.ts',
+  )) as typeof import('../src/query-hooks');
   const bridge = decorate(mockBridge(snapshot));
-  const rendered = ui.render(
-    createElement(ChatInboxProvider, {
+  const controller = new ToastController();
+  const page = (at: SettingsOptions['where'] = where) => {
+    const screen = createElement(ChatInboxProvider, {
       bridge,
       snapshot,
       children: createElement(OverlayProvider, {
         backgroundRef: { current: null },
         portalRoot,
         children: createElement(ToastProvider, {
-          controller: new ToastController(),
+          controller,
           children: createElement(SettingsScreen, {
             snapshot,
             bridge,
-            location: { kind: 'settings', ...where },
+            location: { kind: 'settings', ...at },
             scene,
             onNavigate,
             onRefresh,
@@ -118,13 +126,62 @@ async function renderSettings(
           }),
         }),
       }),
-    }),
-  );
+    });
+    return repository
+      ? createElement(MetadataRepositoryContext.Provider, {
+          value: repository,
+          children: screen,
+        })
+      : screen;
+  };
+  const rendered = ui.render(page());
   await ui.act(async () => {
     await Promise.resolve();
   });
-  return rendered;
+  /** Re-address the page, as the sub-navigation does. */
+  const show = async (at: SettingsOptions['where']): Promise<void> => {
+    await ui.act(async () => {
+      rendered.rerender(page(at));
+      await Promise.resolve();
+    });
+  };
+  return Object.assign(rendered, { show });
 }
+
+test('server statuses are shared rows: leaving Servers and returning does not read them again until they are invalidated', async () => {
+  const { MetadataRepository } = (await vite.ssrLoadModule(
+    '/src/metadata-repository.ts',
+  )) as typeof import('../src/metadata-repository');
+  const repository = new MetadataRepository();
+  let reads = 0;
+  const rendered = await renderSettings(await fixture(), {
+    repository,
+    decorate: (bridge) => ({
+      ...bridge,
+      describeServerStatus: async (profile, fresh) => {
+        reads++;
+        return bridge.describeServerStatus(profile, fresh);
+      },
+    }),
+  });
+  await ui.waitFor(() => assert.ok(rendered.getAllByText('Checked').length));
+  await ui.waitFor(() => assert.ok(reads > 0));
+  const loaded = reads;
+
+  // Away to Device and back: the rows are the repository's, still fresh.
+  await rendered.show({ section: 'mac' });
+  assert.ok(rendered.getByRole('button', { name: 'Reset this Mac…' }));
+  await rendered.show({});
+  await ui.waitFor(() => assert.ok(rendered.getAllByText('Checked').length));
+  assert.equal(reads, loaded);
+
+  // Invalidated, they are read again for the page that shows them.
+  await ui.act(async () => {
+    repository.invalidate(['server-status']);
+    await Promise.resolve();
+  });
+  await ui.waitFor(() => assert.ok(reads > loaded));
+});
 
 test('the sub-navigation lists every section, and Servers opens first', async () => {
   const rendered = await renderSettings(await fixture());

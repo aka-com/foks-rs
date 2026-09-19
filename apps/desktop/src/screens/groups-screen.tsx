@@ -12,7 +12,7 @@ import {
 import { useTabSheetState } from '../navigation-guard';
 import { InvitationRecovery } from '../components/invitation-recovery';
 import { InvitationPanel } from '../components/invitation-panel';
-import { teamRequestRegistry } from './team-requests';
+import { useTeamRequestCounts } from '../operation-queries';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
@@ -2044,14 +2044,11 @@ export function GroupSettingsScreen({
   // Forgetting an unfinished creation is the one destructive action this page
   // offers before a team exists, so it keeps its own confirmation.
   const [abandoning, setAbandoning] = useState(false);
-  // The Requests tab's own count: reported by the invitation panel, which is
-  // mounted for the life of the page rather than only while that tab is
-  // open, so the count shows before the reader ever switches to it.
-  // `undefined` until the panel has loaded once — no count is drawn then,
+  // The Requests tab's count is the same shared row the Teams list and the
+  // rail read; undefined until it has loaded, and no count is drawn then,
   // the same as a team with nothing pending.
-  const [requestCount, setRequestCount] = useState<number | undefined>(
-    undefined,
-  );
+  const requestCounts = useTeamRequestCounts(bridge, snapshot, onError);
+  const requestCount = store ? requestCounts.get(store.id) : undefined;
   // An interrupted member addition or role change leaves durable local state
   // that blocks every later membership mutation until it is resumed. Read the
   // account's pending operations for this group so the UI can finish it.
@@ -2146,7 +2143,6 @@ export function GroupSettingsScreen({
       setAbandoning(false);
       setRekeyArmed(false);
       setInviting(false);
-      setRequestCount(undefined);
       // A channel preparation the agent may already hold is the exception:
       // it is settled where it was made, so the sheet stays until it is.
       if (!channelUnresolved.current) setAddingChannel(false);
@@ -2576,13 +2572,6 @@ export function GroupSettingsScreen({
                     teamAlias={store.alias}
                     requestsOnly
                     onComplete={() => onApplied('Team requests updated')}
-                    onRowsChange={(count) => {
-                      setRequestCount(count);
-                      // The Teams tab's rail badge has no load of its own; it
-                      // only remembers what this page's own request list
-                      // already answered.
-                      teamRequestRegistry(bridge).report(store.id, count);
-                    }}
                   />
                 </div>
               ) : null}

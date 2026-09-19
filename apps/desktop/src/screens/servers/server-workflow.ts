@@ -1,11 +1,7 @@
 import { AccessLifetime } from '../../app/access-lifetime';
-import {
-  enqueueProfileWork,
-  sharedServerStatus,
-  shouldReportPassiveServerStatusError,
-} from '../../bridge';
+import { enqueueProfileWork, sharedServerStatus } from '../../bridge';
 import type { Bridge, CheckedServer, ServerStatusSnapshot } from '../../bridge';
-import { attemptMutation, attemptRead } from '../../commands/command-policy';
+import { attemptMutation } from '../../commands/command-policy';
 import { serverAvailability } from '../../model';
 import type { AgentSnapshot, Server } from '../../model';
 
@@ -48,30 +44,6 @@ export async function readCurrentServerStatus(
   if (status.profile !== server.id)
     throw new Error('describe_server_status returned a different profile.');
   return status;
-}
-
-export async function loadServerStatuses(
-  bridge: Bridge,
-  servers: readonly Server[],
-  isCurrent: () => boolean,
-  publish: (rows: Map<string, ServerStatusSnapshot>) => void,
-  onError: (error: unknown) => void,
-): Promise<void> {
-  const rows = new Map<string, ServerStatusSnapshot>();
-  for (const server of servers) {
-    if (!isCurrent()) return;
-    if (!canReadServer(server)) continue;
-    const result = await attemptRead({ kind: 'read-recovery' }, () =>
-      readCurrentServerStatus(bridge, server, isCurrent),
-    );
-    if (!isCurrent()) return;
-    if (result.outcome === 'read') {
-      if (result.value) rows.set(serverBinding(server), result.value);
-    } else if (shouldReportPassiveServerStatusError(result.error)) {
-      onError(result.error);
-    }
-  }
-  if (isCurrent()) publish(rows);
 }
 
 interface CheckContext {

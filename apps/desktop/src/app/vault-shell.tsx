@@ -51,10 +51,7 @@ import {
 } from '../screens/first-run-screen';
 import { unroutedNotices } from '../screens/people-screen';
 import { listsItems } from '../screens/scope';
-import {
-  teamRequestRegistry,
-  teamRequestsBadge,
-} from '../screens/team-requests';
+import { teamRequestsBadge, useTeamRequestCounts } from '../operation-queries';
 import {
   initialWriteWorkflow,
   type WriteWorkflow,
@@ -340,12 +337,28 @@ export function VaultShell({
         storeOf(shown, state.selection.store)?.server ?? '',
       ) ?? 0)
     : 0;
-  // The rail's own badges: Teams' and Devices' each read a registry the page
-  // that already loads the underlying fact reports into, rather than asking
-  // the agent again from here. See `team-requests.ts` and `device-alert.ts`.
-  const teamRequestCounts = useSyncExternalStore(
-    teamRequestRegistry(bridge).subscribe,
-    teamRequestRegistry(bridge).getSnapshot,
+  const deviceCache = useMetadataRuntime({
+    lifetime,
+    bridge,
+    shown,
+    concealSignal,
+    accessGenerations,
+    metadataInvalidation: catalog.metadataInvalidation,
+    metadataReconciliation: catalog.metadataReconciliation,
+    foregroundRefreshAllowed: runtime.foregroundRefreshAllowed,
+    refreshSnapshot,
+  });
+  // The rail's Teams badge reads the shared request-count rows, one per
+  // named team this account can manage, loaded on unlock and kept by the
+  // repository the shell provides to its pages, so the Teams list and a
+  // team's page read the same rows. Devices' dot reads a registry the page
+  // that already loads the underlying fact reports into. See
+  // `device-alert.ts`.
+  const teamRequestCounts = useTeamRequestCounts(
+    bridge,
+    shown,
+    commandError,
+    deviceCache.repository,
   );
   const deviceAlerts = useSyncExternalStore(
     deviceAlertRegistry(bridge).subscribe,
@@ -595,17 +608,6 @@ export function VaultShell({
     </div>
   );
 
-  const deviceCache = useMetadataRuntime({
-    lifetime,
-    bridge,
-    shown,
-    concealSignal,
-    accessGenerations,
-    metadataInvalidation: catalog.metadataInvalidation,
-    metadataReconciliation: catalog.metadataReconciliation,
-    foregroundRefreshAllowed: runtime.foregroundRefreshAllowed,
-    refreshSnapshot,
-  });
   const withToasts = (
     <ToastProvider controller={toasts} portalRoot={portalRoot}>
       <NavigationGuardProvider store={locations}>

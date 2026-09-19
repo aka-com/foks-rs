@@ -58,7 +58,7 @@ test('the window is the rail and the content column, with no title bar', () => {
   assert.equal(document.querySelector('.side .appname'), null);
 });
 
-test('the rail draws the six tabs, the unread badge and the Settings dot', () => {
+test('the rail draws the six tabs, the unread badge and the Settings dot', async () => {
   const tabs = [
     ...document.querySelectorAll<HTMLButtonElement>(
       '.side.rail .rail-tabs .nav',
@@ -88,10 +88,17 @@ test('the rail draws the six tabs, the unread badge and the Settings dot', () =>
     settingsDot.getAttribute('aria-label'),
     'foks.partner.dev: not verified',
   );
-  // The Teams and Devices badges depend on a page having already loaded
-  // their signal this session; neither Teams nor Devices has been visited
-  // yet, so both are silent rather than guessing.
-  assert.equal(tabs[2].querySelector('.rail-tail'), null);
+  // The Teams badge reads the shared request-count rows, loaded on unlock
+  // for every named team this account can manage: the fixture's inbox holds
+  // two requests for each of its two manageable teams. The Devices dot still
+  // depends on the Devices page having loaded its signal this session, and
+  // that page has not been visited, so it is silent rather than guessing.
+  await testingLibrary.waitFor(() =>
+    assert.equal(
+      tabs[2].querySelector('.rail-tail.count')?.textContent ?? null,
+      '4',
+    ),
+  );
   assert.equal(tabs[3].querySelector('.rail-tail'), null);
   // Files is the tab that owns All items, the shell's starting location.
   assert.equal(tabs[0].getAttribute('aria-current'), 'page');

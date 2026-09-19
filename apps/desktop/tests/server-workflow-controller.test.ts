@@ -11,7 +11,6 @@ import { decodeServers } from '../src/bridge/servers';
 import type { AgentSnapshot, Server } from '../src/model';
 import { ResetWorkflow } from '../src/screens/servers/reset-workflow';
 import {
-  loadServerStatuses,
   readCurrentServerStatus,
   ServerCheckController,
 } from '../src/screens/servers/server-workflow';
@@ -277,32 +276,6 @@ test('reset spends its token synchronously and never replays an ambiguous mutati
   assert.equal(writes, 1);
   assert.equal(errors, 1);
   assert.equal(workflow.getSnapshot().available, false);
-});
-
-test('retired passive status loops do not dispatch the next profile or publish', async () => {
-  const read = deferred<ServerStatusSnapshot>();
-  const started = deferred<void>();
-  const reads: string[] = [];
-  let current = true;
-  const bridge = {
-    describeServerStatus: (profile: string) => {
-      reads.push(profile);
-      started.resolve();
-      return read.promise;
-    },
-  } as unknown as Bridge;
-  const pending = loadServerStatuses(
-    bridge,
-    [server(), server('q')],
-    () => current,
-    unexpected,
-    unexpected,
-  );
-  await started.promise;
-  current = false;
-  read.resolve(status());
-  await pending;
-  assert.deepEqual(reads, ['p']);
 });
 
 test('status reads check currentness after waiting for profile queue admission', async () => {

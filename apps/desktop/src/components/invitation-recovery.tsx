@@ -5,7 +5,7 @@ import { invitationRecoveryQuery } from '../operation-queries';
 import type { Bridge } from '../bridge';
 import type { TeamStore } from '../model';
 import { Band, Button } from './index';
-import { INVITATION_ACTIVITY } from './invitation-panel';
+import { INVITATION_ACTIVITY } from '../invitation-activity';
 /** Both native journals are required: invitation operations and membership approvals. */
 export function InvitationRecovery({
   bridge,

@@ -224,15 +224,20 @@ test('Members exposes invitation creation, requests and approval recovery for th
   assert.deepEqual(
     calls.map((call) => (call.action as { action: string }).action),
     [
-      // Confirmed or pending mutations refresh the visible recovery count.
+      // Confirmed or pending mutations refresh the visible recovery count
+      // and the shared request count the Requests tab, the Teams list and
+      // the rail read.
       'approve',
       'list',
       'pending-approvals',
+      'inbox',
       'reject',
       'list',
       'pending-approvals',
+      'inbox',
       'create',
-      // These explicit read-only actions do not invalidate it again.
+      'inbox',
+      // These explicit read-only actions do not invalidate either again.
       'inbox',
       'pending-approvals',
       'list',
@@ -765,7 +770,12 @@ test('Members invite action opens the group invitation workflow', async () => {
     ui.within(dialog).getByRole('button', { name: 'Create invitation' }),
   );
   await ui.act(async () => {});
-  assert.deepEqual(calls, [{ action: 'create', team_alias: 'engineering' }]);
+  // The invitation is created, and the shared request count is read again
+  // for what it may have changed.
+  assert.deepEqual(calls, [
+    { action: 'create', team_alias: 'engineering' },
+    { action: 'inbox', team_alias: 'engineering' },
+  ]);
 });
 
 test('an invitation prepared after unmount is recovered from the group banner', async () => {

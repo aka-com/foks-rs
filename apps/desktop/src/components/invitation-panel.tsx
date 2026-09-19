@@ -20,7 +20,8 @@ import {
   SectionLabel,
 } from './index';
 import type { PanelPresentation } from './index';
-export const INVITATION_ACTIVITY = 'foks:invitation-activity';
+import { INVITATION_ACTIVITY } from '../invitation-activity';
+export { INVITATION_ACTIVITY };
 
 export function InvitationPanel({
   bridge,
@@ -32,7 +33,6 @@ export function InvitationPanel({
   recover = false,
   requestsOnly = false,
   onComplete,
-  onRowsChange,
 }: {
   bridge: Bridge;
   profile: string;
@@ -54,12 +54,6 @@ export function InvitationPanel({
    */
   requestsOnly?: boolean;
   onComplete: () => Promise<void> | void;
-  /**
-   * The team side is mounted whether or not its tab is open, so a Requests
-   * tab elsewhere on the page can show a live count. Called with the current
-   * membership request count whenever it changes.
-   */
-  onRowsChange?: (count: number) => void;
 }) {
   const devices = useDeviceCache();
   const queries = useMetadataRepository(bridge, devices?.repository);
@@ -164,9 +158,6 @@ export function InvitationPanel({
       live = false;
     };
   }, [bridge, profile, account, teamAlias, presentation]);
-  useEffect(() => {
-    onRowsChange?.(rows.length);
-  }, [rows, onRowsChange]);
   const nativeRole = (value: string): InvitationRole =>
     value === 'member'
       ? { member: { visibility: 0 } }
@@ -220,8 +211,11 @@ export function InvitationPanel({
         ].includes(action.action) &&
         !(action.action === 'range' && !action.raise)
       ) {
-        // Invalidate even when the recovery banner is currently unmounted.
+        // Invalidate even when the recovery banner is currently unmounted,
+        // and the shared request count with it, so the Requests tab, the
+        // Teams list and the rail follow the decision this panel just made.
         queries.invalidate(['invitation-recovery', profile, account]);
+        queries.invalidate(['team-requests', profile, account]);
         window.dispatchEvent(
           new window.CustomEvent(INVITATION_ACTIVITY, {
             detail: { profile, account },

@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
-import { AccessLifetime } from '../../app/access-lifetime';
-import type { Bridge, CheckedServer, ServerStatusSnapshot } from '../../bridge';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { shouldReportPassiveServerStatusError } from '../../bridge';
+import type { Bridge, CheckedServer } from '../../bridge';
+import { useDeviceCache } from '../../device-cache';
 import type { AgentSnapshot, Server } from '../../model';
 import type { MutationFailureHandler } from '../../mutation-recovery';
+import { useMetadataQueries, useMetadataRepository } from '../../query-hooks';
+import { serverStatusKey, serverStatusQuery } from '../../resources/servers';
 import {
-  loadServerStatuses,
+  canReadServer,
   serverBinding,
   ServerCheckController,
 } from './server-workflow';
@@ -28,10 +31,21 @@ export function useServerMetadata({
   onRefresh: (message: string) => Promise<void>;
   toast: (message: string) => void;
 }) {
-  const [statuses, setStatuses] = useState({
-    bridge,
-    rows: new Map<string, ServerStatusSnapshot>(),
-  });
+  // Each server's passive status is a repository row, shared with any other
+  // reader and kept across visits for the repository's freshness window;
+  // the active check's report is this page's own, since it is a mutation
+  // result.
+  const devices = useDeviceCache();
+  const repository = useMetadataRepository(bridge, devices?.repository);
+  const readable = useMemo(
+    () => snapshot.servers.filter(canReadServer),
+    [snapshot.servers],
+  );
+  const statusQueries = useMemo(
+    () =>
+      readable.map((server) => serverStatusQuery(repository, bridge, server)),
+    [readable, repository, bridge],
+  );
   const [checked, setChecked] = useState({
     bridge,
     rows: new Map<string, CheckedServer>(),
@@ -43,6 +57,7 @@ export function useServerMetadata({
     bridge,
     snapshot,
     profile,
+    repository,
     onError,
     onMutationError,
     onRefresh,
@@ -52,11 +67,19 @@ export function useServerMetadata({
     bridge,
     snapshot,
     profile,
+    repository,
     onError,
     onMutationError,
     onRefresh,
     toast,
   };
+  const statusStates = useMetadataQueries(statusQueries, {
+    // A passive read's expected failures are not the page's to report.
+    onError: (error) => {
+      if (shouldReportPassiveServerStatusError(error))
+        latest.current.onError(error);
+    },
+  });
   const scope = JSON.stringify([profile, snapshot.servers.map(serverBinding)]);
   const owner = useRef<{
     bridge: Bridge;
@@ -82,14 +105,10 @@ export function useServerMetadata({
               report,
             ),
           })),
-        status: (binding, status) =>
-          setStatuses((current) => ({
-            bridge,
-            rows: new Map(current.bridge === bridge ? current.rows : []).set(
-              binding,
-              status,
-            ),
-          })),
+        // The check read the status back; the shared row is asked again so
+        // every reader of it sees the checked server, this page included.
+        status: (binding) =>
+          latest.current.repository.invalidate([...serverStatusKey(binding)]),
         toast: (message) => latest.current.toast(message),
         refresh: (message) => latest.current.onRefresh(message),
         error: (error) => latest.current.onMutationError(error),
@@ -102,24 +121,6 @@ export function useServerMetadata({
     controller.activate();
     return () => controller.retire();
   }, [controller]);
-
-  useEffect(() => {
-    const lifetime = new AccessLifetime();
-    const ticket = lifetime.capture();
-    const servers = snapshot.servers;
-    const isCurrent = () =>
-      ticket.isCurrent() &&
-      bridge === latest.current.bridge &&
-      servers === latest.current.snapshot.servers;
-    void loadServerStatuses(
-      bridge,
-      servers,
-      isCurrent,
-      (rows) => setStatuses({ bridge, rows }),
-      (error) => latest.current.onError(error),
-    );
-    return () => lifetime.dispose();
-  }, [bridge, snapshot.servers]);
 
   const seededCheck = useRef(false);
   const selected = snapshot.servers.find((server) => server.id === profile);
@@ -136,16 +137,18 @@ export function useServerMetadata({
     });
   }, [bridge, controller, enteredScene, selected]);
 
+  const statuses = useMemo(
+    () =>
+      new Map(
+        readable.flatMap((server, index) => {
+          const status = statusStates[index]?.data;
+          return status ? [[server.id, status] as const] : [];
+        }),
+      ),
+    [readable, statusStates],
+  );
   return {
-    statuses: new Map(
-      snapshot.servers.flatMap((server) => {
-        const status =
-          statuses.bridge === bridge
-            ? statuses.rows.get(serverBinding(server))
-            : undefined;
-        return status ? [[server.id, status] as const] : [];
-      }),
-    ),
+    statuses,
     checked: new Map(
       snapshot.servers.flatMap((server) => {
         const report =

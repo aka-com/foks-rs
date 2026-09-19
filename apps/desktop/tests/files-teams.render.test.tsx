@@ -18,7 +18,7 @@ import { installDom } from './lib/dom-harness';
 import type { Bridge } from '../src/bridge';
 import { CatalogCoordinator } from '../src/catalog-coordinator';
 import type { Location } from '../src/location';
-import type { AgentSnapshot } from '../src/model';
+import type { AgentSnapshot, TeamStore } from '../src/model';
 
 installDom({
   url: 'http://localhost/',
@@ -181,7 +181,9 @@ test('a Teams row in an abnormal state carries the same chip, and opens team set
 
   const eng = row('Engineering');
   assert.equal(eng.className, 'row');
-  assert.equal(stateChip(eng), null);
+  // A normal row's only state is what its shared request count says, once
+  // that has been read; the fixture's inbox holds two requests for it.
+  await ui.waitFor(() => assert.equal(stateChip(eng), '2 requests'));
   assert.equal(kindChip(eng), 'Chat');
   await ui.act(async () => {
     ui.fireEvent.click(eng);
@@ -193,29 +195,70 @@ test('a Teams row in an abnormal state carries the same chip, and opens team set
   });
 });
 
-test('a Teams row says how many requests are waiting on it', async () => {
+test('a Teams row says how many requests are waiting on it without its page having been opened', async () => {
   const snapshot = await fixture();
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { teamRequestRegistry } = (await vite.ssrLoadModule(
-    '/src/screens/team-requests.ts',
-  )) as typeof import('../src/screens/team-requests');
-  const bridge = mockBridge(snapshot);
-  await teams(() => {}, { snapshot, bridge });
-  assert.equal(stateChip(row('Engineering')), null);
-  // The registry is what the team page's own request list reports into; the
-  // band above the list and the row's chip both read it.
-  await ui.act(async () => {
-    teamRequestRegistry(bridge).report('team:eng', 2);
+  const { manageReason } = (await vite.ssrLoadModule(
+    '/src/screens/group-model.ts',
+  )) as typeof import('../src/screens/group-model');
+  const { INVITATION_ACTIVITY } = (await vite.ssrLoadModule(
+    '/src/components/invitation-panel.tsx',
+  )) as typeof import('../src/components/invitation-panel');
+  const asked: string[] = [];
+  await teams(() => {}, {
+    snapshot,
+    patchBridge: (base) => ({
+      ...base,
+      invitation: async (profile, account, action, secret) => {
+        if (action.action === 'inbox') asked.push(action.team_alias);
+        return base.invitation(profile, account, action, secret);
+      },
+    }),
   });
-  assert.equal(stateChip(row('Engineering')), '2 requests');
+  // The count is a shared row read for every named team this account can
+  // manage, so it is known here, not only after that team's own page loaded.
+  await ui.waitFor(() =>
+    assert.equal(stateChip(row('Engineering')), '2 requests'),
+  );
   assert.equal(kindChip(row('Engineering')), 'Chat');
-  assert.equal(stateChip(row('Household')), null);
+  // A team the account cannot manage is not asked: there is nothing it
+  // could decide.
+  const manageable = snapshot.stores.filter(
+    (store): store is TeamStore =>
+      store.kind === 'team' &&
+      store.team_kind === 'named' &&
+      manageReason(snapshot, store, 'roster') === undefined,
+  );
+  assert.ok(
+    manageable.length < snapshot.stores.filter((s) => s.kind === 'team').length,
+  );
+  assert.deepEqual(
+    [...asked].sort(),
+    manageable.map((store) => store.alias).sort(),
+  );
+
+  // Invitation activity for another account leaves these rows alone;
+  // activity for this account asks again.
+  const before = asked.length;
   await ui.act(async () => {
-    teamRequestRegistry(bridge).report('team:eng', 0);
+    window.dispatchEvent(
+      new window.CustomEvent(INVITATION_ACTIVITY, {
+        detail: { profile: 'acme', account: 'someone-else' },
+      }),
+    );
+    await Promise.resolve();
   });
-  assert.equal(stateChip(row('Engineering')), null);
+  assert.equal(asked.length, before);
+  const eng = manageable.find((store) => store.id === 'team:eng');
+  assert.ok(eng?.kind === 'team');
+  await ui.act(async () => {
+    window.dispatchEvent(
+      new window.CustomEvent(INVITATION_ACTIVITY, {
+        detail: { profile: eng.server, account: eng.account },
+      }),
+    );
+    await Promise.resolve();
+  });
+  await ui.waitFor(() => assert.ok(asked.length > before));
 });
 
 test('a Teams row displays the server, member count, and user role', async () => {
