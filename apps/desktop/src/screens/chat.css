@@ -141,12 +141,25 @@
   border-top: 1px solid var(--line-soft);
   padding-top: 10px;
 }
+.chat-status {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
 .chat-status:empty {
   display: none;
 }
 .chat-status .band {
-  margin: 4px 0 8px;
-  font-size: 12px;
+  margin: 0;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.chat-status .band .t {
+  overflow-wrap: anywhere;
+}
+.chat-status .band .a {
+  max-width: 100%;
+  flex-wrap: wrap;
 }
 .chat-status .band small {
   display: block;
@@ -480,7 +493,8 @@
   margin-left: auto;
 }
 
-.chat-conversation > .band {
+.chat-conversation > .band,
+.chat-conversation > .chat-status {
   flex: none;
   margin: 12px 20px 0;
 }
@@ -855,7 +869,8 @@
     padding-left: 12px;
     padding-right: 12px;
   }
-  .chat-conversation > .band {
+  .chat-conversation > .band,
+  .chat-conversation > .chat-status {
     margin: 10px 12px 0;
   }
 }

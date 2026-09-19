@@ -3,6 +3,7 @@ import test from 'node:test';
 import { createElement, StrictMode, useState } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
+import { readSource } from './lib/source';
 import type { Location } from '../src/location';
 import type { Bridge } from '../src/bridge';
 installDom({
@@ -711,6 +712,144 @@ test('scrolling away from the newest message displays a Jump to latest button', 
       ui.screen.queryByRole('button', { name: 'Jump to latest' }),
       null,
     ),
+  );
+});
+
+for (const distinct of [false, true]) {
+  test(`chat failures share an inset below the header and deduplicate causes, distinct=${distinct}`, async () => {
+    let failing = false;
+    const failures = new Set<string>();
+    const cause = 'This group is no longer in the vault.';
+    await setup((base) => ({
+      ...base,
+      chat: async (store, action, view) => {
+        if (
+          failing &&
+          ['pending', 'sync-inbox', 'history'].includes(action.action)
+        ) {
+          failures.add(action.action);
+          throw {
+            code: 'io',
+            message:
+              distinct && action.action === 'sync-inbox'
+                ? 'Server connection failed.'
+                : cause,
+            fatal: false,
+            retryable: true,
+            ambiguous: false,
+          };
+        }
+        return base.chat(store, action, view);
+      },
+    }));
+    const refresh = ui.screen.getByRole<HTMLButtonElement>('button', {
+      name: 'Refresh messages',
+    });
+    await ui.waitFor(() => assert.equal(refresh.disabled, false));
+    failing = true;
+    ui.fireEvent.click(refresh);
+    await ui.waitFor(() => assert.equal(failures.size, 3));
+    const conversation = ui.screen.getByRole('region', {
+      name: 'Conversation',
+    });
+    await ui.waitFor(() =>
+      assert.equal(ui.within(conversation).getAllByText(cause).length, 1),
+    );
+    const header = conversation.querySelector('.chat-thread-header');
+    const alerts = conversation.querySelector('.chat-status');
+    assert.ok(header && alerts);
+    assert.ok(header.nextElementSibling === alerts);
+    assert.equal(alerts.querySelectorAll('.band').length, distinct ? 2 : 1);
+    assert.equal(alerts.querySelectorAll('.band.stop').length, 1);
+    assert.equal(
+      ui.within(alerts as HTMLElement).getAllByRole('button', { name: 'Retry' })
+        .length,
+      distinct ? 2 : 1,
+    );
+    if (distinct) {
+      const warning = ui
+        .within(alerts as HTMLElement)
+        .getByText('Server connection failed.')
+        .closest('.band');
+      assert.ok(warning);
+      assert.equal(
+        warning.parentElement,
+        alerts.querySelector('.band.stop')?.parentElement,
+      );
+    } else {
+      assert.equal(
+        ui.within(conversation).queryByText('Live updates paused'),
+        null,
+      );
+      failing = false;
+      ui.fireEvent.click(
+        ui.within(alerts as HTMLElement).getByRole('button', { name: 'Retry' }),
+      );
+      await ui.waitFor(() =>
+        assert.ok(!conversation.querySelector('.chat-status')),
+      );
+    }
+  });
+}
+
+test('deduplicated alerts retain severity and distinct recovery actions without retrying twice', async () => {
+  const { ChatAlerts } = await vite.ssrLoadModule('/src/chat/chat-alerts.tsx');
+  const calls: string[] = [];
+  const retry = { label: 'Retry', run: () => calls.push('inbox') };
+  ui.render(
+    createElement(ChatAlerts, {
+      alerts: [
+        {
+          message: '  Missing group.  ',
+          severity: 'warn',
+          label: 'Live updates paused',
+          actions: [retry, retry],
+        },
+        {
+          message: 'Missing group.',
+          severity: 'crit',
+          actions: [
+            { label: 'Retry', run: () => calls.push('history') },
+            {
+              label: 'Retry',
+              disabled: true,
+              run: () => calls.push('disabled'),
+            },
+            { label: 'Retry local recovery', run: () => calls.push('local') },
+          ],
+        },
+        {
+          message: 'Missing group.',
+          severity: 'info',
+          label: 'Local message cleanup is pending.',
+        },
+        { message: ' ', severity: 'warn' },
+      ],
+    }),
+  );
+  assert.equal(ui.screen.getAllByRole('alert').length, 1);
+  assert.equal(ui.screen.queryByText('Live updates paused'), null);
+  assert.equal(
+    ui.screen.queryByText('Local message cleanup is pending.'),
+    null,
+  );
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Retry' }));
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', { name: 'Retry local recovery' }),
+  );
+  assert.deepEqual(calls, ['inbox', 'history', 'local']);
+});
+
+test('chat alert margins are shared across severity and viewport sizes', async () => {
+  const css = await readSource('../src/screens/chat.css', import.meta.url);
+  assert.match(
+    css,
+    /\.chat-conversation > \.chat-status\s*\{[^}]*margin: 12px 20px 0;/,
+  );
+  assert.match(css, /\.chat-status \.band\s*\{[^}]*margin: 0;/);
+  assert.match(
+    css,
+    /@media \(max-width: 860px\)[\s\S]*\.chat-conversation > \.chat-status\s*\{[^}]*margin: 10px 12px 0;/,
   );
 });
 

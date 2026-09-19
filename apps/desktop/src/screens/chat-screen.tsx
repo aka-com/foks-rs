@@ -1,4 +1,5 @@
 import { ChatThread } from '../chat/chat-thread';
+import { ChatAlerts, type ChatAlert } from '../chat/chat-alerts';
 import { PendingRow } from '../chat/pending-row';
 import {
   channelTitle,
@@ -8,7 +9,7 @@ import {
 } from '../chat/presentation';
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode, Ref } from 'react';
-import { Band, Button, Icon, Notice, SectionLabel } from '../components';
+import { Button, Icon, Notice, SectionLabel } from '../components';
 import type { Bridge } from '../bridge';
 import type { ChatAction, ChatReply } from '../chat-contract';
 import {
@@ -209,6 +210,32 @@ export function ChatScreen({
     ['check-in-expired', 'check-in-unavailable'].includes(
       storeDescriptionState(agentSnapshot, store, describeOptions),
     );
+  const retryInbox = {
+    label: 'Retry',
+    disabled: loading,
+    run: () => void guardedRefresh(),
+  };
+  // A failure over a channel list that was read, or over an open channel,
+  // joins the thread's own alerts below its header. Without a channel,
+  // the failure owns the empty pane instead of being repeated above it.
+  const alerts: ChatAlert[] = [
+    { message: error, severity: 'crit', actions: [retryInbox] },
+    {
+      message: syncError,
+      severity: 'warn',
+      label: 'Live updates paused',
+      actions: [retryInbox],
+    },
+    // A synchronization that succeeded but could not finish everything
+    // keeps updating; what it could not finish is a note, not a pause.
+    { message: note, severity: 'info' },
+    {
+      message: degraded
+        ? 'Some inbox changes could not be listed. Visible channels still refresh directly.'
+        : '',
+      severity: 'info',
+    },
+  ];
   const pane =
     !available && store ? (
       // A lapsed check-in locks a whole server: the column stays, and this pane
@@ -269,42 +296,7 @@ export function ChatScreen({
       </div>
     ) : (
       <>
-        {/* A failure over a channel list that was read, or over an open
-            channel, is a band above it; one with no list behind it is the
-            pane itself, below. */}
-        {error && (channelsKnown || channel) && (
-          <Band
-            severity="crit"
-            action={
-              <Button
-                size="sm"
-                disabled={loading}
-                onClick={() => void guardedRefresh()}
-              >
-                Retry
-              </Button>
-            }
-          >
-            <span role="alert">{error}</span>
-          </Band>
-        )}
-        <div role="status" className="chat-status">
-          {syncError && (
-            <Band>
-              Live updates paused
-              <small>{syncError}</small>
-            </Band>
-          )}
-          {/* A synchronization that succeeded but could not finish everything
-              keeps updating; what it could not finish is a note, not a pause. */}
-          {note && <Band severity="info">{note}</Band>}
-          {degraded && (
-            <Band severity="info">
-              Some inbox changes could not be listed. Visible channels still
-              refresh directly.
-            </Band>
-          )}
-        </div>
+        {!channel && !error && <ChatAlerts alerts={alerts} />}
         {channel && blockedChannels.has(channel.id) ? (
           <div className="empty">
             <h2>Channel stopped</h2>
@@ -319,6 +311,7 @@ export function ChatScreen({
           </div>
         ) : channel ? (
           <ChatThread
+            alerts={alerts}
             bridge={bridge}
             storeId={storeId}
             key={`${channel.id}:${channel.readable}`}

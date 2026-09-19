@@ -2,7 +2,8 @@ import { MessageText } from './message-text';
 import type { Bridge } from '../bridge';
 import { Fragment, useId } from 'react';
 import type { ReactNode, Ref } from 'react';
-import { Band, Button, Chip, Icon } from '../components';
+import { Button, Chip, Icon } from '../components';
+import { ChatAlerts, type ChatAlert } from './chat-alerts';
 import type { ChatAction, ChatChannel, ChatReply } from '../chat-contract';
 import { plural, shortId } from '../model';
 import { failure } from './actions';
@@ -20,6 +21,7 @@ import {
   relativeMessageTime,
 } from './presentation';
 export function ChatThread({
+  alerts = [],
   channel,
   teamName,
   memberCount,
@@ -45,6 +47,7 @@ export function ChatThread({
   blockHistory,
   pending,
 }: {
+  alerts?: readonly ChatAlert[];
   bridge: Bridge;
   storeId: string;
   history: import('./conversation-model').HistoryWindow | null;
@@ -236,6 +239,36 @@ export function ChatThread({
           />
         )}
       </div>
+      <ChatAlerts
+        alerts={[
+          ...alerts,
+          {
+            message: error,
+            severity: 'crit',
+            actions: [
+              { label: 'Retry', disabled: busy, run: () => void load() },
+            ],
+          },
+          {
+            message: missing
+              ? 'Some earlier messages could not be checked. This history has incomplete verification.'
+              : '',
+            severity: 'warn',
+          },
+          { message: channel.writable ? sendError : '', severity: 'crit' },
+          {
+            message: channel.writable ? loadError : '',
+            severity: 'crit',
+            label: 'Saved messages could not be loaded.',
+            actions: [{ label: 'Retry local recovery', run: retryLoad }],
+          },
+          {
+            message: channel.writable ? cleanupError : '',
+            severity: 'info',
+            label: 'Local message cleanup is pending.',
+          },
+        ]}
+      />
       {!channel.readable ? (
         <div className="empty">
           <span className="big">
@@ -247,17 +280,6 @@ export function ChatThread({
         </div>
       ) : (
         <>
-          {error && (
-            <Band severity="crit">
-              <span role="alert">{error}</span>
-            </Band>
-          )}
-          {missing && (
-            <Band>
-              Some earlier messages could not be checked. This history has
-              incomplete verification.
-            </Band>
-          )}
           <div className="chat-messages-wrap">
             <div
               className="chat-messages"
@@ -401,28 +423,6 @@ export function ChatThread({
                 void send();
               }}
             >
-              {sendError && (
-                <Band severity="crit">
-                  <span role="alert">{sendError}</span>
-                </Band>
-              )}
-              {loadError && (
-                <Band severity="crit">
-                  <span role="alert">
-                    Saved messages could not be loaded. {loadError}
-                  </span>
-                  <Button size="sm" onClick={retryLoad}>
-                    Retry local recovery
-                  </Button>
-                </Band>
-              )}
-              {cleanupError && (
-                <Band severity="info">
-                  <span role="status">
-                    Local message cleanup is pending. {cleanupError}
-                  </span>
-                </Band>
-              )}
               <textarea
                 aria-label="Message"
                 aria-describedby={waitingForSavedWork ? hintId : undefined}
