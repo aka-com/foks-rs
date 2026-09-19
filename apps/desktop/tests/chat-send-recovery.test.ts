@@ -106,6 +106,7 @@ async function setup(hooks: Hooks = {}) {
     data: reply.result,
     scope: reply.scope,
     error: '',
+    note: '',
     stale: false,
     revision: 1,
     channelRevisions: new Map(),

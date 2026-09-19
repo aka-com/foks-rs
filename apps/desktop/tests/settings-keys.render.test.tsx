@@ -56,6 +56,10 @@ interface DevicesOptions {
   onNavigate?: (location: Location) => void;
   /** Wraps the mock bridge, for a test that watches one command. */
   decorate?: (bridge: Bridge) => Bridge;
+  /** Where a failed read lands; by default a failure fails the test. */
+  onError?: (error: unknown) => void;
+  /** The shell's catalog refresh, for a test that watches whether it runs. */
+  refresh?: () => Promise<AgentSnapshot>;
 }
 
 async function renderDevices(
@@ -67,6 +71,10 @@ async function renderDevices(
     device,
     onNavigate = () => {},
     decorate = (bridge) => bridge,
+    onError = (error: unknown) => {
+      throw error;
+    },
+    refresh = async () => snapshot,
   }: DevicesOptions = {},
 ) {
   const { DevicesScreen } = (await vite.ssrLoadModule(
@@ -103,10 +111,8 @@ async function renderDevices(
           scene,
           onNavigate,
           onRefresh: async () => {},
-          onRefreshSnapshot: async () => snapshot,
-          onError: (error: unknown) => {
-            throw error;
-          },
+          onRefreshSnapshot: refresh,
+          onError,
           onMutationError: async (error: unknown) => {
             throw error;
           },
@@ -908,6 +914,84 @@ test('an address naming a key this account no longer holds says so', async () =>
     ui.fireEvent.click(page.getByRole('button', { name: 'Back to Devices' }));
   });
   assert.deepEqual(chosen.at(-1), { kind: 'devices', store: 'acct:personal' });
+});
+
+test('failed key-list reads do not report the key as absent', async () => {
+  const failures: unknown[] = [];
+  const page = await renderDevices(await fixture(), {
+    store: 'acct:personal',
+    device: `04${'d'.repeat(64)}`,
+    onError: (error) => failures.push(error),
+    decorate: (bridge) => ({
+      ...bridge,
+      listAccountDevices: async () => {
+        throw {
+          code: 'io',
+          message: 'The account’s keys could not be read.',
+          retryable: true,
+          fatal: false,
+          ambiguous: false,
+        };
+      },
+    }),
+  });
+
+  await ui.waitFor(() =>
+    assert.ok(page.getByText('Devices and keys could not be read')),
+  );
+  // The lists never answered, so the page does not assert the key is gone,
+  // and the caption under it says the same thing about the same lists.
+  assert.equal(page.queryByText('This key is not on this account'), null);
+  assert.match(
+    page.getByLabelText('device metadata freshness').textContent ?? '',
+    /could not be loaded/,
+  );
+  assert.equal(failures.length, 1);
+});
+
+test('device metadata retry reloads device lists without refreshing the catalog', async () => {
+  let reads = 0;
+  let refreshes = 0;
+  const snapshot = await fixture();
+  const page = await renderDevices(snapshot, {
+    store: 'acct:personal',
+    onError: () => {},
+    refresh: async () => {
+      refreshes++;
+      return snapshot;
+    },
+    decorate: (bridge) => ({
+      ...bridge,
+      listAccountDevices: async (store) => {
+        reads++;
+        if (reads === 1)
+          throw {
+            code: 'io',
+            message: 'The account’s keys could not be read.',
+            retryable: true,
+            fatal: false,
+            ambiguous: false,
+          };
+        return bridge.listAccountDevices(store);
+      },
+    }),
+  });
+  await ui.waitFor(() =>
+    assert.match(
+      page.getByLabelText('device metadata freshness').textContent ?? '',
+      /could not be loaded/,
+    ),
+  );
+  assert.equal(page.queryByText('Current'), null);
+  await ui.act(async () => {
+    ui.fireEvent.click(page.getByRole('button', { name: 'Retry' }));
+  });
+  // The second read answers, so this Mac's own row is listed and the caption
+  // has nothing more to say. No catalog refresh was asked for on its behalf.
+  await ui.waitFor(() => assert.ok(page.getByText('Current')));
+  assert.equal(reads, 2);
+  assert.equal(refreshes, 0);
+  assert.equal(page.queryByLabelText('device metadata freshness'), null);
 });
 
 test('pairing is two numbered steps, and a resumed offer says the agent holds it', async () => {

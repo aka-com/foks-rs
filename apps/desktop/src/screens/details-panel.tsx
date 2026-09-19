@@ -333,6 +333,9 @@ export function DetailsPanel({
     [item],
   );
 
+  // Keep Show errors in the panel with its retry control. Route Copy, Download,
+  // and Edit errors to the shell because those actions have no persistent inline
+  // error state.
   const show = useCallback(async () => {
     if (!item || !request) return;
     const requestKey = key;
@@ -601,10 +604,7 @@ export function DetailsPanel({
       await bridge.copyItemValue(request);
       toasts.show(`${kind === 'Password' ? 'Password' : 'Value'} copied`);
     } catch (error) {
-      if (normalizeCommandError(error).code === 'agent-lost')
-        onCommandError(error, item);
-      else
-        toasts.show(normalizeCommandError(error).message, { tone: 'warning' });
+      onCommandError(error, item);
     }
   };
 
@@ -952,14 +952,7 @@ export function DetailsPanel({
                         ? `Downloaded ${nameOf(item.path)}`
                         : 'Download cancelled',
                     ),
-                  (error) => {
-                    if (normalizeCommandError(error).code === 'agent-lost')
-                      onCommandError(error, item);
-                    else
-                      toasts.show(normalizeCommandError(error).message, {
-                        tone: 'warning',
-                      });
-                  },
+                  (error) => onCommandError(error, item),
                 );
               }}
             >

@@ -15,9 +15,10 @@ import { Fragment, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
 import { virtualListWindow } from '/kit/virtual-list';
-import { Band, Button, Icon, KindIcon } from '../components';
+import { Band, Button, Icon, KindIcon, Notice } from '../components';
 import type { FilterKind } from '../components';
 import type { FoksIconName } from '../icons';
+import { PageHeader } from '../shell/page-header';
 import { NewItemButton, Toolbar } from '../shell/toolbar';
 import {
   KINDS,
@@ -526,6 +527,21 @@ export function ItemsScreen({
     observer?.observe(body);
     return () => observer?.disconnect();
   }, [items.length, state.kind, state.query, state.folder, location.kind]);
+
+  // Show the unavailable state when a stale link or catalog refresh refers to
+  // a store that is no longer present.
+  if (location.kind === 'store' && !store) {
+    return (
+      <>
+        <PageHeader title="Vault unavailable" subtitle="" />
+        <div className="body">
+          <Notice title="This vault is no longer available">
+            Refresh or choose another vault from Files.
+          </Notice>
+        </div>
+      </>
+    );
+  }
 
   if (store && storeDescriptionState(snapshot, store) !== 'normal') {
     return (

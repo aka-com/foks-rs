@@ -542,11 +542,11 @@ export async function projectCatalog(
                 ),
               );
           } catch (error) {
+            // Record a complete group-detail failure once under the roster.
+            // Federation consumers also check roster failures, so a second entry
+            // would duplicate the status banner and notification.
             failures.push(
               recoverableGroupDetailFailure(error, store.id, 'roster'),
-            );
-            failures.push(
-              recoverableGroupDetailFailure(error, store.id, 'federation'),
             );
           }
           return { parties, federation, failures };

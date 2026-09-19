@@ -736,6 +736,61 @@ test('channel listing failures offer a retry beside the message', async () => {
   assert.equal(ui.screen.queryByText('Offline'), null);
 });
 
+test('partial synchronization results show an informational note while updates continue', async () => {
+  await setup((base) => ({
+    ...base,
+    chat: async (store, action, view) => {
+      const reply = await base.chat(store, action, view);
+      if (action.action === 'sync-inbox' && reply.result.kind === 'inbox')
+        reply.result.read_retry_pending = true;
+      return reply;
+    },
+  }));
+  // The column's row carries the note as a caption; the pane draws it as a
+  // note over the conversation, not as a pause of the live updates that go on.
+  await ui.screen.findAllByText('Read status will retry.');
+  const status = document.querySelector('.chat-status');
+  assert.ok(status);
+  assert.match(status.textContent ?? '', /Read status will retry\./);
+  assert.equal(ui.screen.queryByText('Live updates paused'), null);
+});
+
+test('a channel-list failure renders a single retry pane', async () => {
+  await setup(
+    (base) => ({
+      ...base,
+      chat: async (store, action, view) => {
+        if (action.action === 'sync-inbox')
+          throw {
+            code: 'chat-access-denied',
+            message: 'Your role no longer allows chat in this team.',
+            fatal: false,
+            retryable: false,
+            ambiguous: false,
+          };
+        return base.chat(store, action, view);
+      },
+    }),
+    false,
+  );
+  await ui.screen.findByRole('heading', { name: 'Channels unavailable' });
+  // The failure is stated once, with one way to try again: neither the
+  // "Channel unavailable" pane for the addressed channel nor an invitation to
+  // create the first channel is drawn beside it.
+  assert.equal(ui.screen.getAllByRole('alert').length, 1);
+  assert.match(
+    ui.screen.getByRole('alert').textContent ?? '',
+    /Your role no longer allows chat/,
+  );
+  assert.equal(
+    ui.screen.queryByRole('heading', { name: 'Channel unavailable' }),
+    null,
+  );
+  assert.equal(ui.screen.queryByText(/No conversations yet/), null);
+  assert.equal(ui.screen.getAllByRole('button', { name: 'Retry' }).length, 1);
+  assert.equal(ui.screen.queryByRole('button', { name: 'Refresh' }), null);
+});
+
 test('prepending older messages preserves scroll position', async () => {
   await setup((base) => ({
     ...base,

@@ -4,7 +4,10 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createServer, type ViteDevServer } from 'vite';
 import { metadataFreshness } from '../src/device-cache';
-import { DesktopReconciliation } from '../src/desktop-reconciliation';
+import {
+  DesktopReconciliation,
+  profileRefreshKey,
+} from '../src/desktop-reconciliation';
 import { FIXTURE } from '../src/fixture';
 import {
   failWholeCatalogRefresh,
@@ -201,6 +204,95 @@ test('a root refresh remains observable before any server inventory is available
   assert.equal(summary.servers.length, 1);
   assert.doesNotMatch(summary.servers[0].message, /Previously loaded data/);
   reconciliation.dispose();
+});
+
+test('refresh status uses the scheduler paused state', () => {
+  const profile = FIXTURE.servers[0].id;
+  const fatal = {
+    code: 'response-binding',
+    message: 'The agent’s reply did not match the request',
+    retryable: false,
+    fatal: true,
+    ambiguous: false,
+  };
+  // The catalog job failed fatally: the catalog state carries the error, as
+  // it does on every failure, and the scheduler parked the job.
+  const parked = {
+    ...FIXTURE,
+    catalogFreshness: {
+      stores: {},
+      profiles: {
+        [profile]: {
+          refreshing: false,
+          lastAttemptAt: 20,
+          lastSuccessAt: 10,
+          error: fatal,
+        },
+      },
+    },
+  };
+  const scheduler = (
+    observations: {
+      key: string;
+      scope: string | null;
+      kind: 'catalog' | 'metadata';
+      snapshot: {
+        refreshing: boolean;
+        lastAttemptAt: number;
+        error: unknown;
+        paused: boolean;
+      };
+    }[],
+  ) =>
+    ({
+      supportsConnectivity: true,
+      scheduler: {
+        observations: () => observations,
+        snapshot: (key: string) =>
+          observations.find((observation) => observation.key === key)?.snapshot,
+      },
+    }) as unknown as DesktopReconciliation;
+  const catalogParked = summarizeSync(
+    parked,
+    scheduler([
+      {
+        key: profileRefreshKey(parked, profile),
+        scope: profile,
+        kind: 'catalog',
+        snapshot: {
+          refreshing: false,
+          lastAttemptAt: 20,
+          error: fatal,
+          paused: true,
+        },
+      },
+    ]),
+  );
+  const row = catalogParked.servers.find((server) => server.id === profile);
+  assert.match(row?.message ?? '', /Automatic refresh is paused/);
+  assert.doesNotMatch(row?.message ?? '', /Retrying automatically/);
+  // The metadata job's failure was as fatal, but the scheduler keeps retrying
+  // metadata, so its sentence says so.
+  const metadataRetrying = summarizeSync(
+    FIXTURE,
+    scheduler([
+      {
+        key: 'metadata',
+        scope: null,
+        kind: 'metadata',
+        snapshot: {
+          refreshing: false,
+          lastAttemptAt: 20,
+          error: fatal,
+          paused: false,
+        },
+      },
+    ]),
+  );
+  const local = metadataRetrying.servers.find((server) => server.id === null);
+  assert.equal(local?.name, 'This Mac');
+  assert.match(local?.message ?? '', /Retrying automatically/);
+  assert.doesNotMatch(local?.message ?? '', /paused/);
 });
 
 test('observations that share one root cause on one server collapse to one row and one sentence', () => {

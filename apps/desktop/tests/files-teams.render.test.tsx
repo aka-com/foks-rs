@@ -83,7 +83,10 @@ interface TeamsOptions {
   bridge?: Bridge;
   /** Wraps the mock bridge to observe the commands a row's menu issues. */
   patchBridge?: (base: Bridge) => Bridge;
-  mutationError?: () => Promise<void>;
+  mutationError?: (
+    error: unknown,
+    options?: { report?: boolean },
+  ) => Promise<void>;
 }
 
 async function teams(
@@ -311,6 +314,82 @@ test('discovery keeps its result in the open menu and across reopening', async (
     /for vitalik/,
   );
   assert.equal(document.querySelector('.toasts')?.textContent ?? '', '');
+});
+
+/** One discovery failure, as the agent would state it. */
+function discoveryFailure(code: string, message: string, retryable: boolean) {
+  return {
+    code,
+    message,
+    retryable,
+    fatal: false,
+    ambiguous: false,
+  };
+}
+
+test('a discovery failure is rendered only in its result row', async () => {
+  const reported: ({ report?: boolean } | undefined)[] = [];
+  const rendered = await teams(undefined, {
+    patchBridge: (base) => ({
+      ...base,
+      discoverGroups: async () => {
+        throw discoveryFailure('io', 'The server could not be reached.', true);
+      },
+    }),
+    mutationError: async (_error, options) => {
+      reported.push(options);
+    },
+  });
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Find teams' }));
+  const check = rendered.getByRole('menuitem', { name: 'Check as vitalik' });
+  await ui.act(async () => {
+    ui.fireEvent.click(check);
+  });
+  await ui.waitFor(() =>
+    assert.equal(
+      check.querySelector('[role="status"]')?.textContent,
+      'Check failed. The server could not be reached. Try again.',
+    ),
+  );
+  // The row carries the agent's sentence, so the shell is told not to toast
+  // it as well.
+  assert.deepEqual(reported, [{ report: false }]);
+  assert.equal(document.querySelector('.toasts')?.textContent ?? '', '');
+});
+
+test('nonretryable and cancelled discovery failures render appropriate results', async () => {
+  let outcome = discoveryFailure(
+    'capability-denied',
+    'This account may not list teams.',
+    false,
+  );
+  const rendered = await teams(undefined, {
+    patchBridge: (base) => ({
+      ...base,
+      discoverGroups: async () => {
+        throw outcome;
+      },
+    }),
+    mutationError: async () => {},
+  });
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Find teams' }));
+  const check = rendered.getByRole('menuitem', { name: 'Check as vitalik' });
+  await ui.act(async () => {
+    ui.fireEvent.click(check);
+  });
+  await ui.waitFor(() =>
+    assert.equal(
+      check.querySelector('[role="status"]')?.textContent,
+      'Check failed. This account may not list teams.',
+    ),
+  );
+  outcome = discoveryFailure('cancelled', 'The check was cancelled.', false);
+  await ui.act(async () => {
+    ui.fireEvent.click(check);
+  });
+  await ui.waitFor(() =>
+    assert.equal(check.querySelector('[role="status"]')?.textContent, ''),
+  );
 });
 
 /**

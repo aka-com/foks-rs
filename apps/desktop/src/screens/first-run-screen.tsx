@@ -499,7 +499,12 @@ function FirstRunSession({
     setMessage,
     fail,
   });
-  const { discover, selectDiscoveredGroup, discoveredGroups } = teamDiscovery;
+  const {
+    discover,
+    selectDiscoveredGroup,
+    discoveredGroups,
+    outcome: discoveryOutcome,
+  } = teamDiscovery;
   const mutationBusy =
     otherMutationBusy || serverWorkflow.busy || teamDiscovery.busy;
   const busyOperation =
@@ -2571,8 +2576,11 @@ function FirstRunSession({
       >
         <h1>{checkpoint.selectedGroup.name}</h1>
         <p className="lead">
+          {/* Reached either from a vault that could not be opened or from a
+              team the catalog no longer binds, which the checkpoint does not
+              tell apart; the retry below finds out which. */}
           {message ||
-            'Your team was found, but its vault is not available yet.'}
+            'This team’s vault could not be opened. Retry to check your membership again, or choose another team.'}
         </p>
         <div className="actions">
           <Button
@@ -2696,8 +2704,17 @@ function FirstRunSession({
                   Check now
                 </Button>
                 <span className="status">
-                  <Chip>{message ? 'Checked: now' : 'Not checked yet'}</Chip>
-                  {message ? (
+                  {/* Only a check that completed and found nothing says the
+                      team was not found; a failed check says it failed, and
+                      the sentence below carries what went wrong. */}
+                  <Chip>
+                    {!message
+                      ? 'Not checked yet'
+                      : discoveryOutcome === 'failed'
+                        ? 'Check failed'
+                        : 'Checked: now'}
+                  </Chip>
+                  {message && discoveryOutcome === 'not-found' ? (
                     <>Team not found yet. Only Personal is available.</>
                   ) : null}
                 </span>

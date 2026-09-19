@@ -42,6 +42,7 @@ async function setup(
         data: reply.result,
         scope: reply.scope,
         error: '',
+        note: '',
         stale: false,
         revision: 1,
         channelRevisions: new Map(),
@@ -50,6 +51,7 @@ async function setup(
     ],
   ]);
   const listeners = new Set<() => void>();
+  const invalidated: string[] = [];
   const inbox = {
     getSnapshot: () => entries,
     subscribe: (listener: () => void) => {
@@ -58,7 +60,9 @@ async function setup(
         listeners.delete(listener);
       };
     },
-    invalidate: () => {},
+    invalidate: (store: string) => {
+      invalidated.push(store);
+    },
     block: () => {},
     handleError: () => false,
     blockChannel: () => {},
@@ -83,11 +87,32 @@ async function setup(
     channel,
     calls,
     entries,
+    invalidated,
     update: () => {
       for (const listener of listeners) listener();
     },
   };
 }
+
+test('an access-denied send immediately invalidates the team inbox', async () => {
+  const h = await setup(async (action, run) => {
+    if (action.action === 'submit-message')
+      throw {
+        code: 'chat-access-denied',
+        message: 'Your role no longer allows chat in this team.',
+        fatal: false,
+        retryable: false,
+        ambiguous: false,
+      };
+    return run();
+  });
+  try {
+    await h.service.submit('team:eng', h.channel, 'hello').catch(() => {});
+    assert.deepEqual(h.invalidated, ['team:eng']);
+  } finally {
+    h.service.stop();
+  }
+});
 
 test('a pending send releases its draft while delivery continues outside the conversation', async () => {
   const gate = deferred();

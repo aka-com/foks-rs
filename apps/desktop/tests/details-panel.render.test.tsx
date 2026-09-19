@@ -272,8 +272,9 @@ test('an already-open Delete sheet disables its action when access is lost and r
           onApplied: async () => {},
           onError: () => {},
           onMutationError: async () => {},
-          onRefreshConflict: async () => {},
+          onRefreshConflict: async () => null,
           onDiscardConflict: () => {},
+          onDeleteConflict: async () => {},
           onOpenExisting: async () => {},
         }),
       }),
@@ -503,6 +504,31 @@ test('a mismatched version is rejected and Show retries the read', async () => {
   const before = reads;
   ui.fireEvent.click(r.getByRole('button', { name: 'Show' }));
   await ui.waitFor(() => assert.ok(reads > before));
+});
+
+test('copy failures are forwarded to the shell error handler', async () => {
+  const p = await setup();
+  const handled: unknown[] = [];
+  p.props.bridge = {
+    ...p.props.bridge,
+    copyItemValue: async () => {
+      throw {
+        code: 'protocol',
+        message: 'The agent answered out of order.',
+        retryable: false,
+        fatal: true,
+        ambiguous: false,
+      };
+    },
+  };
+  p.props.onCommandError = (error) => {
+    handled.push(error);
+  };
+  const r = ui.render(p.draw());
+  ui.fireEvent.click(r.getAllByRole('button', { name: 'Copy' })[0]);
+  await ui.waitFor(() => assert.equal(handled.length, 1));
+  // No toast of the panel's own: an unsafe agent is not a warning to read past.
+  assert.equal(document.querySelector('.toasts')?.textContent ?? '', '');
 });
 
 test('a login edits in structured fields and serializes through the existing draft value', async () => {

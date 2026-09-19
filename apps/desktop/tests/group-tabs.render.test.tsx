@@ -59,6 +59,11 @@ async function group(
     accessNow?: () => number;
     /** One command answered differently, to reach a refusal the mock never gives. */
     patchBridge?: (bridge: Bridge) => Bridge;
+    /** The shell's mutation failure handler, for a test that watches it. */
+    onMutationError?: (
+      error: unknown,
+      options?: { report?: boolean },
+    ) => Promise<void>;
   } = {},
 ) {
   const { GroupSettingsScreen } = (await vite.ssrLoadModule(
@@ -96,7 +101,7 @@ async function group(
           onError: (error: unknown) => {
             throw error;
           },
-          onMutationError: async () => {},
+          onMutationError: options.onMutationError ?? (async () => {}),
         })
       : createElement('p', null, 'Elsewhere');
   }
@@ -628,6 +633,37 @@ test('the add sheet clears the agent’s refusal when the username changes', asy
     ui.fireEvent.change(field, { target: { value: 'nobody.two' } });
   });
   assert.equal(document.querySelector('.sheet [role="alert"]'), null);
+});
+
+test('add-member refusals remain in the sheet without a duplicate toast', async () => {
+  const reported: { report?: boolean }[] = [];
+  const rendered = await group('team:eng', 'people', {
+    patchBridge: (bridge) => ({
+      ...bridge,
+      addGroupMember: async () => {
+        throw new Error('No user named nobody.one on this server.');
+      },
+    }),
+    onMutationError: async (_error, options) => {
+      reported.push(options ?? {});
+    },
+  });
+  addPeopleChoice(rendered, 'A user');
+  await ui.act(async () => {
+    ui.fireEvent.change(rendered.getByLabelText('Username'), {
+      target: { value: 'nobody.one' },
+    });
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      rendered.getByRole('button', { name: 'Add nobody.one' }),
+    );
+  });
+  assert.equal(
+    document.querySelector('.sheet [role="alert"]')?.textContent,
+    'No user named nobody.one on this server.',
+  );
+  assert.deepEqual(reported, [{ report: false }]);
 });
 
 test('add member dialog rejects usernames already present in roster', async () => {

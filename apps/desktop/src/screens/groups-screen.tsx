@@ -796,7 +796,11 @@ function MembersTab({
           </span>
         </div>
       )}
-      {federationFailure ? (
+      {/* With the roster unread its rows, the federation's among them, are
+          not drawn, so a federation failure with the same sentence would only
+          repeat the band above. One with its own sentence still says it. */}
+      {federationFailure &&
+      (!failure || federationFailure.message !== failure.message) ? (
         <Band
           label="Federation unavailable"
           action={
@@ -1347,9 +1351,12 @@ export function GroupSheet({
           workflowAvailability(snapshot, 'federate', federationTarget),
         ))
       : undefined;
+  // An admission needs the admitted teams, and a read that failed as a whole
+  // is recorded under the roster, so the admit sheet consults both.
   const requiredFailure =
     sheet === 'admit'
-      ? groupDetailFailure(snapshot, store.id, 'federation')
+      ? (groupDetailFailure(snapshot, store.id, 'federation') ??
+        groupDetailFailure(snapshot, store.id, 'roster'))
       : ['add', 'demote', 'remove'].includes(sheet)
         ? groupDetailFailure(snapshot, store.id, 'roster')
         : undefined;
@@ -1493,8 +1500,12 @@ export function GroupSheet({
     } catch (error) {
       // The sheet stays open on a refusal and states it where the field is,
       // in the agent's own words, while the shell reconciles as it always has.
-      if (sheet === 'add') setRefused(normalizeCommandError(error).message);
-      await onMutationError(error);
+      // The sheet is then the refusal's one surface: the shell does not toast
+      // the same sentence beside it.
+      if (sheet === 'add') {
+        setRefused(normalizeCommandError(error).message);
+        await onMutationError(error, { report: false });
+      } else await onMutationError(error);
     } finally {
       setBusy(false);
     }

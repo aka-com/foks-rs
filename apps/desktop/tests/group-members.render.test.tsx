@@ -427,6 +427,38 @@ test('a single-action alert puts its action at the right end of the alert', asyn
   assert.equal(inert(addPeopleItem('A team from another server')), true);
 });
 
+test('duplicate roster and federation failures render one banner', async () => {
+  const snapshot = await fixture();
+  const message = 'The agent could not be reached.';
+  const rendered = await group({
+    ...snapshot,
+    groupDetailFailures: [
+      {
+        store: 'team:eng',
+        source: 'roster',
+        code: 'io',
+        message,
+        retryable: true,
+      },
+      {
+        store: 'team:eng',
+        source: 'federation',
+        code: 'io',
+        message,
+        retryable: true,
+      },
+    ],
+  });
+  // One band, one Refresh: the roster band already withholds every row,
+  // the federation's included, and says why.
+  assert.equal(document.querySelectorAll('.band').length, 1);
+  assert.equal(
+    document.querySelector('.band b')?.textContent,
+    'Roster unavailable',
+  );
+  assert.equal(rendered.getAllByRole('button', { name: 'Refresh' }).length, 1);
+});
+
 test('a federation failure replaces its rows and keeps its own Refresh', async () => {
   const snapshot = await fixture();
   const rendered = await group({

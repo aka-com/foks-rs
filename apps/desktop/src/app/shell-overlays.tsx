@@ -14,6 +14,7 @@ import type { DropUpload } from '../screens/items-screen';
 import {
   DEFAULT_READ_ROLE,
   DEFAULT_WRITE_ROLE,
+  conflictDraftWorkflow,
   droppedFileDraft,
   WriteOverlay,
   type WriteWorkflow,
@@ -136,7 +137,22 @@ export function ShellOverlays({
         onError={commandError}
         onMutationError={mutationError}
         onRefreshConflict={async (item, draft) => {
-          await refreshSnapshot();
+          const next = await refreshSnapshot();
+          const current = next.items.find(
+            (candidate) =>
+              candidate.store === item.store && candidate.path === item.path,
+          );
+          // The agent reports one conflict whether the item changed or was
+          // removed; the refresh tells them apart. A removed item has no newer
+          // version to review, and the details panel would have nothing to
+          // resume the draft into, so the edit becomes a new-item draft at the
+          // same path instead of being lost.
+          if (!current) {
+            toasts.show(
+              'This item was deleted elsewhere. Your edit is kept as a new item at the same path.',
+            );
+            return conflictDraftWorkflow(item, draft);
+          }
           setResumeDraft({
             store: item.store,
             path: item.path,
@@ -144,6 +160,20 @@ export function ShellOverlays({
             epoch: Date.now(),
           });
           toasts.show('Catalog refreshed. Review your draft.');
+          return null;
+        }}
+        onDeleteConflict={async (item) => {
+          const next = await refreshSnapshot(true);
+          const current = next.items.find(
+            (candidate) =>
+              candidate.store === item.store && candidate.path === item.path,
+          );
+          if (current)
+            toasts.show(
+              'This item was modified by another user or session. Review the updated item before deleting.',
+              { tone: 'warning' },
+            );
+          else toasts.show('This item was already deleted elsewhere.');
         }}
         onDiscardConflict={() => {
           setWorkflow(null);

@@ -31,7 +31,12 @@ test.before(async () => {
 test.afterEach(() => ui.cleanup());
 test.after(async () => vite.close());
 
-async function mount(location: Location, browsing?: Partial<LocationState>) {
+async function mount(
+  location: Location,
+  browsing?: Partial<LocationState>,
+  /** What the page must have drawn before the test reads it. */
+  ready = '.tpane',
+) {
   const { App } = (await vite.ssrLoadModule(
     '/src/app-root.tsx',
   )) as typeof import('../src/app-root');
@@ -51,7 +56,7 @@ async function mount(location: Location, browsing?: Partial<LocationState>) {
       store: new LocationStore({ ...INITIAL_STATE, location, ...browsing }),
     }),
   );
-  await ui.waitFor(() => assert.ok(document.querySelector('.tpane')));
+  await ui.waitFor(() => assert.ok(document.querySelector(ready)));
   return rendered;
 }
 
@@ -274,4 +279,15 @@ test('search scopes to the selected tree row', async () => {
   await ui.waitFor(() =>
     assert.equal(document.querySelectorAll('.lpane .body .row').length, 1),
   );
+});
+
+test('a missing store renders the unavailable state', async () => {
+  await mount({ kind: 'store', ref: 'acct:gone' }, undefined, '.notice');
+  assert.match(
+    document.querySelector('.notice')?.textContent ?? '',
+    /This vault is no longer available/,
+  );
+  // Neither the empty-folder invitation nor a bare table of column headings.
+  assert.equal(document.querySelector('.list-window'), null);
+  assert.equal(document.querySelector('.empty'), null);
 });

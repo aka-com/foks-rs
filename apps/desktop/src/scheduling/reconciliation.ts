@@ -35,6 +35,11 @@ export interface ReconciliationSnapshot {
   lastAttemptAt?: number;
   lastSuccessAt?: number;
   error?: unknown;
+  /**
+   * Whether the scheduler has disabled automatic retries for this job.
+   * The UI uses this value instead of inferring retry behavior from the error.
+   */
+  paused?: boolean;
 }
 export interface ReconciliationDiagnostic {
   kind: ReconciliationKind;
@@ -194,6 +199,7 @@ export class ReconciliationScheduler {
       error: undefined,
       refreshing: Boolean(entry.active),
       lastSuccessAt: this.clock.now(),
+      paused: false,
     });
     this.schedule();
   }
@@ -282,6 +288,7 @@ export class ReconciliationScheduler {
       ...entry.snapshot,
       refreshing: true,
       lastAttemptAt: started,
+      paused: false,
     });
     this.report({
       kind: job.kind,
@@ -328,7 +335,12 @@ export class ReconciliationScheduler {
           typed?.fatal && typed.code !== 'agent-lost' && job.kind !== 'metadata'
             ? Infinity
             : this.clock.now() + delay * (1 + this.clock.random() / 4);
-        this.publish(entry, { ...entry.snapshot, refreshing: false, error });
+        this.publish(entry, {
+          ...entry.snapshot,
+          refreshing: false,
+          error,
+          paused: entry.due === Infinity,
+        });
       }
     } finally {
       this.active.delete(active);

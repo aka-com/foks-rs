@@ -161,6 +161,43 @@ export function droppedFileDraft(path: string, sourcePath: string): NewDraft {
   };
 }
 
+/**
+ * The new-item sheet an edit resumes in when the item it was editing has been
+ * deleted elsewhere: there is no newer version to review, so the edit is
+ * offered as a new item at the same path, for the user to save or discard.
+ */
+export function conflictDraftWorkflow(
+  item: Item,
+  draft: string,
+): WriteWorkflow {
+  const itemKind: NewKind =
+    kindOf(item) === 'Password' ? 'Password' : 'Document';
+  const fields = new Map<string, string>();
+  if (itemKind === 'Password')
+    for (const line of draft.split('\n')) {
+      const at = line.indexOf(':');
+      if (at > 0)
+        fields.set(line.slice(0, at).trim(), line.slice(at + 1).trim());
+    }
+  return {
+    kind: 'new',
+    itemKind,
+    storeId: item.store,
+    draft: {
+      path: item.path,
+      site: itemKind === 'Password' ? nameOf(item.path) : '',
+      username: fields.get('username') ?? fields.get('user') ?? '',
+      password: fields.get('password') ?? '',
+      website: fields.get('url') ?? fields.get('website') ?? '',
+      value: itemKind === 'Password' ? '' : draft,
+      resourceName: '',
+      sourcePath: null,
+      readRole: DEFAULT_READ_ROLE,
+      writeRole: DEFAULT_WRITE_ROLE,
+    },
+  };
+}
+
 export function initialWriteWorkflow(
   search: string,
   snapshot?: AgentSnapshot,
@@ -903,6 +940,7 @@ export function WriteOverlay({
   onMutationError,
   onRefreshConflict,
   onDiscardConflict,
+  onDeleteConflict,
   onOpenExisting,
   accessNow = () => Date.now() / 1000,
 }: {
@@ -913,8 +951,15 @@ export function WriteOverlay({
   onApplied: (message: string) => Promise<void>;
   onError: (error: unknown, item?: Item) => void;
   onMutationError: MutationFailureHandler;
-  onRefreshConflict: (item: Item, draft: string) => Promise<void>;
+  /**
+   * Refreshes after an edit conflict and says what the conflict sheet gives
+   * way to: nothing, when the item is there to review, or a new-item sheet
+   * carrying the edit when the item turned out to have been deleted.
+   */
+  onRefreshConflict: (item: Item, draft: string) => Promise<WriteWorkflow>;
   onDiscardConflict: () => void;
+  /** Refreshes after a delete conflict and states whether the item is still there. */
+  onDeleteConflict: (item: Item) => Promise<void>;
   onOpenExisting: (
     workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'exists' }>,
   ) => Promise<void>;
@@ -967,6 +1012,7 @@ export function WriteOverlay({
       setWorkflow={setWorkflow}
       onApplied={onApplied}
       onMutationError={onMutationError}
+      onDeleteConflict={onDeleteConflict}
     />
   );
 }
@@ -983,7 +1029,7 @@ function ConflictSheet({
 }: {
   workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'conflict' }>;
   setWorkflow: (workflow: WriteWorkflow) => void;
-  onRefreshConflict: (item: Item, draft: string) => Promise<void>;
+  onRefreshConflict: (item: Item, draft: string) => Promise<WriteWorkflow>;
   onDiscardConflict: () => void;
   onError: (error: unknown, item?: Item) => void;
 }): ReactNode {
@@ -1033,7 +1079,7 @@ function ConflictSheet({
     >
       <Sheet
         glyph={<KindIcon kind={kindOf(workflow.item) as FilterKind} />}
-        title="Item modified elsewhere"
+        title="Item changed elsewhere"
         footer={
           <>
             <Button onClick={() => setConfirmingDiscard(true)}>
@@ -1042,8 +1088,10 @@ function ConflictSheet({
             <Button
               variant="primary"
               onClick={() => {
+                // The refresh finds out whether the item was changed or
+                // removed, and says what this sheet gives way to.
                 void onRefreshConflict(workflow.item, workflow.draft).then(
-                  () => setWorkflow(null),
+                  (next) => setWorkflow(next),
                   (error) => onError(error),
                 );
               }}
@@ -1055,8 +1103,10 @@ function ConflictSheet({
       >
         <>
           <p>
-            A newer version was saved while you were editing. Refresh to see it,
-            then reapply your changes.
+            {/* The agent reports one conflict for an item that was changed and
+                one that was removed, so this does not claim to know which. */}
+            This item was changed or removed while you were editing. Refresh to
+            see what happened; your edit is kept until you discard it.
           </p>
         </>
       </Sheet>
@@ -1075,6 +1125,7 @@ function DeleteSheet({
   setWorkflow,
   onApplied,
   onMutationError,
+  onDeleteConflict,
 }: {
   snapshot: AgentSnapshot;
   accessNow: () => number;
@@ -1083,8 +1134,8 @@ function DeleteSheet({
   setWorkflow: (workflow: WriteWorkflow) => void;
   onApplied: (message: string) => Promise<void>;
   onMutationError: MutationFailureHandler;
+  onDeleteConflict: (item: Item) => Promise<void>;
 }): ReactNode {
-  const toasts = useToast();
   const [deleting, setDeleting] = useState(false);
   const [, recheckAccess] = useState(0);
   const accessDescriptionId = useId();
@@ -1129,12 +1180,10 @@ function DeleteSheet({
                 } catch (error) {
                   const typed = normalizeCommandError(error);
                   if (typed.code === 'conflict') {
+                    // Changed or already gone: the shell's refresh finds out
+                    // which and says so, rather than this sheet assuming.
                     setWorkflow(null);
-                    await onMutationError(error, { report: false });
-                    toasts.show(
-                      'This item was modified by another user or session. Review the updated item before deleting.',
-                      { tone: 'warning' },
-                    );
+                    await onDeleteConflict(workflow.item);
                   } else {
                     await onMutationError(error, { item: workflow.item });
                   }

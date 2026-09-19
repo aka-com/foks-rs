@@ -70,6 +70,7 @@ async function setup(
         scope,
         state: 'ready',
         error: '',
+        note: '',
         stale: false,
         revision: 1,
         channelRevisions: new Map(),

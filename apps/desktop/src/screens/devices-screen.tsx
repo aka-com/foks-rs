@@ -280,6 +280,7 @@ export function DevicesScreen({
     loading,
     failed,
     freshness,
+    retry: retryMetadata,
   } = useDeviceMetadata({
     bridge,
     snapshot,
@@ -585,7 +586,7 @@ export function DevicesScreen({
     <FreshnessCaption
       label="device metadata"
       freshness={freshness}
-      onRetry={() => void onRefreshSnapshot().catch(onError)}
+      onRetry={retryMetadata}
     />
   );
   const staleClass = freshness.stale ? ' stale' : '';
@@ -626,6 +627,7 @@ export function DevicesScreen({
               : undefined
           }
           loading={loading}
+          failed={failed}
           stopped={stopped}
           cards={cards}
           metadataStatus={metadataStatus}
@@ -1013,6 +1015,7 @@ function DeviceDetail({
   entry,
   deviceEnrollment,
   loading,
+  failed,
   stopped,
   cards,
   metadataStatus,
@@ -1033,6 +1036,8 @@ function DeviceDetail({
   entry?: DeviceEntry;
   deviceEnrollment?: YubiEnrollment;
   loading: boolean;
+  /** The lists never answered, so whether the key is listed is unknown. */
+  failed: boolean;
   stopped: { stopped: boolean; reason: string };
   /** The cards in this Mac's ports right now. */
   cards: { serial: number }[];
@@ -1062,13 +1067,17 @@ function DeviceDetail({
         <div className="body">
           <div className="settings-main">
             <Notice
-              severity={loading || stopped.stopped ? 'info' : 'crit'}
+              severity={
+                loading || stopped.stopped ? 'info' : failed ? 'warn' : 'crit'
+              }
               title={
                 stopped.stopped
                   ? 'Not listed while access is stopped'
                   : loading
                     ? 'Reading this account’s keys…'
-                    : 'This key is not on this account'
+                    : failed
+                      ? 'Devices and keys could not be read'
+                      : 'This key is not on this account'
               }
               actions={
                 <>
@@ -1084,7 +1093,9 @@ function DeviceDetail({
                   ? stopped.reason
                   : loading
                     ? 'Loading devices, paper keys, and security keys…'
-                    : 'This key is no longer associated with this account on this device.'}
+                    : failed
+                      ? 'Whether this key is still on this account is unknown until its devices, paper keys and security keys are read again.'
+                      : 'This key is no longer associated with this account on this device.'}
               </p>
             </Notice>
             {metadataStatus}

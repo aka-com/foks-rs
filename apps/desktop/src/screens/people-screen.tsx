@@ -350,6 +350,7 @@ export function PeopleScreen({
     loading: loadingKeys,
     failed: keysFailed,
     freshness,
+    retry: retryMetadata,
   } = useDeviceMetadata({
     bridge,
     snapshot,
@@ -510,7 +511,7 @@ export function PeopleScreen({
               <AccountPanel
                 notices={notices}
                 freshness={freshness}
-                onRetry={() => void onRefreshSnapshot().catch(onError)}
+                onRetry={retryMetadata}
                 snapshot={snapshot}
                 store={selected}
                 lists={lists}

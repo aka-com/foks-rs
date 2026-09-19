@@ -84,6 +84,7 @@ export function ChatScreen({
     pending,
     error,
     syncError,
+    note,
     degraded,
     loading,
     resyncing,
@@ -268,7 +269,10 @@ export function ChatScreen({
       </div>
     ) : (
       <>
-        {error && (
+        {/* A failure over a channel list that was read, or over an open
+            channel, is a band above it; one with no list behind it is the
+            pane itself, below. */}
+        {error && (channelsKnown || channel) && (
           <Band
             severity="crit"
             action={
@@ -291,6 +295,9 @@ export function ChatScreen({
               <small>{syncError}</small>
             </Band>
           )}
+          {/* A synchronization that succeeded but could not finish everything
+              keeps updating; what it could not finish is a note, not a pause. */}
+          {note && <Band severity="info">{note}</Band>}
           {degraded && (
             <Band severity="info">
               Some inbox changes could not be listed. Visible channels still
@@ -349,6 +356,20 @@ export function ChatScreen({
                 op.channel === channel.id,
             )}
           />
+        ) : error ? (
+          // The channel list could not be read, so there is nothing to say
+          // about any one channel or about there being none: the failure is
+          // the pane, with the one way out of it.
+          <div className="empty">
+            <span className="big">
+              <Icon name="alert" />
+            </span>
+            <h2>Channels unavailable</h2>
+            <p role="alert">{error}</p>
+            <Button disabled={loading} onClick={() => void guardedRefresh()}>
+              Retry
+            </Button>
+          </div>
         ) : // Show a loading indicator if the requested channel is not yet listed
         // but the team is actively resynchronizing (such as immediately after
         // channel creation), avoiding premature 'unavailable' warnings.

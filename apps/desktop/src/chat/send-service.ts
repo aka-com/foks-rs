@@ -663,6 +663,11 @@ export class ChatSendService {
     } catch (error) {
       if (this.current(team, epoch)) {
         this.inbox.handleError(team.storeId, error, channel);
+        // Immediately invalidate the team after an interactive send is denied,
+        // matching conversation-history reads. Denials found by background
+        // synchronization retain the inbox retry delay.
+        if (normalizeCommandError(error).code === 'chat-access-denied')
+          this.inbox.invalidate(team.storeId);
         if (action.action === 'attempt') {
           team.operations = team.operations.map((op) =>
             op.id === action.operation ? { ...op, statusUnknown: true } : op,

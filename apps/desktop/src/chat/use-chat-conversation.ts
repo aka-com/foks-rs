@@ -258,6 +258,7 @@ export function useChatConversation(
         ? (inbox?.error ?? '')
         : ''),
     syncError: inbox?.data ? inbox.error : '',
+    note: inbox?.data ? inbox.note : '',
     degraded: inbox?.data?.degraded ?? false,
     loading: !inbox || (inbox.state === 'loading' && !inbox.error),
     // A team whose next synchronization has not landed is still answering for

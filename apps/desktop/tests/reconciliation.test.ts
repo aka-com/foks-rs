@@ -232,12 +232,31 @@ test('fatal integrity errors require explicit retry while cancellation is not re
   scheduler.setEnabled(true);
   scheduler.requestAll('foreground');
   await clock.advance(0);
+  // The snapshot says the job is parked, so what is shown about it can say
+  // the same rather than re-deriving it from the error.
+  assert.equal(scheduler.snapshot('p')?.paused, true);
   scheduler.requestAll('network');
   await clock.advance(300_000);
   assert.equal(calls, 1);
   scheduler.request('p', 'manual');
   await clock.advance(0);
   assert.equal(calls, 2);
+  assert.equal(scheduler.snapshot('p')?.paused, true);
+  scheduler.reconciled('p');
+  assert.equal(scheduler.snapshot('p')?.paused, false);
+  // A metadata job's fatal failure does not park it, and its snapshot agrees.
+  scheduler.update([
+    {
+      ...job('m', async () => {
+        throw { code: 'response-binding', fatal: true, retryable: false };
+      }),
+      kind: 'metadata',
+    },
+  ]);
+  scheduler.request('m', 'foreground');
+  await clock.advance(0);
+  assert.ok(scheduler.snapshot('m')?.error);
+  assert.equal(scheduler.snapshot('m')?.paused, false);
   scheduler.update([
     job('q', async () => {
       throw { code: 'cancelled' };

@@ -1,5 +1,5 @@
 /** Session-only metadata queries. Reader presence, PIN state and secrets are excluded. */
-import { createContext, useContext, useMemo, useRef } from 'react';
+import { createContext, useCallback, useContext, useMemo, useRef } from 'react';
 import { requireWorkflow } from './model/workflow-availability';
 import type { AgentSnapshot } from './model/types';
 import { enqueueProfileWork } from './bridge';
@@ -188,11 +188,20 @@ export function useDeviceMetadata({
     }),
     [accountState.data, enrollmentState.data],
   );
+  // Retry only the account-device and enrollment queries represented by this
+  // status. A forced catalog refresh would also invalidate unrelated queries
+  // and probe hardware.
+  const retry = useCallback((): void => {
+    if (!available) return;
+    cache.invalidateAccount(profile!, store!);
+    cache.invalidateEnrollments(profile!);
+  }, [available, cache, profile, store]);
   return {
     cache,
     lists,
     loading: available && !complete && !failed,
     failed,
     freshness: metadataFreshness([accountState, enrollmentState]),
+    retry,
   };
 }

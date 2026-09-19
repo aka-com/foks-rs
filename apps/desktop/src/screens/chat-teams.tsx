@@ -256,7 +256,7 @@ function teamRow(
       unavailable ||
       failure ||
       (firstSynchronization(entry) ? 'Loading channels…' : ''),
-    note: !failed && reachable && entry?.data ? entry.error : '',
+    note: !failed && reachable && entry?.data ? entry.error || entry.note : '',
     channels: entry?.data
       ? listChannels(entry.data.channels, entry.data.conversations)
       : undefined,

@@ -142,6 +142,7 @@ const publicTypes = [
 const publicValues = [
   'commandRecovery',
   'isAgentSessionError',
+  'isTerminalCommandError',
   'normalizeMutationError',
   'onAgentReadinessRequired',
   'isAgentReadinessError',

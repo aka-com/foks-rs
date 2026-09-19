@@ -21,6 +21,12 @@ export interface TeamInbox {
   scope?: ChatScope;
   error: string;
   failure?: CommandError;
+  /**
+   * Nonfatal limitations from a successful synchronization, such as a pending
+   * read-status retry or an unavailable preview. Current data remains usable
+   * and polling continues.
+   */
+  note: string;
   stale: boolean;
   revision: number;
   /** Advances only after an accepted authorized team synchronization. */
@@ -72,6 +78,7 @@ const identity = teamIdentity;
 const initial = (): TeamInbox => ({
   state: 'loading',
   error: '',
+  note: '',
   stale: false,
   revision: 0,
   channelRevisions: readonlyMap([]),
@@ -472,7 +479,8 @@ export class ChatInboxService {
         blockedChannels: new Set(team.blocked),
         scope: reply.scope,
         data,
-        error: data.read_retry_pending
+        error: '',
+        note: data.read_retry_pending
           ? 'Read status will retry.'
           : data.previews_incomplete
             ? 'Some previews are unavailable.'

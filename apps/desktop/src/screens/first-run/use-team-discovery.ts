@@ -18,6 +18,14 @@ import {
 
 type DiscoveryResult = Awaited<ReturnType<Bridge['discoverGroups']>>;
 
+/**
+ * What the last check concluded, beside the sentence it showed: the page
+ * draws "not found" only for a check that completed and found nothing, not
+ * for one that failed, offered a choice, or found a team it could not open.
+ */
+export type TeamDiscoveryOutcome =
+  'not-found' | 'choices' | 'unavailable' | 'failed';
+
 export async function runTeamDiscovery({
   bridge,
   saved,
@@ -99,6 +107,7 @@ export function useTeamDiscovery({
     isCurrent: () => boolean;
   } | null>(null);
   const inFlight = useRef<(() => boolean) | null>(null);
+  const [outcome, setOutcome] = useState<TeamDiscoveryOutcome | null>(null);
 
   const selectGroup = (
     found: DiscoveredGroup,
@@ -114,6 +123,7 @@ export function useTeamDiscovery({
           server.id === profile.profile && server.host_id === profile.hostId,
       ).length !== 1
     ) {
+      setOutcome('unavailable');
       setMessage(
         'The server identity could not be confirmed. Review server settings before opening this team.',
       );
@@ -142,6 +152,7 @@ export function useTeamDiscovery({
     );
     if (stores.length !== 1 || !storeReadable(refreshed, stores[0].id)) {
       commit(selected);
+      setOutcome('unavailable');
       setMessage(
         'Team located, but the vault is currently unavailable. Retry loading the vault, or complete setup later.',
       );
@@ -173,6 +184,7 @@ export function useTeamDiscovery({
     if (!operation.isCurrent()) return;
     inFlight.current = operation.isCurrent;
     setMessage(null);
+    setOutcome(null);
     setChoices(null);
     try {
       const outcome = await runTeamDiscovery({
@@ -210,18 +222,29 @@ export function useTeamDiscovery({
           snapshot: refreshed,
           isCurrent: operation.isCurrent,
         });
+        setOutcome('choices');
         setMessage(
           'Choose the team you want to open. Your other memberships will remain available.',
         );
-      } else
+      } else {
+        setOutcome('not-found');
         setMessage(
           selected
             ? 'Membership in the selected team could not be confirmed. Check again or choose another team.'
             : 'No active teams found yet. You can use Personal while you wait.',
         );
+      }
     } catch (error) {
       if (operation.isCurrent())
-        fail('group-discovery', error, setMessage, operation.isCurrent);
+        fail(
+          'group-discovery',
+          error,
+          (text) => {
+            setOutcome('failed');
+            setMessage(text);
+          },
+          operation.isCurrent,
+        );
     } finally {
       if (inFlight.current === operation.isCurrent) inFlight.current = null;
       operation.finish();
@@ -231,6 +254,7 @@ export function useTeamDiscovery({
     discover,
     selectDiscoveredGroup,
     discoveredGroups: choices?.isCurrent() ? choices.groups : [],
+    outcome,
     busy: workflow.busy,
   };
 }

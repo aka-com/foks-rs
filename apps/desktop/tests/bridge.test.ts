@@ -2120,6 +2120,41 @@ test('loadSnapshot omits rosters for lapsed servers and enriches active member a
   );
 });
 
+test('a complete group-detail failure is recorded once under the roster', async () => {
+  const base = mockBridge(FIXTURE);
+  const failure = {
+    code: 'io',
+    message: 'The agent could not be reached.',
+    retryable: true,
+    ambiguous: false,
+    fatal: false,
+  };
+  const bridge: Bridge = {
+    ...base,
+    native: true,
+    fixtureSnapshot: undefined,
+    listGroupDetails: async (storeId) => {
+      if (storeId === 'team:household') throw failure;
+      return base.listGroupDetails(storeId);
+    },
+  };
+  const snapshot = await loadSnapshot(bridge);
+  assert.deepEqual(snapshot.groupDetailFailures, [
+    {
+      store: 'team:household',
+      source: 'roster',
+      code: 'io',
+      message: failure.message,
+      retryable: true,
+    },
+  ]);
+  assert.equal(
+    snapshot.notifications.filter((note) => note.id.startsWith('group-'))
+      .length,
+    1,
+  );
+});
+
 test('loadSnapshot retains stores and items when group details encounter transient server errors', async () => {
   const base = mockBridge(FIXTURE);
   const failure = {

@@ -4,6 +4,7 @@ export {
   commandRecovery,
   isAgentReadinessError,
   isAgentSessionError,
+  isTerminalCommandError,
   normalizeCommandError,
   normalizeMutationError,
   onAgentReadinessRequired,

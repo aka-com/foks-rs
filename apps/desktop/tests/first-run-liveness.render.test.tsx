@@ -385,6 +385,8 @@ test('multiple groups refresh the catalog and preserve a selected unavailable va
   ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Check now' }));
   await rendered.view.findByText('Choose an existing team');
   assert.deepEqual(forces, [true]);
+  // A check that found teams to choose from does not also say none was found.
+  assert.equal(rendered.view.queryByText(/Team not found yet/), null);
   ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Open “two”' }));
   assert.ok(rendered.view.getByRole('button', { name: 'Retry loading team' }));
   const saved = h.saved()!;
@@ -397,6 +399,34 @@ test('multiple groups refresh the catalog and preserve a selected unavailable va
   });
   assert.ok(resumed.view.getByText('two'));
   assert.ok(resumed.view.getByRole('button', { name: 'Retry loading team' }));
+});
+
+test('a failed team check does not report the team as absent', async () => {
+  const h = await harness();
+  const rendered = h.render(
+    { ...h.checkpoint, path: 'invited', managedLocal: false, state: 'waiting' },
+    {
+      location: { kind: 'first-run', path: 'invited', step: 'waiting' },
+      bridge: {
+        ...h.bridge,
+        discoverGroups: async () => {
+          throw {
+            code: 'io',
+            message: 'The server could not be reached.',
+            retryable: true,
+            fatal: false,
+            ambiguous: false,
+          };
+        },
+      },
+      onRefreshSnapshot: async () => h.complete,
+    },
+  );
+  ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Check now' }));
+  await rendered.view.findByText('The server could not be reached.');
+  assert.ok(rendered.view.getByText('Check failed'));
+  assert.equal(rendered.view.queryByText('Checked: now'), null);
+  assert.equal(rendered.view.queryByText(/Team not found yet/), null);
 });
 
 test('zero groups still force catalog reconciliation', async () => {
@@ -420,6 +450,8 @@ test('zero groups still force catalog reconciliation', async () => {
   ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Check now' }));
   await rendered.view.findByText(/No active teams found yet/);
   assert.equal(refreshes, 1);
+  assert.ok(rendered.view.getByText('Checked: now'));
+  assert.ok(rendered.view.getByText(/Team not found yet/));
 });
 
 test('local-server retry probes again despite a stale failed connectivity snapshot', async () => {

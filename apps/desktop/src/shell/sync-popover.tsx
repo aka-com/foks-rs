@@ -132,24 +132,23 @@ export function summarizeSync(
       (observation) => observation.scope === server.id,
     );
     const messages: string[] = [];
-    let paused = false;
+    // Use scheduler state to report whether automatic retry is paused. Fatal
+    // catalog errors pause; metadata errors and agent disconnects remain scheduled.
+    let paused = Boolean(attempt?.paused);
     const add = (message: string): void => {
       const trimmed = message.trim();
       if (trimmed && !messages.includes(trimmed)) messages.push(trimmed);
     };
     diagnostics.push(`${name}: ${freshnessLine(entry)}`);
     if (entry?.error) add(entry.error.message);
-    if (attempt?.error && !entry?.error) {
-      const error = normalizeCommandError(attempt.error);
-      add(error.message);
-      paused = error.fatal;
-    }
+    if (attempt?.error && !entry?.error)
+      add(normalizeCommandError(attempt.error).message);
     for (const observation of own) {
       if (observation.kind === 'catalog' || !observation.snapshot.error)
         continue;
       const error = normalizeCommandError(observation.snapshot.error);
       add(error.message);
-      paused = paused || error.fatal;
+      paused = paused || Boolean(observation.snapshot.paused);
       diagnostics.push(
         `${observationLabel(observation.kind)} on ${name}: ${error.message}`,
       );
@@ -200,7 +199,7 @@ export function summarizeSync(
     for (const observation of local) {
       const error = normalizeCommandError(observation.snapshot.error);
       if (!messages.includes(error.message)) messages.push(error.message);
-      paused = paused || error.fatal;
+      paused = paused || Boolean(observation.snapshot.paused);
       diagnostics.push(
         `${observationLabel(observation.kind)}: ${error.message}`,
       );

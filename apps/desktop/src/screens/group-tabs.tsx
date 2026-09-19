@@ -161,9 +161,9 @@ export function ChannelsTab({
       {/* A synchronization that brought data and still could not finish
           everything is a note over the rows it did bring, the way the Chat
           column draws one, rather than a failure that replaces them. */}
-      {entry?.data && entry.error ? (
+      {entry?.data && (entry.error || entry.note) ? (
         <Band severity="warn" label="Channels may be out of date">
-          {entry.error}
+          {entry.error || entry.note}
         </Band>
       ) : null}
       <SectionLabel>

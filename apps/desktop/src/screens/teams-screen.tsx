@@ -17,7 +17,12 @@ import type { ReactNode } from 'react';
 import { Band, Button, Chip, Icon, MenuButton, MenuItem } from '../components';
 import { InvitationPanel } from '../components/invitation-panel';
 import { teamRequestRegistry } from './team-requests';
-import { enqueueProfileWork } from '../bridge';
+import {
+  commandRecovery,
+  enqueueProfileWork,
+  isTerminalCommandError,
+  normalizeCommandError,
+} from '../bridge';
 import {
   storeOperationAvailability,
   groupDetailFailure,
@@ -360,11 +365,27 @@ export function TeamsScreen({
       setResults((old) => ({ ...old, [context.store.id]: message }));
       await onRefreshSnapshot(true);
     } catch (error) {
-      setResults((old) => ({
-        ...old,
-        [context.store.id]: 'Check failed. Try again.',
-      }));
-      await onMutationError(error);
+      const typed = normalizeCommandError(error);
+      const recovery = commandRecovery(typed);
+      // The row states the failure in the agent's words, and "Try again" only
+      // where trying again is the answer. A cancelled check leaves no result.
+      setResults((old) => {
+        if (recovery.kind === 'ignore') {
+          const { [context.store.id]: dropped, ...rest } = old;
+          void dropped;
+          return rest;
+        }
+        return {
+          ...old,
+          [context.store.id]:
+            recovery.kind === 'retry'
+              ? `Check failed. ${typed.message} Try again.`
+              : `Check failed. ${typed.message}`,
+        };
+      });
+      // The row is the failure's surface, so an ordinary refusal is not
+      // toasted as well; a lost or unsafe agent still reaches the shell.
+      await onMutationError(error, { report: isTerminalCommandError(typed) });
     } finally {
       setDiscovering(null);
     }

@@ -88,6 +88,7 @@ function entry(ids = ['a', 'b'], selectedScope = scope): TeamInbox {
     scope: selectedScope,
     stale: false,
     error: '',
+    note: '',
     revision: 1,
     authorizationRevision: 1,
     channelRevisions: new Map(ids.map((id) => [id, 1])),
