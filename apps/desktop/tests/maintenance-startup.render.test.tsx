@@ -29,7 +29,7 @@ test.after(async () => {
   dom.window.close();
 });
 
-test('startup mounts local catalog shells at the first-paint deadline and hands off maintenance once', async () => {
+test('startup waits for catalog completion and hands off maintenance once', async () => {
   const { App } = (await vite.ssrLoadModule(
     '/src/app-root.tsx',
   )) as typeof import('../src/app-root');
@@ -72,12 +72,14 @@ test('startup mounts local catalog shells at the first-paint deadline and hands 
     },
     clientStateMaintenanceStatus: async () => maintenance,
   };
-  // The skeleton partial reports no inventory, so the loading screen holds the
-  // window until the first-paint deadline releases it.
+  // Partial catalog state cannot bypass the startup readiness barrier.
   const rendered = ui.render(
     createElement(App, { bridge, firstPaintDeadlineMs: 40 }),
   );
   try {
+    await ui.waitFor(() => assert.ok(document.querySelector('.booting')));
+    assert.equal(document.querySelector('.side.rail .who .t'), null);
+    await ui.act(async () => finish(full));
     await ui.waitFor(() => {
       assert.doesNotMatch(
         document.body.textContent ?? '',
@@ -111,7 +113,7 @@ test('startup mounts local catalog shells at the first-paint deadline and hands 
   }
 });
 
-test('healthy startup progress renders and an older boot cannot overwrite a shell refresh', async () => {
+test('completed startup catalog yields to a later shell refresh', async () => {
   Object.defineProperty(document, 'hidden', {
     configurable: true,
     value: false,
@@ -173,12 +175,14 @@ test('healthy startup progress renders and an older boot cannot overwrite a shel
       };
     },
   };
-  // The partial names a profile that never reports, so the shell mounts on the
-  // first-paint deadline rather than on the partial itself.
+  // Startup finishes before the shell takes ownership of later refreshes.
   const rendered = ui.render(
     createElement(App, { bridge, firstPaintDeadlineMs: 40 }),
   );
   try {
+    await ui.waitFor(() => assert.equal(calls, 1));
+    assert.ok(document.querySelector('.booting'));
+    await ui.act(async () => finish({ ...full, items: partial.items }));
     await ui.waitFor(() =>
       assert.match(document.body.textContent ?? '', /boot-partial-marker/),
     );
@@ -188,10 +192,6 @@ test('healthy startup progress renders and an older boot cannot overwrite a shel
     await ui.waitFor(() =>
       assert.match(document.body.textContent ?? '', /new-catalog-marker/),
     );
-    await ui.act(async () => {
-      finish(full);
-      await Promise.resolve();
-    });
     assert.match(document.body.textContent ?? '', /new-catalog-marker/);
     assert.doesNotMatch(document.body.textContent ?? '', /boot-partial-marker/);
   } finally {

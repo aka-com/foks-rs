@@ -1254,7 +1254,7 @@ test('device removal refreshes native device records before submitting the write
   assert.deepEqual(calls, ['read', 'remove', 'read']);
 });
 
-test('an account with no paper key gets its own band, and the Devices tab rail dot learns of it', async () => {
+test('an account with no paper key gets its own band without publishing shell alerts', async () => {
   const { deviceAlertRegistry } = (await vite.ssrLoadModule(
     '/src/screens/device-alert.ts',
   )) as typeof import('../src/screens/device-alert');
@@ -1275,7 +1275,7 @@ test('an account with no paper key gets its own band, and the Devices tab rail d
     deviceAlertRegistry(bridgeRef.current)
       .getSnapshot()
       .paperKeys.get('acct:work'),
-    false,
+    undefined,
   );
   await ui.act(async () => {
     ui.fireEvent.click(
@@ -1286,7 +1286,7 @@ test('an account with no paper key gets its own band, and the Devices tab rail d
   assert.ok(page.getByRole('heading', { name: 'Create paper key' }));
 });
 
-test('an account with a paper key draws no band, and reports it has one', async () => {
+test('an account with a paper key draws no band without publishing shell alerts', async () => {
   const { deviceAlertRegistry } = (await vite.ssrLoadModule(
     '/src/screens/device-alert.ts',
   )) as typeof import('../src/screens/device-alert');
@@ -1300,13 +1300,12 @@ test('an account with a paper key draws no band, and reports it has one', async 
     },
   });
   assert.ok(bridgeRef.current);
-  await ui.waitFor(() => {
-    assert.equal(
-      deviceAlertRegistry(bridgeRef.current!)
-        .getSnapshot()
-        .paperKeys.get('acct:personal'),
-      true,
-    );
-  });
+  await ui.waitFor(() => assert.ok(page.getByText('paper-backup')));
+  assert.equal(
+    deviceAlertRegistry(bridgeRef.current)
+      .getSnapshot()
+      .paperKeys.get('acct:personal'),
+    undefined,
+  );
   assert.equal(page.queryByText('No paper key'), null);
 });

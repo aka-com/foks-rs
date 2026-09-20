@@ -146,13 +146,8 @@ test('the rail draws six tabs and marks the one that owns the location', async (
 
 test('Chat displays total unread and the avatar displays an attention indicator', async () => {
   const { journal } = await rail({ kind: 'all' }, '2', 3);
-  // While unread counts load, Chat displays a status spinner with an
-  // accessible label.
-  const spinner = document.querySelector('.side.rail .rail-tail.loading');
-  assert.ok(spinner, 'the Chat tab spins while its counts load');
-  assert.equal(spinner.getAttribute('role'), 'status');
-  assert.equal(spinner.getAttribute('aria-label'), 'Loading unread counts');
-  assert.ok(spinner.querySelector('.spin'));
+  // Initial unread loading belongs to the header refresh control.
+  assert.equal(document.querySelector('.side.rail .rail-tail.loading'), null);
   // The badge is one number over every team whose chat this Mac can read: the
   // fixture's two readable groups, two unread apiece.
   const badge = await ui.waitFor(() => {

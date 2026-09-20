@@ -21,10 +21,17 @@ test.before(async () => {
     server: { middlewareMode: true, hmr: false, ws: false, watch: null },
   });
 });
-test.afterEach(() => ui.cleanup());
+test.afterEach(() => {
+  ui.cleanup();
+  Reflect.deleteProperty(document, 'hidden');
+});
 test.after(async () => vite.close());
 
 test('Account and Devices share metadata across navigation; Refresh reloads it and card presence stays live', async () => {
+  Object.defineProperty(document, 'hidden', {
+    configurable: true,
+    value: false,
+  });
   const { App } = (await vite.ssrLoadModule(
     '/src/app-root.tsx',
   )) as typeof import('../src/app-root');
@@ -61,8 +68,24 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
       return connected;
     },
   };
+  const { deviceAlertRegistry } = (await vite.ssrLoadModule(
+    '/src/screens/device-alert.ts',
+  )) as typeof import('../src/screens/device-alert');
   ui.render(createElement(App, { bridge }));
-  await ui.waitFor(() => assert.equal(calls.enrollments, 1));
+  // The shell preloads every eligible account before visiting Devices.
+  await ui.waitFor(() => {
+    const keys = deviceAlertRegistry(bridge).getSnapshot().paperKeys;
+    assert.equal(keys.get('acct:work'), false);
+    assert.equal(keys.get('acct:personal'), true);
+  });
+  const initial = { ...calls };
+  assert.deepEqual(initial, {
+    devices: FIXTURE.accounts.length,
+    backups: FIXTURE.accounts.length,
+    enrollments: new Set(FIXTURE.accounts.map((account) => account.server))
+      .size,
+    cards: 0,
+  });
   const navigate = async (name: string) => {
     const tab = [
       ...document.querySelectorAll<HTMLButtonElement>('.rail-tabs .nav'),
@@ -78,7 +101,7 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
     ui.screen.getByRole('button', { name: 'Refresh connected keys' }),
   );
   await ui.waitFor(() => assert.equal(calls.cards, 1));
-  assert.deepEqual(calls, { devices: 1, backups: 1, enrollments: 1, cards: 1 });
+  assert.deepEqual(calls, { ...initial, cards: 1 });
   assert.equal(document.body.textContent?.includes('Loading devices'), false);
   await ui.act(async () => {
     releaseCard([]);
@@ -90,7 +113,7 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
     ui.screen.getByRole('button', { name: 'Refresh connected keys' }),
   );
   await ui.waitFor(() => assert.equal(calls.cards, 2));
-  assert.equal(calls.devices, 1);
+  assert.equal(calls.devices, initial.devices);
   const refresh = document.querySelector<HTMLButtonElement>(
     '.topbar button[aria-label="Refresh"]',
   );
@@ -120,9 +143,9 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
   await ui.act(async () => {
     ui.fireEvent.click(refresh);
   });
-  await ui.waitFor(() => assert.equal(calls.devices, 2));
-  assert.equal(calls.backups, 2);
-  assert.equal(calls.enrollments, 2);
+  await ui.waitFor(() => assert.equal(calls.devices, initial.devices * 2));
+  assert.equal(calls.backups, initial.backups * 2);
+  assert.equal(calls.enrollments, initial.enrollments * 2);
   assert.equal(calls.cards, 2);
   ui.fireEvent.click(
     ui.screen.getByRole('button', { name: 'Refresh connected keys' }),
@@ -135,7 +158,7 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
   await ui.act(async () => {
     ui.fireEvent.click(refresh);
   });
-  await ui.waitFor(() => assert.equal(calls.devices, 3));
+  await ui.waitFor(() => assert.equal(calls.devices, initial.devices * 3));
   assert.equal(calls.cards, 3);
   ui.fireEvent.click(
     ui.screen.getByRole('button', { name: 'Refresh connected keys' }),

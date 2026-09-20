@@ -82,7 +82,11 @@ function Harness({
       backgroundRef: background,
       portalRoot: document.body,
       children: createElement(Topbar, {
-        snapshot: FIXTURE,
+        // These tests isolate refresh work; no chat provider is mounted.
+        snapshot: {
+          ...FIXTURE,
+          stores: FIXTURE.stores.filter((store) => store.kind !== 'team'),
+        },
         location: { kind: 'files' },
         onNavigate: () => {},
         collapsed: false,
@@ -187,7 +191,7 @@ test('while refreshing, the spinner takes the icon’s place rather than sitting
   assert.equal(button.getAttribute('aria-busy'), 'true');
   assert.equal(
     button.getAttribute('aria-label'),
-    'Refreshing vaults and teams',
+    'Refreshing vaults, teams, chat, and devices',
   );
   assert.ok(button.querySelector('.spin'));
   assert.equal(button.querySelector('svg.ic'), null);

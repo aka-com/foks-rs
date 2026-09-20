@@ -1,6 +1,6 @@
 /**
  * Verifies the launch sequence: one readiness probe, an overlapped appInfo,
- * a loading screen held until the first useful paint, and no team discovery
+ * a loading screen held until catalog and device reads settle, and no team discovery
  * on the launch path.
  */
 
@@ -251,7 +251,7 @@ test('a partial whose stores are still loading holds the paint and says so', asy
   }
 });
 
-test('the shell mounts when every profile in a partial reports ready', async () => {
+test('ready catalog partials preload devices but startup waits for both reads', async () => {
   const { App, FIXTURE, mockBridge } = await modules();
   const base = mockBridge(FIXTURE);
   const full = await base.listCatalog();
@@ -261,27 +261,45 @@ test('the shell mounts when every profile in a partial reports ready', async () 
     localMetadata: await metadataOf(base, full.profiles),
   };
   const driven = drivenCatalog();
-  const bridge: Bridge = { ...base, native: true, listCatalog: driven.read };
+  let releaseDevices!: () => void;
+  const devices = new Promise<void>((resolve) => {
+    releaseDevices = resolve;
+  });
+  let deviceReads = 0;
+  const bridge: Bridge = {
+    ...base,
+    native: true,
+    listCatalog: driven.read,
+    listAccountDevices: async (store) => {
+      deviceReads++;
+      await devices;
+      return base.listAccountDevices(store);
+    },
+  };
   const rendered = ui.render(
     createElement(App, { bridge, firstPaintDeadlineMs: 30_000 }),
   );
   try {
     await driven.emit(ready);
-    // The read itself never completes: the partial is what mounts the shell.
+    await ui.waitFor(() => assert.ok(deviceReads > 0));
+    assert.equal(mounted(), false);
+    await ui.act(async () => driven.finish(ready));
+    assert.equal(mounted(), false);
+    await ui.act(async () => releaseDevices());
     await ui.waitFor(() =>
       assert.ok(document.querySelector('.side.rail .who .t')),
     );
     assert.ok(mounted());
   } finally {
+    releaseDevices();
     driven.finish(full);
     rendered.unmount();
   }
 });
 
-test('the shell mounts at the first-paint deadline when a profile never reports', async () => {
+test('the first-paint deadline starts device reads without bypassing catalog completion', async () => {
   const { App, FIRST_PAINT_DEADLINE_MS, FIXTURE, mockBridge } = await modules();
-  // The tests shorten the wait; production holds the window no longer than
-  // this, whatever the read is doing.
+  // The deadline begins preloading; it no longer releases startup itself.
   assert.equal(FIRST_PAINT_DEADLINE_MS, 2_500);
   const base = mockBridge(FIXTURE);
   const full = await base.listCatalog();
@@ -292,13 +310,25 @@ test('the shell mounts at the first-paint deadline when a profile never reports'
     localMetadata: await metadataOf(base, full.profiles),
   };
   const driven = drivenCatalog();
-  const bridge: Bridge = { ...base, native: true, listCatalog: driven.read };
+  let deviceReads = 0;
+  const bridge: Bridge = {
+    ...base,
+    native: true,
+    listCatalog: driven.read,
+    listAccountDevices: async (store) => {
+      deviceReads++;
+      return base.listAccountDevices(store);
+    },
+  };
   const rendered = ui.render(
     createElement(App, { bridge, firstPaintDeadlineMs: 40 }),
   );
   try {
     await driven.emit(skeleton);
     assert.equal(mounted(), false);
+    await ui.waitFor(() => assert.ok(deviceReads > 0));
+    assert.equal(mounted(), false);
+    await ui.act(async () => driven.finish(full));
     await ui.waitFor(() => assert.ok(mounted()), { timeout: 4_000 });
   } finally {
     driven.finish(full);
@@ -306,7 +336,7 @@ test('the shell mounts at the first-paint deadline when a profile never reports'
   }
 });
 
-test('the shell mounts on a partial that reports no profiles at all', async () => {
+test('an empty catalog partial waits for completion before choosing onboarding', async () => {
   const { App, FIXTURE, mockBridge } = await modules();
   const base = mockBridge(FIXTURE);
   const full = await base.listCatalog();
@@ -328,7 +358,17 @@ test('the shell mounts on a partial that reports no profiles at all', async () =
   );
   try {
     await driven.emit(nothing);
-    await ui.waitFor(() => assert.ok(mounted()), { timeout: 4_000 });
+    assert.equal(mounted(), false);
+    await ui.act(async () => driven.finish(nothing));
+    await ui.waitFor(
+      () => {
+        assert.equal(document.querySelector('.booting'), null);
+        assert.ok(
+          ui.screen.getByRole('heading', { name: 'How are you joining?' }),
+        );
+      },
+      { timeout: 4_000 },
+    );
   } finally {
     driven.finish(full);
     rendered.unmount();
