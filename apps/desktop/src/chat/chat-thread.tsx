@@ -1,6 +1,6 @@
 import { MessageText } from './message-text';
 import type { Bridge } from '../bridge';
-import { Fragment, useId } from 'react';
+import { Fragment, useLayoutEffect, useRef } from 'react';
 import type { ReactNode, Ref } from 'react';
 import { Button, Chip, Icon } from '../components';
 import { ChatAlerts, failureAlert, type ChatAlert } from './chat-alerts';
@@ -125,8 +125,7 @@ export function ChatThread({
   const outgoingIds = new Set(
     outgoing.flatMap((m) => (m.operation ? [m.operation.id] : [])),
   );
-  const hintId = useId();
-  const waitingForSavedWork = !canSend && Boolean(draft.trim());
+  const composer = useComposerSize(draft, channel.readable && channel.writable);
   const { newFrom, readError } = useChatReadIntent(
     channel.id,
     messages,
@@ -362,11 +361,11 @@ export function ChatThread({
               }}
             >
               <textarea
+                ref={composer}
                 aria-label="Message"
-                aria-describedby={waitingForSavedWork ? hintId : undefined}
                 value={draft}
                 placeholder={`Message ${title}`}
-                rows={2}
+                rows={1}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => {
                   if (
@@ -380,28 +379,21 @@ export function ChatThread({
                   }
                 }}
               />
-              <div className="chat-composer-row">
-                {waitingForSavedWork ? (
-                  <small id={hintId}>
-                    Waiting for saved work. You can keep typing.
-                  </small>
-                ) : null}
-                {nearLimit && (
-                  <small
-                    className={overLimit ? 'chat-meter over' : 'chat-meter'}
-                    aria-live="polite"
-                  >
-                    {Math.ceil(draftBytes / 1024)} KiB of {TEXT_LIMIT_LABEL}
-                  </small>
-                )}
-                <Button
-                  variant="primary"
-                  type="submit"
-                  disabled={!canSend || overLimit || !draft.trim()}
+              <Button
+                variant="primary"
+                type="submit"
+                disabled={!canSend || overLimit || !draft.trim()}
+              >
+                Send
+              </Button>
+              {nearLimit && (
+                <small
+                  className={overLimit ? 'chat-meter over' : 'chat-meter'}
+                  aria-live="polite"
                 >
-                  Send
-                </Button>
-              </div>
+                  {Math.ceil(draftBytes / 1024)} KiB of {TEXT_LIMIT_LABEL}
+                </small>
+              )}
             </form>
           ) : (
             <p className="chat-quiet">
@@ -415,3 +407,32 @@ export function ChatThread({
 }
 
 const EMPTY_MESSAGES: import('../chat-contract').ChatMessage[] = [];
+
+function resizeComposer(element: HTMLTextAreaElement): void {
+  // Reset first so deleting text or clearing a sent draft shrinks the field.
+  element.style.height = 'auto';
+  const border = element.offsetHeight - element.clientHeight;
+  element.style.height = `${element.scrollHeight + border}px`;
+}
+
+function useComposerSize(draft: string, visible: boolean) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    if (ref.current) resizeComposer(ref.current);
+  }, [draft, visible]);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    let width = element.clientWidth;
+    const observer = new ResizeObserver(() => {
+      // Reflow when the window or channel-info panel changes the available
+      // width, without responding to our own height adjustments.
+      if (element.clientWidth === width) return;
+      width = element.clientWidth;
+      resizeComposer(element);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [visible]);
+  return ref;
+}
