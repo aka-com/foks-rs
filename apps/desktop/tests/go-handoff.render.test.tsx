@@ -1105,7 +1105,7 @@ test('resumed sign-in step rediscovers the CLI profile for the verified server',
   );
 });
 
-test('identity loading waits out a native mutation instead of failing setup', async () => {
+test('identity loading waits out a native mutation instead of failing setup', async (t) => {
   const { FirstRunExperience } = (await vite.ssrLoadModule(
     '/src/screens/first-run-screen.tsx',
   )) as typeof import('../src/screens/first-run-screen');
@@ -1191,6 +1191,16 @@ test('identity loading waits out a native mutation instead of failing setup', as
     catalogProfiles: [profile.profile],
     profileInventoryStatus: 'complete' as const,
   };
+  // Fake the browser clock, leaving testing-library's own timers real.
+  let now = 0;
+  let nextTimer = 0;
+  const timers = new Map<number, { due: number; run(): void }>();
+  t.mock.method(window, 'setTimeout', (callback: () => void, delay = 0) => {
+    const id = ++nextTimer;
+    timers.set(id, { due: now + delay, run: callback });
+    return id;
+  });
+  t.mock.method(window, 'clearTimeout', (id: number) => timers.delete(id));
   let refreshes = 0;
   const rendered = ui.render(
     createElement(ToastProvider, {
@@ -1229,6 +1239,19 @@ test('identity loading waits out a native mutation instead of failing setup', as
     ).disabled,
     true,
   );
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    assert.equal(refreshes, attempt);
+    assert.ok(
+      [...timers.values()].some((timer) => timer.due === now + 2_000),
+      'a busy refresh schedules another attempt after two seconds',
+    );
+    await ui.act(async () => {
+      now += 2_000;
+      for (const [id, timer] of [...timers]) {
+        if (timer.due <= now && timers.delete(id)) timer.run();
+      }
+    });
+  }
   await ui.waitFor(
     () => {
       const saved = decodeFirstRunCheckpoint(
@@ -1237,7 +1260,7 @@ test('identity loading waits out a native mutation instead of failing setup', as
       assert.equal(saved?.state, 'protect');
       assert.equal(saved?.account?.alias, 'cli-owner');
     },
-    { timeout: 8_000 },
+    { timeout: 1_000 },
   );
   assert.equal(refreshes, 3);
   assert.equal(rendered.queryByRole('alert'), null);

@@ -838,6 +838,13 @@ impl AgentHandle {
     }
 
     pub fn auto_recover_blocking(&self) -> Result<Response, AgentError> {
+        self.auto_recover_with_reservation_timeout(MAINTENANCE_RESERVATION_WAIT)
+    }
+
+    fn auto_recover_with_reservation_timeout(
+        &self,
+        reservation_timeout: Duration,
+    ) -> Result<Response, AgentError> {
         self.wait_for_startup();
         self.maintenance_in_flight
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -849,7 +856,7 @@ impl AgentHandle {
         let _admission = MaintenanceAdmission(&self.maintenance_in_flight);
         let _reservation = self
             .transport
-            .reserve_for_maintenance(MAINTENANCE_RESERVATION_WAIT)
+            .reserve_for_maintenance(reservation_timeout)
             .ok_or_else(|| {
                 AgentError::new(
                     "agent-busy",
@@ -4127,7 +4134,10 @@ mod tests {
         {
             let _request = handle.transport.reserve_use().unwrap();
             assert_eq!(
-                handle.auto_recover_blocking().unwrap_err().code,
+                handle
+                    .auto_recover_with_reservation_timeout(Duration::ZERO)
+                    .unwrap_err()
+                    .code,
                 "agent-busy"
             );
         }

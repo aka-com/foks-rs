@@ -19,9 +19,8 @@ import {
 } from './notification-changes';
 import { notificationAdmission } from './notification-admission';
 
-const QUEUED = 64,
-  BASELINES = 4096,
-  FALLBACK_MS = 5000;
+export const NOTIFICATION_LIMITS = { queued: 64, baselines: 4096 } as const;
+const FALLBACK_MS = 5000;
 const CHANNEL_ROWS = 100,
   CHANNEL_BYTES = 1024 * 1024,
   PASS_ROWS = 400,
@@ -92,6 +91,7 @@ export class NotificationConsumer {
     private report: (message: string) => void,
     private clock: ChatClock = systemChatClock,
     private observe?: (event: NotificationMetric) => void,
+    private limits: { queued: number; baselines: number } = NOTIFICATION_LIMITS,
   ) {
     this.admission = notificationAdmission(bridge);
     this.off = service.subscribe(() => this.kick());
@@ -240,13 +240,17 @@ export class NotificationConsumer {
     const start = size ? this.cursor % size : 0;
     // Walk immutable metadata in two segments without allocating a channel array.
     // Overflow never allocates a promise and never restarts at map position zero.
-    for (let segment = 0; segment < 2 && this.queued.size < QUEUED; segment++) {
+    for (
+      let segment = 0;
+      segment < 2 && this.queued.size < this.limits.queued;
+      segment++
+    ) {
       let index = 0;
       for (const [id, entry] of snapshot) {
         for (const channel of entry.data?.channels ?? []) {
           const position = index++;
           if (segment === 0 ? position < start : position >= start) continue;
-          if (this.queued.size >= QUEUED) break;
+          if (this.queued.size >= this.limits.queued) break;
           const view = notificationView(entry, channel.id);
           if (!view?.eligible || !view.fresh) continue;
           const key = channelWorkKey(id, view.scope, channel.id);
@@ -254,13 +258,13 @@ export class NotificationConsumer {
           let p = this.progress.get(key);
           if (p && (!p.dirty || p.due > now)) continue;
           if (!p) {
-            if (this.progress.size >= BASELINES) {
+            if (this.progress.size >= this.limits.baselines) {
               // Best-effort rotation must not become an endless baseline RPC loop.
               if (now >= this.evictionWindow) {
                 this.evictionWindow = now + FALLBACK_MS;
                 this.evictions = 0;
               }
-              if (this.evictions >= QUEUED) continue;
+              if (this.evictions >= this.limits.queued) continue;
               const old = this.evictionCandidate();
 
               if (!old) continue;

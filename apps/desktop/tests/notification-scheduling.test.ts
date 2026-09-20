@@ -14,6 +14,7 @@ import type {
 } from '../src/chat/inbox-service';
 import {
   NotificationConsumer,
+  NOTIFICATION_LIMITS,
   type NotificationMetric,
 } from '../src/chat/notification-consumer';
 import {
@@ -27,6 +28,26 @@ Object.defineProperty(globalThis, 'document', {
   value: { visibilityState: 'hidden', hasFocus: () => false },
   configurable: true,
 });
+// Track real preference hashes so draining waits for the work the consumer
+// started, rather than submitting dummy WebCrypto work on every clock tick.
+const hashes = new Set<Promise<ArrayBuffer>>();
+const digest = crypto.subtle.digest.bind(crypto.subtle);
+test.before(() => {
+  test.mock.method(
+    crypto.subtle,
+    'digest',
+    (...args: Parameters<typeof digest>) => {
+      const pending = digest(...args);
+      hashes.add(pending);
+      void pending.then(
+        () => hashes.delete(pending),
+        () => hashes.delete(pending),
+      );
+      return pending;
+    },
+  );
+});
+test.after(() => test.mock.restoreAll());
 class Clock implements ChatClock {
   time = 0;
   next = 0;
@@ -45,14 +66,18 @@ class Clock implements ChatClock {
     for (const [id, timer] of [...this.timers])
       if (timer.due <= this.time && this.timers.delete(id)) timer.fn();
   }
-  async flush(rounds = 50) {
-    for (let i = 0; i < rounds; i++) {
+  async flush() {
+    for (let round = 0; round < 10_000; round++) {
       this.run();
-      // Preference hashing uses WebCrypto's worker pool. Drain a crypto task as
-      // well as JS microtasks; a fixed number of setImmediate calls can race it.
-      await crypto.subtle.digest('SHA-256', new Uint8Array());
-      await new Promise<void>((r) => setImmediate(r));
+      await Promise.all([...hashes]);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (
+        hashes.size === 0 &&
+        ![...this.timers.values()].some((timer) => timer.due <= this.time)
+      )
+        return;
     }
+    assert.fail('notification work did not settle at the current clock time');
   }
   async advance(ms: number) {
     this.time += ms;
@@ -172,7 +197,9 @@ function setup(initial = entry()) {
     snapshot = new Map([['store', { ...snapshot.get('store')!, ...patch }]]);
     for (const listener of listeners) listener();
   }
-  const make = () =>
+  const make = (
+    limits: { queued: number; baselines: number } = NOTIFICATION_LIMITS,
+  ) =>
     new NotificationConsumer(
       bridge,
       service,
@@ -180,6 +207,7 @@ function setup(initial = entry()) {
       () => {},
       clock,
       (e) => events.push(e),
+      limits,
     );
   return {
     clock,
@@ -594,37 +622,49 @@ test('admission counts unsettled requests globally and once per profile', async 
   c();
   assert.equal(admission.active, 0);
 });
-test('4096 baseline bound rotates with fresh baselines and a bounded eviction rate', async () => {
+async function checkBaselineRotation(limits: {
+  queued: number;
+  baselines: number;
+}) {
   const f = setup(entry(['a']));
   const snapshot = new Map<string, TeamInbox>();
+  const teamSize = limits.baselines / 16;
   for (let i = 0; i < 17; i++)
     snapshot.set(
       `store${i}`,
       entry(
-        Array.from({ length: i === 16 ? 1 : 256 }, (_, n) => `${i}-${n}`),
+        Array.from({ length: i === 16 ? 1 : teamSize }, (_, n) => `${i}-${n}`),
         { ...scope, store: { ...scope.store, team_id: `team${i}` } },
       ),
     );
   f.replace(snapshot);
-  const c = f.make();
+  const c = f.make(limits);
   try {
     for (
       let i = 0;
-      i < 3000 &&
-      f.events.filter((e) => e.kind === 'pass' && !e.budgetHit).length < 4160;
+      i < 3000 && f.calls.length < limits.baselines + limits.queued;
       i++
     )
       await f.clock.advance(1);
     await f.clock.flush();
-    assert.equal(f.events.filter((e) => e.kind === 'eviction').length, 64);
+    assert.equal(
+      f.events.filter((e) => e.kind === 'eviction').length,
+      limits.queued,
+    );
     assert.equal(
       f.events.filter((e) => e.kind === 'pass' && !e.baselineOnly).length,
       0,
     );
-    assert.ok(f.events.some((e) => e.kind === 'state' && e.baselines === 4096));
+    assert.ok(
+      f.events.some(
+        (e) => e.kind === 'state' && e.baselines === limits.baselines,
+      ),
+    );
     assert.ok(
       f.events.every(
-        (e) => e.kind !== 'state' || (e.baselines <= 4096 && e.queued <= 64),
+        (e) =>
+          e.kind !== 'state' ||
+          (e.baselines <= limits.baselines && e.queued <= limits.queued),
       ),
     );
     const calls = f.calls.length;
@@ -635,7 +675,17 @@ test('4096 baseline bound rotates with fresh baselines and a bounded eviction ra
   } finally {
     c.stop();
   }
+}
+
+test('baseline bound rotates with fresh baselines and a bounded eviction rate', async () => {
+  assert.deepEqual(NOTIFICATION_LIMITS, { queued: 64, baselines: 4096 });
+  await checkBaselineRotation({ queued: 4, baselines: 16 });
 });
+
+if (process.env.FOKS_TEST_SCALE === '1')
+  test('scale: 4096 baseline bound rotates with a bounded eviction rate', async () => {
+    await checkBaselineRotation(NOTIFICATION_LIMITS);
+  });
 test('first-reply scope mismatch blocks the shared owner without quarantining channel contents', async () => {
   const f = setup(entry(['a']));
   f.history(async () => ({

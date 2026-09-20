@@ -33,7 +33,10 @@ npm run test:full       # entire Rust workspace + UI tests
 npm run format
 npm run lint
 npm run typecheck
-npm run test:foks-ui
+npm run test:foks-ui       # full UI coverage, including the notification scale case
+npm run test:foks-ui:fast  # ordinary UI iteration
+npm run test:foks-ui:scale # production-size notification rotation
+npm run test:rust:scale   # production-size incremental history
 ```
 
 `cargo` builds and tests the Rust packages. npm drives Vite, TypeScript,
@@ -51,6 +54,12 @@ without migration support.
 `npm test` aliases `test:core`. Full tests need native desktop dependencies;
 explicitly ignored hardware, hosted, and real-agent tests remain opt-in.
 `npm run test:rust:core` and `npm run test:rust:full` run only Rust tests.
+The full commands retain the production-size cases; the ordinary agent unit
+suite uses a smaller history page to cover the same cursor boundaries quickly.
+`test:rust:full` builds the standalone agent first and includes `test:rust:scale`.
+Both Rust commands accept build flags, for example `-- --release`.
+For a focused UI edit, pass the affected files directly to `npx tsx --test`.
+
 Use `npm run build` for a production executable (embedded frontend),
 and `npm run test:foks-desktop:packaged` after building the macOS bundle.
 

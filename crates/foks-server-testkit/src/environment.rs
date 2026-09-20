@@ -280,6 +280,41 @@ impl TestEnvironment {
         }
     }
 
+    /// Seed already sealed dirents for read-path fixtures without replaying a
+    /// client's upload, journal and resynchronization workflow for each entry.
+    /// The normal writer and database constraints still apply. This bypasses
+    /// RPC authorization and is only for constructing test data.
+    pub fn seed_kv_dirents(
+        &self,
+        uid: foks_proto::EntityId,
+        dirents: Vec<foks_proto::KvDirent>,
+    ) -> foks_server::Result<()> {
+        self.mutate_database(move |db| {
+            for batch in dirents.chunks(64) {
+                let exact = batch
+                    .iter()
+                    .map(foks_proto::KvDirent::encode)
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let mutations = batch
+                    .iter()
+                    .zip(&exact)
+                    .map(|(dirent, exact)| foks_server_db::KvDirentMutation {
+                        parent: &dirent.parent,
+                        id: &dirent.id,
+                        version: dirent.version,
+                        directory_version: dirent.directory_version,
+                        node_id: &dirent.value.0,
+                        name_mac: &dirent.name_mac,
+                        creation_time: dirent.creation_time,
+                        exact,
+                    })
+                    .collect::<Vec<_>>();
+                db.put_kv_dirents(uid.as_bytes(), None, foks_proto::Role::OWNER, &mutations)?;
+            }
+            Ok(())
+        })
+    }
+
     #[doc(hidden)]
     pub fn issue_standard_invite(
         &self,

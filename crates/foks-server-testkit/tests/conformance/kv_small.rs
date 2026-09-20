@@ -384,16 +384,41 @@ fn directory_listing_crosses_the_v019_page_boundary() {
             &mut protected,
         )
         .unwrap();
-    for index in 0..101 {
-        session
-            .put_file(
+    // One normal write supplies a valid node. The pagination fixture needs
+    // 101 independently sealed names, not 101 upload/journal/sync workflows.
+    session
+        .put_file(root, "entry-000", &mut Cursor::new([]), options())
+        .unwrap();
+    let tree = session.sync().unwrap();
+    let directory = foks_proto::KvDirectoryPair::decode(&tree[0].directory_bytes).unwrap();
+    let key = created.authenticated.current_puk().unwrap();
+    let seed = foks_crypto::derive_kv_keys(&key.seed)
+        .unwrap()
+        .open_directory_seed(&directory.active)
+        .unwrap();
+    let template = foks_proto::KvDirent::decode(&tree[0].entries[0].dirent_bytes).unwrap();
+    let dirents = (1..101)
+        .map(|index| {
+            let mut entry = template.clone();
+            entry.id = [index; 16];
+            let (mac, boxed) = foks_crypto::seal_kv_dirent_name(
+                &seed,
                 root,
-                &format!("entry-{index:03}"),
-                &mut Cursor::new([]),
-                options(),
+                entry.directory_version,
+                format!("entry-{index:03}").into_bytes(),
+                [index; 16],
             )
             .unwrap();
-    }
+            entry.name_mac = mac;
+            entry.name_box = boxed;
+            entry.binding_mac = foks_crypto::bind_kv_dirent(&seed, &entry).unwrap();
+            entry
+        })
+        .collect();
+    fixture
+        .environment
+        .seed_kv_dirents(created.credential.uid.clone(), dirents)
+        .unwrap();
     let tree = session.sync().unwrap();
     assert_eq!(tree[0].entries.len(), 101);
     let names = tree[0]
@@ -540,12 +565,12 @@ pub(crate) fn a_path_scoped_write_cites_only_the_directories_its_path_walked() {
     assert_eq!(moved.version, 2, "the peer's change was applied");
 }
 
-/// Counts the KV requests a write costs in a fifty-directory store, with and
+/// Counts the KV requests a write costs in a branching store, with and
 /// without a resolved path. An unscoped session keeps the complete traversal,
 /// so one run measures both shapes against the same server.
 #[test]
 pub(crate) fn a_resolved_path_costs_a_fraction_of_a_complete_traversal() {
-    const WIDTH: usize = 50;
+    const WIDTH: usize = 5;
     let fixture = Fixture::start("kv-path-cost");
     let created = fixture
         .client
@@ -565,8 +590,9 @@ pub(crate) fn a_resolved_path_costs_a_fraction_of_a_complete_traversal() {
             &mut protected,
         )
         .unwrap();
-    // Scope the setup too: fifty complete traversals of a growing store would
-    // exhaust the connection's request budget before the measurement starts.
+    // A small live tree covers the wire behavior; the synthetic path tests
+    // retain the fifty-directory fixture and exact request counts.
+    // Scope setup so it does not repeatedly traverse unrelated directories.
     for index in 0..WIDTH {
         session.resolve_path(&[]).unwrap();
         session
@@ -641,10 +667,10 @@ pub(crate) fn a_resolved_path_costs_a_fraction_of_a_complete_traversal() {
         "KV requests: scoped-write={scoped} unscoped-write={unscoped} \
          two-parents-created={created}"
     );
-    assert!(
-        scoped * 4 < unscoped,
-        "a path-scoped write should cost a fraction of a complete traversal: \
-         scoped={scoped} unscoped={unscoped}"
+    assert_eq!(
+        unscoped - scoped,
+        4 * WIDTH as u64,
+        "each unrelated directory adds metadata and listing reads before and after the write"
     );
     assert!(
         created < unscoped * 2,

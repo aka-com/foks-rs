@@ -18,15 +18,18 @@
     "notarize:macos": "bash scripts/notarize-macos-app.sh",
     "typecheck": "tsc --noEmit -p apps/desktop/tsconfig.json",
     "test": "npm run test:core",
-    "test:foks-ui": "tsx --test apps/desktop/tests/*.test.ts apps/desktop/tests/*.test.tsx",
+    "test:foks-ui": "npm run test:foks-ui:fast && npm run test:foks-ui:scale",
     "test:foks-desktop:real-agent": "bash scripts/test-foks-desktop-real-agent.sh",
     "acceptance:foks-redesign": "VITE_FOKS_MOCK=1 npm run build:frontend && node apps/desktop/tests/acceptance/redesign.mjs",
     "acceptance:foks-ui": "VITE_FOKS_MOCK=1 npm run build:frontend && node apps/desktop/tests/acceptance/run.mjs",
     "test:rust:core": "cargo test --locked",
-    "test:rust:full": "cargo test --locked --workspace",
+    "test:rust:full": "bash scripts/test-rust-full.sh",
     "test:core": "npm run test:rust:core && npm run test:foks-ui",
     "test:full": "npm run test:rust:full && npm run test:foks-ui",
-    "test:foks-desktop:packaged": "bash scripts/test-packaged-startup.sh"
+    "test:foks-desktop:packaged": "bash scripts/test-packaged-startup.sh",
+    "test:foks-ui:fast": "tsx --test apps/desktop/tests/*.test.ts apps/desktop/tests/*.test.tsx",
+    "test:foks-ui:scale": "FOKS_TEST_SCALE=1 tsx --test --test-name-pattern=\"^scale:\" apps/desktop/tests/notification-scheduling.test.ts",
+    "test:rust:scale": "bash scripts/test-rust-scale.sh"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",

@@ -343,6 +343,26 @@ pub(super) fn dispatch(
     store: TeamStoreRef,
     action: ChatAction,
 ) -> Result<serde_json::Value> {
+    dispatch_with_page_rows(
+        state_dir,
+        session,
+        vault,
+        master,
+        store,
+        action,
+        CHAT_PAGE_ROWS,
+    )
+}
+
+fn dispatch_with_page_rows(
+    state_dir: &Path,
+    session: &CheckedProfileSession<'_>,
+    vault: &mut AccountVault<'_>,
+    master: &[u8; 32],
+    store: TeamStoreRef,
+    action: ChatAction,
+    page_rows: usize,
+) -> Result<serde_json::Value> {
     if !action.validate() {
         return Err(Box::new(super::AgentRequestError("invalid chat request")));
     }
@@ -524,7 +544,7 @@ pub(super) fn dispatch(
             let channel_id = RtChannelId(id(&channel)?);
             let end = before.as_deref().and_then(chat_sequence).map(|n| n - 1);
             let after = after.as_deref().and_then(chat_sequence);
-            let mut width = CHAT_PAGE_ROWS as u64;
+            let mut width = page_rows as u64;
             loop {
                 let mut gap = None;
                 let history = if let Some(after) = after {
@@ -762,6 +782,16 @@ mod tests {
 
     #[test]
     fn incremental_history_handles_new_rows_gaps_resets_and_unknown_channels() -> Result<()> {
+        check_incremental_history(3)
+    }
+
+    #[test]
+    #[ignore = "production page size; run npm run test:rust:scale"]
+    fn incremental_history_at_production_page_size() -> Result<()> {
+        check_incremental_history(CHAT_PAGE_ROWS)
+    }
+
+    fn check_incremental_history(page_rows: usize) -> Result<()> {
         use foks_client_app::{
             derive_vault_key, CredentialBackend, Profile, ProfileRegistry, ProfileSession,
             ProtocolPolicy, TrustRoot,
@@ -825,7 +855,7 @@ mod tests {
                 team_id: hex(&created.scope.team),
             };
             let channel = hex(&created.scope.channel);
-            for _ in 0..=CHAT_PAGE_ROWS {
+            for _ in 0..=page_rows {
                 let send = session.prepare_chat_send(
                     "team",
                     RtChannelId(created.scope.channel),
@@ -842,7 +872,7 @@ mod tests {
                 )?;
             }
             let mut history = |channel: String, after: u64| -> Result<ChatReply> {
-                Ok(serde_json::from_value(dispatch(
+                Ok(serde_json::from_value(dispatch_with_page_rows(
                     &state,
                     session,
                     &mut vault,
@@ -853,14 +883,16 @@ mod tests {
                         before: None,
                         after: Some(after.to_string()),
                     },
+                    page_rows,
                 )?)?)
             };
+            let head = page_rows as u64 + 1;
             for (after, expected, gap) in [
-                (49, vec![51, 50], false),
-                (51, vec![], false),
-                (1, (2..=51).rev().collect(), false),
-                (0, (2..=51).rev().collect(), true),
-                (90, vec![], true),
+                (head - 2, vec![head, head - 1], false),
+                (head, vec![], false),
+                (1, (2..=head).rev().collect(), false),
+                (0, (2..=head).rev().collect(), true),
+                (head + 1, vec![], true),
             ] {
                 let ChatResult::History {
                     messages,
@@ -879,7 +911,7 @@ mod tests {
                     expected
                 );
             }
-            assert!(history("fe".repeat(16), 51).is_err());
+            assert!(history("fe".repeat(16), head).is_err());
             Ok(())
         })
     }

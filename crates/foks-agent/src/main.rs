@@ -2381,7 +2381,11 @@ fn catalog_cache() -> &'static Mutex<CatalogCache> {
 /// listing each and removes the need to know which stores an operation
 /// reached while it ran.
 fn invalidate_cached_catalogs() {
-    if let Ok(mut cache) = catalog_cache().lock() {
+    invalidate_catalog_cache(catalog_cache());
+}
+
+fn invalidate_catalog_cache(cache: &Mutex<CatalogCache>) {
+    if let Ok(mut cache) = cache.lock() {
         cache.remove(|_| true);
     }
 }
@@ -2399,12 +2403,21 @@ fn paginate_cached_catalog(
     cursor: Option<&str>,
     limit: u32,
 ) -> Result<Option<KvPage>, Box<dyn std::error::Error>> {
+    paginate_cached_catalog_in(catalog_cache(), store, cursor, limit)
+}
+
+fn paginate_cached_catalog_in(
+    cache: &Mutex<CatalogCache>,
+    store: &CatalogStoreBinding,
+    cursor: Option<&str>,
+    limit: u32,
+) -> Result<Option<KvPage>, Box<dyn std::error::Error>> {
     validate_catalog_request(store, cursor, limit)?;
     let snapshot = cursor
         .map(decode_catalog_cursor)
         .transpose()?
         .map(|cursor| (cursor.snapshot_version, cursor.snapshot_digest));
-    let mut cache = catalog_cache()
+    let mut cache = cache
         .lock()
         .map_err(|_| AgentRequestError("catalog cache is unavailable"))?;
     let Some(entry) = cache.get_at(store, snapshot, Instant::now()) else {
@@ -2422,6 +2435,7 @@ fn paginate_cached_catalog(
 }
 
 fn cache_catalog(
+    cache: &Mutex<CatalogCache>,
     store: CatalogStoreBinding,
     report: &foks_client_app::KvCatalogReport,
     digest: [u8; 32],
@@ -2431,7 +2445,7 @@ fn cache_catalog(
         return Ok(());
     }
     let now = Instant::now();
-    catalog_cache()
+    cache
         .lock()
         .map_err(|_| AgentRequestError("catalog cache is unavailable"))?
         .put_at(
@@ -2453,6 +2467,16 @@ fn paginate_fresh_catalog(
     cursor: Option<&str>,
     limit: u32,
 ) -> Result<KvPage, Box<dyn std::error::Error>> {
+    paginate_fresh_catalog_in(catalog_cache(), report, store, cursor, limit)
+}
+
+fn paginate_fresh_catalog_in(
+    cache: &Mutex<CatalogCache>,
+    report: foks_client_app::KvCatalogReport,
+    store: CatalogStoreBinding,
+    cursor: Option<&str>,
+    limit: u32,
+) -> Result<KvPage, Box<dyn std::error::Error>> {
     // Once per fresh report, for both the cache key and the cursors of every
     // page served from it.
     let (digest, encoded_bytes) = catalog_snapshot_identity(&report)?;
@@ -2460,7 +2484,7 @@ fn paginate_fresh_catalog(
     // A single-page store is retained too: the desktop re-reads every store
     // on its catalog pass, and the pass after this one is inside the
     // lifetime.
-    cache_catalog(store, &report, digest, encoded_bytes)?;
+    cache_catalog(cache, store, &report, digest, encoded_bytes)?;
     Ok(page)
 }
 
@@ -2542,11 +2566,11 @@ fn paginate_catalog(
     })
 }
 
-/// Counts the serializations this function performs, so a test can assert
-/// that one fresh report is serialized and hashed once, not once per page.
+// Counts serializations on this thread, independently of parallel fixtures.
 #[cfg(test)]
-static CATALOG_IDENTITY_COMPUTATIONS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+thread_local! {
+    static CATALOG_IDENTITY_COMPUTATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 fn catalog_snapshot_identity(
     report: &foks_client_app::KvCatalogReport,
@@ -2555,7 +2579,7 @@ fn catalog_snapshot_identity(
     use std::io::Write as _;
 
     #[cfg(test)]
-    CATALOG_IDENTITY_COMPUTATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    CATALOG_IDENTITY_COMPUTATIONS.set(CATALOG_IDENTITY_COMPUTATIONS.get() + 1);
 
     struct DigestWriter {
         digest: sha2::Sha256,
@@ -8175,21 +8199,6 @@ mod tests {
         }
     }
 
-    /// The catalog cache is process-wide, so the tests that reach it run one
-    /// at a time and start from an empty cache.
-    fn catalog_cache_guard() -> std::sync::MutexGuard<'static, ()> {
-        static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
-        let guard = GUARD
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        catalog_cache()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(|_| true);
-        guard
-    }
-
     fn catalog_store(alias: &str) -> CatalogStoreBinding {
         CatalogStoreBinding::Account {
             value: AccountStoreRef {
@@ -8260,23 +8269,24 @@ mod tests {
 
     #[test]
     fn a_later_page_is_served_only_from_the_snapshot_its_cursor_names() {
-        let _guard = catalog_cache_guard();
+        let cache = Mutex::new(CatalogCache::default());
         let store = catalog_store("personal");
         let report = catalog_report(7, 3);
-        let first = paginate_fresh_catalog(report.clone(), store.clone(), None, 2).unwrap();
+        let first =
+            paginate_fresh_catalog_in(&cache, report.clone(), store.clone(), None, 2).unwrap();
         let cursor = first.next_cursor.clone().unwrap();
-        assert!(paginate_cached_catalog(&store, Some(&cursor), 2)
+        assert!(paginate_cached_catalog_in(&cache, &store, Some(&cursor), 2)
             .unwrap()
             .is_some());
         // A write replaces the retained report. The cursor the desktop still
         // holds names the previous snapshot, which is no longer retained, so
         // it is not answered from the new one.
         let rewritten = catalog_report(8, 3);
-        paginate_fresh_catalog(rewritten, store.clone(), None, 2).unwrap();
-        assert!(paginate_cached_catalog(&store, Some(&cursor), 2)
+        paginate_fresh_catalog_in(&cache, rewritten, store.clone(), None, 2).unwrap();
+        assert!(paginate_cached_catalog_in(&cache, &store, Some(&cursor), 2)
             .unwrap()
             .is_none());
-        assert!(paginate_cached_catalog(&store, None, 2)
+        assert!(paginate_cached_catalog_in(&cache, &store, None, 2)
             .unwrap()
             .is_some_and(|page| page.snapshot_version == 8));
     }
@@ -8332,41 +8342,42 @@ mod tests {
 
     #[test]
     fn a_fresh_report_is_serialized_and_hashed_once_for_every_page() {
-        let _guard = catalog_cache_guard();
+        let cache = Mutex::new(CatalogCache::default());
         let store = catalog_store("personal");
         let report = catalog_report(7, 5);
-        let before = CATALOG_IDENTITY_COMPUTATIONS.load(std::sync::atomic::Ordering::Relaxed);
-        let mut page = paginate_fresh_catalog(report, store.clone(), None, 2).unwrap();
+        let before = CATALOG_IDENTITY_COMPUTATIONS.get();
+        let mut page = paginate_fresh_catalog_in(&cache, report, store.clone(), None, 2).unwrap();
         let mut pages = 1;
         while let Some(cursor) = page.next_cursor.clone() {
-            page = paginate_cached_catalog(&store, Some(&cursor), 2)
+            page = paginate_cached_catalog_in(&cache, &store, Some(&cursor), 2)
                 .unwrap()
                 .expect("the retained report serves every later page");
             pages += 1;
         }
         assert_eq!(pages, 3);
-        assert_eq!(
-            CATALOG_IDENTITY_COMPUTATIONS.load(std::sync::atomic::Ordering::Relaxed) - before,
-            1
-        );
+        assert_eq!(CATALOG_IDENTITY_COMPUTATIONS.get() - before, 1);
     }
 
     #[test]
     fn a_write_through_this_agent_drops_every_retained_catalog() {
-        let _guard = catalog_cache_guard();
+        let cache = Mutex::new(CatalogCache::default());
         let store = catalog_store("personal");
-        paginate_fresh_catalog(catalog_report(7, 3), store.clone(), None, 2).unwrap();
-        assert!(paginate_cached_catalog(&store, None, 2).unwrap().is_some());
+        paginate_fresh_catalog_in(&cache, catalog_report(7, 3), store.clone(), None, 2).unwrap();
+        assert!(paginate_cached_catalog_in(&cache, &store, None, 2)
+            .unwrap()
+            .is_some());
         // The lifetime bounds staleness against writes made on other devices.
         // A write made through this agent, by any client and whether or not
         // it asked for a fresh listing, is not one of those.
-        invalidate_cached_catalogs();
-        assert!(paginate_cached_catalog(&store, None, 2).unwrap().is_none());
+        invalidate_catalog_cache(&cache);
+        assert!(paginate_cached_catalog_in(&cache, &store, None, 2)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
     fn catalog_cursors_bind_store_snapshot_and_offset() {
-        let _guard = catalog_cache_guard();
+        let cache = Mutex::new(CatalogCache::default());
         let store = CatalogStoreBinding::Account {
             value: AccountStoreRef {
                 profile: "local".to_owned(),
@@ -8414,8 +8425,8 @@ mod tests {
         .unwrap();
         assert_eq!(second.entries[0].path, "/2");
         assert!(second.next_cursor.is_none());
-        cache_catalog(store.clone(), &report, digest, encoded_bytes).unwrap();
-        let cached = paginate_cached_catalog(&store, first.next_cursor.as_deref(), 2)
+        cache_catalog(&cache, store.clone(), &report, digest, encoded_bytes).unwrap();
+        let cached = paginate_cached_catalog_in(&cache, &store, first.next_cursor.as_deref(), 2)
             .unwrap()
             .unwrap();
         assert_eq!(cached.entries[0].path, "/2");
@@ -8423,7 +8434,7 @@ mod tests {
         // A completed pagination no longer drops the entry: only expiry and
         // eviction do, so the next pass over the same store is served from it.
         assert!(
-            paginate_cached_catalog(&store, first.next_cursor.as_deref(), 2)
+            paginate_cached_catalog_in(&cache, &store, first.next_cursor.as_deref(), 2)
                 .unwrap()
                 .is_some()
         );
