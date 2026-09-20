@@ -1,6 +1,6 @@
 import { RefreshActivities } from './refresh-activity';
 import type { Account, AgentSnapshot, CatalogFreshnessEntry } from './model';
-import { accountHasBoundTeam, discoveryAccounts } from './team-discovery';
+import { discoveryAccounts } from './team-discovery';
 import {
   ReconciliationScheduler,
   type ReconciliationClock,
@@ -20,17 +20,8 @@ export interface DesktopReconciliationReads {
   nowSeconds(): number;
 }
 
-/** How often discovery runs for an account with a team still to bind. */
+/** How often each eligible account checks for newly joined teams. */
 const DISCOVERY_INTERVAL = 300_000;
-/**
- * An account whose teams the catalog already binds has nothing for the next
- * discovery to bind, so it runs one in this many instead. That sweep, the run
- * every account gets shortly after launch, and the one a recovery asks for
- * are what still find a team joined since. Each run the sweep replaces is a
- * `discover_groups` the agent does not serve and a catalog invalidation that
- * does not follow it.
- */
-const DISCOVERY_SWEEP_RUNS = 6;
 
 export const profileRefreshKey = (
   snapshot: AgentSnapshot,
@@ -145,9 +136,7 @@ export class DesktopReconciliation {
         ]),
         scope: account.server,
         kind: 'discovery',
-        interval: accountHasBoundTeam(snapshot, account)
-          ? DISCOVERY_INTERVAL * DISCOVERY_SWEEP_RUNS
-          : DISCOVERY_INTERVAL,
+        interval: DISCOVERY_INTERVAL,
         initialDelay: 5_000,
         eligible: () =>
           discoveryAccounts(

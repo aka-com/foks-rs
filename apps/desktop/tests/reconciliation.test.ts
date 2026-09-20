@@ -277,7 +277,7 @@ test('fatal integrity errors require explicit retry while cancellation is not re
   scheduler.dispose();
 });
 
-test('desktop scheduling sweeps an already-bound account at a longer interval', async () => {
+test('desktop scheduling discovers a bound account every five minutes and after recovery', async () => {
   const clock = new Clock();
   const snapshot: AgentSnapshot = {
     ...FIXTURE,
@@ -326,19 +326,18 @@ test('desktop scheduling sweeps an already-bound account at a longer interval', 
   assert.ok(accounts.includes(bound.store));
   const runs = () => accounts.filter((store) => store === bound.store).length;
   const first = runs();
-  // Discovery binds teams, and this account's are bound already, so the run
-  // it would have made at its own interval is not made.
-  await clock.advance(300_000);
+  // An existing team does not imply that all newly joined teams are bound.
+  await clock.advance(299_999);
   assert.equal(runs(), first);
-  // The sweep that finds a team joined since still runs.
-  await clock.advance(5 * 300_000);
+  await clock.advance(1);
   assert.equal(runs(), first + 1);
-  // A recovery reconnects to the agent, so every account is discovered
-  // again rather than waiting for its own sweep.
+  await clock.advance(300_000);
+  assert.equal(runs(), first + 2);
+  // Recovery discovers again without waiting for the next periodic run.
   await clock.advance(60_000);
   service.wake('recovery');
   await clock.advance(1_000);
-  assert.equal(runs(), first + 2);
+  assert.equal(runs(), first + 3);
   service.dispose();
 });
 
