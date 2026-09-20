@@ -18,6 +18,10 @@ struct Call<F, T> {
     response: SyncSender<Result<T>>,
     queued_at: Instant,
     timing: Arc<WriterTiming>,
+    reconciliation: Option<(
+        Arc<crate::ServerMetrics>,
+        crate::metrics::realtime::ReconcileSource,
+    )>,
 }
 
 impl<F, T> Task for Call<F, T>
@@ -31,11 +35,19 @@ where
             response,
             queued_at,
             timing,
+            reconciliation,
         } = *self;
-        timing.observe_queue_wait(queued_at.elapsed());
+        let queue_wait = queued_at.elapsed();
+        timing.observe_queue_wait(queue_wait);
         let started = Instant::now();
         let result = operation(database);
-        timing.observe_execution(started.elapsed());
+        let execution = started.elapsed();
+        timing.observe_execution(execution);
+        if let Some((metrics, source)) = reconciliation {
+            metrics
+                .realtime
+                .execution(source, queue_wait, execution, result.is_err());
+        }
         let _ = response.send(result);
     }
 }
@@ -228,6 +240,21 @@ impl WriterHandle {
         F: FnOnce(&mut Database) -> Result<T> + Send + 'static,
         T: Send + 'static,
     {
+        self.call_observed(None, operation)
+    }
+
+    pub(crate) fn call_observed<F, T>(
+        &self,
+        reconciliation: Option<(
+            Arc<crate::ServerMetrics>,
+            crate::metrics::realtime::ReconcileSource,
+        )>,
+        operation: F,
+    ) -> Result<T>
+    where
+        F: FnOnce(&mut Database) -> Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
         let authorization = self.authorization.clone();
         let operation = move |database: &mut Database| {
             if let Some(auth) = authorization {
@@ -266,6 +293,7 @@ impl WriterHandle {
                 response,
                 queued_at: Instant::now(),
                 timing: Arc::clone(&self.queue.timing),
+                reconciliation,
             })))
             .is_err()
         {
@@ -406,6 +434,33 @@ impl std::ops::DerefMut for GuardedDatabase<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn schema_upgrade_waits_for_exclusive_writer_ownership() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("upgrade.sqlite");
+        drop(Database::open(&path, Default::default()).unwrap());
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection.execute_batch("DROP TRIGGER rt_membership_insert; DROP TRIGGER rt_membership_delete; DROP TRIGGER rt_membership_update; DROP TRIGGER rt_team_access_update; ALTER TABLE rt_user_inboxes DROP COLUMN reconcile_dirty; PRAGMA user_version=43;").unwrap();
+        let guard = DatabaseWriterGuard::acquire(&path).unwrap();
+        assert!(Writer::start(path.clone(), Default::default(), 2).is_err());
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+                .unwrap(),
+            43
+        );
+        drop(guard);
+        let writer = Writer::start(path.clone(), Default::default(), 2).unwrap();
+        assert!(foks_server_db::ReadDatabase::open(&path, Default::default()).is_ok());
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+                .unwrap(),
+            44
+        );
+        drop(writer);
+    }
 
     struct TestClock(AtomicU64);
 

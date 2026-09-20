@@ -1,4 +1,5 @@
 use super::super::{permission_denied, ServerData};
+use crate::metrics::realtime::ReconcileSource;
 use crate::{auth::Principal, rpc::RoutedCall, services::realtime::Response};
 use foks_proto::{RealtimeWire, RtAppId, RtInboxPollResult};
 use foks_rpc::{
@@ -12,13 +13,12 @@ pub(super) fn response(
     principal: Option<&Principal>,
 ) -> Result<Vec<u8>, RpcStatus> {
     let principal = principal.ok_or_else(permission_denied)?;
-    let database = data.read_database()?;
     let result = data.realtime.dispatch(
         call.route.position,
         call.call.argument(),
         principal,
         &data.host_id,
-        &database,
+        || data.read_database(),
         data.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
         &data.clock,
     )?;
@@ -33,6 +33,39 @@ pub(super) async fn poll_response(
     data: &ServerData,
     call: RoutedCall,
     certificate: Vec<u8>,
+) -> Result<Vec<u8>, RpcStatus> {
+    let mut outcome = PollOutcome::Cancelled;
+    struct Guard<'a>(&'a crate::ServerMetrics, &'a mut PollOutcome);
+    impl Drop for Guard<'_> {
+        fn drop(&mut self) {
+            self.0.realtime.update(|s| match self.1 {
+                PollOutcome::Bumped => s.bumped_polls += 1,
+                PollOutcome::TimedOut => s.timed_out_polls += 1,
+                PollOutcome::Failed => s.failed_polls += 1,
+                PollOutcome::Cancelled => s.cancelled_polls += 1,
+            });
+        }
+    }
+    let guard = Guard(&data.metrics, &mut outcome);
+    let result = poll_inner(data, call, certificate, guard.1).await;
+    if result.is_err() {
+        *guard.1 = PollOutcome::Failed;
+    }
+    result
+}
+
+enum PollOutcome {
+    Bumped,
+    TimedOut,
+    Failed,
+    Cancelled,
+}
+
+async fn poll_inner(
+    data: &ServerData,
+    call: RoutedCall,
+    certificate: Vec<u8>,
+    outcome: &mut PollOutcome,
 ) -> Result<Vec<u8>, RpcStatus> {
     if call.route.id != crate::rpc::RouteId::RealTimeRtPollInbox {
         return Err(RpcStatus::Unsupported);
@@ -85,41 +118,82 @@ pub(super) async fn poll_response(
     loop {
         let mut notified = Box::pin(Arc::clone(&listener).notified_owned());
         notified.as_mut().enable();
-        let read_head = |pool: crate::read_pool::ReadPool,
-                         actor: foks_server_db::RealtimeActor,
-                         clock: Arc<dyn foks_server_db::Clock>| async move {
+        let read_state =
+            |pool: crate::read_pool::ReadPool,
+             actor: foks_server_db::RealtimeActor,
+             clock: Arc<dyn foks_server_db::Clock>,
+             service: crate::services::realtime::RealtimeService| async move {
+                blocking(move || {
+                    let database = pool.checkout().map_err(|_| RpcStatus::TransactionRetry)?;
+                    let snapshot = database
+                        .snapshot()
+                        .map_err(|_| RpcStatus::TransactionRetry)?;
+                    let now = clock
+                        .now_micros()
+                        .map_err(|_| RpcStatus::TransactionRetry)?;
+                    service.inbox_state(&actor, app, &snapshot, now, ReconcileSource::Poll)
+                })
+                .await
+            };
+        let mut state = read_state(
+            pool.clone(),
+            actor.clone(),
+            Arc::clone(&data.clock),
+            service.clone(),
+        )
+        .await?;
+        if state.version > since {
+            *outcome = PollOutcome::Bumped;
+            return poll_result(sequence, state.version, true);
+        }
+        if state.needs_reconciliation() {
+            let reconcile_actor = actor.clone();
+            let reconcile_writer = writer.clone();
+            let reconcile_service = service.clone();
+            let reconcile_clock = Arc::clone(&data.clock);
             blocking(move || {
-                let database = pool.checkout().map_err(|_| RpcStatus::TransactionRetry)?;
-                crate::services::realtime::RealtimeService::inbox_head(
-                    &actor, app, &database, &clock,
+                reconcile_service.reconcile(
+                    reconcile_actor,
+                    app,
+                    &reconcile_writer,
+                    &reconcile_clock,
+                    ReconcileSource::Poll,
                 )
             })
-            .await
-        };
-        let head = read_head(pool.clone(), actor.clone(), Arc::clone(&data.clock)).await?;
-        if head > since {
-            return poll_result(sequence, head, true);
+            .await?;
+            state = read_state(
+                pool.clone(),
+                actor.clone(),
+                Arc::clone(&data.clock),
+                service.clone(),
+            )
+            .await?;
+        } else {
+            service.clean_skip(ReconcileSource::Poll);
         }
-        let reconcile_actor = actor.clone();
-        let reconcile_writer = writer.clone();
-        let reconcile_service = service.clone();
-        let reconcile_clock = Arc::clone(&data.clock);
-        blocking(move || {
-            reconcile_service.reconcile(reconcile_actor, app, &reconcile_writer, &reconcile_clock)
-        })
-        .await?;
-        let head = read_head(pool.clone(), actor.clone(), Arc::clone(&data.clock)).await?;
+        let head = state.version;
         if head > since {
+            *outcome = PollOutcome::Bumped;
             return poll_result(sequence, head, true);
         }
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
+            *outcome = PollOutcome::TimedOut;
             return poll_result(sequence, head, false);
         }
         active_poll.get_or_insert_with(|| {
             crate::ServerMetrics::realtime_poll_guard(Arc::clone(&data.metrics))
         });
-        let _ = tokio::time::timeout(remaining.min(Duration::from_secs(1)), notified).await;
+        let hint = tokio::time::timeout(remaining.min(Duration::from_secs(1)), notified)
+            .await
+            .is_ok();
+        data.metrics.realtime.update(|s| {
+            if hint {
+                s.hint_wakes += 1;
+            } else {
+                s.fallback_wakes += 1;
+            }
+        });
     }
 }
 

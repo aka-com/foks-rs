@@ -40,6 +40,7 @@ CREATE TABLE rt_user_inboxes (
     version INTEGER NOT NULL CHECK (version >= 0),
     reconcile_memberships BLOB CHECK (reconcile_memberships IS NULL OR length(reconcile_memberships) <= 1048576),
     reconcile_after BLOB CHECK (reconcile_after IS NULL OR length(reconcile_after) = 16),
+    reconcile_dirty INTEGER NOT NULL DEFAULT 1 CHECK (reconcile_dirty IN (0,1)),
     PRIMARY KEY (uid, app_id)
 ) STRICT;
 CREATE TABLE rt_user_channels (

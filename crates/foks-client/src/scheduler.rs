@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use foks_client_db::{HardStateStore, ScheduledJob, ScheduledJobKind};
+use foks_client_db::{HardStateStore, JobRegistrationReport, ScheduledJob, ScheduledJobKind};
 use foks_crypto::prefixed_hash;
 
 use crate::{Error, Result};
@@ -60,6 +60,24 @@ pub struct ScheduledJobRegistration {
     pub registered_at: u64,
 }
 
+impl ScheduledJobRegistration {
+    fn into_job(self) -> ScheduledJob {
+        ScheduledJob {
+            job_id: self.job_id,
+            kind: self.kind,
+            host_id: self.host_id,
+            scope_id: self.scope_id,
+            interval_micros: self.interval_micros,
+            next_run_at: self.first_run_at,
+            failure_count: 0,
+            lease_until: None,
+            last_completed_at: None,
+            last_error: None,
+            updated_at: self.registered_at,
+        }
+    }
+}
+
 /// Runtime-neutral durable scheduler.
 ///
 /// The application owns the timer and calls [`Self::run_due`] on its blocking
@@ -82,40 +100,34 @@ impl FoksScheduler {
     }
 
     pub fn register(&self, registration: ScheduledJobRegistration) -> Result<()> {
-        HardStateStore::open(&self.hard_database)?.register_scheduled_job(&ScheduledJob {
-            job_id: registration.job_id,
-            kind: registration.kind,
-            host_id: registration.host_id,
-            scope_id: registration.scope_id,
-            interval_micros: registration.interval_micros,
-            next_run_at: registration.first_run_at,
-            failure_count: 0,
-            lease_until: None,
-            last_completed_at: None,
-            last_error: None,
-            updated_at: registration.registered_at,
-        })?;
+        HardStateStore::open(&self.hard_database)?
+            .register_scheduled_job(&registration.into_job())?;
         Ok(())
     }
 
     /// Registers a default job without replacing an operator-selected
     /// interval or execution state on an existing, identically bound job.
     pub fn register_if_missing(&self, registration: ScheduledJobRegistration) -> Result<bool> {
-        let mut store = HardStateStore::open(&self.hard_database)?;
-        store
-            .register_scheduled_job_if_missing(&ScheduledJob {
-                job_id: registration.job_id,
-                kind: registration.kind,
-                host_id: registration.host_id,
-                scope_id: registration.scope_id,
-                interval_micros: registration.interval_micros,
-                next_run_at: registration.first_run_at,
-                failure_count: 0,
-                lease_until: None,
-                last_completed_at: None,
-                last_error: None,
-                updated_at: registration.registered_at,
-            })
+        Ok(self.register_many_if_missing([registration])?.inserted == 1)
+    }
+
+    /// Reconciles unique default job IDs on one database handle. An empty batch
+    /// does not open/create the database; existing rows retain their full state.
+    pub fn register_many_if_missing(
+        &self,
+        registrations: impl IntoIterator<Item = ScheduledJobRegistration>,
+    ) -> Result<JobRegistrationReport> {
+        let jobs = registrations
+            .into_iter()
+            .map(ScheduledJobRegistration::into_job)
+            .collect::<Vec<_>>();
+        if jobs.is_empty() {
+            return Ok(JobRegistrationReport::default());
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        foks_client_db::registration_test_support::registration_opened();
+        HardStateStore::open(&self.hard_database)?
+            .register_scheduled_jobs_if_missing(&jobs)
             .map_err(Into::into)
     }
 
@@ -288,6 +300,44 @@ mod tests {
         )
         .unwrap();
         (directory, scheduler, host.snapshot.host_id().to_vec())
+    }
+
+    #[test]
+    fn batch_opens_once_and_empty_batch_does_not_create_a_database() {
+        use foks_client_db::registration_test_support::observe;
+        let (directory, scheduler, host_id) = scheduler();
+        let registrations = (1..=10)
+            .map(|id| ScheduledJobRegistration {
+                job_id: [id; 16],
+                kind: ScheduledJobKind::UserRefresh,
+                host_id: host_id.clone(),
+                scope_id: vec![id; 33],
+                interval_micros: 1000,
+                first_run_at: 50,
+                registered_at: 40,
+            })
+            .collect::<Vec<_>>();
+        for inserted in [10, 0] {
+            let (result, work) =
+                observe(|| scheduler.register_many_if_missing(registrations.clone()));
+            assert_eq!(
+                result.unwrap(),
+                JobRegistrationReport {
+                    existing: 10 - inserted,
+                    inserted
+                }
+            );
+            assert_eq!(work.database_opens, 1);
+            assert_eq!(work.batches, 1);
+            assert_eq!(work.read_transactions, 1);
+            assert_eq!(work.write_transactions, usize::from(inserted != 0));
+        }
+        let path = directory.path().join("absent.sqlite");
+        let empty = FoksScheduler::new(&path, SchedulerConfig::default()).unwrap();
+        let (report, work) = observe(|| empty.register_many_if_missing([]));
+        assert_eq!(report.unwrap(), JobRegistrationReport::default());
+        assert_eq!(work.database_opens, 0);
+        assert!(!path.exists());
     }
 
     #[test]

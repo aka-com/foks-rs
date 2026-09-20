@@ -1,3 +1,10 @@
+mod checkpoint;
+pub(crate) mod realtime;
+pub use realtime::{RealtimeMetricsSnapshot, ReconcileMetricsSnapshot};
+
+pub use checkpoint::CheckpointMetricsSnapshot;
+pub(crate) use checkpoint::BUCKET_MICROS as CHECKPOINT_BUCKET_MICROS;
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -37,6 +44,8 @@ struct DurationMetricSnapshot {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ServerMetricsSnapshot {
+    pub checkpoint: CheckpointMetricsSnapshot,
+    pub realtime: RealtimeMetricsSnapshot,
     pub admin_cleanup_attempts: u64,
     pub admin_cleanup_failures: u64,
     pub admin_reclaimed_records: u64,
@@ -76,6 +85,8 @@ pub struct ServerMetricsSnapshot {
 
 #[derive(Default)]
 pub struct ServerMetrics {
+    checkpoint: checkpoint::CheckpointMetrics,
+    pub(crate) realtime: realtime::RealtimeMetrics,
     admin_cleanup_attempts: AtomicU64,
     admin_cleanup_failures: AtomicU64,
     admin_reclaimed_records: AtomicU64,
@@ -108,6 +119,19 @@ pub struct ServerMetrics {
 }
 
 impl ServerMetrics {
+    pub(crate) fn checkpoint_attempted(&self) {
+        self.checkpoint.attempted();
+    }
+
+    pub(crate) fn checkpoint_finished(
+        &self,
+        result: &foks_server_db::Result<foks_server_db::CheckpointReport>,
+        unixtime: u64,
+        duration: Duration,
+    ) {
+        self.checkpoint.finished(result, unixtime, duration);
+    }
+
     pub(crate) fn admin_cleanup_attempted(&self) {
         self.admin_cleanup_attempts.fetch_add(1, Ordering::Relaxed);
     }
@@ -126,6 +150,8 @@ impl ServerMetrics {
         let handler_duration = self.handler_duration.snapshot();
         let backup_duration = self.backup_duration.snapshot();
         ServerMetricsSnapshot {
+            checkpoint: self.checkpoint.snapshot(),
+            realtime: self.realtime.snapshot(),
             admin_cleanup_attempts: self.admin_cleanup_attempts.load(Ordering::Relaxed),
             admin_cleanup_failures: self.admin_cleanup_failures.load(Ordering::Relaxed),
             admin_reclaimed_records: self.admin_reclaimed_records.load(Ordering::Relaxed),

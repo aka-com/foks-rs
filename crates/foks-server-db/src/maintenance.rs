@@ -1,5 +1,7 @@
 use rusqlite::TransactionBehavior;
 
+#[cfg(test)]
+mod checkpoint_tests;
 mod uploads;
 
 use crate::{error::sql_integer, Database, Error, Result};
@@ -31,11 +33,56 @@ pub struct StorageReport {
     pub wal_bytes: u64,
 }
 
+/// WAL frame positions, including frames backfilled by earlier checkpoints.
+/// These are observations, not additive counts of work done by this call.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CheckpointReport {
+    /// SQLite's busy flag (0 or 1). Zero alone does not imply completion.
     pub busy: u64,
-    pub wal_pages: u64,
-    pub checkpointed_pages: u64,
+    /// Total WAL frames. Both counts are `None` when SQLite cannot observe them.
+    pub wal_pages: Option<u64>,
+    /// Frames already backfilled, at most `wal_pages` when counts are known.
+    pub checkpointed_pages: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CheckpointOutcome {
+    Complete,
+    Deferred,
+    Unavailable,
+}
+
+impl CheckpointReport {
+    /// Completion requires known equal positions and no busy flag. An unavailable
+    /// observation without contention proves neither completion nor backlog.
+    pub fn outcome(&self) -> CheckpointOutcome {
+        if self.busy != 0 {
+            return CheckpointOutcome::Deferred;
+        }
+        match (self.wal_pages, self.checkpointed_pages) {
+            (Some(log), Some(done)) if log == done => CheckpointOutcome::Complete,
+            (Some(_), Some(_)) => CheckpointOutcome::Deferred,
+            _ => CheckpointOutcome::Unavailable,
+        }
+    }
+
+    fn decode(busy: i64, log: i64, done: i64) -> Result<Self> {
+        if !matches!(busy, 0 | 1) {
+            return Err(Error::Invalid("invalid checkpoint busy flag"));
+        }
+        let (wal_pages, checkpointed_pages) = match (log, done) {
+            (-1, -1) => (None, None),
+            (log, done) if log >= 0 && done >= 0 && done <= log => {
+                (Some(log as u64), Some(done as u64))
+            }
+            _ => return Err(Error::Invalid("invalid checkpoint frame counts")),
+        };
+        Ok(Self {
+            busy: busy as u64,
+            wal_pages,
+            checkpointed_pages,
+        })
+    }
 }
 
 impl Database {
@@ -117,18 +164,23 @@ impl Database {
         })
     }
 
+    /// Explicitly wait for readers through the busy handler and truncate the WAL.
+    /// Online maintenance should use `checkpoint_passive` instead.
     pub fn checkpoint(&self) -> Result<CheckpointReport> {
-        let (busy, wal_pages, checkpointed_pages): (i64, i64, i64) =
-            self.connection
-                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
-                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-                })?;
-        Ok(CheckpointReport {
-            busy: u64::try_from(busy).map_err(|_| Error::IntegerRange)?,
-            wal_pages: u64::try_from(wal_pages).map_err(|_| Error::IntegerRange)?,
-            checkpointed_pages: u64::try_from(checkpointed_pages)
-                .map_err(|_| Error::IntegerRange)?,
-        })
+        self.checkpoint_sql("PRAGMA main.wal_checkpoint(TRUNCATE)")
+    }
+
+    /// Backfill available frames without invoking SQLite's busy handler.
+    /// May leave work pending and still performs I/O on the calling thread.
+    pub fn checkpoint_passive(&self) -> Result<CheckpointReport> {
+        self.checkpoint_sql("PRAGMA main.wal_checkpoint(PASSIVE)")
+    }
+
+    fn checkpoint_sql(&self, sql: &str) -> Result<CheckpointReport> {
+        let (busy, log, done) = self
+            .connection
+            .query_row(sql, [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        CheckpointReport::decode(busy, log, done)
     }
 
     pub fn storage_report(&self) -> Result<StorageReport> {

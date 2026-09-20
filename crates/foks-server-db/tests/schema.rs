@@ -89,3 +89,22 @@ fn schema_constraints_reject_bad_lengths_and_negative_values() {
         )
         .is_err());
 }
+
+#[test]
+fn older_than_supported_predecessor_is_refused_without_upgrading() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("older.sqlite");
+    let c = Connection::open(&path).unwrap();
+    c.pragma_update(None, "application_id", APPLICATION_ID)
+        .unwrap();
+    c.pragma_update(None, "user_version", 42).unwrap();
+    assert!(matches!(
+        Database::open(&path, Config::default()),
+        Err(Error::SchemaVersion { found: 42 })
+    ));
+    assert_eq!(
+        c.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+            .unwrap(),
+        42
+    );
+}

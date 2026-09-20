@@ -496,8 +496,9 @@ impl RunningStandaloneServer {
         self.client_roots.clone()
     }
 
-    /// Runs the same bounded reclamation and WAL checkpoint used by the
-    /// background maintenance loop, returning non-secret operator metrics.
+    /// Runs the background loop's bounded reclamation and PASSIVE WAL checkpoint.
+    /// Success can include deferred checkpoint work; inspect the returned report.
+    /// Checkpoint I/O runs on the writer but never waits through the busy handler.
     pub fn run_maintenance(
         &self,
     ) -> Result<(

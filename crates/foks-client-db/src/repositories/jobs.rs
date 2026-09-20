@@ -79,59 +79,97 @@ impl HardStateStore {
     /// Concurrent explicit registration wins without having its interval or
     /// execution state replaced.
     pub fn register_scheduled_job_if_missing(&mut self, job: &ScheduledJob) -> Result<bool> {
-        validate_scheduled_job(job)?;
-        if job.failure_count != 0
-            || job.lease_until.is_some()
-            || job.last_completed_at.is_some()
-            || job.last_error.is_some()
-        {
-            return Err(Error::InvalidScheduledJob(
-                "new jobs cannot contain execution state",
-            ));
-        }
-        let transaction = self.write_transaction()?;
-        let host_exists = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM hosts WHERE host_id = ?1)",
-            [&job.host_id],
-            |row| row.get::<_, bool>(0),
-        )?;
-        if !host_exists {
-            return Err(Error::UnknownHost);
-        }
-        let changed = transaction.execute(
-            "INSERT INTO scheduled_jobs (
-                job_id, job_kind, host_id, scope_id, interval_micros,
-                next_run_at, failure_count, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7)
-             ON CONFLICT(job_id) DO NOTHING",
-            params![
-                job.job_id.as_slice(),
-                job.kind as u8,
-                job.host_id,
-                job.scope_id,
-                sqlite_integer("scheduled interval", job.interval_micros)?,
-                sqlite_integer("scheduled next run", job.next_run_at)?,
-                sqlite_integer("scheduled update time", job.updated_at)?,
-            ],
-        )?;
-        if changed == 0 {
-            let binding = transaction.query_row(
-                "SELECT job_kind, host_id, scope_id FROM scheduled_jobs WHERE job_id = ?1",
-                [job.job_id.as_slice()],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, Vec<u8>>(1)?,
-                        row.get::<_, Vec<u8>>(2)?,
-                    ))
-                },
-            )?;
-            if binding != (job.kind as i64, job.host_id.clone(), job.scope_id.clone()) {
-                return Err(Error::InvalidScheduledJob("job ID binding changed"));
+        Ok(self
+            .register_scheduled_jobs_if_missing(std::slice::from_ref(job))?
+            .inserted
+            == 1)
+    }
+
+    /// Registers a batch without replacing existing schedules or execution state.
+    /// IDs must be unique in the input and retain their kind/host/scope binding.
+    /// An all-existing batch uses one read snapshot without acquiring the writer.
+    /// Missing jobs are inserted atomically after rechecking a fresh write snapshot.
+    pub fn register_scheduled_jobs_if_missing(
+        &mut self,
+        jobs: &[ScheduledJob],
+    ) -> Result<JobRegistrationReport> {
+        #[cfg(any(test, feature = "test-support"))]
+        crate::registration_test_support::record(|s| s.batches += 1);
+        let mut ids = std::collections::BTreeSet::new();
+        for job in jobs {
+            validate_scheduled_job(job)?;
+            if job.failure_count != 0
+                || job.lease_until.is_some()
+                || job.last_completed_at.is_some()
+                || job.last_error.is_some()
+            {
+                return Err(Error::InvalidScheduledJob(
+                    "new jobs cannot contain execution state",
+                ));
+            }
+            // Validate even existing rows: their candidate schedule is never used,
+            // but the singular API has always rejected out-of-range input.
+            sqlite_integer("scheduled interval", job.interval_micros)?;
+            sqlite_integer("scheduled next run", job.next_run_at)?;
+            sqlite_integer("scheduled update time", job.updated_at)?;
+            if !ids.insert(job.job_id) {
+                return Err(Error::InvalidScheduledJob("duplicate registration job ID"));
             }
         }
+        if jobs.is_empty() {
+            return Ok(JobRegistrationReport::default());
+        }
+        {
+            let transaction = self.read_transaction()?;
+            #[cfg(any(test, feature = "test-support"))]
+            crate::registration_test_support::record(|s| s.read_transactions += 1);
+            let existing = check_registration_bindings(&transaction, jobs)?.len();
+            transaction.commit()?;
+            if existing == jobs.len() {
+                return Ok(JobRegistrationReport {
+                    existing,
+                    inserted: 0,
+                });
+            }
+        }
+        // Never upgrade a stale read snapshot: serialize with any interleaving
+        // explicit registration, deletion or host change, then inspect all rows.
+        #[cfg(test)]
+        registration_tests::between_phases();
+        let transaction = self.write_transaction()?;
+        #[cfg(any(test, feature = "test-support"))]
+        crate::registration_test_support::record(|s| s.write_transactions += 1);
+        let existing = check_registration_bindings(&transaction, jobs)?;
+        {
+            let mut insert = transaction.prepare(
+                "INSERT INTO scheduled_jobs (job_id,job_kind,host_id,scope_id,interval_micros,
+                 next_run_at,failure_count,updated_at) VALUES (?1,?2,?3,?4,?5,?6,0,?7)
+                 ON CONFLICT(job_id) DO NOTHING",
+            )?;
+            for job in jobs.iter().filter(|job| !existing.contains(&job.job_id)) {
+                insert.execute(params![
+                    job.job_id.as_slice(),
+                    job.kind as u8,
+                    job.host_id,
+                    job.scope_id,
+                    sqlite_integer("scheduled interval", job.interval_micros)?,
+                    sqlite_integer("scheduled next run", job.next_run_at)?,
+                    sqlite_integer("scheduled update time", job.updated_at)?
+                ])?;
+            }
+        }
+        // Keep conflict-safe insertion honest even if future triggers add rows.
+        if check_registration_bindings(&transaction, jobs)?.len() != jobs.len() {
+            return Err(Error::InvalidScheduledJob(
+                "registration did not create all jobs",
+            ));
+        }
+        let report = JobRegistrationReport {
+            existing: existing.len(),
+            inserted: jobs.len() - existing.len(),
+        };
         transaction.commit()?;
-        Ok(changed == 1)
+        Ok(report)
     }
 
     /// Registers a resumable job, or refreshes its interval without delaying
@@ -409,3 +447,44 @@ impl HardStateStore {
         )? == 1)
     }
 }
+
+/// Checks hosts once each and immutable bindings by primary key on one snapshot.
+fn check_registration_bindings(
+    c: &rusqlite::Connection,
+    jobs: &[ScheduledJob],
+) -> Result<std::collections::BTreeSet<[u8; 16]>> {
+    let hosts = jobs
+        .iter()
+        .map(|job| job.host_id.as_slice())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut host = c.prepare("SELECT EXISTS(SELECT 1 FROM hosts WHERE host_id=?1)")?;
+    for id in hosts {
+        if !host.query_row([id], |r| r.get::<_, bool>(0))? {
+            return Err(Error::UnknownHost);
+        }
+    }
+    let mut binding =
+        c.prepare("SELECT job_kind,host_id,scope_id FROM scheduled_jobs WHERE job_id=?1")?;
+    let mut existing = std::collections::BTreeSet::new();
+    for job in jobs {
+        let stored = binding
+            .query_row([job.job_id.as_slice()], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, Vec<u8>>(1)?,
+                    r.get::<_, Vec<u8>>(2)?,
+                ))
+            })
+            .optional()?;
+        if let Some((kind, host, scope)) = stored {
+            if kind != job.kind as i64 || host != job.host_id || scope != job.scope_id {
+                return Err(Error::InvalidScheduledJob("job ID binding changed"));
+            }
+            existing.insert(job.job_id);
+        }
+    }
+    Ok(existing)
+}
+
+#[cfg(test)]
+mod registration_tests;

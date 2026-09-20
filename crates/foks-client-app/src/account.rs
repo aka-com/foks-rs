@@ -1475,6 +1475,11 @@ impl Drop for KexAcceptanceInput {
     }
 }
 
+fn account_alias_from_key(key: &str) -> Option<&str> {
+    key.strip_prefix("account.")
+        .or_else(|| key.strip_prefix("bot-account."))
+}
+
 pub struct AccountVault<'a> {
     pub(super) store: &'a mut dyn SecretStore,
     pub(super) loaded_bots: BTreeMap<String, LoadedAccount>,
@@ -1493,12 +1498,25 @@ impl<'a> AccountVault<'a> {
             .store
             .keys()?
             .into_iter()
-            .filter_map(|key| {
-                key.strip_prefix("account.")
-                    .or_else(|| key.strip_prefix("bot-account."))
-                    .map(str::to_owned)
-            })
+            .filter_map(|key| account_alias_from_key(&key).map(str::to_owned))
             .collect())
+    }
+
+    /// Names are discovery hints only; callers still authenticate every record.
+    /// This inventory is consumed within one checked operation, never cached.
+    pub(crate) fn refresh_account_aliases(&mut self) -> Result<(Vec<String>, Vec<String>)> {
+        let keys = self.store.keys()?;
+        let software = keys
+            .iter()
+            .filter_map(|key| account_alias_from_key(key).map(str::to_owned))
+            .collect();
+        let mut yubi = keys
+            .iter()
+            .filter_map(|key| super::yubi::yubi_alias_from_key(key).map(str::to_owned))
+            .collect::<Vec<_>>();
+        yubi.sort();
+        yubi.dedup();
+        Ok((software, yubi))
     }
 
     /// Lists only locally persisted public enrollment facts. A record exists

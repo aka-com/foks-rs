@@ -66,3 +66,6 @@ mod team_invitations;
 
 #[path = "conformance/web_admin.rs"]
 mod web_admin;
+
+#[path = "conformance/realtime_reconciliation.rs"]
+mod realtime_reconciliation;

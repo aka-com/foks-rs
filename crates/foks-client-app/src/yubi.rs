@@ -25,6 +25,11 @@ pub(super) struct YubiRefreshScope {
     pub software_alias: String,
 }
 
+pub(super) fn yubi_alias_from_key(key: &str) -> Option<&str> {
+    key.strip_prefix("yubi-account.")
+        .or_else(|| key.strip_prefix("pending-yubi."))
+}
+
 pub(super) fn yubi_account_key(alias: &str) -> String {
     format!("yubi-account.{alias}")
 }
@@ -437,11 +442,7 @@ impl AccountVault<'_> {
             .store
             .keys()?
             .into_iter()
-            .filter_map(|key| {
-                key.strip_prefix("yubi-account.")
-                    .or_else(|| key.strip_prefix("pending-yubi."))
-                    .map(str::to_owned)
-            })
+            .filter_map(|key| yubi_alias_from_key(&key).map(str::to_owned))
             .collect::<Vec<_>>();
         aliases.sort();
         aliases.dedup();

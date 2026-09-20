@@ -36,7 +36,10 @@ pub use entropy::{Entropy, OsEntropy};
 pub use error::{Error, Result};
 #[doc(hidden)]
 pub use fault::{SessionFaultPoint, SessionFaults};
-pub use metrics::{ServerMetrics, ServerMetricsSnapshot};
+pub use metrics::{
+    CheckpointMetricsSnapshot, RealtimeMetricsSnapshot, ReconcileMetricsSnapshot, ServerMetrics,
+    ServerMetricsSnapshot,
+};
 pub use net::{start, RunningServer, ServerAddresses};
 pub use rate_limit::RateLimitConfig;
 pub use standalone::{

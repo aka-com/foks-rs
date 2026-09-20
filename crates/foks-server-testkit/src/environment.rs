@@ -550,6 +550,7 @@ pub enum TestProfile {
     TightIo,
     ProductionBenchmark,
     RealtimePollCapacity,
+    RealtimeSingleReader,
     RateLimited,
     BackupAutomation,
 }
@@ -591,10 +592,16 @@ impl TestProfile {
             | Self::TightIo
             | Self::ProductionBenchmark
             | Self::RealtimePollCapacity
+            | Self::RealtimeSingleReader
             | Self::RateLimited
             | Self::BackupAutomation => foks_server_db::Config::default(),
         };
         let limits = foks_server::SessionLimits {
+            maximum_read_connections: if matches!(self, Self::RealtimeSingleReader) {
+                1
+            } else {
+                foks_server::SessionLimits::default().maximum_read_connections
+            },
             // Isolate poll admission from the independently bounded writer/read pools.
             maximum_in_flight_requests: if matches!(self, Self::RealtimePollCapacity) {
                 4

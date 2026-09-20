@@ -18,6 +18,13 @@ use rusqlite::{Transaction, TransactionBehavior};
 use super::{HardStateStore, Result};
 
 impl HardStateStore {
+    /// A consistent read snapshot that never attempts to reserve the writer.
+    pub(super) fn read_transaction(&mut self) -> Result<Transaction<'_>> {
+        Ok(self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)?)
+    }
+
     /// Starts the sole write-transaction mode used by hard-state repositories.
     pub(super) fn write_transaction(&mut self) -> Result<Transaction<'_>> {
         Ok(self

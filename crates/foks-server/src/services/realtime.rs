@@ -1,4 +1,4 @@
-use crate::{auth::Principal, WriterHandle};
+use crate::{auth::Principal, metrics::realtime::ReconcileSource, WriterHandle};
 use foks_proto::RealtimeWire;
 use foks_rpc::{RealtimeRequest, RpcStatus};
 use foks_server_db::{Error as DbError, RealtimeActor, RealtimeCommit, RealtimeWakeTarget};
@@ -83,13 +83,20 @@ impl RealtimeNotifier for InboxHub {
 pub(crate) struct RealtimeService {
     notifier: Arc<dyn RealtimeNotifier>,
     inbox_hub: Arc<InboxHub>,
+    metrics: Arc<crate::ServerMetrics>,
 }
 impl Default for RealtimeService {
     fn default() -> Self {
+        Self::new(Arc::new(crate::ServerMetrics::default()))
+    }
+}
+impl RealtimeService {
+    pub(crate) fn new(metrics: Arc<crate::ServerMetrics>) -> Self {
         let inbox_hub = Arc::new(InboxHub::default());
         Self {
             notifier: inbox_hub.clone(),
             inbox_hub,
+            metrics,
         }
     }
 }
@@ -141,24 +148,38 @@ impl RealtimeService {
         app: foks_proto::RtAppId,
         writer: &WriterHandle,
         clock: &Arc<dyn foks_server_db::Clock>,
+        source: ReconcileSource,
     ) -> Result<(), RpcStatus> {
-        after_commit(
-            writer.call_with_current_time(Arc::clone(clock), move |db, now| {
-                Ok(db.rt_reconcile_inbox(&actor, app, now)?)
-            }),
-            self.notifier.as_ref(),
-        )
+        self.metrics.realtime.source(source, |s| s.submissions += 1);
+        let clock = Arc::clone(clock);
+        let result = writer.call_observed(Some((Arc::clone(&self.metrics), source)), move |db| {
+            Ok(db.rt_reconcile_inbox(&actor, app, clock.now_micros()?)?)
+        });
+        if matches!(&result, Err(crate::Error::WriterQueue)) {
+            self.metrics
+                .realtime
+                .source(source, |s| s.submission_failures += 1);
+        }
+        let report = after_commit(result, self.notifier.as_ref())?;
+        self.metrics.realtime.report(source, report);
+        Ok(())
     }
 
-    pub(crate) fn inbox_head(
+    pub(crate) fn inbox_state(
+        &self,
         actor: &RealtimeActor,
         app: foks_proto::RtAppId,
-        reader: &foks_server_db::ReadDatabase,
-        clock: &Arc<dyn foks_server_db::Clock>,
-    ) -> Result<u64, RpcStatus> {
-        let snapshot = reader.snapshot().map_err(db_error)?;
-        let now = clock.now_micros().map_err(db_error)?;
-        snapshot.rt_inbox_version(actor, app, now).map_err(db_error)
+        snapshot: &foks_server_db::ReadSnapshot<'_>,
+        now: u64,
+        source: ReconcileSource,
+    ) -> Result<foks_server_db::RealtimeInboxState, RpcStatus> {
+        let state = snapshot.rt_inbox_state(actor, app, now).map_err(db_error)?;
+        self.metrics.realtime.source(source, |s| s.state_reads += 1);
+        Ok(state)
+    }
+
+    pub(crate) fn clean_skip(&self, source: ReconcileSource) {
+        self.metrics.realtime.source(source, |s| s.clean_skips += 1);
     }
 
     #[allow(clippy::too_many_arguments)] // Authenticated request and host execution context.
@@ -168,7 +189,7 @@ impl RealtimeService {
         argument: &[u8],
         principal: &Principal,
         host: &[u8],
-        reader: &foks_server_db::ReadDatabase,
+        checkout: impl Fn() -> Result<crate::read_pool::ReadLease, RpcStatus>,
         writer: &WriterHandle,
         clock: &Arc<dyn foks_server_db::Clock>,
     ) -> Result<Response, RpcStatus> {
@@ -206,7 +227,36 @@ impl RealtimeService {
                 Ok(Response::Void)
             }
             RealtimeRequest::GetChangedThreads(arg) => {
-                self.reconcile(actor.clone(), arg.query.app, writer, clock)?;
+                {
+                    let reader = checkout()?;
+                    let snapshot = reader.snapshot().map_err(db_error)?;
+                    let now = clock.now_micros().map_err(db_error)?;
+                    let state = self.inbox_state(
+                        &actor,
+                        arg.query.app,
+                        &snapshot,
+                        now,
+                        ReconcileSource::Delta,
+                    )?;
+                    if !state.needs_reconciliation() {
+                        self.clean_skip(ReconcileSource::Delta);
+                        return Ok(Response::Data(
+                            snapshot
+                                .rt_changed_threads(&actor, &arg, now)
+                                .map_err(db_error)?
+                                .encoded()
+                                .map_err(|_| RpcStatus::TransactionRetry)?,
+                        ));
+                    }
+                } // Return the entire lease before waiting for the writer.
+                self.reconcile(
+                    actor.clone(),
+                    arg.query.app,
+                    writer,
+                    clock,
+                    ReconcileSource::Delta,
+                )?;
+                let reader = checkout()?;
                 let snapshot = reader.snapshot().map_err(db_error)?;
                 let now = clock.now_micros().map_err(db_error)?;
                 Ok(Response::Data(
@@ -219,6 +269,7 @@ impl RealtimeService {
             }
             RealtimeRequest::PollInbox(_) => Err(RpcStatus::Unsupported),
             request => {
+                let reader = checkout()?;
                 let snapshot = reader.snapshot().map_err(db_error)?;
                 let now = clock.now_micros().map_err(db_error)?;
                 let data = match request {

@@ -7,7 +7,7 @@ description = "Native FOKS v0.1.9 identity, recovery, team, and KV client"
 autotests = false
 
 [features]
-test-support = []
+test-support = ["foks-client-db/test-support"]
 
 [dependencies]
 chacha20poly1305 = { workspace = true }
@@ -29,6 +29,7 @@ url = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+foks-client-db = { workspace = true, features = ["test-support"] }
 foks-yubi = { workspace = true }
 foks-oidc = { workspace = true, features = ["test-support"] }
 rcgen = { workspace = true }

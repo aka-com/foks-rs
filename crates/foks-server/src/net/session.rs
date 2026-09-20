@@ -164,7 +164,7 @@ impl ServerData {
             )),
             request_memory: Arc::new(Semaphore::new(config.limits.maximum_request_memory_bytes)),
             kex_relay: Arc::new(kex::Relay::default()),
-            realtime: Default::default(),
+            realtime: crate::services::realtime::RealtimeService::new(Arc::clone(&config.metrics)),
         })
     }
 

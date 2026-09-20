@@ -237,6 +237,13 @@ impl ScheduledJobKind {
     }
 }
 
+/// Result of atomically registering an insert-only batch of scheduled jobs.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct JobRegistrationReport {
+    pub existing: usize,
+    pub inserted: usize,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScheduledJob {
     pub job_id: [u8; 16],
@@ -2346,7 +2353,7 @@ mod tests {
     /// deferral and its caller re-runs the work under wider admission.
     #[test]
     fn a_claim_that_leaves_the_restricting_thread_is_reported_as_a_deferral() {
-        let (directory, mut store) = store_with_a_cross_profile_job();
+        let (directory, store) = store_with_a_cross_profile_job();
         let path = directory.path().join("hard.db");
         drop(store);
 
@@ -4174,3 +4181,7 @@ mod tests {
 }
 
 mod inspection;
+
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod registration_test_support;

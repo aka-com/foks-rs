@@ -242,7 +242,11 @@ global Merkle log still require one leader or a consensus protocol.
 
 The in-process maintenance loop runs once per minute through the ordinary writer.
 It removes expired user/team reservations, receipts, recovery challenges, and
-team-view and TeamAdmin capabilities, then requests a truncating WAL checkpoint.
+team-view and TeamAdmin capabilities, then requests a PASSIVE WAL checkpoint.
+Manual online maintenance uses the same path. PASSIVE does not invoke SQLite's
+busy handler to wait for readers or writers, but its I/O still runs on the sole
+writer. The 60-second interval starts after the preceding pass ends. Explicit
+`Database::checkpoint()` callers still request TRUNCATE and can wait for readers.
 Lock expiry is enforced by the next acquirer rather than background deletion.
 Uploads become eligible for reclamation after 24 idle hours only if no retained
 directory-entry version references them. Overwritten, unlinked historical files
@@ -264,11 +268,84 @@ failures or 60 consecutive deferred upload passes. Alert on that gauge and on
 unexpected growth in `foks_reclaimed_uploads_total`; metrics delivery never gates
 cleanup. Counters reset on server restart. Pinned Go hosts retain their own upload
 lifecycle policy; these guarantees apply to the Rust host.
+Maintenance success means cleanup and the checkpoint call returned without an
+error; it does not mean all WAL frames were backfilled or the file shrank.
+Checkpoint metrics cover these explicit online passes only, excluding SQLite's
+automatic checkpoints and direct database API calls:
+
+- `foks_checkpoint_attempts_total` starts after cleanup succeeds. Each completed
+  attempt increments one of `complete_total`, `deferred_total`,
+  `unavailable_total`, or `errors_total` under the `foks_checkpoint_` prefix.
+  `busy_total` is a subset of deferred outcomes; PASSIVE can be deferred with
+  `busy=0` when a reader pins newer frames.
+- `foks_checkpoint_duration_seconds` is a histogram with bounds 1, 5, 10, 50,
+  100, 500 ms, 1 s, 5 s, and +Inf. It includes failed checkpoint calls.
+- `foks_checkpoint_wal_frames`, `foks_checkpoint_backfilled_frames`, and
+  `foks_checkpoint_remaining_frames` describe the last known WAL positions,
+  including earlier backfill. They are gauges, not additive work counters.
+- `foks_checkpoint_frame_counts_available` is 0 before a first observation,
+  during an attempt, or after unavailable/error results. Prior frame gauges
+  remain stale in those cases. Use `foks_last_checkpoint_observation_unixtime`
+  and `foks_last_checkpoint_complete_unixtime` to assess freshness and the last
+  confirmed completion. Timestamps use the maintenance pass's sampled clock.
+
+Scraping these observations does not run a checkpoint or queue writer work.
+Watch sustained remaining frames together with rising `foks_wal_bytes` and
+checkpoint freshness. Physical WAL allocation alone can be reusable space, even
+when all frames have been backfilled. Committed cleanup remains counted if a
+later checkpoint fails.
+
+Writable connections retain FULL synchronous mode and SQLite's normal automatic
+checkpointing. `foks_server_db::Config::wal_reuse_limit_bytes` defaults to 16 MiB
+and sets `main.journal_size_limit`; zero is allowed. This bounds allocation
+retained on **natural WAL reuse**, not the active WAL. A complete PASSIVE
+checkpoint can leave a large idle file until a later write resets it or
+connections close. Long-lived readers can still prevent reuse and grow the WAL;
+investigate them rather than forcing them out or deleting WAL files. This
+setting is not a database-size quota and has no new CLI/TOML switch.
+
+No schema migration is needed for this policy. Rolling back restores routine
+TRUNCATE and its reader-wait risk; do not remove the WAL as a rollback procedure.
+See [the checkpoint workload comparison](BENCHMARKS.md#wal-checkpoint-comparison)
+for measurement commands and limits of the default reuse policy.
+
 Foreground expiry, current-device, current-roster, role, and key-generation
 checks enforce correctness even if this job never runs. There is no durable
 general-purpose job queue, retry farm, cron dependency, or multi-process lease system.
 An operating-system lock on the database sidecar rejects a second writer
 process; active/active service instances are not supported.
+
+## Realtime inbox reconciliation and schema 44
+
+Clean `PollInbox` and `GetChangedThreads` requests read authenticated durable
+inbox state without entering the writer queue. Membership changes invalidate
+existing inboxes transactionally. Dirty or incomplete inboxes advance one bounded
+page per request/iteration. Polls retain the one-second authorization and missed
+notification check, the 25-second default/55-second maximum, and the 32-poll cap.
+
+Schema 44 automatically upgrades only FOKS schema 43 during writer database
+initialization, under the process lock and before reader pools open. Stop the
+old server and make a consistent pre-upgrade backup first, including the WAL
+through the normal backup mechanism; a live copy of the main file alone is not
+a consistent backup. Do not mix old and new servers. Roll back by restoring that
+backup with the old binary, never by changing `user_version` or deleting WAL
+files. Existing messages, inbox versions, accessibility and read pointers survive
+the upgrade. See [the migration policy exception](SCHEMA_MIGRATION_POLICY.md#implemented-development-exception-43-to-44).
+
+Prometheus exposes `foks_realtime_reconcile_*_total` with fixed `source="poll"`
+and `source="delta"` labels, plus queue-wait/execution histograms in seconds.
+State reads count successful authenticated state checks; clean skips count
+requests/iterations that bypass reconciliation after finding no pending work.
+Submissions count attempts, with submission and execution failures separate.
+Candidates include the lookahead row, not all SQLite rows scanned. Complete,
+incomplete, already-clean and restarted page counts describe committed results.
+Worker timings include execution-time credential checks. Poll wake and outcome
+counters include fallback, hint, bump, timeout, failure and cancellation.
+
+Idle reconciliation submissions should remain zero after initialization. Dirty
+page latency still depends on membership/channel size; the existing 4096-channel
+page cap bounds returned work, not every SQLite operation. Future channel policy
+edits or deletion must add transactional invalidation or equivalent fanout.
 
 ## Capacity limits
 

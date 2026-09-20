@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Durable hard and soft SQLite state for a native FOKS client"
 
+[features]
+test-support = []
+
 [dependencies]
 url = { workspace = true }
 foks-crypto = { workspace = true }

@@ -123,6 +123,8 @@ pub struct Pragmas {
     pub journal_mode: String,
     pub synchronous: i64,
     pub busy_timeout_millis: u64,
+    pub wal_autocheckpoint_pages: u64,
+    pub wal_reuse_limit_bytes: u64,
     pub trusted_schema: bool,
 }
 
@@ -181,12 +183,12 @@ impl Database {
             | OpenFlags::SQLITE_OPEN_NOFOLLOW;
         let connection = Connection::open_with_flags(identity.path(), flags)?;
         identity.recheck()?;
-        configure(&connection, &self.config)?;
+        configure_reader(&connection, &self.config)?;
         Ok(connection)
     }
 
     pub fn pragmas(&self) -> Result<Pragmas> {
-        pragmas(&self.connection, &self.config)
+        pragmas(&self.connection)
     }
 
     pub fn integrity_check(&self) -> Result<bool> {
@@ -384,6 +386,9 @@ fn configure(connection: &Connection, config: &Config) -> Result<()> {
             "KV capacity exceeds the client synchronization limits",
         ));
     }
+    let reuse_limit =
+        i64::try_from(config.wal_reuse_limit_bytes).map_err(|_| crate::Error::IntegerRange)?;
+    connection.pragma_update(Some("main"), "journal_size_limit", reuse_limit)?;
     connection.pragma_update(None, "foreign_keys", true)?;
     connection.pragma_update(None, "journal_mode", "WAL")?;
     connection.pragma_update(None, "synchronous", "FULL")?;
@@ -421,12 +426,18 @@ fn configure_reader(connection: &Connection, config: &Config) -> Result<()> {
     Ok(())
 }
 
-fn pragmas(connection: &Connection, config: &Config) -> Result<Pragmas> {
+fn pragmas(connection: &Connection) -> Result<Pragmas> {
+    let read_count = |name| -> Result<u64> {
+        let value: i64 = connection.pragma_query_value(Some("main"), name, |row| row.get(0))?;
+        u64::try_from(value).map_err(|_| crate::Error::IntegerRange)
+    };
     Ok(Pragmas {
         foreign_keys: connection.pragma_query_value(None, "foreign_keys", |row| row.get(0))?,
         journal_mode: connection.pragma_query_value(None, "journal_mode", |row| row.get(0))?,
         synchronous: connection.pragma_query_value(None, "synchronous", |row| row.get(0))?,
-        busy_timeout_millis: u64::try_from(config.busy_timeout.as_millis()).unwrap_or(u64::MAX),
+        busy_timeout_millis: read_count("busy_timeout")?,
+        wal_autocheckpoint_pages: read_count("wal_autocheckpoint")?,
+        wal_reuse_limit_bytes: read_count("journal_size_limit")?,
         trusted_schema: connection.pragma_query_value(None, "trusted_schema", |row| row.get(0))?,
     })
 }

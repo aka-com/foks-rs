@@ -42,3 +42,36 @@ use policy::*;
 
 #[cfg(test)]
 mod tests;
+
+/// Durable work state, independent of the wire inbox version.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RealtimeReconcileState {
+    Missing,
+    Dirty,
+    Incomplete,
+    Clean,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RealtimeInboxState {
+    pub version: u64,
+    pub reconciliation: RealtimeReconcileState,
+}
+impl RealtimeInboxState {
+    pub fn needs_reconciliation(self) -> bool {
+        self.reconciliation != RealtimeReconcileState::Clean
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RealtimeReconcileOutcome {
+    AlreadyClean,
+    PageComplete,
+    PageIncomplete,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RealtimeReconcileReport {
+    pub outcome: RealtimeReconcileOutcome,
+    pub restarted: bool,
+    /// Candidates returned by the bounded query, including its lookahead row.
+    pub candidates: usize,
+    pub accessibility_changes: usize,
+}

@@ -1005,6 +1005,17 @@ impl CheckedProfileSession<'_> {
         uid: &foks_proto::EntityId,
         now: u64,
     ) -> Result<()> {
+        self.register_default_refresh_jobs_for_users(std::slice::from_ref(uid), now)
+    }
+
+    fn register_default_refresh_jobs_for_users(
+        &self,
+        users: &[foks_proto::EntityId],
+        now: u64,
+    ) -> Result<()> {
+        if users.is_empty() {
+            return Ok(());
+        }
         // Default registration is opportunistic. Probe-only profiles and
         // expired capability canaries must not abort an unrelated scheduler
         // batch (or the signup finalization path that calls this helper).
@@ -1015,31 +1026,34 @@ impl CheckedProfileSession<'_> {
         }
         let host = self.pinned_host()?;
         let scheduler = FoksScheduler::new(&self.paths.hard_database, SchedulerConfig::default())?;
-        register_default_refresh_job(
-            &scheduler,
-            USER_REFRESH_JOB_TYPE_ID,
-            ScheduledJobKind::UserRefresh,
-            host.host_id(),
-            uid,
-            DEFAULT_USER_REFRESH_INTERVAL_MICROS,
-            now,
-        )?;
-        if self.profile.require(Capability::Teams).is_ok() {
-            register_default_refresh_job(
-                &scheduler,
-                TEAM_REFRESH_JOB_TYPE_ID,
-                ScheduledJobKind::TeamRefresh,
+        let teams = self.profile.require(Capability::Teams).is_ok();
+        let mut registrations = Vec::new();
+        for uid in users {
+            registrations.push(default_refresh_job(
+                USER_REFRESH_JOB_TYPE_ID,
+                ScheduledJobKind::UserRefresh,
                 host.host_id(),
                 uid,
-                DEFAULT_TEAM_REFRESH_INTERVAL_MICROS,
+                DEFAULT_USER_REFRESH_INTERVAL_MICROS,
                 now,
-            )?;
+            )?);
+            if teams {
+                registrations.push(default_refresh_job(
+                    TEAM_REFRESH_JOB_TYPE_ID,
+                    ScheduledJobKind::TeamRefresh,
+                    host.host_id(),
+                    uid,
+                    DEFAULT_TEAM_REFRESH_INTERVAL_MICROS,
+                    now,
+                )?);
+            }
         }
+        scheduler.register_many_if_missing(registrations)?;
         Ok(())
     }
 
     fn ensure_default_refresh_jobs(&self, vault: &mut AccountVault<'_>, now: u64) -> Result<()> {
-        let aliases = vault.aliases()?;
+        let (aliases, yubi_aliases) = vault.refresh_account_aliases()?;
         let mut users = std::collections::BTreeSet::new();
         for alias in aliases {
             if vault.bot_selection(&alias)?.is_some() {
@@ -1047,16 +1061,16 @@ impl CheckedProfileSession<'_> {
             }
             users.insert(vault.account(&alias)?.credential.uid.into_bytes());
         }
-        for alias in vault.yubi_aliases()? {
+        for alias in yubi_aliases {
             if let Ok(account) = vault.yubi_account(&alias) {
                 users.insert(account.uid.into_bytes());
             }
         }
-        for uid in users.into_iter().map(foks_proto::EntityId::from_bytes) {
-            let uid = uid?;
-            self.register_default_refresh_jobs_for(&uid, now)?;
-        }
-        Ok(())
+        let users = users
+            .into_iter()
+            .map(foks_proto::EntityId::from_bytes)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        self.register_default_refresh_jobs_for_users(&users, now)
     }
 
     pub fn schedule_user_refresh(
@@ -3252,17 +3266,16 @@ fn prefer_pending_signer_alias(
     });
 }
 
-fn register_default_refresh_job(
-    scheduler: &FoksScheduler,
+fn default_refresh_job(
     type_id: u64,
     kind: ScheduledJobKind,
     host: &foks_proto::EntityId,
     uid: &foks_proto::EntityId,
     interval_micros: u64,
     now: u64,
-) -> Result<()> {
+) -> Result<ScheduledJobRegistration> {
     let job_id = refresh_job_id(type_id, host, uid);
-    scheduler.register_if_missing(ScheduledJobRegistration {
+    Ok(ScheduledJobRegistration {
         job_id,
         kind,
         host_id: host.as_bytes().to_vec(),
@@ -3272,8 +3285,7 @@ fn register_default_refresh_job(
             .checked_add(interval_micros)
             .ok_or(Error::InvalidConfig("default refresh time overflow"))?,
         registered_at: now,
-    })?;
-    Ok(())
+    })
 }
 
 pub(crate) fn refresh_job_id(
@@ -4431,3 +4443,10 @@ mod tests {
         operation.release().unwrap();
     }
 }
+
+#[cfg(test)]
+mod registration_benchmark;
+#[cfg(test)]
+mod registration_fixture;
+#[cfg(test)]
+mod registration_tests;

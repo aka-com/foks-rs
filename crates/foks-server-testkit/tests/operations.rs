@@ -36,6 +36,10 @@ fn health_readiness_and_metrics_are_isolated_on_management_http() {
         "foks_maintenance_failures_total",
         "foks_reclaimed_uploads_total",
         "foks_maintenance_warning",
+        "foks_checkpoint_attempts_total",
+        "foks_checkpoint_duration_seconds_bucket",
+        "foks_checkpoint_frame_counts_available",
+        "foks_checkpoint_remaining_frames",
     ] {
         assert!(metrics.contains(name));
     }
@@ -49,7 +53,72 @@ fn health_readiness_and_metrics_are_isolated_on_management_http() {
     assert_eq!(metric(&after, "foks_maintenance_failures_total"), 0.0);
     assert_eq!(metric(&after, "foks_maintenance_warning"), 0.0);
     assert!(metric(&after, "foks_last_maintenance_success_unixtime") > 0.0);
+    assert_eq!(metric(&after, "foks_checkpoint_attempts_total"), 1.0);
+    assert_eq!(metric(&after, "foks_checkpoint_complete_total"), 1.0);
+    assert_eq!(
+        metric(&after, "foks_checkpoint_frame_counts_available"),
+        1.0
+    );
+    assert_eq!(metric(&after, "foks_checkpoint_remaining_frames"), 0.0);
+    assert_eq!(
+        metric(&after, "foks_checkpoint_duration_seconds_count"),
+        1.0
+    );
     assert!(get(address, "/missing").starts_with("HTTP/1.1 404 Not Found\r\n"));
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn partial_checkpoint_is_successful_maintenance_and_metrics_do_not_enter_writer() {
+    let environment = TestEnvironment::new().unwrap();
+    let server = environment.start_server().unwrap();
+    let reader = rusqlite::Connection::open_with_flags(
+        environment.database_path(),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    reader.execute_batch("BEGIN; SELECT * FROM names;").unwrap();
+    let writer = server.writer_handle();
+    writer
+        .call(|db| {
+            db.reserve_name(b"checkpoint-private-account", &[91; 17], 1, 1, 10_000_000)?;
+            Ok(())
+        })
+        .unwrap();
+    let (_, report) = server.run_maintenance().unwrap();
+    let accepted = writer.metrics().accepted;
+    let text = get(server.management_address(), "/metrics");
+    assert_eq!(writer.metrics().accepted, accepted);
+    reader.execute_batch("ROLLBACK").unwrap();
+    assert_eq!(report.busy, 0);
+    assert_eq!(
+        report.outcome(),
+        foks_server_db::CheckpointOutcome::Deferred
+    );
+    assert_eq!(metric(&text, "foks_maintenance_successes_total"), 1.0);
+    assert_eq!(metric(&text, "foks_checkpoint_deferred_total"), 1.0);
+    assert_eq!(metric(&text, "foks_checkpoint_complete_total"), 0.0);
+    assert_eq!(metric(&text, "foks_checkpoint_busy_total"), 0.0);
+    assert!(metric(&text, "foks_checkpoint_remaining_frames") > 0.0);
+    assert!(metric(&text, "foks_last_checkpoint_observation_unixtime") > 0.0);
+    assert_eq!(metric(&text, "foks_last_checkpoint_complete_unixtime"), 0.0);
+    let buckets: Vec<f64> = text
+        .lines()
+        .filter(|line| line.starts_with("foks_checkpoint_duration_seconds_bucket{"))
+        .map(|line| line.split_whitespace().last().unwrap().parse().unwrap())
+        .collect();
+    assert_eq!(buckets.len(), 9);
+    assert!(buckets.windows(2).all(|pair| pair[0] <= pair[1]));
+    assert_eq!(
+        buckets[8],
+        metric(&text, "foks_checkpoint_duration_seconds_count")
+    );
+    assert!(!text.contains("checkpoint-private-account"));
+    assert!(!text.contains(environment.root().to_string_lossy().as_ref()));
+    server.run_maintenance().unwrap();
+    let text = get(server.management_address(), "/metrics");
+    assert_eq!(metric(&text, "foks_checkpoint_complete_total"), 1.0);
+    assert_eq!(metric(&text, "foks_checkpoint_remaining_frames"), 0.0);
     server.shutdown().unwrap();
 }
 

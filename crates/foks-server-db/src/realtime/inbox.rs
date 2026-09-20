@@ -89,48 +89,41 @@ fn next_inbox_version(c: &Connection, uid: &[u8], app: RtAppId) -> Result<u64> {
     crate::error::unsigned(next)
 }
 
-fn inbox_membership_snapshot(c: &Connection, uid: &[u8]) -> Result<Vec<u8>> {
-    let mut query = c.prepare(
-        "SELECT team_id,scoped_host_id,source_role_type,source_visibility,role_type,visibility
-         FROM team_members WHERE party_id=?1
-         ORDER BY team_id,scoped_host_id,source_role_type,source_visibility,role_type,visibility",
-    )?;
-    let rows = query.query_map(params![uid], |row| {
-        Ok((
-            row.get::<_, Vec<u8>>(0)?,
-            row.get::<_, Option<Vec<u8>>>(1)?,
-            row.get::<_, i64>(2)?,
-            row.get::<_, i64>(3)?,
-            row.get::<_, i64>(4)?,
-            row.get::<_, i64>(5)?,
-        ))
-    })?;
-    let mut snapshot = Vec::new();
-    for row in rows {
-        let (team, scoped_host, source_type, source_visibility, role_type, visibility) = row?;
-        let team_length = u8::try_from(team.len()).map_err(|_| Error::IntegerRange)?;
-        let host_length = u8::try_from(scoped_host.as_deref().map_or(0, <[u8]>::len))
-            .map_err(|_| Error::IntegerRange)?;
-        let additional = 2usize
-            .checked_add(team.len())
-            .and_then(|length| length.checked_add(usize::from(host_length)))
-            .and_then(|length| length.checked_add(32))
-            .ok_or(Error::IntegerRange)?;
-        if snapshot.len().saturating_add(additional) > Limits::INBOX_MEMBERSHIP_BYTES {
-            return Err(Error::Capacity("realtime inbox memberships"));
-        }
-        snapshot.push(team_length);
-        snapshot.extend_from_slice(&team);
-        snapshot.push(host_length);
-        if let Some(scoped_host) = scoped_host {
-            snapshot.extend_from_slice(&scoped_host);
-        }
-        snapshot.extend_from_slice(&source_type.to_be_bytes());
-        snapshot.extend_from_slice(&source_visibility.to_be_bytes());
-        snapshot.extend_from_slice(&role_type.to_be_bytes());
-        snapshot.extend_from_slice(&visibility.to_be_bytes());
+fn inbox_state(
+    c: &Connection,
+    actor: &RealtimeActor,
+    app: RtAppId,
+) -> Result<(RealtimeInboxState, Option<Vec<u8>>)> {
+    let row = c.query_row(
+        "SELECT version,reconcile_dirty,reconcile_after FROM rt_user_inboxes WHERE uid=?1 AND app_id=?2",
+        params![actor.uid, app as i64],
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<Vec<u8>>>(2)?)),
+    ).optional()?;
+    let Some((version, dirty, cursor)) = row else {
+        return Ok((
+            RealtimeInboxState {
+                version: 0,
+                reconciliation: RealtimeReconcileState::Missing,
+            },
+            None,
+        ));
+    };
+    if cursor.as_ref().is_some_and(|c| c.len() != 16) {
+        return Err(Error::Invalid("stored realtime reconciliation cursor"));
     }
-    Ok(snapshot)
+    let reconciliation = match (dirty, cursor.is_some()) {
+        (1, _) => RealtimeReconcileState::Dirty,
+        (0, true) => RealtimeReconcileState::Incomplete,
+        (0, false) => RealtimeReconcileState::Clean,
+        _ => return Err(Error::Invalid("stored realtime reconciliation flag")),
+    };
+    Ok((
+        RealtimeInboxState {
+            version: crate::error::unsigned(version)?,
+            reconciliation,
+        },
+        cursor,
+    ))
 }
 
 fn remove_user_channel(
@@ -211,7 +204,21 @@ impl Database {
         actor: &RealtimeActor,
         app: RtAppId,
         now: u64,
-    ) -> Result<RealtimeCommit<()>> {
+    ) -> Result<RealtimeCommit<RealtimeReconcileReport>> {
+        self.rt_reconcile_inbox_page(actor, app, now, Limits::INBOX_RECONCILE_CHANNELS)
+    }
+
+    // Private test seam; production always uses the fixed maximum.
+    pub(super) fn rt_reconcile_inbox_page(
+        &mut self,
+        actor: &RealtimeActor,
+        app: RtAppId,
+        now: u64,
+        page_size: usize,
+    ) -> Result<RealtimeCommit<RealtimeReconcileReport>> {
+        if page_size == 0 || page_size > Limits::INBOX_RECONCILE_CHANNELS {
+            return Err(Error::Invalid("realtime reconciliation page size"));
+        }
         if app != RtAppId::Chat {
             return Err(Error::Invalid("realtime app"));
         }
@@ -223,21 +230,21 @@ impl Database {
             "INSERT INTO rt_user_inboxes(uid,app_id,version) VALUES (?1,?2,0) ON CONFLICT DO NOTHING",
             params![actor.uid, app as i64],
         )?;
-        let memberships = inbox_membership_snapshot(&tx, &actor.uid)?;
-        let (previous, cursor): (Option<Vec<u8>>, Option<Vec<u8>>) = tx.query_row(
-            "SELECT reconcile_memberships,reconcile_after FROM rt_user_inboxes WHERE uid=?1 AND app_id=?2",
-            params![actor.uid, app as i64],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        let continuing = previous.as_deref() == Some(memberships.as_slice());
-        if continuing && cursor.is_none() {
+        let (state, cursor) = inbox_state(&tx, actor, app)?;
+        if !state.needs_reconciliation() {
             tx.commit()?;
             return Ok(RealtimeCommit {
-                value: (),
+                value: RealtimeReconcileReport {
+                    outcome: RealtimeReconcileOutcome::AlreadyClean,
+                    restarted: false,
+                    candidates: 0,
+                    accessibility_changes: 0,
+                },
                 wake: vec![],
             });
         }
-        let after = if continuing { cursor } else { None };
+        let restarted = state.reconciliation == RealtimeReconcileState::Dirty;
+        let after = if restarted { None } else { cursor };
         let mut channels = {
             let mut query = tx.prepare(
                 "SELECT channel.channel_id,channel.metadata,channel.last_message
@@ -254,12 +261,7 @@ impl Database {
                  ORDER BY channel_id LIMIT ?4",
             )?;
             let rows = query.query_map(
-                params![
-                    app as i64,
-                    actor.uid,
-                    after,
-                    (Limits::INBOX_RECONCILE_CHANNELS + 1) as i64
-                ],
+                params![app as i64, actor.uid, after, (page_size + 1) as i64],
                 |r| {
                     Ok((
                         r.get::<_, Vec<u8>>(0)?,
@@ -270,15 +272,16 @@ impl Database {
             )?;
             rows.collect::<std::result::Result<Vec<_>, _>>()?
         };
-        let incomplete = channels.len() > Limits::INBOX_RECONCILE_CHANNELS;
-        channels.truncate(Limits::INBOX_RECONCILE_CHANNELS);
+        let candidates = channels.len();
+        let incomplete = candidates > page_size;
+        channels.truncate(page_size);
         let next_cursor = if incomplete {
             channels.last().map(|channel| channel.0.clone())
         } else {
             None
         };
         let mut roles = std::collections::BTreeMap::<Vec<u8>, Option<Role>>::new();
-        let mut changed = false;
+        let mut changes = 0;
         for (_, bytes, activity) in channels {
             let md = project_channel(&bytes, activity.as_deref())?;
             let team = md.team.entity().as_bytes();
@@ -293,20 +296,29 @@ impl Database {
                 Some(access) => ChannelPolicy::new(&md)?.can_read(access),
                 None => false,
             };
-            changed |= if readable {
+            changes += usize::from(if readable {
                 insert_user_channel(&tx, &actor.uid, app, md.id, 0)?
             } else {
                 remove_user_channel(&tx, &actor.uid, app, md.id)?
-            };
+            });
         }
         tx.execute(
-            "UPDATE rt_user_inboxes SET reconcile_memberships=?3,reconcile_after=?4 WHERE uid=?1 AND app_id=?2",
-            params![actor.uid, app as i64, memberships, next_cursor],
+            "UPDATE rt_user_inboxes SET reconcile_dirty=0,reconcile_memberships=NULL,reconcile_after=?3 WHERE uid=?1 AND app_id=?2",
+            params![actor.uid, app as i64, next_cursor],
         )?;
         tx.commit()?;
         Ok(RealtimeCommit {
-            value: (),
-            wake: changed
+            value: RealtimeReconcileReport {
+                outcome: if incomplete {
+                    RealtimeReconcileOutcome::PageIncomplete
+                } else {
+                    RealtimeReconcileOutcome::PageComplete
+                },
+                restarted,
+                candidates,
+                accessibility_changes: changes,
+            },
+            wake: (changes != 0)
                 .then(|| RealtimeWakeTarget {
                     host: actor.host.clone(),
                     uid: actor.uid.clone(),
@@ -394,6 +406,19 @@ impl Database {
 }
 
 impl ReadSnapshot<'_> {
+    pub fn rt_inbox_state(
+        &self,
+        actor: &RealtimeActor,
+        app: RtAppId,
+        now: u64,
+    ) -> Result<RealtimeInboxState> {
+        if app != RtAppId::Chat {
+            return Err(Error::Invalid("realtime app"));
+        }
+        check_actor(self.connection(), actor, now)?;
+        Ok(inbox_state(self.connection(), actor, app)?.0)
+    }
+
     pub fn rt_check_actor(&self, actor: &RealtimeActor, now: u64) -> Result<()> {
         check_actor(self.connection(), actor, now)
     }

@@ -429,6 +429,8 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
             let _ = writeln!(output, "# TYPE {name} counter\n{name} {value}");
         }
     }
+    checkpoint_prometheus(&mut output, &metrics.checkpoint);
+    realtime_prometheus(&mut output, &metrics.realtime);
     // Independent read snapshot; metrics never enqueue a policy mutation.
     let sample = (|| -> crate::Result<Option<foks_server_db::SsoRolloutStatus>> {
         let db = foks_server_db::ReadDatabase::open(database_path, Default::default())?;
@@ -471,6 +473,72 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
         }
     }
     output
+}
+
+fn checkpoint_prometheus(output: &mut String, checkpoint: &crate::CheckpointMetricsSnapshot) {
+    use std::fmt::Write as _;
+    for (name, value) in [
+        ("attempts", checkpoint.attempts),
+        ("complete", checkpoint.complete),
+        ("deferred", checkpoint.deferred),
+        ("unavailable", checkpoint.unavailable),
+        ("errors", checkpoint.errors),
+        ("busy", checkpoint.busy),
+    ] {
+        let _ = writeln!(
+            output,
+            "# TYPE foks_checkpoint_{name}_total counter\nfoks_checkpoint_{name}_total {value}"
+        );
+    }
+    let _ = writeln!(output, "# TYPE foks_checkpoint_duration_seconds histogram");
+    for (index, micros) in crate::metrics::CHECKPOINT_BUCKET_MICROS.iter().enumerate() {
+        let _ = writeln!(
+            output,
+            "foks_checkpoint_duration_seconds_bucket{{le=\"{}\"}} {}",
+            seconds(*micros),
+            checkpoint.duration_buckets[index]
+        );
+    }
+    let _ = writeln!(
+        output,
+        "foks_checkpoint_duration_seconds_bucket{{le=\"+Inf\"}} {}",
+        checkpoint.duration_buckets[8]
+    );
+    let _ = writeln!(
+        output,
+        "foks_checkpoint_duration_seconds_count {}",
+        checkpoint.duration_buckets[8]
+    );
+    let _ = writeln!(
+        output,
+        "foks_checkpoint_duration_seconds_sum {:.6}",
+        seconds(checkpoint.duration_microseconds_total)
+    );
+    for (name, value) in [
+        (
+            "foks_checkpoint_frame_counts_available",
+            u64::from(checkpoint.frame_counts_available),
+        ),
+        ("foks_checkpoint_wal_frames", checkpoint.wal_frames),
+        (
+            "foks_checkpoint_backfilled_frames",
+            checkpoint.backfilled_frames,
+        ),
+        (
+            "foks_checkpoint_remaining_frames",
+            checkpoint.remaining_frames,
+        ),
+        (
+            "foks_last_checkpoint_observation_unixtime",
+            checkpoint.last_observation_unixtime,
+        ),
+        (
+            "foks_last_checkpoint_complete_unixtime",
+            checkpoint.last_complete_unixtime,
+        ),
+    ] {
+        let _ = writeln!(output, "# TYPE {name} gauge\n{name} {value}");
+    }
 }
 
 fn seconds(microseconds: u64) -> f64 {
@@ -600,5 +668,116 @@ mod tests {
             std::thread::yield_now();
         }
         Arc::into_inner(writer).unwrap().shutdown().unwrap();
+    }
+}
+
+fn realtime_prometheus(output: &mut String, realtime: &crate::RealtimeMetricsSnapshot) {
+    use std::fmt::Write;
+    for (source, s) in [("poll", realtime.poll), ("delta", realtime.delta)] {
+        for (name, count) in [
+            ("state_reads", s.state_reads),
+            ("clean_skips", s.clean_skips),
+            ("submissions", s.submissions),
+            ("submission_failures", s.submission_failures),
+            ("execution_failures", s.execution_failures),
+            ("already_clean", s.already_clean),
+            ("complete", s.complete),
+            ("incomplete", s.incomplete),
+            ("restarted", s.restarted),
+            ("candidates", s.candidates),
+            ("accessibility_changes", s.accessibility_changes),
+        ] {
+            if source == "poll" {
+                let _ = writeln!(
+                    output,
+                    "# TYPE foks_realtime_reconcile_{name}_total counter"
+                );
+            }
+            let _ = writeln!(
+                output,
+                "foks_realtime_reconcile_{name}_total{{source=\"{source}\"}} {count}"
+            );
+        }
+        for (name, buckets, total) in [
+            (
+                "queue_wait",
+                s.queue_wait_buckets,
+                s.queue_wait_microseconds_total,
+            ),
+            (
+                "execution",
+                s.execution_buckets,
+                s.execution_microseconds_total,
+            ),
+        ] {
+            let prefix = format!("foks_realtime_reconcile_{name}_seconds");
+            if source == "poll" {
+                let _ = writeln!(output, "# TYPE {prefix} histogram");
+            }
+            for (i, bound) in crate::metrics::realtime::BUCKET_MICROS.iter().enumerate() {
+                let _ = writeln!(
+                    output,
+                    "{prefix}_bucket{{source=\"{source}\",le=\"{}\"}} {}",
+                    seconds(*bound),
+                    buckets[i]
+                );
+            }
+            let _ = writeln!(
+                output,
+                "{prefix}_bucket{{source=\"{source}\",le=\"+Inf\"}} {}",
+                buckets[8]
+            );
+            let _ = writeln!(
+                output,
+                "{prefix}_count{{source=\"{source}\"}} {}",
+                buckets[8]
+            );
+            let _ = writeln!(
+                output,
+                "{prefix}_sum{{source=\"{source}\"}} {:.6}",
+                seconds(total)
+            );
+        }
+    }
+    for (name, count) in [
+        ("hint_wakes", realtime.hint_wakes),
+        ("fallback_wakes", realtime.fallback_wakes),
+        ("bumped_polls", realtime.bumped_polls),
+        ("timed_out_polls", realtime.timed_out_polls),
+        ("failed_polls", realtime.failed_polls),
+        ("cancelled_polls", realtime.cancelled_polls),
+    ] {
+        let _ = writeln!(
+            output,
+            "# TYPE foks_realtime_{name}_total counter\nfoks_realtime_{name}_total {count}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod realtime_metric_tests {
+    #[test]
+    fn reconciliation_metrics_export_fixed_sources_and_histogram_counts() {
+        let mut s = crate::RealtimeMetricsSnapshot::default();
+        s.poll.clean_skips = 7;
+        s.delta.execution_failures = 1;
+        s.delta.execution_buckets[8] = 1;
+        s.delta.execution_microseconds_total = 12_345;
+        s.cancelled_polls = 2;
+        let mut output = String::new();
+        super::realtime_prometheus(&mut output, &s);
+        assert!(output.contains("foks_realtime_reconcile_clean_skips_total{source=\"poll\"} 7"));
+        assert!(
+            output.contains("foks_realtime_reconcile_execution_failures_total{source=\"delta\"} 1")
+        );
+        assert!(output.contains(
+            "foks_realtime_reconcile_execution_seconds_bucket{source=\"delta\",le=\"+Inf\"} 1"
+        ));
+        assert!(
+            output.contains("foks_realtime_reconcile_execution_seconds_count{source=\"delta\"} 1")
+        );
+        assert!(output
+            .contains("foks_realtime_reconcile_execution_seconds_sum{source=\"delta\"} 0.012345"));
+        assert!(output.contains("foks_realtime_cancelled_polls_total 2"));
     }
 }

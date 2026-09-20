@@ -74,7 +74,7 @@ pub use kv::{
     KvRootMutation, KvVersionCheck, StoredKvDirectory, StoredKvDirent, StoredKvFile,
     StoredKvFileChunk, StoredKvNode, StoredKvRoot,
 };
-pub use maintenance::{CheckpointReport, MaintenanceReport, StorageReport};
+pub use maintenance::{CheckpointOutcome, CheckpointReport, MaintenanceReport, StorageReport};
 pub use merkle::SqliteNodeReader;
 pub use passphrases::{PassphraseMutation, PassphraseSnapshot};
 pub use peripheral::{
@@ -87,7 +87,10 @@ pub use read::{
     TeamLinkSnapshot, TeamMemberSnapshot, TeamRemovalSnapshot, TeamSnapshot, UserAuthoritySnapshot,
     UserChainLinkSnapshot, UserChainSnapshot, UserDeviceSnapshot, UserSharedKeySnapshot,
 };
-pub use realtime::{RealtimeActor, RealtimeCommit, RealtimeLimits, RealtimeWakeTarget};
+pub use realtime::{
+    RealtimeActor, RealtimeCommit, RealtimeInboxState, RealtimeLimits, RealtimeReconcileOutcome,
+    RealtimeReconcileReport, RealtimeReconcileState, RealtimeWakeTarget,
+};
 pub use receipts::Receipt;
 pub use recovery::RecoveryCredentialSnapshot;
 pub use schema::{APPLICATION_ID, SCHEMA_VERSION};
