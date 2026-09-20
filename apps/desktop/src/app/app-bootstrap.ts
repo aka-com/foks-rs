@@ -1,3 +1,4 @@
+import { refreshActivitiesFor } from '../refresh-activity';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   isAgentReadinessError,
@@ -210,7 +211,11 @@ export function useAppBootstrap(
         // The rejection handler keeps a failure that loses the race to a
         // catalog failure from surfacing as an unhandled rejection; the await
         // below still reports it.
-        const info = selected.appInfo();
+        const info = refreshActivitiesFor(selected).run(
+          'Loading application information',
+          () => selected.appInfo(),
+          current,
+        );
         void info.then(
           (resolved) => {
             if (current()) setManagedProfile(resolved.managedProfile ?? null);

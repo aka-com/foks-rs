@@ -87,11 +87,8 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side.rail .nav .rail-tail{margin-left:auto;flex:none;min-width:20px;height:20px;display:grid;place-items:center;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;color:rgba(255,255,255,.62)}
 .side.rail .nav.on .rail-tail{color:rgba(255,255,255,.85)}
 .side.rail .nav .rail-tail.count.warn{color:var(--warning-dot)}
-.side.rail .nav .rail-tail.dot::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--unread)}
+.side.rail .nav .rail-tail.dot::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--warning-dot)}
 .side.rail .nav .rail-tail.dot.warn::before{background:var(--warning-dot)}
-.side.rail .nav .rail-tail .spin{width:12px;height:12px;border-radius:50%;border:1.5px solid rgba(255,255,255,.28);border-top-color:rgba(255,255,255,.9);animation:rail-spin .8s linear infinite}
-@keyframes rail-spin{to{transform:rotate(360deg)}}
-@media (prefers-reduced-motion:reduce){.side.rail .nav .rail-tail .spin{animation:none}}
 .side.rail .rail-tabs{display:flex;flex-direction:column;padding:10px 0}
 /* Setup step rail */
 .side.rail.setup-side{width:var(--side-w-open)}
@@ -121,8 +118,8 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side.rail .who .t b{display:block;color:#fff;font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .side.rail .who .t small{display:block;font-size:12px;opacity:.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .side.rail .who .chev{display:grid;place-items:center;opacity:.8;flex:none}
-.side.rail .attn{position:absolute;left:43px;top:7px;width:11px;height:11px;padding:0;border-radius:50%;background:var(--unread);border:2px solid var(--rail)}
-.side.rail .attn:hover{background:#ff8a4a}
+.side.rail .attn{position:absolute;left:43px;top:7px;width:11px;height:11px;padding:0;border-radius:50%;background:var(--warning-dot);border:2px solid var(--rail)}
+.side.rail .attn:hover{background:var(--warning-dot)}
 /* Status slot */
 .side.rail .side-bottom{padding-bottom:0}
 .side.rail .side-bottom>.nav{font-size:13px;padding:7px 18px;gap:14px}
@@ -151,10 +148,8 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side.rail.is-narrow .attn{left:calc(50% + 8px);top:9px}
 .side.rail.is-narrow .nav>.rail-tail{position:absolute;top:9px;left:calc(50% + 8px);margin:0;min-width:0;width:6px;height:6px;border-radius:50%;font-size:0;box-shadow:0 0 0 2px var(--rail)}
 .side.rail.is-narrow .nav>.rail-tail.dot::before{width:6px;height:6px}
-.side.rail.is-narrow .nav>.rail-tail.count{background:var(--unread)}
+.side.rail.is-narrow .nav>.rail-tail.count{background:var(--warning-dot)}
 .side.rail.is-narrow .nav>.rail-tail.count.warn{background:var(--warning-dot)}
-.side.rail.is-narrow .nav>.rail-tail.loading{box-shadow:none}
-.side.rail.is-narrow .nav>.rail-tail .spin{width:6px;height:6px}
 .side.rail.is-narrow .status{justify-content:center;padding-left:0;padding-right:0;gap:0;border-right:3px solid transparent}
 .side.rail.is-narrow .status .t{display:none}
 /* Account menu */
@@ -230,6 +225,8 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .sync-jobs li{display:grid;grid-template-columns:6px 1fr auto;align-items:center;gap:8px;min-height:24px;padding:2px 0;font-size:12px;color:var(--muted)}
 .sync-jobs li+li{border-top:1px solid var(--line-soft)}
 .sync-jobs .sync-dot{width:6px;height:6px}
+.sync-activities{margin:0 14px 10px;padding-top:6px;border-top:1px solid var(--line-soft)}
+.sync-activities b{overflow-wrap:anywhere}
 .sync-jobs b{font-weight:500;color:var(--ink-3)}
 .sync-when{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .sync-when.failed{color:var(--amber-ink)}

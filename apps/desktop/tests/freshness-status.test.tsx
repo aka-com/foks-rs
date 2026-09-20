@@ -1,3 +1,4 @@
+import { RefreshActivities } from '../src/refresh-activity';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
@@ -240,7 +241,9 @@ test('a root refresh remains observable before any server inventory is available
   const empty = { ...FIXTURE, servers: [], stores: [], catalogProfiles: [] };
   const pending = markCatalogRefresh(empty, undefined, 20);
   const reconciliation = service(pending);
+  const activity = reconciliation.activities.begin('Loading catalog');
   assert.equal(summarizeSync(pending, reconciliation).refreshing, true);
+  activity.finish();
   const failed = failWholeCatalogRefresh(pending, FAILURE, 21);
   const summary = summarizeSync(failed, reconciliation);
   assert.equal(summary.refreshing, false);
@@ -290,6 +293,7 @@ test('refresh status uses the scheduler paused state', () => {
   ) =>
     ({
       supportsConnectivity: true,
+      activities: new RefreshActivities(),
       scheduler: {
         observations: () => observations,
         snapshot: (key: string) =>
@@ -368,6 +372,7 @@ test('observations that share one root cause on one server collapse to one row a
   }));
   const fake = {
     supportsConnectivity: true,
+    activities: new RefreshActivities(),
     scheduler: {
       observations: () => observations,
       snapshot: (key: string) =>
@@ -420,6 +425,7 @@ test('each row lists its jobs: when they ran, when they run next, and what faile
   ) =>
     ({
       supportsConnectivity: true,
+      activities: new RefreshActivities(),
       scheduler: {
         observations: () => observations,
         snapshot: (key: string) =>
@@ -523,6 +529,32 @@ test('each row lists its jobs: when they ran, when they run next, and what faile
   );
 });
 
+test('Chat follows Devices in each server refresh group', () => {
+  const profile = FIXTURE.servers[0].profileName;
+  const reconciliation = service(FIXTURE);
+  const summary = summarizeSync(FIXTURE, reconciliation, new Map(), [
+    {
+      profile,
+      total: 1,
+      ready: 1,
+      unavailable: 0,
+      refreshing: false,
+      failed: false,
+      lastSuccessAt: 20_000,
+    },
+  ]);
+  const kinds = summary.servers
+    .find((server) => server.profileName === profile)
+    ?.jobs.map((job) => job.kind);
+  assert.ok(kinds);
+  assert.equal(kinds.indexOf('chat'), kinds.indexOf('devices') + 1);
+  assert.equal(
+    summary.diagnostics.some((line) => line.startsWith('Chat on ')),
+    false,
+  );
+  reconciliation.dispose();
+});
+
 test('copied diagnostics keep the status lines first and append the timing log', async () => {
   const { diagnosticsText } = (await vite.ssrLoadModule(
     '/src/shell/sync-popover.tsx',
@@ -621,4 +653,62 @@ test('a job row states how long its last run took beside the time it ran', () =>
     row({ ...base, state: 'ok', lastSuccessAt: 20_000 }),
     / in /,
   );
+});
+
+test('stale catalog flags cannot keep the spinner alive after real work settles', () => {
+  const snapshot = markCatalogRefresh(FIXTURE);
+  const reconciliation = service(snapshot);
+  const activity = reconciliation.activities.begin('Loading team rosters');
+  const busy = summarizeSync(snapshot, reconciliation);
+  assert.equal(busy.refreshing, true);
+  assert.equal(busy.activities[0].label, 'Loading team rosters');
+  assert.ok(
+    busy.diagnostics.some((line) =>
+      line.startsWith('Active: Loading team rosters'),
+    ),
+  );
+  activity.finish();
+  const idle = summarizeSync(snapshot, reconciliation);
+  assert.equal(idle.refreshing, false);
+  assert.deepEqual(idle.activities, []);
+  assert.equal(
+    idle.diagnostics.some((line) => line.includes('. Refreshing')),
+    false,
+  );
+  assert.equal(
+    idle.servers.some((server) => server.state === 'refreshing'),
+    false,
+  );
+  reconciliation.dispose();
+});
+
+test('healthy local work is named and an active retry remains busy despite its previous error', () => {
+  const reconciliation = service(FIXTURE);
+  const profile = FIXTURE.servers[0].id;
+  reconciliation.scheduler.observations = () => [
+    {
+      key: 'metadata',
+      scope: null,
+      kind: 'metadata',
+      snapshot: { refreshing: true, lastAttemptAt: 10_000 },
+    },
+    {
+      key: 'connectivity',
+      scope: profile,
+      kind: 'connectivity',
+      snapshot: { refreshing: true, error: FAILURE, lastAttemptAt: 10_000 },
+    },
+  ];
+  const summary = summarizeSync(FIXTURE, reconciliation);
+  assert.equal(summary.refreshing, true);
+  assert.equal(summary.failed, true);
+  assert.deepEqual(
+    summary.activities.map((entry) => entry.label),
+    ['Refreshing account metadata'],
+  );
+  assert.equal(
+    summary.servers.find((server) => server.id === profile)?.jobs[0].state,
+    'refreshing',
+  );
+  reconciliation.dispose();
 });

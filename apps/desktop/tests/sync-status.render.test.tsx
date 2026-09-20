@@ -177,20 +177,54 @@ test('leaving the button without reaching the popover closes it', async () => {
 });
 
 test('while refreshing, the spinner takes the icon’s place rather than sitting over it', async () => {
+  const service = reconciliation();
+  const activity = service.activities.begin('Loading catalog');
   const rendered = ui.render(
-    createElement(Harness, { service: reconciliation(), refreshing: true }),
+    createElement(Harness, { service, refreshing: true }),
   );
   const button = document.querySelector<HTMLButtonElement>('.global-refresh');
   assert.ok(button);
   assert.equal(button.getAttribute('aria-busy'), 'true');
-  assert.equal(button.getAttribute('aria-label'), 'Refreshing vaults and teams');
+  assert.equal(
+    button.getAttribute('aria-label'),
+    'Refreshing vaults and teams',
+  );
   assert.ok(button.querySelector('.spin'));
   assert.equal(button.querySelector('svg.ic'), null);
   assert.equal(document.querySelector('.sync-badge'), null);
-  rendered.rerender(
-    createElement(Harness, { service: reconciliation(), refreshing: false }),
-  );
+  await ui.act(async () => activity.finish());
+  rendered.rerender(createElement(Harness, { service, refreshing: false }));
   assert.equal(button.getAttribute('aria-busy'), null);
   assert.equal(button.querySelector('.spin'), null);
   assert.ok(button.querySelector('svg.ic'));
+});
+
+test('remaining work is visible beside healthy jobs and disappears when it settles', async () => {
+  const service = reconciliation();
+  service.update(FIXTURE);
+  for (const observation of service.scheduler.observations())
+    service.scheduler.reconciled(observation.key);
+  const activity = service.activities.begin('Loading team rosters');
+  const rendered = ui.render(createElement(Harness, { service }));
+  const wrap = document.querySelector('.global-refresh-wrap')!;
+  await ui.act(async () => enter(wrap));
+  const button = wrap.querySelector('button')!;
+  assert.equal(button.getAttribute('aria-busy'), 'true');
+  assert.ok(
+    ui.screen
+      .getByLabelText('Other refresh activity')
+      .textContent?.includes('Loading team rosters'),
+  );
+  const refreshNow = ui.screen.getByRole<HTMLButtonElement>('button', {
+    name: 'Refresh now',
+  });
+  assert.equal(refreshNow.disabled, false);
+  assert.equal(button.disabled, false);
+  rendered.rerender(createElement(Harness, { service, refreshing: true }));
+  assert.equal(refreshNow.disabled, true);
+  assert.equal(button.disabled, true);
+  await ui.act(async () => activity.finish());
+  assert.equal(button.getAttribute('aria-busy'), null);
+  assert.equal(ui.screen.queryByLabelText('Other refresh activity'), null);
+  service.dispose();
 });

@@ -1,3 +1,4 @@
+import { refreshActivitiesFor } from './refresh-activity';
 import { useEffect, useMemo, useRef } from 'react';
 import type { Bridge } from './bridge';
 import {
@@ -238,6 +239,7 @@ export function useDesktopReconciliation(
     };
     const service = new DesktopReconciliation(
       {
+        activities: refreshActivitiesFor(options.bridge),
         snapshot: () => live.current.current(),
         nowSeconds: () => live.current.nowSeconds(),
         profile: (name, context) =>

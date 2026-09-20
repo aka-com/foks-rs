@@ -9,7 +9,7 @@
  * six tabs. Every tab's indicator sits in one trailing slot: Chat and Teams
  * carry a
  * muted count, Devices and Settings a dot, since neither has a number to
- * substantiate, and Chat a spinner while its counts load.
+ * substantiate, while Chat loading appears in the header Refresh control.
  * The rail is 200px open and 46px collapsed. The width is selected by the user
  * from the rail itself: it never expands on hover or focus.
  */
@@ -533,8 +533,8 @@ export function AccountHeader({
 /**
  * The total unread across the teams whose chat this Mac can read. `teamUnread`
  * reports one team at a time, including the states that have no number
- * (loading, unavailable); those contribute nothing to the sum but do keep the
- * badge from disappearing while a team is still loading.
+ * (loading, unavailable); those contribute nothing to the sum. Loading is
+ * reported by the header Refresh control.
  *
  * A team whose synchronization failed or arrived incomplete marks the badge
  * rather than replacing it: an inbox poll fails and retries on a backoff, and
@@ -546,20 +546,14 @@ export function AccountHeader({
 function railChatUnread(
   snapshot: AgentSnapshot,
   inbox: ReturnType<typeof useSidebarInbox>,
-):
-  | RailCount
-  | { loading: true; description: string }
-  | { warning: true; description: string }
-  | null {
+): RailCount | { warning: true; description: string } | null {
   let total = 0;
   let known = false;
-  let pending = false;
   const warnings = new Set<string>();
   for (const store of storeNavigationOrder(snapshot)) {
     if (!chatAvailable(snapshot, store)) continue;
     const entry = inbox.get(store.id);
     if (!entry || (entry.state === 'loading' && !entry.data && !entry.error)) {
-      pending = true;
       continue;
     }
     const unread = teamUnread(entry);
@@ -586,9 +580,7 @@ function railChatUnread(
       : { warning: true, description };
   }
   if (known) return { label: String(total), description: `${total} unread` };
-  return pending
-    ? { loading: true, description: 'Loading unread counts' }
-    : null;
+  return null;
 }
 
 type RailCount = { label: string; description: string; warning?: boolean };
@@ -596,7 +588,7 @@ type RailCount = { label: string; description: string; warning?: boolean };
 /**
  * Standard trailing status slot for each tab. Unread counts use neutral text,
  * dots indicate actionable status without a numeric value, `warn` uses amber,
- * and `loading` renders a ring spinner. A count carrying `warn` is a total
+ * and all dots use amber. A count carrying `warn` is a total
  * that is known to be short of something, drawn in amber rather than dropped.
  */
 function RailTail({
@@ -604,22 +596,17 @@ function RailTail({
   description,
   children,
 }: {
-  kind: 'count' | 'count warn' | 'dot' | 'dot warn' | 'loading';
+  kind: 'count' | 'count warn' | 'dot' | 'dot warn';
   description: string;
   children?: ReactNode;
 }): ReactNode {
   return (
     <span
       className={`rail-tail ${kind}`}
-      role={kind === 'loading' ? 'status' : undefined}
       aria-label={description}
       title={description}
     >
-      {kind === 'loading' ? (
-        <i className="spin" aria-hidden="true" />
-      ) : (
-        children
-      )}
+      {children}
     </span>
   );
 }
@@ -648,16 +635,13 @@ export function Sidebar({
   const unread = snapshot ? railChatUnread(snapshot, chatInbox) : null;
   const here = railTabOf(location);
   /**
-   * A tab's own indicator: a muted count for Chat and Teams, a spinner for
-   * Chat while its counts load, a dot for Devices, and an amber one for
-   * Settings. In collapsed mode, indicators render as overlay badges on the
-   * icon's upper corner.
+   * A tab's own indicator: a muted count for Chat and Teams, and amber dots
+   * for Devices and Settings. In collapsed mode, indicators render as overlay
+   * badges on the icon's upper corner.
    */
   const railTail = (tab: RailTab): ReactNode => {
     if (tab === 'chat') {
       if (!unread) return undefined;
-      if ('loading' in unread)
-        return <RailTail kind="loading" description={unread.description} />;
       if (!('label' in unread))
         return <RailTail kind="dot warn" description={unread.description} />;
       return (

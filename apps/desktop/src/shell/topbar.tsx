@@ -213,7 +213,7 @@ function SyncControls({
     on.current = { pointer: false, focus: false };
     setOpen(false);
   };
-  const spinning = summary.refreshing || refreshing;
+  const spinning = summary.refreshing;
   const badge = summary.failed ? 'failed' : null;
   return (
     <span
@@ -229,7 +229,7 @@ function SyncControls({
         className="global-refresh"
         icon={spinning ? undefined : 'again'}
         busy={spinning}
-        aria-label={spinning ? 'Refreshing vaults and teams' : 'Refresh'}
+        aria-label={spinning ? 'Refreshing vaults, teams, and chat' : 'Refresh'}
         aria-describedby={open ? SYNC_STATUS_ID : undefined}
         disabled={refreshing || blocked}
         onClick={onRefresh}
@@ -242,6 +242,7 @@ function SyncControls({
           snapshot={snapshot}
           service={service}
           summary={summary}
+          refreshDisabled={refreshing || blocked}
           anchorRef={wrapRef}
           onClose={hideNow}
           onPointerEnter={track('pointer', true)}

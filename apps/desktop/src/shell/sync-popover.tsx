@@ -9,7 +9,7 @@
  * server lists its jobs with their most recent success, how long that run
  * took and their next-run times.
  * Failures add a summary and recovery actions. A single server is always
- * expanded; when several servers are present, failed servers start expanded
+ * expanded; when several servers are present, failed or busy servers start expanded
  * and the others start collapsed. Copy diagnostics retains the ungrouped
  * observations.
  */
@@ -24,7 +24,8 @@ import {
 import type { ReactNode, RefObject } from 'react';
 import { Popover } from '/kit/overlay-primitives';
 import type { AgentSnapshot, CatalogFreshnessEntry, Server } from '../model';
-import { serverDisplayName } from '../model';
+import { chatAvailable, serverDisplayName } from '../model';
+import { useSidebarInbox } from '../chat/inbox-provider';
 import { formatMilliseconds, formatTimings } from '../diagnostics/format';
 import { diagnosticLog, type TimingEvent } from '../diagnostics/log';
 import type { DesktopReconciliation } from '../desktop-reconciliation';
@@ -44,7 +45,7 @@ export type SyncState = 'ok' | 'refreshing' | 'failed' | 'unknown';
 
 /** One of the scheduler's jobs on a server or on this Mac, as a line. */
 export interface SyncJobSummary {
-  kind: ReconciliationKind;
+  kind: ReconciliationKind | 'chat';
   label: string;
   state: SyncState;
   /** Full status sentence exposed as the row's tooltip. */
@@ -77,6 +78,8 @@ export interface SyncServerSummary {
 
 export interface SyncSummary {
   refreshing: boolean;
+  /** App-wide work not represented by a server's three scheduler rows. */
+  activities: readonly { id: string; label: string; startedAt?: number }[];
   failed: boolean;
   servers: SyncServerSummary[];
   /** The ungrouped observations, one line each, for Copy diagnostics. */
@@ -94,7 +97,7 @@ function timeOf(seconds: number | undefined): string {
 
 function observationLabel(kind: string): string {
   return kind === 'discovery'
-    ? 'Team discovery'
+    ? 'Teams'
     : kind === 'metadata'
       ? 'Account metadata'
       : kind === 'connectivity'
@@ -164,8 +167,14 @@ function jobSummary(
     return {
       kind,
       label,
-      state: 'failed',
-      detail: line([`${cause}.`, succeeded, lastRun(ran), next]),
+      state: snapshot.refreshing ? 'refreshing' : 'failed',
+      detail: line([
+        snapshot.refreshing ? 'Retrying now.' : '',
+        `${cause}.`,
+        succeeded,
+        lastRun(ran),
+        next,
+      ]),
       ...times,
     };
   }
@@ -239,7 +248,9 @@ function freshnessLine(entry: CatalogFreshnessEntry | undefined): string {
       : `Last successful refresh: ${new Date(entry.lastSuccessAt * 1_000).toLocaleTimeString()}`;
   if (entry.error)
     return `${successful}. Refresh failed: ${entry.error.message}`;
-  return entry.refreshing ? `${successful}. Refreshing` : successful;
+  // Freshness flags describe a published partial, not whether its owner is
+  // still alive. Live work is reported separately below.
+  return successful;
 }
 
 function reconnectDisabledFor(server: Server): boolean {
@@ -258,6 +269,7 @@ function reconnectDisabledFor(server: Server): boolean {
 export function summarizeSync(
   snapshot: AgentSnapshot,
   service: DesktopReconciliation,
+  inbox?: ReturnType<typeof useSidebarInbox>,
 ): SyncSummary {
   const observations = service.scheduler.observations();
   const diagnostics: string[] = [];
@@ -298,17 +310,67 @@ export function summarizeSync(
         `${observationLabel(observation.kind)} on ${name}: ${error.message}`,
       );
     }
-    const refreshing =
-      Boolean(entry?.refreshing) ||
-      own.some((observation) => observation.snapshot.refreshing);
+    const jobs = jobSummaries(own);
+    if (inbox) {
+      const teams = snapshot.stores.filter(
+        (store) => store.server === server.id && chatAvailable(snapshot, store),
+      );
+      let loading = false;
+      let unavailable = false;
+      for (const team of teams) {
+        const entry = inbox.get(team.id);
+        if (
+          !entry ||
+          (entry.state === 'loading' && !entry.data && !entry.error)
+        )
+          loading = true;
+        else if (
+          !entry.data ||
+          entry.state === 'blocked' ||
+          entry.state === 'unavailable' ||
+          entry.stale ||
+          entry.error ||
+          entry.data.degraded
+        )
+          unavailable = true;
+      }
+      // Initial unread loading belongs here. Background polling with usable
+      // data must not keep the global refresh button spinning.
+      const chat: SyncJobSummary = {
+        kind: 'chat',
+        label: 'Chat',
+        state: loading
+          ? 'refreshing'
+          : unavailable
+            ? 'failed'
+            : teams.length
+              ? 'ok'
+              : 'unknown',
+        detail: loading
+          ? 'Loading unread counts'
+          : unavailable
+            ? 'Unread counts may be incomplete or unavailable'
+            : teams.length
+              ? 'Unread counts loaded'
+              : 'No available chats',
+        paused: false,
+      };
+      const discovery = jobs.findIndex((job) => job.kind === 'discovery');
+      jobs.splice(discovery < 0 ? jobs.length : discovery + 1, 0, chat);
+    }
+    const refreshing = jobs.some((job) => job.state === 'refreshing');
     const failed = messages.length > 0;
-    const state: SyncState = failed
-      ? 'failed'
-      : refreshing
-        ? 'refreshing'
-        : entry?.lastSuccessAt !== undefined
-          ? 'ok'
-          : 'unknown';
+    const chatFailed = jobs.some(
+      (job) => job.kind === 'chat' && job.state === 'failed',
+    );
+    const state: SyncState =
+      failed || chatFailed
+        ? 'failed'
+        : refreshing
+          ? 'refreshing'
+          : entry?.lastSuccessAt !== undefined
+            ? 'ok'
+            : 'unknown';
     const canReconnect =
       service.supportsConnectivity &&
       (server.host_id !== null ||
@@ -319,16 +381,18 @@ export function summarizeSync(
       state,
       message: failed
         ? failureSentence(messages, entry?.lastSuccessAt, paused)
-        : refreshing
-          ? 'Refreshing…'
-          : entry?.lastSuccessAt !== undefined
-            ? `Up to date, ${timeOf(entry.lastSuccessAt)}`
-            : 'No refresh observation yet',
+        : chatFailed
+          ? 'Chat unread counts may be incomplete or unavailable.'
+          : refreshing
+            ? 'Refreshing…'
+            : entry?.lastSuccessAt !== undefined
+              ? `Up to date, ${timeOf(entry.lastSuccessAt)}`
+              : 'No refresh observation yet',
       lastSuccessAt: entry?.lastSuccessAt,
-      canReconnect,
+      canReconnect: canReconnect && (!chatFailed || failed),
       reconnectDisabled: reconnectDisabledFor(server),
       reconnecting: Boolean(connectivity?.refreshing),
-      jobs: jobSummaries(own),
+      jobs,
     };
   });
   // The registry and metadata jobs belong to no server. They are listed only
@@ -369,10 +433,42 @@ export function summarizeSync(
       jobs: jobSummaries(localJobs),
     });
   }
+  const activities: { id: string; label: string; startedAt?: number }[] =
+    service.activities.getSnapshot().map((activity) => ({
+      id: `catalog:${activity.id}`,
+      label: `${activity.isCurrent() ? '' : 'Finishing earlier refresh · '}${activity.phases.join(' · ')}`,
+      startedAt: activity.startedAt,
+    }));
+  // Local failures already expose all of their jobs in the This Mac group.
+  // Otherwise healthy local work used to be completely invisible.
+  for (const observation of observations) {
+    if (!observation.snapshot.refreshing) continue;
+    const represented = servers.find(
+      (server) => server.id === observation.scope,
+    );
+    if (represented) {
+      diagnostics.push(
+        `Active: ${observationLabel(observation.kind)} on ${represented.name}`,
+      );
+      continue;
+    }
+    activities.push({
+      id: `job:${observation.key}`,
+      label: `Refreshing ${observationLabel(observation.kind).toLowerCase()}${observation.scope ? ` on ${observation.scope}` : ''}`,
+      startedAt: observation.snapshot.lastAttemptAt,
+    });
+  }
+  for (const activity of activities)
+    diagnostics.push(
+      `Active: ${activity.label}${activity.startedAt === undefined ? '' : ` · ${Math.max(0, Math.floor((Date.now() - activity.startedAt) / 1000))}s`} [${activity.id}]`,
+    );
   return {
     refreshing:
-      Boolean(catalogAttempt?.refreshing) ||
-      servers.some((server) => server.state === 'refreshing'),
+      activities.length > 0 ||
+      servers.some((server) =>
+        server.jobs.some((job) => job.state === 'refreshing'),
+      ),
+    activities,
     failed: servers.some((server) => server.state === 'failed'),
     servers,
     diagnostics,
@@ -417,7 +513,23 @@ export function useSyncSummary(
     service.scheduler.getSnapshot,
     service.scheduler.getSnapshot,
   );
-  return summarizeSync(snapshot, service);
+  const activities = useSyncExternalStore(
+    service.activities.subscribe,
+    service.activities.getSnapshot,
+    service.activities.getSnapshot,
+  );
+  // Also refresh elapsed times and superseded labels while real work remains.
+  const [, tick] = useState(0);
+  const busy =
+    activities.length > 0 ||
+    service.scheduler.observations().some((entry) => entry.snapshot.refreshing);
+  useEffect(() => {
+    if (!busy) return;
+    const timer = setInterval(() => tick((value) => value + 1), 1_000);
+    return () => clearInterval(timer);
+  }, [busy]);
+  const inbox = useSidebarInbox();
+  return summarizeSync(snapshot, service, inbox);
 }
 
 /** Names the popover as the refresh button's description while it is up. */
@@ -428,6 +540,21 @@ export const SYNC_STATUS_ID = 'sync-status-popover';
  * the row's own text is held by a test without standing the popover up.
  */
 export function JobTimes({ job }: { job: SyncJobSummary }): ReactNode {
+  if (job.kind === 'chat')
+    return (
+      <span
+        className={`sync-when${job.state === 'failed' ? ' failed' : ''}`}
+        role={job.state === 'refreshing' ? 'status' : undefined}
+      >
+        {job.state === 'refreshing'
+          ? 'Loading unread counts…'
+          : job.state === 'failed'
+            ? 'Unread counts incomplete'
+            : job.state === 'ok'
+              ? 'Unread counts loaded'
+              : 'No available chats'}
+      </span>
+    );
   // How long the last run took, beside the time it ran: a job that is slow
   // and a job that is stale read the same on a row that states only a time.
   const took = runDuration(job.lastMilliseconds);
@@ -575,6 +702,7 @@ export function SyncPopover({
   onPointerLeave,
   onOpenServers,
   onRefresh,
+  refreshDisabled = false,
 }: {
   snapshot: AgentSnapshot;
   service: DesktopReconciliation;
@@ -588,6 +716,7 @@ export function SyncPopover({
   onOpenServers?: (profile: string) => void;
   /** Runs the same manual refresh action as the top-bar button. */
   onRefresh?: () => void;
+  refreshDisabled?: boolean;
 }): ReactNode {
   // Explicit choices override the default of expanding failed servers.
   const [openOverrides, setOpenOverrides] = useState<Record<string, boolean>>(
@@ -686,7 +815,10 @@ export function SyncPopover({
         ) : summary.servers.length ? (
           summary.servers.map((server) => {
             const key = server.id ?? 'local';
-            const open = openOverrides[key] ?? server.state === 'failed';
+            const open =
+              openOverrides[key] ??
+              (server.state === 'failed' ||
+                server.jobs.some((job) => job.state === 'refreshing'));
             return (
               <ServerRow
                 key={key}
@@ -706,13 +838,31 @@ export function SyncPopover({
               : 'No servers configured.'}
           </p>
         )}
+        {summary.activities.length ? (
+          <ul
+            className="sync-jobs sync-activities"
+            aria-label="Other refresh activity"
+          >
+            {summary.activities.map((activity) => (
+              <li key={activity.id}>
+                <span className="sync-dot refreshing" aria-hidden="true" />
+                <b>{activity.label}</b>
+                <span className="sync-when">
+                  {activity.startedAt === undefined
+                    ? 'Running now'
+                    : `${Math.max(0, Math.floor((Date.now() - activity.startedAt) / 1000))}s`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
         <div className="sync-foot">
           {onRefresh ? (
             <Button
               size="sm"
               variant="plain"
               className="lnk"
-              disabled={summary.refreshing}
+              disabled={refreshDisabled}
               onClick={onRefresh}
             >
               Refresh now

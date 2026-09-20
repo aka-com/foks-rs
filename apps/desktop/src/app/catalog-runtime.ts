@@ -1,3 +1,4 @@
+import { refreshActivitiesFor } from '../refresh-activity';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import type { ToastController } from '/kit/toasts';
@@ -111,33 +112,41 @@ export function useCatalogRuntime({
         (onPartial, catalogCurrent, forced) => {
           const ticket = lifetime.capture();
           const isCurrent = () => ticket.isCurrent() && catalogCurrent();
-          return catalogGate.exclusive(async () => {
-            if (!isCurrent()) throw new CatalogReadRetiredError();
-            const base = markCatalogRefresh(latestRef.current);
-            latestRef.current = base;
-            setLatest(base);
-            try {
-              return await loadSnapshot(
-                bridge,
-                base,
-                undefined,
-                onPartial,
-                isCurrent,
-                // A refresh the user asked for reads every roster, whether
-                // or not the team's chain has moved.
-                forced,
-              );
-            } catch (error) {
-              if (isCurrent()) {
-                latestRef.current = failWholeCatalogRefresh(
-                  latestRef.current,
-                  normalizeCommandError(error),
+          const activity = refreshActivitiesFor(bridge).begin(
+            'Waiting for current catalog reads',
+            isCurrent,
+          );
+          return catalogGate
+            .exclusive(async () => {
+              if (!isCurrent()) throw new CatalogReadRetiredError();
+              const base = markCatalogRefresh(latestRef.current);
+              latestRef.current = base;
+              setLatest(base);
+              try {
+                return await loadSnapshot(
+                  bridge,
+                  base,
+                  undefined,
+                  onPartial,
+                  isCurrent,
+                  // A refresh the user asked for reads every roster, whether
+                  // or not the team's chain has moved.
+                  forced,
+                  undefined,
+                  activity,
                 );
-                setLatest(latestRef.current);
+              } catch (error) {
+                if (isCurrent()) {
+                  latestRef.current = failWholeCatalogRefresh(
+                    latestRef.current,
+                    normalizeCommandError(error),
+                  );
+                  setLatest(latestRef.current);
+                }
+                throw error;
               }
-              throw error;
-            }
-          });
+            })
+            .finally(() => activity.finish());
         },
         (next, forced) => {
           // The comparison is made against the snapshot this publication

@@ -1,3 +1,4 @@
+import { RefreshActivities } from './refresh-activity';
 import type { Account, AgentSnapshot, CatalogFreshnessEntry } from './model';
 import { accountHasBoundTeam, discoveryAccounts } from './team-discovery';
 import {
@@ -9,6 +10,7 @@ import {
 } from './scheduling/reconciliation';
 
 export interface DesktopReconciliationReads {
+  activities?: RefreshActivities;
   snapshot(): AgentSnapshot;
   profile(profile: string, context: ReconciliationContext): Promise<void>;
   connectivity?(profile: string, context: ReconciliationContext): Promise<void>;
@@ -61,12 +63,14 @@ export const profileConnectivityKey = (
 
 export class DesktopReconciliation {
   readonly scheduler: ReconciliationScheduler;
+  readonly activities: RefreshActivities;
   private accepted = new Map<string, CatalogFreshnessEntry>();
   constructor(
     private reads: DesktopReconciliationReads,
     clock?: ReconciliationClock,
   ) {
     this.scheduler = new ReconciliationScheduler(clock);
+    this.activities = reads.activities ?? new RefreshActivities();
   }
   get supportsConnectivity(): boolean {
     return this.reads.connectivity !== undefined;

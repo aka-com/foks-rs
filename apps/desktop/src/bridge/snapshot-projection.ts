@@ -1,3 +1,4 @@
+import type { RefreshOperation } from '../refresh-activity';
 import {
   catalogItemsComplete,
   catalogStoreComplete,
@@ -97,7 +98,9 @@ export async function projectCatalog(
    * the user asked for, or a read back of a profile a write changed.
    */
   forceRosters = false,
+  activity?: RefreshOperation,
 ): Promise<AgentSnapshot> {
+  const operation = activity?.child('Loading catalog details');
   // The projection is the renderer's own share of a catalog read: the server
   // and account listings, and a roster read per team whose chain moved. Its
   // duration and those counts are what the timing log keeps of it.
@@ -118,6 +121,7 @@ export async function projectCatalog(
       background,
       forceRosters,
       counts,
+      operation,
     );
     end('ok', { attrs: counts });
     return snapshot;
@@ -125,6 +129,8 @@ export async function projectCatalog(
     const code = normalizeCommandError(error).code;
     end(outcomeForCode(code), { code, attrs: counts });
     throw error;
+  } finally {
+    operation?.finish();
   }
 }
 
@@ -139,6 +145,7 @@ async function projectCatalogCounted(
   background: BackgroundHistoryWork | undefined,
   forceRosters: boolean,
   counts: { servers: number; rosters: number },
+  activity?: RefreshOperation,
 ): Promise<AgentSnapshot> {
   // A native response that carries the locally known server facts and accounts
   // is projected from them, whichever command produced it, so the whole-catalog
@@ -303,6 +310,7 @@ async function projectCatalogCounted(
                 !blockedProfiles.has(server.id),
             )
             .map(async (server) => {
+              const statusActivity = activity?.child('Loading server status');
               try {
                 const cached = response.localMetadata?.profiles.find(
                   (entry) => entry.profile === server.id,
@@ -337,6 +345,8 @@ async function projectCatalogCounted(
                   profile: server.id,
                   error: typed,
                 };
+              } finally {
+                statusActivity?.finish();
               }
             }),
         )
@@ -629,6 +639,7 @@ async function projectCatalogCounted(
       const cached = cachedRoster(store);
       if (cached) return { ...cached, failures: [] as GroupDetailFailure[] };
       counts.rosters++;
+      const rosterActivity = activity?.child('Loading team rosters');
       const { parties, federation, failures } = await scheduleProfileWork(
         bridge,
         store.server,
@@ -671,19 +682,23 @@ async function projectCatalogCounted(
         background
           ? { ...background, key: `${background.key}:roster:${store.id}` }
           : undefined,
-      ).catch((error: unknown) => {
-        // Admission itself failed: the profile's queue was full, or the wait
-        // for it ran out. That is one team's roster this refresh could not
-        // read, recorded like any other roster failure, not a reason to
-        // discard the whole catalog. A cancellation is this refresh's own
-        // retirement and stays fatal to it.
-        if (normalizeCommandError(error).code === 'cancelled') throw error;
-        return {
-          parties: [] as Party[],
-          federation: [] as FederationEntry[],
-          failures: [recoverableGroupDetailFailure(error, store.id, 'roster')],
-        };
-      });
+      )
+        .catch((error: unknown) => {
+          // Admission itself failed: the profile's queue was full, or the wait
+          // for it ran out. That is one team's roster this refresh could not
+          // read, recorded like any other roster failure, not a reason to
+          // discard the whole catalog. A cancellation is this refresh's own
+          // retirement and stays fatal to it.
+          if (normalizeCommandError(error).code === 'cancelled') throw error;
+          return {
+            parties: [] as Party[],
+            federation: [] as FederationEntry[],
+            failures: [
+              recoverableGroupDetailFailure(error, store.id, 'roster'),
+            ],
+          };
+        })
+        .finally(() => rosterActivity?.finish());
       if (parties.some((party) => party.store !== store.id)) {
         throw new Error(
           'list_parties returned a roster for a different store.',

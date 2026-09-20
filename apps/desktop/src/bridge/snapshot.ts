@@ -1,3 +1,7 @@
+import {
+  refreshActivitiesFor,
+  type RefreshOperation,
+} from '../refresh-activity';
 import { mergeProfileSnapshot } from '../catalog-state';
 import { CatalogReadRetiredError } from '../catalog-coordinator';
 import { profileInventoryComplete, serverFactAvailability } from '../model';
@@ -102,6 +106,36 @@ export async function loadSnapshot(
    * agent twice. Absent means probe, as every other caller does.
    */
   ready?: AgentStatus,
+  activity?: RefreshOperation,
+): Promise<AgentSnapshot> {
+  const operation =
+    activity ??
+    refreshActivitiesFor(bridge).begin('Loading catalog', isCurrent);
+  try {
+    return await loadSnapshotTracked(
+      bridge,
+      base,
+      nowSeconds,
+      onPartial,
+      isCurrent,
+      forceRosters,
+      ready,
+      operation,
+    );
+  } finally {
+    if (!activity) operation.finish();
+  }
+}
+
+async function loadSnapshotTracked(
+  bridge: Bridge,
+  base: AgentSnapshot | undefined,
+  nowSeconds: number,
+  onPartial: ((snapshot: AgentSnapshot) => void) | undefined,
+  isCurrent: () => boolean,
+  forceRosters: boolean,
+  ready: AgentStatus | undefined,
+  activity: RefreshOperation,
 ): Promise<AgentSnapshot> {
   try {
     return await loadSnapshotOnce(
@@ -112,6 +146,7 @@ export async function loadSnapshot(
       isCurrent,
       forceRosters,
       ready,
+      activity,
     );
   } catch (error) {
     if (
@@ -127,6 +162,7 @@ export async function loadSnapshot(
       isCurrent,
       forceRosters,
       ready,
+      activity,
     );
   }
 }
@@ -139,8 +175,10 @@ async function loadSnapshotOnce(
   isCurrent: () => boolean,
   forceRosters: boolean,
   ready: AgentStatus | undefined,
+  activity: RefreshOperation,
 ): Promise<AgentSnapshot> {
   if (!isCurrent()) throw new CatalogReadRetiredError();
+  activity.update('Checking local agent');
   const agent = ready ?? (await bridge.agentStatus());
   if (!isCurrent()) throw new CatalogReadRetiredError();
   if (agent.state !== 'ready') {
@@ -161,6 +199,7 @@ async function loadSnapshotOnce(
   let terminalFailure: CommandError | undefined;
   const projections = new Set<Promise<void>>();
   try {
+    activity.update('Loading catalog');
     const response = await bridge.listCatalog(
       onPartial
         ? (partial) => {
@@ -173,6 +212,10 @@ async function loadSnapshotOnce(
               nowSeconds,
               agent,
               true,
+              undefined,
+              undefined,
+              false,
+              activity,
             )
               .then((snapshot) => {
                 if (
@@ -199,6 +242,7 @@ async function loadSnapshotOnce(
       forceRosters,
     );
     accepting = false;
+    activity.update('Loading catalog details');
     await Promise.all(projections);
     if (!isCurrent()) throw new CatalogReadRetiredError();
     if (terminalFailure) throw terminalFailure;
@@ -212,6 +256,7 @@ async function loadSnapshotOnce(
       undefined,
       undefined,
       forceRosters,
+      activity,
     );
     if (!isCurrent()) throw new CatalogReadRetiredError();
     return snapshot;
