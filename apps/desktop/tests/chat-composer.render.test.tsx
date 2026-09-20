@@ -160,14 +160,18 @@ async function setup(
   };
 }
 
-function assertSent(current: ReturnType<typeof Hook>, count: number) {
+function assertSent(
+  current: ReturnType<typeof Hook>,
+  count: number,
+  canSend = true,
+) {
   assert.equal(current.messages.length, count);
   assert.ok(
     current.messages.every(
       (message) => message.phase === 'sent' && !message.running,
     ),
   );
-  assert.equal(current.canSend, true);
+  assert.equal(current.canSend, canSend);
   assert.equal(current.sendError, '');
 }
 
@@ -178,7 +182,7 @@ test('production composer import aliases the canonical application-service hook'
   assert.equal(useMessageComposer, useChatComposer);
 });
 
-test('confirmed delivery releases the composer before delayed history completes', async () => {
+test('confirmed delivery finishes while delayed history holds intent cleanup', async () => {
   const history = deferred();
   let delayed = false;
   let refresh: Promise<void> | undefined;
@@ -192,18 +196,20 @@ test('confirmed delivery releases the composer before delayed history completes'
   delayed = true;
   try {
     await h.send('first');
-    await ui.waitFor(() => assertSent(h.current, 1));
+    await ui.waitFor(() => assertSent(h.current, 1, false));
     assert.equal(h.history.busy, true);
     assert.ok(h.calls.some((action) => action.action === 'history'));
-    await h.send('second');
-    assert.equal(h.current.messages.length, 2);
-    assert.equal(h.current.messages[1].text, 'second');
-    assert.equal(h.current.draft, '');
+    await ui.act(async () => h.current.setDraft('second'));
+    assert.equal(h.current.messages.length, 1);
+    assert.equal(h.current.draft, 'second');
+    assert.equal(h.current.canSend, false);
     assert.equal(h.current.messages[0].running, false);
     await ui.act(async () => {
       history.resolve();
       await refresh;
     });
+    await ui.waitFor(() => assertSent(h.current, 1));
+    await h.send('second');
     await ui.waitFor(() => assertSent(h.current, 2));
     assert.equal(
       h.calls.filter((action) => action.action === 'submit-message').length,
@@ -234,7 +240,7 @@ test('pending-view refresh is not a prerequisite to submitting delivery', async 
     h.current.service.refresh(storeId);
   try {
     await h.send('send before optional refresh');
-    await ui.waitFor(() => assertSent(h.current, 1));
+    await ui.waitFor(() => assertSent(h.current, 1, false));
     assert.ok(h.calls.some((action) => action.action === 'pending'));
     assert.equal(
       h.calls.filter((action) => action.action === 'submit-message').length,
@@ -362,12 +368,15 @@ test('an older delivery error belongs to its message, not a newer send', async (
   });
   try {
     await h.send('first');
-    await ui.waitFor(() => assert.equal(h.current.canSend, true));
-    await h.send('second');
-    assert.equal(h.current.messages[1].text, 'second');
+    await ui.waitFor(() => assert.equal(attempts, 1));
+    assert.equal(h.current.canSend, false);
+    await ui.act(async () => h.current.setDraft('second'));
+    assert.equal(h.current.draft, 'second');
     await ui.act(async () => {
       old.resolve();
     });
+    await ui.waitFor(() => assert.equal(h.current.canSend, true));
+    await h.send('second');
     await ui.waitFor(() => {
       assert.equal(h.current.messages[0].running, false);
       assert.equal(h.current.messages[1].phase, 'sent');

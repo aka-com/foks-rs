@@ -840,6 +840,7 @@ export class ChatSendService {
       return;
     }
     const epoch = team.epoch;
+    const generation = this.generations.get(team.profile) ?? 0;
     message.running = true;
     message.error = '';
     this.publish();
@@ -853,6 +854,14 @@ export class ChatSendService {
           text: message.text,
         });
         if (!this.current(team, epoch)) return;
+        if (generation !== (this.generations.get(team.profile) ?? 0))
+          throw {
+            code: 'access-changed',
+            message: 'Chat access changed. Your saved message has been kept.',
+            fatal: false,
+            ambiguous: false,
+            retryable: true,
+          };
         this.report(team, message, 'saved');
         message.phase = 'preparing';
         this.publish();

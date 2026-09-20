@@ -168,7 +168,7 @@ test('a pending send releases its draft while delivery continues outside the con
     assert.equal(h.service.draft('team:eng', h.channel), 'next draft');
     assert.deepEqual(
       h.calls.map((a) => a.action),
-      ['submit-message'],
+      ['load-intent', 'save-intent', 'submit-message', 'clear-intent'],
     );
   } finally {
     gate.resolve();
@@ -190,6 +190,7 @@ test('one channel intent applies admission backpressure without blocking typing'
     assert.equal(h.service.draft('team:eng', h.channel), 'second');
     gate.resolve();
     await sending;
+    await settle(); // Intent cleanup has its own acknowledgement.
     assert.equal(h.service.canSubmit('team:eng', h.channel), true);
   } finally {
     gate.resolve();
