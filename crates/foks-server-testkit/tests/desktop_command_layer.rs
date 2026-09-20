@@ -1043,6 +1043,7 @@ fn exercise_chat_submit(
     };
     let history = || {
         let R::History { messages, .. } = chat(A::History {
+            after: None,
             channel: channel.into(),
             before: None,
         }) else {
@@ -1178,6 +1179,7 @@ fn exercise_chat_submit(
         );
     }
     let R::History { messages, .. } = chat(A::History {
+        after: None,
         channel: alternate.channel,
         before: None,
     }) else {
@@ -1445,6 +1447,7 @@ fn exercise_chat(
         let R::History { messages, .. } = chat(
             actor,
             A::History {
+                after: None,
                 channel: channel.clone(),
                 before: None,
             },
