@@ -1,4 +1,4 @@
-# Outstanding implementation and documentation issues
+# Outstanding issues
 
 This inventory records gaps found while reviewing the team-chat and team-invitation
 plans against the current implementation. It separates current implementation
@@ -172,7 +172,7 @@ identify them accurately:
 - Basic chat supports named teams with direct same-host user membership. Ad-hoc,
   nested and federated team chat are unsupported.
 - The pinned Go filtered-inbox behavior can prevent exact unread completeness;
-  Fennec reports degraded state instead of inventing progress.
+  FOKS-RS reports degraded state instead of inventing progress.
 - Cross-restart equivocation checking retains only the latest 10,000 message
   anchors per account/channel and does not provide a globally complete or
   Merkle-authenticated chat log.

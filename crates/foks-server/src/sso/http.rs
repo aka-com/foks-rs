@@ -224,11 +224,11 @@ async fn handle(
         }
         Ok(Ok(None)) => response(
             StatusCode::OK,
-            "Authentication response recorded. Return to Fennec to continue.",
+            "Authentication step completed. Return to FOKS to continue.",
         ),
         _ => response(
             StatusCode::BAD_REQUEST,
-            "Authentication could not complete. Return to Fennec and check the session status.",
+            "Authentication could not complete. Return to FOKS and check the session status.",
         ),
     })
 }

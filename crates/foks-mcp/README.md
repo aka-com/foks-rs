@@ -1,6 +1,6 @@
 # FOKS MCP
 
-Run the KV or team MCP server over stdio using an existing Fennec account:
+Run the KV or team MCP server over stdio using an existing FOKS account:
 
 ```sh
 cargo build --locked --release -p foks-cli -p foks-agent
