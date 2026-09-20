@@ -1,4 +1,5 @@
 import { ChatThread } from '../chat/chat-thread';
+import { useComposerAutofocus } from '../chat/use-composer-autofocus';
 import { ChatAlerts, failureAlert, type ChatAlert } from '../chat/chat-alerts';
 import { PendingRow } from '../chat/pending-row';
 import {
@@ -65,6 +66,7 @@ export function ChatScreen({
   onNewChat?: () => void;
 }): ReactNode {
   const { service: sends } = useChatSends();
+  const autofocusComposer = useComposerAutofocus(location.channel);
   const store = storeOf(agentSnapshot, location.ref);
   const access = useCallback(
     () =>
@@ -327,6 +329,7 @@ export function ChatScreen({
           </div>
         ) : channel ? (
           <ChatThread
+            autofocusComposer={autofocusComposer}
             alerts={alerts}
             bridge={bridge}
             storeId={storeId}

@@ -1,6 +1,6 @@
 import { MessageText } from './message-text';
 import type { Bridge } from '../bridge';
-import { Fragment, useLayoutEffect, useRef } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef } from 'react';
 import type { ReactNode, Ref } from 'react';
 import { Button, Chip, Icon } from '../components';
 import { ChatAlerts, failureAlert, type ChatAlert } from './chat-alerts';
@@ -20,6 +20,7 @@ import {
   relativeMessageTime,
 } from './presentation';
 export function ChatThread({
+  autofocusComposer,
   alerts = [],
   channel,
   teamName,
@@ -44,6 +45,7 @@ export function ChatThread({
   blockHistory,
   pending,
 }: {
+  autofocusComposer?: (element: HTMLTextAreaElement) => void;
   alerts?: readonly ChatAlert[];
   bridge: Bridge;
   storeId: string;
@@ -139,6 +141,10 @@ export function ChatThread({
     outgoing.flatMap((m) => (m.operation ? [m.operation.id] : [])),
   );
   const composer = useComposerSize(draft, channel.readable && channel.writable);
+  useEffect(() => {
+    if (canSend && channel.readable && composer.current)
+      autofocusComposer?.(composer.current);
+  }, [autofocusComposer, canSend, channel.readable, composer]);
   const { newFrom, readError } = useChatReadIntent(
     channel.id,
     messages,

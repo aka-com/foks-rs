@@ -294,7 +294,10 @@ for (const incremental of [false, true])
     }
   });
 
-test('live sync backs off across repeated post-poll sync failures', async () => {
+test('live sync backs off across repeated post-poll sync failures', async (t) => {
+  // Autofocus makes JSDOM's window focused. Keep read acknowledgments (which
+  // legitimately invalidate the inbox) out of this background-backoff test.
+  t.mock.method(document, 'hasFocus', () => false);
   const syncs: number[] = [];
   await setup((base) => ({
     ...base,
@@ -1301,6 +1304,186 @@ test('the team column receives live unread while a conversation is unmounted', a
     ),
   );
 });
+
+test('composer autofocuses once per visit and returns on reopening', async () => {
+  const page = await setup();
+  const composer = ui.screen.getByRole('textbox', { name: 'Message' });
+  await ui.waitFor(() => assert.equal(document.activeElement, composer));
+  const info = ui.screen.getByRole('button', { name: 'Channel info' });
+  info.focus();
+  ui.fireEvent.change(composer, { target: { value: 'Draft retained' } });
+  assert.equal(document.activeElement, info);
+  page.toggleChat();
+  page.toggleChat();
+  await ui.waitFor(() =>
+    assert.equal(
+      document.activeElement,
+      ui.screen.getByRole('textbox', { name: 'Message' }),
+    ),
+  );
+});
+
+for (const delay of ['sync-inbox', 'load-intent'] as const) {
+  for (const interrupted of [false, true]) {
+    test(`composer waits for ${delay} and ${interrupted ? 'respects intervening focus' : 'focuses when ready'}`, async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let started = false;
+      const page = await setup(
+        (base) => ({
+          ...base,
+          chat: async (store, action, view) => {
+            if (action.action === delay) {
+              started = true;
+              await gate;
+            }
+            return base.chat(store, action, view);
+          },
+        }),
+        false,
+      );
+      const other = document.createElement('input');
+      document.body.append(other);
+      try {
+        await ui.waitFor(() => assert.ok(started));
+        const composer = ui.screen.queryByRole('textbox', { name: 'Message' });
+        if (composer) assert.notEqual(document.activeElement, composer);
+        if (interrupted) other.focus();
+        await ui.act(async () => release());
+        await ui.screen.findByText('Team chat is ready.');
+        const ready = await ui.screen.findByRole('textbox', {
+          name: 'Message',
+        });
+        ui.fireEvent.change(ready, { target: { value: 'Ready' } });
+        await ui.waitFor(() =>
+          assert.equal(
+            ui.screen.getByRole<HTMLButtonElement>('button', {
+              name: 'Send',
+            }).disabled,
+            false,
+          ),
+        );
+        assert.equal(document.activeElement, interrupted ? other : ready);
+      } finally {
+        release();
+        page.unmount();
+        other.remove();
+      }
+    });
+  }
+}
+
+for (const permission of ['readable', 'writable'] as const) {
+  test(`composer autofocus waits for ${permission} permission from live sync`, async () => {
+    let allowed = false;
+    let direct!: Bridge['chat'];
+    await setup((base) => {
+      direct = (store, action, view) => base.chat(store, action, view);
+      return {
+        ...base,
+        chat: async (store, action, view) => {
+          const reply = await base.chat(store, action, view);
+          if (reply.result.kind === 'inbox') {
+            reply.result.channels = reply.result.channels.map((c) => ({
+              ...c,
+              [permission]: allowed,
+            }));
+            reply.result.conversations = reply.result.conversations.map(
+              (c) => ({
+                ...c,
+                channel: { ...c.channel, [permission]: allowed },
+              }),
+            );
+          }
+          return reply;
+        },
+      };
+    }, false);
+    await ui.screen.findByText(
+      permission === 'readable'
+        ? 'Read access required'
+        : 'Your current role can read this channel but cannot send messages.',
+    );
+    assert.equal(ui.screen.queryByRole('textbox', { name: 'Message' }), null);
+    allowed = true;
+    const prepared = await direct('team:eng', {
+      action: 'prepare-message',
+      submission: '89'.repeat(16),
+      channel: 'ab'.repeat(16),
+      text: 'Permission changed',
+    });
+    if (prepared.result.kind !== 'operation')
+      throw new Error('missing operation');
+    await direct('team:eng', {
+      action: 'attempt',
+      operation: prepared.result.operation.id,
+    });
+    const composer = await ui.screen.findByRole('textbox', { name: 'Message' });
+    await ui.waitFor(() => assert.equal(document.activeElement, composer));
+  });
+}
+
+for (const interrupt of [
+  'navigation',
+  'modal',
+  'pointer',
+  'keyboard',
+] as const) {
+  test(`pending composer autofocus respects ${interrupt}`, async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started = false;
+    const page = await setup(
+      (base) => ({
+        ...base,
+        chat: async (store, action, view) => {
+          if (action.action === 'load-intent') {
+            started = true;
+            await gate;
+          }
+          return base.chat(store, action, view);
+        },
+      }),
+      false,
+    );
+    const modal = document.createElement('div');
+    try {
+      await ui.waitFor(() => assert.ok(started));
+      if (interrupt === 'navigation') page.toggleChat();
+      if (interrupt === 'modal') {
+        modal.setAttribute('aria-modal', 'true');
+        document.body.append(modal);
+      }
+      if (interrupt === 'pointer') ui.fireEvent.pointerDown(document.body);
+      if (interrupt === 'keyboard')
+        ui.fireEvent.keyDown(document.body, { key: 'Tab' });
+      const focused = document.activeElement;
+      await ui.act(async () => release());
+      if (interrupt !== 'navigation') {
+        const composer = await ui.screen.findByRole('textbox', {
+          name: 'Message',
+        });
+        ui.fireEvent.change(composer, { target: { value: 'Ready' } });
+        await ui.waitFor(() =>
+          assert.equal(
+            ui.screen.getByRole<HTMLButtonElement>('button', { name: 'Send' })
+              .disabled,
+            false,
+          ),
+        );
+      }
+      assert.equal(document.activeElement, focused);
+    } finally {
+      release();
+      page.unmount();
+      modal.remove();
+    }
+  });
+}
 
 test('read-only projection keeps history and removes composer', async () => {
   await setup((base) => ({
