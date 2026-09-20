@@ -1,5 +1,8 @@
 //! Host discovery, durable pin restoration, and persisted identity loading.
 
+use std::sync::Arc;
+
+use super::host_memo;
 use super::{
     decode, restore_merkle_anchor, restore_public_host_identity, restore_verified_team,
     restore_verified_user, verify_public_host, Acceptance, CertificateDer, EntityId, Error,
@@ -189,10 +192,9 @@ impl FoksClient {
     /// Loads an authenticated host capability from durable hard state.
     pub fn pinned_host(&self, lookup_name: &str, database_path: &Path) -> Result<PinnedHost> {
         let store = HardStateStore::open(database_path)?;
-        let snapshot = store
-            .host_for_lookup(lookup_name)?
-            .ok_or(Error::HostBinding("pinned host is missing"))?;
-        pinned_host_from_snapshot(snapshot, database_path)
+        Ok(restored_host(&store, lookup_name, database_path)?
+            .host
+            .clone())
     }
 
     /// Replays the exact persisted user transcript before returning durable
@@ -203,26 +205,15 @@ impl FoksClient {
         uid: &EntityId,
     ) -> Result<Option<VerifiedUserState>> {
         let store = HardStateStore::open(&host.database_path)?;
-        let host_snapshot = store
-            .host_for_lookup(&host.lookup_name)?
-            .ok_or(Error::HostBinding("pinned host is missing"))?;
+        // The host is restored before the lookup, so a missing or tampered host
+        // is still reported for a user this database does not hold.
+        let restored = restored_host(&store, &host.lookup_name, &host.database_path)?;
         let Some(user) = store.user_for_host(host.host_id.as_bytes(), uid.as_bytes())? else {
             return Ok(None);
         };
-        let anchor = restore_merkle_anchor(
-            host_snapshot.merkle_root.epoch,
-            host_snapshot.merkle_root.root_hash,
-            &host_snapshot.merkle_root.root_bytes,
-            &host_snapshot.merkle_root.evidence,
-            &host_snapshot.merkle_root.authenticated_roots,
-            &host_snapshot.chain_bytes,
-        )?;
-        let authenticated_roots = anchor.authenticated_root_set();
-        let verified = restore_verified_user(
-            user.parts(),
-            &authenticated_roots,
-            &host_snapshot.chain_bytes,
-        )?;
+        let authenticated_roots = restored.anchor.authenticated_root_set();
+        let verified =
+            restore_verified_user(user.parts(), &authenticated_roots, &restored.chain_bytes)?;
         Ok(Some(verified))
     }
 
@@ -234,24 +225,16 @@ impl FoksClient {
         team: &EntityId,
     ) -> Result<Option<VerifiedTeamState>> {
         let store = HardStateStore::open(&host.database_path)?;
-        let host_snapshot = store
-            .host_for_lookup(&host.lookup_name)?
-            .ok_or(Error::HostBinding("pinned host is missing"))?;
+        // The host is restored before the lookup, so a missing or tampered host
+        // is still reported for a team this database does not hold.
+        let restored = restored_host(&store, &host.lookup_name, &host.database_path)?;
         let Some(team) = store.team_for_host(host.host_id.as_bytes(), team.as_bytes())? else {
             return Ok(None);
         };
-        let anchor = restore_merkle_anchor(
-            host_snapshot.merkle_root.epoch,
-            host_snapshot.merkle_root.root_hash,
-            &host_snapshot.merkle_root.root_bytes,
-            &host_snapshot.merkle_root.evidence,
-            &host_snapshot.merkle_root.authenticated_roots,
-            &host_snapshot.chain_bytes,
-        )?;
         Ok(Some(restore_verified_team(
             team.parts(),
-            &anchor.authenticated_root_set(),
-            &host_snapshot.chain_bytes,
+            &restored.anchor.authenticated_root_set(),
+            &restored.chain_bytes,
         )?))
     }
 }
@@ -283,7 +266,54 @@ pub(crate) fn authenticated_tls_roots(host: &PinnedHost) -> Result<rustls::RootC
     Ok(roots)
 }
 
-fn pinned_host_from_snapshot(snapshot: StoredHostSnapshot, path: &Path) -> Result<PinnedHost> {
+/// The authenticated host, its Merkle anchor and its host chain, restored once
+/// per hard-state revision rather than once per call.
+///
+/// The caller passes the store it already holds, and the memo is revalidated
+/// against that same store: a connection opened before the file was replaced
+/// keeps reading the old inode, so validating against a separately opened store
+/// could pair a fresh metadata reading with a stale projection.
+pub(crate) fn restored_host(
+    store: &HardStateStore,
+    lookup_name: &str,
+    database_path: &Path,
+) -> Result<Arc<host_memo::RestoredHost>> {
+    // A memo must not be able to fail a call that would otherwise succeed, so
+    // a revision this cannot read means no memo for this call rather than an
+    // error.
+    let revision = store.metadata().ok();
+    if let Some(metadata) = revision {
+        let key = host_memo::MemoKey::new(database_path, lookup_name, metadata);
+        if let Some(memoized) = host_memo::get(&key) {
+            return Ok(memoized);
+        }
+    }
+    let snapshot = store
+        .host_for_lookup(lookup_name)?
+        .ok_or(Error::HostBinding("pinned host is missing"))?;
+    host_memo::record_replay();
+    let restored = Arc::new(pinned_host_from_snapshot(snapshot, database_path)?);
+    // The snapshot is read with several separate statements, so a writer that
+    // commits between them yields a torn projection. Re-reading the revision
+    // proves no revision-table write landed across the whole read, so what was
+    // restored belongs to exactly the revision the key names. A restore that
+    // failed is never reached here: caching a failure would make a transient
+    // condition stick.
+    if let Some(metadata) = revision {
+        if store.metadata().is_ok_and(|current| current == metadata) {
+            host_memo::put(
+                host_memo::MemoKey::new(database_path, lookup_name, metadata),
+                &restored,
+            );
+        }
+    }
+    Ok(restored)
+}
+
+fn pinned_host_from_snapshot(
+    snapshot: StoredHostSnapshot,
+    path: &Path,
+) -> Result<host_memo::RestoredHost> {
     let identity = restore_public_host_identity(
         &snapshot.host_id,
         &snapshot.genesis_key,
@@ -292,7 +322,7 @@ fn pinned_host_from_snapshot(snapshot: StoredHostSnapshot, path: &Path) -> Resul
         &snapshot.chain_bytes,
         &snapshot.public_zone_bytes,
     )?;
-    restore_merkle_anchor(
+    let anchor = restore_merkle_anchor(
         snapshot.merkle_root.epoch,
         snapshot.merkle_root.root_hash,
         &snapshot.merkle_root.root_bytes,
@@ -332,17 +362,23 @@ fn pinned_host_from_snapshot(snapshot: StoredHostSnapshot, path: &Path) -> Resul
         return Err(Error::HostTlsRoots);
     }
     let host_id = identity.host_id().clone();
-    Ok(PinnedHost {
-        lookup_name: snapshot.lookup_name,
-        host_id,
-        database_path: path.to_owned(),
-        probe,
-        registration,
-        user,
-        merkle_query,
-        kv_store,
-        realtime,
-        tls_ca_certificates,
+    Ok(host_memo::RestoredHost {
+        host: PinnedHost {
+            lookup_name: snapshot.lookup_name,
+            host_id,
+            database_path: path.to_owned(),
+            probe,
+            registration,
+            user,
+            merkle_query,
+            kv_store,
+            realtime,
+            tls_ca_certificates,
+        },
+        anchor,
+        chain_seqno: snapshot.chain_seqno,
+        chain_tail_hash: snapshot.chain_tail_hash,
+        chain_bytes: snapshot.chain_bytes,
     })
 }
 

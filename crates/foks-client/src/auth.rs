@@ -11,7 +11,7 @@ use super::{
     encode_merkle_multi_lookup_request, encode_merkle_select_vhost_request,
     encode_registration_select_vhost_request, encode_resolve_username_request,
     encode_user_ping_request, merkle_history_requirements, open_puk_parcel_with_for_role,
-    open_puk_seed_chain, restore_merkle_anchor, user_chain_root_epochs, verify_non_self_user_chain,
+    open_puk_seed_chain, user_chain_root_epochs, verify_non_self_user_chain,
     verify_non_self_user_chain_increment, verify_signed_merkle_advance, verify_user_chain,
     verify_user_chain_increment, Acceptance, AuthenticatedMerkleRoots, DeviceNagInfo, EntityId,
     Error, FoksClient, HardStateStore, HostchainTail, PinnedHost, PukParcel, Result, Role,
@@ -700,10 +700,11 @@ impl FoksClient {
     ) -> Result<(Acceptance, VerifiedMerkleAdvance)> {
         let _pinning = crate::pinning::span(&pinned.database_path);
         let mut store = HardStateStore::open(&pinned.database_path)?;
-        let host = store
-            .host_for_lookup(&pinned.lookup_name)?
-            .ok_or(Error::HostBinding("pinned host is missing"))?;
-        if host.host_id.as_slice() != pinned.host_id.as_bytes() {
+        // The anchor this advance is verified against is the one the pinned
+        // host was restored with, so both come from one replay of the stored
+        // evidence rather than two.
+        let host = crate::host::restored_host(&store, &pinned.lookup_name, &pinned.database_path)?;
+        if host.host.host_id.as_bytes() != pinned.host_id.as_bytes() {
             return Err(Error::HostBinding("stored HostID changed"));
         }
         let latest_bytes = self.call_after_vhost_selection(
@@ -715,7 +716,7 @@ impl FoksClient {
         let signed = foks_proto::SignedBlob::decode(&latest_bytes)
             .map_err(|_| Error::HostBinding("current Merkle root is not signed"))?;
         let latest = foks_proto::MerkleRoot::decode(&signed.inner)?;
-        let history = merkle_history_requirements(latest.epoch, host.merkle_root.epoch)?;
+        let history = merkle_history_requirements(latest.epoch, host.anchor.epoch())?;
         let historical_bytes = if history.is_empty() {
             foks_snowpack::encode(&Value::Array(vec![Value::Null, Value::Null]))?
         } else {
@@ -731,16 +732,8 @@ impl FoksClient {
                 )?,
             )?
         };
-        let anchor = restore_merkle_anchor(
-            host.merkle_root.epoch,
-            host.merkle_root.root_hash,
-            &host.merkle_root.root_bytes,
-            &host.merkle_root.evidence,
-            &host.merkle_root.authenticated_roots,
-            &host.chain_bytes,
-        )?;
         let verified = verify_signed_merkle_advance(
-            &anchor,
+            &host.anchor,
             &latest_bytes,
             &historical_bytes,
             &host.chain_bytes,
@@ -749,7 +742,8 @@ impl FoksClient {
                 hash: host.chain_tail_hash,
             },
         )?;
-        let acceptance = store.accept_verified_merkle_root(&host.host_id, verified.snapshot())?;
+        let acceptance =
+            store.accept_verified_merkle_root(host.host.host_id.as_bytes(), verified.snapshot())?;
         Ok((acceptance, verified))
     }
 
