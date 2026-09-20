@@ -97,6 +97,7 @@ export function ChatScreen({
     refresh,
     refreshPending,
     markRead,
+    setOpenChannel,
     acceptHistory,
     history,
     blockHistory,
@@ -111,6 +112,14 @@ export function ChatScreen({
   // The tab's column resolves the current row the same way, through the same
   // helper, so the row drawn as current is the channel this pane mounted.
   const channel = openChannel(listed, location.channel);
+  // The inbox service exempts the presented channel from the backoff a
+  // degraded projection is otherwise held to, so it has to be told which one
+  // that is, and told again when this pane unmounts.
+  const openId = channel?.id ?? null;
+  useEffect(() => {
+    setOpenChannel(openId);
+    return () => setOpenChannel(null);
+  }, [setOpenChannel, openId]);
   const activeConversation = conversations.find(
     (conversation) => conversation.channel.id === channel?.id,
   );
@@ -334,8 +343,14 @@ export function ChatScreen({
             request={guardedRequest}
             refreshPending={guardedRefreshPending}
             revision={channelRevisions?.get(channel.id) ?? 0}
+            // A degraded projection cannot state this channel's newest
+            // position: its conversation rows stop advancing while the host
+            // cannot report what changed, so gating the tail on them would
+            // hold the open thread at whatever it last read. Withholding the
+            // position is what keeps the open channel refreshing there; the
+            // rate limit on the degraded invalidation bounds what that costs.
             position={
-              activeConversation
+              activeConversation && !degraded
                 ? String(lastPosition(activeConversation))
                 : null
             }

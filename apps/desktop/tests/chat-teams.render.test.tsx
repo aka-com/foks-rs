@@ -1973,8 +1973,10 @@ test('a collapsed empty team keeps its fold when its first channel arrives', asy
     await ui.screen.findByRole('button', { name: 'Collapse Household' }),
   );
   empty = false;
+  // The periodic resynchronization is what lists a channel this device did
+  // not create, and an idle team waits minutes for it.
   await ui.act(async () => {
-    await clock.advance(26000);
+    await clock.advance(310_000);
   });
   assert.equal(
     ui.screen

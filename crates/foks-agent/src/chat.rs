@@ -324,16 +324,12 @@ impl foks_client::ChatPreviewCache for SharedPreviewCache {
     }
 }
 
-/// How long one completed account-level inbox drain stands in for the other
-/// teams of that account. The inbox scope is host, user and application with
-/// no team in it: whichever team syncs first applies every team's changed
-/// threads to the store, and the rest read what it applied. A team that
-/// syncs after this has elapsed drains again, so a row that arrived since the
-/// drain waits at most this long and a gate set in error corrects itself
-/// within one synchronization cycle rather than across a session. The
-/// desktop runs one team of a profile at a time and resynchronizes an idle
-/// team every twenty-five seconds, so a burst of teams falls inside this and
-/// the periodic pass never does.
+/// Maximum age at which a completed account-level inbox drain may satisfy
+/// synchronization for another team in the same account. The inbox cursor is
+/// shared by host, user, and application, so the first team applies changes for
+/// every team. After this interval, the next team drains again. Two seconds
+/// coalesces teams triggered by one poll while keeping periodic synchronizations
+/// separate.
 const INBOX_DRAIN_TTL: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Maximum number of recently drained account scopes retained by the process.

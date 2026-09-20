@@ -29,13 +29,18 @@ export function useChatHistory(
   incrementalHistory = false,
   /**
    * The channel's newest position as the inbox last published it, or `null`
-   * when no conversation row states one. A revision moves for reasons other
-   * than arriving content — a conservative degraded projection, a read
-   * authority change, a preview whose message was rewritten — and a read on
-   * another device leaves the position where it was. The tail is gated on
-   * this having passed the held window, so those revisions cost no round
-   * trip. Any increase publishes a new revision with it, so a gated
-   * revision cannot hide one.
+   * when nothing states one. A revision moves for reasons other than arriving
+   * content — a conservative degraded projection, a read authority change, a
+   * preview whose message was rewritten — and a read on another device leaves
+   * the position where it was. The tail is gated on this having passed the
+   * held window, so those revisions cost no round trip. Any increase
+   * publishes a new revision with it, so a gated revision cannot hide one.
+   *
+   * `null` disables the gate, and is what a caller passes when the projection
+   * cannot state the position: a degraded host stops advancing the
+   * conversation rows the position is derived from, so gating on them would
+   * hold the thread at what it last read. The caller rate-limits the
+   * revisions it raises in that state instead.
    */
   position: string | null = null,
 ) {

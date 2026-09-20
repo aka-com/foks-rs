@@ -5,6 +5,7 @@ import type {
 } from '../chat-contract';
 import type { TeamInbox } from './inbox-service';
 import { sameScope } from './scope';
+import { lastPosition } from './snapshots';
 
 // Lookup indexes refer to immutable shell DTOs; they are not channel authority.
 // Weak keys let old snapshots (and their decrypted previews) be collected.
@@ -31,6 +32,16 @@ export interface NotificationView {
   preference: boolean;
   fresh: boolean;
   degraded: boolean;
+  /**
+   * The newest sequence this channel's conversation row states, or `null`
+   * when no row states one. This is the stored projection's own head: the
+   * agent derives the unread count from that row's last message, so it never
+   * exceeds a message the channel holds, and on a host that cannot report
+   * what changed it lags rather than leads. A baseline seeded from it
+   * therefore cannot sit above what a full history read would have
+   * established, which is the direction that would silently drop alerts.
+   */
+  position: bigint | null;
 }
 export function notificationView(
   entry: TeamInbox | undefined,
@@ -69,6 +80,7 @@ export function notificationView(
       !conversation?.hidden,
     fresh: entry.state === 'ready' && !entry.stale,
     degraded: entry.data.degraded,
+    position: conversation ? lastPosition(conversation) : null,
   };
 }
 export interface NotificationChange {

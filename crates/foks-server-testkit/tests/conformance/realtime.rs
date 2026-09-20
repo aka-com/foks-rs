@@ -35,6 +35,35 @@ impl ChatTransport for CountChangedThreads<'_> {
     }
 }
 
+/// Simulates a message arriving between the history listing and its page.
+/// A read mark must refresh that listing before bounding the displayed sequence.
+struct CountListChannels<'a> {
+    connection: &'a mut RealtimeConnection,
+    listings: usize,
+    reads: usize,
+    stale_listing: Option<RtChannelId>,
+}
+impl ChatTransport for CountListChannels<'_> {
+    fn request(&mut self, request: &Request) -> foks_client::Result<Response> {
+        match request {
+            Request::ListChannels(_) => self.listings += 1,
+            Request::ReadThrough(_) => self.reads += 1,
+            _ => {}
+        }
+        let mut response = self.connection.call(request)?;
+        if let Response::Channels(set) = &mut response {
+            if let Some(channel) = self.stale_listing.take() {
+                for md in &mut set.channels {
+                    if md.id == channel {
+                        md.last_message = None;
+                    }
+                }
+            }
+        }
+        Ok(response)
+    }
+}
+
 struct PreviewFault<'a> {
     connection: &'a mut RealtimeConnection,
     corrupt: bool,
@@ -508,6 +537,49 @@ pub(crate) fn realtime_text() {
             .unread,
         0
     );
+    {
+        // The history page includes a message newer than its listing. Marking
+        // that displayed message must succeed, even in the same ChatSession.
+        let mut counted = CountListChannels {
+            connection: &mut reader,
+            listings: 0,
+            reads: 0,
+            stale_listing: Some(md.id),
+        };
+        assert_eq!(
+            member_chat
+                .read_recent(&mut counted, md.id, 10)
+                .unwrap()
+                .messages
+                .len(),
+            1
+        );
+        assert_eq!(counted.listings, 1);
+        member_chat
+            .mark_read(&mut counted, &mut soft, md.id, 1)
+            .unwrap();
+        assert_eq!(
+            counted.listings, 2,
+            "a read mark must refresh the head observed before the history page"
+        );
+        assert_eq!(counted.reads, 1);
+        // A sequence above the fresh server head is still refused before
+        // staging or sending a read-through.
+        assert!(matches!(
+            member_chat.mark_read(&mut counted, &mut soft, md.id, 2),
+            Err(foks_client::Error::ChatInvalidInput(_))
+        ));
+        assert_eq!(counted.reads, 1);
+        assert_eq!(
+            soft.chat_inbox_entries(&inbox_scope, created.team.as_bytes())
+                .unwrap()
+                .iter()
+                .find(|entry| entry.metadata.id == md.id)
+                .unwrap()
+                .read_through,
+            1
+        );
+    }
     let Response::InboxVersion(unchanged_head) = reader
         .call(&Request::GetInboxVersion(RtGetInboxVersionArgument {
             key: RtInboxKey { app: RtAppId::Chat },

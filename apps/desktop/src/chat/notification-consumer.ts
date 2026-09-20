@@ -20,7 +20,36 @@ import {
 import { notificationAdmission } from './notification-admission';
 
 export const NOTIFICATION_LIMITS = { queued: 64, baselines: 4096 } as const;
+/**
+ * The base wait between fallback passes, and the ceiling that wait doubles
+ * toward for a channel whose passes keep finding nothing.
+ *
+ * The fallback exists for a projection that cannot say which thread moved: a
+ * degraded host, or a channel whose baseline is not established yet. It is
+ * the whole cost of a degraded host — twenty channels at the base interval is
+ * four full history reads a second, sustained — so a channel that keeps
+ * finding nothing doubles its wait, and any pass that finds a newer sequence
+ * puts it straight back to the base.
+ *
+ * **The channel whose thread is open never backs off.** It keeps the base
+ * interval however long it has been quiet, because it is the one channel
+ * whose staleness the user is looking at.
+ *
+ * **What this trades is alert latency on a degraded host, deliberately.** A
+ * message in a quiet channel that is not open is alerted up to
+ * `FALLBACK_MAX_MS` after it arrives rather than up to `FALLBACK_MS`. No
+ * message is skipped: the wait decides when the read happens, not whether,
+ * and the read that finds it resets the channel to the base interval.
+ */
 const FALLBACK_MS = 5000;
+const FALLBACK_MAX_MS = 60_000;
+/**
+ * How long to wait before retrying a channel that is due but could not be
+ * started, because a profile admission was refused or this pass's row
+ * allowance was spent. Every other wake-up is armed for a deadline the scan
+ * computed, so this is the only fixed interval left.
+ */
+const PENDING_REARM_MS = 1000;
 const CHANNEL_ROWS = 100,
   CHANNEL_BYTES = 1024 * 1024,
   PASS_ROWS = 400,
@@ -39,7 +68,10 @@ type Progress = {
   dirtyDuringFlight: boolean;
   overflow: boolean;
   due: number;
-  fallbackDue: number;
+  /** When the last pass that could have observed an arrival finished. */
+  fallbackAt: number;
+  /** This channel's current wait, doubled per pass that found nothing. */
+  fallbackInterval: number;
   failures: number;
   preference?: string;
   locallyDisabled?: boolean;
@@ -168,6 +200,21 @@ export class NotificationConsumer {
       next.admin === p.view.admin
     );
   }
+  /** Whether this channel's thread is the one presented for its store. */
+  private presented(p: Progress): boolean {
+    return this.service.openChannel(p.id) === p.channel;
+  }
+  /**
+   * When this channel's next fallback pass is due. Read rather than stored,
+   * so opening a channel that had backed off makes it due at the base
+   * interval from its last pass immediately, without waiting the interval it
+   * had reached.
+   */
+  private fallbackDue(p: Progress): number {
+    return (
+      p.fallbackAt + (this.presented(p) ? FALLBACK_MS : p.fallbackInterval)
+    );
+  }
   private scan() {
     if (this.stopped) return;
     const snapshot = this.service.getSnapshot(),
@@ -222,7 +269,7 @@ export class NotificationConsumer {
         p.dirtyDuringFlight ||= this.jobs.has(p.key);
       }
       p.view = next!;
-      if ((p.view.degraded || p.baselineOnly) && p.fallbackDue <= now)
+      if ((p.view.degraded || p.baselineOnly) && this.fallbackDue(p) <= now)
         p.dirty = true;
     }
     if (invalidated)
@@ -238,6 +285,11 @@ export class NotificationConsumer {
       0,
     );
     const start = size ? this.cursor % size : 0;
+    // Whether an eligible channel was passed over because the baseline bound
+    // or this pass's queue was full. Rotation is the only work that makes
+    // progress on its own, so it is the only reason left to arm a timer for
+    // a set of channels that are all otherwise idle.
+    let deferred = false;
     // Walk immutable metadata in two segments without allocating a channel array.
     // Overflow never allocates a promise and never restarts at map position zero.
     for (
@@ -250,7 +302,10 @@ export class NotificationConsumer {
         for (const channel of entry.data?.channels ?? []) {
           const position = index++;
           if (segment === 0 ? position < start : position >= start) continue;
-          if (this.queued.size >= this.limits.queued) break;
+          if (this.queued.size >= this.limits.queued) {
+            deferred = true;
+            break;
+          }
           const view = notificationView(entry, channel.id);
           if (!view?.eligible || !view.fresh) continue;
           const key = channelWorkKey(id, view.scope, channel.id);
@@ -264,10 +319,16 @@ export class NotificationConsumer {
                 this.evictionWindow = now + FALLBACK_MS;
                 this.evictions = 0;
               }
-              if (this.evictions >= this.limits.queued) continue;
+              if (this.evictions >= this.limits.queued) {
+                deferred = true;
+                continue;
+              }
               const old = this.evictionCandidate();
 
-              if (!old) continue;
+              if (!old) {
+                deferred = true;
+                continue;
+              }
               this.discard(old);
               this.evictions++;
               this.metric({ kind: 'eviction' });
@@ -285,7 +346,8 @@ export class NotificationConsumer {
               dirtyDuringFlight: false,
               overflow: false,
               due: 0,
-              fallbackDue: now + FALLBACK_MS,
+              fallbackAt: now,
+              fallbackInterval: FALLBACK_MS,
               failures: 0,
             };
             this.progress.set(key, p);
@@ -354,18 +416,33 @@ export class NotificationConsumer {
       baselines: this.progress.size,
       active: this.admission.active,
     });
-    let delay = 1000;
+    // Arm for the earliest deadline this pass computed rather than for a
+    // fixed floor: a channel with nothing due states `Infinity`, and a set of
+    // channels that all do arms no timer at all. The consumer then wakes on
+    // an inbox publication or an admission release, which is what actually
+    // changes its work. A channel whose deadline has already passed is
+    // waiting for an admission or for this pass's allowance, not for time, so
+    // it re-arms at the retry floor instead of at zero.
+    let delay = Infinity;
     for (const p of this.progress.values()) {
       if (p.locallyDisabled || p.deniedAt !== undefined || this.jobs.has(p.key))
         continue;
       const deadline = p.dirty
         ? p.due
         : p.view.degraded || p.baselineOnly
-          ? p.fallbackDue
+          ? this.fallbackDue(p)
           : Infinity;
-      if (deadline > now) delay = Math.min(delay, deadline - now);
+      delay = Math.min(
+        delay,
+        deadline > now ? deadline - now : PENDING_REARM_MS,
+      );
     }
-    this.kick(delay);
+    if (deferred)
+      delay = Math.min(
+        delay,
+        Math.max(PENDING_REARM_MS, this.evictionWindow - now),
+      );
+    if (delay !== Infinity) this.kick(delay);
   }
   private async run(p: Progress, job: Job) {
     const revision = p.view.revision,
@@ -413,17 +490,48 @@ export class NotificationConsumer {
       return reply.result;
     };
     const commit = (upper: bigint) => {
+      // A pass that reached a newer sequence is evidence that this channel
+      // still receives, so its wait returns to the base; a pass that reached
+      // nothing new doubles it, up to the ceiling. The channel whose thread
+      // is open is held at the base by `fallbackDue`, whatever is stored here.
+      const observed = p.baseline === null || upper > p.baseline;
       p.baseline = upper;
       p.baselineOnly = false;
       p.processed = revision;
       p.failures = 0;
       p.due = 0;
-      p.fallbackDue = this.clock.now() + FALLBACK_MS;
+      p.fallbackAt = this.clock.now();
+      p.fallbackInterval = observed
+        ? FALLBACK_MS
+        : Math.min(p.fallbackInterval * 2, FALLBACK_MAX_MS);
       p.dirty = p.dirtyDuringFlight || p.view.revision !== revision;
     };
     try {
       p.preference = await notificationKey(p.view.scope, p.channel);
       if (!current()) return;
+      // A baseline is the sequence this channel stood at when watching began,
+      // and a full history read establishes it as the newest sequence the
+      // first page carries. The projection already states that number: the
+      // conversation row's own head. Seeding from it costs no round trip, and
+      // it cannot sit above what the read would have established, because the
+      // row is derived from a message the channel holds and lags the server
+      // rather than leading it. Seeding above the true position is the one
+      // failure here that reports nothing — those messages would simply never
+      // alert — so a projection that states no position, and a degraded one
+      // whose rows stopped advancing while messages kept arriving, still read.
+      if (p.baseline === null && !p.view.degraded && p.view.position !== null) {
+        commit(p.view.position);
+        this.metric({
+          kind: 'pass',
+          milliseconds: this.clock.now() - started,
+          candidates: [],
+          baselineOnly: true,
+          incomplete: false,
+          rows: 0,
+          bytes: 0,
+        });
+        return;
+      }
       const first = await read(null);
       if (!current()) return;
       const upper = first.messages.reduce(
@@ -436,6 +544,10 @@ export class NotificationConsumer {
         // history. Retain the known floor and rebaseline on a bounded retry.
         commit(p.baseline);
         p.baselineOnly = true;
+        // Rebaselining after a page the server could not serve in full is a
+        // recovery, not a quiet channel: the geometric wait is for a channel
+        // that keeps finding nothing, and this one found something wrong.
+        p.fallbackInterval = FALLBACK_MS;
         this.metric({
           kind: 'pass',
           milliseconds: this.clock.now() - started,

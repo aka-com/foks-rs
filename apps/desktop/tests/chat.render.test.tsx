@@ -372,6 +372,44 @@ test('read markers require focus and the newest displayed position', async () =>
   }
 });
 
+test('a read the server refused still invalidates the team', async () => {
+  Object.defineProperty(document, 'hasFocus', {
+    configurable: true,
+    value: () => true,
+  });
+  const marks: string[] = [];
+  const syncs: string[] = [];
+  try {
+    await setup((base) => ({
+      ...base,
+      chat: async (store, action, view) => {
+        if (action.action === 'sync-inbox') syncs.push(store);
+        if (action.action === 'mark-read') {
+          marks.push(action.sequence);
+          throw {
+            code: 'io',
+            message: 'Connection lost.',
+            retryable: true,
+            fatal: false,
+            ambiguous: false,
+          };
+        }
+        return base.chat(store, action, view);
+      },
+    }));
+    await ui.waitFor(() => assert.equal(marks.length, 1));
+    const settled = syncs.length;
+    await ui.waitFor(() => assert.ok(syncs.length > settled), {
+      timeout: 4_000,
+    });
+  } finally {
+    Object.defineProperty(document, 'hasFocus', {
+      configurable: true,
+      value: () => false,
+    });
+  }
+});
+
 test('a read mark the server could not take for now is not the thread’s failure to announce', async () => {
   Object.defineProperty(document, 'hasFocus', {
     configurable: true,
@@ -1658,13 +1696,17 @@ test('the provider stops periodic team synchronization while the window is hidde
     );
     await clock.advance(1_000);
     assert.deepEqual(syncs, ['team:eng']);
+    // An idle team whose poll is neither failing nor degraded waits minutes,
+    // not seconds, for its periodic pass.
     await clock.advance(30_000);
+    assert.equal(syncs.length, 1);
+    await clock.advance(300_000);
     assert.equal(syncs.length, 2);
     visibility('hidden');
     await ui.act(async () => {
       document.dispatchEvent(new Event('visibilitychange'));
     });
-    await clock.advance(120_000);
+    await clock.advance(600_000);
     assert.equal(syncs.length, 2);
     visibility('visible');
     await ui.act(async () => {

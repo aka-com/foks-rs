@@ -106,7 +106,7 @@ test('notification content does not advance for unchanged degraded projection', 
   next.degraded = true;
   const versions = new Map([[old.channels[0].id, 5]]);
   assert.equal(
-    contentRevisions(old, next, versions, false).get(old.channels[0].id),
+    contentRevisions(old, next, versions, () => false).get(old.channels[0].id),
     5,
   );
   assert.equal(

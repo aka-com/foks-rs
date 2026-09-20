@@ -97,7 +97,19 @@ const message = (sequence: number): ChatMessage => ({
   insert_time: '1',
   content: { kind: 'text', text: 'private text' },
 });
-function entry(ids = ['a', 'b'], selectedScope = scope): TeamInbox {
+/**
+ * A ready projection of `ids`. `head` is the newest sequence each channel's
+ * conversation row states, which is what a baseline is seeded from. The
+ * default is no conversation rows at all — a channel the listing discovered
+ * whose inbox row has not arrived — because that is the projection that
+ * publishes no position, and so the one whose baseline still costs a read.
+ * The seeded path has its own tests below.
+ */
+function entry(
+  ids = ['a', 'b'],
+  selectedScope = scope,
+  head: number | null = null,
+): TeamInbox {
   const channels = ids.map((id) => ({
     id,
     readable: true,
@@ -121,16 +133,19 @@ function entry(ids = ['a', 'b'], selectedScope = scope): TeamInbox {
     data: {
       kind: 'inbox',
       channels,
-      conversations: channels.map((channel) => ({
-        channel,
-        muted: false,
-        hidden: false,
-        unread: '0',
-        preview: null,
-        read_through: '0',
-        pending_read: null,
-        inbox_version: '1',
-      })),
+      conversations:
+        head === null
+          ? []
+          : channels.map((channel) => ({
+              channel,
+              muted: false,
+              hidden: false,
+              unread: String(head),
+              preview: null,
+              read_through: '0',
+              pending_read: null,
+              inbox_version: '1',
+            })),
       degraded: false,
       previews_incomplete: false,
       read_retry_pending: false,
@@ -161,12 +176,14 @@ function setup(initial = entry()) {
       missing_predecessors: [],
     },
   });
+  let open: string | undefined;
   const service = {
     getSnapshot: () => snapshot,
     subscribe: (fn: () => void) => {
       listeners.add(fn);
       return () => listeners.delete(fn);
     },
+    openChannel: () => open,
     invalidate: () => {},
     blockChannel: (_id: string, channel: string) =>
       update({ blockedChannels: new Set([channel]) }),
@@ -220,6 +237,12 @@ function setup(initial = entry()) {
     service,
     make,
     update,
+    // The service tells its listeners when the presented channel changes,
+    // because that is what wakes a consumer asleep on a backed-off interval.
+    openChannel: (channel: string | undefined) => {
+      open = channel;
+      for (const listener of listeners) listener();
+    },
     get: () => snapshot.get('store')!,
     replace: (next: Map<string, TeamInbox>) => {
       snapshot = next;
@@ -582,7 +605,18 @@ for (const policy of [
       await f.clock.flush();
       const data = structuredClone(f.get().data!);
       if (policy === 'muted' || policy === 'hidden')
-        data.conversations[0][policy] = true;
+        data.conversations = [
+          {
+            channel: data.channels[0],
+            muted: policy === 'muted',
+            hidden: policy === 'hidden',
+            unread: '0',
+            preview: null,
+            read_through: '0',
+            pending_read: null,
+            inbox_version: '1',
+          },
+        ];
       if (policy === 'unreadable') data.channels[0].readable = false;
       f.update({
         data,
@@ -883,5 +917,163 @@ test('two-page notification reads stay within the pass allowance without droppin
     );
   } finally {
     c.stop();
+  }
+});
+
+test('a degraded host reads the open channel every base interval and backs every other channel off', async () => {
+  const ids = Array.from({ length: 20 }, (_, i) => `c${i}`);
+  const initial = entry(ids);
+  initial.data = { ...initial.data!, degraded: true };
+  const f = setup(initial),
+    c = f.make();
+  f.openChannel('c0');
+  try {
+    await f.clock.flush();
+    // One baseline read per channel; the degraded projection publishes no
+    // position to seed from.
+    assert.equal(f.calls.length, ids.length);
+    const start = f.calls.length;
+    // Five minutes of a degraded host with nothing arriving. Before the
+    // backoff this cost one read per channel per five seconds — twenty
+    // channels is four reads a second, sustained.
+    for (let second = 0; second < 300; second++) await f.clock.advance(1000);
+    const per = (id: string) =>
+      f.calls.slice(start).filter((call) => call === id).length;
+    const reads = f.calls.length - start;
+    assert.equal(
+      reads < (300 / 5) * ids.length * 0.2,
+      true,
+      `degraded reads must fall well under the flat cadence: ${reads}`,
+    );
+    assert.ok(
+      per('c0') >= 55,
+      `the open channel must keep the base interval: ${per('c0')}`,
+    );
+    for (const id of ids.slice(1))
+      assert.ok(per(id) <= 10, `${id} must back off geometrically: ${per(id)}`);
+    // An arrival puts that channel back on the base interval, so a channel
+    // that starts receiving is not left waiting out a minute.
+    const before = per('c5');
+    f.rows.set('c5', [message(2), message(1)]);
+    await f.clock.advance(60_000);
+    assert.ok(per('c5') > before);
+    const resumed = per('c5');
+    await f.clock.advance(5_000);
+    assert.ok(per('c5') > resumed, 'an observed arrival resets the interval');
+  } finally {
+    c.stop();
+  }
+});
+
+test('an established baseline arms no timer, and opening a backed-off channel makes it due at once', async () => {
+  const f = setup(entry(['a', 'b'])),
+    c = f.make();
+  try {
+    await f.clock.flush();
+    assert.equal(f.calls.length, 2);
+    // Nothing is degraded and every baseline is established, so there is no
+    // deadline left to wake for: the consumer waits on the inbox instead of
+    // rescanning every channel of every team once a second.
+    assert.equal(f.clock.timers.size, 0);
+    await f.clock.advance(60_000);
+    assert.equal(f.calls.length, 2);
+    // An inbox publication still wakes it.
+    f.update({
+      channelRevisions: new Map([
+        ['a', 9],
+        ['b', 1],
+      ]),
+    });
+    await f.clock.flush();
+    assert.equal(f.calls.length, 3);
+  } finally {
+    c.stop();
+  }
+});
+
+test('a backed-off channel the user opens returns to the base interval without waiting out its interval', async () => {
+  const initial = entry(['a']);
+  initial.data = { ...initial.data!, degraded: true };
+  const f = setup(initial),
+    c = f.make();
+  try {
+    await f.clock.flush();
+    // Let one channel back off to its ceiling.
+    // A second at a time: this clock runs every timer a jump passed, so a
+    // single long jump would collapse several intervals into one pass.
+    const seconds = async (count: number) => {
+      for (let second = 0; second < count; second++)
+        await f.clock.advance(1000);
+    };
+    await seconds(300);
+    let mark = f.calls.length;
+    await seconds(20);
+    const closed = f.calls.length - mark;
+    f.openChannel('a');
+    mark = f.calls.length;
+    await seconds(20);
+    const opened = f.calls.length - mark;
+    assert.ok(
+      closed <= 1,
+      `a backed-off channel reads at most once a ceiling: ${closed}`,
+    );
+    assert.ok(
+      opened >= 3,
+      `opening it returns it to the base interval: ${opened}`,
+    );
+  } finally {
+    c.stop();
+  }
+});
+
+test('a seeded baseline costs no read and alerts exactly above the sequence the projection states', async () => {
+  // The projection states that this channel's newest sequence is 10.
+  const f = setup(entry(['a'], scope, 10)),
+    c = f.make();
+  try {
+    await f.clock.flush();
+    assert.deepEqual(f.calls, [], 'a stated position costs no baseline read');
+    assert.equal(f.alerts.length, 0);
+    // One message below the seed, one at it, one above it.
+    f.rows.set('a', [message(11), message(10), message(9)]);
+    f.update({ channelRevisions: new Map([['a', 2]]) });
+    await f.clock.flush();
+    assert.deepEqual(f.calls, ['a']);
+    assert.equal(f.alerts.length, 1);
+    assert.equal(
+      (f.alerts[0] as { channel: string }).channel,
+      'a',
+      'only the message above the seeded sequence alerts',
+    );
+  } finally {
+    c.stop();
+  }
+});
+
+test('a seeded baseline is the same boundary a full history read would have established', async () => {
+  const seeded = setup(entry(['a'], scope, 10));
+  const read = setup(entry(['a']));
+  const consumers = [seeded.make(), read.make()];
+  try {
+    // The read establishes its baseline from the newest sequence the first
+    // page carries; the seed takes it from the projection. Both must then
+    // treat 9, 10 and 11 identically.
+    read.rows.set('a', [message(10), message(9)]);
+    for (const f of [seeded, read]) await f.clock.flush();
+    assert.deepEqual(seeded.calls, []);
+    assert.deepEqual(read.calls, ['a']);
+    for (const f of [seeded, read]) {
+      f.rows.set('a', [message(11), message(10), message(9)]);
+      f.update({ channelRevisions: new Map([['a', 2]]) });
+      await f.clock.flush();
+    }
+    assert.equal(seeded.alerts.length, 1);
+    assert.equal(read.alerts.length, 1);
+    assert.deepEqual(
+      seeded.events.filter((e) => e.kind === 'pass' && !e.baselineOnly).length,
+      read.events.filter((e) => e.kind === 'pass' && !e.baselineOnly).length,
+    );
+  } finally {
+    for (const c of consumers) c.stop();
   }
 });

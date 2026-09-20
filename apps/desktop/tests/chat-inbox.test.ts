@@ -82,6 +82,19 @@ function fixture(count = 2) {
   >();
   const syncs: string[] = [];
   const polls: string[] = [];
+  // What every team's inbox reply states. `position` is each channel's newest
+  // sequence, which is what `lastPosition` derives from an unread count.
+  const inbox = { channels: [] as string[], degraded: false, position: 0 };
+  const channelRow = (id: string) => ({
+    id,
+    name: id,
+    description: null,
+    admin: false,
+    readable: true,
+    writable: true,
+    read_role: 'Member (0)',
+    write_role: 'Member (0)',
+  });
   const fail = new Set<string>();
   const denied = new Set<string>();
   const unrefreshed = new Set<string>();
@@ -141,11 +154,20 @@ function fixture(count = 2) {
         scope: scope(store),
         result: {
           kind: 'inbox',
-          channels: [],
-          conversations: [],
+          channels: inbox.channels.map(channelRow),
+          conversations: inbox.channels.map((id) => ({
+            channel: channelRow(id),
+            inbox_version: '1',
+            read_through: '0',
+            pending_read: null,
+            unread: String(inbox.position),
+            hidden: false,
+            muted: false,
+            preview: null,
+          })),
           cursor: head,
           head,
-          degraded: false,
+          degraded: inbox.degraded,
           read_retry_pending: false,
           previews_incomplete: false,
           blocked_channels: [],
@@ -185,6 +207,7 @@ function fixture(count = 2) {
     service,
     bridge,
     clock,
+    inbox,
     syncs,
     polls,
     fail,
@@ -549,7 +572,9 @@ test('finite admission serves excess accounts and releases more than the view li
   service.start();
   await clock.advance(600000);
   assert.equal(served.size, 6);
-  assert.ok(registrations > 128);
+  // Polls dominate this: each account long-polls for twenty-five seconds and
+  // re-polls, while an idle team resynchronizes in minutes.
+  assert.ok(registrations > 32, `registrations ${registrations}`);
   assert.ok(peak <= 3, `peak registrations ${peak}`);
   service.stop();
   await clock.advance(1000);
@@ -854,9 +879,10 @@ test('polls, synchronizations and arrivals are timed for diagnostics without cha
   assert.ok(arrival && arrival.kind === 'arrival');
   assert.equal(arrival.store, 't0');
   assert.ok(arrival.milliseconds >= 0 && arrival.milliseconds <= 1_000);
-  // One arrival per bump, not one per periodic resynchronization.
+  // One arrival per bump, not one per periodic resynchronization — which an
+  // idle team now waits minutes for.
   events.length = 0;
-  await f.clock.advance(30_000);
+  await f.clock.advance(310_000);
   assert.ok(events.some((event) => event.kind === 'sync'));
   assert.ok(!events.some((event) => event.kind === 'arrival'));
   stop();
@@ -864,4 +890,250 @@ test('polls, synchronizations and arrivals are timed for diagnostics without cha
   await f.clock.advance(30_000);
   assert.equal(events.length, 0);
   f.service.stop();
+});
+
+test('a confirmed read publishes locally, is a floor, and costs no synchronization', async () => {
+  const f = fixture(1);
+  f.inbox.channels = ['c0'];
+  f.inbox.position = 5;
+  try {
+    await f.clock.advance(500);
+    const before = f.service.getSnapshot().get('t0')!;
+    assert.equal(before.data?.conversations[0]?.unread, '5');
+    const syncs = f.syncs.length;
+    const revisions = [...(before.channelRefreshRevisions ?? [])];
+    f.service.applyRead('t0', 'c0', '3');
+    const after = f.service.getSnapshot().get('t0')!;
+    assert.equal(after.data?.conversations[0]?.read_through, '3');
+    assert.equal(after.data?.conversations[0]?.unread, '2');
+    // The newest position the conversation states is unchanged, so the
+    // channel is not invalidated and the thread reloads nothing.
+    assert.deepEqual([...(after.channelRefreshRevisions ?? [])], revisions);
+    assert.equal(f.service.isInvalidated('t0'), false);
+    await f.clock.advance(60_000);
+    assert.equal(
+      f.syncs.length,
+      syncs,
+      'a confirmed read resynchronizes nothing',
+    );
+    // A reply that lands after another device read further does not roll the
+    // pointer back, and neither does a repeat of the same sequence.
+    f.service.applyRead('t0', 'c0', '2');
+    f.service.applyRead('t0', 'c0', '3');
+    const settled = f.service.getSnapshot().get('t0')!;
+    assert.equal(settled.data?.conversations[0]?.read_through, '3');
+    assert.equal(settled.data?.conversations[0]?.unread, '2');
+  } finally {
+    f.service.stop();
+  }
+});
+
+test('a failed read invalidates the team, which is what a confirmed one no longer does', async () => {
+  const f = fixture(1);
+  f.inbox.channels = ['c0'];
+  f.inbox.position = 5;
+  try {
+    await f.clock.advance(500);
+    const syncs = f.syncs.length;
+    // What `markRead` does on the failure branch, and only there.
+    f.service.invalidate('t0');
+    assert.equal(f.service.isInvalidated('t0'), true);
+    await f.clock.advance(500);
+    assert.equal(f.syncs.length, syncs + 1);
+  } finally {
+    f.service.stop();
+  }
+});
+
+test('an idle team resynchronizes in minutes, and keeps the short cadence while its poll fails', async () => {
+  const f = fixture(1);
+  try {
+    await f.clock.advance(500);
+    assert.equal(f.syncs.length, 1);
+    // What the twenty-five second cadence used to cost, and no longer does.
+    await f.clock.advance(30_000);
+    assert.equal(f.syncs.length, 1);
+    await f.clock.advance(300_000);
+    assert.equal(f.syncs.length, 2);
+    // A poll that fails is the one case that cannot wait: nothing else
+    // reports an arrival while it is down.
+    const wait = f.waits.entries().next().value!;
+    f.waits.delete(wait[0]);
+    wait[1].reject({
+      code: 'io',
+      message: 'Connection lost.',
+      retryable: true,
+      fatal: false,
+      ambiguous: false,
+    });
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    await f.clock.advance(26_000);
+    assert.ok(f.syncs.length >= 3, 'a failing poll keeps the short cadence');
+  } finally {
+    f.service.stop();
+  }
+});
+
+test('a poll that recovers, a shown window and a local mutation each make the team due now', async () => {
+  for (const trigger of ['recovery', 'focus', 'mutation', 'bump'] as const) {
+    const f = fixture(1);
+    try {
+      await f.clock.advance(500);
+      const syncs = f.syncs.length;
+      if (trigger === 'recovery') {
+        const wait = f.waits.entries().next().value!;
+        f.waits.delete(wait[0]);
+        wait[1].reject({
+          code: 'io',
+          message: 'Connection lost.',
+          retryable: true,
+          fatal: false,
+          ambiguous: false,
+        });
+        for (let i = 0; i < 30; i++) await Promise.resolve();
+        // The poll is retried and succeeds; the teams it could not report on
+        // resynchronize at once rather than waiting out any interval.
+        await f.clock.advance(1_000);
+        f.bump('1');
+      }
+      if (trigger === 'focus') {
+        f.service.setVisible(false);
+        f.service.setVisible(true);
+      }
+      if (trigger === 'mutation') f.service.invalidate('t0');
+      if (trigger === 'bump') f.bump('9');
+      await f.clock.advance(600);
+      assert.ok(
+        f.syncs.length > syncs,
+        `${trigger} must make the team due immediately`,
+      );
+    } finally {
+      f.service.stop();
+    }
+  }
+});
+
+test('a new binding synchronizes immediately rather than waiting out the idle cadence', async () => {
+  const f = fixture(1);
+  try {
+    await f.clock.advance(500);
+    const syncs = f.syncs.length;
+    const snapshot = structuredClone(f.snapshot);
+    snapshot.servers[0].host_id = 'other-host';
+    f.service.updateStores(snapshot, {}, new Map([['p', 0]]));
+    await f.clock.advance(600);
+    assert.ok(f.syncs.length > syncs);
+  } finally {
+    f.service.stop();
+  }
+});
+
+test('a degraded projection holds the open channel at the base interval and backs the rest off', async () => {
+  const f = fixture(1);
+  f.inbox.channels = ['open', 'quiet-a', 'quiet-b'];
+  f.inbox.degraded = true;
+  f.inbox.position = 4;
+  f.service.setOpenChannel('t0', 'open');
+  const bumps = () =>
+    new Map([
+      ...(f.service.getSnapshot().get('t0')?.channelRefreshRevisions ?? []),
+    ]);
+  try {
+    await f.clock.advance(500);
+    const start = bumps();
+    // Sixty seconds of synchronizations one second apart, which is what a
+    // busy account's poll bumps produce.
+    for (let step = 0; step < 60; step++) {
+      f.service.invalidate('t0');
+      await f.clock.advance(1_000);
+    }
+    const end = bumps();
+    const raised = (id: string) => end.get(id)! - start.get(id)!;
+    assert.ok(
+      raised('open') >= 11,
+      `the open channel must keep refreshing: ${raised('open')}`,
+    );
+    assert.ok(
+      raised('quiet-a') <= 4 && raised('quiet-b') <= 4,
+      `quiet channels must back off: ${raised('quiet-a')}`,
+    );
+    // An arrival the projection can see resets that channel to the base
+    // interval, so a channel that starts receiving is not left backed off.
+    const backedOff = bumps();
+    f.inbox.position = 9;
+    f.service.invalidate('t0');
+    await f.clock.advance(1_000);
+    assert.equal(bumps().get('quiet-a')! - backedOff.get('quiet-a')!, 1);
+    const reset = bumps();
+    for (let step = 0; step < 6; step++) {
+      f.service.invalidate('t0');
+      await f.clock.advance(1_000);
+    }
+    assert.equal(bumps().get('quiet-a')! - reset.get('quiet-a')!, 1);
+  } finally {
+    f.service.stop();
+  }
+});
+
+test('a throttled degraded bump refreshes the open thread when its delay expires without another sync', async () => {
+  const f = fixture(1);
+  f.inbox.channels = ['open'];
+  f.inbox.degraded = true;
+  f.service.setOpenChannel('t0', 'open');
+  const entry = () => f.service.getSnapshot().get('t0')!;
+  const revision = () => entry().channelRefreshRevisions!.get('open')!;
+  try {
+    await f.clock.advance(500);
+    f.bump('2');
+    await f.clock.advance(1_000);
+    const first = revision();
+    const content = entry().channelRevisions.get('open');
+    f.bump('3');
+    await f.clock.advance(1_000);
+    f.bump('4');
+    await f.clock.advance(1_000);
+    assert.equal(revision(), first, 'nearby bumps are coalesced');
+    const syncs = f.syncs.length;
+    await f.clock.advance(3_000);
+    assert.equal(revision(), first + 1, 'the deferred refresh is not lost');
+    assert.equal(f.syncs.length, syncs, 'releasing it needs no inbox RPC');
+    assert.equal(entry().channelRevisions.get('open'), content);
+    await f.clock.advance(6_000);
+    assert.equal(
+      revision(),
+      first + 1,
+      'one trailing refresh drains the bumps',
+    );
+  } finally {
+    f.service.stop();
+  }
+});
+
+test('recovery to a healthy projection clears deferred degraded refreshes', async () => {
+  const f = fixture(1);
+  f.inbox.channels = ['open'];
+  f.inbox.degraded = true;
+  f.service.setOpenChannel('t0', 'open');
+  const revision = () =>
+    f.service.getSnapshot().get('t0')!.channelRefreshRevisions!.get('open');
+  try {
+    await f.clock.advance(500);
+    f.bump('2');
+    await f.clock.advance(1_000);
+    f.bump('3');
+    await f.clock.advance(1_000);
+    f.inbox.degraded = false;
+    f.service.invalidate('t0');
+    await f.clock.advance(500);
+    const healthy = revision();
+    await f.clock.advance(6_000);
+    assert.equal(revision(), healthy);
+    // A later degraded lifetime starts fresh, with no old delay to inherit.
+    f.inbox.degraded = true;
+    f.service.invalidate('t0');
+    await f.clock.advance(500);
+    assert.equal(revision(), healthy! + 1);
+  } finally {
+    f.service.stop();
+  }
 });

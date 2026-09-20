@@ -188,23 +188,33 @@ export function useChatConversation(
     },
     [sends, service, storeId],
   );
+  // A confirmed read is applied to the projection rather than resynchronized
+  // into it: the reply states the pointer the server accepted, and the
+  // contract has already checked that it names this request's channel and
+  // sequence. A read that did not land leaves the local pointer unproven, so
+  // that path invalidates and lets the next synchronization state it.
   const markRead = useCallback(
     async (channel: string, sequence: string) => {
       const end = diagnosticLog.span('chat.read', {
         scope: `store#${hashId(storeId)}`,
       });
       try {
-        await request({ action: 'mark-read', channel, sequence });
+        const reply = await request({ action: 'mark-read', channel, sequence });
+        if (reply.result.kind !== 'read') throw integrity();
+        service.applyRead(storeId, reply.result.channel, reply.result.sequence);
         end('ok');
       } catch (error) {
         const code = normalizeCommandError(error).code;
         end(outcomeForCode(code), { code });
-        throw error;
-      } finally {
         service.invalidate(storeId);
+        throw error;
       }
     },
     [request, service, storeId],
+  );
+  const setOpenChannel = useCallback(
+    (channel: string | null) => service.setOpenChannel(storeId, channel),
+    [service, storeId],
   );
   const blockHistory = useCallback(
     (channel: string) => {
@@ -309,6 +319,7 @@ export function useChatConversation(
     refresh,
     refreshPending,
     markRead,
+    setOpenChannel,
     acceptHistory,
     blockHistory,
   };

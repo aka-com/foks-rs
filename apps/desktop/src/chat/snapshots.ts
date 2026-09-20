@@ -48,12 +48,23 @@ function sameReadAuthority(a: ChatChannel, b: ChatChannel): boolean {
   );
 }
 
-/** Basic hosts have no content revision. Read/prefs/status changes are not content. */
+/**
+ * Basic hosts have no content revision. Read/prefs/status changes are not
+ * content.
+ *
+ * `conservative` decides, per channel, whether a degraded projection alone
+ * invalidates it. A degraded host cannot say which threads moved, so the only
+ * correct answer from the projection is "possibly all of them"; asking that
+ * question of every channel on every synchronization is what turns a degraded
+ * host into a polling loop, so the caller rate-limits it per channel and
+ * passes the result here. A channel the predicate refuses is still
+ * invalidated by every change the comparison below can actually see.
+ */
 export function contentRevisions(
   previous: Inbox | undefined,
   incoming: Inbox,
   revisions: ReadonlyMap<string, number>,
-  conservativeDegraded = true,
+  conservative: (channel: string) => boolean = () => true,
 ): ReadonlyMap<string, number> {
   const channels = new Map(previous?.channels.map((c) => [c.id, c]));
   const conversations = new Map(
@@ -70,7 +81,7 @@ export function contentRevisions(
       const changed =
         !old ||
         !sameReadAuthority(old, channel) ||
-        (conservativeDegraded && incoming.degraded) ||
+        (incoming.degraded && conservative(channel.id)) ||
         !!a !== !!b ||
         (!!a &&
           !!b &&

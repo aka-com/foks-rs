@@ -94,6 +94,7 @@ test('consumer baselines verified history, filters own messages and never writes
   const listeners = new Set<() => void>();
   const service = {
     handleError: () => false,
+    openChannel: () => undefined,
     subscribe: (fn: () => void) => {
       listeners.add(fn);
       return () => listeners.delete(fn);
@@ -112,9 +113,9 @@ test('consumer baselines verified history, filters own messages and never writes
             blockedChannels: new Set(),
             data: {
               channels: [channel],
-              conversations: [
-                { channel, muted: false, hidden: false, unread: '100000' },
-              ],
+              // No conversation row states this channel's position, so the
+              // baseline is established by a read rather than seeded.
+              conversations: [],
             },
           },
         ],
@@ -183,6 +184,7 @@ test('consumer advances budgeted passes beyond 64 channels despite an always-fai
   const budgets: { rows: number; bytes: number }[] = [];
   const service = {
     handleError: () => false,
+    openChannel: () => undefined,
     subscribe: () => () => {},
     getSnapshot: () =>
       new Map([
@@ -270,6 +272,7 @@ test('closing consumer during history discards late authorized plaintext', async
   let alerts = 0;
   const service = {
     handleError: () => false,
+    openChannel: () => undefined,
     subscribe: () => () => {},
     getSnapshot: () =>
       new Map([
@@ -388,6 +391,7 @@ test('activating a notification opens the Chat tab on that team and channel', as
   };
   const service = {
     handleError: () => false,
+    openChannel: () => undefined,
     subscribe: () => () => {},
     getSnapshot: () => new Map(),
   };

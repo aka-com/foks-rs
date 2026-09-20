@@ -87,6 +87,12 @@ interface Team {
   accessExpiresAt?: number;
   /** When a poll last said this team's account moved, until a sync publishes. */
   bumpedAt?: number;
+  /**
+   * Per channel, when a degraded projection last invalidated it with no
+   * evidence that anything moved, and how long the next such invalidation
+   * waits. Only consulted while the projection is degraded.
+   */
+  degraded: Map<string, { at: number; interval: number; pending: boolean }>;
 }
 interface Account {
   key: string;
@@ -114,6 +120,43 @@ const identity = teamIdentity;
  */
 const answeredByCatalog = (failure: CommandError | undefined): boolean =>
   failure?.code === 'catalog-required' || failure?.code === 'store-not-found';
+/**
+ * How long a degraded projection waits before invalidating a channel again on
+ * no evidence, and the ceiling that wait doubles toward.
+ *
+ * A degraded host cannot report what changed, so an invalidation it raises is
+ * a guess, and acting on every guess is what makes a degraded host poll: with
+ * twenty channels the fallback alone costs four full history reads a second.
+ * The channel the user has open keeps the base interval and never backs off;
+ * every other channel doubles its wait up to the ceiling and resets to the
+ * base the moment the projection shows it actually moved.
+ *
+ * **This trades alert latency on a degraded host, and it is a product
+ * decision.** On such a host nothing reports which thread moved, so a message
+ * in a channel that is not open surfaces at that channel's current wait —
+ * `DEGRADED_REFRESH_MAX_MS` in the worst case, against five seconds before.
+ * Nothing is lost: the wait bounds when the read happens, not whether it
+ * happens, and the first read that finds the message resets the channel to
+ * the base interval.
+ */
+const DEGRADED_REFRESH_BASE_MS = 5_000;
+const DEGRADED_REFRESH_MAX_MS = 60_000;
+/**
+ * How long an idle team waits before resynchronizing, and the short cadence
+ * it keeps instead while its account's poll is failing or its projection is
+ * degraded.
+ *
+ * The resynchronization is not what carries messages: a send stamps every
+ * recipient's inbox version server-side, which ends the account's long poll,
+ * which marks every team of that account due immediately. What it uniquely
+ * catches is what moves no message — a new empty channel, a rename, a role
+ * change that alters readability, a preference change — and recovery when the
+ * poll itself is not running. None of those needs twenty-five seconds, so it
+ * keeps the short cadence only while the poll is failing or the host cannot
+ * report what changed.
+ */
+const RESYNC_IDLE_MS = 300_000;
+const RESYNC_SHORT_MS = 25_000;
 const initial = (): TeamInbox => ({
   state: 'loading',
   error: '',
@@ -146,6 +189,13 @@ export class ChatInboxService {
   onCatalogRequired?: (profile: string) => void;
   private catalogRequests = new Map<string, number>();
   private observers = new Set<(event: ChatInboxTiming) => void>();
+  /**
+   * Per store, the channel whose thread is mounted, or nothing. A degraded
+   * projection never backs this channel off, and the notification consumer
+   * reads it for the same reason; both are best-effort presentation, never
+   * authority over what may be read.
+   */
+  private open = new Map<string, string>();
   constructor(
     private bridge: Bridge,
     private clock = systemChatClock,
@@ -210,7 +260,36 @@ export class ChatInboxService {
   setVisible(visible: boolean) {
     if (visible === this.visible) return;
     this.visible = visible;
+    // Showing the window is one of the moments the periodic
+    // resynchronization exists for: what it uniquely catches is what the
+    // account poll cannot report, and the user is about to look at it. The
+    // idle cadence is minutes, so waiting for it here would show a stale
+    // channel list; every team's next pass is due immediately instead.
+    if (visible)
+      for (const account of this.accounts.values())
+        for (const team of account.teams.values())
+          if (!account.blocked && !team.quarantine && team.due !== Infinity)
+            team.due = 0;
     this.kick();
+  }
+  /**
+   * States which channel's thread is mounted for a store, or none. Presenting
+   * a channel is what exempts it from the degraded backoff: it is the one
+   * channel whose staleness the user can see.
+   */
+  setOpenChannel(id: string, channel: string | null) {
+    if (this.open.get(id) === (channel ?? undefined)) return;
+    if (channel === null) this.open.delete(id);
+    else this.open.set(id, channel);
+    // Tell the listeners: a consumer holding a backed-off channel is asleep
+    // on a timer it armed for the interval that channel had reached, and
+    // presenting it is exactly the moment that interval no longer applies.
+    // The published snapshot is unchanged, so a renderer that reads it
+    // re-renders nothing.
+    for (const listener of this.listeners) listener();
+  }
+  openChannel(id: string): string | undefined {
+    return this.open.get(id);
   }
   stop() {
     this.running = false;
@@ -221,6 +300,7 @@ export class ChatInboxService {
     this.accounts.clear();
     this.profiles.clear();
     this.polls = 0;
+    this.open.clear();
     this.snapshot = readonlyMap([]);
     this.histories.clear();
     for (const listener of this.listeners) listener();
@@ -267,6 +347,7 @@ export class ChatInboxService {
         const store = wanted.get(id);
         if (!store || binding(store) !== team.binding) {
           account.teams.delete(id);
+          this.open.delete(id);
           this.histories.clear(id);
           const next = new Map(this.snapshot);
           next.delete(id);
@@ -300,6 +381,7 @@ export class ChatInboxService {
           binding: binding(store),
           store,
           blocked: new Set(),
+          degraded: new Map(),
           dirty: true,
           due: 0,
           retry: 250,
@@ -349,6 +431,53 @@ export class ChatInboxService {
     }
     for (const listener of this.listeners) listener();
     this.kick();
+  }
+  /**
+   * Publish a read the agent confirmed, with no synchronization behind it.
+   *
+   * The agent answers a mark-read only after the server accepted the pointer
+   * for that exact sequence and its own store recorded it, so what is applied
+   * here is never ahead of what the server holds. It is applied as a floor:
+   * a read another device made first is not rolled back, and a reply that
+   * lands after one leaves the larger pointer alone. The conversation's
+   * newest position is held fixed — the unread count falls by exactly what
+   * the pointer rose — so this publishes no channel invalidation and the next
+   * synchronization compares equal.
+   */
+  applyRead(id: string, channel: string, sequence: string) {
+    const old = this.snapshot.get(id);
+    if (!old?.data) return;
+    const marked = BigInt(sequence);
+    let moved = false;
+    const conversations = old.data.conversations.map((conversation) => {
+      const read = BigInt(conversation.read_through);
+      if (conversation.channel.id !== channel || read >= marked)
+        return conversation;
+      const pending =
+        conversation.pending_read === null
+          ? null
+          : BigInt(conversation.pending_read);
+      const unread = BigInt(conversation.unread);
+      const effective = pending !== null && pending > read ? pending : read;
+      const next = marked > effective ? marked : effective;
+      moved = true;
+      return {
+        ...conversation,
+        read_through: String(marked),
+        // The agent's store clears a staged read the confirmation overtook
+        // and keeps one it did not; mirror that rather than guess.
+        pending_read:
+          pending !== null && pending > marked ? String(pending) : null,
+        unread: String(
+          effective + unread > next ? effective + unread - next : 0n,
+        ),
+      };
+    });
+    if (!moved) return;
+    this.publish(id, {
+      ...old,
+      data: { ...old.data, conversations },
+    });
   }
   invalidate(id: string) {
     for (const account of this.accounts.values()) {
@@ -506,6 +635,73 @@ export class ChatInboxService {
       this.clock.now() < team.accessExpiresAt
     );
   }
+  /**
+   * Whether a degraded projection may invalidate a channel on no evidence
+   * this pass, advancing that channel's backoff when it does.
+   *
+   * `moved` states what the comparison that ignores degradation already saw:
+   * a channel it reports is invalidated by that change alone, so admitting it
+   * here would buy nothing, and its backoff resets because the projection is
+   * demonstrably still reporting this channel's arrivals. The channel the
+   * user has open never backs off; it is rate-limited to the base interval so
+   * that a burst of synchronizations cannot turn its thread into a poll.
+   */
+  private degradedAdmission(
+    team: Team,
+    moved: (channel: string) => boolean,
+  ): (channel: string) => boolean {
+    const now = this.clock.now();
+    const open = this.open.get(team.store.id);
+    return (channel: string) => {
+      let state = team.degraded.get(channel);
+      if (!state) {
+        state = {
+          at: -Infinity,
+          interval: DEGRADED_REFRESH_BASE_MS,
+          pending: false,
+        };
+        team.degraded.set(channel, state);
+      }
+      if (moved(channel)) {
+        state.at = now;
+        state.interval = DEGRADED_REFRESH_BASE_MS;
+        state.pending = false;
+        return false;
+      }
+      const wait = channel === open ? DEGRADED_REFRESH_BASE_MS : state.interval;
+      if (now - state.at < wait) {
+        state.pending = true;
+        return false;
+      }
+      state.pending = false;
+      state.at = now;
+      state.interval =
+        channel === open
+          ? DEGRADED_REFRESH_BASE_MS
+          : Math.min(state.interval * 2, DEGRADED_REFRESH_MAX_MS);
+      return true;
+    };
+  }
+  /** Release coalesced invalidations without another inbox RPC. */
+  private flushDegraded(team: Team) {
+    if (team.quarantine || !this.accessValid(team)) return;
+    const old = this.snapshot.get(team.store.id);
+    if (old?.state !== 'ready' || old.stale || !old.data?.degraded) return;
+    const admit = this.degradedAdmission(team, () => false);
+    let revisions: Map<string, number> | undefined;
+    for (const [channel, state] of team.degraded) {
+      if (!state.pending || !admit(channel)) continue;
+      revisions ??= new Map(
+        old.channelRefreshRevisions ?? old.channelRevisions,
+      );
+      revisions.set(channel, (revisions.get(channel) ?? 0) + 1);
+    }
+    if (revisions)
+      this.publish(team.store.id, {
+        ...old,
+        channelRefreshRevisions: revisions,
+      });
+  }
   private delay(retry: number) {
     return Math.min(
       30_000,
@@ -523,6 +719,7 @@ export class ChatInboxService {
     for (const account of [...this.accounts.values()]) {
       if (account.blocked) continue;
       const teams = [...account.teams.values()];
+      for (const team of teams) this.flushDegraded(team);
       const team = teams.find(
         (candidate) =>
           !candidate.quarantine &&
@@ -592,13 +789,20 @@ export class ChatInboxService {
         old?.data,
         data,
         old?.channelRevisions ?? new Map(),
-        false,
+        () => false,
       );
+      const moved = (channel: string) =>
+        old?.channelRevisions.get(channel) !== revisions.get(channel);
       const refreshRevisions = contentRevisions(
         old?.data,
         data,
         old?.channelRefreshRevisions ?? old?.channelRevisions ?? new Map(),
+        this.degradedAdmission(team, moved),
       );
+      if (!data.degraded) team.degraded.clear();
+      for (const channel of team.degraded.keys())
+        if (!data.channels.some((row) => row.id === channel))
+          team.degraded.delete(channel);
       const changed = [...revisions].some(
         ([id, value]) => old?.channelRevisions.get(id) !== value,
       );
@@ -636,7 +840,10 @@ export class ChatInboxService {
         authorizationRevision: (old?.authorizationRevision ?? 0) + 1,
       });
       team.retry = 250;
-      team.due = team.dirty ? 0 : this.clock.now() + 25_000;
+      team.due = team.dirty
+        ? 0
+        : this.clock.now() +
+          (account.failure || data.degraded ? RESYNC_SHORT_MS : RESYNC_IDLE_MS);
     } catch (cause) {
       const error = normalizeCommandError(cause);
       this.report({
@@ -733,6 +940,15 @@ export class ChatInboxService {
         }
       }
       account.retry = 250;
+      // A poll that succeeds after failing is the recovery the short cadence
+      // was being kept for: what changed while no poll was running was never
+      // reported, so every team of the account resynchronizes now and only
+      // then returns to the idle cadence.
+      if (account.failure)
+        for (const t of account.teams.values()) {
+          t.dirty = true;
+          t.due = 0;
+        }
       account.failure = undefined;
       account.due = this.clock.now() + 250;
     } catch (cause) {
@@ -751,6 +967,15 @@ export class ChatInboxService {
         return;
       }
       if (this.handleError(team.store.id, error)) return;
+      // Nothing reports arrivals while the poll is down, so the teams of this
+      // account go back to the short cadence rather than waiting out an idle
+      // interval that was scheduled while the poll was working. It is a
+      // clamp, not a reset: a team already due sooner keeps its time, and a
+      // team backing off from its own failure keeps that.
+      if (!account.failure)
+        for (const t of account.teams.values())
+          if (!t.quarantine && t.due !== Infinity)
+            t.due = Math.min(t.due, this.clock.now() + RESYNC_SHORT_MS);
       account.failure = error;
       account.due = this.clock.now() + this.delay(account.retry);
       account.retry = Math.min(30_000, account.retry * 2);
