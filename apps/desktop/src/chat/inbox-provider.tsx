@@ -15,7 +15,8 @@ import type { Bridge } from '../bridge';
 import type { AgentSnapshot } from '../model';
 import { ChatInboxService } from './inbox-service';
 import type { ChatClock } from './inbox-service';
-import { diagnosticLog, hashId } from '../diagnostics/log';
+import { diagnosticLog } from '../diagnostics/log';
+import { recordInboxTiming } from './inbox-timing';
 const Context = createContext<ChatInboxService | null>(null);
 export function ChatInboxProvider({
   bridge,
@@ -74,33 +75,7 @@ export function ChatInboxProvider({
   // account and team identifiers; a publish is followed to the next frame
   // while the window is visible, which is what an inbox change costs to show.
   useEffect(() => {
-    const stopTimings = service.observe((event) => {
-      if (event.kind === 'poll')
-        diagnosticLog.record({
-          name: 'chat.poll',
-          scope: `acct#${hashId(event.account)}`,
-          ms: event.milliseconds,
-          outcome: event.outcome,
-          code: event.code,
-          attrs: { bumped: event.bumped },
-        });
-      else if (event.kind === 'sync')
-        diagnosticLog.record({
-          name: 'chat.sync',
-          scope: `store#${hashId(event.store)}`,
-          ms: event.milliseconds,
-          outcome: event.outcome,
-          code: event.code,
-          attrs: { changed: event.changed, conversations: event.conversations },
-        });
-      else
-        diagnosticLog.record({
-          name: 'chat.arrival',
-          scope: `store#${hashId(event.store)}`,
-          ms: event.milliseconds,
-          outcome: 'ok',
-        });
-    });
+    const stopTimings = service.observe(recordInboxTiming);
     let pending = false;
     const stopFrames = service.subscribe(() => {
       if (

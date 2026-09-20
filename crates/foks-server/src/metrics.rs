@@ -1,6 +1,6 @@
 mod checkpoint;
 pub(crate) mod realtime;
-pub use realtime::{RealtimeMetricsSnapshot, ReconcileMetricsSnapshot};
+pub use realtime::{FanoutMetricsSnapshot, RealtimeMetricsSnapshot, ReconcileMetricsSnapshot};
 
 pub use checkpoint::CheckpointMetricsSnapshot;
 pub(crate) use checkpoint::BUCKET_MICROS as CHECKPOINT_BUCKET_MICROS;

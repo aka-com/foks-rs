@@ -36,7 +36,10 @@ opens lazily after fixture setup. One channel is reserved for foreground writes;
 incoming traffic rotates through the remaining channels (or channel 1 for backlog).
 The receiver uses production `ChatInboxService`, `NotificationConsumer`, scheduling,
 TypeScript decoding, native desktop reply validation and real agent history.
-`poll-inbox` retains its production bypass and separate account owner.
+`poll-inbox` retains its production bypass and separate account owner. The receiver
+uses a ready snapshot with current service, compatibility, and inventory fields.
+Setup checks committed consumer progress, including baselines seeded from verified
+inbox positions without a history RPC; this read-only inspection ends before warmup.
 
 Slow history adds 250 ms **after admission**, before the real native request. The
 first channel then fails retryably on every attempt; later channels still use
@@ -64,6 +67,35 @@ The TypeScript entry point additionally supports `--channels`, `--worker`, `--ag
 `--warmup`, `--duration`, and `--drain` for diagnosis. Changed dimensions or shortened
 runs are **not** acceptance results. Worker and agent hashes and the harness hash
 are recorded with each complete matrix trial.
+
+## Comparing a later server and UI change
+
+The legacy `--implementation baseline` always selects `6031904`. To compare a
+later change against its immediate parent, supply that parent's source archive
+and separately preserved release binaries instead:
+
+```sh
+python3 scripts/benchmarks/run-chat-notifications.py \
+  --source /tmp/parent-source --source-revision <parent-commit> \
+  --worker /tmp/parent-chat-notification-bench --agent /tmp/parent-foks-agent \
+  --fault-onset measurement --output /tmp/notification-parent.jsonl
+python3 scripts/benchmarks/run-chat-notifications.py \
+  --worker /tmp/changed-chat-notification-bench --agent /tmp/changed-foks-agent \
+  --fault-onset measurement --output /tmp/notification-changed.jsonl
+```
+
+Build each worker and agent from the corresponding revision before running either
+matrix. Preserve the executables before rebuilding in a shared Cargo target;
+never infer the linked server revision from the current checkout. The source
+archive needs a `node_modules` symlink to the installed dependencies. For a Git
+checkout, omit `--source-revision` to read its HEAD. With an archive, the explicit
+revision records its provenance and must name the commit used to create it.
+The driver hashes the selected binaries, harness, UI source files and chat limits.
+Both result sets use `implementation: current` because both run the modern
+notification design; `sourceRevision` and artifact hashes distinguish them.
+Evaluate each full matrix with the summary script, then compare matching cases
+and arms across revisions. Explicit sources cannot be combined with the legacy
+baseline or its `--compare` mode.
 
 ## Interpreting results
 
@@ -119,3 +151,22 @@ the primary matrix. Raw source/artifact hashes accompany the paired comparisons.
 Run `python3 scripts/benchmarks/test_summary.py` to check the result validator and
 `python3 scripts/benchmarks/summarize-chat-notifications.py <current-results.jsonl>`
 to evaluate a complete primary matrix; partial data never passes acceptance.
+
+## Inbox CPU benchmark
+
+```sh
+node --import tsx scripts/benchmarks/inbox-publication.ts --source /tmp/parent-source
+node --import tsx scripts/benchmarks/inbox-publication.ts
+```
+
+At 10, 100 and 1,000 channels, `sync` measures full-reply publication, `read`
+measures a confirmed single-channel read, and `revision` measures a refresh-map
+update. Each includes one subscriber scanning conversations. The additional
+`full-sync` workload runs the full UI sync method with an immediate bridge,
+including profile scheduling, authority checks, preview filtering, both revision
+calculations, publication, and the subscriber scan. It checks that all 520 warmup
+and measured requests publish ready data, so failed requests cannot appear faster.
+It uses a healthy inbox; the revision-only workload represents a degraded refresh.
+Network/native RPC time and rendering are excluded. Each result is the median of
+five batch means of 100 operations after 20 warmups, in microseconds. Run these
+measurements without concurrent compilers or acceptance trials.

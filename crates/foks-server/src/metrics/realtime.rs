@@ -27,8 +27,45 @@ pub struct ReconcileMetricsSnapshot {
     pub queue_wait_microseconds_total: u64,
     pub execution_microseconds_total: u64,
 }
+#[derive(Clone, Copy)]
+pub(crate) enum FanoutOperation {
+    Registration,
+    Recipients,
+    Membership,
+}
+#[derive(Default)]
+pub(crate) struct FanoutWork {
+    pub recipient_keys: u64,
+    pub entries_examined: u64,
+    pub expired_entries_removed: u64,
+    pub listeners_woken: u64,
+    pub mutex_wait: Duration,
+    pub mutex_hold: Duration,
+    pub wake: Duration,
+}
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FanoutMetricsSnapshot {
+    pub calls: u64,
+    pub recipient_keys: u64,
+    pub entries_examined: u64,
+    pub expired_entries_removed: u64,
+    pub listeners_woken: u64,
+    pub mutex_wait_buckets: [u64; 9],
+    pub mutex_hold_buckets: [u64; 9],
+    pub wake_buckets: [u64; 9],
+    pub mutex_wait_microseconds_total: u64,
+    pub mutex_hold_microseconds_total: u64,
+    pub wake_microseconds_total: u64,
+    /// Preserve sub-microsecond samples before deriving the compatibility totals.
+    pub mutex_wait_nanoseconds_total: u64,
+    pub mutex_hold_nanoseconds_total: u64,
+    pub wake_nanoseconds_total: u64,
+}
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RealtimeMetricsSnapshot {
+    pub registration: FanoutMetricsSnapshot,
+    pub notification: FanoutMetricsSnapshot,
+    pub membership: FanoutMetricsSnapshot,
     pub poll: ReconcileMetricsSnapshot,
     pub delta: ReconcileMetricsSnapshot,
     pub hint_wakes: u64,
@@ -41,6 +78,48 @@ pub struct RealtimeMetricsSnapshot {
 #[derive(Default)]
 pub(crate) struct RealtimeMetrics(Mutex<RealtimeMetricsSnapshot>);
 impl RealtimeMetrics {
+    pub(crate) fn fanout(&self, operation: FanoutOperation, work: FanoutWork) {
+        self.update(|s| {
+            let s = match operation {
+                FanoutOperation::Registration => &mut s.registration,
+                FanoutOperation::Recipients => &mut s.notification,
+                FanoutOperation::Membership => &mut s.membership,
+            };
+            s.calls += 1;
+            s.recipient_keys += work.recipient_keys;
+            s.entries_examined += work.entries_examined;
+            s.expired_entries_removed += work.expired_entries_removed;
+            s.listeners_woken += work.listeners_woken;
+            for (duration, buckets, nanoseconds, microseconds) in [
+                (
+                    work.mutex_wait,
+                    &mut s.mutex_wait_buckets,
+                    &mut s.mutex_wait_nanoseconds_total,
+                    &mut s.mutex_wait_microseconds_total,
+                ),
+                (
+                    work.mutex_hold,
+                    &mut s.mutex_hold_buckets,
+                    &mut s.mutex_hold_nanoseconds_total,
+                    &mut s.mutex_hold_microseconds_total,
+                ),
+                (
+                    work.wake,
+                    &mut s.wake_buckets,
+                    &mut s.wake_nanoseconds_total,
+                    &mut s.wake_microseconds_total,
+                ),
+            ] {
+                for (i, bound) in BUCKET_MICROS.iter().enumerate() {
+                    buckets[i] += u64::from(duration <= Duration::from_micros(*bound));
+                }
+                buckets[8] += 1;
+                *nanoseconds = nanoseconds
+                    .saturating_add(u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX));
+                *microseconds = *nanoseconds / 1_000;
+            }
+        });
+    }
     pub(crate) fn snapshot(&self) -> RealtimeMetricsSnapshot {
         *self
             .0
@@ -112,6 +191,44 @@ impl RealtimeMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fanout_totals_preserve_submicrosecond_work_per_operation() {
+        let metrics = RealtimeMetrics::default();
+        for operation in [
+            FanoutOperation::Registration,
+            FanoutOperation::Recipients,
+            FanoutOperation::Membership,
+        ] {
+            for _ in 0..3 {
+                metrics.fanout(
+                    operation,
+                    FanoutWork {
+                        mutex_wait: Duration::from_nanos(400),
+                        mutex_hold: Duration::from_nanos(250),
+                        wake: Duration::from_nanos(100),
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+        let snapshot = metrics.snapshot();
+        for sample in [
+            snapshot.registration,
+            snapshot.notification,
+            snapshot.membership,
+        ] {
+            assert_eq!(sample.mutex_wait_nanoseconds_total, 1_200);
+            assert_eq!(sample.mutex_wait_microseconds_total, 1);
+            assert_eq!(sample.mutex_hold_nanoseconds_total, 750);
+            assert_eq!(sample.mutex_hold_microseconds_total, 0);
+            assert_eq!(sample.wake_nanoseconds_total, 300);
+            assert_eq!(sample.wake_microseconds_total, 0);
+            assert_eq!(sample.mutex_wait_buckets, [3; 9]);
+            assert_eq!(sample.mutex_hold_buckets, [3; 9]);
+            assert_eq!(sample.wake_buckets, [3; 9]);
+        }
+    }
+
     #[test]
     fn sources_outcomes_and_worker_histograms_are_independent() {
         let m = RealtimeMetrics::default();

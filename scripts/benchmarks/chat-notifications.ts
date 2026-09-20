@@ -18,7 +18,8 @@ import type {
   ChatScope,
 } from '../../apps/desktop/src/chat-contract';
 import type { NotificationMetric } from '../../apps/desktop/src/chat/notification-consumer';
-import type { AgentSnapshot } from '../../apps/desktop/src/model';
+import type { ChatInboxTiming } from '../../apps/desktop/src/chat/inbox-service';
+import { notificationBenchmarkSnapshot } from './chat-notification-fixture';
 import { decodeChatScope } from '../../apps/desktop/src/chat-contract';
 import type { WorkTiming } from '../../apps/desktop/src/scheduling/profile-work';
 
@@ -90,11 +91,13 @@ if (
 )
   throw Error('Invalid trial duration');
 const root = resolve('.');
-let source = root,
+let source = resolve(option('source', root)),
   scratch: string | undefined;
 process.on('exit', () => {
   if (scratch) rmSync(scratch, { recursive: true, force: true });
 });
+if (baseline && source !== root)
+  throw Error('Choose either an explicit source or the legacy baseline');
 if (baseline) {
   scratch = mkdtempSync(join(tmpdir(), 'foks-notification-baseline-'));
   execFileSync('tar', ['-x', '-C', scratch], {
@@ -355,22 +358,27 @@ try {
     if (measured) timings.push(event);
   });
   const service = new ChatInboxService(bridge);
-  service.updateStores({
-    stores: [
-      {
-        id: storeId,
-        kind: 'team',
-        name: 'Benchmark',
-        alias: 'bench',
-        server: 'receiver',
-        account: 'receiver',
-        active: true,
-        team_kind: 'named',
-        team_id_hex: info.scope.store.team_id,
-      },
-    ],
-    servers: [{ id: 'receiver', chat_available: true }],
-  } as unknown as AgentSnapshot);
+  const snapshot = notificationBenchmarkSnapshot(storeId, info.scope);
+  service.updateStores(
+    baseline
+      ? {
+          ...snapshot,
+          servers: snapshot.servers.map((server) => ({
+            ...server,
+            chat_available: true,
+          })),
+        }
+      : snapshot,
+  );
+  const stopSetupDiagnostics =
+    typeof service.observe === 'function'
+      ? service.observe((event: ChatInboxTiming) => {
+          if (event.kind === 'sync' && event.outcome !== 'ok')
+            console.error(
+              `benchmark setup sync: ${event.outcome} ${event.code ?? 'unknown'}`,
+            );
+        })
+      : () => {};
   service.start();
   const consumer = enabled
     ? new NotificationConsumer(
@@ -388,23 +396,62 @@ try {
     : undefined;
   cleanup = () => {
     stopped = true;
+    stopSetupDiagnostics();
     consumer?.stop();
     service.stop();
     off();
   };
+  // Modern consumers can seed from verified inbox positions without an RPC.
+  // Read committed progress only during setup; never mutate consumer metadata.
+  const initializedChannels = (): ReadonlySet<string> => {
+    if (baseline || !consumer) return baselined;
+    const progress = (
+      consumer as unknown as {
+        progress: Map<
+          string,
+          {
+            channel: string;
+            baseline: bigint | null;
+            baselineOnly: boolean;
+          }
+        >;
+      }
+    ).progress;
+    return new Set(
+      [...progress.values()]
+        .filter(
+          (p) => typeof p.baseline === 'bigint' && p.baselineOnly === false,
+        )
+        .map((p) => p.channel),
+    );
+  };
   const setupDeadline = performance.now() + 120000;
-  while (
-    !service.getSnapshot().get(storeId)?.data ||
-    (enabled &&
-      baselined.size <
-        channelsCount - Number(workload === 'slow' && faultOnset === 'setup'))
-  ) {
+  while (true) {
+    const initialized = initializedChannels();
+    const expected = info.channels.filter(
+      (channel) =>
+        !(
+          workload === 'slow' &&
+          faultOnset === 'setup' &&
+          channel === faultKey
+        ),
+    );
+    const inbox = service.getSnapshot().get(storeId);
+    if (
+      inbox?.state === 'ready' &&
+      !inbox.stale &&
+      inbox.data &&
+      (!enabled || expected.every((channel) => initialized.has(channel)))
+    )
+      break;
     if (performance.now() > setupDeadline)
       throw Error(
-        `Baseline setup timed out (${baselined.size}/${channelsCount})`,
+        `Baseline setup timed out (${initialized.size}/${channelsCount}; state=${inbox?.state ?? 'missing'}; code=${inbox?.failure?.code ?? 'none'})`,
       );
     await delay(50);
   }
+  stopSetupDiagnostics();
+  console.error('benchmark receiver: inbox and notification baselines ready');
   // Every trial begins with established baselines, then exactly 15 seconds of warmup.
   const histogram = monitorEventLoopDelay({ resolution: 20 });
   histogram.enable();

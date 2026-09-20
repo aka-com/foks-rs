@@ -97,11 +97,32 @@ export function contentRevisions(
   );
 }
 
+const protectedMaps = new WeakSet<object>();
+const protectedSets = new WeakSet<object>();
+const frozenDtos = new WeakSet<object>();
+export const isFrozenDto = (value: object): boolean => frozenDtos.has(value);
+export const isReadonlySet = (value: object): boolean =>
+  protectedSets.has(value);
+
 /** No writable collection escapes the service, even through a runtime cast. */
 export function readonlyMap<K, V>(
   entries: Iterable<readonly [K, V]>,
 ): ReadonlyMap<K, V> {
+  if (protectedMaps.has(entries)) return entries as ReadonlyMap<K, V>;
+  return mapView(new Map(entries));
+}
+
+/** Copy once, update privately, and expose no mutable backing-map reference. */
+export function updatedReadonlyMap<K, V>(
+  entries: ReadonlyMap<K, V>,
+  key: K,
+  value: V,
+): ReadonlyMap<K, V> {
   const map = new Map(entries);
+  map.set(key, value);
+  return mapView(map);
+}
+function mapView<K, V>(map: Map<K, V>): ReadonlyMap<K, V> {
   const view: ReadonlyMap<K, V> = Object.freeze({
     get size() {
       return map.size;
@@ -119,9 +140,11 @@ export function readonlyMap<K, V>(
       map.forEach((value, key) => callback.call(thisArg, value, key, view));
     },
   });
+  protectedMaps.add(view);
   return view;
 }
 export function readonlySet<T>(entries: Iterable<T>): ReadonlySet<T> {
+  if (protectedSets.has(entries)) return entries as ReadonlySet<T>;
   const set = new Set(entries);
   const view: ReadonlySet<T> = Object.freeze({
     get size() {
@@ -139,13 +162,15 @@ export function readonlySet<T>(entries: Iterable<T>): ReadonlySet<T> {
       set.forEach((value) => callback.call(thisArg, value, value, view));
     },
   });
+  protectedSets.add(view);
   return view;
 }
 /** DTOs contain only plain objects, arrays and primitives; never call on a model. */
 export function freezeDto<T>(value: T): T {
-  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+  if (value && typeof value === 'object' && !frozenDtos.has(value)) {
     for (const child of Object.values(value)) freezeDto(child);
     Object.freeze(value);
+    frozenDtos.add(value);
   }
   return value;
 }

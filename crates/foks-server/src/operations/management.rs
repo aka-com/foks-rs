@@ -739,6 +739,68 @@ fn realtime_prometheus(output: &mut String, realtime: &crate::RealtimeMetricsSna
             );
         }
     }
+    for (operation, s) in [
+        ("registration", realtime.registration),
+        ("recipients", realtime.notification),
+        ("membership", realtime.membership),
+    ] {
+        for (name, count) in [
+            ("calls", s.calls),
+            ("recipient_keys", s.recipient_keys),
+            ("entries_examined", s.entries_examined),
+            ("expired_entries_removed", s.expired_entries_removed),
+            ("listeners_woken", s.listeners_woken),
+        ] {
+            if operation == "registration" {
+                let _ = writeln!(output, "# TYPE foks_realtime_fanout_{name}_total counter");
+            }
+            let _ = writeln!(
+                output,
+                "foks_realtime_fanout_{name}_total{{operation=\"{operation}\"}} {count}"
+            );
+        }
+        for (name, buckets, total) in [
+            (
+                "mutex_wait",
+                s.mutex_wait_buckets,
+                s.mutex_wait_nanoseconds_total,
+            ),
+            (
+                "mutex_hold",
+                s.mutex_hold_buckets,
+                s.mutex_hold_nanoseconds_total,
+            ),
+            ("wake", s.wake_buckets, s.wake_nanoseconds_total),
+        ] {
+            let prefix = format!("foks_realtime_fanout_{name}_seconds");
+            if operation == "registration" {
+                let _ = writeln!(output, "# TYPE {prefix} histogram");
+            }
+            for (i, bound) in crate::metrics::realtime::BUCKET_MICROS.iter().enumerate() {
+                let _ = writeln!(
+                    output,
+                    "{prefix}_bucket{{operation=\"{operation}\",le=\"{}\"}} {}",
+                    seconds(*bound),
+                    buckets[i]
+                );
+            }
+            let _ = writeln!(
+                output,
+                "{prefix}_bucket{{operation=\"{operation}\",le=\"+Inf\"}} {}",
+                buckets[8]
+            );
+            let _ = writeln!(
+                output,
+                "{prefix}_count{{operation=\"{operation}\"}} {}",
+                buckets[8]
+            );
+            let _ = writeln!(
+                output,
+                "{prefix}_sum{{operation=\"{operation}\"}} {:.9}",
+                total as f64 / 1_000_000_000.0
+            );
+        }
+    }
     for (name, count) in [
         ("hint_wakes", realtime.hint_wakes),
         ("fallback_wakes", realtime.fallback_wakes),
@@ -756,6 +818,31 @@ fn realtime_prometheus(output: &mut String, realtime: &crate::RealtimeMetricsSna
 
 #[cfg(test)]
 mod realtime_metric_tests {
+    #[test]
+    fn fanout_metrics_have_fixed_operations_and_no_recipient_labels() {
+        let mut s = crate::RealtimeMetricsSnapshot::default();
+        s.notification.calls = 1;
+        s.notification.recipient_keys = 2;
+        s.notification.entries_examined = 2;
+        s.notification.mutex_hold_buckets[8] = 1;
+        s.notification.mutex_hold_microseconds_total = 42;
+        s.notification.mutex_hold_nanoseconds_total = 42_125;
+        s.notification.wake_nanoseconds_total = 300;
+        let mut output = String::new();
+        super::realtime_prometheus(&mut output, &s);
+        assert!(output
+            .contains("foks_realtime_fanout_entries_examined_total{operation=\"recipients\"} 2"));
+        assert!(output
+            .contains("foks_realtime_fanout_mutex_hold_seconds_count{operation=\"recipients\"} 1"));
+        assert!(output.contains(
+            "foks_realtime_fanout_mutex_hold_seconds_sum{operation=\"recipients\"} 0.000042125"
+        ));
+        assert!(output.contains(
+            "foks_realtime_fanout_wake_seconds_sum{operation=\"recipients\"} 0.000000300"
+        ));
+        assert!(!output.contains("uid="));
+        assert!(!output.contains("host="));
+    }
     #[test]
     fn reconciliation_metrics_export_fixed_sources_and_histogram_counts() {
         let mut s = crate::RealtimeMetricsSnapshot::default();

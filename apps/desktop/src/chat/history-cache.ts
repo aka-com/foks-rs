@@ -5,7 +5,12 @@ import { conversationResult, type HistoryWindow } from './conversation-model';
 import { eventFromReply } from './conversation-events';
 import { cancelled } from './errors';
 import { sameScope } from './scope';
-import { freezeDto, readonlyMap } from './snapshots';
+import {
+  freezeDto,
+  isFrozenDto,
+  isReadonlySet,
+  readonlyMap,
+} from './snapshots';
 
 export interface HistoryBinding {
   readonly store: string;
@@ -16,6 +21,15 @@ export interface HistoryBinding {
 }
 
 export class ChatHistoryCache {
+  private inputs = new Map<
+    string,
+    {
+      scope: ChatScope;
+      generation: number;
+      channels: NonNullable<TeamInbox['data']>['channels'];
+      blocked: TeamInbox['blockedChannels'];
+    }
+  >();
   private bindings = new Map<string, Map<string, HistoryBinding>>();
   private entries = new Map<
     HistoryBinding,
@@ -67,8 +81,27 @@ export class ChatHistoryCache {
       this.clear(store);
       return;
     }
+    // Identity is evidence only for runtime-protected collections and DTOs.
+    // Mutable callers still take the validation path on every update.
+    const reusable =
+      isFrozenDto(inbox.scope) &&
+      isFrozenDto(inbox.data.channels) &&
+      isReadonlySet(inbox.blockedChannels);
+    const inputs = this.inputs.get(store);
+    if (
+      reusable &&
+      inputs &&
+      inputs.generation === generation &&
+      inputs.channels === inbox.data.channels &&
+      inputs.blocked === inbox.blockedChannels &&
+      sameScope(inputs.scope, inbox.scope)
+    )
+      return;
     const previous = this.bindings.get(store);
     const next = new Map<string, HistoryBinding>();
+    const scope = isFrozenDto(inbox.scope)
+      ? inbox.scope
+      : freezeDto(structuredClone(inbox.scope));
     for (const channel of inbox.data.channels) {
       if (!channel.readable || inbox.blockedChannels.has(channel.id)) continue;
       const authority = JSON.stringify([channel.read_role, channel.admin]);
@@ -83,13 +116,21 @@ export class ChatHistoryCache {
           : Object.freeze({
               store,
               channel: channel.id,
-              scope: freezeDto(structuredClone(inbox.scope)),
+              scope,
               generation,
               authority,
             }),
       );
     }
     this.bindings.set(store, next);
+    if (reusable)
+      this.inputs.set(store, {
+        scope: inbox.scope,
+        generation,
+        channels: inbox.data.channels,
+        blocked: inbox.blockedChannels,
+      });
+    else this.inputs.delete(store);
     let changed = false;
     for (const binding of previous?.values() ?? []) {
       if (next.get(binding.channel) !== binding) {
@@ -164,10 +205,12 @@ export class ChatHistoryCache {
   }
   clear(store?: string): void {
     if (store === undefined) {
+      this.inputs.clear();
       if (!this.bindings.size && !this.entries.size) return;
       this.bindings.clear();
       this.entries.clear();
     } else {
+      this.inputs.delete(store);
       const bindings = this.bindings.get(store);
       if (!bindings) return;
       for (const binding of bindings.values()) this.entries.delete(binding);

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ChatHistoryCache } from '../src/chat/history-cache';
+import { freezeDto, readonlySet } from '../src/chat/snapshots';
 import type { TeamInbox } from '../src/chat/inbox-service';
 import type { ChatResult } from '../src/chat-contract';
 
@@ -294,3 +295,77 @@ test('incremental acceptance deduplicates sequences and gap replacement discards
   cache.accept(binding, { ...page(), messages: [] }, null, true);
   assert.equal(cache.get(binding)?.messages.length, 0);
 });
+
+test('owned unchanged authority inputs skip iteration, but clearing and generation changes rebuild', () => {
+  const next = inbox();
+  let visits = 0;
+  const channels = next.data!.channels;
+  const iterate = channels[Symbol.iterator].bind(channels);
+  channels[Symbol.iterator] = () => {
+    visits++;
+    return iterate();
+  };
+  freezeDto(next.data!);
+  freezeDto(next.scope!);
+  next.blockedChannels = readonlySet([]);
+  const cache = new ChatHistoryCache();
+  cache.update('t', next, 0);
+  assert.equal(visits, 1);
+  const binding = cache.binding('t', 'a', 0)!;
+  cache.accept(binding, page(), null);
+  cache.update(
+    't',
+    { ...next, revision: 1, channelRefreshRevisions: new Map([['a', 2]]) },
+    0,
+  );
+  assert.equal(visits, 1);
+  assert.ok(cache.get(binding));
+  cache.update('t', next, 1);
+  assert.equal(visits, 2);
+  assert.equal(cache.get(binding), null);
+  cache.clear('t');
+  cache.update('t', next, 1);
+  assert.equal(visits, 3);
+});
+
+for (const change of [
+  'role',
+  'quarantine',
+  'scope',
+  'generation',
+  'unavailable',
+  'blocked',
+] as const) {
+  test(`immutable history inputs still retire authority after ${change}`, () => {
+    const cache = new ChatHistoryCache();
+    const first = inbox();
+    freezeDto(first.data!);
+    freezeDto(first.scope!);
+    first.blockedChannels = readonlySet([]);
+    cache.update('t', first, 0);
+    const binding = cache.binding('t', 'a', 0)!;
+    cache.accept(binding, page(), null);
+    let next = { ...first };
+    if (change === 'role') {
+      next = {
+        ...next,
+        data: freezeDto({
+          ...first.data!,
+          channels: first.data!.channels.map((c) => ({
+            ...c,
+            read_role: 'Admin (0)',
+          })),
+        }),
+      };
+    }
+    if (change === 'quarantine') next.blockedChannels = readonlySet(['a']);
+    if (change === 'scope')
+      next.scope = freezeDto({ ...first.scope!, actor: 'other' });
+    if (change === 'unavailable' || change === 'blocked') next.state = change;
+    cache.update('t', next, Number(change === 'generation'));
+    assert.equal(cache.get(binding), null);
+    assert.throws(() => cache.accept(binding, page(), null), {
+      code: 'cancelled',
+    });
+  });
+}

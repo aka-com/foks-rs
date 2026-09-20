@@ -11,6 +11,7 @@ import {
   teamIdentity,
   contentRevisions,
   readonlyMap,
+  updatedReadonlyMap,
   readonlySet,
   freezeDto,
 } from './snapshots';
@@ -44,11 +45,34 @@ export interface ChatClock {
   random(): number;
 }
 /**
- * One poll, one synchronization, or the latency between a poll that said an
- * account moved and the synchronization that published the change. Carries
- * the account key and the store id, never a channel or a message.
+ * Poll/sync/arrival timings and publication phases, in milliseconds. Carries
+ * account/store identifiers and collection sizes, never channel IDs or content.
  */
+export type PublicationReason =
+  | 'sync'
+  | 'read'
+  | 'degraded'
+  | 'channel-block'
+  | 'access'
+  | 'sync-error'
+  | 'reset'
+  | 'store';
 export type ChatInboxTiming =
+  | {
+      kind: 'publication';
+      store: string;
+      reason: PublicationReason;
+      preparation: number;
+      historyBindings: number;
+      subscribers: number;
+      channels: number;
+      conversations: number;
+      blockedChannels: number;
+      channelRevisions: number;
+      refreshRevisions: number;
+      stores: number;
+      listeners: number;
+    }
   | {
       kind: 'poll';
       account: string;
@@ -225,27 +249,75 @@ export class ChatInboxService {
       this.listeners.delete(listener);
     };
   };
-  private publish(id: string, entry: TeamInbox) {
+  /** Accept bridge DTO ownership once; all other publications use owned state. */
+  private publishReply(id: string, entry: TeamInbox) {
+    const started = performance.now();
+    this.publish(
+      id,
+      {
+        ...entry,
+        scope: entry.scope
+          ? freezeDto(structuredClone(entry.scope))
+          : undefined,
+        data: entry.data ? freezeDto(structuredClone(entry.data)) : undefined,
+      },
+      'sync',
+      started,
+    );
+  }
+  private publish(
+    id: string,
+    entry: TeamInbox,
+    reason: PublicationReason,
+    started = performance.now(),
+  ) {
+    const old = this.snapshot.get(id);
     const accepted = Object.freeze({
       ...entry,
-      scope: entry.scope ? freezeDto(structuredClone(entry.scope)) : undefined,
-      failure: entry.failure
-        ? freezeDto(structuredClone(entry.failure))
-        : undefined,
-      data: entry.data ? freezeDto(structuredClone(entry.data)) : undefined,
+      // Local updates contain only new owned nodes or previously frozen DTOs.
+      scope: entry.scope ? freezeDto(entry.scope) : undefined,
+      failure:
+        entry.failure === old?.failure
+          ? old?.failure
+          : entry.failure
+            ? freezeDto(structuredClone(entry.failure))
+            : undefined,
+      data: entry.data ? freezeDto(entry.data) : undefined,
       blockedChannels: readonlySet(entry.blockedChannels),
       channelRevisions: readonlyMap(entry.channelRevisions),
       channelRefreshRevisions: readonlyMap(
         entry.channelRefreshRevisions ?? entry.channelRevisions,
       ),
     });
-    this.snapshot = readonlyMap(new Map(this.snapshot).set(id, accepted));
+    this.snapshot = updatedReadonlyMap(this.snapshot, id, accepted);
+    const prepared = performance.now();
+    const stores = this.snapshot.size;
     this.histories.update(
       id,
       accepted,
       this.accessGenerations.get(accepted.scope?.store.profile ?? '') ?? 0,
     );
-    for (const listener of this.listeners) listener();
+    const bound = performance.now();
+    const listeners = this.listeners.size;
+    try {
+      for (const listener of this.listeners) listener();
+    } finally {
+      this.report({
+        kind: 'publication',
+        store: id,
+        reason,
+        preparation: prepared - started,
+        historyBindings: bound - prepared,
+        subscribers: performance.now() - bound,
+        channels: accepted.data?.channels.length ?? 0,
+        conversations: accepted.data?.conversations.length ?? 0,
+        blockedChannels: accepted.blockedChannels.size,
+        channelRevisions: accepted.channelRevisions.size,
+        refreshRevisions: accepted.channelRefreshRevisions.size,
+        stores,
+        listeners,
+      });
+    }
   }
   start() {
     if (!this.running) {
@@ -401,6 +473,7 @@ export class ChatInboxService {
                 failure: account.blocked,
               }
             : initial(),
+          'store',
         );
       } else {
         const team = account.teams.get(store.id);
@@ -474,10 +547,14 @@ export class ChatInboxService {
       };
     });
     if (!moved) return;
-    this.publish(id, {
-      ...old,
-      data: { ...old.data, conversations },
-    });
+    this.publish(
+      id,
+      {
+        ...old,
+        data: { ...old.data, conversations },
+      },
+      'read',
+    );
   }
   invalidate(id: string) {
     for (const account of this.accounts.values()) {
@@ -512,14 +589,18 @@ export class ChatInboxService {
       if (!team || account.blocked || team.blocked.has(channel)) continue;
       team.blocked.add(channel);
       const old = this.snapshot.get(id) ?? initial();
-      this.publish(id, {
-        ...old,
-        blockedChannels: new Set(team.blocked),
-        data: old.data
-          ? withoutBlockedPreviews(old.data, team.blocked)
-          : undefined,
-        revision: old.revision + 1,
-      });
+      this.publish(
+        id,
+        {
+          ...old,
+          blockedChannels: new Set(team.blocked),
+          data: old.data
+            ? withoutBlockedPreviews(old.data, team.blocked)
+            : undefined,
+          revision: old.revision + 1,
+        },
+        'channel-block',
+      );
     }
   }
   block(id: string, message: string) {
@@ -578,16 +659,20 @@ export class ChatInboxService {
                 ? 30_000
                 : this.delay(team.retry));
         team.retry = Math.min(30_000, team.retry * 2);
-        this.publish(team.store.id, {
-          ...initial(),
-          state: quarantined ? 'blocked' : 'unavailable',
-          error: error.message,
-          failure: error,
-          authorizationRevision: this.snapshot.get(team.store.id)
-            ?.authorizationRevision,
-          revision: (this.snapshot.get(team.store.id)?.revision ?? 0) + 1,
-          blockedChannels: new Set(team.blocked),
-        });
+        this.publish(
+          team.store.id,
+          {
+            ...initial(),
+            state: quarantined ? 'blocked' : 'unavailable',
+            error: error.message,
+            failure: error,
+            authorizationRevision: this.snapshot.get(team.store.id)
+              ?.authorizationRevision,
+            revision: (this.snapshot.get(team.store.id)?.revision ?? 0) + 1,
+            blockedChannels: new Set(team.blocked),
+          },
+          'access',
+        );
       }
       for (const [client, owner] of this.jobs)
         if (owner === account) client.dispose();
@@ -697,10 +782,14 @@ export class ChatInboxService {
       revisions.set(channel, (revisions.get(channel) ?? 0) + 1);
     }
     if (revisions)
-      this.publish(team.store.id, {
-        ...old,
-        channelRefreshRevisions: revisions,
-      });
+      this.publish(
+        team.store.id,
+        {
+          ...old,
+          channelRefreshRevisions: revisions,
+        },
+        'degraded',
+      );
   }
   private delay(retry: number) {
     return Math.min(
@@ -822,7 +911,7 @@ export class ChatInboxService {
         });
         team.bumpedAt = undefined;
       }
-      this.publish(team.store.id, {
+      this.publishReply(team.store.id, {
         state: 'ready',
         blockedChannels: new Set(team.blocked),
         scope: reply.scope,
@@ -858,12 +947,16 @@ export class ChatInboxService {
       if (!this.valid(account, team, epoch, generation)) return;
       if (this.handleError(team.store.id, error)) return;
       const old = this.snapshot.get(team.store.id) ?? initial();
-      this.publish(team.store.id, {
-        ...old,
-        error: error.message,
-        failure: error,
-        stale: true,
-      });
+      this.publish(
+        team.store.id,
+        {
+          ...old,
+          error: error.message,
+          failure: error,
+          stale: true,
+        },
+        'sync-error',
+      );
       team.dirty = true;
       team.due = this.clock.now() + this.delay(team.retry);
       team.retry = Math.min(30_000, team.retry * 2);
@@ -924,10 +1017,14 @@ export class ChatInboxService {
         for (const t of account.teams.values()) {
           t.dirty = true;
           t.due = 0;
-          this.publish(t.store.id, {
-            ...initial(),
-            blockedChannels: new Set(t.blocked),
-          });
+          this.publish(
+            t.store.id,
+            {
+              ...initial(),
+              blockedChannels: new Set(t.blocked),
+            },
+            'reset',
+          );
         }
       } else if (result.bumped) {
         account.head =

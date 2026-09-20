@@ -63,6 +63,27 @@ For a focused UI edit, pass the affected files directly to `npx tsx --test`.
 Use `npm run build` for a production executable (embedded frontend),
 and `npm run test:foks-desktop:packaged` after building the macOS bundle.
 
+## Benchmarks
+
+The real-process chat benchmark runs desktop TypeScript services against release
+Rust agent and server processes, with six incoming messages per second and
+concurrent foreground history reads and message writes. Linux x86_64 results with
+notifications enabled, comparing `a4d69ad0` with the publication/fanout changes
+in `df95f9e9` plus timing fixes:
+
+| Workload | Foreground history p95 before | After |
+| --- | ---: | ---: |
+| Steady traffic, 70 channels | 44.9 ms | 43.7 ms |
+| Message backlog, 70 channels | 39.2 ms | 38.4 ms |
+| Steady traffic, 200 channels | 44.7 ms | 45.1 ms |
+
+Values are medians of three trial p95s, each with 15 seconds of warmup, 60 seconds
+of measurement and a 10-second drain. They include the service/agent/server path
+but exclude desktop rendering. Notification discovery missed the 99% target in
+some steady-traffic trials, so these latency results are **not an acceptance pass**.
+See the [benchmark guide](scripts/benchmarks/README.md) for reproduction and the
+[validation report](docs/inbox-publication-fanout-validation.md) for details.
+
 ## Repository layout
 
 - `apps/desktop/src/`: React frontend, including its `main.tsx` entry point.

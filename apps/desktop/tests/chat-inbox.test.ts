@@ -1094,7 +1094,20 @@ test('a throttled degraded bump refreshes the open thread when its delay expires
     await f.clock.advance(1_000);
     assert.equal(revision(), first, 'nearby bumps are coalesced');
     const syncs = f.syncs.length;
+    const before = entry();
+    const binding = f.service.histories.binding('t0', 'open', 0);
     await f.clock.advance(3_000);
+    const after = entry();
+    assert.equal(after.data, before.data);
+    assert.equal(after.scope, before.scope);
+    assert.equal(after.blockedChannels, before.blockedChannels);
+    assert.equal(after.channelRevisions, before.channelRevisions);
+    assert.notEqual(
+      after.channelRefreshRevisions,
+      before.channelRefreshRevisions,
+    );
+    assert.equal(before.channelRefreshRevisions!.get('open'), first);
+    assert.equal(f.service.histories.binding('t0', 'open', 0), binding);
     assert.equal(revision(), first + 1, 'the deferred refresh is not lost');
     assert.equal(f.syncs.length, syncs, 'releasing it needs no inbox RPC');
     assert.equal(entry().channelRevisions.get('open'), content);
@@ -1133,6 +1146,99 @@ test('recovery to a healthy projection clears deferred degraded refreshes', asyn
     f.service.invalidate('t0');
     await f.clock.advance(500);
     assert.equal(revision(), healthy! + 1);
+  } finally {
+    f.service.stop();
+  }
+});
+
+test('bridge acceptance is isolated and read publications share immutable unaffected nodes', async () => {
+  const f = fixture(1);
+  f.inbox.channels = ['a', 'b'];
+  f.inbox.position = 10;
+  const request = f.bridge.chat.bind(f.bridge);
+  let incoming: ChatReply | undefined;
+  f.bridge.chat = async (...args) => {
+    const reply = await request(...args);
+    if (reply.result.kind === 'inbox') {
+      reply.result.conversations[0].preview = {
+        sender: 'actor',
+        send_time: '1',
+        insert_time: '1',
+        content: { kind: 'text', text: 'original' },
+      };
+      incoming = reply;
+    }
+    return reply;
+  };
+  const events: ChatInboxTiming[] = [];
+  f.service.observe((event) => events.push(event));
+  try {
+    await f.clock.advance(500);
+    const outer = f.service.getSnapshot();
+    const before = outer.get('t0')!;
+    const data = before.data!;
+    assert.ok(incoming?.result.kind === 'inbox');
+    incoming.scope.actor = 'changed';
+    incoming.result.channels[0].readable = false;
+    incoming.result.conversations[0].preview!.content = {
+      kind: 'text',
+      text: 'changed',
+    };
+    incoming.result.conversations.length = 0;
+    assert.equal(before.scope!.actor, 'actor');
+    assert.equal(data.channels[0].readable, true);
+    assert.deepEqual(data.conversations[0].preview!.content, {
+      kind: 'text',
+      text: 'original',
+    });
+    const binding = f.service.histories.binding('t0', 'a', 0);
+    f.service.applyRead('t0', 'a', '3');
+    const after = f.service.getSnapshot().get('t0')!;
+    assert.equal(outer.get('t0'), before);
+    assert.equal(data.conversations[0].read_through, '0');
+    assert.equal(after.data!.conversations[0].read_through, '3');
+    assert.notEqual(after.data, data);
+    assert.notEqual(after.data!.conversations, data.conversations);
+    assert.notEqual(after.data!.conversations[0], data.conversations[0]);
+    assert.equal(after.data!.conversations[1], data.conversations[1]);
+    assert.equal(
+      after.data!.conversations[0].channel,
+      data.conversations[0].channel,
+    );
+    assert.equal(
+      after.data!.conversations[0].preview,
+      data.conversations[0].preview,
+    );
+    assert.equal(after.data!.channels, data.channels);
+    assert.equal(after.scope, before.scope);
+    assert.equal(after.blockedChannels, before.blockedChannels);
+    assert.equal(after.channelRevisions, before.channelRevisions);
+    assert.equal(after.channelRefreshRevisions, before.channelRefreshRevisions);
+    assert.equal(f.service.histories.binding('t0', 'a', 0), binding);
+    assert.throws(() => {
+      after.data!.conversations[0].read_through = '99';
+    });
+    assert.throws(() => {
+      after.data!.conversations[0].channel.readable = false;
+    });
+    assert.equal('set' in after.channelRevisions, false);
+    assert.equal('add' in after.blockedChannels, false);
+    assert.equal('set' in f.service.getSnapshot(), false);
+    const publications = events.filter((e) => e.kind === 'publication');
+    assert.deepEqual(
+      publications.map((e) => e.reason),
+      ['sync', 'read'],
+    );
+    for (const event of publications) {
+      assert.equal(event.channels, 2);
+      assert.equal(event.conversations, 2);
+      assert.equal(event.channelRevisions, 2);
+      assert.ok(
+        event.preparation >= 0 &&
+          event.historyBindings >= 0 &&
+          event.subscribers >= 0,
+      );
+    }
   } finally {
     f.service.stop();
   }

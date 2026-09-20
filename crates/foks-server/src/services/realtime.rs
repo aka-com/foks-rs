@@ -2,10 +2,7 @@ use crate::{auth::Principal, metrics::realtime::ReconcileSource, WriterHandle};
 use foks_proto::RealtimeWire;
 use foks_rpc::{RealtimeRequest, RpcStatus};
 use foks_server_db::{Error as DbError, RealtimeActor, RealtimeCommit, RealtimeWakeTarget};
-use std::{
-    collections::{HashMap, HashSet},
-    sync::{Arc, Mutex, Weak},
-};
+use std::sync::Arc;
 
 /// Best-effort, nonblocking wake hints after durable commit. Implementations
 /// must not panic or perform blocking delivery. Inbox versions remain the source
@@ -28,57 +25,8 @@ impl From<&RealtimeWakeTarget> for WakeKey {
         }
     }
 }
-#[derive(Default)]
-struct InboxHub {
-    waiters: Mutex<HashMap<WakeKey, Weak<tokio::sync::Notify>>>,
-}
-impl InboxHub {
-    fn listener(&self, target: &RealtimeWakeTarget) -> Result<Arc<tokio::sync::Notify>, RpcStatus> {
-        let mut waiters = self
-            .waiters
-            .lock()
-            .map_err(|_| RpcStatus::TransactionRetry)?;
-        let key = WakeKey::from(target);
-        if let Some(listener) = waiters.get(&key).and_then(Weak::upgrade) {
-            return Ok(listener);
-        }
-        let listener = Arc::new(tokio::sync::Notify::new());
-        waiters.insert(key, Arc::downgrade(&listener));
-        Ok(listener)
-    }
-
-    fn notify_all(&self) {
-        let Ok(mut waiters) = self.waiters.lock() else {
-            return;
-        };
-        waiters.retain(|_, listener| {
-            if let Some(listener) = listener.upgrade() {
-                listener.notify_waiters();
-                true
-            } else {
-                false
-            }
-        });
-    }
-}
-impl RealtimeNotifier for InboxHub {
-    fn notify(&self, targets: &[RealtimeWakeTarget]) {
-        let Ok(mut waiters) = self.waiters.lock() else {
-            return;
-        };
-        let targets = targets.iter().map(WakeKey::from).collect::<HashSet<_>>();
-        waiters.retain(|key, listener| {
-            if let Some(listener) = listener.upgrade() {
-                if targets.contains(key) {
-                    listener.notify_waiters();
-                }
-                true
-            } else {
-                false
-            }
-        });
-    }
-}
+mod inbox_hub;
+use inbox_hub::InboxHub;
 #[derive(Clone)]
 pub(crate) struct RealtimeService {
     notifier: Arc<dyn RealtimeNotifier>,
@@ -92,7 +40,7 @@ impl Default for RealtimeService {
 }
 impl RealtimeService {
     pub(crate) fn new(metrics: Arc<crate::ServerMetrics>) -> Self {
-        let inbox_hub = Arc::new(InboxHub::default());
+        let inbox_hub = Arc::new(InboxHub::new(Arc::clone(&metrics)));
         Self {
             notifier: inbox_hub.clone(),
             inbox_hub,
@@ -404,3 +352,6 @@ mod tests {
             .unwrap();
     }
 }
+
+#[cfg(test)]
+mod fanout_benchmark;

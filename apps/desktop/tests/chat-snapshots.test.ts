@@ -3,6 +3,8 @@ import test from 'node:test';
 import {
   contentRevisions,
   freezeDto,
+  isFrozenDto,
+  updatedReadonlyMap,
   readonlyMap,
   readonlySet,
 } from '../src/chat/snapshots';
@@ -113,4 +115,32 @@ test('notification content does not advance for unchanged degraded projection', 
     contentRevisions(old, next, versions).get(old.channels[0].id),
     6,
   );
+});
+
+test('owned views retain identity and updating a map exposes only a new protected view', () => {
+  const old = readonlyMap([['a', 1]]);
+  assert.equal(readonlyMap(old), old);
+  const set = readonlySet(['a']);
+  assert.equal(readonlySet(set), set);
+  const next = updatedReadonlyMap(old, 'b', 2);
+  assert.deepEqual([...old], [['a', 1]]);
+  assert.deepEqual(
+    [...next],
+    [
+      ['a', 1],
+      ['b', 2],
+    ],
+  );
+  assert.equal('set' in next, false);
+  next.forEach((_v, _k, map) => assert.equal(map, next));
+});
+
+test('shallow external freezes are not treated as deeply protected DTOs', () => {
+  const value = Object.freeze({ nested: { readable: true } });
+  assert.equal(isFrozenDto(value), false);
+  freezeDto(value);
+  assert.equal(isFrozenDto(value), true);
+  assert.throws(() => {
+    value.nested.readable = false;
+  });
 });
