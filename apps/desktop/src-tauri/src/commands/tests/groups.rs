@@ -968,19 +968,36 @@ fn run_discovery(
     reply: Result<serde_json::Value, DesktopAgentError>,
 ) -> (AppState, Result<serde_json::Value, AgentError>, u64) {
     let state = phase_four_state(Vec::new());
-    let profile = state.for_profile("work.example").unwrap();
+    // Transport validation requires local profile names, not hostnames.
+    if let Some(catalog) = state.catalog.lock().unwrap().as_mut() {
+        for profile in &mut catalog.profiles {
+            *profile = profile.replace('.', "_");
+        }
+        for entry in &mut catalog.stores {
+            match entry {
+                foks_desktop::CatalogStoreSummary::Account { store } => {
+                    store.profile = store.profile.replace('.', "_")
+                }
+                foks_desktop::CatalogStoreSummary::Team { store, .. } => {
+                    store.profile = store.profile.replace('.', "_")
+                }
+            }
+        }
+    }
+
+    let profile = state.for_profile("work_example").unwrap();
     let before = profile.chat_generation.load(Ordering::Acquire);
     let transport = Arc::new(DiscoveryTransport {
-        profile: "work.example".to_owned(),
+        profile: "work_example".to_owned(),
         reply,
     });
     let value = tauri::async_runtime::block_on(async {
         let _mutation = profile.begin_mutation().unwrap();
         apply_surveying_profile_operation_with_transport(
             &profile,
-            "work.example".to_owned(),
+            "work_example".to_owned(),
             Operation::DiscoverTeams {
-                profile: "work.example".to_owned(),
+                profile: "work_example".to_owned(),
                 account_alias: "personal".to_owned(),
             },
             MutationKind::Resume,
@@ -1002,7 +1019,7 @@ fn work_example_stores(state: &AppState) -> usize {
             catalog
                 .stores
                 .iter()
-                .filter(|store| store.profile() == "work.example")
+                .filter(|store| store.profile() == "work_example")
                 .count()
         })
         .unwrap_or_default()

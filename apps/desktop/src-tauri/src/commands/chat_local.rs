@@ -24,7 +24,7 @@ pub struct Settings {
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Action {
-    RecoverIntents,
+    RecoverIntents {},
     Begin,
     End {
         epoch: String,
@@ -234,7 +234,7 @@ pub async fn chat_local(
         }
         crate::applock::require_unlocked_generation(app, generation)?;
     }
-    if matches!(&action, Action::RecoverIntents) {
+    if matches!(&action, Action::RecoverIntents {}) {
         let generation = crate::applock::unlocked_generation(app)?;
         let owned_app = app.clone();
         let state = state.inner().clone();
@@ -378,7 +378,7 @@ pub async fn chat_local(
             crate::applock::require_unlocked_generation(app, generation)?;
             platform::display(app, &token, &text)?;
         }
-        Action::End { .. } | Action::RecoverIntents => unreachable!(),
+        Action::End { .. } | Action::RecoverIntents {} => unreachable!(),
     }
     Ok(inner.session())
 }

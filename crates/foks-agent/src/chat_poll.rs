@@ -383,12 +383,12 @@ mod tests {
         drop(held);
         let (failed, timing) = worker.join().unwrap();
         // There is no profile to open under this root, so the poll fails as
-        // soon as it is admitted and never enters a phase of its own.
+        // soon as session setup fails and never enters a poll phase.
+        // Opening the registry and rejecting the missing profile can take time.
         assert!(failed);
         assert!(timing.queue_ms >= 50, "admission {}ms", timing.queue_ms);
         assert_eq!(timing.waited_behind.as_deref(), Some("profile"));
         assert_eq!(timing.prepare_ms, 0);
-        assert_eq!(timing.session_ms, 0);
         assert_eq!(timing.wait_ms, 0);
         assert_eq!(timing.rescope_ms, 0);
     }
