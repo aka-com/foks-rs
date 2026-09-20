@@ -71,6 +71,7 @@ function requiresExplicitAction(error: CommandError): boolean {
       !['agent-lost', 'agent-start-failed'].includes(error.code)) ||
     /integrity|takeover/.test(error.code) ||
     [
+      'agent-credentials-required',
       'bootstrap-required',
       'unsafe-socket',
       'version-mismatch',

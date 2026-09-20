@@ -61,7 +61,7 @@ export type ShellBlock =
   | { kind: 'locked' }
   | { kind: 'boot-error'; message: string }
   | { kind: 'stop'; lifecycle: AgentStop }
-  | { kind: 'disconnected'; message?: string };
+  | { kind: 'disconnected'; message?: string; credentialsRequired?: boolean };
 
 export function shellBlock(
   lifecycle: AgentLifecycle,
@@ -86,6 +86,15 @@ export function shellBlock(
           ...(startup.progress ? { progress: startup.progress } : {}),
         };
   }
+  if (
+    lifecycle.state === 'failure' &&
+    normalizeCommandError(lifecycle.error).code === 'agent-credentials-required'
+  )
+    return {
+      kind: 'disconnected',
+      credentialsRequired: true,
+      message: normalizeCommandError(lifecycle.error).message,
+    };
   const stop = agentStop(lifecycle);
   if (stop) return { kind: 'stop', lifecycle: stop };
   return lifecycle.state === 'disconnected'
@@ -202,10 +211,12 @@ export function AgentStopCard({
 
 export function AgentLostCard({
   message,
+  credentialsRequired = false,
   bridge,
   onRetryAgent,
 }: {
   message?: string;
+  credentialsRequired?: boolean;
   bridge: Bridge;
   onRetryAgent: () => Promise<void>;
 }): ReactNode {
@@ -215,9 +226,11 @@ export function AgentLostCard({
     <div className="notice stop">
       <h2>Connection to background service lost</h2>
       <p>
-        The background service stopped responding. Click Retry to reconnect.
+        {credentialsRequired
+          ? 'Keychain access is needed to restore your connection.'
+          : 'The background service stopped responding. Click Retry to reconnect.'}
       </p>
-      {message ? <p className="fn">{message}</p> : null}
+      {message && !credentialsRequired ? <p className="fn">{message}</p> : null}
       {failure ? (
         <p className="fn" role="alert">
           {failure}
@@ -241,7 +254,7 @@ export function AgentLostCard({
             })();
           }}
         >
-          Retry
+          {credentialsRequired ? 'Restore connection' : 'Retry'}
         </Button>
         <Button
           disabled={busy}

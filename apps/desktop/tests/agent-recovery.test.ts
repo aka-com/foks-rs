@@ -526,3 +526,24 @@ for (const code of [
     recovery.dispose();
   });
 }
+
+test('credential-blocked recovery waits for explicit restoration and reconciles afterward', async () => {
+  const error = { ...failure('agent-credentials-required'), retryable: false };
+  const { recovery, lifecycle, calls, clock } = setup({
+    automatic: async () => {
+      throw error;
+    },
+  });
+  await assert.rejects(recovery.recover(failure()), (value) => value === error);
+  assert.equal(lifecycle.snapshot().state, 'failure');
+  assert.equal(recovery.snapshot().halted, true);
+  await clock.advance(60_000);
+  await recovery.recover(failure());
+  assert.equal(calls.automatic, 1);
+  assert.equal(calls.manual, 0);
+  await recovery.retry();
+  assert.equal(calls.manual, 1);
+  assert.equal(calls.reconcile, 1);
+  assert.equal(lifecycle.snapshot().state, 'ready');
+  recovery.dispose();
+});

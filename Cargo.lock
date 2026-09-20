@@ -1950,6 +1950,7 @@ dependencies = [
  "foks-compat-artifact",
  "foks-crypto",
  "foks-desktop",
+ "foks-keystore",
  "foks-protocol-metadata",
  "foks-verify",
  "foks-yubi",

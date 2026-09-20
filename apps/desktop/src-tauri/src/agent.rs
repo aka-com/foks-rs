@@ -740,6 +740,7 @@ pub struct AgentHandle {
     maintenance_generation: AtomicU64,
     maintenance_revision: AtomicU64,
     maintenance_in_flight: AtomicBool,
+    recovery_credentials_required: AtomicBool,
     maintenance_snapshot: Mutex<MaintenanceSnapshot>,
     pending_stop_pid: Mutex<Option<u32>>,
     maintenance_process: Arc<dyn MaintenanceProcess>,
@@ -775,6 +776,7 @@ impl AgentHandle {
             maintenance_generation: AtomicU64::new(0),
             maintenance_revision: AtomicU64::new(0),
             maintenance_in_flight: AtomicBool::new(false),
+            recovery_credentials_required: AtomicBool::new(false),
             maintenance_snapshot: Mutex::new(MaintenanceSnapshot::Idle {
                 generation: 0,
                 revision: 0,
@@ -867,7 +869,6 @@ impl AgentHandle {
             Err(error) => return Err(error),
         };
         self.require_managed_endpoint()?;
-        self.require_auto_recovery_root()?;
         self.require_missing_agent_endpoint()?;
         if MANAGED_AGENT_PID
             .lock()
@@ -885,6 +886,7 @@ impl AgentHandle {
                 true,
             ));
         }
+        self.check_recovery_credentials(false)?;
         let binary = managed_agent_binary(&self.socket).ok_or_else(|| {
             AgentError::new(
                 "agent-start-failed",
@@ -900,7 +902,6 @@ impl AgentHandle {
         let _root_lease = foks_client_app::ClientStateLease::acquire(root)
             .map_err(|error| AgentError::new("agent-state", error.to_string(), false))?;
         let _spawn_lock = acquire_spawn_lock(&self.socket)?;
-        self.require_auto_recovery_root()?;
         match self.probe_status() {
             Ok(response) => {
                 self.clear_connection_failure();
@@ -909,6 +910,8 @@ impl AgentHandle {
             Err(error) if error.code == "agent-lost" => self.require_missing_agent_endpoint()?,
             Err(error) => return Err(error),
         }
+        // Recheck protected recovery facts under the spawn lock.
+        self.check_recovery_credentials(false)?;
         let mut launch = launch_agent(&binary, root, &self.socket)?;
         let mut last_error = initial_error;
         for _ in 0..50 {
@@ -967,6 +970,25 @@ impl AgentHandle {
         Ok(())
     }
 
+    fn check_recovery_credentials(&self, interactive: bool) -> Result<(), AgentError> {
+        let result = if interactive {
+            self.require_auto_recovery_root()
+        } else {
+            foks_keystore::without_user_interaction(|| self.require_auto_recovery_root())
+        };
+        match &result {
+            Ok(()) => self
+                .recovery_credentials_required
+                .store(false, Ordering::Release),
+            Err(error) if error.code == "agent-credentials-required" => {
+                self.recovery_credentials_required
+                    .store(true, Ordering::Release);
+            }
+            _ => {}
+        }
+        result
+    }
+
     fn require_auto_recovery_root(&self) -> Result<(), AgentError> {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
         let root = self
@@ -993,6 +1015,11 @@ impl AgentHandle {
             }
         }
         match (self.maintenance_readiness)(root, &[]) {
+            SafeRootDisposition::CredentialsRequired(_) => Err(AgentError::new(
+                "agent-credentials-required",
+                "Keychain access is needed to restore your connection.",
+                false,
+            )),
             SafeRootDisposition::Current => Ok(()),
             SafeRootDisposition::Selected(_) => Err(AgentError::from_desktop(
                 DesktopAgentError::Local(foks_desktop::LocalAgentCondition::RestartRequired),
@@ -1176,6 +1203,11 @@ impl AgentHandle {
                     foks_desktop::LocalAgentCondition::RecoveryRequired,
                 )));
             }
+        }
+        // Only an explicit retry may authorize the desktop's protected-state
+        // inspection after automatic recovery was blocked by the keychain.
+        if self.recovery_credentials_required.load(Ordering::Acquire) {
+            self.check_recovery_credentials(true)?;
         }
         let response = self.maintenance_process.restore(self)?;
         *self
@@ -1491,7 +1523,8 @@ impl AgentHandle {
                         SafeRootDisposition::Current => MaintenanceDisposition::RecoveryRequired {
                             root: root.display().to_string(),
                         },
-                        SafeRootDisposition::Recovery(root) => {
+                        SafeRootDisposition::Recovery(root)
+                        | SafeRootDisposition::CredentialsRequired(root) => {
                             MaintenanceDisposition::RecoveryRequired {
                                 root: root.display().to_string(),
                             }
@@ -1515,7 +1548,8 @@ impl AgentHandle {
                             root: root.display().to_string(),
                         }
                     }
-                    SafeRootDisposition::Recovery(root) => {
+                    SafeRootDisposition::Recovery(root)
+                    | SafeRootDisposition::CredentialsRequired(root) => {
                         MaintenanceDisposition::RecoveryRequired {
                             root: root.display().to_string(),
                         }
@@ -1533,9 +1567,12 @@ impl AgentHandle {
                         root: root.display().to_string(),
                     }
                 }
-                SafeRootDisposition::Recovery(root) => MaintenanceDisposition::RecoveryRequired {
-                    root: root.display().to_string(),
-                },
+                SafeRootDisposition::Recovery(root)
+                | SafeRootDisposition::CredentialsRequired(root) => {
+                    MaintenanceDisposition::RecoveryRequired {
+                        root: root.display().to_string(),
+                    }
+                }
             };
         }
         if stop_attempted && matches!(disposition, MaintenanceDisposition::ContinueCurrentRoot) {
@@ -1898,6 +1935,7 @@ enum SafeRootDisposition {
     Current,
     Selected(PathBuf),
     Recovery(PathBuf),
+    CredentialsRequired(PathBuf),
 }
 
 fn safe_selected_root(source: &Path, affected_roots: &[PathBuf]) -> SafeRootDisposition {
@@ -1925,6 +1963,9 @@ fn safe_selected_root_with(
         match foks_client_app::portability::maintenance_readiness(&root) {
             Ok(foks_client_app::portability::MaintenanceReadiness::RecoveryRequired) => {
                 return SafeRootDisposition::Recovery(root);
+            }
+            Err(foks_client_app::Error::Keystore(foks_keystore::Error::CredentialsRequired)) => {
+                return SafeRootDisposition::CredentialsRequired(root);
             }
             Err(_) => return SafeRootDisposition::Recovery(root),
             Ok(foks_client_app::portability::MaintenanceReadiness::Openable) => {}
@@ -3951,6 +3992,68 @@ mod tests {
             }
             server.join().unwrap();
         }
+    }
+
+    #[test]
+    fn recovery_credentials_are_distinct_and_explicit_retry_rechecks_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let config = root.join("client-state.toml");
+        std::fs::write(&config, b"fixture").unwrap();
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let checks = Arc::new(AtomicU64::new(0));
+        let observed = checks.clone();
+        let process = FakeMaintenanceProcess::healthy();
+        let handle = AgentHandle::new_for_maintenance_test(
+            root.join("agent.sock"),
+            process.clone(),
+            move |root, _| {
+                if observed.fetch_add(1, Ordering::SeqCst) < 2 {
+                    SafeRootDisposition::CredentialsRequired(root.to_owned())
+                } else {
+                    SafeRootDisposition::Current
+                }
+            },
+        );
+        assert_eq!(
+            handle.check_recovery_credentials(false).unwrap_err().code,
+            "agent-credentials-required"
+        );
+        assert_eq!(
+            handle.retry_started_blocking().unwrap_err().code,
+            "agent-credentials-required"
+        );
+        assert_eq!(process.restore_calls.load(Ordering::Acquire), 0);
+        handle.retry_started_blocking().unwrap();
+        assert_eq!(checks.load(Ordering::SeqCst), 3);
+        assert_eq!(process.restore_calls.load(Ordering::Acquire), 1);
+        assert!(!handle.recovery_credentials_required.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn automatic_recovery_checks_live_listener_before_credentials() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("agent.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let handle = AgentHandle::new_for_maintenance_test(
+            socket,
+            FakeMaintenanceProcess::healthy(),
+            |_, _| panic!("must not access credentials"),
+        );
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = read_socket_request(&mut stream);
+            drop(stream);
+            // Keep the listener live through the second, socket-only check.
+            let _ = listener.accept().unwrap();
+        });
+        assert_eq!(
+            handle.auto_recover_blocking().unwrap_err().code,
+            "agent-busy"
+        );
+        server.join().unwrap();
     }
 
     #[test]

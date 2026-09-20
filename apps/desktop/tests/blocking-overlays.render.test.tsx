@@ -1416,3 +1416,58 @@ test('active maintenance overlay renders no action buttons', async () => {
   assert.equal(dialog.querySelectorAll('button').length, 0);
   rendered.unmount();
 });
+
+test('keychain-blocked automatic recovery offers explicit restoration and survives a denied retry', async () => {
+  const { App, FIXTURE, mockBridge } = await modules();
+  let loss = true;
+  let automatic = 0;
+  let manual = 0;
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    native: true,
+    takeAgentConnectionLoss: async () => {
+      if (!loss) return null;
+      loss = false;
+      return 'Agent endpoint closed';
+    },
+    autoRecoverAgent: async () => {
+      automatic++;
+      throw {
+        code: 'agent-credentials-required',
+        message: 'Keychain access is needed to restore your connection.',
+        retryable: false,
+        fatal: false,
+        ambiguous: false,
+      };
+    },
+    retryAgentConnection: async () => {
+      manual++;
+      if (manual === 1) throw new Error('Keychain authorization was denied.');
+      return { state: 'ready' };
+    },
+  };
+  const rendered = ui.render(createElement(App, { snapshot: FIXTURE, bridge }));
+  const restore = await rendered.findByRole('button', {
+    name: 'Restore connection',
+  });
+  assert.equal(manual, 0);
+  assert.equal(automatic, 1);
+  await ui.act(async () => {
+    restore.click();
+  });
+  await ui.waitFor(() =>
+    assert.match(
+      document.querySelector('.stopwrap [role="alert"]')?.textContent ?? '',
+      /Keychain authorization was denied/,
+    ),
+  );
+  await ui.act(async () => {
+    rendered.getByRole('button', { name: 'Restore connection' }).click();
+  });
+  await ui.waitFor(() =>
+    assert.equal(document.querySelector('.stopwrap'), null),
+  );
+  assert.equal(manual, 2);
+  assert.equal(automatic, 1);
+  rendered.unmount();
+});

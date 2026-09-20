@@ -220,6 +220,7 @@ export function ShellOverlays({
           ) : block.kind === 'disconnected' ? (
             <AgentLostCard
               message={block.message}
+              credentialsRequired={block.credentialsRequired}
               bridge={bridge}
               onRetryAgent={() => recoverAgentReadiness(true)}
             />

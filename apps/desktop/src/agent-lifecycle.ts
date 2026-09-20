@@ -1,4 +1,5 @@
 import type { AgentStatus } from './model';
+import { normalizeCommandError } from './bridge';
 import type {
   Bridge,
   CommandError,
@@ -262,7 +263,11 @@ export class AgentLifecycleController {
       if (!isCurrent()) throw new StaleAgentLifecycle();
     };
     const disconnected =
-      mode !== 'initial' && this.#state.state === 'disconnected'
+      mode !== 'initial' &&
+      (this.#state.state === 'disconnected' ||
+        (this.#state.state === 'failure' &&
+          normalizeCommandError(this.#state.error).code ===
+            'agent-credentials-required'))
         ? this.#state
         : null;
     return (async () => {
