@@ -292,12 +292,6 @@ export function DevicesScreen({
     onError,
   });
   const { devices, backups, yubi } = lists;
-  // The Devices rail indicator initiates no background request; it reflects
-  // cached results from the device list query.
-  useEffect(() => {
-    if (!selected || stopped.stopped || loading || failed) return;
-    deviceAlertRegistry(bridge).reportPaperKey(selected.id, backups.length > 0);
-  }, [bridge, selected, stopped.stopped, loading, failed, backups.length]);
   const devicesAlert = useSyncExternalStore(
     deviceAlertRegistry(bridge).subscribe,
     deviceAlertRegistry(bridge).getSnapshot,

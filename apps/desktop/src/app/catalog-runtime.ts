@@ -90,6 +90,7 @@ export function useCatalogRuntime({
     () => null,
   );
   const metadataReconciliation = useRef<() => Promise<void>>(async () => {});
+  const deviceRefresh = useRef<() => Promise<boolean>>(async () => true);
   const [hardwareRefresh, setHardwareRefresh] = useState(0);
   const commandErrorRef = useRef<CommandErrorHandler>(() => undefined);
 
@@ -224,7 +225,7 @@ export function useCatalogRuntime({
     if (refreshingSnapshot) return;
     setRefreshingSnapshot(true);
     void refreshSnapshot(true)
-      .then((next) => {
+      .then(async (next) => {
         // The Refresh the user asked for is a request for current data, not
         // only for what the catalog says changed: device lists, enrollments
         // and invitation counts are server state the catalog does not
@@ -232,14 +233,22 @@ export function useCatalogRuntime({
         // reads the visible ones again.
         metadataInvalidation.current();
         reconcile();
+        // Account identity changes can replace the metadata owner while its
+        // previous reads settle. Wait for the current owner's reads as well.
+        let readDevices = deviceRefresh.current;
+        let devicesReady = await readDevices();
+        while (readDevices !== deviceRefresh.current) {
+          readDevices = deviceRefresh.current;
+          devicesReady = await readDevices();
+        }
         const incomplete = Object.values(
           next.catalogFreshness?.profiles ?? {},
         ).some((entry) => entry.error || entry.refreshing);
         toasts.show(
-          incomplete
+          incomplete || !devicesReady
             ? 'Refresh completed with unavailable data. See Refresh status.'
-            : 'Vaults and teams refreshed',
-          incomplete ? { tone: 'warning' } : undefined,
+            : 'Vaults, teams, and devices refreshed',
+          incomplete || !devicesReady ? { tone: 'warning' } : undefined,
         );
       })
       .catch(commandError)
@@ -256,6 +265,7 @@ export function useCatalogRuntime({
     hardwareRefresh,
     metadataInvalidation,
     metadataReconciliation,
+    deviceRefresh,
     profileRefresh,
     commandErrorRef,
     catalogGate,

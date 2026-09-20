@@ -3,7 +3,6 @@ import type { metadataFreshness } from '../device-cache';
 import { WorkflowProvider, useWorkflowAccess } from '../workflow-context';
 import { workflowAvailability } from '../model/workflow-availability';
 import { FreshnessCaption } from '../components/metadata-status';
-import { deviceAlertRegistry } from './device-alert';
 import { LocalAliasPanel } from '../components/local-alias-panel';
 import { localAliasOf } from '../model';
 import { useTabSheetState } from '../navigation-guard';
@@ -360,22 +359,6 @@ export function PeopleScreen({
     recovery: { refresh: onRefreshSnapshot },
     onError,
   });
-  // The Devices rail indicator initiates no background request; it reflects
-  // cached results from the account key list query.
-  useEffect(() => {
-    if (!selected || keysStopped || loadingKeys || keysFailed) return;
-    deviceAlertRegistry(bridge).reportPaperKey(
-      selected.id,
-      lists.backups.length > 0,
-    );
-  }, [
-    bridge,
-    selected,
-    keysStopped,
-    loadingKeys,
-    keysFailed,
-    lists.backups.length,
-  ]);
 
   // Secrets typed into a panel must not stay on screen behind another window.
   // Browser sign-in is the exception: it hands focus away on purpose.

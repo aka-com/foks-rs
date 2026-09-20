@@ -229,6 +229,7 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .sync-activities b{overflow-wrap:anywhere}
 .sync-jobs b{font-weight:500;color:var(--ink-3)}
 .sync-when{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.sync-device-status{white-space:normal;overflow-wrap:anywhere;max-width:240px}
 .sync-when.failed{color:var(--amber-ink)}
 .sync-next{color:var(--faint);margin-left:10px}
 .sync-actions{display:flex;align-items:center;gap:8px;margin-top:8px}

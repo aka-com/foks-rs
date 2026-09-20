@@ -26,6 +26,12 @@ import { Popover } from '/kit/overlay-primitives';
 import type { AgentSnapshot, CatalogFreshnessEntry, Server } from '../model';
 import { chatAvailable, serverDisplayName } from '../model';
 import { useSidebarInbox } from '../chat/inbox-provider';
+import {
+  useShellDeviceMetadata,
+  emptyDeviceMetadata,
+  noDeviceSubscription,
+  type DeviceMetadataStatus,
+} from '../device-metadata';
 import { formatMilliseconds, formatTimings } from '../diagnostics/format';
 import { diagnosticLog, type TimingEvent } from '../diagnostics/log';
 import type { DesktopReconciliation } from '../desktop-reconciliation';
@@ -45,7 +51,7 @@ export type SyncState = 'ok' | 'refreshing' | 'failed' | 'unknown';
 
 /** One of the scheduler's jobs on a server or on this Mac, as a line. */
 export interface SyncJobSummary {
-  kind: ReconciliationKind | 'chat';
+  kind: ReconciliationKind | 'chat' | 'devices';
   label: string;
   state: SyncState;
   /** Full status sentence exposed as the row's tooltip. */
@@ -270,6 +276,7 @@ export function summarizeSync(
   snapshot: AgentSnapshot,
   service: DesktopReconciliation,
   inbox?: ReturnType<typeof useSidebarInbox>,
+  devices?: readonly DeviceMetadataStatus[],
 ): SyncSummary {
   const observations = service.scheduler.observations();
   const diagnostics: string[] = [];
@@ -311,6 +318,36 @@ export function summarizeSync(
       );
     }
     const jobs = jobSummaries(own);
+    const device = devices?.find((status) => status.profile === server.id);
+    if (device) {
+      const state: SyncState = device.refreshing
+        ? 'refreshing'
+        : device.failed
+          ? 'failed'
+          : device.total > 0 &&
+              device.ready === device.total &&
+              !device.unavailable
+            ? 'ok'
+            : 'unknown';
+      const detail = device.refreshing
+        ? `Loading device lists · ${device.ready} of ${device.total} accounts`
+        : device.failed
+          ? `${device.error ?? 'Some device lists are unavailable'}${device.lastSuccessAt === undefined ? '' : ` · Last updated ${clockTime(device.lastSuccessAt)}`}`
+          : device.unavailable
+            ? `Device access unavailable for ${device.unavailable} of ${device.total} accounts`
+            : device.total
+              ? `Updated ${clockTime(device.lastSuccessAt)}`
+              : 'No accounts';
+      jobs.push({
+        kind: 'devices',
+        label: 'Devices',
+        state,
+        detail,
+        lastSuccessAt: device.lastSuccessAt,
+        paused: false,
+      });
+      diagnostics.push(`Devices on ${name}: ${detail}`);
+    }
     if (inbox) {
       const teams = snapshot.stores.filter(
         (store) => store.server === server.id && chatAvailable(snapshot, store),
@@ -363,8 +400,9 @@ export function summarizeSync(
     const chatFailed = jobs.some(
       (job) => job.kind === 'chat' && job.state === 'failed',
     );
+    const devicesFailed = device?.failed ?? false;
     const state: SyncState =
-      failed || chatFailed
+      failed || chatFailed || devicesFailed
         ? 'failed'
         : refreshing
           ? 'refreshing'
@@ -381,15 +419,17 @@ export function summarizeSync(
       state,
       message: failed
         ? failureSentence(messages, entry?.lastSuccessAt, paused)
-        : chatFailed
-          ? 'Chat unread counts may be incomplete or unavailable.'
-          : refreshing
-            ? 'Refreshing…'
-            : entry?.lastSuccessAt !== undefined
-              ? `Up to date, ${timeOf(entry.lastSuccessAt)}`
-              : 'No refresh observation yet',
+        : devicesFailed
+          ? 'Device lists could not all be refreshed. Use Retry devices to try again.'
+          : chatFailed
+            ? 'Chat unread counts may be incomplete or unavailable.'
+            : refreshing
+              ? 'Refreshing…'
+              : entry?.lastSuccessAt !== undefined
+                ? `Up to date, ${timeOf(entry.lastSuccessAt)}`
+                : 'No refresh observation yet',
       lastSuccessAt: entry?.lastSuccessAt,
-      canReconnect: canReconnect && (!chatFailed || failed),
+      canReconnect: canReconnect && ((!chatFailed && !devicesFailed) || failed),
       reconnectDisabled: reconnectDisabledFor(server),
       reconnecting: Boolean(connectivity?.refreshing),
       jobs,
@@ -529,7 +569,13 @@ export function useSyncSummary(
     return () => clearInterval(timer);
   }, [busy]);
   const inbox = useSidebarInbox();
-  return summarizeSync(snapshot, service, inbox);
+  const devices = useShellDeviceMetadata();
+  const deviceStatuses = useSyncExternalStore(
+    devices?.subscribe ?? noDeviceSubscription,
+    devices?.getSnapshot ?? emptyDeviceMetadata,
+    devices?.getSnapshot ?? emptyDeviceMetadata,
+  );
+  return summarizeSync(snapshot, service, inbox, deviceStatuses);
 }
 
 /** Names the popover as the refresh button's description while it is up. */
@@ -540,6 +586,15 @@ export const SYNC_STATUS_ID = 'sync-status-popover';
  * the row's own text is held by a test without standing the popover up.
  */
 export function JobTimes({ job }: { job: SyncJobSummary }): ReactNode {
+  if (job.kind === 'devices')
+    return (
+      <span
+        className={`sync-when sync-device-status${job.state === 'failed' ? ' failed' : ''}`}
+        role={job.state === 'refreshing' ? 'status' : undefined}
+      >
+        {job.detail}
+      </span>
+    );
   if (job.kind === 'chat')
     return (
       <span
@@ -603,6 +658,7 @@ function ServerBody({
   onClose: () => void;
   onOpenServers?: (profile: string) => void;
 }): ReactNode {
+  const devices = useShellDeviceMetadata();
   return (
     <>
       {server.state === 'failed' ? (
@@ -621,6 +677,18 @@ function ServerBody({
       ) : null}
       {server.state === 'failed' && server.id ? (
         <div className="sync-actions">
+          {devices &&
+          server.jobs.some(
+            (job) => job.kind === 'devices' && job.state === 'failed',
+          ) ? (
+            <Button
+              size="sm"
+              onClick={() => devices.retry(server.id!)}
+              aria-label={`Retry devices on ${server.name}`}
+            >
+              Retry devices
+            </Button>
+          ) : null}
           {server.canReconnect ? (
             <Button
               size="sm"

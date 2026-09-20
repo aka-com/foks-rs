@@ -1,14 +1,9 @@
 /**
  * What this session has learned about each account's keys.
  *
- * `hasPaperKey` mirrors the backup list the People and Devices pages already
- * load for their own rows — recording it here costs no new request, only a
- * report from a fetch already made. A pairing offer has no such fact to
- * mirror: the agent holds it invisibly and reports neither when it was made
- * nor when it expires (see `PairSheet`'s own note on this), so the only way
- * to know is the one place that ever asks — the Pair sheet's Start or Resume
- * offer, on this device. Both are recorded the same way, from the page that
- * already learned them, rather than by asking the agent again from the rail.
+ * The shell maintains paper-key facts from its shared device metadata queries.
+ * Pairing offers remain explicit: the agent does not publish their creation
+ * or expiry, so only the Pair sheet reports offers it starts or resumes.
  */
 
 import type { Bridge } from '../bridge';
@@ -43,6 +38,14 @@ export class DeviceAlertRegistry {
     if (this.snapshot.paperKeys.get(store) === hasPaperKey) return;
     const paperKeys = new Map(this.snapshot.paperKeys);
     paperKeys.set(store, hasPaperKey);
+    this.snapshot = { ...this.snapshot, paperKeys };
+    this.publish();
+  }
+
+  forgetPaperKey(store: StoreRef): void {
+    if (!this.snapshot.paperKeys.has(store)) return;
+    const paperKeys = new Map(this.snapshot.paperKeys);
+    paperKeys.delete(store);
     this.snapshot = { ...this.snapshot, paperKeys };
     this.publish();
   }

@@ -382,14 +382,22 @@ function StartingScreen({ progress }: { progress?: BootProgress }): ReactNode {
     <div className="booting" role="status">
       <span className="spin" aria-hidden="true" />
       <b>
-        {progress ? 'Connecting to your vaults' : 'Starting the FOKS agent…'}
+        {progress?.devices
+          ? 'Loading your devices'
+          : progress
+            ? 'Connecting to your vaults'
+            : 'Starting the FOKS agent…'}
       </b>
       <span className="line">
         {progress
           ? 'This can take a few seconds.'
           : 'Startup usually takes a few seconds.'}
       </span>
-      {progress && progress.total > 0 ? (
+      {progress?.devices ? (
+        <span className="line prog">
+          {progress.devices.ready} of {progress.devices.total} accounts ready
+        </span>
+      ) : progress && progress.total > 0 ? (
         <span className="line prog">
           {progress.ready < progress.total
             ? `${progress.ready} of ${progress.total} profiles ready`

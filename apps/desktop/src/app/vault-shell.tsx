@@ -65,6 +65,7 @@ import { shellBlock, shellChrome } from './blocking-shell';
 import { useCatalogRuntime, useMutationError } from './catalog-runtime';
 import type { MaintenanceOwnership } from './maintenance-ownership';
 import { useMetadataRuntime } from './metadata-runtime';
+import { DeviceMetadataContext } from '../device-metadata';
 import { diagnosticLog } from '../diagnostics/log';
 import {
   backendTimingSource,
@@ -113,6 +114,7 @@ interface VaultShellProps {
   store?: LocationStore;
   firstRunStart?: 'who' | 'local' | null;
   managedProfile?: string | null;
+  initialDeviceCache?: import('../device-cache').DeviceCache;
   onLock: () => Promise<boolean>;
   retireBoot: () => void;
   /** Resolves when the active boot catalog load completes, or immediately if none is running. */
@@ -129,6 +131,7 @@ export function VaultShell({
   store,
   firstRunStart = null,
   managedProfile = null,
+  initialDeviceCache,
   onLock: requestLock,
   retireBoot,
   awaitBootRead,
@@ -354,7 +357,7 @@ export function VaultShell({
         storeOf(shown, state.selection.store)?.server ?? '',
       ) ?? 0)
     : 0;
-  const deviceCache = useMetadataRuntime({
+  const { cache: deviceCache, devices: deviceMetadata } = useMetadataRuntime({
     lifetime,
     bridge,
     shown,
@@ -362,8 +365,11 @@ export function VaultShell({
     accessGenerations,
     metadataInvalidation: catalog.metadataInvalidation,
     metadataReconciliation: catalog.metadataReconciliation,
+    deviceRefresh: catalog.deviceRefresh,
     foregroundRefreshAllowed: runtime.foregroundRefreshAllowed,
     refreshSnapshot,
+    report: commandError,
+    initialDeviceCache,
   });
   // The timing log listens to the services that already report timings,
   // for as long as this shell and those services live.
@@ -391,8 +397,8 @@ export function VaultShell({
   // The rail's Teams badge reads the shared request-count rows, one per
   // named team this account can manage, loaded on unlock and kept by the
   // repository the shell provides to its pages, so the Teams list and a
-  // team's page read the same rows. Devices' dot reads a registry the page
-  // that already loads the underlying fact reports into. See
+  // team's page read the same rows. Devices' dot reads the paper-key facts
+  // maintained by the shell's shared metadata subscriptions. See
   // `device-alert.ts`.
   const teamRequestCounts = useTeamRequestCounts(
     bridge,
@@ -657,7 +663,9 @@ export function VaultShell({
       <NavigationGuardProvider store={locations}>
         <MetadataRepositoryContext.Provider value={deviceCache.repository}>
           <DeviceCacheContext.Provider value={deviceCache}>
-            {shell}
+            <DeviceMetadataContext.Provider value={deviceMetadata}>
+              {shell}
+            </DeviceMetadataContext.Provider>
           </DeviceCacheContext.Provider>
         </MetadataRepositoryContext.Provider>
       </NavigationGuardProvider>

@@ -5,7 +5,7 @@ import {
   workflowAvailability,
 } from './model/workflow-availability';
 import type { AgentSnapshot } from './model/types';
-import { enqueueProfileWork } from './bridge';
+import { scheduleProfileWork } from './scheduling/profile-work';
 import type {
   AccountDevice,
   BackupEnrollment,
@@ -55,6 +55,7 @@ interface AccountKeys {
 /** Typed resource service; the repository owns data, lifetimes and subscriptions. */
 export class DeviceCache {
   snapshot: (() => AgentSnapshot | undefined) | undefined;
+  private queued = new AbortController();
 
   constructor(
     private readonly bridge: Bridge,
@@ -63,17 +64,41 @@ export class DeviceCache {
   ) {}
 
   clear(): void {
+    this.queued.abort();
+    this.queued = new AbortController();
     this.repository.clear();
   }
   retire(): void {
+    this.queued.abort();
     this.repository.retire();
+  }
+
+  private read<T>(
+    profile: string,
+    key: readonly string[],
+    work: () => Promise<T>,
+  ) {
+    const signal = this.queued.signal;
+    const generation = this.repository.epoch;
+    return scheduleProfileWork(this.bridge, profile, work, {
+      key: JSON.stringify(key),
+      owner: this,
+      generation,
+      signal,
+      current: () =>
+        !signal.aborted &&
+        !this.repository.retired &&
+        generation === this.repository.epoch,
+      cancel: () => undefined,
+      preemptible: false,
+    });
   }
 
   account(profile: string, store: StoreRef) {
     return this.repository.query<AccountKeys>(
       accountDeviceKey(profile, store),
       () =>
-        enqueueProfileWork(this.bridge, profile, async () => {
+        this.read(profile, accountDeviceKey(profile, store), async () => {
           const snapshot = this.snapshot?.();
           if (this.snapshot)
             requireWorkflow(snapshot, 'devices-list', {
@@ -101,7 +126,7 @@ export class DeviceCache {
     return this.repository.query<YubiEnrollment[]>(
       profileEnrollmentKey(profile),
       () =>
-        enqueueProfileWork(this.bridge, profile, () => {
+        this.read(profile, profileEnrollmentKey(profile), () => {
           // If security-key listing becomes unavailable after the initial check, return
           // no enrollments instead of failing the entire device query.
           if (

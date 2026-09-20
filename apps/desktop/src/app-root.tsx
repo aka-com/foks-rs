@@ -54,6 +54,7 @@ export function App({
       store={store}
       firstRunStart={boot.firstRunStart}
       managedProfile={boot.managedProfile}
+      initialDeviceCache={boot.deviceCache}
       onLock={boot.lockNow}
       retireBoot={boot.retireBoot}
       awaitBootRead={boot.awaitBootRead}

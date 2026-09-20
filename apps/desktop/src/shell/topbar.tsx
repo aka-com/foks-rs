@@ -229,7 +229,9 @@ function SyncControls({
         className="global-refresh"
         icon={spinning ? undefined : 'again'}
         busy={spinning}
-        aria-label={spinning ? 'Refreshing vaults, teams, and chat' : 'Refresh'}
+        aria-label={
+          spinning ? 'Refreshing vaults, teams, chat, and devices' : 'Refresh'
+        }
         aria-describedby={open ? SYNC_STATUS_ID : undefined}
         disabled={refreshing || blocked}
         onClick={onRefresh}
@@ -366,10 +368,12 @@ export function Topbar({
           className="global-refresh"
           icon={refreshing ? undefined : 'again'}
           busy={refreshing}
-          aria-label={refreshing ? 'Refreshing vaults and teams' : 'Refresh'}
+          aria-label={
+            refreshing ? 'Refreshing vaults, teams, and devices' : 'Refresh'
+          }
           title={
             refreshing
-              ? 'Refreshing vaults and teams'
+              ? 'Refreshing vaults, teams, and devices'
               : 'Refresh vaults and teams'
           }
           disabled={refreshing || blocked}

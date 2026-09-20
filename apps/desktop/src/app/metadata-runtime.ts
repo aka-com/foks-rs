@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef } from 'react';
 import type { RefObject } from 'react';
 import type { Bridge } from '../bridge';
 import { DeviceCache } from '../device-cache';
+import { DeviceMetadata, isDeviceQuery } from '../device-metadata';
+import { deviceAlertRegistry } from '../screens/device-alert';
 import { accountStopped, type AgentSnapshot } from '../model';
 import { readRecoveryFor } from '../query-read-recovery';
 import { serverStatusKey } from '../resources/servers';
@@ -29,8 +31,11 @@ export function useMetadataRuntime({
   accessGenerations,
   metadataInvalidation,
   metadataReconciliation,
+  deviceRefresh,
   foregroundRefreshAllowed,
   refreshSnapshot,
+  report,
+  initialDeviceCache,
 }: {
   lifetime: import('./access-lifetime').AccessLifetime;
   bridge: Bridge;
@@ -39,8 +44,11 @@ export function useMetadataRuntime({
   accessGenerations: ReadonlyMap<string, number>;
   metadataInvalidation: RefObject<(profiles?: readonly string[]) => void>;
   metadataReconciliation: RefObject<() => Promise<void>>;
+  deviceRefresh: RefObject<() => Promise<boolean>>;
   foregroundRefreshAllowed: RefObject<boolean>;
   refreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>;
+  report: (error: unknown) => void;
+  initialDeviceCache?: DeviceCache;
 }) {
   // Display labels do not identify accounts. Replacing identities or access
   // retires all cached metadata. Ordinary publication keeps resource data; a
@@ -61,15 +69,25 @@ export function useMetadataRuntime({
       .map((store) => [store.id, accountStopped(shown, store).stopped]),
     generations: [...accessGenerations],
   });
+  const initialScope = useRef({ bridge, concealSignal, deviceIdentity });
   const deviceCache = useMemo(
-    () => new DeviceCache(bridge),
+    () =>
+      initialDeviceCache &&
+      initialScope.current.bridge === bridge &&
+      initialScope.current.concealSignal === concealSignal &&
+      initialScope.current.deviceIdentity === deviceIdentity
+        ? initialDeviceCache
+        : new DeviceCache(bridge),
     // These values define the lifetime of the cache, not its read arguments.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [bridge, concealSignal, deviceIdentity],
+    [bridge, concealSignal, deviceIdentity, initialDeviceCache],
   );
   const deviceSnapshot = useRef(shown);
   deviceSnapshot.current = shown;
   deviceCache.snapshot = () => deviceSnapshot.current;
+  const devices = useMemo(
+    () => new DeviceMetadata(deviceCache, deviceAlertRegistry(bridge)),
+    [bridge, deviceCache],
+  );
   metadataInvalidation.current = (profiles) => {
     // Without a list of changed profiles the comparison could not be made
     // (boot, unlock, agent restart), and every row is discarded as before.
@@ -91,10 +109,27 @@ export function useMetadataRuntime({
         ]);
     }
   };
-  metadataReconciliation.current = () =>
-    deviceCache.repository.reconcileSubscribed(
+  metadataReconciliation.current = async () => {
+    // Devices publish their own progress. Cached background reads must not
+    // hold the generic metadata spinner open for their entire duration.
+    void devices.reconcile();
+    await deviceCache.repository.reconcileSubscribed(
       () => foregroundRefreshAllowed.current && !document.hidden,
+      (key) => !isDeviceQuery(key),
     );
+  };
+  deviceRefresh.current = async () => {
+    await devices.settle();
+    return (
+      devices.isAvailable() &&
+      devices
+        .getSnapshot()
+        .every(
+          (status) =>
+            !status.failed && !status.refreshing && status.unavailable === 0,
+        )
+    );
+  };
   deviceCache.repository.setReadRecovery(
     () =>
       readRecoveryFor(deviceCache.repository).options({
@@ -103,13 +138,26 @@ export function useMetadataRuntime({
     () => foregroundRefreshAllowed.current,
   );
   useEffect(() => {
-    const stop = lifetime.subscribe((event) => {
-      if (event.profile === undefined) deviceCache.clear();
+    const update = () =>
+      devices.update(
+        shown,
+        () => foregroundRefreshAllowed.current && !document.hidden,
+        report,
+      );
+    update();
+    document.addEventListener('visibilitychange', update);
+    return () => document.removeEventListener('visibilitychange', update);
+  }, [devices, shown, foregroundRefreshAllowed, report]);
+  useEffect(() => {
+    const stop = lifetime.subscribe(() => {
+      devices.stop();
+      deviceCache.clear();
     });
     return () => {
       stop();
+      devices.stop();
       deviceCache.clear();
     };
-  }, [deviceCache, lifetime]);
-  return deviceCache;
+  }, [deviceCache, devices, lifetime]);
+  return { cache: deviceCache, devices };
 }

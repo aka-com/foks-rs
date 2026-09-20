@@ -330,12 +330,15 @@ export class MetadataRepository {
     return entry as MetadataQuery<T>;
   }
 
-  reconcileSubscribed(allowed: () => boolean = () => true): Promise<void> {
+  reconcileSubscribed(
+    allowed: () => boolean = () => true,
+    include: (key: QueryKey) => boolean = () => true,
+  ): Promise<void> {
     if (this.closed || !allowed()) return Promise.resolve();
     if (this.reconciliation) return this.reconciliation;
     const epoch = this.accessEpoch;
-    const due = [...this.entries.values()].filter((query) =>
-      query.isDueSubscribed(),
+    const due = [...this.entries.values()].filter(
+      (query) => include(query.key) && query.isDueSubscribed(),
     );
     let next = 0;
     const errors: unknown[] = [];

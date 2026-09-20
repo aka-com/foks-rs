@@ -15,11 +15,14 @@ import { profileInventoryComplete, serverAvailability } from '../model';
 import type { AgentSnapshot } from '../model';
 import { initialScene } from './scenes';
 import { MaintenanceOwnership } from './maintenance-ownership';
+import { DeviceCache } from '../device-cache';
+import { DeviceMetadata } from '../device-metadata';
+import { deviceAlertRegistry } from '../screens/device-alert';
 
 /**
- * How long the loading screen may wait for every profile to report before it
- * hands the window to the shell anyway. A profile whose server is unreachable
- * reports only when its request deadline expires, which is longer than this.
+ * How long to wait before preloading devices from a partial catalog. The
+ * window still waits for the catalog and initial device reads to settle;
+ * this deadline starts useful work early rather than bypassing that gate.
  */
 export const FIRST_PAINT_DEADLINE_MS = 2500;
 
@@ -29,6 +32,8 @@ export interface BootProgress {
   ready: number;
   /** Profiles the read is walking. */
   total: number;
+  /** Initial device reads finish before the shell takes ownership. */
+  devices?: { ready: number; total: number };
 }
 
 function bootProgressOf(partial: AgentSnapshot): BootProgress {
@@ -75,6 +80,7 @@ export function useAppBootstrap(
   );
   const [managedProfile, setManagedProfile] = useState<string | null>(null);
   const [bootProgress, setBootProgress] = useState<BootProgress | null>(null);
+  const [deviceCache, setDeviceCache] = useState<DeviceCache | undefined>();
   const [lockState, setLockState] = useState<AppLockState | null>(null);
   const [lockError, setLockError] = useState<string | null>(null);
   const [unlocking, setUnlocking] = useState(false);
@@ -136,6 +142,12 @@ export function useAppBootstrap(
     let painted = false;
     let latest: AgentSnapshot | null = null;
     let deadline: ReturnType<typeof setTimeout> | undefined;
+    let startupCache: DeviceCache | undefined;
+    let startupDevices: DeviceMetadata | undefined;
+    let stopDeviceProgress: (() => void) | undefined;
+    let mounting: Promise<void> | undefined;
+    let deviceReadinessError: unknown;
+    let catalogFailed = false;
     setBootProgress(null);
     const restartFromMaintenanceSnapshot = (): void => {
       bootInvalidated = true;
@@ -222,7 +234,34 @@ export function useAppBootstrap(
           },
           () => undefined,
         );
-        const mount = (snapshot: AgentSnapshot): void => {
+        const prepareFirstRun = (
+          snapshot: AgentSnapshot,
+          appInfo: Awaited<ReturnType<Bridge['appInfo']>>,
+        ): void => {
+          if (
+            !maintenanceOwner.handedOff &&
+            !requested &&
+            profileInventoryComplete(snapshot, 'accounts') &&
+            !snapshot.stores.some((entry) => entry.kind === 'account')
+          ) {
+            const localProfile =
+              appInfo.managedProfile &&
+              snapshot.servers.some(
+                (server) =>
+                  server.id === appInfo.managedProfile &&
+                  serverAvailability(snapshot, server).available,
+              )
+                ? appInfo.managedProfile
+                : null;
+            if (alive) {
+              setManagedProfile(appInfo.managedProfile ?? null);
+              setFirstRunStart(localProfile ? 'local' : 'who');
+            }
+          } else if (alive) {
+            setManagedProfile(appInfo.managedProfile ?? null);
+          }
+        };
+        const publish = (snapshot: AgentSnapshot): void => {
           if (!maintenanceOwner.handoff(current)) return;
           painted = true;
           if (deadline !== undefined) {
@@ -233,8 +272,78 @@ export function useAppBootstrap(
           setLoaded(snapshot);
           setLoadError(null);
         };
+        const mount = (snapshot: AgentSnapshot): Promise<void> => {
+          latest = snapshot;
+          if (painted) {
+            publish(snapshot);
+            return Promise.resolve();
+          }
+          if (mounting) return mounting;
+          startupCache ??= new DeviceCache(selected);
+          startupCache.snapshot = () => latest ?? undefined;
+          startupDevices ??= new DeviceMetadata(
+            startupCache,
+            deviceAlertRegistry(selected),
+          );
+          const devices = startupDevices;
+          stopDeviceProgress = devices.subscribe(() => {
+            if (!current() || !latest) return;
+            const statuses = devices.getSnapshot();
+            setBootProgress({
+              ...bootProgressOf(latest),
+              devices: {
+                ready: statuses.reduce((sum, entry) => sum + entry.ready, 0),
+                total: statuses.reduce((sum, entry) => sum + entry.total, 0),
+              },
+            });
+          });
+          mounting = (async () => {
+            // A newer partial may add accounts while device reads are in
+            // flight. Cover it before handing the cache and shell over.
+            while (current() && latest) {
+              const candidate: AgentSnapshot = latest;
+              devices.update(
+                candidate,
+                () => current() && controller.snapshot().state === 'ready',
+                (error) => {
+                  deviceReadinessError = error;
+                  devices.stop();
+                  startupCache?.clear();
+                },
+              );
+              await devices.settle();
+              if (deviceReadinessError) throw deviceReadinessError;
+              // The deadline may start preloading, but cannot bypass accounts
+              // still being discovered by the initial catalog read.
+              await reading;
+              if (catalogFailed) return;
+              const appInfo = await info;
+              if (!current() || controller.snapshot().state !== 'ready') return;
+              if (latest !== candidate) continue;
+              stopDeviceProgress?.();
+              stopDeviceProgress = undefined;
+              devices.stop();
+              setDeviceCache(startupCache);
+              prepareFirstRun(candidate, appInfo);
+              publish(candidate);
+              return;
+            }
+          })();
+          return mounting;
+        };
+        const requestMount = (snapshot: AgentSnapshot): void => {
+          void mount(snapshot).catch((error) => {
+            if (!current()) return;
+            setAgentLifecycle({ state: 'failure', error });
+            setLoadError(normalizeCommandError(error).message);
+          });
+        };
         const publishPartial = (partial: AgentSnapshot): void => {
           if (!current() || controller.snapshot().state !== 'ready') return;
+          if (mounting && !painted) {
+            latest = partial;
+            return;
+          }
           // Without an account, the completed read and appInfo must choose
           // automatic onboarding before the shell initializes its scene.
           // A deadline must not hand off that decision either.
@@ -248,7 +357,7 @@ export function useAppBootstrap(
             return;
           }
           if (painted || firstPaintReady(partial)) {
-            mount(partial);
+            requestMount(partial);
             return;
           }
           // Hold the loading screen and report the read's progress into it,
@@ -264,7 +373,7 @@ export function useAppBootstrap(
               !latest.stores.some((entry) => entry.kind === 'account')
             )
               return;
-            mount(latest);
+            requestMount(latest);
           }, firstPaintDeadlineMs);
         };
         // The agent is up and the read is what the window is now waiting on, so
@@ -287,6 +396,7 @@ export function useAppBootstrap(
             status,
           );
         } catch (error) {
+          catalogFailed = true;
           const typed = normalizeCommandError(error);
           if (
             maintenanceOwner.handedOff ||
@@ -297,6 +407,7 @@ export function useAppBootstrap(
             typed.fatal
           )
             throw error;
+          catalogFailed = false;
           next = emptySnapshot(status);
         } finally {
           if (bootRead.current === reading) bootRead.current = null;
@@ -309,34 +420,13 @@ export function useAppBootstrap(
         if (!current()) return;
         const appInfo = await info;
         if (!current()) return;
-        if (
-          !maintenanceOwner.handedOff &&
-          !requested &&
-          profileInventoryComplete(next, 'accounts') &&
-          !next.stores.some((entry) => entry.kind === 'account')
-        ) {
-          const localProfile =
-            appInfo.managedProfile &&
-            next.servers.some(
-              (server) =>
-                server.id === appInfo.managedProfile &&
-                serverAvailability(next, server).available,
-            )
-              ? appInfo.managedProfile
-              : null;
-          if (alive) {
-            setManagedProfile(appInfo.managedProfile ?? null);
-            setFirstRunStart(localProfile ? 'local' : 'who');
-          }
-        } else if (alive) {
-          setManagedProfile(appInfo.managedProfile ?? null);
-        }
+        prepareFirstRun(next, appInfo);
         if (!alive) return;
         // Transfer maintenance ingestion to VaultShell. Its listener is
         // installed before querying the replayable native snapshot, so events
         // in this handoff window are recovered without two listeners racing
         // the same controller revision.
-        mount(next);
+        await mount(next);
       } catch (error) {
         if (!alive || bootInvalidated || generation !== bootGeneration.current)
           return;
@@ -345,6 +435,12 @@ export function useAppBootstrap(
           !isAgentReadinessError(normalizeCommandError(error))
         )
           return;
+        if (!maintenanceOwner.handedOff) {
+          stopDeviceProgress?.();
+          stopDeviceProgress = undefined;
+          startupDevices?.stop();
+          startupCache?.clear();
+        }
         setAgentLifecycle({ state: 'failure', error });
         setLoadError(normalizeCommandError(error).message);
       } finally {
@@ -359,6 +455,9 @@ export function useAppBootstrap(
     return () => {
       alive = false;
       if (deadline !== undefined) clearTimeout(deadline);
+      stopDeviceProgress?.();
+      startupDevices?.stop();
+      startupCache?.clear();
       stopLifecycle?.();
       maintenanceOwner.retire();
     };
@@ -434,6 +533,7 @@ export function useAppBootstrap(
     firstRunStart,
     managedProfile,
     bootProgress,
+    deviceCache,
     lockState,
     lockError,
     unlocking,
