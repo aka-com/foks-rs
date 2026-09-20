@@ -5,7 +5,7 @@ use objc2::{
 };
 use objc2_foundation::{NSBundle, NSError, NSObject, NSObjectProtocol, NSString};
 use objc2_user_notifications::*;
-use std::cell::RefCell;
+use std::{cell::RefCell, ptr::NonNull};
 
 // The center uses a weak delegate. Retain it for the application's main thread lifetime.
 thread_local! {static DELEGATE:RefCell<Option<Retained<Delegate>>>=const{RefCell::new(None)};}
@@ -64,10 +64,32 @@ pub fn install(app: &tauri::AppHandle) {
     // No restart backlog or routing tokens survive the process.
     clear();
 }
-pub async fn permission() -> bool {
-    if !available() {
-        return false;
+fn authorized(status: UNAuthorizationStatus) -> bool {
+    status == UNAuthorizationStatus::Authorized
+        || status == UNAuthorizationStatus::Provisional
+        || status == UNAuthorizationStatus::Ephemeral
+}
+async fn authorization_status() -> Option<UNAuthorizationStatus> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    {
+        let tx = std::sync::Mutex::new(Some(tx));
+        let callback = RcBlock::new(move |settings: NonNull<UNNotificationSettings>| {
+            // SAFETY: UserNotifications supplies a valid settings object for
+            // the duration of this completion handler.
+            let status = unsafe { settings.as_ref() }.authorizationStatus();
+            if let Some(tx) = tx.lock().ok().and_then(|mut tx| tx.take()) {
+                let _ = tx.send(status);
+            }
+        });
+        UNUserNotificationCenter::currentNotificationCenter()
+            .getNotificationSettingsWithCompletionHandler(&callback);
     }
+    match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+        Ok(Ok(status)) => Some(status),
+        _ => None,
+    }
+}
+async fn request_permission() -> bool {
     let (tx, rx) = tokio::sync::oneshot::channel();
     {
         let tx = std::sync::Mutex::new(Some(tx));
@@ -86,6 +108,18 @@ pub async fn permission() -> bool {
         tokio::time::timeout(std::time::Duration::from_secs(30), rx).await,
         Ok(Ok(true))
     )
+}
+pub async fn permission() -> bool {
+    if !available() {
+        return false;
+    }
+    match authorization_status().await {
+        Some(status) if authorized(status) => true,
+        Some(status) if status == UNAuthorizationStatus::NotDetermined => {
+            request_permission().await
+        }
+        _ => false,
+    }
 }
 pub fn display(app: &tauri::AppHandle, token: &str, body: &str) -> Result<(), AgentError> {
     if !available() {
@@ -139,5 +173,19 @@ pub fn open_settings() -> Result<(), AgentError> {
         Ok(())
     } else {
         Err(super::super::error("Could not open notification settings."))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_notification_authorization_is_recognized() {
+        assert!(authorized(UNAuthorizationStatus::Authorized));
+        assert!(authorized(UNAuthorizationStatus::Provisional));
+        assert!(authorized(UNAuthorizationStatus::Ephemeral));
+        assert!(!authorized(UNAuthorizationStatus::Denied));
+        assert!(!authorized(UNAuthorizationStatus::NotDetermined));
     }
 }
