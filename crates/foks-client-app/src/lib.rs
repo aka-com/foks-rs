@@ -7,7 +7,9 @@
 #![forbid(unsafe_code)]
 
 mod chat_intent;
-pub use chat_intent::{LocalChatIntent, LocalChatIntentStore};
+mod pending_chat;
+pub use chat_intent::{LegacyChatIntent, LocalChatIntent, LocalChatIntentStore};
+pub use pending_chat::{PendingChatBinding, PendingChatStore};
 mod adapter_maintenance;
 pub use adapter_maintenance::{AdapterMaintenanceCursor, AdapterMaintenanceReport};
 mod auth_cache;

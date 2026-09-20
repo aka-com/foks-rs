@@ -7,6 +7,32 @@ include!(concat!(env!("OUT_DIR"), "/chat_limits.rs"));
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ChatAction {
+    LoadIntent {
+        host: String,
+        actor: String,
+        channel: String,
+    },
+    SaveIntent {
+        host: String,
+        actor: String,
+        channel: String,
+        submission: String,
+        text: SecretString,
+    },
+    ClearIntent {
+        host: String,
+        actor: String,
+        channel: String,
+        submission: String,
+    },
+    ImportIntent {
+        host: String,
+        actor: String,
+        channel: String,
+        submission: String,
+        text: SecretString,
+        source: String,
+    },
     Channels,
     History {
         channel: String,
@@ -75,6 +101,10 @@ impl ChatAction {
     /// remote `SyncInbox` are not one number.
     pub fn operation_name(&self) -> &'static str {
         match self {
+            Self::LoadIntent { .. } => "Chat/LoadIntent",
+            Self::SaveIntent { .. } => "Chat/SaveIntent",
+            Self::ClearIntent { .. } => "Chat/ClearIntent",
+            Self::ImportIntent { .. } => "Chat/ImportIntent",
             Self::Channels => "Chat/Channels",
             Self::History { .. } => "Chat/History",
             Self::NotificationHistory { .. } => "Chat/NotificationHistory",
@@ -98,7 +128,8 @@ impl ChatAction {
     pub fn is_mutation(&self) -> bool {
         !matches!(
             self,
-            Self::Channels
+            Self::LoadIntent { .. }
+                | Self::Channels
                 | Self::History { .. }
                 | Self::NotificationHistory { .. }
                 | Self::Inbox
@@ -110,8 +141,67 @@ impl ChatAction {
                 | Self::OperationBody { .. }
         )
     }
+    pub fn is_intent(&self) -> bool {
+        matches!(
+            self,
+            Self::LoadIntent { .. }
+                | Self::SaveIntent { .. }
+                | Self::ClearIntent { .. }
+                | Self::ImportIntent { .. }
+        )
+    }
     pub fn validate(&self) -> bool {
+        let identity = |host: &str, actor: &str, channel: &str| {
+            let entity = |value: &str, prefix: &str| {
+                value.len() == 66
+                    && value.starts_with(prefix)
+                    && value
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            };
+            entity(host, "02") && entity(actor, "01") && valid_chat_id(channel)
+        };
         match self {
+            Self::LoadIntent {
+                host,
+                actor,
+                channel,
+            } => identity(host, actor, channel),
+            Self::ClearIntent {
+                host,
+                actor,
+                channel,
+                submission,
+            } => identity(host, actor, channel) && valid_chat_id(submission),
+            Self::SaveIntent {
+                host,
+                actor,
+                channel,
+                submission,
+                text,
+            }
+            | Self::ImportIntent {
+                host,
+                actor,
+                channel,
+                submission,
+                text,
+                ..
+            } => {
+                identity(host, actor, channel)
+                    && valid_chat_id(submission)
+                    && !text.expose().is_empty()
+                    && text.expose().len() <= CHAT_TEXT_BYTES
+                    && match self {
+                        Self::ImportIntent { source, .. } => {
+                            source.len() == 64
+                                && source
+                                    .bytes()
+                                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                        }
+                        _ => true,
+                    }
+            }
             Self::History { channel, before } | Self::NotificationHistory { channel, before } => {
                 valid_chat_id(channel)
                     && before
@@ -275,6 +365,10 @@ pub enum ChatReceipt {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ChatResult {
+    Intent {
+        channel: String,
+        intent: Option<SavedChatIntent>,
+    },
     OperationBody {
         operation: String,
         channel: String,
@@ -317,6 +411,12 @@ pub enum ChatResult {
     CleanupPending {
         operations: Vec<ChatOperation>,
     },
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SavedChatIntent {
+    pub submission: String,
+    pub text: SecretString,
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

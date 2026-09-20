@@ -845,3 +845,5 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 .rail-back .ic{width:15px;height:15px}
 .rail-back:hover:not(:disabled){background:rgba(255,255,255,.12)}
 .rail-back:disabled{opacity:.35}
+
+.chat-migration { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 20px; font-size: 13px; flex-shrink: 0; }

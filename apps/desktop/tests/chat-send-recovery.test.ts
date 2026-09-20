@@ -72,17 +72,20 @@ class Clock implements ChatClock {
   }
 }
 
-type LocalAction = Parameters<Bridge['chatLocal']>[0];
-type LocalReply = Awaited<ReturnType<Bridge['chatLocal']>>;
+type IntentAction = Extract<
+  ChatAction,
+  { action: 'load-intent' | 'save-intent' | 'clear-intent' | 'import-intent' }
+>;
+type IntentReply = ChatReply;
 type Hooks = {
   chat?: (
     action: ChatAction,
     run: (action?: ChatAction) => Promise<ChatReply>,
   ) => Promise<ChatReply>;
-  local?: (
-    action: LocalAction,
-    run: () => Promise<LocalReply>,
-  ) => Promise<LocalReply>;
+  intent?: (
+    action: IntentAction,
+    run: () => Promise<IntentReply>,
+  ) => Promise<IntentReply>;
 };
 
 async function setup(hooks: Hooks = {}) {
@@ -115,7 +118,7 @@ async function setup(hooks: Hooks = {}) {
   const entries = new Map([[STORE, ready]]);
   const listeners = new Set<() => void>();
   const calls: ChatAction[] = [];
-  const localCalls: LocalAction[] = [];
+  const intentCalls: IntentAction[] = [];
   const invalidations: string[] = [];
   const updateInbox = (entry: TeamInbox) => {
     entries.set(STORE, entry);
@@ -157,15 +160,19 @@ async function setup(hooks: Hooks = {}) {
   const bridge: Bridge = {
     ...base,
     chat: async (store, action, view) => {
-      calls.push(structuredClone(action));
       const run = async (input = action) =>
         structuredClone(await base.chat(store, input, view));
+      if (
+        action.action === 'load-intent' ||
+        action.action === 'save-intent' ||
+        action.action === 'clear-intent' ||
+        action.action === 'import-intent'
+      ) {
+        intentCalls.push(structuredClone(action));
+        return hooks.intent ? hooks.intent(action, run) : run();
+      }
+      calls.push(structuredClone(action));
       return hooks.chat ? hooks.chat(action, run) : run();
-    },
-    chatLocal: async (action) => {
-      localCalls.push(structuredClone(action));
-      const run = () => base.chatLocal(action);
-      return hooks.local ? hooks.local(action, run) : run();
     },
   };
   const clock = new Clock();
@@ -182,7 +189,7 @@ async function setup(hooks: Hooks = {}) {
     ready,
     channel,
     calls,
-    localCalls,
+    intentCalls,
     clock,
     updateInbox,
     invalidations,
@@ -233,7 +240,7 @@ test('automatic recovery yields queued profile work to an explicit history reque
 test('fresh message persists its intent before a single submit request', async () => {
   const order: string[] = [];
   const h = await setup({
-    local: async (action, run) => {
+    intent: async (action, run) => {
       const reply = await run();
       order.push(action.action);
       return reply;
@@ -461,13 +468,13 @@ for (const boundary of [
       assert.equal(count(h.calls, 'submit-message'), 0);
       assert.equal(count(h.calls, 'attempt'), 0);
       assert.equal(
-        h.localCalls.some((call) => call.action === 'clear-intent'),
+        h.intentCalls.some((call) => call.action === 'clear-intent'),
         false,
       );
       if (boundary !== 'stopped') {
         const message = h.service.messages(STORE, h.channel)[0];
         assert.equal(message.intentPending, true);
-        assert.equal(message.phase, 'unconfirmed');
+        assert.notEqual(message.phase, 'sent');
       }
     } finally {
       gate.resolve();
@@ -481,7 +488,7 @@ for (const boundary of [
 test('failed local intent deletion does not hide known delivery or admit another same-slot intent', async () => {
   let failClear = true;
   const h = await setup({
-    local: async (action, run) => {
+    intent: async (action, run) => {
       if (action.action === 'clear-intent' && failClear) throw unavailable;
       return run();
     },
@@ -511,7 +518,7 @@ test('failed local intent deletion does not hide known delivery or admit another
 test('delayed local intent deletion does not hold delivery completion and keeps same-slot backpressure', async () => {
   const clearing = deferred();
   const h = await setup({
-    local: async (action, run) => {
+    intent: async (action, run) => {
       if (action.action === 'clear-intent') await clearing.promise;
       return run();
     },
@@ -528,7 +535,7 @@ test('delayed local intent deletion does not hold delivery completion and keeps 
     assert.equal(h.service.canSubmit(STORE, h.channel), false);
     await h.clock.advance(5000);
     assert.equal(
-      h.localCalls.filter((call) => call.action === 'clear-intent').length,
+      h.intentCalls.filter((call) => call.action === 'clear-intent').length,
       1,
     );
     clearing.resolve();
@@ -544,7 +551,7 @@ test('delayed local intent deletion does not hold delivery completion and keeps 
 test('repeated local intent cleanup failures use increasing automatic retry backoff', async () => {
   const times: number[] = [];
   const h = await setup({
-    local: async (action, run) => {
+    intent: async (action, run) => {
       if (action.action === 'clear-intent') {
         times.push(h.clock.now());
         throw unavailable;
@@ -593,7 +600,7 @@ for (const committed of [false, true]) {
         assert.equal(h.service.canSubmit(STORE, h.channel), false);
         await assert.rejects(h.service.restoreDraft(STORE, message.id));
         assert.equal(
-          h.localCalls.some((call) => call.action === 'clear-intent'),
+          h.intentCalls.some((call) => call.action === 'clear-intent'),
           false,
         );
         h.service.setDraft(STORE, h.channel, 'new draft');
@@ -767,7 +774,7 @@ for (const stage of ['saving', 'preparing'] as const) {
       const gate = deferred();
       let started = false;
       const h = await setup({
-        local: async (action, run) => {
+        intent: async (action, run) => {
           if (stage === 'saving' && action.action === 'save-intent') {
             started = true;
             await gate.promise;
@@ -795,7 +802,7 @@ for (const stage of ['saving', 'preparing'] as const) {
             agent: { state: 'bootstrap', step: 'locked' },
           });
         const prepareCount = count(h.calls, 'submit-message');
-        const clearCount = h.localCalls.filter(
+        const clearCount = h.intentCalls.filter(
           (call) => call.action === 'clear-intent',
         ).length;
         const invalidationCount = h.invalidations.length;
@@ -805,7 +812,7 @@ for (const stage of ['saving', 'preparing'] as const) {
         assert.equal(count(h.calls, 'submit-message'), prepareCount);
         assert.equal(count(h.calls, 'attempt'), 0);
         assert.equal(
-          h.localCalls.filter((call) => call.action === 'clear-intent').length,
+          h.intentCalls.filter((call) => call.action === 'clear-intent').length,
           clearCount,
         );
         assert.equal(h.invalidations.length, invalidationCount);

@@ -11,6 +11,7 @@ import { OverlayProvider } from '/kit/overlay-primitives';
 import { ToastController, ToastProvider } from '/kit/toasts';
 import type { AgentLifecycleController } from '../agent-lifecycle';
 import type { Bridge } from '../bridge';
+import { useChatMigration } from '../chat/migration';
 import { ChatInboxProvider } from '../chat/inbox-provider';
 import { DeviceCacheContext } from '../device-cache';
 import { FIRST_RUN_PROGRESS_EVENT } from '../first-run-operations';
@@ -433,6 +434,11 @@ export function VaultShell({
   // same disabled styling as `BlockedShell`.
   const block = shellBlock(agentLifecycle);
   const chrome = shellChrome(block, agentLifecycle.state, shown.agent.state);
+  const chatMigration = useChatMigration(
+    bridge,
+    agentLifecycle.state === 'ready' && agentCatalogReady && !chrome.blocked,
+    concealSignal,
+  );
   const shell = (
     <div
       className={[
@@ -459,7 +465,11 @@ export function VaultShell({
       >
         <ChatInboxProvider
           key={`inbox:${concealSignal}`}
-          enabled={agentLifecycle.state === 'ready' && agentCatalogReady}
+          enabled={
+            agentLifecycle.state === 'ready' &&
+            agentCatalogReady &&
+            chatMigration.ready
+          }
           bridge={bridge}
           snapshot={shown}
           onNavigate={navigateFromNotification}
@@ -557,6 +567,7 @@ export function VaultShell({
                     })
                   }
                 />
+                {chatMigration.notice}
                 {/* Reset screen failures when the location changes while keeping
                     the rail and topbar outside the error boundary. */}
                 <ScreenErrorBoundary

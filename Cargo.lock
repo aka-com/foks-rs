@@ -1839,6 +1839,7 @@ dependencies = [
 name = "foks-client-app"
 version = "0.3.0"
 dependencies = [
+ "base64 0.23.1",
  "foks-client",
  "foks-client-db",
  "foks-compat-artifact",

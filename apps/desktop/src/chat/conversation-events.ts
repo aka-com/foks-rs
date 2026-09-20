@@ -73,6 +73,7 @@ export function eventFromReply(
       return { kind: 'pending', operations: result.operations };
     case 'channels':
       return { kind: 'channels', channels: result.channels };
+    case 'intent':
     case 'cleanup-pending':
     case 'inbox':
     case 'poll':

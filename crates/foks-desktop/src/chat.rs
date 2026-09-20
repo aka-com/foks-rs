@@ -76,6 +76,53 @@ pub fn validate_chat_reply(
     }
     let valid = match (action, &reply.result) {
         (
+            ChatAction::LoadIntent {
+                host,
+                actor,
+                channel,
+            }
+            | ChatAction::SaveIntent {
+                host,
+                actor,
+                channel,
+                ..
+            }
+            | ChatAction::ClearIntent {
+                host,
+                actor,
+                channel,
+                ..
+            }
+            | ChatAction::ImportIntent {
+                host,
+                actor,
+                channel,
+                ..
+            },
+            ChatResult::Intent {
+                channel: actual,
+                intent,
+            },
+        ) => {
+            host == &reply.scope.host
+                && actor == &reply.scope.actor
+                && channel == actual
+                && intent.as_ref().is_none_or(|i| {
+                    valid_chat_id(&i.submission)
+                        && !i.text.expose().is_empty()
+                        && i.text.expose().len() <= CHAT_TEXT_BYTES
+                })
+                && match action {
+                    ChatAction::LoadIntent { .. } => true,
+                    ChatAction::SaveIntent {
+                        submission, text, ..
+                    } => intent
+                        .as_ref()
+                        .is_some_and(|i| &i.submission == submission && &i.text == text),
+                    _ => intent.is_none(),
+                }
+        }
+        (
             ChatAction::OperationBody { operation, channel },
             ChatResult::OperationBody {
                 operation: actual,

@@ -460,13 +460,19 @@ export class ChatSendService {
       !team.messages.some((m) => m.channel === channel && m.intentPending),
     );
   }
-  private persistence(team: Team, channel: string): ChatIntentPersistence {
+  private persistence(
+    team: Team,
+    channel: string,
+    priority: ChatWorkPriority = 'foreground',
+  ): ChatIntentPersistence {
     if (!team.scope) throw cancelled();
     return chatIntentPersistence(
       this.bridge,
       team.storeId,
       team.scope,
       channel,
+      team.client,
+      priority,
     );
   }
   open(
@@ -488,7 +494,7 @@ export class ChatSendService {
     const epoch = team.epoch;
     const work = (async () => {
       try {
-        const saved = await this.persistence(team, channel).load();
+        const saved = await this.persistence(team, channel, priority).load();
         if (!this.current(team, epoch) || !this.readable(team, channel)) return;
         team.loadErrors.delete(channel);
         team.loaded.add(channel);
@@ -842,7 +848,7 @@ export class ChatSendService {
         if (message.text === undefined) throw cancelled();
         message.phase = 'saving';
         message.intentPending = true;
-        await this.persistence(team, message.channel).save({
+        await this.persistence(team, message.channel, priority).save({
           submission: message.submission,
           text: message.text,
         });
@@ -879,12 +885,18 @@ export class ChatSendService {
             ? 'sending'
             : phaseOf(op);
       this.publish();
+      // Admit delivery before asynchronous cleanup to the shared chat lane.
+      // A slow clear acknowledgement must not hold up the send it follows.
+      const delivery =
+        op.state === 'prepared' || op.state === 'uncertain'
+          ? request({
+              action: checking ? 'reconcile' : 'attempt',
+              operation: op.id,
+            })
+          : undefined;
       void this.clearIntent(team, message);
-      if (op.state === 'prepared' || op.state === 'uncertain') {
-        const reply = await request({
-          action: checking ? 'reconcile' : 'attempt',
-          operation: op.id,
-        });
+      if (delivery) {
+        const reply = await delivery;
         if (this.current(team, epoch) && reply.result.kind === 'operation') {
           message.phase = message.observed
             ? 'sent'
@@ -899,13 +911,20 @@ export class ChatSendService {
       this.report(team, message, 'failed', typed.code);
       message.error = failure(error);
       if (!message.operation) {
-        message.ambiguousPreparation ||= typed.ambiguous;
+        // Losing a local save acknowledgement cannot mean network delivery.
+        // Keep the same text and submission ID for an idempotent save retry.
+        const saveFailed = message.phase === 'saving';
+        if (!saveFailed) message.ambiguousPreparation ||= typed.ambiguous;
         message.phase = message.ambiguousPreparation
           ? 'unconfirmed'
           : typed.code === 'access-changed'
             ? 'paused'
             : 'not-sent';
-        if (!message.ambiguousPreparation && preparationCanChange(error))
+        if (
+          !saveFailed &&
+          !message.ambiguousPreparation &&
+          preparationCanChange(error)
+        )
           await this.clearIntent(team, message);
       } else {
         message.phase = message.observed ? 'sent' : 'unconfirmed';

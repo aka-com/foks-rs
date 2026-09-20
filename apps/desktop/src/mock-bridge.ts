@@ -1,8 +1,6 @@
 /** A deterministic command bridge for render and browser acceptance tests. */
 
 import { notificationKey } from './chat/local-contract';
-import type { SavedChatIntent } from './chat/local-contract';
-import { channelWorkKey } from './chat/scope';
 import { mockInvitations } from './invitation-mock';
 import { mockChat } from './chat-mock';
 import type {
@@ -49,7 +47,6 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       ? 'The agent socket closed while reading the catalog.'
       : null;
   const ssoModes = new Map<string, import('./sso-contract').SsoPurpose>();
-  const chatIntents = new Map<string, SavedChatIntent>();
   const stores: Store[] = snapshot.stores.map((store) => ({ ...store }));
   const servers = snapshot.servers.map((server) => ({ ...server }));
   const serverProbes = new Map(
@@ -927,47 +924,6 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       return { applied: true };
     },
     chatLocal: async (action) => {
-      let intent: SavedChatIntent | undefined;
-      if (
-        action.action === 'load-intent' ||
-        action.action === 'save-intent' ||
-        action.action === 'clear-intent'
-      ) {
-        const key = channelWorkKey(
-          action.storeId,
-          action.scope,
-          action.channel,
-        );
-        const saved = chatIntents.get(key);
-        if (action.action === 'save-intent') {
-          if (
-            saved &&
-            (saved.submission !== action.submission ||
-              saved.text !== action.text)
-          )
-            throw failure(
-              'chat-intent',
-              'Another message is already saved for this channel.',
-            );
-          if (!saved && chatIntents.size >= 128)
-            throw failure('chat-intent', 'Saved message capacity reached.');
-          chatIntents.set(
-            key,
-            structuredClone({
-              storeId: action.storeId,
-              scope: action.scope,
-              channel: action.channel,
-              submission: action.submission,
-              text: action.text,
-            }),
-          );
-        } else if (action.action === 'clear-intent') {
-          if (saved && saved.submission !== action.submission)
-            throw failure('chat-intent', 'Saved message changed.');
-          chatIntents.delete(key);
-        }
-        intent = chatIntents.get(key);
-      }
       if (action.action === 'configure') {
         if (action.enabled !== undefined)
           notificationSettings.enabled = action.enabled;
@@ -981,7 +937,9 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
         }
       }
       return {
-        ...(intent ? { intent: structuredClone(intent) } : {}),
+        ...(action.action === 'recover-intents'
+          ? { migrationRemaining: 0 }
+          : {}),
         epoch: '0'.repeat(32),
         available: true,
         settings: {

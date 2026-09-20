@@ -347,6 +347,90 @@ pub(super) fn dispatch(
         return Err(Box::new(super::AgentRequestError("invalid chat request")));
     }
     let (resolved, scope) = resolve_scope(session, vault, &store)?;
+    if action.is_intent() {
+        let (host, actor, channel) = match &action {
+            ChatAction::LoadIntent {
+                host,
+                actor,
+                channel,
+            }
+            | ChatAction::SaveIntent {
+                host,
+                actor,
+                channel,
+                ..
+            }
+            | ChatAction::ClearIntent {
+                host,
+                actor,
+                channel,
+                ..
+            }
+            | ChatAction::ImportIntent {
+                host,
+                actor,
+                channel,
+                ..
+            } => (host, actor, channel),
+            _ => unreachable!(),
+        };
+        // Validate before opening/writing recovery state, not merely on reply.
+        if host != &scope.host || actor != &scope.actor {
+            return Err(foks_client::Error::ChatIntegrity("saved message scope changed").into());
+        }
+        let binding = foks_client_app::PendingChatBinding {
+            host: host.clone(),
+            actor: actor.clone(),
+            team: store.team_id.clone(),
+            channel: channel.clone(),
+        };
+        let mut pending = foks_client_app::PendingChatStore::open(state_dir, master)?;
+        let intent = match action {
+            ChatAction::LoadIntent { .. } => pending.load(&binding)?,
+            ChatAction::SaveIntent {
+                submission, text, ..
+            } => {
+                let intent = foks_client_app::LocalChatIntent {
+                    submission,
+                    text: text.expose().to_owned(),
+                };
+                pending.save(&store.profile, &binding, &intent)?;
+                Some(intent)
+            }
+            ChatAction::ClearIntent { submission, .. } => {
+                pending.clear(&binding, &submission)?;
+                None
+            }
+            ChatAction::ImportIntent {
+                submission,
+                text,
+                source,
+                ..
+            } => {
+                pending.import(
+                    &store.profile,
+                    &binding,
+                    &foks_client_app::LocalChatIntent {
+                        submission,
+                        text: text.expose().to_owned(),
+                    },
+                    &source,
+                )?;
+                None
+            }
+            _ => unreachable!(),
+        };
+        return Ok(serde_json::to_value(ChatReply {
+            scope,
+            result: ChatResult::Intent {
+                channel: binding.channel,
+                intent: intent.map(|intent| SavedChatIntent {
+                    submission: intent.submission.clone(),
+                    text: SecretString::new(&intent.text),
+                }),
+            },
+        })?);
+    }
     let submission = match &action {
         ChatAction::PrepareChannel { submission, .. }
         | ChatAction::PrepareMessage { submission, .. }
@@ -362,6 +446,10 @@ pub(super) fn dispatch(
     };
     let team = &store.team_alias;
     let result = match action {
+        ChatAction::LoadIntent { .. }
+        | ChatAction::SaveIntent { .. }
+        | ChatAction::ClearIntent { .. }
+        | ChatAction::ImportIntent { .. } => unreachable!("local intents dispatched above"),
         ChatAction::OperationBody { operation, channel } => {
             let text = session.recover_chat_operation_text(
                 team,

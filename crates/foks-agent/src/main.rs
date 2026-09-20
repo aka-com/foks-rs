@@ -2926,7 +2926,11 @@ fn operation_is_noninteractive(operation: &Operation) -> bool {
         } => true,
         Operation::Chat { action, .. } => matches!(
             action,
-            foks_agent_proto::chat::ChatAction::Channels
+            foks_agent_proto::chat::ChatAction::LoadIntent { .. }
+                | foks_agent_proto::chat::ChatAction::SaveIntent { .. }
+                | foks_agent_proto::chat::ChatAction::ClearIntent { .. }
+                | foks_agent_proto::chat::ChatAction::ImportIntent { .. }
+                | foks_agent_proto::chat::ChatAction::Channels
                 | foks_agent_proto::chat::ChatAction::History { .. }
                 | foks_agent_proto::chat::ChatAction::NotificationHistory { .. }
                 | foks_agent_proto::chat::ChatAction::Inbox
@@ -7004,6 +7008,60 @@ mod tests {
             },
         ] {
             assert!(!operation_is_noninteractive(&operation), "{operation:?}");
+        }
+    }
+
+    #[test]
+    fn pending_intent_io_is_noninteractive_and_only_load_is_abandonable() {
+        use foks_agent_proto::chat::ChatAction;
+        let host = format!("02{}", "ab".repeat(32));
+        let actor = format!("01{}", "cd".repeat(32));
+        let channel = "12".repeat(16);
+        let submission = "34".repeat(16);
+        let store = TeamStoreRef {
+            profile: "local".into(),
+            account_alias: "owner".into(),
+            team_alias: "team".into(),
+            team_id: format!("03{}", "ef".repeat(32)),
+        };
+        for action in [
+            ChatAction::LoadIntent {
+                host: host.clone(),
+                actor: actor.clone(),
+                channel: channel.clone(),
+            },
+            ChatAction::SaveIntent {
+                host: host.clone(),
+                actor: actor.clone(),
+                channel: channel.clone(),
+                submission: submission.clone(),
+                text: foks_agent_proto::SecretString::new("private intent"),
+            },
+            ChatAction::ClearIntent {
+                host: host.clone(),
+                actor: actor.clone(),
+                channel: channel.clone(),
+                submission: submission.clone(),
+            },
+            ChatAction::ImportIntent {
+                host,
+                actor,
+                channel,
+                submission,
+                text: foks_agent_proto::SecretString::new("private intent"),
+                source: "ab".repeat(32),
+            },
+        ] {
+            assert!(action.validate());
+            let mutation = action.is_mutation();
+            let operation = Operation::Chat {
+                store: store.clone(),
+                action,
+            };
+            assert!(operation_is_noninteractive(&operation));
+            assert!(read_cache::operation_leaves_retained_material(&operation));
+            assert_eq!(read_cache::operation_is_abandonable(&operation), !mutation);
+            assert!(!format!("{operation:?}").contains("private intent"));
         }
     }
 

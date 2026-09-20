@@ -49,7 +49,7 @@ impl ArchiveManifest {
         let mut entries = snapshot.artifacts.clone();
         entries.sort_by(|a, b| a.path.cmp(&b.path));
         let manifest = Self {
-            version: 1,
+            version: 2,
             source_platform: std::env::consts::OS.into(),
             source_root: snapshot.root.clone(),
             source_state_id: snapshot.state_id.clone(),
@@ -74,7 +74,7 @@ impl ArchiveManifest {
         Ok(manifest)
     }
     pub fn validate(&self) -> Result<()> {
-        if self.version != 1
+        if !matches!(self.version, 1 | 2)
             || !matches!(self.source_platform.as_str(), "linux" | "macos")
             || !self.source_root.is_absolute()
             || self.profiles.len() > 256
@@ -157,6 +157,7 @@ impl ArchiveManifest {
             }
             let soft = match parts.as_slice() {
                 ["client-state.toml" | "profiles.toml"] => false,
+                ["chat-intents", "state.fks"] if self.version == 2 => false,
                 ["trust", file] => {
                     let hash = file.strip_suffix(".der").ok_or(Error::TrustRoot)?;
                     super::trust::validate_digest(hash)?;

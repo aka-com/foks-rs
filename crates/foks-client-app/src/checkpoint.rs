@@ -1444,6 +1444,15 @@ impl ClientCredentials {
         database_ids: &[[u8; 16]],
         mode: ResetMode,
     ) -> Result<ResetOutcome> {
+        if self
+            .root
+            .join(crate::pending_chat::DIRECTORY)
+            .try_exists()?
+        {
+            let master = self.master_key()?;
+            crate::PendingChatStore::open(&self.root, &master)?
+                .forget_profile(&session.profile.name)?;
+        }
         stage_reset_directory(
             &session.paths.credential_store,
             &session.paths.directory.join(RESET_CREDENTIAL_QUARANTINE),
@@ -1597,6 +1606,29 @@ fn reset_state_preview(
                 kind,
                 entries,
                 bytes,
+            });
+        }
+    }
+
+    let root = session
+        .paths
+        .directory
+        .parent()
+        .and_then(Path::parent)
+        .ok_or(Error::StatePathChanged)?;
+    if root.join(crate::pending_chat::DIRECTORY).try_exists()? {
+        let master = master_key.ok_or(Error::InvalidConfig(
+            "saved chat state requires credentials before resetting this profile",
+        ))?;
+        let (entries, bytes, commitment) = crate::PendingChatStore::open(root, master)?
+            .profile_summary(&session.profile.name, master)?;
+        digest.update(b"pending-chat-v1");
+        digest.update(commitment);
+        if entries != 0 {
+            artifacts.push(ResetArtifactSummary {
+                kind: ResetArtifactKind::ProtectedMutations,
+                entries: entries as u64,
+                bytes: bytes as u64,
             });
         }
     }

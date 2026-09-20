@@ -1093,6 +1093,7 @@ pub async fn forget_server(
 ) -> Result<ForgottenServerDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    super::chat_migration::require_recovered(&app)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     exact_profile_confirmation(&profile, &confirmation, "forget")?;
@@ -1236,6 +1237,7 @@ pub async fn reset_server(
 ) -> Result<MutationDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
+    super::chat_migration::require_recovered(&app)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     exact_profile_confirmation(&profile, &confirmation, "reset")?;

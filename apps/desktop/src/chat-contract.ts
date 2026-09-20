@@ -14,6 +14,31 @@ import {
 } from './chat-limits';
 export { CHAT_TEXT_BYTES } from './chat-limits';
 export type ChatAction =
+  | { action: 'load-intent'; host: string; actor: string; channel: string }
+  | {
+      action: 'save-intent';
+      host: string;
+      actor: string;
+      channel: string;
+      submission: string;
+      text: string;
+    }
+  | {
+      action: 'clear-intent';
+      host: string;
+      actor: string;
+      channel: string;
+      submission: string;
+    }
+  | {
+      action: 'import-intent';
+      host: string;
+      actor: string;
+      channel: string;
+      submission: string;
+      text: string;
+      source: string;
+    }
   | { action: 'operation-body'; operation: string; channel: string }
   | { action: 'channels' }
   | { action: 'pending' }
@@ -49,6 +74,7 @@ export type ChatAction =
     };
 export function chatActionMutates(action: ChatAction): boolean {
   return ![
+    'load-intent',
     'operation-body',
     'channels',
     'pending',
@@ -119,6 +145,11 @@ export interface ChatOperation {
   rejection_code: number | null;
 }
 export type ChatResult =
+  | {
+      kind: 'intent';
+      channel: string;
+      intent: { submission: string; text: string } | null;
+    }
   | {
       kind: 'operation-body';
       operation: string;
@@ -338,7 +369,42 @@ export function decodeChatReply(
   const resolved = decodeChatScope(v.scope, storeId);
   const r = object(v.result);
   let result: ChatResult;
-  if (r.kind === 'channels' && action.action === 'channels') {
+  if (
+    r.kind === 'intent' &&
+    (action.action === 'load-intent' ||
+      action.action === 'save-intent' ||
+      action.action === 'clear-intent' ||
+      action.action === 'import-intent')
+  ) {
+    object(r, ['kind', 'channel', 'intent']);
+    const channel = chatId(r.channel);
+    if (
+      channel !== action.channel ||
+      resolved.host !== action.host ||
+      resolved.actor !== action.actor
+    )
+      return fail();
+    let intent: Extract<ChatResult, { kind: 'intent' }>['intent'] = null;
+    if (r.intent !== null) {
+      const i = object(r.intent, ['submission', 'text']);
+      intent = {
+        submission: chatId(i.submission),
+        text: text(i.text, CHAT_TEXT_BYTES),
+      };
+      if (!intent.text.length) return fail();
+    }
+    if (
+      action.action === 'save-intent' &&
+      (intent?.submission !== action.submission || intent.text !== action.text)
+    )
+      return fail();
+    if (
+      (action.action === 'clear-intent' || action.action === 'import-intent') &&
+      intent !== null
+    )
+      return fail();
+    result = { kind: 'intent', channel, intent };
+  } else if (r.kind === 'channels' && action.action === 'channels') {
     object(r, ['kind', 'channels', 'version']);
     const channels = array(r.channels, CHAT_CHANNEL_ROWS, channel);
     if (new Set(channels.map((c) => c.id)).size !== channels.length)

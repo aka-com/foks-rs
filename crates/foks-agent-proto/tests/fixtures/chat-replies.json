@@ -2177,6 +2177,335 @@
           "text": 42
         }
       }
+    },
+    {
+      "name": "pending intent loads with immutable identity",
+      "valid": true,
+      "action": {
+        "action": "load-intent",
+        "host": "02abababababababababababababababababababababababababababababababab",
+        "actor": "01abababababababababababababababababababababababababababababababab",
+        "channel": "abababababababababababababababab"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "intent",
+          "channel": "abababababababababababababababab",
+          "intent": {
+            "submission": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "text": "pending text"
+          }
+        }
+      }
+    },
+    {
+      "name": "missing pending intent is a valid local read",
+      "valid": true,
+      "action": {
+        "action": "load-intent",
+        "host": "02abababababababababababababababababababababababababababababababab",
+        "actor": "01abababababababababababababababababababababababababababababababab",
+        "channel": "abababababababababababababababab"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "intent",
+          "channel": "abababababababababababababababab",
+          "intent": null
+        }
+      }
+    },
+    {
+      "name": "saving pending intent confirms exact input",
+      "valid": true,
+      "action": {
+        "action": "save-intent",
+        "host": "02abababababababababababababababababababababababababababababababab",
+        "actor": "01abababababababababababababababababababababababababababababababab",
+        "channel": "abababababababababababababababab",
+        "submission": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "text": "pending text"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "intent",
+          "channel": "abababababababababababababababab",
+          "intent": {
+            "submission": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "text": "pending text"
+          }
+        }
+      }
+    },
+    {
+      "name": "saving pending intent cannot change text",
+      "valid": false,
+      "action": {
+        "action": "save-intent",
+        "host": "02abababababababababababababababababababababababababababababababab",
+        "actor": "01abababababababababababababababababababababababababababababababab",
+        "channel": "abababababababababababababababab",
+        "submission": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "text": "pending text"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "intent",
+          "channel": "abababababababababababababababab",
+          "intent": {
+            "submission": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "text": "changed"
+          }
+        }
+      }
+    },
+    {
+      "name": "saving pending intent cannot omit its body",
+      "valid": false,
+      "action": {
+        "action": "save-intent",
+        "host": "02abababababababababababababababababababababababababababababababab",
+        "actor": "01abababababababababababababababababababababababababababababababab",
+        "channel": "abababababababababababababababab",
+        "submission": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "text": "pending text"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "intent",
+          "channel": "abababababababababababababababab",
+          "intent": null
+        }
+      }
+    },
+    {
+      "name": "clearing pending intent acknowledges no body",
+      "valid": true,
+      "action": {
+        "action": "clear-intent",
+        "host": "02abababababababababababababababababababababababababababababababab",
+        "actor": "01abababababababababababababababababababababababababababababababab",
+        "channel": "abababababababababababababababab",
+        "submission": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "intent",
+          "channel": "abababababababababababababababab",
+          "intent": null
+        }
+      }
+    },
+    {
+      "name": "clearing pending intent cannot return retained text",
+      "valid": false,
+      "action": {
+        "action": "clear-intent",
+        "host": "02abababababababababababababababababababababababababababababababab",
+        "actor": "01abababababababababababababababababababababababababababababababab",
+        "channel": "abababababababababababababababab",
+        "submission": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "intent",
+          "channel": "abababababababababababababababab",
+          "intent": {
+            "submission": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "text": "pending text"
+          }
+        }
+      }
+    },
+    {
+      "name": "legacy import acknowledges durable receipt",
+      "valid": true,
+      "action": {
+        "action": "import-intent",
+        "host": "02abababababababababababababababababababababababababababababababab",
+        "actor": "01abababababababababababababababababababababababababababababababab",
+        "channel": "abababababababababababababababab",
+        "submission": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "text": "pending text",
+        "source": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "intent",
+          "channel": "abababababababababababababababab",
+          "intent": null
+        }
+      }
+    },
+    {
+      "name": "pending intent cannot cross channels",
+      "valid": false,
+      "action": {
+        "action": "load-intent",
+        "host": "02abababababababababababababababababababababababababababababababab",
+        "actor": "01abababababababababababababababababababababababababababababababab",
+        "channel": "abababababababababababababababab"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "intent",
+          "channel": "efefefefefefefefefefefefefefefef",
+          "intent": {
+            "submission": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "text": "pending text"
+          }
+        }
+      }
+    },
+    {
+      "name": "pending intent cannot cross actors",
+      "valid": false,
+      "action": {
+        "action": "load-intent",
+        "host": "02abababababababababababababababababababababababababababababababab",
+        "actor": "01abababababababababababababababababababababababababababababababab",
+        "channel": "abababababababababababababababab"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef"
+        },
+        "result": {
+          "kind": "intent",
+          "channel": "abababababababababababababababab",
+          "intent": {
+            "submission": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "text": "pending text"
+          }
+        }
+      }
+    },
+    {
+      "name": "pending intent rejects empty text",
+      "valid": false,
+      "action": {
+        "action": "load-intent",
+        "host": "02abababababababababababababababababababababababababababababababab",
+        "actor": "01abababababababababababababababababababababababababababababababab",
+        "channel": "abababababababababababababababab"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "intent",
+          "channel": "abababababababababababababababab",
+          "intent": {
+            "submission": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "text": ""
+          }
+        }
+      }
     }
   ]
 }

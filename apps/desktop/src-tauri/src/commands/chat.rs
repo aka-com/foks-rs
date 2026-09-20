@@ -49,6 +49,23 @@ pub async fn chat_request(
     if !action.validate() || !foks_agent_proto::chat::valid_chat_id(&view_id) {
         return Err(invalid_request("Invalid chat request."));
     }
+    // Passive only: never open the old Keychain namespace from a chat view.
+    if matches!(&action, ChatAction::ImportIntent { .. }) {
+        return Err(invalid_request(
+            "Legacy imports are owned by saved message recovery.",
+        ));
+    }
+    if matches!(
+        &action,
+        ChatAction::LoadIntent { .. }
+            | ChatAction::SaveIntent { .. }
+            | ChatAction::PrepareMessage { .. }
+            | ChatAction::SubmitMessage { .. }
+            | ChatAction::Attempt { .. }
+            | ChatAction::Reconcile { .. }
+    ) {
+        super::chat_migration::require_recovered(webview.app_handle())?;
+    }
     let state = state.for_store(&store_id)?;
     let mutation = action.is_mutation();
     let (generation, store) = state.selected_chat(&store_id)?;

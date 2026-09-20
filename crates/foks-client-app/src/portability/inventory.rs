@@ -334,6 +334,31 @@ impl ClientStateMaintenanceGuard {
                 "native manifest contains pending publication or unsupported ownership records",
             ));
         }
+        let pending_path = root.join(crate::pending_chat::DIRECTORY);
+        if files::exists(&pending_path)? {
+            self.reserve_local_lock(&root.join(crate::pending_chat::LOCK))?;
+            let owners = crate::pending_chat::inspect(root, &master)?;
+            for profile in owners {
+                let p = snapshot
+                    .profiles
+                    .get_mut(&profile)
+                    .ok_or(Error::InvalidConfig(
+                        "saved chat message names an unknown profile",
+                    ))?;
+                if p.checkpoint.is_none() {
+                    return Err(Error::InvalidConfig(
+                        "saved chat message profile is not initialized",
+                    ));
+                }
+                p.blockers
+                    .push("pending saved chat message; recover or discard it before export".into());
+            }
+            for (_, path) in files::entries(&pending_path)? {
+                snapshot
+                    .validated_files
+                    .insert(path.clone(), files::regular(&path)?);
+            }
+        }
         snapshot.walk()?;
         if DirectoryIdentity::read(root)? != snapshot.identity {
             return Err(Error::StatePathChanged);
@@ -370,6 +395,17 @@ impl StateSnapshot {
             match name.as_str() {
                 "client-state.toml" | "profiles.toml" => self.add(&path, false)?,
                 "profiles" => self.walk_profiles(&path)?,
+                "chat-intents" => {
+                    for (name, path) in files::entries(&path)? {
+                        if name != "state.fks" {
+                            return Err(Error::StatePathChanged);
+                        }
+                        self.add(&path, false)?;
+                    }
+                }
+                ".chat-intents.lock" => {
+                    files::regular(&path)?;
+                }
                 ".state-import-v1" => {
                     if self.allowed_import_marker
                         != Some(files::artifact(&self.root, &path, false)?.sha256)

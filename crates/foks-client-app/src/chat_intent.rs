@@ -9,11 +9,35 @@ use zeroize::{Zeroize, Zeroizing};
 const MAX_INTENTS: usize = 128;
 const KEY_DOMAIN: u64 = 0xa536_6912_2a5f_909c;
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct LocalChatIntent {
     pub submission: String,
     pub text: String,
+}
+
+pub(crate) fn deserialize_secret_string<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Zeroizing<String>, D::Error> {
+    String::deserialize(deserializer).map(Zeroizing::new)
+}
+impl<'de> Deserialize<'de> for LocalChatIntent {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            submission: String,
+            #[serde(deserialize_with = "deserialize_secret_string")]
+            text: Zeroizing<String>,
+        }
+        let mut wire = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            submission: wire.submission,
+            text: std::mem::take(&mut *wire.text),
+        })
+    }
 }
 
 impl Drop for LocalChatIntent {
@@ -33,10 +57,163 @@ struct Record {
 pub struct LocalChatIntentStore {
     store: EncryptedFileSecretStore,
     _credentials: ClientCredentials,
-    _lock: File,
+    source_key: Zeroizing<[u8; 32]>,
+    _lock: Option<File>,
 }
 
 impl LocalChatIntentStore {
+    /// Retain the already authorized legacy key while releasing the writer
+    /// lock before IPC. Every subsequent store access reacquires and checks it.
+    pub fn release_lock(&mut self) {
+        self._lock = None;
+    }
+
+    fn acquire_lock(&mut self) -> Result<()> {
+        if self._lock.is_none() {
+            let directory = &self._credentials.root;
+            crate::pending_chat::private_path(directory, true)?;
+            let lock = crate::pending_chat::lock(&directory.join(".intent.lock"))?;
+            legacy_inventory(directory)?;
+            if crate::checkpoint::inspect_state_file(directory)?
+                .is_some_and(|state| state.state_id != self._credentials.state_id)
+            {
+                return Err(Error::InvalidConfig(
+                    "legacy saved message credentials changed",
+                ));
+            }
+            self._lock = Some(lock);
+        }
+        Ok(())
+    }
+
+    /// Passive discovery: no credentials, initialization, or permission repair.
+    pub fn has_existing(directory: &Path) -> Result<bool> {
+        match std::fs::symlink_metadata(directory) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(e.into()),
+            Ok(_) => {
+                crate::pending_chat::private_path(directory, true)?;
+            }
+        }
+        let _lock = crate::pending_chat::try_lock(&directory.join(".intent.lock"))?;
+        let keys = legacy_inventory(directory)?;
+        Ok(!keys.is_empty())
+    }
+
+    pub fn open_existing(directory: &Path) -> Result<Self> {
+        crate::pending_chat::private_path(directory, true)?;
+        let lock = crate::pending_chat::lock(&directory.join(".intent.lock"))?;
+        legacy_inventory(directory)?;
+        if directory.join("retired-client-state.toml").try_exists()? {
+            return Err(Error::InvalidConfig(
+                "legacy saved message store is retired",
+            ));
+        }
+        let credentials = ClientCredentials::open(directory)?;
+        if credentials.backend() != CredentialBackend::Native {
+            return Err(Error::InvalidConfig(
+                "legacy saved message credential backend changed",
+            ));
+        }
+        let master = credentials.master_key()?;
+        let store = EncryptedFileSecretStore::inspect_existing(
+            directory.join("records"),
+            Zeroizing::new(foks_crypto::prefixed_hash(KEY_DOMAIN, master.as_ref())),
+        )?;
+        Ok(Self {
+            store,
+            _credentials: credentials,
+            source_key: Zeroizing::new(foks_crypto::prefixed_hash(
+                0x95cc_e62a_e83f_684a,
+                master.as_ref(),
+            )),
+            _lock: Some(lock),
+        })
+    }
+
+    /// Authenticated records, with a keyed source commitment that reveals no
+    /// guessable message text. The caller releases this store before agent IPC.
+    pub fn existing_records(&mut self) -> Result<Vec<LegacyChatIntent>> {
+        self.acquire_lock()?;
+        let keys = self.store.keys()?;
+        if keys.len() > MAX_INTENTS {
+            return Err(Error::InvalidConfig("legacy saved message limit exceeded"));
+        }
+        keys.iter().map(|key| self.existing_record(key)).collect()
+    }
+    fn existing_record(&mut self, key: &str) -> Result<LegacyChatIntent> {
+        let bytes = self.store.get(key)?;
+        let record: Record = serde_json::from_slice(&bytes)
+            .map_err(|_| Error::InvalidConfig("legacy saved message is invalid"))?;
+        validate_intent(&record.intent)?;
+        if record_key(&record.profile, &record.binding)? != key {
+            return Err(Error::InvalidConfig(
+                "legacy saved message identity changed",
+            ));
+        }
+        let input = Zeroizing::new(serde_json::to_vec(&(
+            &self._credentials.state_id,
+            key,
+            &record,
+        ))?);
+        let source = crate::hex(&foks_crypto::capability_mac(
+            self.source_key.as_ref(),
+            0x758c_e491_025a_d366,
+            &input,
+        ));
+        Ok(LegacyChatIntent {
+            profile: record.profile,
+            binding: record.binding,
+            intent: record.intent,
+            source,
+        })
+    }
+
+    /// Recheck the full authenticated commitment under the legacy writer lock.
+    pub fn clear_imported(&mut self, record: &LegacyChatIntent) -> Result<()> {
+        self.acquire_lock()?;
+        let key = record_key(&record.profile, &record.binding)?;
+        let current = match self.existing_record(&key) {
+            Ok(record) => record,
+            Err(Error::Keystore(foks_keystore::Error::Missing)) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        if current.source != record.source {
+            return Err(Error::InvalidConfig(
+                "legacy saved message changed during migration",
+            ));
+        }
+        self.store.remove(&key)?;
+        Ok(())
+    }
+
+    /// Keep the empty old namespace as a harmless residual. Moving its config
+    /// prevents older apps from silently creating a second recovery store:
+    /// their initialize-on-open path refuses an existing records directory.
+    pub fn retire_empty(directory: &Path) -> Result<()> {
+        match std::fs::symlink_metadata(directory) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+            Ok(_) => {
+                crate::pending_chat::private_path(directory, true)?;
+            }
+        }
+        let _lock = crate::pending_chat::try_lock(&directory.join(".intent.lock"))?;
+        if !legacy_inventory(directory)?.is_empty() {
+            return Err(Error::InvalidConfig(
+                "legacy saved messages still require recovery",
+            ));
+        }
+        let source = directory.join(crate::STATE_CONFIG_FILE);
+        if source.try_exists()? {
+            crate::prepare_private_directory(&directory.join("records"))?;
+            File::open(directory)?.sync_all()?;
+            std::fs::rename(source, directory.join("retired-client-state.toml"))?;
+            File::open(directory)?.sync_all()?;
+        }
+        Ok(())
+    }
+
     pub fn open(directory: &Path) -> Result<Self> {
         Self::open_with_backend(directory, CredentialBackend::Native)
     }
@@ -73,11 +250,16 @@ impl LocalChatIntentStore {
         Ok(Self {
             store,
             _credentials: credentials,
-            _lock: lock,
+            source_key: Zeroizing::new(foks_crypto::prefixed_hash(
+                0x95cc_e62a_e83f_684a,
+                master.as_ref(),
+            )),
+            _lock: Some(lock),
         })
     }
 
     pub fn load(&mut self, profile: &str, binding: &[u8]) -> Result<Option<LocalChatIntent>> {
+        self.acquire_lock()?;
         let key = record_key(profile, binding)?;
         let bytes = match self.store.get(&key) {
             Ok(bytes) => bytes,
@@ -132,6 +314,7 @@ impl LocalChatIntentStore {
     }
 
     pub fn forget_profile(&mut self, profile: &str) -> Result<()> {
+        self.acquire_lock()?;
         crate::validate_name(profile)?;
         let prefix = profile_prefix(profile);
         for key in self.store.keys()? {
@@ -143,7 +326,92 @@ impl LocalChatIntentStore {
     }
 }
 
-fn validate_intent(intent: &LocalChatIntent) -> Result<()> {
+pub struct LegacyChatIntent {
+    pub profile: String,
+    pub binding: Vec<u8>,
+    pub intent: LocalChatIntent,
+    pub source: String,
+}
+fn legacy_inventory(directory: &Path) -> Result<Vec<String>> {
+    let mut count = 0;
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+        count += 1;
+        if count > 16 {
+            return Err(Error::InvalidConfig(
+                "legacy saved message directory is invalid",
+            ));
+        }
+        let name = entry.file_name();
+        if name == "records" {
+            continue;
+        }
+        let meta = crate::pending_chat::private_path(&entry.path(), false)?;
+        if meta.len() > 64 * 1024
+            || !matches!(
+                name.to_str(),
+                Some(
+                    "client-state.toml"
+                        | "retired-client-state.toml"
+                        | ".intent.lock"
+                        | ".native-manifest.lock"
+                )
+            )
+        {
+            return Err(Error::InvalidConfig(
+                "legacy saved message directory is invalid",
+            ));
+        }
+    }
+    let retired = directory.join("retired-client-state.toml").try_exists()?;
+    let configured = crate::checkpoint::inspect_state_file(directory)?.is_some();
+    if retired && configured {
+        return Err(Error::InvalidConfig(
+            "legacy saved message retirement is inconsistent",
+        ));
+    }
+    let records = directory.join("records");
+    let mut keys = Vec::new();
+    match std::fs::symlink_metadata(&records) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !retired => return Ok(keys),
+        Err(e) => return Err(e.into()),
+        Ok(_) => {
+            crate::pending_chat::private_path(&records, true)?;
+        }
+    }
+    crate::pending_chat::remove_uncommitted(&records)?;
+    for entry in std::fs::read_dir(records)? {
+        let entry = entry?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| Error::InvalidConfig("legacy saved message filename is invalid"))?;
+        let valid = name.strip_suffix(".fks").is_some_and(|k| {
+            k.len() == 97
+                && k.as_bytes()[32] == b'-'
+                && k.bytes()
+                    .enumerate()
+                    .all(|(i, b)| i == 32 || b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        });
+        if !valid
+            || keys.len() >= MAX_INTENTS
+            || crate::pending_chat::private_path(&entry.path(), false)?.len() > 8 * 1024 * 1024
+        {
+            return Err(Error::InvalidConfig(
+                "legacy saved message inventory is invalid",
+            ));
+        }
+        keys.push(name);
+    }
+    if (!configured || retired) && !keys.is_empty() {
+        return Err(Error::InvalidConfig(
+            "legacy saved message key configuration is missing",
+        ));
+    }
+    Ok(keys)
+}
+
+pub(crate) fn validate_intent(intent: &LocalChatIntent) -> Result<()> {
     if intent.submission.len() != 32
         || !intent
             .submission

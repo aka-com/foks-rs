@@ -135,6 +135,17 @@ pub(super) fn rekey(
 ) -> Result<DestinationAuthority> {
     let old_master = snapshot.master()?;
     let mut projection = NativeManifestStore::initialized(&identity.destination, new_master);
+    let pending = identity.staging.join(crate::pending_chat::DIRECTORY);
+    if files::exists(&pending)? {
+        let temporary = identity.staging.join(format!(
+            ".import-chat-intents-{}",
+            crate::hex(&identity.nonce)
+        ));
+        hook("before-chat-intents-rekey")?;
+        crate::pending_chat::rekey(&pending, &temporary, &old_master, new_master)?;
+        hook("after-chat-intents-rekey")?;
+        replace_rekey_directory(identity, &pending, &temporary, hook)?;
+    }
     for (name, profile) in &snapshot.profiles {
         let directory = identity.staging.join("profiles").join(name);
         let vault_path = directory.join("credentials");

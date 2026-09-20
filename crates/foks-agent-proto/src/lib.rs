@@ -434,8 +434,8 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_is_a_local_v26_mutation_with_no_initial_trust_inputs() {
-        assert_eq!(PROTOCOL_VERSION, 26);
+    fn reconcile_is_a_local_v27_mutation_with_no_initial_trust_inputs() {
+        assert_eq!(PROTOCOL_VERSION, 27);
         let operation = Operation::ReconcileProfile {
             profile: "saved".into(),
         };
@@ -443,7 +443,7 @@ mod tests {
         let request = Request::new(19, operation);
         assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
         let mut previous = serde_json::to_value(&request).unwrap();
-        previous["version"] = serde_json::json!(25);
+        previous["version"] = serde_json::json!(26);
         assert!(matches!(
             decode_request(&encode(&previous).unwrap()),
             Err(Error::Version)
@@ -451,8 +451,8 @@ mod tests {
     }
 
     #[test]
-    fn submit_message_is_a_local_v26_mutation() {
-        assert_eq!(PROTOCOL_VERSION, 26);
+    fn submit_message_is_a_local_v27_mutation() {
+        assert_eq!(PROTOCOL_VERSION, 27);
         let request = Request::new(
             20,
             Operation::Chat {
@@ -473,7 +473,7 @@ mod tests {
         assert!(!format!("{request:?}").contains("private message"));
         assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
         let mut previous = serde_json::to_value(&request).unwrap();
-        previous["version"] = serde_json::json!(25);
+        previous["version"] = serde_json::json!(26);
         assert!(matches!(
             decode_request(&encode(&previous).unwrap()),
             Err(Error::Version)

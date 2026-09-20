@@ -42,6 +42,8 @@ export function mockChat(snapshot?: AgentSnapshot) {
       waiters: Set<() => void>;
     }
   >();
+  const intents = new Map<string, { submission: string; text: string }>();
+  const receipts = new Set<string>();
   let counter = 10;
   const chat = async (
     storeId: string,
@@ -115,7 +117,61 @@ export function mockChat(snapshot?: AgentSnapshot) {
       op.state = 'confirmed';
     };
     let result: ChatResult;
-    if (action.action === 'channels')
+    if (
+      action.action === 'load-intent' ||
+      action.action === 'save-intent' ||
+      action.action === 'clear-intent' ||
+      action.action === 'import-intent'
+    ) {
+      if (
+        action.host !== '02' + 'ab'.repeat(32) ||
+        action.actor !== '01' + 'ab'.repeat(32)
+      )
+        throw new Error('Saved message scope changed.');
+      const key = JSON.stringify([
+        storeId,
+        action.host,
+        action.actor,
+        action.channel,
+      ]);
+      const saved = intents.get(key);
+      if (
+        action.action === 'save-intent' ||
+        action.action === 'import-intent'
+      ) {
+        if (!(
+          action.action === 'import-intent' && receipts.has(action.source)
+        )) {
+          if (
+            saved &&
+            (saved.submission !== action.submission ||
+              saved.text !== action.text)
+          )
+            throw new Error(
+              'Another message is already saved for this channel.',
+            );
+          if (!saved && intents.size >= 128)
+            throw new Error('Saved message capacity reached.');
+          intents.set(key, {
+            submission: action.submission,
+            text: action.text,
+          });
+          if (action.action === 'import-intent') receipts.add(action.source);
+        }
+      } else if (action.action === 'clear-intent') {
+        if (saved && saved.submission !== action.submission)
+          throw new Error('Saved message changed.');
+        intents.delete(key);
+      }
+      result = {
+        kind: 'intent',
+        channel: action.channel,
+        intent:
+          action.action === 'clear-intent' || action.action === 'import-intent'
+            ? null
+            : structuredClone(intents.get(key) ?? null),
+      };
+    } else if (action.action === 'channels')
       result = {
         kind: 'channels',
         channels: [...team.channels],

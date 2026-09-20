@@ -435,14 +435,11 @@ test('local intent persistence survives navigation and retains the next draft', 
   const { store, refusals } = await setup({
     override: (base) => ({
       ...base,
-      chatLocal: async (action) => {
+      chat: async (storeId, action, view) => {
         if (action.action === 'save-intent')
           await new Promise<void>((resolve) => {
             finishSave = resolve;
           });
-        return base.chatLocal(action);
-      },
-      chat: async (storeId, action, view) => {
         if (action.action === 'submit-message') preparations++;
         if (action.action === 'attempt') attempts++;
         return base.chat(storeId, action, view);

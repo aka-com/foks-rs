@@ -478,11 +478,19 @@ pub(crate) fn operation_leaves_retained_material(operation: &Operation) -> bool 
         // supersede a retained outcome or view. The renderer issues the last
         // two every two seconds per team even when nothing is pending, so
         // treating them as mutations empties both caches on every idle tick.
+        // Intent persistence also leaves account/team material untouched, but
+        // its writes are explicitly excluded from abandonment below.
         // Every other chat action is either a read that is already served
         // from the caches, a long poll, or a mutation.
         Operation::Chat { action, .. } => matches!(
             action,
-            ChatAction::Status { .. } | ChatAction::Pending | ChatAction::CleanupPending
+            ChatAction::Status { .. }
+                | ChatAction::Pending
+                | ChatAction::CleanupPending
+                | ChatAction::LoadIntent { .. }
+                | ChatAction::SaveIntent { .. }
+                | ChatAction::ClearIntent { .. }
+                | ChatAction::ImportIntent { .. }
         ),
         _ => false,
     }
@@ -494,6 +502,10 @@ pub(crate) fn operation_leaves_retained_material(operation: &Operation) -> bool 
 /// their outcome unknown. Host probes, reconciliation, and lease renewal also
 /// continue because they may pin trust or update server state.
 pub(crate) fn operation_is_abandonable(operation: &Operation) -> bool {
+    if matches!(operation, Operation::Chat { action, .. } if action.is_intent() && action.is_mutation())
+    {
+        return false;
+    }
     if matches!(
         operation,
         Operation::Probe { .. }

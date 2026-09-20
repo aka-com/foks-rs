@@ -19,6 +19,10 @@ import { sameScope } from './scope';
 export { sameScope } from './scope';
 
 const kinds = {
+  'load-intent': 'intent',
+  'save-intent': 'intent',
+  'clear-intent': 'intent',
+  'import-intent': 'intent',
   'operation-body': 'operation-body',
   channels: 'channels',
   history: 'history',
