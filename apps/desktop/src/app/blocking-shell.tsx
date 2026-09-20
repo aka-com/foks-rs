@@ -378,6 +378,15 @@ export function BlockedShell({
  * progress line is re-read rather than announced as a new region.
  */
 function StartingScreen({ progress }: { progress?: BootProgress }): ReactNode {
+  const detail = progress?.devices
+    ? `${progress.devices.ready} of ${progress.devices.total} accounts ready`
+    : progress && progress.total > 0
+      ? progress.ready < progress.total
+        ? `${progress.ready} of ${progress.total} profiles ready`
+        : 'Loading items…'
+      : progress
+        ? 'This can take a few seconds.'
+        : 'Startup usually takes a few seconds.';
   return (
     <div className="booting" role="status">
       <span className="spin" aria-hidden="true" />
@@ -388,22 +397,7 @@ function StartingScreen({ progress }: { progress?: BootProgress }): ReactNode {
             ? 'Connecting to your vaults'
             : 'Starting the FOKS agent…'}
       </b>
-      <span className="line">
-        {progress
-          ? 'This can take a few seconds.'
-          : 'Startup usually takes a few seconds.'}
-      </span>
-      {progress?.devices ? (
-        <span className="line prog">
-          {progress.devices.ready} of {progress.devices.total} accounts ready
-        </span>
-      ) : progress && progress.total > 0 ? (
-        <span className="line prog">
-          {progress.ready < progress.total
-            ? `${progress.ready} of ${progress.total} profiles ready`
-            : 'Loading items…'}
-        </span>
-      ) : null}
+      <span className="line">{detail}</span>
     </div>
   );
 }
