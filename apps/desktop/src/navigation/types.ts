@@ -8,8 +8,9 @@ import type { LeaseState, StoreRef } from '../model/types';
  * of them is open. `account` is one account's profile, the account the address
  * `store` names: its username, local alias, server, and the counts that link
  * to Devices and Teams. It also lists the servers this Mac talks to and holds
- * each server's own page, security keys included. `preferences` contains
- * account passphrases and local desktop alert settings. `mac` is Device: the
+ * each server's own page, security keys included, and manages the selected
+ * account's passphrase. `preferences` contains local desktop alert and
+ * appearance settings. `mac` is Device: the
  * application version and lock, the agent, the local FOKS data operations and
  * the Mac-wide reset. The section keeps its `mac` id, so older addresses that
  * name it still resolve.

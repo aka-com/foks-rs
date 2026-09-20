@@ -626,11 +626,11 @@ test('settings scene aliases map to specific account stores', () => {
 });
 
 test('the six former Settings sections resolve to the three pages that hold them', () => {
-  // Account (the passphrase rows) and Notifications are both Preferences;
-  // This device and About both described this Mac; Security keys was a list
-  // of links to the server pages, which now lives under Account.
+  // Account passphrases and the former Security keys server links live under
+  // Account; Notifications is Preferences; This device and About described
+  // this Mac.
   for (const [former, section] of [
-    ['credentials', 'preferences'],
+    ['credentials', 'account'],
     ['notifications', 'preferences'],
     ['device', 'mac'],
     ['about', 'mac'],

@@ -1,9 +1,4 @@
 import { localAliasOf } from '../model';
-import { WorkflowProvider } from '../workflow-context';
-import {
-  workflowAvailability,
-  workflowMessage,
-} from '../model/workflow-availability';
 /**
  * The Settings tab: a sub-navigation of three pages, held on screen beside
  * whichever one is open.
@@ -11,7 +6,7 @@ import {
  * Account, the first page and the one the tab opens on, is one account's
  * profile: the account the address's `store` names. At its bottom are the
  * servers this Mac talks to, each with its own detail, where its security keys
- * are managed. Preferences contains account passphrases and local desktop alert settings.
+ * are managed. Preferences contains local desktop alert and appearance settings.
  * Device contains the application version and lock, the agent and its socket,
  * local FOKS data operations, and the device-wide reset. A `section=` address
  * opens its page; `profile=` opens a server detail at the bottom of Account.
@@ -52,14 +47,8 @@ import type { Location, NavigateOptions, SettingsSection } from '../location';
 import { useSheetGuard } from '../navigation-guard';
 import { useMetadataQuery, useMetadataRepository } from '../query-hooks';
 import { appInfoQuery } from '../resources/application';
-import {
-  accountStores,
-  plural,
-  serverDisplayName,
-  serverName,
-  usernameOf,
-} from '../model';
-import type { AccountStore, AgentSnapshot, Server } from '../model';
+import { accountStores, plural, serverDisplayName, usernameOf } from '../model';
+import type { AgentSnapshot, Server } from '../model';
 import { PageHeader } from '../shell/page-header';
 import {
   RAIL_COLORS,
@@ -72,8 +61,6 @@ import { agentLifecycleLabel, type AgentLifecycle } from '../agent-lifecycle';
 import { NotificationSettings } from '../chat/notification-provider';
 import { ServersSection } from './servers-screen';
 import { AccountSection } from './account-section';
-import { AccountMark } from './account-switcher';
-import { PassphraseSheet } from './device-sheets';
 
 export interface SettingsScreenProps {
   snapshot: AgentSnapshot;
@@ -92,7 +79,7 @@ export interface SettingsScreenProps {
 
 /** A sheet this page owns. Add a server and the per-server reset are the
  *  embedded server section's own. */
-type Sheet = 'passphrase' | 'reset-mac' | null;
+type Sheet = 'reset-mac' | null;
 
 /** The base the sub-navigation's tab and panel ids are derived from. */
 const SETTINGS_TABS = 'settings-sections';
@@ -113,9 +100,7 @@ export function SettingsScreen({
 }: SettingsScreenProps): ReactNode {
   const [enteredScene] = useState(scene);
   const toasts = useToast();
-  const stores = accountStores(snapshot);
   const [sheet, setSheet] = useState<Sheet>(null);
-  const [passphrase, setPassphrase] = useState<AccountStore | null>(null);
   const repository = useMetadataRepository(bridge);
   const { data: appInfo } = useMetadataQuery(appInfoQuery(repository, bridge), {
     onError,
@@ -165,14 +150,7 @@ export function SettingsScreen({
 
   const page: ReactNode =
     section === 'account' ? null : section === 'preferences' ? (
-      <PreferencesSection
-        snapshot={snapshot}
-        stores={stores}
-        onPassphrase={(store) => {
-          setPassphrase(store);
-          setSheet('passphrase');
-        }}
-      />
+      <PreferencesSection />
     ) : (
       <DeviceSection
         snapshot={snapshot}
@@ -247,24 +225,6 @@ export function SettingsScreen({
           </>
         )}
       </div>
-      {sheet === 'passphrase' && passphrase ? (
-        <WorkflowProvider snapshot={snapshot}>
-          <PassphraseSheet
-            bridge={bridge}
-            store={passphrase}
-            onClose={() => {
-              setSheet(null);
-              setPassphrase(null);
-            }}
-            onDone={(message) => {
-              setSheet(null);
-              setPassphrase(null);
-              void onRefresh(message).catch((error) => onMutationError(error));
-            }}
-            onError={(error) => void onMutationError(error)}
-          />
-        </WorkflowProvider>
-      ) : null}
       {sheet === 'reset-mac' ? (
         <ResetMacSheet
           snapshot={snapshot}
@@ -284,70 +244,10 @@ export function SettingsScreen({
   );
 }
 
-/** Account passphrases and locally stored desktop alert preferences. */
-function PreferencesSection({
-  snapshot,
-  stores,
-  onPassphrase,
-}: {
-  snapshot: AgentSnapshot;
-  stores: readonly AccountStore[];
-  onPassphrase: (store: AccountStore) => void;
-}): ReactNode {
+/** Locally stored desktop alert and appearance preferences. */
+function PreferencesSection(): ReactNode {
   return (
     <>
-      <SectionLabel>Passphrase</SectionLabel>
-      <Inset className="settings-inset middle wide">
-        {stores.length ? (
-          stores.map((store) => {
-            const eligibility = workflowAvailability(snapshot, 'passphrase', {
-              profile: store.server,
-              account: store.account,
-            });
-            const stopped = {
-              stopped: !eligibility.available,
-              reason: workflowMessage(eligibility) ?? '',
-            };
-            return (
-              <InsetRow
-                key={store.id}
-                className="devrow"
-                action={
-                  <Button
-                    size="sm"
-                    disabled={stopped.stopped}
-                    title={stopped.stopped ? stopped.reason : undefined}
-                    onClick={() => onPassphrase(store)}
-                  >
-                    Passphrase…
-                  </Button>
-                }
-              >
-                <AccountMark
-                  name={usernameOf(snapshot, store) ?? store.account}
-                />
-                <span className="t">
-                  <b>{usernameOf(snapshot, store) ?? store.account}</b>
-                  <small>
-                    {localAliasOf(snapshot, store)} ·{' '}
-                    {serverName(snapshot, store)}
-                  </small>
-                  {/* Why the action is off, on the row and not only in the
-                      button's title. */}
-                  {stopped.stopped ? (
-                    <small className="why">{stopped.reason}</small>
-                  ) : null}
-                </span>
-              </InsetRow>
-            );
-          })
-        ) : (
-          <InsetRow label="None">No accounts on this device.</InsetRow>
-        )}
-      </Inset>
-      {/* The sheet reads the account's passphrase state and offers whichever
-          of set and change the server will accept. */}
-      <p className="fn">Set or change an account's passphrase on its server.</p>
       <SectionLabel>Desktop alerts</SectionLabel>
       <NotificationSettings />
       <SectionLabel>Appearance</SectionLabel>

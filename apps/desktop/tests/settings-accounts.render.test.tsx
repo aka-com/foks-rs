@@ -178,13 +178,14 @@ test('the account panel keeps every workflow row from the accounts pane', async 
   const { rendered } = await renderPeople(await fixture());
 
   // One account is shown at a time now, so each fact and each workflow
-  // appears once: the five facts' own actions, and the four quieter links
-  // below them.
+  // appears once: the primary facts' actions, the passphrase action, and the
+  // four quieter links below them.
   for (const name of [
     'Change…',
     'Server details ›',
     'Devices ›',
     'Teams ›',
+    'Passphrase…',
     'Bot accounts',
     'Open web admin panel',
     'Sign in via SSO',

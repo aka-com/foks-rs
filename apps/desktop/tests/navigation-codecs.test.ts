@@ -312,7 +312,7 @@ test('canonical production routes round-trip opaque store references and explici
 
 test('folded and retired settings sections remain production deep links', () => {
   const sections: Record<string, Location> = {
-    credentials: { kind: 'settings', section: 'preferences' },
+    credentials: { kind: 'settings', section: 'account' },
     notifications: { kind: 'settings', section: 'preferences' },
     device: { kind: 'settings', section: 'mac' },
     about: { kind: 'settings', section: 'mac' },

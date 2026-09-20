@@ -18,9 +18,10 @@ import { useTabSheetState } from '../navigation-guard';
  * properties with management links: Username, Shown as (the local alias),
  * Server, Devices, and Teams. Secondary integrations (Bot accounts, web
  * administration, SSO, and FOKS CLI import) render below the primary
- * properties. Alerts without a navigable destination, such as catalog read
- * failures, render above the details list; entity-specific alerts render in
- * their corresponding Settings or Teams views.
+ * properties. The selected account's passphrase is managed here as well.
+ * Alerts without a navigable destination, such as catalog read failures,
+ * render above the details list; entity-specific alerts render in their
+ * corresponding Settings or Teams views.
  *
  * The section draws its own header and tab panel, because its header is an
  * identity rather than the section's name, which is what the other sections'
@@ -41,6 +42,7 @@ import {
   Inset,
   InsetRow,
   Notice,
+  SectionLabel,
 } from '../components';
 import type { Bridge } from '../bridge';
 import {
@@ -68,13 +70,20 @@ import { AccountMark } from './account-switcher';
 import { deviceEntries } from './device-model';
 import type { DeviceLists } from './device-model';
 import { GoProfileConnectSheet } from './go-profile-connect';
+import { PassphraseSheet } from './device-sheets';
 
 const ACTION_UNAVAILABLE =
   'Resolve this under Account servers, or in the team’s settings.';
 
 /** The account panels reached from a row on this page. */
 type AccountSheet =
-  'local-alias' | 'rename' | 'bot' | 'admin' | 'sso' | 'go-profile';
+  | 'local-alias'
+  | 'rename'
+  | 'passphrase'
+  | 'bot'
+  | 'admin'
+  | 'sso'
+  | 'go-profile';
 
 function canRetry(note: Notification): boolean {
   return note.action === 'Retry' && note.id.startsWith('catalog-');
@@ -588,6 +597,18 @@ export function AccountSection({
           onComplete={() => onRefresh('Username updated')}
         />
       ) : null}
+      {selected && sheet === 'passphrase' ? (
+        <PassphraseSheet
+          bridge={bridge}
+          store={selected}
+          onClose={() => setSheet(null)}
+          onDone={(message) => {
+            setSheet(null);
+            void onRefresh(message).catch((error) => onMutationError(error));
+          }}
+          onError={(error) => void onMutationError(error)}
+        />
+      ) : null}
       {selected && sheet === 'bot' ? (
         <BotPanel
           bridge={bridge}
@@ -807,6 +828,22 @@ function AccountPanel({
         freshness={freshness}
         onRetry={onRetry}
       />
+      <SectionLabel>Passphrase</SectionLabel>
+      <Inset className="settings-inset middle wide">
+        <InsetRow
+          action={
+            <Button
+              size="sm"
+              {...access.props('passphrase', target)}
+              onClick={() => onSheet('passphrase')}
+            >
+              Passphrase…
+            </Button>
+          }
+        >
+          Set or change this account’s passphrase on its server.
+        </InsetRow>
+      </Inset>
       <div className="fn account-more">
         <Button
           variant="plain"

@@ -413,9 +413,8 @@ test('a section address opens that page, each with the sub-navigation beside it'
   }
 });
 
-test('Preferences holds one passphrase row per account, the desktop alert preferences and the rail color', async () => {
-  const snapshot = await fixture();
-  const rendered = await renderSettings(snapshot, {
+test('Preferences holds desktop alert preferences and the rail color', async () => {
+  const rendered = await renderSettings(await fixture(), {
     where: { section: 'preferences' },
   });
 
@@ -428,27 +427,9 @@ test('Preferences holds one passphrase row per account, the desktop alert prefer
     [...main.querySelectorAll(':scope > .sec')].map(
       (label) => label.textContent,
     ),
-    ['Passphrase', 'Desktop alerts', 'Appearance'],
+    ['Desktop alerts', 'Appearance'],
   );
-  // One button per account; the sheet reads which operation applies.
-  const accounts = snapshot.stores.filter((store) => store.kind === 'account');
-  const buttons = rendered.getAllByRole('button', {
-    name: 'Passphrase…',
-  });
-  assert.equal(buttons.length, accounts.length);
-  assert.equal(rendered.queryByRole('button', { name: 'Set…' }), null);
-  assert.equal(rendered.queryByRole('button', { name: 'Verify…' }), null);
-  // A row with no label reserves no label column: the account mark is the
-  // row's first child.
-  const rows = [...main.querySelectorAll('.settings-inset .fr.devrow')];
-  assert.equal(rows.length, accounts.length);
-  for (const row of rows) {
-    assert.equal(row.querySelector('.k'), null);
-    assert.equal(row.firstElementChild?.className, 'v');
-  }
-  assert.ok(
-    rendered.getByText("Set or change an account's passphrase on its server."),
-  );
+  assert.equal(rendered.queryByRole('button', { name: 'Passphrase…' }), null);
   assert.ok(
     rendered.getByRole('checkbox', {
       name: 'Enable desktop alerts on this device',
@@ -456,7 +437,7 @@ test('Preferences holds one passphrase row per account, the desktop alert prefer
   );
 });
 
-test('a Preferences page with no accounts says so', async () => {
+test('Preferences remains available without an account', async () => {
   const snapshot = await fixture();
   const rendered = await renderSettings(
     {
@@ -466,11 +447,12 @@ test('a Preferences page with no accounts says so', async () => {
     { where: { section: 'preferences' } },
   );
 
-  assert.ok(rendered.getByText('No accounts on this device.'));
-  assert.equal(
-    rendered.queryByRole('button', { name: 'Change passphrase…' }),
-    null,
+  assert.ok(
+    rendered.getByRole('checkbox', {
+      name: 'Enable desktop alerts on this device',
+    }),
   );
+  assert.equal(rendered.queryByRole('button', { name: 'Passphrase…' }), null);
 });
 
 test('a server address keeps the sub-navigation on screen, Account still selected', async () => {
@@ -493,13 +475,11 @@ test('a server address keeps the sub-navigation on screen, Account still selecte
 
 test('the passphrase sheet changes a configured passphrase behind a check', async () => {
   const rendered = await renderSettings(await fixture(), {
-    where: { section: 'preferences' },
+    where: { section: 'account' },
   });
 
   await ui.act(async () => {
-    ui.fireEvent.click(
-      rendered.getAllByRole('button', { name: 'Passphrase…' })[0],
-    );
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Passphrase…' }));
   });
   const dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
   // The account in the fixture holds a passphrase, so the sheet settles on
@@ -543,7 +523,7 @@ test('the passphrase sheet stops changing once the check is rate-limited', async
     fatal: false,
   };
   const rendered = await renderSettings(await fixture(), {
-    where: { section: 'preferences' },
+    where: { section: 'account' },
     decorate: (bridge) => ({
       ...bridge,
       changeAccountPassphrase: async () => {
@@ -554,9 +534,7 @@ test('the passphrase sheet stops changing once the check is rate-limited', async
   });
 
   await ui.act(async () => {
-    ui.fireEvent.click(
-      rendered.getAllByRole('button', { name: 'Passphrase…' })[0],
-    );
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Passphrase…' }));
   });
   const dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
   await ui.waitFor(() => ui.within(dialog).getByLabelText('Current'));
@@ -607,7 +585,7 @@ test('the passphrase sheet stops changing once the check is rate-limited', async
 
 test('the passphrase sheet sets a first passphrase when the account has none', async () => {
   const rendered = await renderSettings(await fixture(), {
-    where: { section: 'preferences' },
+    where: { section: 'account' },
     decorate: (bridge) => ({
       ...bridge,
       accountPassphraseStatus: async () => ({
@@ -618,9 +596,7 @@ test('the passphrase sheet sets a first passphrase when the account has none', a
   });
 
   await ui.act(async () => {
-    ui.fireEvent.click(
-      rendered.getAllByRole('button', { name: 'Passphrase…' })[0],
-    );
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Passphrase…' }));
   });
   const dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
   await ui.waitFor(() =>
@@ -1369,7 +1345,7 @@ test('a passphrase conflict blocks another write until its status refresh succee
   let writes = 0;
   let rejectStatus!: (error: Error) => void;
   const rendered = await renderSettings(await fixture(), {
-    where: { section: 'preferences' },
+    where: { section: 'account' },
     onMutationError: () => {},
     decorate: (bridge) => ({
       ...bridge,
@@ -1393,9 +1369,7 @@ test('a passphrase conflict blocks another write until its status refresh succee
       },
     }),
   });
-  ui.fireEvent.click(
-    rendered.getAllByRole('button', { name: 'Passphrase…' })[0],
-  );
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Passphrase…' }));
   const dialog = await rendered.findByRole('dialog');
   await ui.waitFor(() => ui.within(dialog).getByLabelText('Current'));
   for (const [label, value] of [

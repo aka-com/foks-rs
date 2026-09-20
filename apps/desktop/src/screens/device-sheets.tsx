@@ -23,7 +23,8 @@ import type { WorkflowOperation } from '../model/workflow-availability';
  * The sheets that act on one account's devices, keys and passphrase.
  *
  * They are shared: Devices opens the pairing, paper-key, YubiKey and removal
- * sheets, and Settings opens the passphrase and card-credential ones. Each is
+ * sheets, and Settings › Account opens the passphrase and card-credential
+ * ones. Each is
  * the sheet that pane opened before the three tabs were split apart, with the
  * same commands behind it.
  */

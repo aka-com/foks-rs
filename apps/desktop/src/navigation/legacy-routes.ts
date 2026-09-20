@@ -8,7 +8,8 @@ import type {
 
 /**
  * Former `section=` values that are pages of one of the three sections now.
- * `credentials` (the passphrase rows) and `notifications` are Preferences;
+ * `credentials` (the passphrase rows) is Account and `notifications` is
+ * Preferences;
  * `device`, `about` and the older `agent` are Device; `security-keys` was a
  * list of links to each server's page, now at the bottom of Account. `servers`
  * is the retired id of the same page.
@@ -16,7 +17,7 @@ import type {
 export const SETTINGS_SECTION_ALIASES: Readonly<
   Record<string, SettingsSection>
 > = {
-  credentials: 'preferences',
+  credentials: 'account',
   notifications: 'preferences',
   device: 'mac',
   about: 'mac',
