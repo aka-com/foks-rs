@@ -196,13 +196,14 @@ test('confirmed delivery finishes while delayed history holds intent cleanup', a
   delayed = true;
   try {
     await h.send('first');
-    await ui.waitFor(() => assertSent(h.current, 1, false));
+    await ui.waitFor(() => assertSent(h.current, 1));
     assert.equal(h.history.busy, true);
     assert.ok(h.calls.some((action) => action.action === 'history'));
     await ui.act(async () => h.current.setDraft('second'));
     assert.equal(h.current.messages.length, 1);
     assert.equal(h.current.draft, 'second');
-    assert.equal(h.current.canSend, false);
+    // A held history refresh is not something the composer waits on.
+    assert.equal(h.current.canSend, true);
     assert.equal(h.current.messages[0].running, false);
     await ui.act(async () => {
       history.resolve();
@@ -240,7 +241,7 @@ test('pending-view refresh is not a prerequisite to submitting delivery', async 
     h.current.service.refresh(storeId);
   try {
     await h.send('send before optional refresh');
-    await ui.waitFor(() => assertSent(h.current, 1, false));
+    await ui.waitFor(() => assertSent(h.current, 1));
     assert.ok(h.calls.some((action) => action.action === 'pending'));
     assert.equal(
       h.calls.filter((action) => action.action === 'submit-message').length,
@@ -369,13 +370,17 @@ test('an older delivery error belongs to its message, not a newer send', async (
   try {
     await h.send('first');
     await ui.waitFor(() => assert.equal(attempts, 1));
-    assert.equal(h.current.canSend, false);
+    // The attempt is still out; the composer is open because another send
+    // would queue behind this message rather than wait for it.
+    assert.equal(h.current.canSend, true);
     await ui.act(async () => h.current.setDraft('second'));
     assert.equal(h.current.draft, 'second');
     await ui.act(async () => {
       old.resolve();
     });
-    await ui.waitFor(() => assert.equal(h.current.canSend, true));
+    await ui.waitFor(() =>
+      assert.equal(h.current.messages[0].error, 'older delivery failed'),
+    );
     await h.send('second');
     await ui.waitFor(() => {
       assert.equal(h.current.messages[0].running, false);

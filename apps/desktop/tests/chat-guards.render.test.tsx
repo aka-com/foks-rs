@@ -459,9 +459,11 @@ test('local intent persistence survives navigation and retains the next draft', 
   assert.equal(composer().value, '');
   assert.equal(composer().disabled, false);
   write('the next draft');
+  // The composer does not wait on the message being saved: the next send
+  // queues behind it.
   assert.equal(
     ui.screen.getByRole<HTMLButtonElement>('button', { name: 'Send' }).disabled,
-    true,
+    false,
   );
   await leave(store);
   assert.equal(dialog(), null);
@@ -603,9 +605,11 @@ test('a message being sent is neither prompted about nor refused', async () => {
   );
   await ui.screen.findByText('on its way', { selector: '.chat-message p' });
   assert.equal(composer().value, 'another thought');
+  // The send in flight does not close the composer; another message would
+  // queue behind it.
   assert.equal(
     ui.screen.getByRole<HTMLButtonElement>('button', { name: 'Send' }).disabled,
-    true,
+    false,
   );
 });
 

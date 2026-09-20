@@ -1,12 +1,30 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ChatSendService, type ChatSendTiming } from '../src/chat/send-service';
+import {
+  CHAT_QUEUE_ROWS,
+  ChatSendService,
+  type ChatSendTiming,
+} from '../src/chat/send-service';
 import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';
 import type { ChatAction, ChatReply } from '../src/chat-contract';
 import type { ChatClock, TeamInbox } from '../src/chat/inbox-service';
 
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+/**
+ * Waits for a channel's send queue to empty. Each message is started by the
+ * one ahead of it finishing, so the queue takes as many turns of the loop as
+ * it holds messages rather than settling in one.
+ */
+async function drained(h: { service: ChatSendService; channel: string }) {
+  for (let turn = 0; turn < 200; turn++) {
+    await settle();
+    const messages = h.service.messages('team:eng', h.channel);
+    if (messages.every((m) => m.phase === 'sent')) return;
+  }
+  throw new Error('the send queue did not drain');
+}
 
 function deferred() {
   let resolve!: () => void;
@@ -176,7 +194,7 @@ test('a pending send releases its draft while delivery continues outside the con
   }
 });
 
-test('one channel intent applies admission backpressure without blocking typing', async () => {
+test('a send while one is in flight queues rather than being refused', async () => {
   const gate = deferred();
   const h = await setup(async (action, run) => {
     if (action.action === 'submit-message') await gate.promise;
@@ -184,14 +202,216 @@ test('one channel intent applies admission backpressure without blocking typing'
   });
   try {
     const sending = h.service.submit('team:eng', h.channel, 'first');
-    h.service.setDraft('team:eng', h.channel, 'second');
+    await settle();
+    // The channel is working on the first message and still admits the next.
+    assert.equal(h.service.canSubmit('team:eng', h.channel), true);
+    await h.service.submit('team:eng', h.channel, 'second');
+    await h.service.submit('team:eng', h.channel, 'third');
+    assert.deepEqual(
+      h.service.messages('team:eng', h.channel).map((m) => m.phase),
+      ['preparing', 'queued', 'queued'],
+    );
+    // Nothing was saved for a queued message, so only the message being sent
+    // has reached the agent.
+    assert.deepEqual(
+      h.calls.filter((a) => a.action === 'save-intent').length,
+      1,
+    );
+    assert.equal(h.service.draft('team:eng', h.channel), '');
+    gate.resolve();
+    await sending;
+    await drained(h);
+    assert.deepEqual(
+      h.service.messages('team:eng', h.channel).map((m) => m.phase),
+      ['sent', 'sent', 'sent'],
+    );
+    // One message at a time, in the order they were sent in: the agent keeps
+    // a single saved message per channel.
+    assert.deepEqual(
+      h.calls.flatMap((a) => (a.action === 'submit-message' ? [a.text] : [])),
+      ['first', 'second', 'third'],
+    );
+    assert.deepEqual(
+      h.calls.flatMap((a) =>
+        ['save-intent', 'clear-intent'].includes(a.action) ? [a.action] : [],
+      ),
+      [
+        'save-intent',
+        'clear-intent',
+        'save-intent',
+        'clear-intent',
+        'save-intent',
+        'clear-intent',
+      ],
+    );
+  } finally {
+    gate.resolve();
+    h.service.stop();
+  }
+});
+
+test('the queue stops admitting sends at its depth and keeps the draft', async () => {
+  const gate = deferred();
+  const h = await setup(async (action, run) => {
+    if (action.action === 'submit-message') await gate.promise;
+    return run();
+  });
+  const sending = h.service.submit('team:eng', h.channel, 'in flight');
+  try {
+    await settle();
+    // One message is being sent; the depth is what may wait behind it.
+    for (let count = 0; count < CHAT_QUEUE_ROWS; count++) {
+      assert.equal(
+        h.service.canSubmit('team:eng', h.channel),
+        true,
+        `refused message ${count}`,
+      );
+      await h.service.submit('team:eng', h.channel, `message ${count}`);
+    }
     assert.equal(h.service.canSubmit('team:eng', h.channel), false);
-    await assert.rejects(h.service.submit('team:eng', h.channel, 'second'));
+    assert.equal(h.service.queueFull('team:eng', h.channel), true);
+    h.service.setDraft('team:eng', h.channel, 'over the limit');
+    await assert.rejects(
+      h.service.submit('team:eng', h.channel, 'over the limit'),
+      (error: { message: string }) => /waiting to be sent/.test(error.message),
+    );
+    assert.equal(h.service.draft('team:eng', h.channel), 'over the limit');
+    assert.equal(
+      h.service.messages('team:eng', h.channel).filter((m) => m.queued).length,
+      CHAT_QUEUE_ROWS,
+    );
+  } finally {
+    gate.resolve();
+    h.service.stop();
+    await sending.catch(() => {});
+  }
+});
+
+test('the queue counts as unsent until the agent has a copy of each message', async () => {
+  const gate = deferred();
+  const h = await setup(async (action, run) => {
+    if (action.action === 'save-intent') await gate.promise;
+    return run();
+  });
+  try {
+    const sending = h.service.submit('team:eng', h.channel, 'first');
+    await settle();
+    await h.service.submit('team:eng', h.channel, 'second');
+    // The first message's save has not been acknowledged and the other two
+    // are held here alone: all three would be lost with the window.
+    assert.equal(h.service.unsentCount(), 2);
+    gate.resolve();
+    await sending;
+    await drained(h);
+    assert.equal(h.service.unsentCount(), 0);
+  } finally {
+    gate.resolve();
+    h.service.stop();
+  }
+});
+
+for (const pausedAction of [
+  'save-intent',
+  'submit-message',
+  'clear-intent',
+] as const)
+  test(`pausing during ${pausedAction} preserves the queue and resumes in order`, async () => {
+    const gate = deferred();
+    let waiting = false;
+    const h = await setup(async (action, run) => {
+      if (action.action === pausedAction && !waiting) {
+        waiting = true;
+        await gate.promise;
+      }
+      return run();
+    });
+    try {
+      const sending = h.service.submit('team:eng', h.channel, 'first');
+      while (!waiting) await settle();
+      await h.service.submit('team:eng', h.channel, 'second');
+      h.service.pause();
+      gate.resolve();
+      await sending;
+      await settle();
+      assert.deepEqual(
+        h.service.messages('team:eng', h.channel).map((m) => m.text),
+        ['first', 'second'],
+      );
+      assert.ok(h.service.unsentCount() >= 1);
+      const calls = h.calls.length;
+      await h.clock.advance(30_000);
+      assert.equal(h.calls.length, calls, 'paused work issues no requests');
+      h.service.start();
+      await h.clock.advance(30_000);
+      await drained(h);
+      assert.equal(h.service.unsentCount(), 0);
+      assert.deepEqual(
+        h.calls.flatMap((a) => (a.action === 'submit-message' ? [a.text] : [])),
+        ['first', 'second'],
+      );
+    } finally {
+      gate.resolve();
+      h.service.stop();
+    }
+  });
+
+test('a failed save keeps the queue in order until its own retry succeeds', async () => {
+  let saves = 0;
+  const h = await setup(async (action, run) => {
+    if (action.action === 'save-intent' && saves++ === 0)
+      throw {
+        code: 'unavailable',
+        message: 'Saved messages are temporarily unavailable.',
+        fatal: false,
+        ambiguous: false,
+        retryable: true,
+      };
+    return run();
+  });
+  try {
+    await h.service.submit('team:eng', h.channel, 'first');
+    await h.service.submit('team:eng', h.channel, 'second');
+    const [first, second] = h.service.messages('team:eng', h.channel);
+    assert.equal(first.phase, 'not-sent');
+    // The message behind a failure waits rather than overtaking it.
+    assert.equal(second.phase, 'queued');
+    assert.deepEqual(
+      h.calls.filter((a) => a.action === 'submit-message'),
+      [],
+    );
+    // The recovery pass owns the retry; nothing here resends by itself.
+    await h.clock.advance(30_000);
+    await drained(h);
+    assert.deepEqual(
+      h.calls.flatMap((a) => (a.action === 'submit-message' ? [a.text] : [])),
+      ['first', 'second'],
+    );
+  } finally {
+    h.service.stop();
+  }
+});
+
+test('a queued message can be taken back into the draft, and the next one follows', async () => {
+  const gate = deferred();
+  const h = await setup(async (action, run) => {
+    if (action.action === 'submit-message') await gate.promise;
+    return run();
+  });
+  try {
+    const sending = h.service.submit('team:eng', h.channel, 'first');
+    await settle();
+    await h.service.submit('team:eng', h.channel, 'second');
+    await h.service.submit('team:eng', h.channel, 'third');
+    const queued = h.service.messages('team:eng', h.channel)[1];
+    await h.service.restoreDraft('team:eng', queued.id);
     assert.equal(h.service.draft('team:eng', h.channel), 'second');
     gate.resolve();
     await sending;
-    await settle(); // Intent cleanup has its own acknowledgement.
-    assert.equal(h.service.canSubmit('team:eng', h.channel), true);
+    await drained(h);
+    assert.deepEqual(
+      h.calls.flatMap((a) => (a.action === 'submit-message' ? [a.text] : [])),
+      ['first', 'third'],
+    );
   } finally {
     gate.resolve();
     h.service.stop();

@@ -42,6 +42,7 @@ type Inbox = Pick<
   | 'isChannelBlocked'
 >;
 export type SendPhase =
+  | 'queued'
   | 'saving'
   | 'preparing'
   | 'sending'
@@ -71,6 +72,18 @@ export interface OutgoingMessage {
   operation?: ChatOperation;
   observed: boolean;
   running: boolean;
+  /**
+   * Waiting for the message ahead of it in this channel. A queued message is
+   * held in this session's memory alone: nothing has been written for it, so
+   * closing the window discards it.
+   */
+  queued: boolean;
+  /**
+   * Whether the agent has acknowledged a copy of this submission that
+   * outlives the window: its saved intent. A message that reached an
+   * `operation` is recorded by the agent itself and does not need this.
+   */
+  saved: boolean;
   intentPending: boolean;
   ambiguousPreparation: boolean;
   automatic: boolean;
@@ -136,6 +149,12 @@ const ACTIVE_TICK = 1000;
  * operations another session left behind.
  */
 const IDLE_TICK = 30_000;
+/**
+ * How many messages one channel may hold behind the one it is sending. The
+ * queue is this session's memory alone, so it is kept to a depth a person can
+ * still account for when the window asks before discarding it.
+ */
+export const CHAT_QUEUE_ROWS = 64;
 const problem = (message: string) => ({
   code: 'chat-limit',
   message,
@@ -217,11 +236,17 @@ export class ChatSendService {
     this.synchronize();
     this.arm(true);
   }
-  stop() {
+  /** Suspend agent work without discarding this window's unsaved queue. */
+  pause() {
     this.active = false;
     this.stopInbox?.();
+    this.stopInbox = undefined;
     this.clock.cancel(this.timer);
     this.timerDue = Infinity;
+    this.publish();
+  }
+  stop() {
+    this.pause();
     for (const team of this.teams.values()) {
       team.epoch++;
       team.client.dispose();
@@ -361,6 +386,16 @@ export class ChatSendService {
           for (const channel of revoked) {
             if (team.drafts.delete(channel)) changed = true;
             team.loaded.delete(channel);
+            // A queued message exists only in this session, and a revoked
+            // channel takes its text with the drafts. Nothing is left to send
+            // or to recover, so the row goes rather than remaining as a
+            // message that can never leave.
+            if (team.messages.some((m) => m.channel === channel && m.queued)) {
+              team.messages = team.messages.filter(
+                (m) => m.channel !== channel || !m.queued,
+              );
+              changed = true;
+            }
             for (const [id, observed] of team.observations)
               if (observed.channel === channel) team.observations.delete(id);
             for (const message of team.messages.filter(
@@ -442,6 +477,21 @@ export class ChatSendService {
   operations(storeId: string): TrackedOperation[] {
     return this.teams.get(storeId)?.operations ?? [];
   }
+  /**
+   * How many submissions this session is the only copy of: the queued
+   * messages, and the ones whose save the agent has not acknowledged. Every
+   * other outgoing message is either a prepared agent operation or a saved
+   * intent, both of which the next session recovers. Closing the window
+   * discards these, which is what the window asks about first.
+   */
+  unsentCount(): number {
+    let count = 0;
+    for (const team of this.teams.values())
+      for (const message of team.messages)
+        if (!message.operation && !message.saved && message.text !== undefined)
+          count++;
+    return count;
+  }
   loadError(storeId: string, channel: string): string {
     return this.teams.get(storeId)?.loadErrors.get(channel) ?? '';
   }
@@ -457,8 +507,61 @@ export class ChatSendService {
       team.scope &&
       team.loaded.has(channel) &&
       !team.loadErrors.has(channel) &&
-      !team.messages.some((m) => m.channel === channel && m.intentPending),
+      this.queueDepth(team, channel) < CHAT_QUEUE_ROWS,
     );
+  }
+  /** How many of this channel's submissions are waiting behind another. */
+  private queueDepth(team: Team, channel: string): number {
+    return team.messages.filter((m) => m.channel === channel && m.queued)
+      .length;
+  }
+  /** Whether this channel's queue is at the depth the composer stops at. */
+  queueFull(storeId: string, channel: string): boolean {
+    const team = this.teams.get(storeId);
+    return Boolean(team && this.queueDepth(team, channel) >= CHAT_QUEUE_ROWS);
+  }
+  /**
+   * Whether this message is the one its channel may work on now. The agent
+   * keeps one saved message per channel, so a submission waits for the one
+   * ahead of it to reach an operation and have its saved copy cleared. A
+   * message the agent has already prepared is ordered by the agent, not here,
+   * and a message already holding the channel's saved copy is the only one
+   * that can be holding it, wherever it sits in the list.
+   */
+  private admitted(team: Team, message: OutgoingMessage): boolean {
+    if (message.operation || message.intentPending) return true;
+    return (
+      this.head(team, message.channel) === message &&
+      !team.messages.some(
+        (m) =>
+          m !== message && m.channel === message.channel && m.intentPending,
+      )
+    );
+  }
+  /**
+   * The channel's oldest message the agent has not prepared and this session
+   * can still send. A message whose text went with the channel's access can
+   * never leave, so the queue is not held up on its behalf.
+   */
+  private head(team: Team, channel: string): OutgoingMessage | undefined {
+    return team.messages.find(
+      (m) => m.channel === channel && !m.operation && m.text !== undefined,
+    );
+  }
+  /**
+   * Starts the channel's next queued message once the one ahead of it is out
+   * of the way. Only the oldest unprepared message is ever driven, so the
+   * queue reaches the agent in the order the messages were sent in.
+   */
+  private drain(
+    team: Team,
+    channel: string,
+    priority: ChatWorkPriority = 'foreground',
+  ) {
+    if (!this.current(team)) return;
+    const next = this.head(team, channel);
+    if (!next?.queued || !this.admitted(team, next)) return;
+    void this.drive(team, next, priority);
   }
   private persistence(
     team: Team,
@@ -511,6 +614,10 @@ export class ChatSendService {
             saved.text,
             saved.submission,
           );
+          // It was read back out of the agent's own store, so it is saved and
+          // its copy there is this channel's until cleanup clears it.
+          message.saved = true;
+          message.intentPending = true;
           message.ambiguousPreparation = true;
           team.messages.push(message);
           void this.drive(team, message, priority);
@@ -555,7 +662,11 @@ export class ChatSendService {
       phase: 'saving',
       observed: false,
       running: false,
-      intentPending: true,
+      queued: false,
+      saved: false,
+      // A fresh submission has nothing saved for it yet; `drive` records the
+      // save it is about to attempt before it can be acknowledged or lost.
+      intentPending: false,
       ambiguousPreparation: false,
       automatic: true,
       error: '',
@@ -569,7 +680,9 @@ export class ChatSendService {
       throw problem('The message is empty or exceeds the text limit.');
     if (!this.canSubmit(storeId, channel))
       throw problem(
-        'The previous message is still being saved. Your draft is kept.',
+        this.queueFull(storeId, channel)
+          ? 'Too many messages are waiting to be sent in this channel. Your draft is kept.'
+          : 'This conversation cannot accept messages yet. Your draft is kept.',
       );
     const writable = this.inbox
       .getSnapshot()
@@ -587,6 +700,8 @@ export class ChatSendService {
     team.messages.push(message);
     if (team.drafts.get(channel) === text) team.drafts.delete(channel);
     this.publish();
+    // A channel already working on a message queues this one and returns at
+    // once, so the composer is free for the next message either way.
     await this.drive(team, message);
   }
   private apply(team: Team, reply: ChatReply, action: ChatAction) {
@@ -813,7 +928,12 @@ export class ChatSendService {
     } catch (error) {
       if (this.current(team, epoch)) message.cleanupError = failure(error);
     }
-    if (this.current(team, epoch)) this.publish();
+    if (this.current(team, epoch)) {
+      this.publish();
+      // The channel's one saved message is free again, so the next queued
+      // message can take it.
+      this.drain(team, message.channel);
+    }
   }
   private async drive(
     team: Team,
@@ -824,16 +944,25 @@ export class ChatSendService {
       this.request(team.storeId, action, priority);
     if (message.running || !this.current(team)) return;
     if (
-      !message.operation &&
-      team.messages.some(
-        (m) =>
-          m !== message && m.channel === message.channel && m.intentPending,
-      )
+      // A message with no text and no operation can never be sent, so it is
+      // neither queued nor something the queue waits behind; driving it
+      // reports that below rather than leaving a row that reads as waiting.
+      (message.operation || message.text !== undefined) &&
+      !this.admitted(team, message)
     ) {
-      message.error = 'Another message is still being saved in this channel.';
+      // Behind another message in this channel. It waits rather than failing;
+      // the channel's drain starts it as soon as the one ahead is out of the
+      // way, so the messages reach the agent in the order they were sent in.
+      message.queued = true;
+      message.phase = 'queued';
+      message.error = '';
       this.publish();
       return;
     }
+    message.queued = false;
+    // It is no longer waiting, so no row reads as queued while its save is
+    // already being attempted.
+    if (message.phase === 'queued') message.phase = 'saving';
     if (!this.available(team) || !this.readable(team, message.channel)) {
       message.phase = 'paused';
       this.publish();
@@ -854,6 +983,9 @@ export class ChatSendService {
           text: message.text,
         });
         if (!this.current(team, epoch)) return;
+        // Acknowledged: the agent now holds a copy the next session recovers,
+        // so closing the window no longer loses this submission.
+        message.saved = true;
         if (generation !== (this.generations.get(team.profile) ?? 0))
           throw {
             code: 'access-changed',
@@ -960,7 +1092,12 @@ export class ChatSendService {
       }
     } finally {
       message.running = false;
-      if (this.current(team, epoch)) this.publish();
+      if (this.current(team, epoch)) {
+        this.publish();
+        // Whatever this attempt ended as, the channel may have room for the
+        // message behind it now.
+        this.drain(team, message.channel, priority);
+      }
     }
   }
   async retry(storeId: string, id: string): Promise<void> {
@@ -1000,6 +1137,7 @@ export class ChatSendService {
     if (message.text) this.setDraft(storeId, message.channel, message.text);
     team.messages = team.messages.filter((m) => m !== message);
     this.publish();
+    this.drain(team, message.channel);
   }
   private observeMessage(
     team: Team,
@@ -1134,6 +1272,12 @@ export class ChatSendService {
     );
     const visited = new Set<string>();
     for (let count = 0; count < 16 && this.current(team, epoch); count++) {
+      // A queue whose head settled between publications still has to move;
+      // the drain is a no-op for a channel that is already working.
+      for (const channel of new Set(
+        team.messages.filter((m) => m.queued).map((m) => m.channel),
+      ))
+        this.drain(team, channel, priority);
       const jobs: { key: string; run: () => Promise<unknown> }[] = [];
       for (const op of team.operations) {
         if (team.messages.some((m) => m.operation?.id === op.id && m.running))
@@ -1273,7 +1417,10 @@ export class ChatSendService {
       team.jobs ||
       team.messages.some(
         (m) =>
-          m.running || m.intentPending || (m.automatic && m.phase === 'paused'),
+          m.running ||
+          m.queued ||
+          m.intentPending ||
+          (m.automatic && m.phase === 'paused'),
       ) ||
       team.operations.some((op) => op.statusUnknown || op.state === 'uncertain')
     )

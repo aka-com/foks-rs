@@ -1,6 +1,7 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -43,8 +44,38 @@ export function ChatSendProvider({
   }, [service, snapshot, accessGenerations]);
   useLayoutEffect(() => {
     if (enabled) service.start();
-    return () => service.stop();
+    else service.pause();
   }, [service, enabled]);
+  // Agent readiness can come and go while this window still owns its queue.
+  // Only disposing the owner should erase those submissions.
+  useLayoutEffect(() => () => service.stop(), [service]);
+  // The send queue is this session's memory alone. The native window asks
+  // before discarding it, so it is told how many submissions are only here,
+  // and told none once the unlocked shell that owns them goes.
+  useEffect(() => {
+    if (!bridge.native) return;
+    let reported = -1;
+    // Reports are chained rather than issued in parallel: a later count must
+    // never be overtaken by an earlier one, least of all by the closing zero.
+    let last: Promise<unknown> = Promise.resolve();
+    const report = (count: number) => {
+      if (count === reported) return;
+      reported = count;
+      last = last
+        .then(() => bridge.setUnsentMessages(count))
+        .catch(() => {
+          // A lost report must not leave the window holding a stale count:
+          // the next publication reports this one again.
+          if (reported === count) reported = -1;
+        });
+    };
+    report(service.unsentCount());
+    const stop = service.subscribe(() => report(service.unsentCount()));
+    return () => {
+      stop();
+      report(0);
+    };
+  }, [bridge, service]);
   useLayoutEffect(
     () =>
       service.observe((event) =>

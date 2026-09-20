@@ -146,6 +146,12 @@ export interface Bridge {
   appLockState(): Promise<AppLockState>;
   windowState(): Promise<WindowStateEvent>;
   setTrafficLightsVisible(visible: boolean): Promise<void>;
+  /**
+   * How many chat submissions the renderer holds that nothing durable would
+   * recover. The window asks before discarding them, so this is reported
+   * whenever the count changes and cleared when the unlocked shell goes.
+   */
+  setUnsentMessages(count: number): Promise<void>;
   lockApp(): Promise<AppLockState>;
   unlockApp(): Promise<AppLockState>;
   restartApp(): Promise<void>;

@@ -9,6 +9,7 @@
 mod agent;
 mod applock;
 mod clipboard;
+mod close_guard;
 mod commands;
 mod diagnostics;
 mod dragdrop;
@@ -22,6 +23,7 @@ use tauri::Manager as _;
 use tauri_plugin_dialog::{DialogExt as _, MessageDialogKind};
 
 use agent::AgentHandle;
+use close_guard::CloseGuard;
 use commands::{AppState, MAIN};
 
 #[cfg(target_os = "macos")]
@@ -64,6 +66,7 @@ fn open_main_window(app: &tauri::AppHandle, settings: bool) -> Result<(), String
         .map_err(|error| error.to_string())?;
     dragdrop::observe(&window);
     window_state::observe(&window);
+    close_guard::observe(&window, Arc::clone(&app.state::<Arc<CloseGuard>>()));
     window.set_focus().map_err(|error| error.to_string())
 }
 
@@ -152,6 +155,10 @@ pub fn run() {
     let socket = endpoint.socket;
     tracing::info!(socket = %socket.display(), "Using agent socket");
     let agent = Arc::new(AgentHandle::new(socket));
+    // Shared with the run loop below, which asks the same question for a quit
+    // that never passes through the window's own close.
+    let closing = Arc::new(CloseGuard::default());
+    let exiting = Arc::clone(&closing);
 
     tauri::Builder::default()
         // Register single-instance plugin first so duplicate processes hand off
@@ -178,6 +185,7 @@ pub fn run() {
         .manage(AppState::new(Arc::clone(&agent)))
         .manage(commands::chat_local::LocalState::default())
         .manage(Arc::new(applock::AppLock::new()))
+        .manage(Arc::clone(&closing))
         .invoke_handler(tauri::generate_handler![
             commands::sso::sso_request,
             commands::account_conveniences::rename_account_request,
@@ -255,6 +263,7 @@ pub fn run() {
             commands::application::quit_app,
             window_state::get_window_state,
             window_state::set_traffic_lights_visible,
+            close_guard::set_unsent_messages,
             commands::vault::list_stores,
             commands::vault::list_catalog,
             commands::vault::list_profile_catalog,
@@ -324,6 +333,7 @@ pub fn run() {
             if let Some(window) = app.get_webview_window(MAIN) {
                 dragdrop::observe(&window);
                 window_state::observe(&window);
+                close_guard::observe(&window, Arc::clone(&closing));
             } else {
                 tracing::error!("{MAIN} window configuration not found in tauri.conf.json");
             }
@@ -331,8 +341,17 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("failed to start application")
-        .run(|app, event| {
+        .run(move |app, event| {
             if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+                // A quit the user asked for, rather than one the application
+                // requested, is held back until the unsent chat messages it
+                // would discard have been accounted for.
+                let unsent = close_guard::unsent_at_exit(&exiting, code);
+                if unsent > 0 {
+                    api.prevent_exit();
+                    close_guard::ask_before_exit(app, &exiting, unsent);
+                    return;
+                }
                 agent::terminate_managed_agent();
                 clipboard::defer_exit_cleanup(app, code, &api);
             }

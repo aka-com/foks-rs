@@ -32,6 +32,13 @@ const lostReply = {
   retryable: false,
 };
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+/**
+ * The send queue starts each message from the one ahead of it finishing, so
+ * work that crosses the queue needs more than a single turn to come to rest.
+ */
+const flush = async (turns = 30) => {
+  for (let turn = 0; turn < turns; turn++) await settle();
+};
 
 function deferred() {
   let resolve!: () => void;
@@ -395,7 +402,9 @@ for (const committed of [false, true]) {
         h.service.messages(STORE, h.channel)[0].phase,
         'unconfirmed',
       );
-      assert.equal(h.service.canSubmit(STORE, h.channel), false);
+      // The composer stays open: another send would queue behind this one
+      // rather than take the channel's one saved copy from it.
+      assert.equal(h.service.canSubmit(STORE, h.channel), true);
       h.service.stop();
       h.updateInbox(h.ready);
       h.service.start();
@@ -501,21 +510,28 @@ test('failed local intent deletion does not hide known delivery or admit another
     assert.equal(sent.operation?.state, 'confirmed');
     assert.equal(sent.intentPending, true);
     assert.notEqual(sent.cleanupError, '');
-    h.service.setDraft(STORE, h.channel, 'next draft');
-    assert.equal(h.service.canSubmit(STORE, h.channel), false);
-    await assert.rejects(h.service.submit(STORE, h.channel, 'next draft'));
-    assert.equal(h.service.draft(STORE, h.channel), 'next draft');
+    // The next message is admitted and queued. Nothing is written for it
+    // while the failed cleanup still leaves the delivered message's saved
+    // copy in the channel's one slot.
+    assert.equal(h.service.canSubmit(STORE, h.channel), true);
+    await h.service.submit(STORE, h.channel, 'next draft');
+    assert.equal(h.service.messages(STORE, h.channel)[1].phase, 'queued');
+    assert.equal(count(h.intentCalls, 'save-intent'), 1);
+    assert.equal(count(h.calls, 'submit-message'), 1);
     failClear = false;
     await h.clock.advance(6000);
+    await flush();
     assert.equal(h.service.messages(STORE, h.channel)[0].intentPending, false);
-    assert.equal(h.service.canSubmit(STORE, h.channel), true);
-    assert.equal(count(h.calls, 'submit-message'), 1);
+    // Cleanup succeeded, so the queued message takes the slot it waited for.
+    assert.equal(count(h.intentCalls, 'save-intent'), 2);
+    assert.equal(count(h.calls, 'submit-message'), 2);
+    assert.equal(h.service.messages(STORE, h.channel)[1].phase, 'sent');
   } finally {
     h.service.stop();
   }
 });
 
-test('delayed local intent deletion does not hold delivery completion and keeps same-slot backpressure', async () => {
+test('delayed local intent deletion does not hold delivery completion and keeps the next message queued', async () => {
   const clearing = deferred();
   const h = await setup({
     intent: async (action, run) => {
@@ -532,15 +548,18 @@ test('delayed local intent deletion does not hold delivery completion and keeps 
     await settle();
     assert.equal(h.service.messages(STORE, h.channel)[0].phase, 'sent');
     assert.equal(complete, true);
-    assert.equal(h.service.canSubmit(STORE, h.channel), false);
-    await h.clock.advance(5000);
-    assert.equal(
-      h.intentCalls.filter((call) => call.action === 'clear-intent').length,
-      1,
-    );
-    clearing.resolve();
-    await settle();
     assert.equal(h.service.canSubmit(STORE, h.channel), true);
+    await h.service.submit(STORE, h.channel, 'delivered second');
+    assert.equal(h.service.messages(STORE, h.channel)[1].phase, 'queued');
+    await h.clock.advance(5000);
+    // One cleanup is in flight and the queue has written nothing behind it.
+    assert.equal(count(h.intentCalls, 'clear-intent'), 1);
+    assert.equal(count(h.intentCalls, 'save-intent'), 1);
+    assert.equal(count(h.calls, 'submit-message'), 1);
+    clearing.resolve();
+    await flush();
+    assert.equal(count(h.calls, 'submit-message'), 2);
+    assert.equal(h.service.messages(STORE, h.channel)[1].phase, 'sent');
   } finally {
     clearing.resolve();
     await sending;
@@ -597,7 +616,9 @@ for (const committed of [false, true]) {
         assert.equal(message.phase, 'unconfirmed');
         assert.equal(message.ambiguousPreparation, true);
         assert.equal(message.intentPending, true);
-        assert.equal(h.service.canSubmit(STORE, h.channel), false);
+        // Its saved copy is still the channel's; a further send would wait
+        // for it in the queue rather than be refused.
+        assert.equal(h.service.canSubmit(STORE, h.channel), true);
         await assert.rejects(h.service.restoreDraft(STORE, message.id));
         assert.equal(
           h.intentCalls.some((call) => call.action === 'clear-intent'),
@@ -1183,5 +1204,34 @@ test('terminal cleanup retries after failure and stops after durable success', a
     );
   } finally {
     h.service.stop();
+  }
+});
+
+test('a revoked channel discards the queue that could never be sent', async () => {
+  const gate = deferred();
+  const h = await setup({
+    chat: async (action, run) => {
+      if (action.action === 'submit-message') await gate.promise;
+      return run();
+    },
+  });
+  const sending = h.service.submit(STORE, h.channel, 'in flight');
+  try {
+    await settle();
+    await h.service.submit(STORE, h.channel, 'queued behind it');
+    assert.equal(h.service.messages(STORE, h.channel).length, 2);
+    // The saved message is the agent's to recover; the queued one is not.
+    assert.equal(h.service.unsentCount(), 1);
+    h.updateInbox({ ...h.ready, blockedChannels: new Set([h.channel]) });
+    const remaining = h.service.messages(STORE, h.channel);
+    assert.equal(remaining.length, 1);
+    assert.equal(remaining[0].text, undefined);
+    assert.equal(remaining[0].phase, 'paused');
+    assert.equal(h.service.unsentCount(), 0);
+    assert.equal(h.service.canSubmit(STORE, h.channel), false);
+  } finally {
+    gate.resolve();
+    h.service.stop();
+    await sending.catch(() => {});
   }
 });

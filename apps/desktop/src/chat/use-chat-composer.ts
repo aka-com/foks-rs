@@ -54,6 +54,8 @@ export function useChatComposer(
     // Once the agent has prepared it, its durable operation is recovered by
     // the service and shown in the outgoing row. Until local persistence
     // answers, the service retains the submission independently of this view.
+    // A channel already saving a message queues this one instead of refusing
+    // it, so the composer is ready for the next message immediately.
     if (!service.canSubmit(storeId, channel.id)) return;
     void service
       .submit(storeId, channel.id, draft)
@@ -77,6 +79,12 @@ export function useChatComposer(
     },
     /* Keep the durable identity visible if status is unavailable. */
     messages: service.messages(storeId, channel.id),
+    /**
+     * Whether the channel is holding as many unsent messages as it will. The
+     * composer keeps the draft and says so rather than silently disabling
+     * Send with no reason.
+     */
+    queueFull: service.queueFull(storeId, channel.id),
     cleanupError: service.cleanupError(storeId),
     service,
     revision,

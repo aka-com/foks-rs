@@ -93,6 +93,7 @@ export function ChatThread({
     loadError,
     retryLoad,
     messages: outgoing,
+    queueFull,
     cleanupError,
     service: sends,
   } = useMessageComposer(storeId, channel, scope);
@@ -207,6 +208,13 @@ export function ChatThread({
             message: channel.writable ? cleanupError : '',
             severity: 'info',
             label: 'Local message cleanup is pending.',
+          },
+          {
+            message:
+              channel.writable && queueFull
+                ? 'Too many messages are waiting to be sent in this channel. Your draft is kept until one of them goes.'
+                : '',
+            severity: 'warn',
           },
         ]}
       />

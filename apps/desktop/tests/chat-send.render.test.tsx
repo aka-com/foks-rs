@@ -58,6 +58,7 @@ async function setup(override?: (base: Bridge) => Bridge) {
   const bridge = override?.(base) ?? base;
   function Host() {
     const [visible, setVisible] = useState(true);
+    const [enabled, setEnabled] = useState(true);
     const [partial, setPartial] = useState(false);
     const shown = partial
       ? {
@@ -79,11 +80,17 @@ async function setup(override?: (base: Bridge) => Bridge) {
       backgroundRef: { current: null },
       portalRoot: document.getElementById('overlays'),
       children: createElement(ChatInboxProvider, {
+        enabled,
         bridge,
         snapshot: shown,
         children: createElement(
           'div',
           null,
+          createElement(
+            'button',
+            { onClick: () => setEnabled((value) => !value) },
+            'Toggle agent readiness',
+          ),
           createElement(
             'button',
             { onClick: () => setVisible((v) => !v) },
@@ -155,9 +162,11 @@ test('optimistic submission survives conversation unmount during preparation and
   assert.equal(sending.querySelector('time'), null);
   assert.equal(ui.within(sending).queryByText('Details'), null);
   ui.fireEvent.change(field, { target: { value: 'next draft' } });
+  // The composer stays open while the first message is in flight: another
+  // send would queue behind it rather than wait for it.
   assert.equal(
     ui.screen.getByRole<HTMLButtonElement>('button', { name: 'Send' }).disabled,
-    true,
+    false,
   );
   ui.fireEvent.click(
     ui.screen.getByRole<HTMLButtonElement>('button', {
@@ -347,6 +356,84 @@ test('confirmation replaces the spinner with a timestamp independently of a stal
       ui.screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message' })
         .disabled,
       false,
+    );
+  } finally {
+    gate.resolve();
+  }
+});
+
+test('queued messages survive agent unavailability and remain counted for the window', async () => {
+  const gate = deferred();
+  const reports: number[] = [];
+  await setup((base) => ({
+    ...base,
+    // The count only goes to a native window, which is the one that asks.
+    native: true,
+    setUnsentMessages: async (count: number) => {
+      reports.push(count);
+    },
+    chat: async (store, action, view) => {
+      if (action.action === 'save-intent') await gate.promise;
+      return base.chat(store, action, view);
+    },
+  }));
+  const send = async (text: string) => {
+    const field = ui.screen.getByRole<HTMLTextAreaElement>('textbox', {
+      name: 'Message',
+    });
+    ui.fireEvent.change(field, { target: { value: text } });
+    await ui.waitFor(() =>
+      assert.equal(
+        ui.screen.getByRole<HTMLButtonElement>('button', { name: 'Send' })
+          .disabled,
+        false,
+      ),
+    );
+    ui.fireEvent.click(
+      ui.screen.getByRole<HTMLButtonElement>('button', { name: 'Send' }),
+    );
+    await ui.screen.findByText(text);
+  };
+  try {
+    await send('first message');
+    await send('second message');
+    const queued = await ui.waitFor(() => {
+      const row = document.querySelector<HTMLElement>('.chat-outgoing.queued');
+      assert.ok(row);
+      return row;
+    });
+    assert.ok(ui.within(queued).getByText('second message'));
+    assert.ok(ui.within(queued).getByRole('status'));
+    assert.equal(ui.within(queued).getByRole('status').textContent, 'Queued');
+    // Neither message has a copy the next session could read.
+    await ui.waitFor(() => assert.equal(reports.at(-1), 2));
+    ui.fireEvent.click(
+      ui.screen.getByRole('button', { name: 'Toggle agent readiness' }),
+    );
+    await ui.act(async () => {
+      gate.resolve();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    });
+    // The unavailable inbox hides the conversation, but the window still
+    // owns both submissions and must continue warning before closing.
+    assert.equal(reports.at(-1), 2);
+    ui.fireEvent.click(
+      ui.screen.getByRole('button', { name: 'Toggle agent readiness' }),
+    );
+    gate.resolve();
+    await ui.waitFor(
+      () =>
+        assert.equal(
+          document.querySelectorAll('.chat-outgoing.sent').length,
+          2,
+        ),
+      { timeout: 10_000 },
+    );
+    await ui.waitFor(() => assert.equal(reports.at(-1), 0));
+    // Nothing is reported twice for the same count.
+    assert.deepEqual(
+      reports.filter((count, index) => count === reports[index - 1]),
+      [],
     );
   } finally {
     gate.resolve();

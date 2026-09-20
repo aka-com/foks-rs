@@ -507,6 +507,10 @@
 .chat-outgoing.sending .chat-message-text {
   opacity: 0.8;
 }
+/* Waiting behind another message of the same channel, not on its way yet. */
+.chat-outgoing.queued .chat-message-text {
+  opacity: 0.65;
+}
 .chat-send-status {
   display: flex;
   align-items: center;

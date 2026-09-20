@@ -7,6 +7,7 @@ import { failure } from './actions';
 import { messageTime, relativeMessageTime } from './presentation';
 
 const statusLabels: Partial<Record<OutgoingMessage['phase'], string>> = {
+  queued: 'Queued',
   'not-sent': 'Not sent',
   unconfirmed: 'Delivery unconfirmed',
   paused: 'Waiting for access',
@@ -35,18 +36,20 @@ export function OutgoingRow({
   };
   const sent = message.phase === 'sent';
   const sending = ['saving', 'preparing', 'sending'].includes(message.phase);
+  // Waiting behind another message of this channel, and held in memory only.
+  const queued = message.phase === 'queued';
   const statusLabel = statusLabels[message.phase];
   const retryable =
     ['not-sent', 'unconfirmed', 'paused'].includes(message.phase) &&
     !['rejected', 'cancelled'].includes(message.operation?.state ?? '');
   const editable =
-    message.phase === 'not-sent' &&
+    (message.phase === 'not-sent' || queued) &&
     !message.running &&
     (!message.ambiguousPreparation || !!message.operation) &&
     message.text !== undefined;
   return (
     <article
-      className={`chat-message chat-outgoing${sent ? ' sent' : ''}${sending ? ' sending' : ''}`}
+      className={`chat-message chat-outgoing${sent ? ' sent' : ''}${sending ? ' sending' : ''}${queued ? ' queued' : ''}`}
       data-submission={message.submission}
       data-operation={message.operation?.id}
     >

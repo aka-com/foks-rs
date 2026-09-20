@@ -64,7 +64,9 @@ export function ChatInboxProvider({
       );
     else service.histories.clear();
   }, [service, snapshot, accessNow, accessGenerations, enabled]);
-  useEffect(() => {
+  // Stop the previous lifecycle before updateStores repopulates the inbox
+  // in layout effects. A passive cleanup would erase the restored stores.
+  useLayoutEffect(() => {
     if (enabled) service.start();
     return () => service.stop();
   }, [service, enabled]);
