@@ -86,6 +86,14 @@ fn stale_agent_cleanup_message(
     agent: &AgentHandle,
     candidates: &[crate::agent::StaleAgentProcess],
 ) -> String {
+    agent_cleanup_message(agent, candidates, false)
+}
+
+fn agent_cleanup_message(
+    agent: &AgentHandle,
+    candidates: &[crate::agent::StaleAgentProcess],
+    continuing: bool,
+) -> String {
     let processes = candidates
         .iter()
         .map(|candidate| {
@@ -98,12 +106,18 @@ fn stale_agent_cleanup_message(
         })
         .collect::<Vec<_>>()
         .join("\n\n");
+    let action = if continuing {
+        "These additional processes are not serving this application's current socket. They may still serve other clients; terminating them will disconnect those clients.\n\nTerminate these additional processes and continue?"
+    } else {
+        "Terminate these processes before quitting?"
+    };
     format!(
-        "FOKS found {} foks-agent process{} configured to use {}. They may continue accessing that data directory after this application quits.\n\n{}\n\nTerminate these processes before quitting?",
+        "FOKS found {} foks-agent process{} configured to use {}. They may continue accessing that data directory after this application quits.\n\n{}\n\n{}",
         candidates.len(),
         if candidates.len() == 1 { "" } else { "es" },
         agent_state_directory(agent).display(),
         processes,
+        action,
     )
 }
 
@@ -129,6 +143,47 @@ fn stale_agent_cleanup_failure_message(
         agent_state_directory(agent).display(),
         processes,
     )
+}
+
+fn offer_additional_agent_cleanup(app: &tauri::AppHandle, agent: &AgentHandle) {
+    let candidates = agent.additional_agent_processes();
+    if candidates.is_empty() {
+        return;
+    }
+    let window = app
+        .get_webview_window(MAIN)
+        .expect("main window unavailable during startup");
+    if !app
+        .dialog()
+        .message(agent_cleanup_message(agent, &candidates, true))
+        .parent(&window)
+        .kind(MessageDialogKind::Warning)
+        .title("Additional FOKS Agents Found")
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Terminate Additional Agents".into(),
+            "Leave Running".into(),
+        ))
+        .blocking_show()
+    {
+        return;
+    }
+    let failures = candidates
+        .iter()
+        .filter_map(|candidate| {
+            agent
+                .terminate_additional_agent(candidate)
+                .err()
+                .map(|error| format!("Process {}: {}", candidate.pid, error.message))
+        })
+        .collect::<Vec<_>>();
+    if !failures.is_empty() {
+        app.dialog()
+            .message(failures.join("\n\n"))
+            .parent(&window)
+            .kind(MessageDialogKind::Warning)
+            .title("Agent Cleanup Incomplete")
+            .blocking_show();
+    }
 }
 
 /// Confirms the agent is reachable before the first request.
@@ -215,6 +270,7 @@ pub fn require_agent(app: &tauri::AppHandle, agent: &AgentHandle) {
     }
     // AgentStatus already completed a version-checked round trip. Do not add
     // a second startup gate that bypasses takeover recovery if the owner changes.
+    offer_additional_agent_cleanup(app, agent);
 }
 
 fn reset_warning(root: &Path) -> String {

@@ -1739,6 +1739,30 @@ impl AgentHandle {
         }
     }
 
+    /// Only offer extra processes when the current socket owner can be identified.
+    pub fn additional_agent_processes(&self) -> Vec<StaleAgentProcess> {
+        let candidates = self.stale_agent_processes();
+        let Some(active) = self.process_info().pid else {
+            return Vec::new();
+        };
+        candidates
+            .into_iter()
+            .filter(|target| target.pid != active)
+            .collect()
+    }
+
+    /// Recheck the socket after the dialog: an extra process may now be active.
+    pub fn terminate_additional_agent(&self, target: &StaleAgentProcess) -> Result<(), AgentError> {
+        match self.process_info().pid {
+            Some(pid) if pid != target.pid => self.terminate_stale_agent(target),
+            _ => Err(AgentError::new(
+                "agent-cleanup-changed",
+                "The active agent changed or could not be verified. This process was not terminated.",
+                false,
+            )),
+        }
+    }
+
     pub fn terminate_stale_agent(&self, target: &StaleAgentProcess) -> Result<(), AgentError> {
         #[cfg(unix)]
         {
@@ -4377,6 +4401,25 @@ mod tests {
         use std::os::unix::process::ExitStatusExt as _;
         use std::process::{Command, Stdio};
 
+        struct ChildGuard(std::process::Child);
+        impl std::ops::Deref for ChildGuard {
+            type Target = std::process::Child;
+            fn deref(&self) -> &Self::Target {
+                &self.0
+            }
+        }
+        impl std::ops::DerefMut for ChildGuard {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                &mut self.0
+            }
+        }
+        impl Drop for ChildGuard {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
         let temporary = tempfile::tempdir().unwrap();
         let socket = temporary.path().join("agent.sock");
         let ready = temporary.path().join("ready");
@@ -4425,13 +4468,17 @@ int main(int argc, char **argv) {
             .status()
             .expect("cc is required to build the dummy agent");
         assert!(compiled.success(), "cc failed to build the dummy agent");
-        let mut child = Command::new(&binary)
-            .args([&socket, &ready])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
+        let mut child = ChildGuard(
+            Command::new(&binary)
+                .args([&socket, &ready])
+                .arg("--state-dir")
+                .arg(temporary.path())
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
         let started = std::time::Instant::now();
         while !ready.exists() {
             if let Some(status) = child.try_wait().unwrap() {
@@ -4443,6 +4490,72 @@ int main(int argc, char **argv) {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
+        let handle = AgentHandle::new(socket.clone());
+        let candidates = handle.stale_agent_processes();
+        let active = candidates
+            .iter()
+            .find(|target| target.pid == child.id())
+            .unwrap();
+        assert!(handle.additional_agent_processes().is_empty());
+        assert_eq!(
+            handle.terminate_additional_agent(active).unwrap_err().code,
+            "agent-cleanup-changed"
+        );
+        let missing = AgentHandle::new(temporary.path().join("missing.sock"));
+        assert!(missing.additional_agent_processes().is_empty());
+        assert_eq!(
+            missing.terminate_additional_agent(active).unwrap_err().code,
+            "agent-cleanup-changed"
+        );
+
+        let extra_socket = temporary.path().join("extra.sock");
+        let extra_ready = temporary.path().join("extra-ready");
+        let mut extra = ChildGuard(
+            Command::new(&binary)
+                .args([&extra_socket, &extra_ready])
+                .arg("--state-dir")
+                .arg(temporary.path())
+                .spawn()
+                .unwrap(),
+        );
+        let started = std::time::Instant::now();
+        while !extra_ready.exists() {
+            if started.elapsed() > Duration::from_secs(5) {
+                let _ = extra.kill();
+                let _ = extra.wait();
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("additional agent did not bind");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let candidates = handle.additional_agent_processes();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].pid, extra.id());
+        let now_active = AgentHandle::new(extra_socket.clone());
+        assert_eq!(
+            now_active
+                .terminate_additional_agent(&candidates[0])
+                .unwrap_err()
+                .code,
+            "agent-cleanup-changed"
+        );
+        // An unreachable listener is still discoverable and can be cleaned up.
+        std::fs::remove_file(&extra_socket).unwrap();
+        assert_eq!(handle.additional_agent_processes(), candidates);
+        let mut changed = candidates[0].clone();
+        changed.started_at += 1;
+        assert_eq!(
+            handle
+                .terminate_additional_agent(&changed)
+                .unwrap_err()
+                .code,
+            "agent-cleanup-changed"
+        );
+        handle.terminate_additional_agent(&candidates[0]).unwrap();
+        assert_eq!(extra.wait().unwrap().signal(), Some(libc::SIGTERM));
+        assert!(child.try_wait().unwrap().is_none());
+
         let mut approvals = 0;
         stop_incompatible_agent(
             &socket,
