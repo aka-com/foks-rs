@@ -3,7 +3,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 pub const APPLICATION_ID: i64 = 0x464f_4b53;
-pub const SCHEMA_VERSION: i64 = 44;
+pub const SCHEMA_VERSION: i64 = 45;
 
 const SCHEMA: &str = concat!(
     include_str!("schema/core.sql"),
@@ -25,6 +25,7 @@ const SCHEMA: &str = concat!(
     include_str!("schema/realtime.sql"),
     include_str!("schema/realtime_invalidation.sql"),
     include_str!("schema/peripheral.sql"),
+    include_str!("schema/expiry_indexes.sql"),
 );
 
 pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
@@ -39,23 +40,28 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
         transaction.commit()?;
         return Ok(());
     }
-    if application_id == APPLICATION_ID && version == 43 {
+    if application_id == APPLICATION_ID && matches!(version, 43 | 44) {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        // Recheck under the write lock, before changing anything.
+        // Recheck under the write lock: another opener may already have upgraded.
         let application_id =
             transaction.pragma_query_value(None, "application_id", |r| r.get(0))?;
         let version = transaction.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if application_id == APPLICATION_ID && version == 43 {
-            transaction.execute_batch(
-                "ALTER TABLE rt_user_inboxes ADD COLUMN reconcile_dirty INTEGER NOT NULL
-                 DEFAULT 1 CHECK (reconcile_dirty IN (0,1));",
-            )?;
-            transaction.execute_batch(include_str!("schema/realtime_invalidation.sql"))?;
-            transaction.execute(
-                "UPDATE rt_user_inboxes SET reconcile_dirty=1,
-                 reconcile_after=NULL,reconcile_memberships=NULL",
-                [],
-            )?;
+        if application_id == APPLICATION_ID && matches!(version, 43 | 44) {
+            if version == 43 {
+                transaction.execute_batch(
+                    "ALTER TABLE rt_user_inboxes ADD COLUMN reconcile_dirty INTEGER NOT NULL
+                     DEFAULT 1 CHECK (reconcile_dirty IN (0,1));",
+                )?;
+                transaction.execute_batch(include_str!("schema/realtime_invalidation.sql"))?;
+                transaction.execute(
+                    "UPDATE rt_user_inboxes SET reconcile_dirty=1,
+                     reconcile_after=NULL,reconcile_memberships=NULL",
+                    [],
+                )?;
+            }
+            // Both supported predecessors reach the new schema in one transaction.
+            // A failed index build also rolls back the version-43 reconciliation work.
+            transaction.execute_batch(include_str!("schema/expiry_indexes.sql"))?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         } else {
             validate(application_id, version)?;

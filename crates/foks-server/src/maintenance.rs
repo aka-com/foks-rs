@@ -7,6 +7,8 @@ use crate::{Error, Result, ServerMetrics, WriterHandle};
 
 #[cfg(test)]
 mod checkpoint_bench;
+#[cfg(test)]
+mod expiry_bench;
 
 const INTERVAL: Duration = Duration::from_secs(60);
 pub(crate) const ABANDONED_UPLOAD_AGE_MICROS: u64 = 24 * 60 * 60 * 1_000_000;
@@ -100,6 +102,7 @@ fn run_with_checkpoint(
     let result = writer.call_with_current_time(clock, move |database, now| {
         let cutoff = now.saturating_sub(ABANDONED_UPLOAD_AGE_MICROS);
         let report = database.run_maintenance(now, cutoff)?;
+        worker_metrics.expiry_reclaimed(&report);
         worker_metrics.uploads_reclaimed(&report);
         if let Some(admin) = admin {
             worker_metrics.admin_cleanup_attempted();
@@ -222,6 +225,8 @@ mod tests {
         let seed = rusqlite::Connection::open(&path).unwrap();
         seed.execute_batch(
             "PRAGMA foreign_keys=ON;
+            INSERT INTO names(normalized_name,reservation_token,reservation_sequence,expires_at)
+                VALUES(x'61',zeroblob(17),1,1);
             INSERT INTO kv_namespaces VALUES(zeroblob(33), 1, zeroblob(33));
             INSERT INTO kv_file_uploads(uid,file_id,exact_metadata,created_at,updated_at)
                 VALUES(zeroblob(33),zeroblob(16),x'00',1,1);
@@ -246,6 +251,11 @@ mod tests {
         let first = metrics.snapshot();
         assert_eq!(first.maintenance_failures, 1);
         assert_eq!(first.maintenance_successes, 0);
+        assert_eq!(
+            first.expiry.deleted_parent_rows,
+            [1, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(first.expiry.empty_passes, [0, 1, 1, 1, 1, 1, 1, 1, 1]);
         assert_eq!(first.reclaimed_uploads, 1);
         assert_eq!(first.reclaimed_upload_chunks, 1);
         assert_eq!(first.reclaimed_upload_bytes, 13);
@@ -261,11 +271,80 @@ mod tests {
         )
         .unwrap();
         assert_eq!(metrics.snapshot().reclaimed_uploads, 1);
+        assert_eq!(
+            metrics.snapshot().expiry.deleted_parent_rows,
+            [1, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(
+            metrics.snapshot().expiry.empty_passes,
+            [1, 2, 2, 2, 2, 2, 2, 2, 2]
+        );
         let remaining: i64 = rusqlite::Connection::open(&path)
             .unwrap()
             .query_row("SELECT count(*) FROM kv_file_uploads", [], |row| row.get(0))
             .unwrap();
         assert_eq!(remaining, 0);
+        writer.shutdown().unwrap();
+    }
+
+    #[test]
+    fn rolled_back_cleanup_never_increments_expiry_counters() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("host.sqlite");
+        drop(foks_server_db::Database::open(&path, Default::default()).unwrap());
+        let seed = rusqlite::Connection::open(&path).unwrap();
+        seed.execute_batch(
+            "PRAGMA foreign_keys=ON;
+             INSERT INTO names(normalized_name,reservation_token,reservation_sequence,expires_at)
+                 VALUES(x'61',zeroblob(17),1,1);
+             INSERT INTO log_sends(log_send_id,created_at) VALUES(zeroblob(17),1);
+             CREATE TRIGGER fail_late_cleanup BEFORE DELETE ON log_sends
+                 BEGIN SELECT RAISE(ABORT,'injected late cleanup failure'); END;",
+        )
+        .unwrap();
+        drop(seed);
+        let writer = crate::Writer::start(path.clone(), Default::default(), 4).unwrap();
+        let metrics = Arc::new(ServerMetrics::default());
+        let now = ABANDONED_UPLOAD_AGE_MICROS + 2;
+        assert!(run(
+            &writer.handle(),
+            Arc::new(FixedClock(now)),
+            Arc::clone(&metrics),
+            None
+        )
+        .is_err());
+        let failed = metrics.snapshot();
+        assert_eq!(failed.expiry, crate::ExpiryMetricsSnapshot::default());
+        assert_eq!(failed.maintenance_failures, 1);
+        assert_eq!(failed.checkpoint.attempts, 0);
+        let inspect = rusqlite::Connection::open(&path).unwrap();
+        for table in ["names", "log_sends"] {
+            let remaining: i64 = inspect
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(remaining, 1);
+        }
+        inspect
+            .execute_batch("DROP TRIGGER fail_late_cleanup")
+            .unwrap();
+        drop(inspect);
+        run(
+            &writer.handle(),
+            Arc::new(FixedClock(now)),
+            Arc::clone(&metrics),
+            None,
+        )
+        .unwrap();
+        let succeeded = metrics.snapshot();
+        assert_eq!(
+            succeeded.expiry.deleted_parent_rows,
+            [1, 0, 0, 0, 0, 0, 0, 1, 0]
+        );
+        assert_eq!(succeeded.expiry.empty_passes, [0, 1, 1, 1, 1, 1, 1, 0, 1]);
+        assert_eq!(succeeded.maintenance_successes, 1);
+        assert_eq!(succeeded.checkpoint.attempts, 1);
         writer.shutdown().unwrap();
     }
 

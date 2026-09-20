@@ -170,3 +170,45 @@ It uses a healthy inbox; the revision-only workload represents a degraded refres
 Network/native RPC time and rendering are excluded. Each result is the median of
 five batch means of 100 operations after 20 warmups, in microseconds. Run these
 measurements without concurrent compilers or acceptance trials.
+
+## Server expiry cleanup
+
+Two ignored Rust fixtures isolate expiry work and writer contention. Run release
+builds and measurements sequentially, with no concurrent compiler or benchmark:
+
+```sh
+cargo test --release --locked -j 2 -p foks-server-db --lib \
+  expiry_scale_and_write_cost -- --ignored --nocapture --test-threads=1
+cargo test --release --locked -j 2 -p foks-server --lib \
+  concurrent_expiry_and_foreground_writes -- --ignored --nocapture --test-threads=1
+```
+
+Apply the local PC/SC environment configuration if required. The DB fixture uses
+separate disposable databases for the old indexes/queries and the new ones. It
+prints JSON for selector/full DELETE work (VM/full-scan/sort/automatic-index
+counters), elapsed time, insert/consume cost and storage/WAL allocation. Selector
+and DELETE times are medians of five samples including preparation and excluding
+rollback. Insert and full foreground reclamation timings are single samples.
+Representative populations and explicitly synthetic 10,000-row populations are
+separate. Foreign keys stay enabled; fixture setup is outside measured cleanup.
+
+For a full source-level writer comparison, archive the immediate pre-change
+revision, copy `crates/foks-server/src/maintenance/expiry_bench.rs` unchanged into
+it and add its `#[cfg(test)] mod expiry_bench;` declaration in `maintenance.rs`.
+Build each release test binary with `--no-run --message-format=json` and preserve
+the reported executable before rebuilding shared Cargo artifacts. Record source
+revision and executable hashes. Shared targets can incorrectly reuse a binary
+from the other source tree: clean DB/server release artifacts before the second
+build and verify that Cargo reports the test executable as freshly built. Run
+the preserved binaries in baseline/current/current/baseline order. Each invocation
+emits three repetitions at two live populations.
+
+The writer fixture measures four foreground reservation writers (512 writes per
+repetition) overlapping 32 no-op maintenance passes through the production writer.
+It emits `EXPIRY_WRITER_BENCH` JSON with per-run sample counts and p50/p95/p99 queue
+and completion latencies, cleanup transaction duration, and separate checkpoint
+observations. It bypasses the server metrics/admin wrapper, has empty upload/log
+payloads and does not measure instrumentation overhead. Larger fixtures exceed
+some normal admission caps deliberately. Neither fixture imposes absolute timing
+thresholds. The [recorded observations](results/server-expiry-2026-09-20.json)
+include source and executable hashes for the comparison.

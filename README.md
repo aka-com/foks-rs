@@ -81,8 +81,7 @@ Values are medians of three trial p95s, each with 15 seconds of warmup, 60 secon
 of measurement and a 10-second drain. They include the service/agent/server path
 but exclude desktop rendering. Notification discovery missed the 99% target in
 some steady-traffic trials, so these latency results are **not an acceptance pass**.
-See the [benchmark guide](scripts/benchmarks/README.md) for reproduction and the
-[validation report](docs/inbox-publication-fanout-validation.md) for details.
+See the [benchmark guide](scripts/benchmarks/README.md) for reproduction.
 
 ## Repository layout
 

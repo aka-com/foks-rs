@@ -441,6 +441,19 @@ mod tests {
         let path = directory.path().join("upgrade.sqlite");
         drop(Database::open(&path, Default::default()).unwrap());
         let connection = rusqlite::Connection::open(&path).unwrap();
+        for index in [
+            "names_reservation_expiry",
+            "team_names_reservation_expiry",
+            "recovery_challenges_cleanup",
+            "team_view_tokens_expiry",
+            "team_view_challenges_expiry",
+            "team_admin_tokens_expiry",
+            "log_sends_created_at",
+        ] {
+            connection
+                .execute_batch(&format!("DROP INDEX {index}"))
+                .unwrap();
+        }
         connection.execute_batch("DROP TRIGGER rt_membership_insert; DROP TRIGGER rt_membership_delete; DROP TRIGGER rt_membership_update; DROP TRIGGER rt_team_access_update; ALTER TABLE rt_user_inboxes DROP COLUMN reconcile_dirty; PRAGMA user_version=43;").unwrap();
         let guard = DatabaseWriterGuard::acquire(&path).unwrap();
         assert!(Writer::start(path.clone(), Default::default(), 2).is_err());
@@ -457,7 +470,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
                 .unwrap(),
-            44
+            foks_server_db::SCHEMA_VERSION
         );
         drop(writer);
     }

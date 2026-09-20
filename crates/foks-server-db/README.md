@@ -20,5 +20,21 @@ device/inode identity; unsupported filesystem identity semantics fail closed.
 The server writer retains its adjacent path lock and rechecks the captured
 identity and link count under that lock before opening SQLite.
 
-The schema is pre-release v1. Incompatible development changes replace v1
-rather than adding migration compatibility.
+The schema is pre-release v1, currently SQLite schema version 45. Version 45 adds
+seven expiry indexes; it retains existing scope and uniqueness indexes. Fresh
+creation and writer upgrades use the same index definitions.
+
+`Database::open` (including the server writer's identity-checked open) upgrades
+versions 43 and 44 in one immediate transaction. Version 43 also receives the
+existing inbox reconciliation migration. Index creation, reconciliation changes
+and the version stamp commit together; any error leaves the previous schema and
+data intact. Index builds can take time and disk/WAL space proportional to the
+existing tables, so allow for that work during a controlled writer restart and
+retain a backup. No upgrade runs inside recurring maintenance.
+
+`Database::open_existing` and `ReadDatabase::open` validate only: they refuse 43
+and 44 until the writer has upgraded them. All validating paths reject foreign,
+future and unsupported older versions. Upgraded files and backups cannot be
+opened by version-44 binaries; there is no downgrade path. Other incompatible
+pre-release changes may still require replacement unless an explicit migration
+is provided.

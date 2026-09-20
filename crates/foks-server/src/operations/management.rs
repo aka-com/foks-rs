@@ -429,6 +429,7 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
             let _ = writeln!(output, "# TYPE {name} counter\n{name} {value}");
         }
     }
+    expiry_prometheus(&mut output, &metrics.expiry);
     checkpoint_prometheus(&mut output, &metrics.checkpoint);
     realtime_prometheus(&mut output, &metrics.realtime);
     // Independent read snapshot; metrics never enqueue a policy mutation.
@@ -473,6 +474,27 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
         }
     }
     output
+}
+
+fn expiry_prometheus(output: &mut String, expiry: &crate::ExpiryMetricsSnapshot) {
+    use std::fmt::Write;
+    for (name, counts) in [
+        (
+            "foks_expiry_deleted_rows_total",
+            &expiry.deleted_parent_rows,
+        ),
+        ("foks_expiry_empty_passes_total", &expiry.empty_passes),
+    ] {
+        let _ = writeln!(output, "# TYPE {name} counter");
+        for kind in crate::ExpiryKind::ALL {
+            let _ = writeln!(
+                output,
+                "{name}{{kind=\"{}\"}} {}",
+                kind.label(),
+                counts[kind as usize]
+            );
+        }
+    }
 }
 
 fn checkpoint_prometheus(output: &mut String, checkpoint: &crate::CheckpointMetricsSnapshot) {
@@ -560,6 +582,40 @@ fn storage_bytes(database_path: &Path) -> std::result::Result<(u64, u64), ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expiry_export_has_exact_fixed_labels_and_values() {
+        let snapshot = crate::ExpiryMetricsSnapshot {
+            deleted_parent_rows: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            empty_passes: [9, 8, 7, 6, 5, 4, 3, 2, 1],
+        };
+        let mut text = String::new();
+        expiry_prometheus(&mut text, &snapshot);
+        let labels = [
+            "names",
+            "team_names",
+            "recovery_challenges",
+            "team_view_tokens",
+            "team_view_challenges",
+            "team_admin_tokens",
+            "sso_sessions",
+            "log_sends",
+            "request_receipts",
+        ];
+        assert_eq!(text.lines().count(), 20);
+        for (index, label) in labels.iter().enumerate() {
+            assert!(text.contains(&format!(
+                "foks_expiry_deleted_rows_total{{kind=\"{label}\"}} {}\n",
+                index + 1
+            )));
+            assert!(text.contains(&format!(
+                "foks_expiry_empty_passes_total{{kind=\"{label}\"}} {}\n",
+                9 - index
+            )));
+        }
+        assert!(text.contains("# TYPE foks_expiry_deleted_rows_total counter\n"));
+        assert!(text.contains("# TYPE foks_expiry_empty_passes_total counter\n"));
+    }
 
     #[test]
     fn management_listener_accepts_only_loopback_addresses() {

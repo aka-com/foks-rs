@@ -35,6 +35,8 @@ fn health_readiness_and_metrics_are_isolated_on_management_http() {
         "foks_maintenance_successes_total",
         "foks_maintenance_failures_total",
         "foks_reclaimed_uploads_total",
+        "foks_expiry_deleted_rows_total",
+        "foks_expiry_empty_passes_total",
         "foks_maintenance_warning",
         "foks_checkpoint_attempts_total",
         "foks_checkpoint_duration_seconds_bucket",
@@ -97,6 +99,24 @@ fn partial_checkpoint_is_successful_maintenance_and_metrics_do_not_enter_writer(
     );
     assert_eq!(metric(&text, "foks_maintenance_successes_total"), 1.0);
     assert_eq!(metric(&text, "foks_checkpoint_deferred_total"), 1.0);
+    assert_eq!(
+        metric(&text, "foks_expiry_deleted_rows_total{kind=\"names\"}"),
+        1.0
+    );
+    assert_eq!(
+        metric(&text, "foks_expiry_empty_passes_total{kind=\"names\"}"),
+        0.0
+    );
+    for kind in foks_server::ExpiryKind::ALL {
+        assert!(text.contains(&format!(
+            "foks_expiry_deleted_rows_total{{kind=\"{}\"}}",
+            kind.label()
+        )));
+        assert!(text.contains(&format!(
+            "foks_expiry_empty_passes_total{{kind=\"{}\"}}",
+            kind.label()
+        )));
+    }
     assert_eq!(metric(&text, "foks_checkpoint_complete_total"), 0.0);
     assert_eq!(metric(&text, "foks_checkpoint_busy_total"), 0.0);
     assert!(metric(&text, "foks_checkpoint_remaining_frames") > 0.0);
@@ -118,6 +138,14 @@ fn partial_checkpoint_is_successful_maintenance_and_metrics_do_not_enter_writer(
     server.run_maintenance().unwrap();
     let text = get(server.management_address(), "/metrics");
     assert_eq!(metric(&text, "foks_checkpoint_complete_total"), 1.0);
+    assert_eq!(
+        metric(&text, "foks_expiry_deleted_rows_total{kind=\"names\"}"),
+        1.0
+    );
+    assert_eq!(
+        metric(&text, "foks_expiry_empty_passes_total{kind=\"names\"}"),
+        1.0
+    );
     assert_eq!(metric(&text, "foks_checkpoint_remaining_frames"), 0.0);
     server.shutdown().unwrap();
 }

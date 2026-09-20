@@ -2,6 +2,9 @@ use rusqlite::TransactionBehavior;
 
 #[cfg(test)]
 mod checkpoint_tests;
+pub(crate) mod expiry;
+#[cfg(test)]
+mod expiry_tests;
 mod uploads;
 
 use crate::{error::sql_integer, Database, Error, Result};
@@ -9,6 +12,7 @@ use crate::{error::sql_integer, Database, Error, Result};
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct MaintenanceReport {
     pub challenges: u64,
+    pub sso_sessions: u64,
     pub team_reservations: u64,
     pub team_view_challenges: u64,
     pub team_view_tokens: u64,
@@ -94,44 +98,25 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transaction.execute(
-            "DELETE FROM sso_sessions WHERE rowid IN (SELECT rowid FROM sso_sessions WHERE expires_at_ms<=?1 LIMIT 128)",
-            [sql_integer(now / 1000)?],
-        )?;
-        let reservations = transaction.execute(
-            "DELETE FROM names WHERE rowid IN (SELECT rowid FROM names WHERE uid IS NULL AND expires_at <= ?1 LIMIT 128)",
-            [sql_integer(now)?],
-        )?;
-        let team_reservations = transaction.execute(
-            "DELETE FROM team_names WHERE rowid IN (SELECT rowid FROM team_names WHERE team_id IS NULL AND expires_at <= ?1 LIMIT 128)",
-            [sql_integer(now)?],
-        )?;
-        let receipts = transaction.execute(
-            "DELETE FROM request_receipts WHERE rowid IN (SELECT rowid FROM request_receipts WHERE expires_at <= ?1 LIMIT 128)",
-            [sql_integer(now)?],
-        )?;
-        let challenges = transaction.execute(
-            "DELETE FROM recovery_challenges WHERE rowid IN (SELECT rowid FROM recovery_challenges WHERE expires_at <= ?1 OR consumed = 1 LIMIT 128)",
-            [sql_integer(now)?],
-        )?;
-        let team_view_tokens = transaction.execute(
-            "DELETE FROM team_view_tokens WHERE rowid IN (SELECT rowid FROM team_view_tokens WHERE expires_at <= ?1 LIMIT 128)",
-            [sql_integer(now)?],
-        )?;
-        let team_view_challenges = transaction.execute(
-            "DELETE FROM team_view_challenges WHERE rowid IN (SELECT rowid FROM team_view_challenges WHERE expires_at <= ?1 LIMIT 128)",
-            [sql_integer(now)?],
-        )?;
-        let team_admin_tokens = transaction.execute(
-            "DELETE FROM team_admin_tokens WHERE rowid IN (SELECT rowid FROM team_admin_tokens WHERE expires_at <= ?1 LIMIT 128)",
-            [sql_integer(now)?],
-        )?;
+        let sso_sessions =
+            transaction.execute(expiry::SSO_SESSIONS.delete, [sql_integer(now / 1000)?])?;
+        let reservations = transaction.execute(expiry::RESERVATIONS.delete, [sql_integer(now)?])?;
+        let team_reservations =
+            transaction.execute(expiry::TEAM_RESERVATIONS.delete, [sql_integer(now)?])?;
+        let receipts = transaction.execute(expiry::RECEIPTS.delete, [sql_integer(now)?])?;
+        let challenges = transaction.execute(expiry::CHALLENGES.delete, [sql_integer(now)?])?;
+        let team_view_tokens =
+            transaction.execute(expiry::TEAM_VIEW_TOKENS.delete, [sql_integer(now)?])?;
+        let team_view_challenges =
+            transaction.execute(expiry::TEAM_VIEW_CHALLENGES.delete, [sql_integer(now)?])?;
+        let team_admin_tokens =
+            transaction.execute(expiry::TEAM_ADMIN_TOKENS.delete, [sql_integer(now)?])?;
         // Lock expiry is evaluated against the timeout supplied by the next
         // acquirer, matching go-foks. There is no absolute expiry to reap.
         let locks = 0;
         let uploads = uploads::reclaim(&transaction, abandon_uploads_before)?;
         let log_sends = transaction.execute(
-            "DELETE FROM log_sends WHERE rowid IN (SELECT rowid FROM log_sends WHERE created_at <= ?1 LIMIT 128)",
+            expiry::LOG_SENDS.delete,
             [sql_integer(now.saturating_sub(24 * 60 * 60 * 1_000_000))?],
         )?;
         // Active federation rows remain renewable after bearer expiry, and revoked
@@ -141,6 +126,7 @@ impl Database {
         let federation_team_permissions = 0;
         transaction.commit()?;
         Ok(MaintenanceReport {
+            sso_sessions: u64::try_from(sso_sessions).map_err(|_| Error::IntegerRange)?,
             challenges: u64::try_from(challenges).map_err(|_| Error::IntegerRange)?,
             team_reservations: u64::try_from(team_reservations).map_err(|_| Error::IntegerRange)?,
             team_view_challenges: u64::try_from(team_view_challenges)

@@ -2,6 +2,10 @@ use rusqlite::{params, OptionalExtension as _, TransactionBehavior};
 
 use crate::{error::sql_integer, Database, Error, Result};
 
+pub(crate) const RECLAIM_CONSUMED: &str = "DELETE FROM recovery_challenges WHERE consumed = 1";
+pub(crate) const RECLAIM_EXPIRED: &str =
+    "DELETE FROM recovery_challenges WHERE consumed = 0 AND expires_at <= ?1";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecoveryCredentialSnapshot {
     pub uid: Vec<u8>,
@@ -24,13 +28,15 @@ impl Database {
         if !matches!(entity_id.len(), 33 | 34) || host_id.len() != 33 || expires_at <= now {
             return Err(Error::Invalid("recovery challenge"));
         }
+        // Validate timestamps before deleting anything; both range deletes and
+        // issuance remain in the same transaction, with complete reclamation.
+        let now = sql_integer(now)?;
+        let expires_at = sql_integer(expires_at)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transaction.execute(
-            "DELETE FROM recovery_challenges WHERE expires_at <= ?1 OR consumed = 1",
-            [sql_integer(now)?],
-        )?;
+        transaction.execute(RECLAIM_CONSUMED, [])?;
+        transaction.execute(RECLAIM_EXPIRED, [now])?;
         let global: i64 =
             transaction.query_row("SELECT count(*) FROM recovery_challenges", [], |row| {
                 row.get(0)
@@ -56,7 +62,7 @@ impl Database {
                 entity_id,
                 host_id,
                 key_generation,
-                sql_integer(expires_at)?
+                expires_at
             ],
         )?;
         transaction.commit()?;

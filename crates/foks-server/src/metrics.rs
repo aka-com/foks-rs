@@ -1,4 +1,6 @@
 mod checkpoint;
+mod expiry;
+pub use expiry::{ExpiryKind, ExpiryMetricsSnapshot};
 pub(crate) mod realtime;
 pub use realtime::{FanoutMetricsSnapshot, RealtimeMetricsSnapshot, ReconcileMetricsSnapshot};
 
@@ -45,6 +47,7 @@ struct DurationMetricSnapshot {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ServerMetricsSnapshot {
     pub checkpoint: CheckpointMetricsSnapshot,
+    pub expiry: ExpiryMetricsSnapshot,
     pub realtime: RealtimeMetricsSnapshot,
     pub admin_cleanup_attempts: u64,
     pub admin_cleanup_failures: u64,
@@ -86,6 +89,7 @@ pub struct ServerMetricsSnapshot {
 #[derive(Default)]
 pub struct ServerMetrics {
     checkpoint: checkpoint::CheckpointMetrics,
+    expiry: expiry::ExpiryMetrics,
     pub(crate) realtime: realtime::RealtimeMetrics,
     admin_cleanup_attempts: AtomicU64,
     admin_cleanup_failures: AtomicU64,
@@ -151,6 +155,7 @@ impl ServerMetrics {
         let backup_duration = self.backup_duration.snapshot();
         ServerMetricsSnapshot {
             checkpoint: self.checkpoint.snapshot(),
+            expiry: self.expiry.snapshot(),
             realtime: self.realtime.snapshot(),
             admin_cleanup_attempts: self.admin_cleanup_attempts.load(Ordering::Relaxed),
             admin_cleanup_failures: self.admin_cleanup_failures.load(Ordering::Relaxed),
@@ -272,6 +277,10 @@ impl ServerMetrics {
 
     // Called only after the reclamation transaction commits, even when a later
     // checkpoint fails. Committed work must not disappear from the counters.
+    pub(crate) fn expiry_reclaimed(&self, report: &foks_server_db::MaintenanceReport) {
+        self.expiry.committed(report);
+    }
+
     pub(crate) fn uploads_reclaimed(&self, report: &foks_server_db::MaintenanceReport) {
         self.reclaimed_uploads
             .fetch_add(report.uploads, Ordering::Relaxed);
