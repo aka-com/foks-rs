@@ -10,7 +10,8 @@ import type {
  * Former `section=` values that are pages of one of the three sections now.
  * `credentials` (the passphrase rows) and `notifications` are Preferences;
  * `device`, `about` and the older `agent` are Device; `security-keys` was a
- * list of links to each server's page, so it is Servers.
+ * list of links to each server's page, now at the bottom of Account. `servers`
+ * is the retired id of the same page.
  */
 export const SETTINGS_SECTION_ALIASES: Readonly<
   Record<string, SettingsSection>
@@ -20,7 +21,8 @@ export const SETTINGS_SECTION_ALIASES: Readonly<
   device: 'mac',
   about: 'mac',
   agent: 'mac',
-  'security-keys': 'servers',
+  servers: 'account',
+  'security-keys': 'account',
 };
 
 /**
@@ -59,12 +61,12 @@ export const PUBLIC_LOCATION_ALIASES: Readonly<Record<string, Location>> = {
   join: { kind: 'teams' },
   groups: { kind: 'teams' },
   create: { kind: 'teams' },
-  // Servers used to be its own page; it is a Settings section now, and every
-  // former name for that page maps to this section.
-  servers: { kind: 'settings', section: 'servers' },
+  // Servers now lives at the bottom of Account. Every former name for that
+  // page maps there, while a named profile still opens its server detail.
+  servers: ACCOUNT_SECTION,
   settings: { kind: 'settings' },
-  'servers-list': { kind: 'settings', section: 'servers' },
-  'servers-add': { kind: 'settings', section: 'servers' },
+  'servers-list': ACCOUNT_SECTION,
+  'servers-add': ACCOUNT_SECTION,
   // Recovery devices and security keys are the Devices tab; the accounts pane
   // is the Account section.
   'settings-macs': { kind: 'devices', section: 'macs' },
@@ -82,6 +84,7 @@ export const PUBLIC_LOCATION_ALIASES: Readonly<Record<string, Location>> = {
 export function decodeLegacyLocation(
   params: URLSearchParams,
   alias: Location | undefined,
+  allowSettingsProfile = false,
 ): Location | null {
   if (alias?.kind === 'group-settings') {
     const tab = params.get('tab');
@@ -94,7 +97,7 @@ export function decodeLegacyLocation(
   if (alias?.kind === 'settings') {
     const store = params.get('store') ?? alias.store;
     const profile =
-      alias.section === 'servers'
+      allowSettingsProfile && alias.section === 'account'
         ? (params.get('profile') ?? alias.profile)
         : undefined;
     return {

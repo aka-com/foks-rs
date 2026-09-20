@@ -42,7 +42,7 @@ export function LocalCompleteStep({
                   onClick={() =>
                     onNavigate({
                       kind: 'settings',
-                      section: 'servers',
+                      section: 'account',
                       profile: profile?.profile,
                     })
                   }

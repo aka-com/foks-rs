@@ -389,7 +389,7 @@ export function IncompleteGroupPage({
                   onClick={() =>
                     onNavigate({
                       kind: 'settings',
-                      section: 'servers',
+                      section: 'account',
                       profile: store.server,
                     })
                   }

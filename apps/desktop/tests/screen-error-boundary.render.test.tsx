@@ -115,7 +115,7 @@ test('the boundary key identifies screens and page identity includes route field
   // A section is a page of the Settings screen, whose sub-navigation moves
   // between sections; the screen stays mounted.
   assert.equal(
-    boundary.screenBoundaryKey({ kind: 'settings', section: 'servers' }),
+    boundary.screenBoundaryKey({ kind: 'settings', section: 'account' }),
     'settings:',
   );
   assert.equal(boundary.screenBoundaryKey({ kind: 'all' }), 'all:');
@@ -142,11 +142,11 @@ test('the boundary key identifies screens and page identity includes route field
       { kind: 'devices', section: 'keys', store: 'acct:a', device: 'd2' },
     ],
     [
-      { kind: 'settings', section: 'servers', profile: 'acme' },
-      { kind: 'settings', section: 'servers', profile: 'personal' },
+      { kind: 'settings', section: 'account', profile: 'acme' },
+      { kind: 'settings', section: 'account', profile: 'personal' },
     ],
     [
-      { kind: 'settings', section: 'servers' },
+      { kind: 'settings', section: 'account' },
       { kind: 'settings', section: 'preferences' },
     ],
     [

@@ -1,9 +1,8 @@
 /**
- * The Settings tab as a sub-navigation of three pages — Servers, Preferences,
- * Device: the `section=` address that opens one of them, the `profile=`
- * address that opens a server on the Servers page without hiding the
- * sub-navigation, and the Mac-wide reset that composes the per-server one, on
- * the Device page.
+ * The Settings tab as a sub-navigation of Account, Preferences and Device.
+ * Account holds the device-wide server inventory at its bottom; `profile=`
+ * opens one server there without hiding the sub-navigation. Device owns the
+ * Mac-wide reset that composes the per-server one.
  */
 
 import assert from 'node:assert/strict';
@@ -190,7 +189,7 @@ function countingStatus(counter: { reads: number }) {
   });
 }
 
-test('the Servers page states lease and identity from the catalog, reading no server status', async () => {
+test('the server inventory states lease and identity from the catalog, reading no server status', async () => {
   const { applyLease } = (await vite.ssrLoadModule(
     '/src/model/index.ts',
   )) as typeof import('../src/model');
@@ -199,7 +198,7 @@ test('the Servers page states lease and identity from the catalog, reading no se
   const snapshot = applyLease(await fixture(), 'fresh', 'acme', now);
   const counter = { reads: 0 };
   const rendered = await renderSettings(snapshot, {
-    where: { section: 'servers' },
+    where: { section: 'account' },
     decorate: countingStatus(counter),
   });
 
@@ -282,7 +281,7 @@ test('the explicit check reads the signed status fresh and states what it read',
   assert.equal(counter.reads, 1);
 });
 
-test('the sub-navigation lists every section, and Account opens first', async () => {
+test('Account opens first and carries the server inventory at its bottom', async () => {
   const rendered = await renderSettings(await fixture());
 
   const nav = rendered.getByRole('navigation', { name: 'Settings sections' });
@@ -290,7 +289,7 @@ test('the sub-navigation lists every section, and Account opens first', async ()
     .within(nav)
     .getAllByRole('tab')
     .map((tab) => tab.textContent);
-  assert.deepEqual(tabs, ['Account', 'Servers', 'Preferences', 'Device']);
+  assert.deepEqual(tabs, ['Account', 'Preferences', 'Device']);
   const account = ui.within(nav).getByRole('tab', { name: 'Account' });
   assert.equal(account.getAttribute('aria-selected'), 'true');
   // Account is the sub-navigation's landing page. Its header names the
@@ -299,20 +298,50 @@ test('the sub-navigation lists every section, and Account opens first', async ()
   const panel = rendered.getByRole('tabpanel');
   assert.equal(panel.id, account.getAttribute('aria-controls'));
   assert.ok(ui.within(panel).getByText('Username'));
-  assert.equal(rendered.queryByText('Add a server…'), null);
+  assert.ok(rendered.getByText('Servers on this device'));
+  assert.ok(rendered.getByRole('button', { name: 'Add a server…' }));
 });
 
-test('the Servers section is its list, with its own state chips', async () => {
+test('the server inventory remains available when this device has no account', async () => {
+  const snapshot = await fixture();
+  const rendered = await renderSettings({
+    ...snapshot,
+    stores: snapshot.stores.filter((store) => store.kind !== 'account'),
+  });
+
+  assert.ok(rendered.getByText('No available account on this device'));
+  assert.ok(rendered.getByText('Servers on this device'));
+  assert.ok(rendered.getByRole('button', { name: 'Add a server…' }));
+});
+
+test('opening a device-wide server retains the selected account', async () => {
+  const chosen: Location[] = [];
+  const rendered = await renderSettings(await fixture(), {
+    where: { section: 'account', store: 'acct:work' },
+    onNavigate: (location) => chosen.push(location),
+  });
+
+  ui.fireEvent.click(rendered.getAllByRole('button', { name: 'Manage' })[0]);
+  const destination = chosen.at(-1);
+  assert.equal(destination?.kind, 'settings');
+  if (destination?.kind !== 'settings') return;
+  assert.equal(destination.section, 'account');
+  assert.equal(destination.store, 'acct:work');
+  assert.ok(destination.profile);
+});
+
+test('a retired Servers address opens the list at the bottom of Account', async () => {
   const rendered = await renderSettings(await fixture(), {
     where: { section: 'servers' },
   });
   assert.equal(
     rendered
-      .getByRole('tab', { name: 'Servers' })
+      .getByRole('tab', { name: 'Account' })
       .getAttribute('aria-selected'),
     'true',
   );
-  assert.ok(rendered.getByRole('heading', { level: 1, name: 'Servers' }));
+  assert.ok(rendered.getByRole('heading', { level: 1, name: 'satoshi' }));
+  assert.ok(rendered.getByText('Servers on this device'));
   assert.ok(rendered.getByText('foks.example.net'));
   assert.ok(rendered.getByRole('button', { name: 'Add a server…' }));
   // A server that answered carries no chip — its mark already reads as one —
@@ -320,15 +349,14 @@ test('the Servers section is its list, with its own state chips', async () => {
   assert.equal(rendered.queryByText('Checked'), null);
   assert.ok(document.querySelector('.smark.ok'));
   assert.ok(rendered.getByText('Not verified'));
-  // Only one page is mounted at a time: the other sections' own content is
-  // not drawn behind Servers.
+  // Other Settings pages are not mounted behind Account.
   assert.equal(
     rendered.queryByRole('button', { name: 'Change passphrase…' }),
     null,
   );
   assert.equal(rendered.queryByRole('button', { name: 'Lock now' }), null);
   assert.equal(rendered.queryByText('Danger zone'), null);
-  assert.equal(rendered.queryByText('Username'), null);
+  assert.ok(rendered.getByText('Username'));
 });
 
 test('choosing a sub-navigation section replaces the page, dropping any open server', async () => {
@@ -344,11 +372,11 @@ test('choosing a sub-navigation section replaces the page, dropping any open ser
 
 test('walking the sub-navigation by keyboard keeps focus on the section it selects', async () => {
   const rendered = await renderSettings(await fixture(), {
-    where: { section: 'servers' },
+    where: { section: 'account' },
     shellKeyed: true,
   });
   const strip = rendered.getByRole('tablist', { name: 'Settings sections' });
-  rendered.getByRole('tab', { name: 'Servers' }).focus();
+  rendered.getByRole('tab', { name: 'Account' }).focus();
   await ui.act(async () => {
     ui.fireEvent.keyDown(strip, { key: 'ArrowDown' });
     await Promise.resolve();
@@ -445,7 +473,7 @@ test('a Preferences page with no accounts says so', async () => {
   );
 });
 
-test('a server address keeps the sub-navigation on screen, Servers still selected', async () => {
+test('a server address keeps the sub-navigation on screen, Account still selected', async () => {
   const rendered = await renderSettings(await fixture(), {
     where: { profile: 'personal' },
   });
@@ -454,7 +482,7 @@ test('a server address keeps the sub-navigation on screen, Servers still selecte
   assert.equal(
     ui
       .within(nav)
-      .getByRole('tab', { name: 'Servers' })
+      .getByRole('tab', { name: 'Account' })
       .getAttribute('aria-selected'),
     'true',
   );
@@ -725,7 +753,7 @@ test('duplicate server labels retain addresses without profile-name suffixes', a
     ),
   };
   const rendered = await renderSettings(duplicated, {
-    where: { section: 'servers' },
+    where: { section: 'account' },
   });
   assert.equal(rendered.getAllByText('Shared').length, 2);
   assert.equal(
@@ -826,7 +854,7 @@ test('a lapsed server can be checked from its row in the list', async () => {
     '/src/model/index.ts',
   )) as typeof import('../src/model');
   const rendered = await renderSettings(applyLease(await fixture(), 'lapsed'), {
-    where: { section: 'servers' },
+    where: { section: 'account' },
   });
 
   // The never-checked server and the lapsed one are equally stuck.
@@ -1173,7 +1201,7 @@ test('device notification preferences are reachable without a channel and recove
 test('server security-key actions name the selected enrollment across accounts', async () => {
   const calls: unknown[] = [];
   const rendered = await renderSettings(await fixture(), {
-    where: { section: 'servers', profile: 'personal' },
+    where: { section: 'account', profile: 'personal' },
     decorate: (base) => ({
       ...base,
       listYubiAccounts: async () => [

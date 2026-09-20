@@ -7,7 +7,7 @@ import type { LeaseState, StoreRef } from '../model/types';
  * a page of its own, with the sub-navigation staying on screen while any one
  * of them is open. `account` is one account's profile, the account the address
  * `store` names: its username, local alias, server, and the counts that link
- * to Devices and Teams. `servers` lists the servers this Mac talks to and holds
+ * to Devices and Teams. It also lists the servers this Mac talks to and holds
  * each server's own page, security keys included. `preferences` contains
  * account passphrases and local desktop alert settings. `mac` is Device: the
  * application version and lock, the agent, the local FOKS data operations and
@@ -18,12 +18,16 @@ import type { LeaseState, StoreRef } from '../model/types';
  * maps them (`SETTINGS_SECTION_ALIASES`). The former Account tab
  * (`state=people`) decodes to the `account` section.
  */
-export type SettingsSection = 'account' | 'servers' | 'preferences' | 'mac';
+export type SettingsSection =
+  | 'account'
+  /** @deprecated Decoded and rendered as Account. */
+  | 'servers'
+  | 'preferences'
+  | 'mac';
 
 /** The order the sub-navigation lists Settings' pages in. */
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'account',
-  'servers',
   'preferences',
   'mac',
 ];
@@ -35,7 +39,7 @@ export const DEFAULT_SETTINGS_SECTION: SettingsSection = SETTINGS_SECTIONS[0];
 export const SETTINGS_SECTION_LABEL: Readonly<Record<SettingsSection, string>> =
   {
     account: 'Account',
-    servers: 'Servers',
+    servers: 'Account',
     preferences: 'Preferences',
     mac: 'Device',
   };
@@ -97,9 +101,9 @@ export type Location =
     }
   /**
    * `store` names the account the page acts on, which the Account section
-   * shows and the other sections read through. `profile` names the server the
-   * Servers section is open on; it means nothing on any other section and is
-   * dropped when moving between them.
+   * shows and the other sections read through. `profile` names the server
+   * detail open at the bottom of Account; it means nothing on other sections
+   * and is dropped when moving between them.
    */
   | {
       kind: 'settings';

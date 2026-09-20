@@ -5,20 +5,19 @@ import {
   workflowMessage,
 } from '../model/workflow-availability';
 /**
- * The Settings tab: a sub-navigation of four pages, held on screen beside
+ * The Settings tab: a sub-navigation of three pages, held on screen beside
  * whichever one is open.
  *
  * Account, the first page and the one the tab opens on, is one account's
- * profile: the account the address's `store` names. Servers: the servers this
- * Mac talks to, each with its own page, where its security keys are managed.
- * Preferences contains account passphrases and local desktop alert settings.
+ * profile: the account the address's `store` names. At its bottom are the
+ * servers this Mac talks to, each with its own detail, where its security keys
+ * are managed. Preferences contains account passphrases and local desktop alert settings.
  * Device contains the application version and lock, the agent and its socket,
  * local FOKS data operations, and the device-wide reset. A `section=` address
- * opens its page; `profile=` opens a server's own page, which is the Servers
- * page's, so it carries `section: 'servers'` with it.
+ * opens its page; `profile=` opens a server detail at the bottom of Account.
  *
  * Account draws its own header — the account's mark, username and server —
- * and its own tab panel, and owns its sheets. The other three share the
+ * and its own tab panel, and owns its sheets. The other two share the
  * header and panel drawn here.
  */
 
@@ -92,7 +91,7 @@ export interface SettingsScreenProps {
 }
 
 /** A sheet this page owns. Add a server and the per-server reset are the
- *  Servers section's own. */
+ *  embedded server section's own. */
 type Sheet = 'passphrase' | 'reset-mac' | null;
 
 /** The base the sub-navigation's tab and panel ids are derived from. */
@@ -125,22 +124,47 @@ export function SettingsScreen({
   const section: SettingsSection = settingsSectionOf(location);
 
   const serversSection = (
-    <ServersSection
-      snapshot={snapshot}
-      bridge={bridge}
-      profile={location.profile}
-      scene={enteredScene}
-      onNavigate={onNavigate}
-      onRefresh={onRefresh}
-      onError={onError}
-      onMutationError={onMutationError}
-    />
+    <div className="account-servers">
+      <SectionLabel
+        action={
+          location.profile ? (
+            <Button
+              size="sm"
+              icon="back"
+              onClick={() =>
+                onNavigate(
+                  {
+                    kind: 'settings',
+                    section: 'account',
+                    ...(location.store ? { store: location.store } : {}),
+                  },
+                  { replace: true },
+                )
+              }
+            >
+              All servers
+            </Button>
+          ) : null
+        }
+      >
+        {location.profile ? 'Server details' : 'Servers on this device'}
+      </SectionLabel>
+      <ServersSection
+        snapshot={snapshot}
+        bridge={bridge}
+        profile={location.profile}
+        store={location.store}
+        scene={enteredScene}
+        onNavigate={onNavigate}
+        onRefresh={onRefresh}
+        onError={onError}
+        onMutationError={onMutationError}
+      />
+    </div>
   );
 
   const page: ReactNode =
-    section === 'account' ? null : section === 'servers' ? (
-      serversSection
-    ) : section === 'preferences' ? (
+    section === 'account' ? null : section === 'preferences' ? (
       <PreferencesSection
         snapshot={snapshot}
         stores={stores}
@@ -206,34 +230,11 @@ export function SettingsScreen({
             onRefreshSnapshot={onRefreshSnapshot}
             onError={onError}
             onMutationError={onMutationError}
+            serverSection={serversSection}
           />
         ) : (
           <>
-            <PageHeader
-              ruled
-              title={SETTINGS_SECTION_LABEL[section]}
-              // A server's own page is the Servers page with one server open,
-              // so the way back out of it belongs in that page's header.
-              action={
-                section === 'servers' && location.profile ? (
-                  <Button
-                    icon="back"
-                    onClick={() =>
-                      onNavigate(
-                        {
-                          kind: 'settings',
-                          ...(location.store ? { store: location.store } : {}),
-                          section: 'servers',
-                        },
-                        { replace: true },
-                      )
-                    }
-                  >
-                    All servers
-                  </Button>
-                ) : null
-              }
-            />
+            <PageHeader ruled title={SETTINGS_SECTION_LABEL[section]} />
             {/* Fixed IDs associate each tab button with its tabpanel. */}
             <div
               className="body"

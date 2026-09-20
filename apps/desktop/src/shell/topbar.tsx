@@ -101,7 +101,7 @@ export function crumbTrail(
       // names one — the address's own section, or the page it defaults to.
       const section = settingsSectionOf(location);
       trail.push(SETTINGS_SECTION_LABEL[section]);
-      if (section === 'servers' && location.profile)
+      if (section === 'account' && location.profile)
         trail.push(
           serverLocalAlias(
             snapshot?.servers.find((entry) => entry.id === location.profile),
@@ -139,7 +139,7 @@ export interface TopbarProps {
    * button is the plain manual refresh.
    */
   syncService?: DesktopReconciliation;
-  /** Opens Settings › Servers on one server, from the popover. */
+  /** Opens one server under Settings › Account, from the popover. */
   onOpenServers?: (profile: string) => void;
   /** A blocking state: the bar is drawn, and nothing on it acts. */
   blocked?: boolean;

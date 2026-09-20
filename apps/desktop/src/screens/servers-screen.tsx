@@ -1,6 +1,4 @@
-/**
- * The Servers section of Settings, displaying configured servers and detailed server state.
- */
+/** Device-wide server inventory and server details embedded in Settings › Account. */
 
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -47,6 +45,8 @@ interface Props {
   bridge: Bridge;
   /** The server the section is open on, or nothing for the list. */
   profile?: string;
+  /** The Account page to retain while opening and closing server details. */
+  store?: StoreRef;
   /** The named fixture scene Settings was entered at, captured once there. */
   scene: string;
   onNavigate: (location: Location) => void;
@@ -212,10 +212,11 @@ function ServerMark({ state }: { state: ServerUiState }): ReactNode {
   );
 }
 
-/** Returns the location object for the servers section or a specific server profile. */
-const servers = (profile?: string): Location => ({
+/** Returns the Account location for the server list or one server detail. */
+const servers = (profile?: string, store?: StoreRef): Location => ({
   kind: 'settings',
-  section: 'servers',
+  section: 'account',
+  ...(store ? { store } : {}),
   ...(profile ? { profile } : {}),
 });
 
@@ -223,6 +224,7 @@ export function ServersSection({
   snapshot: agentSnapshot,
   bridge,
   profile,
+  store,
   scene,
   onNavigate,
   onRefresh,
@@ -294,7 +296,7 @@ export function ServersSection({
           await onRefresh(
             'Server added. Check the server to verify its connection.',
           );
-          onNavigate(servers(added));
+          onNavigate(servers(added, store));
         }}
         onError={(error) => void onMutationError(error)}
       />
@@ -331,7 +333,7 @@ export function ServersSection({
         onClose={() => setSheet(null)}
         onForgot={async () => {
           setSheet(null);
-          onNavigate(servers());
+          onNavigate(servers(undefined, store));
           await onRefresh(`Removed ${serverLocalAlias(selected)}`);
         }}
         onError={(error) => void onMutationError(error)}
@@ -368,7 +370,7 @@ export function ServersSection({
           snapshot={agentSnapshot}
           statuses={statuses}
           busy={busy}
-          onOpen={(next) => onNavigate(servers(next))}
+          onOpen={(next) => onNavigate(servers(next, store))}
           onCheck={(server) => void check(server)}
           onAdd={() => setSheet('add')}
         />

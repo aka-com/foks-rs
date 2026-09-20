@@ -4,15 +4,15 @@ import type { Location, RailTab, SettingsSection } from './types';
 
 /**
  * The Settings page an address opens. An address that names a section opens
- * it; one that names a server (`profile`) and no section is that server's
- * own page, which is the Servers page's; any other opens the sub-navigation's
- * first page.
+ * it; a server profile is a detail at the bottom of Account; any other address
+ * opens the sub-navigation's first page.
  */
 export function settingsSectionOf(
   location: Extract<Location, { kind: 'settings' }>,
 ): SettingsSection {
+  if (location.section === 'servers') return 'account';
   if (location.section) return location.section;
-  return location.profile ? 'servers' : DEFAULT_SETTINGS_SECTION;
+  return DEFAULT_SETTINGS_SECTION;
 }
 
 /** Resolve the account through which a page's object is accessed. */

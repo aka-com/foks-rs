@@ -458,7 +458,7 @@ export function AccountHeader({
                                   close();
                                   onNavigate({
                                     kind: 'settings',
-                                    section: 'servers',
+                                    section: 'account',
                                     profile: store.server,
                                     store: store.id,
                                   });

@@ -114,7 +114,7 @@ export function encodeLocation(location: Location): {
           store: location.store ?? null,
           section: location.section ?? null,
           profile:
-            settingsSectionOf(location) === 'servers'
+            settingsSectionOf(location) === 'account'
               ? (location.profile ?? null)
               : null,
         },
@@ -210,12 +210,12 @@ export function decodeProductionLocation(search: string): Location | null {
       section && SETTINGS_SECTION_ALIASES[section]
         ? SETTINGS_SECTION_ALIASES[section]
         : section;
-    // With no section, `profile` opens Servers; otherwise it applies only
-    // to an explicit Servers section. Legacy
-    // `security-keys` URLs identified a server row, so they redirect to the
-    // root Servers list.
+    // A profile opens a server detail at the bottom of Account. The retired
+    // Servers section and addresses with no section keep their profile.
+    // Legacy `security-keys` URLs identified only a list, so they redirect to
+    // the Account root.
     const profile =
-      section === null || section === 'servers'
+      section === null || section === 'account' || section === 'servers'
         ? (params.get('profile') ?? undefined)
         : undefined;
     return resolved &&
@@ -236,7 +236,7 @@ export function decodeProductionLocation(search: string): Location | null {
     const profile = params.get('profile') ?? undefined;
     return {
       kind: 'settings',
-      section: 'servers',
+      section: 'account',
       ...(profile ? { profile } : {}),
     };
   }
@@ -248,7 +248,11 @@ export function decodeProductionLocation(search: string): Location | null {
       ...(path === 'invited' || path === 'own' ? { path } : {}),
     };
   }
-  return decodeLegacyLocation(params, PUBLIC_LOCATION_ALIASES[state]);
+  return decodeLegacyLocation(
+    params,
+    PUBLIC_LOCATION_ALIASES[state],
+    state === 'servers-list' || state === 'servers-add',
+  );
 }
 
 /** The href a location deep-links to, given the address the page is at. */

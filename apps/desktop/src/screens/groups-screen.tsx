@@ -1006,7 +1006,7 @@ function SettingsTab({
               onClick={() =>
                 onNavigate({
                   kind: 'settings',
-                  section: 'servers',
+                  section: 'account',
                   profile: store.server,
                 })
               }
@@ -1104,7 +1104,7 @@ function SettingsTab({
               onClick={() =>
                 onNavigate({
                   kind: 'settings',
-                  section: 'servers',
+                  section: 'account',
                   profile: store.server,
                 })
               }
@@ -2421,7 +2421,7 @@ export function GroupSettingsScreen({
           noHeader
           variant="band"
           onOpenServer={(profile) =>
-            onNavigate({ kind: 'settings', section: 'servers', profile })
+            onNavigate({ kind: 'settings', section: 'account', profile })
           }
           onFinishSetup={finishSetup}
         />
@@ -2554,7 +2554,7 @@ export function GroupSettingsScreen({
                   onOpenServer={(profile) =>
                     onNavigate({
                       kind: 'settings',
-                      section: 'servers',
+                      section: 'account',
                       profile,
                     })
                   }

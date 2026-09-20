@@ -41,26 +41,26 @@ const STATE_ALIASES: Readonly<Record<string, Location>> = {
   admit: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
   'servers-server': {
     kind: 'settings',
-    section: 'servers',
+    section: 'account',
     profile: 'personal',
   },
-  'servers-lapsed': { kind: 'settings', section: 'servers', profile: 'acme' },
+  'servers-lapsed': { kind: 'settings', section: 'account', profile: 'acme' },
   'servers-rollback': {
     kind: 'settings',
-    section: 'servers',
+    section: 'account',
     profile: 'personal',
   },
   'servers-reset': {
     kind: 'settings',
-    section: 'servers',
+    section: 'account',
     profile: 'personal',
   },
   'servers-unprobed': {
     kind: 'settings',
-    section: 'servers',
+    section: 'account',
     profile: 'partner',
   },
-  'servers-check': { kind: 'settings', section: 'servers', profile: 'partner' },
+  'servers-check': { kind: 'settings', section: 'account', profile: 'partner' },
   'settings-macs-work': {
     kind: 'devices',
     section: 'macs',
@@ -120,7 +120,11 @@ export function decodeLocation(search: string): Location | null {
           : {}),
     };
   }
-  return decodeLegacyLocation(params, STATE_ALIASES[state]);
+  return decodeLegacyLocation(
+    params,
+    STATE_ALIASES[state],
+    state.startsWith('servers'),
+  );
 }
 
 /** The scene a `?state=` name means, beyond the location it decodes to. */

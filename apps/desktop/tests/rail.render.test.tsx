@@ -628,23 +628,23 @@ test('the settings crumb always names the sub-navigation’s open page', async (
   // sub-navigation's first — so the crumb names it rather than stopping at
   // the tab.
   assert.deepEqual(crumbTrail({ kind: 'settings' }), ['Settings', 'Account']);
-  // A server named without its section is that server's page, under Servers.
+  // A server named without its section is that server's detail under Account.
   assert.deepEqual(
     crumbTrail({ kind: 'settings', profile: 'acme' }, {
       servers: [{ id: 'acme', name: 'internal-acme-profile', label: 'Acme' }],
     } as unknown as Parameters<typeof crumbTrail>[1]),
-    ['Settings', 'Servers', 'Acme'],
+    ['Settings', 'Account', 'Acme'],
   );
   assert.deepEqual(crumbTrail({ kind: 'settings', section: 'mac' }), [
     'Settings',
     'Device',
   ]);
-  // A server's own page reads three deep: the tab, the Servers page it
+  // A legacy server address reads three deep: the tab, the Account page it
   // belongs to, and the server itself.
   assert.deepEqual(
     crumbTrail({ kind: 'settings', section: 'servers', profile: 'acme' }, {
       servers: [{ id: 'acme', name: 'internal-acme-profile', label: 'Acme' }],
     } as unknown as Parameters<typeof crumbTrail>[1]),
-    ['Settings', 'Servers', 'Acme'],
+    ['Settings', 'Account', 'Acme'],
   );
 });

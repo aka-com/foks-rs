@@ -686,7 +686,7 @@ export function DevicesScreen({
                       onClick={() =>
                         onNavigate({
                           kind: 'settings',
-                          section: 'servers',
+                          section: 'account',
                           profile: selected.server,
                         })
                       }
@@ -1462,7 +1462,7 @@ function CardOperations({
               onClick={() =>
                 onNavigate({
                   kind: 'settings',
-                  section: 'servers',
+                  section: 'account',
                   profile: store.server,
                 })
               }

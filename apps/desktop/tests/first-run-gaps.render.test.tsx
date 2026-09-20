@@ -312,7 +312,7 @@ test('shows why the Personal vault is unavailable and provides a link to server 
   );
   assert.deepEqual(seen.at(-1), {
     kind: 'settings',
-    section: 'servers',
+    section: 'account',
     profile: 'personal',
   });
   assert.ok(

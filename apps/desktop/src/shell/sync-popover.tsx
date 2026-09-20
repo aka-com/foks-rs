@@ -780,7 +780,7 @@ export function SyncPopover({
   /** Keeps a hover-held popover up while the pointer is over it. */
   onPointerEnter?: () => void;
   onPointerLeave?: () => void;
-  /** Opens Settings › Servers on one server, when the shell can navigate. */
+  /** Opens one server under Settings › Account, when the shell can navigate. */
   onOpenServers?: (profile: string) => void;
   /** Runs the same manual refresh action as the top-bar button. */
   onRefresh?: () => void;

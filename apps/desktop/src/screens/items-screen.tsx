@@ -552,7 +552,7 @@ export function ItemsScreen({
         store={store}
         activeAccount={activeAccount}
         onOpenServer={(profile) =>
-          locations.navigate({ kind: 'settings', section: 'servers', profile })
+          locations.navigate({ kind: 'settings', section: 'account', profile })
         }
         onFinishSetup={() => void onResume(store.id)}
         headerAction={

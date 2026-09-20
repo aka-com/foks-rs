@@ -70,7 +70,7 @@ import type { DeviceLists } from './device-model';
 import { GoProfileConnectSheet } from './go-profile-connect';
 
 const ACTION_UNAVAILABLE =
-  'Resolve this under Servers, or in the team’s settings.';
+  'Resolve this under Account servers, or in the team’s settings.';
 
 /** The account panels reached from a row on this page. */
 type AccountSheet =
@@ -171,10 +171,10 @@ function destinationOf(
   if (namedServer)
     return {
       label: 'Open server',
-      where: `Settings › Servers › ${serverDisplayName(namedServer)}`,
+      where: `Settings › Account › ${serverDisplayName(namedServer)}`,
       location: {
         kind: 'settings',
-        section: 'servers',
+        section: 'account',
         profile: namedServer.id,
       },
     };
@@ -231,7 +231,7 @@ interface UnroutedNoticesProps {
  * retry can fix, or a note whose place could not be resolved — an alias that
  * matches more than one store, or an admission this Mac cannot place. Every
  * other note already has a home: a lapsed or unverified server shows on
- * Settings › Servers, a team whose setup is incomplete shows on Teams, and a
+ * Settings › Account, a team whose setup is incomplete shows on Teams, and a
  * team's admission into another team shows as Inactive on the host team's own
  * Members page. Drawing those again here would be a second copy of a state
  * the reader can already see where it is acted on.
@@ -325,6 +325,8 @@ export interface AccountSectionProps {
   onRefreshSnapshot: () => Promise<AgentSnapshot>;
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
+  /** Device-wide server inventory, composed after every account state. */
+  serverSection?: ReactNode;
 }
 
 export function AccountSection({
@@ -337,6 +339,7 @@ export function AccountSection({
   onRefreshSnapshot,
   onError,
   onMutationError,
+  serverSection,
 }: AccountSectionProps): ReactNode {
   const stores = accountStores(snapshot);
   // Select by exact StoreRef: two servers may both hold an account aliased
@@ -538,6 +541,7 @@ export function AccountSection({
               />
             </>
           )}
+          {serverSection}
         </div>
       </div>
       {sheet === 'go-profile' ? (
@@ -679,7 +683,7 @@ function AccountPanel({
               onClick={() =>
                 onNavigate({
                   kind: 'settings',
-                  section: 'servers',
+                  section: 'account',
                   profile: store.server,
                 })
               }
@@ -733,13 +737,13 @@ function AccountPanel({
               onClick={() =>
                 onNavigate({
                   kind: 'settings',
-                  section: 'servers',
+                  section: 'account',
                   profile: store.server,
                   store: store.id,
                 })
               }
             >
-              Servers ›
+              Server details ›
             </Button>
           }
         >

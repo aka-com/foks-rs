@@ -562,7 +562,7 @@ export function VaultShell({
                   onOpenServers={(profile) =>
                     locations.navigate({
                       kind: 'settings',
-                      section: 'servers',
+                      section: 'account',
                       profile,
                     })
                   }

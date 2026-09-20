@@ -600,7 +600,7 @@ test('a team with a lapsed server check-in remains listed with recovery actions'
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Check in' }));
   assert.deepEqual(journal.at(-1), {
     kind: 'settings',
-    section: 'servers',
+    section: 'account',
     profile: 'acme',
   });
   // Open another available team.

@@ -709,7 +709,7 @@ function serverFlaggedForSettings(availability: Availability): boolean {
  * The Settings tab's amber dot: on when a server's check-in has lapsed or it
  * has never been verified. Every other access problem — blocked trust, an
  * incompatible schema, an unreadable status — already has its own row in the
- * Servers section's "Needs attention" list, which is the dot's other half:
+ * Account page's "Needs attention" server list, which is the dot's other half:
  * the band that resolves it.
  */
 export function settingsAlertSummary(

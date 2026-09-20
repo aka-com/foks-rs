@@ -244,8 +244,7 @@ const ROUND_TRIP: Location[] = [
   { kind: 'group-settings', ref: 'team:eng', tab: 'channels' },
   { kind: 'group-settings', ref: 'team:eng', tab: 'files' },
   { kind: 'group-settings', ref: 'team:eng', tab: 'settings' },
-  { kind: 'settings', section: 'servers' },
-  { kind: 'settings', section: 'servers', profile: 'acme' },
+  { kind: 'settings', section: 'account', profile: 'acme' },
   { kind: 'settings' },
   { kind: 'settings', section: 'preferences' },
   { kind: 'settings', section: 'preferences', store: 'acct:work' },
@@ -276,7 +275,7 @@ test('encoding clears query parameters from previous location', () => {
 test('legacy state aliases do not collide with group or first-run routes', () => {
   assert.deepEqual(decodeLocation('?state=servers-add'), {
     kind: 'settings',
-    section: 'servers',
+    section: 'account',
   });
   assert.deepEqual(decodeLocation('?state=settings-account'), {
     kind: 'settings',
@@ -367,10 +366,10 @@ test('the sections that became tabs keep their deep links', () => {
     ).searchParams.get('device'),
     null,
   );
-  // The panes Settings kept are unchanged.
+  // The retired Servers pane opens the server inventory under Account.
   assert.deepEqual(decodeLocation('?state=settings&section=servers'), {
     kind: 'settings',
-    section: 'servers',
+    section: 'account',
   });
   // Preferences carries the account the address named.
   assert.deepEqual(decodeLocation('?state=settings&section=preferences'), {
@@ -401,8 +400,8 @@ test('the sections that became tabs keep their deep links', () => {
   });
 });
 
-test('the sub-navigation’s four pages deep-link, and an address for a section that no longer exists lands on the tab', () => {
-  for (const section of ['account', 'servers', 'preferences', 'mac'] as const) {
+test('the sub-navigation’s three pages deep-link, and retired or unknown sections land safely', () => {
+  for (const section of ['account', 'preferences', 'mac'] as const) {
     assert.deepEqual(decodeLocation(`?state=settings&section=${section}`), {
       kind: 'settings',
       section,
@@ -412,6 +411,10 @@ test('the sub-navigation’s four pages deep-link, and an address for a section 
     const href = locationHref('http://localhost/?state=all', location);
     assert.deepEqual(decodeLocation(new URL(href).search), location, href);
   }
+  assert.deepEqual(decodeLocation('?state=settings&section=servers'), {
+    kind: 'settings',
+    section: 'account',
+  });
   // A `section=` naming nothing this build has — never valid, or since
   // retired for a reason not in `RETIRED_SETTINGS_SECTIONS` — drops the
   // section rather than refusing the address; the tab opens on its default
@@ -625,14 +628,14 @@ test('settings scene aliases map to specific account stores', () => {
 test('the six former Settings sections resolve to the three pages that hold them', () => {
   // Account (the passphrase rows) and Notifications are both Preferences;
   // This device and About both described this Mac; Security keys was a list
-  // of links to the server pages, so it is Servers.
+  // of links to the server pages, which now lives under Account.
   for (const [former, section] of [
     ['credentials', 'preferences'],
     ['notifications', 'preferences'],
     ['device', 'mac'],
     ['about', 'mac'],
     ['agent', 'mac'],
-    ['security-keys', 'servers'],
+    ['security-keys', 'account'],
   ] as const) {
     assert.deepEqual(
       decodeLocation(`?state=settings&section=${former}`),
@@ -647,10 +650,10 @@ test('the six former Settings sections resolve to the three pages that hold them
     );
   }
   // A `security-keys` address pointed at a server row, not at a server: its
-  // `profile` opens nothing, so the address lands on the Servers list.
+  // `profile` opens nothing, so the address lands on the Account root.
   assert.deepEqual(
     decodeLocation('?state=settings&section=security-keys&profile=acme'),
-    { kind: 'settings', section: 'servers' },
+    { kind: 'settings', section: 'account' },
   );
 });
 
@@ -685,7 +688,7 @@ test("the mock's own state names still deep-link", () => {
   });
   assert.deepEqual(decodeLocation('?state=servers'), {
     kind: 'settings',
-    section: 'servers',
+    section: 'account',
   });
 });
 
@@ -1020,7 +1023,7 @@ test('a page inside a tab knows the page it returns to', () => {
   assert.deepEqual(
     parentLocation({
       kind: 'settings',
-      section: 'servers',
+      section: 'account',
       profile: 'personal',
       store: 'acct:personal',
     }),

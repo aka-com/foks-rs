@@ -102,10 +102,10 @@ const PUBLIC_ALIASES: Record<string, Location> = {
   join: { kind: 'teams' },
   groups: { kind: 'teams' },
   create: { kind: 'teams' },
-  servers: { kind: 'settings', section: 'servers' },
+  servers: { kind: 'settings', section: 'account' },
   settings: { kind: 'settings' },
-  'servers-list': { kind: 'settings', section: 'servers' },
-  'servers-add': { kind: 'settings', section: 'servers' },
+  'servers-list': { kind: 'settings', section: 'account' },
+  'servers-add': { kind: 'settings', section: 'account' },
   'settings-macs': { kind: 'devices', section: 'macs' },
   'settings-phrase': { kind: 'devices', section: 'macs' },
   'settings-keys': { kind: 'devices', section: 'keys' },
@@ -241,10 +241,14 @@ test('public legacy destinations are available without fixture capabilities', ()
     ),
     {
       kind: 'settings',
-      section: 'servers',
+      section: 'account',
       store: ACCOUNT,
       profile: 'remote',
     },
+  );
+  assert.deepEqual(
+    decodeProductionLocation(search('alerts', { profile: 'ignored' })),
+    { kind: 'settings', section: 'account' },
   );
 });
 
@@ -265,7 +269,7 @@ test('canonical production routes round-trip opaque store references and explici
       section: 'keys',
       device: 'yubi:primary key',
     },
-    { kind: 'settings', store: ACCOUNT, section: 'servers', profile: 'remote' },
+    { kind: 'settings', store: ACCOUNT, section: 'account', profile: 'remote' },
     { kind: 'settings', store: ACCOUNT, profile: 'remote' },
     { kind: 'settings', store: ACCOUNT, section: 'preferences' },
     { kind: 'first-run', step: 'waiting', path: 'invited' },
@@ -313,7 +317,7 @@ test('folded and retired settings sections remain production deep links', () => 
     device: { kind: 'settings', section: 'mac' },
     about: { kind: 'settings', section: 'mac' },
     agent: { kind: 'settings', section: 'mac' },
-    'security-keys': { kind: 'settings', section: 'servers' },
+    'security-keys': { kind: 'settings', section: 'account' },
     macs: { kind: 'devices', section: 'macs' },
     phrase: { kind: 'devices', section: 'macs' },
     keys: { kind: 'devices', section: 'keys' },
@@ -332,6 +336,7 @@ test('folded and retired settings sections remain production deep links', () => 
       {
         ...location,
         store: ACCOUNT,
+        ...(section === 'account' ? { profile: 'ignored' } : {}),
       },
       section,
     );

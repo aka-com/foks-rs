@@ -182,7 +182,7 @@ test('the account panel keeps every workflow row from the accounts pane', async 
   // below them.
   for (const name of [
     'Change…',
-    'Servers ›',
+    'Server details ›',
     'Devices ›',
     'Teams ›',
     'Bot accounts',
@@ -195,7 +195,7 @@ test('the account panel keeps every workflow row from the accounts pane', async 
       1,
       `expected one "${name}" button`,
     );
-  for (const name of ['Servers ›', 'Devices ›', 'Teams ›'])
+  for (const name of ['Server details ›', 'Devices ›', 'Teams ›'])
     assert.ok(
       rendered
         .getByRole('button', { name })
@@ -464,8 +464,7 @@ test('the header names the account and carries no switcher of its own', async ()
   const panel = rendered.getByRole('tabpanel');
   assert.equal(panel.id, 'settings-sections-panel-account');
   assert.ok(ui.within(panel).getByText('Username'));
-  // Server is a sibling section, so its link names the section alone.
-  assert.ok(rendered.getByRole('button', { name: 'Servers ›' }));
+  assert.ok(rendered.getByRole('button', { name: 'Server details ›' }));
 });
 
 test('a notice this page can route elsewhere is not repeated here', async () => {

@@ -277,7 +277,7 @@ export function ChatScreen({
               onClick={() =>
                 onNavigate({
                   kind: 'settings',
-                  section: 'servers',
+                  section: 'account',
                   profile: store.server,
                 })
               }

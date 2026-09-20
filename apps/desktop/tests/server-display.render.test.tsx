@@ -124,13 +124,13 @@ for (const label of ['Local server alias', null]) {
     assert.ok(detail.getByText('Internal ID'));
     assert.equal(
       crumbTrail(
-        { kind: 'settings', section: 'servers', profile },
+        { kind: 'settings', section: 'account', profile },
         h.snapshot,
       ).at(-1),
       h.name,
     );
     assert.equal(
-      crumbTrail({ kind: 'settings', section: 'servers', profile }).at(-1),
+      crumbTrail({ kind: 'settings', section: 'account', profile }).at(-1),
       'Loading...',
     );
   });
