@@ -172,7 +172,7 @@ test('consumer baselines verified history, filters own messages and never writes
   }
 });
 
-test('consumer rotates beyond 64 channels despite an always-failing first channel', async () => {
+test('consumer advances budgeted passes beyond 64 channels despite an always-failing first channel', async () => {
   const { NotificationConsumer } =
     await import('../src/chat/notification-consumer');
   const channels = Array.from({ length: 70 }, (_, i) => ({
@@ -180,6 +180,7 @@ test('consumer rotates beyond 64 channels despite an always-failing first channe
     readable: true,
   }));
   const checked = new Set<string>();
+  const budgets: { rows: number; bytes: number }[] = [];
   const service = {
     handleError: () => false,
     subscribe: () => () => {},
@@ -220,7 +221,7 @@ test('consumer rotates beyond 64 channels despite an always-failing first channe
         result: {
           kind: 'history',
           channel: action.channel,
-          messages: [],
+          messages: Array.from({ length: 50 }, (_, i) => message(50 - i)),
           before: null,
           missing_predecessors: [],
         },
@@ -240,11 +241,23 @@ test('consumer rotates beyond 64 channels despite an always-failing first channe
       settings: { enabled: true, previews: false, overrides: {} },
     },
     () => {},
+    undefined,
+    (event) => {
+      if (event.kind === 'pass' && event.budgetHit) {
+        budgets.push({ rows: event.rows, bytes: event.bytes });
+      }
+    },
   );
   try {
     for (let i = 0; i < 300 && checked.size < 70; i++)
       await new Promise((r) => setTimeout(r, 50));
     assert.equal(checked.size, 70);
+    assert.ok(budgets.length > 0);
+    assert.ok(
+      budgets.every(
+        (pass) => pass.rows <= 400 && pass.bytes <= 4 * 1024 * 1024,
+      ),
+    );
   } finally {
     consumer.stop();
   }

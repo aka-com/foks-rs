@@ -1009,6 +1009,13 @@ test('passive server status uses structured schema codes, not wording', () => {
 
 test('agent status decoding preserves bootstrap as a non-ready variant', () => {
   assert.deepEqual(decodeAgentStatus({ state: 'ready' }), { state: 'ready' });
+  assert.deepEqual(decodeAgentStatus({ state: 'ready', historyAfter: true }), {
+    state: 'ready',
+    historyAfter: true,
+  });
+  assert.throws(() =>
+    decodeAgentStatus({ state: 'ready', historyAfter: 'yes' }),
+  );
   assert.deepEqual(
     decodeAgentStatus({ state: 'bootstrap', step: 'initialize-state' }),
     { state: 'bootstrap', step: 'initialize-state' },

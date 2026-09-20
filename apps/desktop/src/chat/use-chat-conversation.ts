@@ -217,6 +217,7 @@ export function useChatConversation(
     (
       result: Extract<ChatResult, { kind: 'history' }>,
       before: string | null,
+      replace?: boolean,
     ) => {
       const binding = historyBindings.current.get(result);
       if (
@@ -225,7 +226,7 @@ export function useChatConversation(
         !accessRef.current().available
       )
         throw cancelled();
-      service.histories.accept(binding, result, before);
+      service.histories.accept(binding, result, before, replace);
       sends.observeHistory(storeId, result.channel, result.messages);
     },
     [service, sends, storeId],

@@ -610,10 +610,11 @@ test('4096 baseline bound rotates with fresh baselines and a bounded eviction ra
   try {
     for (
       let i = 0;
-      i < 3000 && f.events.filter((e) => e.kind === 'pass').length < 4160;
+      i < 3000 &&
+      f.events.filter((e) => e.kind === 'pass' && !e.budgetHit).length < 4160;
       i++
     )
-      await f.clock.flush();
+      await f.clock.advance(1);
     await f.clock.flush();
     assert.equal(f.events.filter((e) => e.kind === 'eviction').length, 64);
     assert.equal(
@@ -749,6 +750,86 @@ test('regressed history cannot rewind a known baseline and replay old alerts', a
     assert.deepEqual(
       f.events.flatMap((e) => (e.kind === 'pass' ? [...e.candidates] : [])),
       ['message-11'],
+    );
+  } finally {
+    c.stop();
+  }
+});
+
+test('the pass budget counts baseline pages and serves leftovers before newly dirty channels', async () => {
+  const ids = Array.from({ length: 12 }, (_, i) => `channel-${i}`);
+  const f = setup(entry(ids));
+  for (const id of ids)
+    f.rows.set(
+      id,
+      Array.from({ length: 50 }, (_, i) => message(50 - i)),
+    );
+  const c = f.make();
+  try {
+    await f.clock.flush();
+    const first = [...f.calls];
+    assert.ok(first.length > 0 && first.length < ids.length);
+    assert.ok(first.length * 50 <= 400);
+    const summary = f.events.find((e) => e.kind === 'pass' && e.budgetHit);
+    assert.ok(summary?.kind === 'pass');
+    assert.equal(summary.rows, first.length * 50);
+    assert.equal(
+      summary.bytes,
+      first.length * 50 * new TextEncoder().encode('private text').length,
+    );
+    f.update({ channelRevisions: new Map(ids.map((id) => [id, 2])) });
+    await f.clock.flush();
+    assert.deepEqual(f.calls, first);
+    await f.clock.advance(1);
+    assert.deepEqual(
+      f.calls.slice(first.length, ids.length),
+      ids.slice(first.length),
+    );
+    assert.equal(new Set(f.calls).size, ids.length);
+  } finally {
+    c.stop();
+  }
+});
+
+test('two-page notification reads stay within the pass allowance without dropping deferred alerts', async () => {
+  const ids = Array.from({ length: 8 }, (_, i) => `c${i}`);
+  const f = setup(entry(ids));
+  const c = f.make();
+  try {
+    await f.clock.flush();
+    f.calls.length = 0;
+    f.events.length = 0;
+    f.history(async (_id, action) => {
+      const high = action.before === null ? 101 : 51;
+      return {
+        scope,
+        result: {
+          kind: 'history',
+          channel: action.channel,
+          messages: Array.from({ length: 50 }, (_, i) => message(high - i)),
+          before: String(high - 49),
+          missing_predecessors: [],
+        },
+      };
+    });
+    f.update({ channelRevisions: new Map(ids.map((id) => [id, 2])) });
+    await f.clock.flush();
+    assert.equal(f.calls.length, 8);
+    assert.deepEqual(
+      f.calls,
+      ids.slice(0, 4).flatMap((id) => [id, id]),
+    );
+    assert.ok(
+      f.events.some((e) => e.kind === 'pass' && e.budgetHit && e.rows === 400),
+    );
+    await f.clock.advance(1);
+    assert.deepEqual(
+      f.calls,
+      ids.flatMap((id) => [id, id]),
+    );
+    assert.equal(
+      f.events.filter((e) => e.kind === 'pass' && !e.baselineOnly).length,
+      8,
     );
   } finally {
     c.stop();

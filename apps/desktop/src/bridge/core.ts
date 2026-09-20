@@ -364,7 +364,14 @@ export function decodeAgentStatus(value: unknown): AgentStatus {
   const state = string(item.state, 'agent_status.state');
   if (state === 'ready') {
     rejectVariantFields(item, ['step'], 'agent_status');
-    return { state: 'ready' };
+    return {
+      state: 'ready',
+      ...(item.historyAfter === undefined
+        ? {}
+        : {
+            historyAfter: bool(item.historyAfter, 'agent_status.historyAfter'),
+          }),
+    };
   }
   if (state === 'bootstrap') {
     return {

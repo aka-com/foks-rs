@@ -105,7 +105,11 @@ export function conversationResult(
       messages,
       verification,
       before:
-        reset || older || !previous?.before ? result.before : previous.before,
+        result.incremental && previous
+          ? previous.before
+          : reset || older || !previous?.before
+            ? result.before
+            : previous.before,
     },
   };
 }

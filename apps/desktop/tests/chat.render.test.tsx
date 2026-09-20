@@ -31,6 +31,7 @@ async function setup(
   onNavigate: (location: unknown) => void = () => {},
   showChat = true,
   navigate = false,
+  incrementalHistory = false,
 ) {
   const { ChatTeamColumn } = await vite.ssrLoadModule(
     '/src/screens/chat-teams.tsx',
@@ -52,6 +53,7 @@ async function setup(
   )) as typeof import('../src/mock-bridge');
   const enabledSnapshot = {
     ...FIXTURE,
+    agent: { state: 'ready' as const, historyAfter: incrementalHistory },
     stores: FIXTURE.stores.filter(
       (s) => s.kind !== 'team' || s.id === 'team:eng',
     ),
@@ -218,64 +220,79 @@ test('renders channel descriptions, message times, and bounded inbox previews', 
   assert.doesNotMatch(time?.textContent ?? '', /2023/);
 });
 
-test('conversation inbox wakes, refreshes history, and shows unread state', async () => {
-  const originalFocus = document.hasFocus.bind(document);
-  Object.defineProperty(document, 'hasFocus', {
-    configurable: true,
-    value: () => false,
-  });
-  let direct!: Bridge['chat'];
-  let incoming = false;
-  let polls = 0;
-  try {
-    await setup((base) => {
-      direct = (store, action, view) => base.chat(store, action, view);
-      return {
-        ...base,
-        chat: async (store, action, view) => {
-          if (action.action === 'poll-inbox') polls++;
-          const reply = await base.chat(store, action, view);
-          if (reply.result.kind === 'inbox')
-            reply.result.conversations = reply.result.conversations.map(
-              (conversation) => ({
-                ...conversation,
-                unread: incoming ? '1' : '0',
-              }),
-            );
-          return reply;
-        },
-      };
-    });
-    assert.equal(ui.screen.queryByLabelText('1 unread'), null);
-    incoming = true;
-    const prepared = await direct('team:eng', {
-      action: 'prepare-message',
-      submission: '88'.repeat(16),
-      channel: 'ab'.repeat(16),
-      text: 'Arrived through live sync',
-    });
-    assert.equal(prepared.result.kind, 'operation');
-    if (prepared.result.kind !== 'operation')
-      throw new Error('missing operation');
-    await direct('team:eng', {
-      action: 'attempt',
-      operation: prepared.result.operation.id,
-    });
-    await ui.screen.findByText('Arrived through live sync');
-    assert.ok(polls > 0);
-    // Engineering's general channel row carries the count. The label states
-    // the count alone: the row it sits in says which channel it belongs to.
-    assert.equal(
-      (await teamBadge('Engineering')).getAttribute('aria-label'),
-      '1 unread',
-    );
-  } finally {
+for (const incremental of [false, true])
+  test(`conversation inbox wakes and loads ${incremental ? 'incremental' : 'legacy'} history`, async () => {
+    const originalFocus = document.hasFocus.bind(document);
     Object.defineProperty(document, 'hasFocus', {
       configurable: true,
-      value: originalFocus,
+      value: () => false,
     });
-  }
-});
+    let direct!: Bridge['chat'];
+    let incoming = false;
+    let polls = 0;
+    const cursors: (string | undefined)[] = [];
+    try {
+      await setup(
+        (base) => {
+          direct = (store, action, view) => base.chat(store, action, view);
+          return {
+            ...base,
+            chat: async (store, action, view) => {
+              if (action.action === 'poll-inbox') polls++;
+              if (action.action === 'history') cursors.push(action.after);
+              const reply = await base.chat(store, action, view);
+              if (reply.result.kind === 'inbox')
+                reply.result.conversations = reply.result.conversations.map(
+                  (conversation) => ({
+                    ...conversation,
+                    unread: incoming ? '1' : '0',
+                  }),
+                );
+              return reply;
+            },
+          };
+        },
+        true,
+        () => {},
+        true,
+        false,
+        incremental,
+      );
+      assert.equal(ui.screen.queryByLabelText('1 unread'), null);
+      incoming = true;
+      const prepared = await direct('team:eng', {
+        action: 'prepare-message',
+        submission: '88'.repeat(16),
+        channel: 'ab'.repeat(16),
+        text: 'Arrived through live sync',
+      });
+      assert.equal(prepared.result.kind, 'operation');
+      if (prepared.result.kind !== 'operation')
+        throw new Error('missing operation');
+      await direct('team:eng', {
+        action: 'attempt',
+        operation: prepared.result.operation.id,
+      });
+      await ui.screen.findByText('Arrived through live sync');
+      assert.ok(polls > 0);
+      assert.equal(
+        cursors.some((cursor) => cursor !== undefined),
+        incremental,
+      );
+      assert.equal(ui.screen.getAllByText('Team chat is ready.').length, 1);
+      // Engineering's general channel row carries the count. The label states
+      // the count alone: the row it sits in says which channel it belongs to.
+      assert.equal(
+        (await teamBadge('Engineering')).getAttribute('aria-label'),
+        '1 unread',
+      );
+    } finally {
+      Object.defineProperty(document, 'hasFocus', {
+        configurable: true,
+        value: originalFocus,
+      });
+    }
+  });
 
 test('live sync backs off across repeated post-poll sync failures', async () => {
   const syncs: number[] = [];

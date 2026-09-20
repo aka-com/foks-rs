@@ -88,6 +88,8 @@ export function NotificationProvider({
             outcome: 'ok',
             attrs: {
               rows: event.rows,
+              bytes: event.bytes,
+              budgetHit: event.budgetHit === true,
               candidates: event.candidates.length,
               baseline: event.baselineOnly,
               incomplete: event.incomplete,

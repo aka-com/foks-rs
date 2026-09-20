@@ -233,6 +233,18 @@ impl CheckedProfileSession<'_> {
             Ok(chat.read_recent(&mut chat.connection()?, channel, limit)?)
         })
     }
+    pub fn read_chat_after(
+        &self,
+        team_alias: &str,
+        channel: RtChannelId,
+        after: u64,
+        width: u64,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<(ChatHistory, bool)> {
+        self.with_chat_read(team_alias, vault, |chat| {
+            Ok(chat.read_after(&mut chat.connection()?, channel, after, width)?)
+        })
+    }
     /// Each of two notification pages has a 512 KiB pre-decryption budget.
     pub fn read_notification_chat(
         &self,

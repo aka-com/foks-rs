@@ -38,6 +38,7 @@ export function ChatThread({
   readThrough,
   markRead,
   acceptHistory,
+  incrementalHistory = false,
   history,
   blockHistory,
   pending,
@@ -71,11 +72,13 @@ export function ChatThread({
   request: (a: ChatAction) => Promise<ChatReply>;
   refreshPending: () => Promise<void>;
   revision: number;
+  incrementalHistory?: boolean;
   readThrough: string | null;
   markRead: (channel: string, sequence: string) => Promise<void>;
   acceptHistory: (
     page: Extract<import('../chat-contract').ChatResult, { kind: 'history' }>,
     before: string | null,
+    replace?: boolean,
   ) => void;
 }): ReactNode {
   const {
@@ -121,6 +124,7 @@ export function ChatThread({
     history,
     blockHistory,
     capture,
+    incrementalHistory,
   );
   const outgoingIds = new Set(
     outgoing.flatMap((m) => (m.operation ? [m.operation.id] : [])),

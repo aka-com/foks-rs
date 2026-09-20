@@ -271,3 +271,26 @@ test('verification warnings survive unrelated pages until the flagged rows are r
   cache.accept(binding, rechecked, null);
   assert.equal(unverified(cache, binding), false);
 });
+
+test('incremental acceptance deduplicates sequences and gap replacement discards the old window', () => {
+  const cache = new ChatHistoryCache();
+  cache.update('t', inbox(), 0);
+  const binding = cache.binding('t', 'a', 0)!;
+  cache.accept(binding, page('a', '1'), null);
+  const delta = { ...page('a', '2'), before: '2', gap: false };
+  cache.accept(binding, delta, null);
+  cache.accept(binding, delta, null);
+  assert.deepEqual(
+    cache.get(binding)?.messages.map((m) => m.sequence),
+    ['1', '2'],
+  );
+  assert.equal(cache.get(binding)?.before, null);
+  cache.accept(binding, page('a', '1', 'reset'), null, true);
+  assert.deepEqual(
+    cache.get(binding)?.messages.map((m) => m.sequence),
+    ['1'],
+  );
+  assert.equal(cache.get(binding)?.verification.size, 1);
+  cache.accept(binding, { ...page(), messages: [] }, null, true);
+  assert.equal(cache.get(binding)?.messages.length, 0);
+});

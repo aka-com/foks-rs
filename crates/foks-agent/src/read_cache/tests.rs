@@ -625,6 +625,7 @@ fn network_chat_state_keeps_exclusive_profile_admission() {
             blocked_channels: vec![],
         },
         ChatAction::History {
+            after: None,
             channel: "12".repeat(16),
             before: None,
         },

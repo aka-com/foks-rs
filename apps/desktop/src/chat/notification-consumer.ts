@@ -22,6 +22,10 @@ import { notificationAdmission } from './notification-admission';
 const QUEUED = 64,
   BASELINES = 4096,
   FALLBACK_MS = 5000;
+const CHANNEL_ROWS = 100,
+  CHANNEL_BYTES = 1024 * 1024,
+  PASS_ROWS = 400,
+  PASS_BYTES = 4 * 1024 * 1024;
 type Progress = {
   id: string;
   channel: string;
@@ -58,6 +62,8 @@ export type NotificationMetric =
       bytes: number;
       /** From the pass's start to its history reads' end. */
       milliseconds?: number;
+      /** This summary ends a pass whose remaining allowance cannot admit a channel. */
+      budgetHit?: boolean;
     }
   | { kind: 'failure'; cancelled: boolean; busy: boolean; retry: number }
   | { kind: 'eviction' };
@@ -77,6 +83,8 @@ export class NotificationConsumer {
   private generation = 0;
   private evictionWindow = 0;
   private evictions = 0;
+  private pass = { rows: 0, bytes: 0 };
+  private nextPass = 0;
   constructor(
     private bridge: Bridge,
     private service: ChatInboxService,
@@ -115,7 +123,7 @@ export class NotificationConsumer {
   }
   private kick(delay = 0) {
     if (this.stopped) return;
-    const due = this.clock.now() + delay;
+    const due = Math.max(this.clock.now() + delay, this.nextPass);
     if (this.timer !== undefined && this.timerDue <= due) return;
     this.clock.cancel(this.timer);
     this.timerDue = due;
@@ -123,7 +131,7 @@ export class NotificationConsumer {
       this.timer = undefined;
       this.timerDue = Infinity;
       this.scan();
-    }, delay);
+    }, due - this.clock.now());
   }
   private discard(p: Progress) {
     this.progress.delete(p.key);
@@ -286,10 +294,20 @@ export class NotificationConsumer {
     }
     for (const p of this.progress.values())
       p.overflow = p.dirty && !this.queued.has(p.key) && !this.jobs.has(p.key);
+    let budgetHit = false;
     for (const [key, p] of this.queued) {
       if (!this.current(p)) {
         this.discard(p);
         continue;
+      }
+      // Reserve a complete channel read before admission. Concurrent profiles
+      // cannot overshoot the pass, and a baseline never commits half a read.
+      if (
+        this.pass.rows + (this.jobs.size + 1) * CHANNEL_ROWS > PASS_ROWS ||
+        this.pass.bytes + (this.jobs.size + 1) * CHANNEL_BYTES > PASS_BYTES
+      ) {
+        budgetHit = true;
+        break;
       }
       const release = this.admission.acquire(p.view.scope.store.profile);
       if (!release) continue;
@@ -304,6 +322,27 @@ export class NotificationConsumer {
         release();
         this.kick();
       });
+    }
+    if (budgetHit && this.jobs.size === 0) {
+      this.metric({
+        kind: 'pass',
+        candidates: [],
+        baselineOnly: true,
+        incomplete: false,
+        ...this.pass,
+        budgetHit: true,
+      });
+      // Retain Map insertion order: leftovers precede newly dirtied channels.
+      // Yield a timer turn even if an admission or inbox event arrives now.
+      for (const p of this.queued.values()) {
+        p.dirty = true;
+        p.due = 0;
+      }
+      this.pass = { rows: 0, bytes: 0 };
+      this.nextPass = now + 1;
+      this.kick();
+    } else if (this.jobs.size === 0 && this.queued.size === 0) {
+      this.pass = { rows: 0, bytes: 0 };
     }
     this.metric({
       kind: 'state',
@@ -357,6 +396,16 @@ export class NotificationConsumer {
         )
       )
         throw channelIntegrity('Invalid notification history bound.');
+      // Count every returned row, including baseline-only and repeated pages.
+      this.pass.rows += reply.result.messages.length;
+      this.pass.bytes += reply.result.messages.reduce(
+        (sum, m) =>
+          sum +
+          (m.content.kind === 'text'
+            ? new TextEncoder().encode(m.content.text).length
+            : 0),
+        0,
+      );
       return reply.result;
     };
     const commit = (upper: bigint) => {
@@ -413,7 +462,7 @@ export class NotificationConsumer {
       let incomplete = p.view.degraded || first.missing_predecessors.length > 0;
       if (
         before &&
-        rows.length < 100 &&
+        rows.length < CHANNEL_ROWS &&
         rows.every((m) => BigInt(m.sequence) > baseline)
       ) {
         const next = await read(before);
@@ -423,16 +472,16 @@ export class NotificationConsumer {
         incomplete ||= next.missing_predecessors.length > 0;
       }
       incomplete ||=
-        rows.length > 100 ||
+        rows.length > CHANNEL_ROWS ||
         (!!before && rows.every((m) => BigInt(m.sequence) > baseline));
       let bytes = 0;
       const bounded: ChatMessage[] = [];
-      for (const m of rows.slice(0, 100)) {
+      for (const m of rows.slice(0, CHANNEL_ROWS)) {
         const size =
           m.content.kind === 'text'
             ? new TextEncoder().encode(m.content.text).length
             : 0;
-        if (bytes + size > 1024 * 1024) {
+        if (bytes + size > CHANNEL_BYTES) {
           incomplete = true;
           break;
         }

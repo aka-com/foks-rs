@@ -298,7 +298,7 @@ export interface Notification {
 }
 
 export type AgentStatus =
-  | { readonly state: 'ready' }
+  | { readonly state: 'ready'; readonly historyAfter?: boolean }
   | { readonly state: 'bootstrap'; readonly step: string };
 
 /* ------------------------------------------------------------- snapshot -- */

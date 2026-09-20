@@ -150,6 +150,7 @@ pub fn validate_chat_reply(
             ChatAction::History {
                 channel: expected,
                 before: bound,
+                ..
             }
             | ChatAction::NotificationHistory {
                 channel: expected,
@@ -160,11 +161,25 @@ pub fn validate_chat_reply(
                 messages,
                 before,
                 missing_predecessors,
+                gap,
             },
         ) => {
             let mut ids = HashSet::new();
             let mut sequences = HashSet::new();
             channel == expected
+                && match action {
+                    ChatAction::History {
+                        after: Some(after), ..
+                    } => {
+                        gap.is_some()
+                            && messages.iter().all(|m| {
+                                chat_sequence(&m.sequence)
+                                    .zip(chat_sequence(after))
+                                    .is_some_and(|(n, after)| n > after)
+                            })
+                    }
+                    _ => gap.is_none(),
+                }
                 && messages.len() <= CHAT_PAGE_ROWS
                 && missing_predecessors.len() <= CHAT_MISSING_PREDECESSORS
                 && missing_predecessors
@@ -520,6 +535,7 @@ mod tests {
             team_id: format!("03{}", "ab".repeat(32)),
         };
         let action = ChatAction::History {
+            after: None,
             channel: "ab".repeat(16),
             before: None,
         };
@@ -538,6 +554,7 @@ mod tests {
                 actor: format!("01{}", "ab".repeat(32)),
             },
             result: ChatResult::History {
+                gap: None,
                 channel: "ab".repeat(16),
                 messages: vec![message.clone()],
                 before: Some(message.sequence.clone()),
@@ -545,6 +562,26 @@ mod tests {
             },
         };
         validate_chat_reply(&store, &action, &reply).unwrap();
+        let incremental = ChatAction::History {
+            channel: "ab".repeat(16),
+            before: None,
+            after: Some("9007199254740992".into()),
+        };
+        assert!(validate_chat_reply(&store, &incremental, &reply).is_err());
+        if let ChatResult::History { gap, .. } = &mut reply.result {
+            *gap = Some(false);
+        }
+        validate_chat_reply(&store, &incremental, &reply).unwrap();
+        let at_row = ChatAction::History {
+            channel: "ab".repeat(16),
+            before: None,
+            after: Some(message.sequence.clone()),
+        };
+        assert!(validate_chat_reply(&store, &at_row, &reply).is_err());
+        assert!(validate_chat_reply(&store, &action, &reply).is_err());
+        if let ChatResult::History { gap, .. } = &mut reply.result {
+            *gap = None;
+        }
         reply.scope.store.account_alias = "other".into();
         assert!(validate_chat_reply(&store, &action, &reply).is_err());
         reply.scope.store = store.clone();

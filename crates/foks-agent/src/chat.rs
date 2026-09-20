@@ -512,16 +512,29 @@ pub(super) fn dispatch(
         }
         action @ (ChatAction::History { .. } | ChatAction::NotificationHistory { .. }) => {
             let notification = matches!(action, ChatAction::NotificationHistory { .. });
-            let (ChatAction::History { channel, before }
-            | ChatAction::NotificationHistory { channel, before }) = action
-            else {
-                unreachable!()
+            let (channel, before, after) = match action {
+                ChatAction::History {
+                    channel,
+                    before,
+                    after,
+                } => (channel, before, after),
+                ChatAction::NotificationHistory { channel, before } => (channel, before, None),
+                _ => unreachable!(),
             };
             let channel_id = RtChannelId(id(&channel)?);
             let end = before.as_deref().and_then(chat_sequence).map(|n| n - 1);
+            let after = after.as_deref().and_then(chat_sequence);
             let mut width = CHAT_PAGE_ROWS as u64;
             loop {
-                let history = if notification {
+                let mut gap = None;
+                let history = if let Some(after) = after {
+                    session
+                        .read_chat_after(team, channel_id, after, width, vault)
+                        .map(|(history, truncated)| {
+                            gap = Some(truncated);
+                            history
+                        })
+                } else if notification {
                     session.read_notification_chat(team, channel_id, end, width, vault)
                 } else if let Some(end) = end {
                     session.read_chat_thread(
@@ -567,6 +580,7 @@ pub(super) fn dispatch(
                     .filter(|n| *n > 1)
                     .map(|n| n.to_string());
                 let result = ChatResult::History {
+                    gap,
                     channel: channel.clone(),
                     before,
                     missing_predecessors: history
@@ -745,6 +759,130 @@ pub(super) fn contextual_error(error: Box<dyn std::error::Error>) -> Box<dyn std
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incremental_history_handles_new_rows_gaps_resets_and_unknown_channels() -> Result<()> {
+        use foks_client_app::{
+            derive_vault_key, CredentialBackend, Profile, ProfileRegistry, ProfileSession,
+            ProtocolPolicy, TrustRoot,
+        };
+        use foks_keystore::EncryptedFileSecretStore;
+        let environment = foks_server_testkit::TestEnvironment::new()?;
+        let _server = environment.start_server()?;
+        let addresses = environment.addresses().expect("server addresses");
+        let state = environment.client_path("incremental-chat", "state")?;
+        let root = environment.client_path("incremental-chat", "root.der")?;
+        environment.write_probe_root(&root)?;
+        ClientCredentials::initialize(&state, CredentialBackend::PrivateFile)?;
+        let mut registry = ProfileRegistry::open(&state)?;
+        registry.add(Profile {
+            name: "local".into(),
+            label: None,
+            probe: format!("localhost:{}", addresses.probe.port()),
+            protocol: ProtocolPolicy::V019,
+            trust: TrustRoot::CertificateDer { path: root },
+        })?;
+        let profile = ProfileSession::open(&registry, "local")?;
+        let credentials = ClientCredentials::open(&state)?;
+        let master = credentials.master_key()?;
+        credentials.with_checked_session(&profile, |session| -> Result<()> {
+            session.probe_and_pin()?;
+            let mut secrets = EncryptedFileSecretStore::open(
+                &session.paths().credential_store,
+                derive_vault_key(&master),
+            )?;
+            let mut vault = AccountVault::new(&mut secrets);
+            session.create_account(
+                "owner",
+                "incrementalowner",
+                "laptop",
+                "owner@example.test",
+                "",
+                None,
+                &mut vault,
+                &master,
+            )?;
+            session.create_named_team("owner", "team", "incremental-team", &mut vault, &master)?;
+            let created = session.prepare_chat_channel(
+                "team",
+                "",
+                "",
+                RtChannelTier::Bottom,
+                &mut vault,
+                &master,
+            )?;
+            session.attempt_chat_operation(
+                &credentials,
+                "team",
+                &created.id,
+                &mut vault,
+                &master,
+            )?;
+            let store = TeamStoreRef {
+                profile: "local".into(),
+                account_alias: "owner".into(),
+                team_alias: "team".into(),
+                team_id: hex(&created.scope.team),
+            };
+            let channel = hex(&created.scope.channel);
+            for _ in 0..=CHAT_PAGE_ROWS {
+                let send = session.prepare_chat_send(
+                    "team",
+                    RtChannelId(created.scope.channel),
+                    "message",
+                    &mut vault,
+                    &master,
+                )?;
+                session.attempt_chat_operation(
+                    &credentials,
+                    "team",
+                    &send.id,
+                    &mut vault,
+                    &master,
+                )?;
+            }
+            let mut history = |channel: String, after: u64| -> Result<ChatReply> {
+                Ok(serde_json::from_value(dispatch(
+                    &state,
+                    session,
+                    &mut vault,
+                    &master,
+                    store.clone(),
+                    ChatAction::History {
+                        channel,
+                        before: None,
+                        after: Some(after.to_string()),
+                    },
+                )?)?)
+            };
+            for (after, expected, gap) in [
+                (49, vec![51, 50], false),
+                (51, vec![], false),
+                (1, (2..=51).rev().collect(), false),
+                (0, (2..=51).rev().collect(), true),
+                (90, vec![], true),
+            ] {
+                let ChatResult::History {
+                    messages,
+                    gap: actual,
+                    ..
+                } = history(channel.clone(), after)?.result
+                else {
+                    panic!("history reply")
+                };
+                assert_eq!(actual, Some(gap));
+                assert_eq!(
+                    messages
+                        .iter()
+                        .map(|m| chat_sequence(&m.sequence).unwrap())
+                        .collect::<Vec<_>>(),
+                    expected
+                );
+            }
+            assert!(history("fe".repeat(16), 51).is_err());
+            Ok(())
+        })
+    }
 
     #[test]
     fn submit_fingerprint_uses_legacy_prepare_message_bytes() {

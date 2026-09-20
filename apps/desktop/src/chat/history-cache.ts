@@ -103,6 +103,7 @@ export class ChatHistoryCache {
     binding: HistoryBinding,
     page: Extract<ChatResult, { kind: 'history' }>,
     before: string | null,
+    replace?: boolean,
   ): void {
     if (!this.current(binding) || page.channel !== binding.channel)
       throw cancelled();
@@ -113,7 +114,7 @@ export class ChatHistoryCache {
     let result: HistoryWindow;
     try {
       result = conversationResult(
-        { operations: [], history: this.get(binding) },
+        { operations: [], history: replace ? null : this.get(binding) },
         event,
       ).history!;
     } catch (error) {

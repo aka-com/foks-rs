@@ -391,3 +391,66 @@ test('lowercasing follows the agent, which keeps one scalar per character', () =
   assert.equal(normalizeChannelName('  Design  '), 'design');
   assert.equal(normalizeChannelDescription('Team DECISIONS'), 'team decisions');
 });
+
+test('incremental history requires an explicit gap answer and rows strictly beyond the cursor', () => {
+  const channel = 'ab'.repeat(16);
+  const action = {
+    action: 'history' as const,
+    channel,
+    before: null,
+    after: '9007199254740993',
+  };
+  const reply = {
+    scope: {
+      store,
+      host: '02' + 'ab'.repeat(32),
+      actor: '01' + 'ab'.repeat(32),
+    },
+    result: {
+      kind: 'history',
+      channel,
+      messages: [
+        {
+          id: 'cd'.repeat(16),
+          sequence: '9007199254740994',
+          sender: null,
+          send_time: '1',
+          insert_time: '1',
+          content: { kind: 'unsupported' },
+        },
+      ],
+      before: '9007199254740994',
+      missing_predecessors: [],
+      gap: false,
+    },
+  };
+  assert.equal(decodeChatReply(reply, storeId, action).result.kind, 'history');
+  assert.throws(() =>
+    decodeChatReply(
+      { ...reply, result: { ...reply.result, gap: undefined } },
+      storeId,
+      action,
+    ),
+  );
+  assert.throws(() =>
+    decodeChatReply(reply, storeId, { ...action, after: '9007199254740994' }),
+  );
+  assert.throws(() =>
+    decodeChatReply(reply, storeId, {
+      action: 'notification-history',
+      channel,
+      before: null,
+    }),
+  );
+  assert.equal(
+    decodeChatReply(
+      {
+        ...reply,
+        result: { ...reply.result, messages: [], before: null, gap: true },
+      },
+      storeId,
+      action,
+    ).result.kind,
+    'history',
+  );
+});

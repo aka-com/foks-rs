@@ -336,6 +336,10 @@ export function ChatScreen({
             readThrough={activeConversation?.read_through ?? null}
             markRead={guardedMarkRead}
             history={history(channel.id)}
+            incrementalHistory={
+              agentSnapshot.agent.state === 'ready' &&
+              agentSnapshot.agent.historyAfter === true
+            }
             acceptHistory={acceptHistory}
             blockHistory={blockHistory}
             pending={pending.filter(

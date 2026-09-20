@@ -181,7 +181,12 @@ export function mockChat(snapshot?: AgentSnapshot) {
       action.action === 'history' ||
       action.action === 'notification-history'
     ) {
-      const rows = (team.messages.get(action.channel) ?? [])
+      const all = team.messages.get(action.channel) ?? [];
+      const after = action.action === 'history' ? action.after : undefined;
+      const newer = all.filter(
+        (m) => after === undefined || BigInt(m.sequence) > BigInt(after),
+      );
+      const rows = newer
         .filter(
           (m) =>
             action.before === null ||
@@ -190,8 +195,15 @@ export function mockChat(snapshot?: AgentSnapshot) {
         .slice(-CHAT_PAGE_ROWS);
       result = {
         kind: 'history',
+        ...(after === undefined
+          ? {}
+          : {
+              gap:
+                newer.length > CHAT_PAGE_ROWS ||
+                BigInt(all.at(-1)?.sequence ?? '0') < BigInt(after),
+            }),
         channel: action.channel,
-        messages: rows,
+        messages: after === undefined ? rows : [...rows].reverse(),
         before:
           rows.length && rows[0].sequence !== '1' ? rows[0].sequence : null,
         missing_predecessors: [],

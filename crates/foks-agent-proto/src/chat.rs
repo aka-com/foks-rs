@@ -37,6 +37,8 @@ pub enum ChatAction {
     History {
         channel: String,
         before: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after: Option<String>,
     },
     /// Read-only notification page with a stricter native plaintext budget.
     NotificationHistory {
@@ -202,7 +204,19 @@ impl ChatAction {
                         _ => true,
                     }
             }
-            Self::History { channel, before } | Self::NotificationHistory { channel, before } => {
+            Self::History {
+                channel,
+                before,
+                after,
+            } => {
+                valid_chat_id(channel)
+                    && before
+                        .as_ref()
+                        .is_none_or(|n| chat_sequence(n).is_some_and(|n| n > 1))
+                    && after.as_ref().is_none_or(|n| chat_sequence(n).is_some())
+                    && (before.is_none() || after.is_none())
+            }
+            Self::NotificationHistory { channel, before } => {
                 valid_chat_id(channel)
                     && before
                         .as_ref()
@@ -383,6 +397,9 @@ pub enum ChatResult {
         messages: Vec<ChatMessage>,
         before: Option<String>,
         missing_predecessors: Vec<String>,
+        /// Present only for incremental requests; true requires a full reload.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gap: Option<bool>,
     },
     Inbox {
         channels: Vec<ChatChannel>,
@@ -428,6 +445,26 @@ pub struct ChatReply {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn history_after_is_optional_and_round_trips_without_changing_legacy_wire() {
+        let old = serde_json::json!({"action":"history", "channel":"ab".repeat(16), "before":null});
+        let action: ChatAction = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&action).unwrap(), old);
+        let mut incremental = old.clone();
+        incremental["after"] = "9007199254740993".into();
+        let action: ChatAction = serde_json::from_value(incremental.clone()).unwrap();
+        assert!(action.validate());
+        assert_eq!(serde_json::to_value(&action).unwrap(), incremental);
+        incremental["before"] = "12".into();
+        assert!(!serde_json::from_value::<ChatAction>(incremental)
+            .unwrap()
+            .validate());
+        let mut notification = old;
+        notification["action"] = "notification-history".into();
+        notification["after"] = "1".into();
+        assert!(serde_json::from_value::<ChatAction>(notification).is_err());
+    }
+
     #[test]
     fn submit_message_is_bounded_redacted_and_canonical() {
         let submission = "ab".repeat(16);
@@ -563,6 +600,7 @@ mod tests {
         let wire = serde_json::to_value(&action).unwrap();
         assert_eq!(serde_json::from_value::<ChatAction>(wire).unwrap(), action);
         assert!(!ChatAction::History {
+            after: None,
             channel: "cd".repeat(16),
             before: Some("01".into())
         }

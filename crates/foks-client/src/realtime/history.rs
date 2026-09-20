@@ -67,6 +67,35 @@ impl ChatSession<'_> {
         }
         self.verify_page(rpc, &md, page.messages)
     }
+    /// Newest rows after a cursor, with a gap on truncation or sequence rollback.
+    pub fn read_after(
+        &mut self,
+        rpc: &mut impl ChatTransport,
+        channel: RtChannelId,
+        after: u64,
+        limit: u64,
+    ) -> Result<(ChatHistory, bool)> {
+        if !(1..=ChatLimits::HISTORY_ROWS as u64).contains(&limit) || after > i64::MAX as u64 {
+            return Err(Error::ChatInvalidInput(
+                "invalid incremental history window",
+            ));
+        }
+        self.refresh()?;
+        // Resolve access even when the cursor is already at the head.
+        let md = self.channel(rpc, channel, false)?;
+        let head = md.last_message.as_ref().map_or(0, |m| m.sequence);
+        let mut gap = head < after || head.saturating_sub(after) > limit;
+        let rows = if head > after {
+            let start = (after + 1).max(head.saturating_sub(limit - 1));
+            let rows = self.range(rpc, channel, head, start)?;
+            // A reset or omitted row between metadata and history needs a reload too.
+            gap |= rows.len() as u64 != head - start + 1;
+            rows
+        } else {
+            Vec::new()
+        };
+        Ok((self.verify_page(rpc, &md, rows)?, gap))
+    }
     /// One bounded history window. Callers serialize reads per checked profile.
     pub fn read_thread(
         &mut self,

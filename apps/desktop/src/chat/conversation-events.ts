@@ -20,6 +20,7 @@ export type ConversationEvent =
       messages: ChatMessage[];
       before: string | null;
       requestBefore: string | null;
+      incremental?: true;
       missing: boolean;
     }
   | {
@@ -50,6 +51,7 @@ export function eventFromReply(
     case 'history':
       return {
         kind: 'history',
+        ...(result.gap === false ? { incremental: true as const } : {}),
         channel: result.channel,
         messages: result.messages,
         before: result.before,

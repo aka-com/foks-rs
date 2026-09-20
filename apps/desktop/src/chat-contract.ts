@@ -47,7 +47,12 @@ export type ChatAction =
   | { action: 'sync-inbox'; blocked_channels?: string[] }
   | { action: 'mark-read'; channel: string; sequence: string }
   | { action: 'poll-inbox'; since: string; timeout_milliseconds: number }
-  | { action: 'history'; channel: string; before: string | null }
+  | {
+      action: 'history';
+      channel: string;
+      before: string | null;
+      after?: string;
+    }
   | { action: 'notification-history'; channel: string; before: string | null }
   | {
       action: 'prepare-channel';
@@ -163,6 +168,7 @@ export type ChatResult =
       messages: ChatMessage[];
       before: string | null;
       missing_predecessors: string[];
+      gap?: boolean;
     }
   | {
       kind: 'inbox';
@@ -420,9 +426,13 @@ export function decodeChatReply(
       'messages',
       'before',
       'missing_predecessors',
+      'gap',
     ]);
     const channel = chatId(r.channel);
     if (channel !== action.channel) return fail();
+    const after = action.action === 'history' ? action.after : undefined;
+    if (after !== undefined ? typeof r.gap !== 'boolean' : r.gap !== undefined)
+      return fail();
     const messages = array(r.messages, CHAT_PAGE_ROWS, (value): ChatMessage => {
       const m = object(value, [
         'id',
@@ -435,7 +445,8 @@ export function decodeChatReply(
       const seq = sequence(m.sequence);
       if (
         seq === '0' ||
-        (action.before !== null && BigInt(seq) >= BigInt(action.before))
+        (action.before !== null && BigInt(seq) >= BigInt(action.before)) ||
+        (after !== undefined && BigInt(seq) <= BigInt(after))
       )
         return fail();
       return {
@@ -470,6 +481,7 @@ export function decodeChatReply(
       return fail();
     result = {
       kind: 'history',
+      ...(after === undefined ? {} : { gap: r.gap as boolean }),
       channel,
       messages,
       before,

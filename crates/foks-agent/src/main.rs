@@ -3141,6 +3141,7 @@ fn dispatch_result_inner(
             // Include background-loop timings in the existing agent-status response
             // for diagnostic correlation with requests.
             AgentStatus::Ready {
+                history_after: Some(true),
                 timers: timers::timers().snapshot(timers::now_milliseconds()),
             }
         } else {
@@ -7171,6 +7172,7 @@ mod tests {
         for action in [
             ChatAction::Channels,
             ChatAction::History {
+                after: None,
                 channel: "channel".into(),
                 before: None,
             },

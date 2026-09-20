@@ -13,18 +13,22 @@ pub struct AgentStatusDto {
     pub state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history_after: Option<bool>,
 }
 
 impl From<foks_agent_proto::AgentStatus> for AgentStatusDto {
     fn from(status: foks_agent_proto::AgentStatus) -> Self {
         match status {
-            foks_agent_proto::AgentStatus::Ready { .. } => Self {
+            foks_agent_proto::AgentStatus::Ready { history_after, .. } => Self {
                 state: "ready".to_owned(),
                 step: None,
+                history_after,
             },
             foks_agent_proto::AgentStatus::Bootstrap { step } => Self {
                 state: "bootstrap".to_owned(),
                 step: Some(step),
+                history_after: None,
             },
         }
     }
@@ -263,4 +267,26 @@ pub fn quit_app(app: tauri::AppHandle, webview: tauri::Webview) -> Result<(), Ag
     require_main_window(&webview)?;
     app.exit(0);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn forwards_incremental_history_only_when_advertised_by_the_agent() {
+        let legacy = AgentStatusDto::from(foks_agent_proto::AgentStatus::ready());
+        assert_eq!(
+            serde_json::to_value(legacy).unwrap(),
+            serde_json::json!({"state":"ready"})
+        );
+        let capable = AgentStatusDto::from(foks_agent_proto::AgentStatus::Ready {
+            timers: vec![],
+            history_after: Some(true),
+        });
+        assert_eq!(
+            serde_json::to_value(capable).unwrap(),
+            serde_json::json!({"state":"ready", "historyAfter":true})
+        );
+    }
 }

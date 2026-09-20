@@ -435,13 +435,19 @@ pub enum AgentStatus {
         /// omitted when empty for wire compatibility with older agents.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         timers: Vec<TimerStatus>,
+        /// History accepts an exclusive `after` cursor. Older agents reject unknown fields.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        history_after: Option<bool>,
     },
 }
 
 impl AgentStatus {
     /// Constructs ready status without background-loop timings.
     pub fn ready() -> Self {
-        Self::Ready { timers: Vec::new() }
+        Self::Ready {
+            timers: Vec::new(),
+            history_after: None,
+        }
     }
 
     pub fn is_ready(&self) -> bool {
@@ -451,7 +457,7 @@ impl AgentStatus {
     /// Returns the reported background-loop timings.
     pub fn timers(&self) -> &[TimerStatus] {
         match self {
-            Self::Ready { timers } => timers,
+            Self::Ready { timers, .. } => timers,
             Self::Bootstrap { .. } => &[],
         }
     }
@@ -2490,6 +2496,7 @@ mod tests {
         assert!(AgentStatus::ready().is_ready());
         assert!(AgentStatus::ready().timers().is_empty());
         let reported = AgentStatus::Ready {
+            history_after: None,
             timers: vec![TimerStatus {
                 name: "scheduler".to_owned(),
                 started_at_ms: Some(1_700_000_000_000),

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createElement, useCallback } from 'react';
+import { createElement, useCallback, useState } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 import type {
@@ -426,4 +426,227 @@ test('the application service completes preparation after the composer unmounts'
       preparation.resolve();
     });
   }
+});
+
+test('history revisions append incrementally, retain older rows, and replace gaps and resets', async () => {
+  const { conversationResult } = (await vite.ssrLoadModule(
+    '/src/chat/conversation-model.ts',
+  )) as typeof import('../src/chat/conversation-model');
+  const { eventFromReply } = (await vite.ssrLoadModule(
+    '/src/chat/conversation-events.ts',
+  )) as typeof import('../src/chat/conversation-events');
+  const channel: ChatChannel = {
+    id: channelId,
+    name: '',
+    description: null,
+    admin: false,
+    readable: true,
+    writable: true,
+    read_role: 'member',
+    write_role: 'member',
+  };
+  const calls: ChatAction[] = [];
+  let rows = [2, 1];
+  let gap = false;
+  const request = async (action: ChatAction): Promise<ChatReply> => {
+    assert.equal(action.action, 'history');
+    calls.push(action);
+    const selected = rows.filter(
+      (n) =>
+        (action.after === undefined || n > Number(action.after)) &&
+        (action.before === null || n < Number(action.before)),
+    );
+    return {
+      scope: {} as ChatScope,
+      result: {
+        kind: 'history',
+        channel: action.channel,
+        messages: selected.map((n) => ({
+          id: `m${n}`,
+          sequence: String(n),
+          sender: null,
+          send_time: '1',
+          insert_time: '1',
+          content: { kind: 'unsupported' },
+        })),
+        before:
+          selected.length && Math.min(...selected) > 1
+            ? String(Math.min(...selected))
+            : null,
+        missing_predecessors: [],
+        ...(action.after === undefined ? {} : { gap }),
+      },
+    };
+  };
+  let current!: ReturnType<typeof HistoryHook>;
+  function History({
+    revision,
+    incremental = true,
+  }: {
+    revision: number;
+    incremental?: boolean;
+  }) {
+    const [held, setHeld] = useState<
+      import('../src/chat/conversation-model').HistoryWindow | null
+    >(null);
+    const accept = useCallback(
+      (
+        page: Extract<
+          import('../src/chat-contract').ChatResult,
+          { kind: 'history' }
+        >,
+        before: string | null,
+        replace?: boolean,
+      ) => {
+        setHeld(
+          (previous) =>
+            conversationResult(
+              { operations: [], history: replace ? null : previous },
+              eventFromReply(
+                { action: 'history', channel: channelId, before },
+                page,
+              ),
+            ).history,
+        );
+      },
+      [],
+    );
+    current = useChatHistory(
+      channel,
+      request,
+      revision,
+      accept,
+      held,
+      undefined,
+      undefined,
+      incremental,
+    );
+    return null;
+  }
+  const view = ui.render(createElement(History, { revision: 0 }));
+  await ui.waitFor(() => assert.equal(current.messages.length, 2));
+  assert.deepEqual(calls[0], {
+    action: 'history',
+    channel: channelId,
+    before: null,
+  });
+  rows = [3, 2, 1];
+  view.rerender(createElement(History, { revision: 1 }));
+  await ui.waitFor(() => assert.equal(current.messages.length, 3));
+  assert.deepEqual(calls.at(-1), {
+    action: 'history',
+    channel: channelId,
+    before: null,
+    after: '2',
+  });
+  assert.equal(current.before, null);
+  // An empty delta retains the accepted window.
+  view.rerender(createElement(History, { revision: 2 }));
+  await ui.waitFor(() => assert.equal(calls.length, 3));
+  assert.deepEqual(
+    current.messages.map((m) => m.sequence),
+    ['1', '2', '3'],
+  );
+  rows = [100, 99];
+  gap = true;
+  view.rerender(createElement(History, { revision: 3 }));
+  await ui.waitFor(() =>
+    assert.deepEqual(
+      current.messages.map((m) => m.sequence),
+      ['99', '100'],
+    ),
+  );
+  assert.deepEqual(
+    calls.slice(-2).map((a) => (a.action === 'history' ? a.after : undefined)),
+    ['3', undefined],
+  );
+  rows = [1];
+  view.rerender(createElement(History, { revision: 4 }));
+  await ui.waitFor(() =>
+    assert.deepEqual(
+      current.messages.map((m) => m.sequence),
+      ['1'],
+    ),
+  );
+  // Older agents never receive the unknown after field.
+  view.rerender(createElement(History, { revision: 4, incremental: false }));
+  await ui.waitFor(() => assert.equal(current.busy, false));
+  const count = calls.length;
+  rows = [2, 1];
+  view.rerender(createElement(History, { revision: 5, incremental: false }));
+  await ui.waitFor(() => assert.equal(calls.length, count + 1));
+  assert.equal('after' in calls.at(-1)!, false);
+  await ui.act(async () => {
+    await current.load('2');
+  });
+  assert.deepEqual(calls.at(-1), {
+    action: 'history',
+    channel: channelId,
+    before: '2',
+  });
+});
+
+test('changing channels ignores the old in-flight page and starts a full load', async () => {
+  const first = deferred();
+  const calls: ChatAction[] = [];
+  const accepted: string[] = [];
+  const accept = (
+    page: Extract<
+      import('../src/chat-contract').ChatResult,
+      { kind: 'history' }
+    >,
+  ) => {
+    accepted.push(page.channel);
+  };
+  const request = async (action: ChatAction): Promise<ChatReply> => {
+    assert.equal(action.action, 'history');
+    calls.push(action);
+    if (action.channel === 'a') await first.promise;
+    return {
+      scope: {} as ChatScope,
+      result: {
+        kind: 'history',
+        channel: action.channel,
+        messages: [],
+        before: null,
+        missing_predecessors: [],
+      },
+    };
+  };
+  const channel: ChatChannel = {
+    id: 'a',
+    name: '',
+    description: null,
+    admin: false,
+    readable: true,
+    writable: true,
+    read_role: 'member',
+    write_role: 'member',
+  };
+  function History({ id }: { id: string }) {
+    useChatHistory(
+      { ...channel, id },
+      request,
+      0,
+      accept,
+      null,
+      undefined,
+      undefined,
+      true,
+    );
+    return null;
+  }
+  const view = ui.render(createElement(History, { id: 'a' }));
+  await ui.waitFor(() => assert.equal(calls.length, 1));
+  view.rerender(createElement(History, { id: 'b' }));
+  await ui.waitFor(() => assert.deepEqual(accepted, ['b']));
+  await ui.act(async () => {
+    first.resolve();
+    await first.promise;
+  });
+  assert.deepEqual(accepted, ['b']);
+  assert.deepEqual(calls, [
+    { action: 'history', channel: 'a', before: null },
+    { action: 'history', channel: 'b', before: null },
+  ]);
 });

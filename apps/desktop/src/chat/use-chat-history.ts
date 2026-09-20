@@ -21,10 +21,12 @@ export function useChatHistory(
   onAccepted?: (
     page: Extract<ChatResult, { kind: 'history' }>,
     before: string | null,
+    replace?: boolean,
   ) => void,
   history?: HistoryWindow | null,
   onFatal?: (channel: string) => void,
   onLoading?: (before: string | null) => void,
+  incrementalHistory = false,
 ) {
   const accepted = history?.channel === channel.id ? history : null;
   const messages = accepted?.messages ?? EMPTY_MESSAGES;
@@ -45,12 +47,24 @@ export function useChatHistory(
   const reading = useRef(false);
   const again = useRef(false);
   const seenRevision = useRef(revision);
+  const generation = useRef(0);
+  const latest = useRef(accepted);
+  latest.current = accepted;
   const load = useCallback(
-    async (older: string | null = null) => {
+    async (older: string | null = null, incremental = false) => {
       if (reading.current) {
         if (!older) again.current = true;
         return;
       }
+      const run = generation.current;
+      const current = () => active.current && generation.current === run;
+      const after =
+        incremental &&
+        incrementalHistory &&
+        !older &&
+        latest.current?.channel === channel.id
+          ? latest.current.messages.at(-1)?.sequence
+          : undefined;
       reading.current = true;
       setBusy(true);
       setError(null);
@@ -59,14 +73,32 @@ export function useChatHistory(
       // count: a thread open, and the reload each incoming message costs.
       const end = diagnosticLog.span('chat.history', {
         scope: `chan#${hashId(channel.id)}`,
-        attrs: { older: older !== null },
+        attrs: { older: older !== null, incremental: after !== undefined },
       });
       try {
-        const reply = await request({
+        let reply = await request({
           action: 'history',
           channel: channel.id,
           before: older,
+          ...(after === undefined ? {} : { after }),
         });
+        let replace = false;
+        if (!current()) {
+          end('cancelled');
+          return;
+        }
+        if (
+          after !== undefined &&
+          reply.result.kind === 'history' &&
+          reply.result.gap !== false
+        ) {
+          replace = true;
+          reply = await request({
+            action: 'history',
+            channel: channel.id,
+            before: null,
+          });
+        }
         end('ok', {
           attrs: {
             rows:
@@ -75,33 +107,66 @@ export function useChatHistory(
                 : 0,
           },
         });
-        if (!active.current) return;
+        if (!current()) return;
         if (reply.result.kind === 'history') {
           const page = reply.result;
-          onAccepted?.(page, older);
+          if (!older && (after === undefined || replace)) {
+            const head = page.messages.reduce(
+              (max, m) => (BigInt(m.sequence) > max ? BigInt(m.sequence) : max),
+              0n,
+            );
+            replace ||=
+              head < BigInt(latest.current?.messages.at(-1)?.sequence ?? '0');
+          }
+          onAccepted?.(page, older, replace);
+          // Acceptance publishes synchronously, but React may not render before a
+          // retained invalidation starts. Keep its next cursor current here too.
+          const held = replace ? [] : (latest.current?.messages ?? []);
+          const rows = new Map(
+            [...held, ...page.messages].map((m) => [m.sequence, m]),
+          );
+          latest.current = {
+            channel: channel.id,
+            messages: [...rows.values()].sort((a, b) =>
+              BigInt(a.sequence) < BigInt(b.sequence) ? -1 : 1,
+            ),
+            before: page.before,
+            verification: new Map(),
+          };
         }
       } catch (e) {
         const code = normalizeCommandError(e).code;
         end(outcomeForCode(code), { code });
-        if (active.current) {
+        if (current()) {
           if (normalizeCommandError(e).code === 'chat-channel-integrity')
             onFatal?.(channel.id);
           setError(e);
         }
       } finally {
-        reading.current = false;
-        if (active.current) {
+        if (current()) {
+          reading.current = false;
           setBusy(false);
           if (again.current) {
             again.current = false;
-            void load();
+            void load(null, true);
           }
         }
       }
     },
-    [request, channel.id, onAccepted, onFatal, onLoading, setError],
+    [
+      request,
+      channel.id,
+      onAccepted,
+      onFatal,
+      onLoading,
+      setError,
+      incrementalHistory,
+    ],
   );
   useEffect(() => {
+    generation.current++;
+    reading.current = false;
+    again.current = false;
     active.current = true;
     if (channel.readable) void load();
     return () => {
@@ -111,7 +176,7 @@ export function useChatHistory(
   useEffect(() => {
     if (revision === seenRevision.current) return;
     seenRevision.current = revision;
-    if (active.current && channel.readable) void load();
+    if (active.current && channel.readable) void load(null, true);
   }, [channel.readable, load, revision]);
   return {
     messages,
