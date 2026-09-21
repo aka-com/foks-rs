@@ -151,6 +151,7 @@ export function useCatalogRuntime({
             setHardwareRefresh((generation) => generation + 1);
           }
         },
+        () => latestRef.current.catalogProfiles.length,
       ),
     [bridge, catalogGate, publishSnapshot, lifetime],
   );

@@ -66,10 +66,15 @@ export async function discoverUnboundTeams(
       continue;
     attempted = true;
     try {
-      await enqueueProfileWork(bridge, account.server, async () => {
-        if (isCurrent())
-          await bridge.discoverGroups(account.server, account.alias);
-      });
+      await enqueueProfileWork(
+        bridge,
+        account.server,
+        async () => {
+          if (isCurrent())
+            await bridge.discoverGroups(account.server, account.alias);
+        },
+        'discover-groups',
+      );
     } catch {
       // Best effort: leave the account unbound until a later launch.
     }
@@ -231,6 +236,7 @@ export async function loadProfileSnapshot(
     profile,
     () => bridge.listProfileCatalog(profile),
     background,
+    'profile-catalog',
   );
   if (!isCurrent()) throw new CatalogReadRetiredError();
   if (

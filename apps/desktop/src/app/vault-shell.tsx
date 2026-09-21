@@ -381,9 +381,10 @@ export function VaultShell({
     if (!bridge.diagnosticTimings) return;
     return diagnosticLog.addSource(async () => {
       const events = (await bridge.diagnosticTimings!(0)).events;
-      // The agent process answering, so a copy shows whether it predates
-      // the build it is being read with.
+      // The agent process answering, and the build reading it, so a copy
+      // names what produced it and shows whether the agent predates it.
       const process = await bridge.agentProcessInfo().catch(() => null);
+      const info = await bridge.appInfo().catch(() => null);
       if (!process?.pid) return events;
       return [
         ...events,
@@ -394,6 +395,7 @@ export function VaultShell({
           attrs: {
             pid: process.pid,
             owned: process.owned,
+            ...(info?.version ? { version: info.version } : {}),
             ...(process.startedAt !== null
               ? {
                   up_min: Math.round(

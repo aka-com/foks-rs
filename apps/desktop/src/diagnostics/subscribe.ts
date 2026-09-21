@@ -83,7 +83,7 @@ export function subscribeDiagnostics(sources: DiagnosticSources): () => void {
               : event.outcome === 'failed'
                 ? 'error'
                 : 'retired',
-          attrs: { forced: event.forced },
+          attrs: { forced: event.forced, profiles: event.profiles },
         });
       }),
     );

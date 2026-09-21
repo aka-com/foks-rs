@@ -7,7 +7,7 @@ import {
   useSyncExternalStore,
 } from 'react';
 import { normalizeCommandError } from '../bridge';
-import { diagnosticLog, hashId } from '../diagnostics/log';
+import { diagnosticLog, hashId, outcomeForCode } from '../diagnostics/log';
 import type { Bridge, CommandError } from '../bridge';
 import type {
   ChatAction,
@@ -198,7 +198,7 @@ export function useChatConversation(
         end('ok');
       } catch (error) {
         const code = normalizeCommandError(error).code;
-        end(code === 'cancelled' ? 'cancelled' : 'error', { code });
+        end(outcomeForCode(code), { code });
         throw error;
       } finally {
         service.invalidate(storeId);

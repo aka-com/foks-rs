@@ -162,6 +162,7 @@ test('aggregate diagnostics contain no catalog data and cannot alter publication
   const coordinator = new CatalogCoordinator(
     () => Promise.resolve({ privateId: 'excluded' }),
     () => undefined,
+    () => 3,
   );
   coordinator.observe(() => {
     throw new Error('observer failure');
@@ -178,8 +179,13 @@ test('aggregate diagnostics contain no catalog data and cannot alter publication
     'forced',
     'milliseconds',
     'outcome',
+    'profiles',
   ]);
   assert.equal((events[0] as { outcome: string }).outcome, 'published');
+  // How many profiles the read covered, and whether it was asked for: a
+  // count and a flag, not the catalog the read produced.
+  assert.equal((events[0] as { forced: boolean }).forced, false);
+  assert.equal((events[0] as { profiles: number }).profiles, 3);
   stop();
   await coordinator.refresh();
   assert.equal(events.length, 1);

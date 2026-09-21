@@ -1,5 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
-import { diagnosticLog, hashId, type TimingValue } from '../diagnostics/log';
+import {
+  diagnosticLog,
+  hashId,
+  outcomeForCode,
+  type TimingValue,
+} from '../diagnostics/log';
 import {
   isAgentSessionError,
   normalizeCommandError,
@@ -75,14 +80,6 @@ export async function checked<T>(
     return value;
   } catch (error) {
     let typed = normalizeCommandError(error);
-    end(
-      typed.code === 'cancelled'
-        ? 'cancelled'
-        : typed.code === 'profile-busy' || typed.code === 'busy'
-          ? 'busy'
-          : 'error',
-      { code: typed.code },
-    );
     typed = {
       ...typed,
       origin,
@@ -96,15 +93,20 @@ export async function checked<T>(
         origin === 'response'
           ? { ...typed, ambiguous: true, retryable: false }
           : normalizeMutationError(typed);
+    // Recorded after the code the caller will see is settled, so a request
+    // the renderer itself retired is not counted as a command that failed.
     if (generation !== nativeAgentGeneration && isAgentSessionError(typed)) {
-      throw {
+      const retired = {
         ...typed,
         code: 'agent-request-retired',
         message: 'An earlier agent request was retired after recovery.',
         retryable: false,
         fatal: false,
       } satisfies CommandError;
+      end(outcomeForCode(retired.code), { code: retired.code });
+      throw retired;
     }
+    end(outcomeForCode(typed.code), { code: typed.code });
     if (reportReadiness) reportReadinessError(typed);
     throw typed;
   }

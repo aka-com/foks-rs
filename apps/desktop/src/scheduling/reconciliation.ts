@@ -41,6 +41,12 @@ export interface ReconciliationSnapshot {
    */
   paused?: boolean;
   /**
+   * How long the last run that reached an outcome of its own took. Kept on
+   * the snapshot rather than read back out of the timing log, so the job's
+   * row still states a duration once that log has been cleared.
+   */
+  lastMilliseconds?: number;
+  /**
    * When the job will next run on its own, while it is idle and scheduled.
    * Read off the entry as the snapshot is taken: the due time moves with
    * every request, retry and completion, so it is never stored in one.
@@ -411,6 +417,7 @@ export class ReconciliationScheduler {
           refreshing: false,
           lastAttemptAt: started,
           lastSuccessAt: this.clock.now(),
+          lastMilliseconds: Math.max(0, this.clock.now() - started),
         });
       }
     } catch (error) {
@@ -443,6 +450,7 @@ export class ReconciliationScheduler {
           ...entry.snapshot,
           refreshing: false,
           error,
+          lastMilliseconds: Math.max(0, this.clock.now() - started),
           paused: entry.due === Infinity,
         });
       }

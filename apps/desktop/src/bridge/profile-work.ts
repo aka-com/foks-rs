@@ -15,8 +15,10 @@ export function enqueueProfileWork<T>(
   bridge: Bridge,
   profile: string,
   work: () => Promise<T>,
+  /** An operation name for the timings; never an argument or a result. */
+  label?: string,
 ): Promise<T> {
-  return scheduleProfileWork(bridge, profile, work);
+  return scheduleProfileWork(bridge, profile, work, undefined, label);
 }
 
 export function sharedServerStatus(
@@ -32,8 +34,11 @@ export function sharedServerStatus(
   const key = `${profile}:${fresh ? 'fresh' : 'cached'}`;
   const active = statuses.get(key);
   if (active) return active;
-  const pending = enqueueProfileWork(bridge, profile, () =>
-    bridge.describeServerStatus(profile, fresh),
+  const pending = enqueueProfileWork(
+    bridge,
+    profile,
+    () => bridge.describeServerStatus(profile, fresh),
+    'server-status',
   );
   statuses.set(key, pending);
   const clear = (): void => {

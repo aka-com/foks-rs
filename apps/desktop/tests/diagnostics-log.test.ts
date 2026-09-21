@@ -4,6 +4,7 @@ import { formatTimings } from '../src/diagnostics/format';
 import {
   DiagnosticLog,
   hashId,
+  outcomeForCode,
   redactKey,
   type TimingClock,
   type TimingEvent,
@@ -14,6 +15,7 @@ import {
   scheduleProfileWork,
 } from '../src/scheduling/profile-work';
 import { ReconciliationScheduler } from '../src/scheduling/reconciliation';
+import { CatalogCoordinator } from '../src/catalog-coordinator';
 
 class Clock implements TimingClock {
   wall = 1_700_000_000_000;
@@ -95,6 +97,18 @@ test('hashId is short, stable and never the input', () => {
   assert.match(hashId('anything'), /^[0-9a-f]{6}$/);
 });
 
+test('a retired request is classified as retired, not as a failure', () => {
+  // A read a newer access generation replaced, and a request dropped after
+  // an agent recovery, were not failures of the command they measured.
+  assert.equal(outcomeForCode('catalog-read-retired'), 'retired');
+  assert.equal(outcomeForCode('agent-request-retired'), 'retired');
+  assert.equal(outcomeForCode('cancelled'), 'cancelled');
+  assert.equal(outcomeForCode('profile-busy'), 'busy');
+  assert.equal(outcomeForCode('busy'), 'busy');
+  assert.equal(outcomeForCode('io'), 'error');
+  assert.equal(outcomeForCode(undefined), 'error');
+});
+
 test('the scheduler and the profile queue report into the log with their scope', async () => {
   const clock = new Clock();
   const log = new DiagnosticLog(64, clock);
@@ -125,9 +139,15 @@ test('the scheduler and the profile queue report into the log with their scope',
   scheduler.setEnabled(true);
   while (timers.length) timers.shift()!();
   for (let i = 0; i < 20; i++) await Promise.resolve();
-  await scheduleProfileWork(owner, 'srv', async () => {
-    clock.tick(5);
-  });
+  await scheduleProfileWork(
+    owner,
+    'srv',
+    async () => {
+      clock.tick(5);
+    },
+    undefined,
+    'profile-catalog',
+  );
   stop();
   const names = log
     .events()
@@ -144,6 +164,9 @@ test('the scheduler and the profile queue report into the log with their scope',
   assert.equal(success.outcome, 'ok');
   assert.equal(queue.scope, 'srv');
   assert.equal(queue.attrs?.priority, 'foreground');
+  // Foreground work has no key of its own, so the caller's label is what
+  // names it in the log.
+  assert.equal(queue.attrs?.key, 'profile-catalog');
   // Nothing listens after stop.
   let seen = 0;
   const off = observeProfileWork(owner, () => {
@@ -154,6 +177,25 @@ test('the scheduler and the profile queue report into the log with their scope',
   assert.equal(seen, 1);
   assert.equal(log.length, 3);
   scheduler.dispose();
+});
+
+test('a catalog read records how many profiles it covered', async () => {
+  const clock = new Clock();
+  const log = new DiagnosticLog(8, clock);
+  const coordinator = new CatalogCoordinator(
+    () => Promise.resolve('catalog'),
+    () => undefined,
+    () => 4,
+  );
+  const stop = subscribeDiagnostics({ log, coordinator });
+  await coordinator.refresh(true);
+  stop();
+  const [read] = log.events();
+  assert.equal(read.name, 'catalog.read');
+  assert.equal(read.outcome, 'ok');
+  // The duration only reads against the work it covered: a read over four
+  // servers is not a read over one.
+  assert.deepEqual(read.attrs, { forced: true, profiles: 4 });
 });
 
 const AT = Date.UTC(2026, 8, 19, 12, 0, 33, 104);

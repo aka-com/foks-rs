@@ -580,3 +580,39 @@ test('stopping during an active job rejects waiters for its follow-up run', asyn
     scheduler.dispose();
   }
 });
+
+test('a snapshot keeps how long the last run took, on success and on failure', async () => {
+  const clock = new Clock(),
+    gates = [deferred(), deferred()];
+  const scheduler = new ReconciliationScheduler(clock);
+  let calls = 0;
+  scheduler.update([
+    job('p', async () => {
+      const run = calls++;
+      await gates[run].promise;
+      if (run === 1)
+        throw Object.assign(new Error('unreachable'), { code: 'io' });
+    }),
+  ]);
+  scheduler.setEnabled(true);
+  scheduler.request('p', 'foreground');
+  await clock.advance(0);
+  await clock.advance(250);
+  gates[0].resolve();
+  await flush();
+  // The duration is on the job's snapshot, so the row can state it whether
+  // or not the observations are still held anywhere.
+  assert.equal(scheduler.snapshot('p')?.lastMilliseconds, 250);
+  // A request is held to a second past the last attempt, so the second run
+  // starts at 1000 ms and its own duration is measured from there.
+  scheduler.request('p', 'manual');
+  await clock.advance(750);
+  await clock.advance(80);
+  gates[1].resolve();
+  await flush();
+  assert.ok(scheduler.snapshot('p')?.error);
+  // A run that failed took as long as it took; the row says so beside the
+  // failure rather than leaving the previous run's number standing.
+  assert.equal(scheduler.snapshot('p')?.lastMilliseconds, 80);
+  scheduler.dispose();
+});

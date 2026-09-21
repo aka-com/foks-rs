@@ -2,7 +2,11 @@
 export interface WorkTiming {
   /** The queue's profile: a server id, as the Refresh status popover names it. */
   profile: string;
-  /** The background entry's key; foreground work has none. */
+  /**
+   * The background entry's key, or the label a foreground caller gave its
+   * work. Foreground work has no identity of its own, so without a label the
+   * queue cannot say what a later request was waiting behind.
+   */
   key?: string;
   priority: 'foreground' | 'background';
   queueMilliseconds: number;
@@ -83,6 +87,8 @@ export function scheduleProfileWork<T>(
   profile: string,
   work: () => Promise<T>,
   background?: BackgroundHistoryWork,
+  /** An operation name for the timings; never an argument or a result. */
+  label?: string,
 ): Promise<T> {
   if (background && (background.signal.aborted || !background.current()))
     return Promise.reject(cancellation());
@@ -134,7 +140,11 @@ export function scheduleProfileWork<T>(
   ) => {
     const event: WorkTiming = {
       profile,
-      ...(background ? { key: background.key } : {}),
+      ...(background
+        ? { key: background.key }
+        : label !== undefined
+          ? { key: label }
+          : {}),
       priority: background ? 'background' : 'foreground',
       queueMilliseconds: started - queued,
       executionMilliseconds:

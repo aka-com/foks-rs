@@ -9,7 +9,7 @@ import type {
   ChatResult,
 } from '../chat-contract';
 import type { HistoryWindow } from './conversation-model';
-import { diagnosticLog, hashId } from '../diagnostics/log';
+import { diagnosticLog, hashId, outcomeForCode } from '../diagnostics/log';
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
 
@@ -82,7 +82,7 @@ export function useChatHistory(
         }
       } catch (e) {
         const code = normalizeCommandError(e).code;
-        end(code === 'cancelled' ? 'cancelled' : 'error', { code });
+        end(outcomeForCode(code), { code });
         if (active.current) {
           if (normalizeCommandError(e).code === 'chat-channel-integrity')
             onFatal?.(channel.id);

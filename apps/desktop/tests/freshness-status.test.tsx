@@ -16,6 +16,7 @@ import {
 } from '../src/catalog-state';
 let FreshnessCaption: typeof import('../src/components/metadata-status').FreshnessCaption;
 let summarizeSync: typeof import('../src/shell/sync-popover').summarizeSync;
+let JobTimes: typeof import('../src/shell/sync-popover').JobTimes;
 let vite: ViteDevServer;
 test.before(async () => {
   vite = await createServer({
@@ -26,7 +27,9 @@ test.before(async () => {
   ({ FreshnessCaption } = await vite.ssrLoadModule(
     '/src/components/metadata-status.tsx',
   ));
-  ({ summarizeSync } = await vite.ssrLoadModule('/src/shell/sync-popover.tsx'));
+  ({ summarizeSync, JobTimes } = await vite.ssrLoadModule(
+    '/src/shell/sync-popover.tsx',
+  ));
 });
 test.after(async () => {
   await vite.close();
@@ -408,6 +411,7 @@ test('each row lists its jobs: when they ran, when they run next, and what faile
         refreshing: boolean;
         lastAttemptAt?: number;
         lastSuccessAt?: number;
+        lastMilliseconds?: number;
         error?: unknown;
         paused?: boolean;
         nextAttemptAt?: number;
@@ -439,6 +443,7 @@ test('each row lists its jobs: when they ran, when they run next, and what faile
           refreshing: false,
           lastAttemptAt: 20_000,
           lastSuccessAt: 20_000,
+          lastMilliseconds: 1_200,
           nextAttemptAt: 50_000,
         },
       },
@@ -471,7 +476,13 @@ test('each row lists its jobs: when they ran, when they run next, and what faile
       ['Connectivity', 'refreshing'],
     ],
   );
-  assert.match(row?.jobs[0].detail ?? '', /^Succeeded .+\. Next at .+\.$/);
+  // The row states how long the job's last run took, from the scheduler's
+  // own snapshot rather than from the timing log, which can be cleared.
+  assert.match(
+    row?.jobs[0].detail ?? '',
+    /^Succeeded .+ in 1\.20s\. Next at .+\.$/,
+  );
+  assert.equal(row?.jobs[0].lastMilliseconds, 1_200);
   assert.equal(row?.jobs[1].detail, 'Running now.');
   const local = summary.servers.find((server) => server.id === null);
   assert.deepEqual(
@@ -574,4 +585,40 @@ test('copied diagnostics keep the status lines first and append the timing log',
   assert.match(text, /--- jobs ---/);
   diagnosticLog.clear();
   reconciliation.dispose();
+});
+
+test('a job row states how long its last run took beside the time it ran', () => {
+  const row = (job: Parameters<typeof JobTimes>[0]['job']) =>
+    renderToStaticMarkup(createElement(JobTimes, { job }));
+  const base = {
+    kind: 'catalog' as const,
+    label: 'Catalog',
+    detail: '',
+    paused: false,
+  };
+  assert.match(
+    row({
+      ...base,
+      state: 'ok',
+      lastSuccessAt: 20_000,
+      lastMilliseconds: 1_200,
+      nextAttemptAt: 50_000,
+    }),
+    / in 1\.20s/,
+  );
+  // An attempt that has not yet succeeded states its duration too.
+  assert.match(
+    row({
+      ...base,
+      state: 'unknown',
+      lastAttemptAt: 20_000,
+      lastMilliseconds: 340,
+    }),
+    /Attempted .+ in 340ms/,
+  );
+  // A job that has not run yet, or whose duration is unknown, states none.
+  assert.doesNotMatch(
+    row({ ...base, state: 'ok', lastSuccessAt: 20_000 }),
+    / in /,
+  );
 });

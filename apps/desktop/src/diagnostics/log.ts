@@ -81,6 +81,27 @@ function text(value: string | undefined): string | undefined {
   return value === undefined ? undefined : value.slice(0, MAX_TEXT);
 }
 
+/**
+ * The outcome a failed step records for a command error code. A request the
+ * renderer itself retired — a catalog read a newer generation replaced, an
+ * agent request dropped after recovery — is not a failure of the thing it
+ * measured, and a profile queue that was already busy is not one either.
+ */
+export function outcomeForCode(code: string | undefined): TimingOutcome {
+  switch (code) {
+    case 'cancelled':
+      return 'cancelled';
+    case 'catalog-read-retired':
+    case 'agent-request-retired':
+      return 'retired';
+    case 'profile-busy':
+    case 'busy':
+      return 'busy';
+    default:
+      return 'error';
+  }
+}
+
 /** A short, stable hash for an identifier that must not be printed. */
 export function hashId(value: string): string {
   let hash = 0x811c9dc5;

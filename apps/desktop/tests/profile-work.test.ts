@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   observeProfileWork,
   scheduleProfileWork,
+  type WorkTiming,
 } from '../src/scheduling/profile-work';
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -133,6 +134,36 @@ test('errors and observers cannot poison the queue; idle and reentrant submissio
     'queueMilliseconds',
   ]);
   assert.equal((events[0] as { profile: string }).profile, 'p');
+  off();
+});
+
+test('a foreground timing carries the label its caller gave the work', async () => {
+  const owner = {},
+    events: WorkTiming[] = [];
+  const off = observeProfileWork(owner, (event) => {
+    events.push(event);
+  });
+  await scheduleProfileWork(
+    owner,
+    'srv-1',
+    async () => 1,
+    undefined,
+    'profile-catalog',
+  );
+  await scheduleProfileWork(owner, 'srv-2', async () => 2);
+  assert.deepEqual(
+    events.map((event) => [
+      event.profile,
+      event.key,
+      event.priority,
+      event.outcome,
+    ]),
+    [
+      ['srv-1', 'profile-catalog', 'foreground', 'success'],
+      // Work whose caller named nothing carries no key at all.
+      ['srv-2', undefined, 'foreground', 'success'],
+    ],
+  );
   off();
 });
 

@@ -24,7 +24,7 @@ import {
   type BackgroundHistoryWork,
 } from '../scheduling/profile-work';
 import type { Bridge } from './contract';
-import { diagnosticLog } from '../diagnostics/log';
+import { diagnosticLog, outcomeForCode } from '../diagnostics/log';
 import {
   isHardStateSchemaFailure,
   normalizeCommandError,
@@ -122,13 +122,8 @@ export async function projectCatalog(
     end('ok', { attrs: counts });
     return snapshot;
   } catch (error) {
-    end(
-      normalizeCommandError(error).code === 'cancelled' ||
-        normalizeCommandError(error).code === 'catalog-read-retired'
-        ? 'cancelled'
-        : 'error',
-      { code: normalizeCommandError(error).code, attrs: counts },
-    );
+    const code = normalizeCommandError(error).code;
+    end(outcomeForCode(code), { code, attrs: counts });
     throw error;
   }
 }

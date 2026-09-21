@@ -6,7 +6,8 @@
  * account metadata). One root cause — a missing keystore record, an
  * unreachable host — fails all of them with the same message, so the
  * observations are grouped by server and duplicate errors are collapsed. Each
- * server lists its jobs with their most recent success and next-run times.
+ * server lists its jobs with their most recent success, how long that run
+ * took and their next-run times.
  * Failures add a summary and recovery actions. A single server is always
  * expanded; when several servers are present, failed servers start expanded
  * and the others start collapsed. Copy diagnostics retains the ungrouped
@@ -24,7 +25,7 @@ import type { ReactNode, RefObject } from 'react';
 import { Popover } from '/kit/overlay-primitives';
 import type { AgentSnapshot, CatalogFreshnessEntry, Server } from '../model';
 import { serverDisplayName } from '../model';
-import { formatTimings } from '../diagnostics/format';
+import { formatMilliseconds, formatTimings } from '../diagnostics/format';
 import { diagnosticLog, type TimingEvent } from '../diagnostics/log';
 import type { DesktopReconciliation } from '../desktop-reconciliation';
 import type {
@@ -54,6 +55,8 @@ export interface SyncJobSummary {
   nextAttemptAt?: number;
   /** Whether automatic retries are paused pending a manual refresh. */
   paused: boolean;
+  /** How long the job's last completed run took, in milliseconds. */
+  lastMilliseconds?: number;
 }
 
 export interface SyncServerSummary {
@@ -115,6 +118,20 @@ function clockTime(milliseconds: number | undefined): string {
   return milliseconds === undefined ? '' : timeOf(milliseconds / 1_000);
 }
 
+/**
+ * How long the job's last run took, as the row and its sentence state it.
+ * Taken from the scheduler's own snapshot, so a cleared timing log does not
+ * take the duration off the row with it.
+ */
+function runDuration(milliseconds: number | undefined): string {
+  return milliseconds === undefined ? '' : formatMilliseconds(milliseconds);
+}
+
+/** The same duration as its own sentence, where no success time carries it. */
+function lastRun(duration: string): string {
+  return duration ? `Last run ${duration}.` : '';
+}
+
 function jobSummary(
   kind: ReconciliationKind,
   snapshot: Readonly<ReconciliationSnapshot>,
@@ -131,11 +148,13 @@ function jobSummary(
       ? `Last succeeded ${clockTime(snapshot.lastSuccessAt)}.`
       : '';
   const line = (parts: readonly string[]) => parts.filter(Boolean).join(' ');
+  const ran = runDuration(snapshot.lastMilliseconds);
   const times = {
     lastSuccessAt: snapshot.lastSuccessAt,
     lastAttemptAt: snapshot.lastAttemptAt,
     nextAttemptAt: snapshot.nextAttemptAt,
     paused: Boolean(snapshot.paused),
+    lastMilliseconds: snapshot.lastMilliseconds,
   };
   if (snapshot.error) {
     const cause = normalizeCommandError(snapshot.error).message.replace(
@@ -146,7 +165,7 @@ function jobSummary(
       kind,
       label,
       state: 'failed',
-      detail: line([`${cause}.`, succeeded, next]),
+      detail: line([`${cause}.`, succeeded, lastRun(ran), next]),
       ...times,
     };
   }
@@ -163,7 +182,10 @@ function jobSummary(
       kind,
       label,
       state: 'ok',
-      detail: line([`Succeeded ${clockTime(snapshot.lastSuccessAt)}.`, next]),
+      detail: line([
+        `Succeeded ${clockTime(snapshot.lastSuccessAt)}${ran ? ` in ${ran}` : ''}.`,
+        next,
+      ]),
       ...times,
     };
   return {
@@ -174,6 +196,7 @@ function jobSummary(
       snapshot.lastAttemptAt !== undefined
         ? `Attempted ${clockTime(snapshot.lastAttemptAt)}, not yet successful.`
         : 'Not yet run.',
+      lastRun(ran),
       next,
     ]),
     ...times,
@@ -400,8 +423,14 @@ export function useSyncSummary(
 /** Names the popover as the refresh button's description while it is up. */
 export const SYNC_STATUS_ID = 'sync-status-popover';
 
-/** Compact timing or retry text shown at the right of a job row. */
-function JobTimes({ job }: { job: SyncJobSummary }): ReactNode {
+/**
+ * Compact timing or retry text shown at the right of a job row. Exported so
+ * the row's own text is held by a test without standing the popover up.
+ */
+export function JobTimes({ job }: { job: SyncJobSummary }): ReactNode {
+  // How long the last run took, beside the time it ran: a job that is slow
+  // and a job that is stale read the same on a row that states only a time.
+  const took = runDuration(job.lastMilliseconds);
   if (job.state === 'failed')
     return (
       <span className="sync-when failed">
@@ -418,13 +447,14 @@ function JobTimes({ job }: { job: SyncJobSummary }): ReactNode {
     return (
       <span className="sync-when">
         {job.lastAttemptAt !== undefined
-          ? `Attempted ${clockTime(job.lastAttemptAt)}`
+          ? `Attempted ${clockTime(job.lastAttemptAt)}${took ? ` in ${took}` : ''}`
           : 'Not yet run'}
       </span>
     );
   return (
     <span className="sync-when">
       {clockTime(job.lastSuccessAt)}
+      {took ? ` in ${took}` : ''}
       {job.nextAttemptAt !== undefined ? (
         <span className="sync-next">
           Next at {clockTime(job.nextAttemptAt)}

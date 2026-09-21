@@ -25,22 +25,26 @@ export const tauriBridge: Bridge = {
   // would expire at the admission deadline instead of running. The test
   // `profile-queue-ownership.test.ts` holds this contract.
   invitation: (profile, accountAlias, action, pin) =>
-    enqueueProfileWork(tauriBridge, profile, () =>
-      ([
-        'preview',
-        'preview-remote',
-        'inbox',
-        'pending-approvals',
-        'list',
-        'status',
-        'status-remote',
-        'inspect-remote',
-      ].includes(action.action)
-        ? checked
-        : checkedMutation)(
-        'invitation_request',
-        { profile, accountAlias, action, pin },
-        decodeInvitationReply,
-      ),
+    enqueueProfileWork(
+      tauriBridge,
+      profile,
+      () =>
+        ([
+          'preview',
+          'preview-remote',
+          'inbox',
+          'pending-approvals',
+          'list',
+          'status',
+          'status-remote',
+          'inspect-remote',
+        ].includes(action.action)
+          ? checked
+          : checkedMutation)(
+          'invitation_request',
+          { profile, accountAlias, action, pin },
+          decodeInvitationReply,
+        ),
+      'invitation',
     ),
 };

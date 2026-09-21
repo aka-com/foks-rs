@@ -15,6 +15,12 @@ export interface CatalogReadTiming {
   milliseconds: number;
   /** The read answered a request for fresh facts: a Refresh, or a read back of a write. */
   forced: boolean;
+  /**
+   * How many profiles the read covered, which is what its duration has to be
+   * read against: one catalog read over six servers is not the same read as
+   * one over one.
+   */
+  profiles: number;
 }
 
 export class CatalogCoordinator<T> {
@@ -42,10 +48,17 @@ export class CatalogCoordinator<T> {
     started: number,
     forced: boolean,
   ): void {
+    let profiles = 0;
+    try {
+      profiles = this.observedProfiles();
+    } catch {
+      /* Diagnostics cannot affect publication. */
+    }
     const event = Object.freeze({
       outcome,
       milliseconds: performance.now() - started,
       forced,
+      profiles,
     });
     for (const observer of this.observers) {
       try {
@@ -64,6 +77,8 @@ export class CatalogCoordinator<T> {
       forced: boolean,
     ) => Promise<T>,
     private readonly publish: (value: T, forced: boolean) => void,
+    /** How many profiles a read covers, for the timings only. */
+    private readonly observedProfiles: () => number = () => 0,
   ) {}
 
   /** Retire replies on lock, maintenance or connection loss without overlapping reads. */
