@@ -60,7 +60,6 @@ body {
 }
 
 .app > .details {
-  position: relative;
   z-index: 3;
 }
 
