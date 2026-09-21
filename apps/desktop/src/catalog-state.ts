@@ -64,6 +64,43 @@ export function markCatalogRefresh(
   };
 }
 
+/**
+ * Clears the refreshing flag after a profile refresh is retired. Preserve the
+ * previous success and error state because the retired read produced no result.
+ */
+export function settleCatalogRefresh(
+  snapshot: AgentSnapshot,
+  profiles: readonly string[],
+): AgentSnapshot {
+  const freshness = snapshot.catalogFreshness;
+  if (!freshness) return snapshot;
+  const settle = (entry: CatalogFreshnessEntry | undefined) =>
+    entry?.refreshing ? { ...entry, refreshing: false } : entry;
+  const settled = (
+    entries: Readonly<Record<string, CatalogFreshnessEntry>>,
+    keep: (key: string) => boolean,
+  ) =>
+    Object.fromEntries(
+      Object.entries(entries).map(([key, entry]) => [
+        key,
+        keep(key) ? (settle(entry) ?? entry) : entry,
+      ]),
+    );
+  const stores = new Set(
+    snapshot.stores
+      .filter((store) => profiles.includes(store.server))
+      .map((store) => store.id),
+  );
+  return {
+    ...snapshot,
+    catalogFreshness: {
+      ...freshness,
+      profiles: settled(freshness.profiles, (key) => profiles.includes(key)),
+      stores: settled(freshness.stores, (key) => stores.has(key)),
+    },
+  };
+}
+
 export function failWholeCatalogRefresh(
   snapshot: AgentSnapshot,
   error: ServerFailure,

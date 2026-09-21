@@ -9,12 +9,16 @@ import {
   failCatalogRefresh,
   markCatalogRefresh,
   mergeProfileSnapshot,
+  settleCatalogRefresh,
 } from './catalog-state';
 import { CatalogReadGate } from './catalog-read-gate';
-import { DesktopReconciliation } from './desktop-reconciliation';
+import {
+  DesktopReconciliation,
+  profileRefreshKey,
+} from './desktop-reconciliation';
 import { observeProfileConnection } from './profile-connectivity';
 import { scheduleProfileWork } from './scheduling/profile-work';
-import type { AgentSnapshot } from './model';
+import type { AgentSnapshot, Server } from './model';
 import { discoveryAccounts, reconcileTeamDiscovery } from './team-discovery';
 import type {
   ReconciliationClock,
@@ -55,7 +59,106 @@ export function useDesktopReconciliation(
       )
         live.current.report(error);
     };
-    const profile = async (
+    // Job callbacks use this binding after the service has been initialized below.
+    /**
+     * Clear the profile's refreshing flag when a cancelled job exits before
+     * publishing. Otherwise the UI would continue to show an active refresh
+     * until another job updates the state.
+     */
+    const settle = (profile: string): void => {
+      const current = live.current.current();
+      if (current.catalogFreshness?.profiles[profile]?.refreshing)
+        live.current.publish(settleCatalogRefresh(current, [profile]), false);
+    };
+    /**
+     * Returns whether the profile's catalog job exists and is eligible to run.
+     * Blocked or incompatible profiles cannot service an awaited refresh.
+     */
+    const catalogJobRuns = (profile: string, key: string): boolean => {
+      const server = live.current
+        .current()
+        .servers.find((candidate) => candidate.id === profile);
+      return (
+        service.scheduler.snapshot(key) !== undefined &&
+        server?.trust.status !== 'blocked' &&
+        !server?.restrictions.some(
+          (restriction) =>
+            restriction.kind === 'schema-incompatible' ||
+            restriction.kind === 'import-verification-required',
+        )
+      );
+    };
+    /**
+     * Defer publishing a connectivity result until the subsequent catalog
+     * refresh completes. Publish it only if the server configuration still
+     * matches the configuration used for the observation.
+     */
+    type Observation = {
+      before: Server;
+      observed: Awaited<ReturnType<NonNullable<Bridge['reconcileServer']>>>;
+      observedAt: number;
+    };
+    const pendingObservations = new Map<string, Observation>();
+    const publishObservation = (name: string): void => {
+      const pending = pendingObservations.get(name);
+      if (!pending) return;
+      pendingObservations.delete(name);
+      const { before, observed, observedAt } = pending;
+      const latest = live.current.current();
+      const after = latest.servers.find((server) => server.id === name);
+      // The facts moved under the observation, so it says nothing about the
+      // server as it is now. The connectivity job's key carries those facts,
+      // so the scheduler has already replaced it with one that runs at once.
+      if (
+        !after ||
+        before.configuredProbe !== after.configuredProbe ||
+        (before.host_id && after.host_id && before.host_id !== after.host_id) ||
+        (before.host_id &&
+          after.host_id === null &&
+          after.trust.status === 'unprobed' &&
+          observed.identity.status === 'connected')
+      )
+        return;
+      const binding =
+        after.host_id === null && after.trust.status === 'unknown'
+          ? { ...after, host_id: before.host_id }
+          : after;
+      let connectivity: Server['connectivity'];
+      try {
+        connectivity = observeProfileConnection(binding, observed, observedAt);
+      } catch {
+        // Discard the observation if it no longer matches the current server state.
+        // A later connectivity check will collect a current result; this does not
+        // change the catalog job's outcome.
+        return;
+      }
+      live.current.publish(
+        {
+          ...latest,
+          servers: latest.servers.map((server) =>
+            server.id === name ? { ...server, connectivity } : server,
+          ),
+        },
+        false,
+      );
+    };
+    /**
+     * Schedules the profile's catalog job so the refresh uses its normal
+     * cancellation, retry, and diagnostic handling. A request received during
+     * an active read schedules one follow-up run.
+     */
+    const requestCatalog = (
+      profile: string,
+      context: ReconciliationContext,
+    ): Promise<void> => {
+      const key = profileRefreshKey(live.current.current(), profile);
+      if (catalogJobRuns(profile, key)) {
+        service.scheduler.request(key, 'recovery', true);
+        return Promise.resolve();
+      }
+      return readProfile(profile, context);
+    };
+    const readProfile = async (
       profile: string,
       context: ReconciliationContext,
     ): Promise<void> => {
@@ -84,7 +187,10 @@ export function useDesktopReconciliation(
             preemptible: false,
           },
         );
-        if (!context.isCurrent()) return;
+        if (!context.isCurrent()) {
+          settle(profile);
+          return;
+        }
         const merged = mergeProfileSnapshot(
           live.current.current(),
           next,
@@ -93,7 +199,10 @@ export function useDesktopReconciliation(
         live.current.publish(merged);
         observationError = merged.catalogFreshness?.profiles[profile]?.error;
       } catch (error) {
-        if (!context.isCurrent()) return;
+        if (!context.isCurrent()) {
+          settle(profile);
+          return;
+        }
         const current = live.current;
         current.publish(
           failCatalogRefresh(
@@ -104,20 +213,22 @@ export function useDesktopReconciliation(
           ),
           false,
         );
+        publishObservation(profile);
         report(error);
         throw error;
       }
+      publishObservation(profile);
       if (observationError) {
         report(observationError);
         throw observationError;
       }
     };
-    return new DesktopReconciliation(
+    const service = new DesktopReconciliation(
       {
         snapshot: () => live.current.current(),
         nowSeconds: () => live.current.nowSeconds(),
         profile: (name, context) =>
-          options.gate.profile(() => profile(name, context)),
+          options.gate.profile(() => readProfile(name, context)),
         connectivity: options.bridge.reconcileServer
           ? (name, context) =>
               options.gate.profile(async () => {
@@ -163,60 +274,14 @@ export function useDesktopReconciliation(
                       fatal: false,
                       ambiguous: false,
                     };
-                  let refreshError: unknown;
-                  try {
-                    await profile(name, context);
-                  } catch (error) {
-                    refreshError = error;
-                  }
-                  if (!context.isCurrent()) return;
-                  if (
-                    refreshError &&
-                    [
-                      'profile-not-found',
-                      'profile-configuration-changed',
-                      'catalog-read-retired',
-                    ].includes(normalizeCommandError(refreshError).code)
-                  )
-                    throw refreshError;
-                  const latest = live.current.current();
-                  const after = latest.servers.find(
-                    (server) => server.id === name,
-                  );
-                  if (
-                    !after ||
-                    before.configuredProbe !== after.configuredProbe ||
-                    (before.host_id &&
-                      after.host_id &&
-                      before.host_id !== after.host_id) ||
-                    (before.host_id &&
-                      after.host_id === null &&
-                      after.trust.status === 'unprobed' &&
-                      observed.identity.status === 'connected')
-                  )
-                    return;
-                  const binding =
-                    after.host_id === null && after.trust.status === 'unknown'
-                      ? { ...after, host_id: before.host_id }
-                      : after;
-                  const connectivity = observeProfileConnection(
-                    binding,
+                  pendingObservations.set(name, {
+                    before,
                     observed,
                     observedAt,
-                  );
-                  live.current.publish(
-                    {
-                      ...latest,
-                      servers: latest.servers.map((server) =>
-                        server.id === name
-                          ? { ...server, connectivity }
-                          : server,
-                      ),
-                    },
-                    false,
-                  );
+                  });
+                  await requestCatalog(name, context);
+                  if (!context.isCurrent()) return;
                   if (errors[0]) throw errors[0];
-                  if (refreshError) throw refreshError;
                 } catch (error) {
                   if (!context.isCurrent()) return;
                   report(error);
@@ -260,7 +325,7 @@ export function useDesktopReconciliation(
                       candidate.alias === account.alias &&
                       candidate.server === account.server,
                   ),
-                () => profile(account.server, context),
+                () => requestCatalog(account.server, context),
               );
             } catch (error) {
               if (!context.isCurrent()) return;
@@ -281,6 +346,7 @@ export function useDesktopReconciliation(
       },
       options.clock,
     );
+    return service;
   }, [options.bridge, options.gate, options.clock]);
   useEffect(
     () => service.update(options.snapshot),

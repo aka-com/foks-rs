@@ -3,6 +3,11 @@ import test from 'node:test';
 import { createElement, useRef, useState } from 'react';
 import { installDom } from './lib/dom-harness';
 import { useDesktopReconciliation } from '../src/use-desktop-reconciliation';
+import {
+  profileConnectivityKey,
+  profileRefreshKey,
+  type DesktopReconciliation,
+} from '../src/desktop-reconciliation';
 import { CatalogReadGate } from '../src/catalog-read-gate';
 import { useCatalogRuntime } from '../src/app/catalog-runtime';
 import { AccessLifetime } from '../src/app/access-lifetime';
@@ -118,18 +123,20 @@ function Harness({
   clock,
   enabled = true,
   publish,
+  expose,
 }: {
   bridge: Bridge;
   initial: AgentSnapshot;
   clock: Clock;
   enabled?: boolean;
   publish(this: void, snapshot: AgentSnapshot): void;
+  expose?(this: void, service: DesktopReconciliation): void;
 }) {
   const [snapshot, setSnapshot] = useState(initial);
   const latest = useRef(snapshot);
   latest.current = snapshot;
   const [gate] = useState(() => new CatalogReadGate());
-  useDesktopReconciliation({
+  const service = useDesktopReconciliation({
     bridge,
     snapshot,
     enabled,
@@ -146,6 +153,7 @@ function Harness({
     report: () => {},
     nowSeconds: () => clock.now() / 1_000,
   });
+  expose?.(service);
   return createElement(
     'output',
     null,
@@ -449,4 +457,128 @@ test('connectivity recovery refreshes signed facts without replaying setup or bl
     true,
   );
   assert.equal(accepted.agent.state, 'ready');
+});
+
+test('catalog refresh failures do not fail connectivity reconciliation', async () => {
+  const data = await fixture(),
+    clock = new Clock();
+  const affected = data.initial.catalogProfiles[0];
+  let accepted = data.initial;
+  let service!: DesktopReconciliation;
+  const bridge: Bridge = {
+    ...data.bridge,
+    reconcileServer: async (profile) => {
+      // The catalog read for this profile fails, so its facts stay as they
+      // were; the observation has to name the host those facts hold.
+      const server = data.initial.servers.find((server) => server.id === profile);
+      const status = await data.bridge.describeServerStatus(profile);
+      assert.ok(status.host);
+      return {
+        profile,
+        identity: {
+          status: 'connected',
+          hostId: server?.host_id ?? status.host.hostId,
+          configuredProbe: status.configuredProbe,
+        },
+        compatibility: { status: 'not-required' },
+      };
+    },
+    listProfileCatalog: async (profile) => {
+      if (profile === affected)
+        throw {
+          code: 'operation-failed',
+          message: 'Catalog read failed.',
+          retryable: false,
+          fatal: true,
+          ambiguous: false,
+        };
+      return data.bridge.listProfileCatalog(profile);
+    },
+  };
+  ui.render(
+    createElement(Harness, {
+      ...data,
+      bridge,
+      clock,
+      publish: (next) => {
+        accepted = next;
+      },
+      expose: (value) => {
+        service = value;
+      },
+    }),
+  );
+  await clock.advance(0);
+  const connectivity = service.scheduler.snapshot(
+    profileConnectivityKey(accepted, affected),
+  );
+  const catalog = service.scheduler.snapshot(
+    profileRefreshKey(accepted, affected),
+  );
+  // The connectivity job succeeded: its failure would have been the catalog
+  // read's, and a fatal one would have parked the connectivity job.
+  assert.equal(connectivity?.error, undefined);
+  assert.notEqual(connectivity?.paused, true);
+  assert.ok(connectivity?.lastSuccessAt);
+  // The catalog job carries its own failure, and the fatal one parks it.
+  assert.equal(
+    (catalog?.error as { message?: string } | undefined)?.message,
+    'Catalog read failed.',
+  );
+  assert.equal(catalog?.paused, true);
+  assert.equal(
+    accepted.catalogFreshness?.profiles[affected]?.error?.message,
+    'Catalog read failed.',
+  );
+  // The observation was published once the catalog read had settled.
+  const server = accepted.servers.find((server) => server.id === affected)!;
+  assert.equal(server.connectivity.status, 'observed');
+});
+
+test('retiring an active profile refresh clears its refreshing state', async () => {
+  const data = await fixture(),
+    clock = new Clock();
+  const affected = data.initial.catalogProfiles[0];
+  let accepted = data.initial;
+  let release!: () => void;
+  let held = false;
+  const bridge: Bridge = {
+    ...data.bridge,
+    listProfileCatalog: async (profile) => {
+      if (profile === affected && !held) {
+        held = true;
+        await new Promise<void>((done) => {
+          release = done;
+        });
+      }
+      return data.bridge.listProfileCatalog(profile);
+    },
+  };
+  const props = {
+    ...data,
+    bridge,
+    clock,
+    publish: (next: AgentSnapshot) => {
+      accepted = next;
+    },
+  };
+  const rendered = ui.render(createElement(Harness, props));
+  await clock.advance(30_000);
+  assert.ok(held);
+  assert.equal(
+    accepted.catalogFreshness?.profiles[affected]?.refreshing,
+    true,
+  );
+  // The session is disabled while the read is in flight: the job is retired
+  // and the read's answer, when it comes, is not published.
+  rendered.rerender(createElement(Harness, { ...props, enabled: false }));
+  await ui.act(async () => {
+    release();
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+  });
+  assert.equal(
+    accepted.catalogFreshness?.profiles[affected]?.refreshing,
+    false,
+  );
+  assert.equal(accepted.catalogFreshness?.profiles[affected]?.error, undefined);
 });
