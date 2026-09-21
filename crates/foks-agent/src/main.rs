@@ -926,11 +926,19 @@ async fn handle_connection(
             spawned_at: Some(Instant::now()),
             waited_behind,
         };
+        // A client that retires a read closes its connection, and until that
+        // is observed the request keeps this profile's admission and its
+        // session while the request behind it waits for both. Only an
+        // operation that commits nothing is ended this way; a mutation runs
+        // to its own conclusion whether or not anyone is left to read it.
+        let abandonment =
+            read_cache::operation_is_abandonable(&request.operation).then_some(&mut stream);
         let supervised = supervise_blocking(
             request.id,
             permit,
             profile_permit,
             operation_timeout,
+            abandonment,
             move |cancellation| {
                 dispatch_timed(
                     &state,
@@ -943,6 +951,9 @@ async fn handle_connection(
             },
         )
         .await;
+        if supervised.abandoned {
+            return Ok(());
+        }
         write_response(&mut stream, &supervised.response, timeout).await?;
         let close_connection = supervised.close_connection;
         drop(supervised);
@@ -1240,6 +1251,9 @@ fn operation_allowed(ready: bool, operation: &Operation) -> bool {
 struct SupervisedResponse {
     response: Response,
     close_connection: bool,
+    /// True when the client disconnected before the operation completed, so no
+    /// response should be written.
+    abandoned: bool,
     _profile_permit: Option<profile_work::Permit>,
 }
 
@@ -1248,11 +1262,44 @@ struct WorkerCompletion {
     profile_permit: profile_work::Permit,
 }
 
+/// Waits for the peer to close `stream`. Peeking distinguishes a closed
+/// connection from pipelined request data without consuming that data. If
+/// pipelined data is present, this future remains pending and the operation uses
+/// its normal deadline.
+async fn connection_closed(stream: &mut tokio::net::UnixStream) {
+    loop {
+        match stream.ready(tokio::io::Interest::READABLE).await {
+            Ok(ready) if ready.is_read_closed() => return,
+            Ok(_) => {}
+            Err(_) => return,
+        }
+        let peeked = stream.try_io(tokio::io::Interest::READABLE, || {
+            let mut byte = [0_u8];
+            rustix::net::recv(&*stream, &mut byte[..], rustix::net::RecvFlags::PEEK)
+                .map(|(_, length)| length)
+                .map_err(std::io::Error::from)
+        });
+        match peeked {
+            Ok(0) => return,
+            // try_io clears cached readiness on WouldBlock, so a later close
+            // will wake the next wait instead of disabling this watcher.
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return,
+            Ok(_) => break,
+        }
+    }
+    std::future::pending().await
+}
+
 async fn supervise_blocking(
     request_id: u64,
     permit: OwnedSemaphorePermit,
     profile_permit: profile_work::Permit,
     timeout: Duration,
+    // For cancellable reads, monitors client disconnection while the operation
+    // runs. `None` applies only the operation deadline.
+    abandonment: Option<&mut tokio::net::UnixStream>,
     operation: impl FnOnce(CancellationToken) -> Response + Send + 'static,
 ) -> SupervisedResponse {
     let cancellation = CancellationToken::new();
@@ -1265,10 +1312,46 @@ async fn supervise_blocking(
             profile_permit,
         }
     });
-    match tokio::time::timeout(timeout, &mut task).await {
+    let completed = async {
+        match abandonment {
+            Some(stream) => {
+                tokio::select! {
+                    biased;
+                    result = tokio::time::timeout(timeout, &mut task) => Some(result),
+                    () = connection_closed(stream) => None,
+                }
+            }
+            None => Some(tokio::time::timeout(timeout, &mut task).await),
+        }
+    }
+    .await;
+    let Some(completed) = completed else {
+        cancellation.cancel();
+        // Allow the standard cancellation grace period for the worker to release
+        // profile admission and session resources. The timeout prevents an
+        // unresponsive worker from blocking the request loop.
+        let profile_permit = match tokio::time::timeout(CANCELLATION_GRACE, &mut task).await {
+            Ok(Ok(completion)) => Some(completion.profile_permit),
+            Ok(Err(_)) | Err(_) => None,
+        };
+        return SupervisedResponse {
+            // Construct a response to preserve the common result type; the caller
+            // does not write it because the socket is closed.
+            response: Response::error(
+                request_id,
+                ErrorCode::OperationFailed,
+                "agent request abandoned by its client",
+            ),
+            close_connection: true,
+            abandoned: true,
+            _profile_permit: profile_permit,
+        };
+    };
+    match completed {
         Ok(Ok(completion)) => SupervisedResponse {
             response: completion.response,
             close_connection: false,
+            abandoned: false,
             _profile_permit: Some(completion.profile_permit),
         },
         Ok(Err(error)) => SupervisedResponse {
@@ -1278,6 +1361,7 @@ async fn supervise_blocking(
                 format!("agent worker failed: {error}"),
             ),
             close_connection: true,
+            abandoned: false,
             _profile_permit: None,
         },
         Err(_) => {
@@ -1296,6 +1380,7 @@ async fn supervise_blocking(
                     "agent operation deadline exceeded; connection closed because completion is ambiguous",
                 ),
                 close_connection: true,
+                abandoned: false,
                 _profile_permit: profile_permit,
             }
         }
@@ -7043,6 +7128,7 @@ mod tests {
             permit,
             profile_permit,
             Duration::from_millis(20),
+            None,
             move |cancellation| {
                 while !cancellation.is_cancelled() {
                     std::thread::sleep(Duration::from_millis(1));
@@ -7053,6 +7139,7 @@ mod tests {
         )
         .await;
 
+        assert!(!result.abandoned);
         assert!(result.close_connection);
         assert!(matches!(
             result.response.result,
@@ -7107,6 +7194,7 @@ mod tests {
             worker_permit,
             profile_permit,
             Duration::from_secs(1),
+            None,
             |_| Response::success(8, serde_json::json!({ "ok": true })),
         )
         .await;
@@ -7429,6 +7517,7 @@ mod tests {
             permit,
             profile_permit,
             Duration::from_millis(20),
+            None,
             move |_| {
                 entered.send(()).unwrap();
                 held.recv().unwrap();
@@ -7457,6 +7546,163 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(workers.available_permits(), 1);
+    }
+
+    /// A client that retires a read drops its connection. Until the agent
+    /// observes that, the request holds this profile's admission and the
+    /// request behind it waits for a reply nobody will read.
+    #[tokio::test]
+    async fn an_abandoned_read_releases_its_profile_before_its_deadline() {
+        let workers = Arc::new(Semaphore::new(1));
+        let coordinator = Arc::new(profile_work::Coordinator::default());
+        let root = Path::new("/abandoned-read-test");
+        let profile_permit = coordinator
+            .try_acquire(root, profile_work::Scope::profile("a"))
+            .unwrap()
+            .unwrap();
+        let permit = workers.clone().acquire_owned().await.unwrap();
+        let (mut agent_side, client_side) = tokio::net::UnixStream::pair().unwrap();
+        let observed = Arc::new(AtomicBool::new(false));
+        let worker_observed = Arc::clone(&observed);
+        let supervised = tokio::spawn(async move {
+            supervise_blocking(
+                11,
+                permit,
+                profile_permit,
+                // Far past what this test waits for: the client's departure
+                // is what ends the request, not the deadline.
+                Duration::from_secs(120),
+                Some(&mut agent_side),
+                move |cancellation| {
+                    while !cancellation.is_cancelled() {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    worker_observed.store(true, Ordering::Release);
+                    Response::success(11, serde_json::json!({ "late": true }))
+                },
+            )
+            .await
+        });
+        drop(client_side);
+        let response = supervised.await.unwrap();
+
+        assert!(response.abandoned);
+        assert!(response.close_connection);
+        assert!(observed.load(Ordering::Acquire));
+        drop(response);
+        // The profile and the worker are free for the request that was
+        // waiting behind this one.
+        assert!(coordinator
+            .try_acquire(root, profile_work::Scope::profile("a"))
+            .unwrap()
+            .is_some());
+        assert_eq!(workers.available_permits(), 1);
+    }
+
+    /// A monitored read completes normally if the client remains connected.
+    #[tokio::test]
+    async fn a_watched_read_whose_client_stays_answers_normally() {
+        let workers = Arc::new(Semaphore::new(1));
+        let coordinator = Arc::new(profile_work::Coordinator::default());
+        let root = Path::new("/watched-read-test");
+        let profile_permit = coordinator
+            .try_acquire(root, profile_work::Scope::profile("a"))
+            .unwrap()
+            .unwrap();
+        let permit = workers.clone().acquire_owned().await.unwrap();
+        let (mut agent_side, client_side) = tokio::net::UnixStream::pair().unwrap();
+        let response = supervise_blocking(
+            12,
+            permit,
+            profile_permit,
+            Duration::from_secs(5),
+            Some(&mut agent_side),
+            |_| Response::success(12, serde_json::json!({ "ok": true })),
+        )
+        .await;
+
+        assert!(!response.abandoned);
+        assert!(!response.close_connection);
+        assert!(matches!(
+            response.response.result,
+            foks_agent_proto::ResponseResult::Success { .. }
+        ));
+        drop(client_side);
+    }
+
+    /// Only an operation that commits nothing is ended when its client
+    /// leaves. A mutation runs to its own conclusion, so its outcome is never
+    /// unknown to the agent that performed it.
+    #[test]
+    fn only_operations_that_commit_nothing_are_abandoned_with_their_client() {
+        use foks_agent_proto::chat::ChatAction;
+        let team = TeamStoreRef {
+            profile: "local".into(),
+            account_alias: "owner".into(),
+            team_alias: "team".into(),
+            team_id: format!("03{}", "11".repeat(32)),
+        };
+        for operation in [
+            Operation::ListKnownStores {
+                profile: "local".into(),
+            },
+            Operation::ListProfileOverview {
+                profile: "local".into(),
+            },
+            Operation::ListTeamMembers {
+                profile: "local".into(),
+                team_alias: "team".into(),
+            },
+            Operation::ListKv {
+                store: foks_agent_proto::AccountStoreRef {
+                    profile: "local".into(),
+                    account_alias: "owner".into(),
+                },
+                cursor: None,
+                limit: 1,
+                fresh: false,
+            },
+            Operation::Chat {
+                store: team.clone(),
+                action: ChatAction::Pending,
+            },
+        ] {
+            assert!(
+                read_cache::operation_is_abandonable(&operation),
+                "expected an abandonable read: {operation:?}"
+            );
+        }
+        for operation in [
+            // Writes, of this user's material or of the server's.
+            Operation::RemoveDevice {
+                profile: "local".into(),
+                signer_alias: "owner".into(),
+                device_id: "00".into(),
+            },
+            Operation::Chat {
+                store: team,
+                action: ChatAction::MarkRead {
+                    channel: "00".repeat(16),
+                    sequence: "1".into(),
+                },
+            },
+            // Host contact that pins trust or renews a lease, which is not
+            // abandoned half-done even though it retains no material.
+            Operation::Probe {
+                profile: "local".into(),
+            },
+            Operation::ReconcileProfile {
+                profile: "local".into(),
+            },
+            Operation::RefreshLease {
+                profile: "local".into(),
+            },
+        ] {
+            assert!(
+                !read_cache::operation_is_abandonable(&operation),
+                "expected an operation that runs to its conclusion: {operation:?}"
+            );
+        }
     }
 
     #[test]

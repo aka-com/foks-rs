@@ -488,6 +488,23 @@ pub(crate) fn operation_leaves_retained_material(operation: &Operation) -> bool 
     }
 }
 
+/// Returns whether an operation may be cancelled after its client disconnects.
+/// Read-only operations may be cancelled to release profile admission and
+/// session resources. Mutations continue because cancelling them could leave
+/// their outcome unknown. Host probes, reconciliation, and lease renewal also
+/// continue because they may pin trust or update server state.
+pub(crate) fn operation_is_abandonable(operation: &Operation) -> bool {
+    if matches!(
+        operation,
+        Operation::Probe { .. }
+            | Operation::ReconcileProfile { .. }
+            | Operation::RefreshLease { .. }
+    ) {
+        return false;
+    }
+    operation_serves_reads(operation) || operation_leaves_retained_material(operation)
+}
+
 /// Whether a failed read earns its one retry: it must have been served
 /// retained material, and the failure must be a refusal of that material. A
 /// read that authenticated for itself gets the answer it was given.

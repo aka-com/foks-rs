@@ -128,6 +128,8 @@ function Harness({
   enabled = true,
   publish,
   expose,
+  retireBoot,
+  awaitBootRead,
 }: {
   bridge: Bridge;
   initial: AgentSnapshot;
@@ -135,6 +137,8 @@ function Harness({
   enabled?: boolean;
   publish(this: void, snapshot: AgentSnapshot): void;
   expose?(this: void, service: DesktopReconciliation): void;
+  retireBoot?(this: void): void;
+  awaitBootRead?(this: void): Promise<void>;
 }) {
   const [snapshot, setSnapshot] = useState(initial);
   const latest = useRef(snapshot);
@@ -146,6 +150,8 @@ function Harness({
     enabled,
     gate,
     clock,
+    retireBoot,
+    awaitBootRead,
     current: () => latest.current,
     publish: (next) => {
       latest.current = next;
@@ -726,6 +732,52 @@ for (const move of ['host', 'probe', 'identity', 'lease'] as const) {
     assert.deepEqual([...new Set(reads)], [moved]);
   });
 }
+
+test('connectivity reconciliation waits for the active boot catalog load', async () => {
+  const data = await fixture(),
+    clock = new Clock();
+  const moved = data.initial.catalogProfiles[0];
+  const reads: string[] = [];
+  const base = unchangedConnectivity(data, 'host', moved);
+  const bridge: Bridge = {
+    ...base,
+    listProfileCatalog: async (profile) => {
+      reads.push(profile);
+      return base.listProfileCatalog(profile);
+    },
+  };
+  let settleBootRead = (): void => undefined;
+  const bootRead = new Promise<void>((resolve) => {
+    settleBootRead = resolve;
+  });
+  let retired = 0;
+  ui.render(
+    createElement(Harness, {
+      ...data,
+      bridge,
+      clock,
+      publish: () => {},
+      retireBoot: () => {
+        retired++;
+      },
+      awaitBootRead: () => bootRead,
+    }),
+  );
+  await clock.advance(0);
+  // The boot catalog load remains active. Connectivity reconciliation must wait
+  // because retiring the load would discard its result without stopping backend
+  // processing.
+  assert.equal(retired, 0);
+  assert.deepEqual(reads, []);
+
+  await ui.act(async () => {
+    settleBootRead();
+    for (let i = 0; i < 100; i++) await Promise.resolve();
+  });
+  await clock.advance(0);
+  assert.ok(retired > 0);
+  assert.deepEqual([...new Set(reads)], [moved]);
+});
 
 test('foreground reconciliation performs one catalog read per unchanged profile', async () => {
   const data = await fixture(),

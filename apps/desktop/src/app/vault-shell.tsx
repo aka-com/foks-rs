@@ -112,6 +112,8 @@ interface VaultShellProps {
   managedProfile?: string | null;
   onLock: () => Promise<boolean>;
   retireBoot: () => void;
+  /** Resolves when the active boot catalog load completes, or immediately if none is running. */
+  awaitBootRead?: () => Promise<void>;
   currentBootSnapshot: () => boolean;
   agentController: AgentLifecycleController;
   maintenanceOwnership: MaintenanceOwnership;
@@ -126,6 +128,7 @@ export function VaultShell({
   managedProfile = null,
   onLock: requestLock,
   retireBoot,
+  awaitBootRead,
   currentBootSnapshot,
   agentController,
   maintenanceOwnership,
@@ -220,6 +223,7 @@ export function VaultShell({
     maintenanceOwnership,
     catalog,
     retireBoot,
+    awaitBootRead,
     locations,
     locationKind: state.location.kind,
     toasts,

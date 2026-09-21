@@ -56,6 +56,7 @@ export function App({
       managedProfile={boot.managedProfile}
       onLock={boot.lockNow}
       retireBoot={boot.retireBoot}
+      awaitBootRead={boot.awaitBootRead}
       currentBootSnapshot={boot.currentBootSnapshot}
       agentController={agentController}
       maintenanceOwnership={boot.maintenanceOwnership}

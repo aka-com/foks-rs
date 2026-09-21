@@ -80,6 +80,16 @@ export function useAppBootstrap(
   const [bootEpoch, setBootEpoch] = useState(0);
   const bootGeneration = useRef(0);
   const publishedBootGeneration = useRef(0);
+  /**
+   * Tracks the active boot catalog load. Retiring a load prevents publication
+   * but does not stop backend processing, which continues to hold profile
+   * admission. Callers that would retire the load should wait for it to finish.
+   */
+  const bootRead = useRef<Promise<void> | null>(null);
+  const awaitBootRead = useCallback(
+    (): Promise<void> => bootRead.current ?? Promise.resolve(),
+    [],
+  );
   const retireBoot = useCallback(() => {
     bootGeneration.current++;
   }, []);
@@ -256,6 +266,11 @@ export function useAppBootstrap(
         // the loading screen says so before the first profile reports.
         setBootProgress({ ready: 0, total: 0 });
         let next: AgentSnapshot;
+        let settleBootRead = (): void => undefined;
+        const reading = new Promise<void>((resolve) => {
+          settleBootRead = resolve;
+        });
+        bootRead.current = reading;
         try {
           next = await loadSnapshot(
             selected,
@@ -278,6 +293,9 @@ export function useAppBootstrap(
           )
             throw error;
           next = emptySnapshot(status);
+        } finally {
+          if (bootRead.current === reading) bootRead.current = null;
+          settleBootRead();
         }
         // Teams granted to an account after its first-run setup are found by
         // the scheduler's discovery job shortly after the shell mounts, not
@@ -419,6 +437,7 @@ export function useAppBootstrap(
     maintenanceOwnership,
     lockNow,
     retireBoot,
+    awaitBootRead,
     currentBootSnapshot,
     unlock,
     retry,

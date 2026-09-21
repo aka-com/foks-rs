@@ -28,7 +28,7 @@ fs2 = { workspace = true }
 getrandom = { workspace = true }
 libc = { workspace = true }
 reqwest = { workspace = true }
-rustix = { workspace = true }
+rustix = { workspace = true, features = ["net"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tokio = { workspace = true }

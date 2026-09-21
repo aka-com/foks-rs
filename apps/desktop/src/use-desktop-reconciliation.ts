@@ -36,6 +36,11 @@ interface Options {
   clock?: ReconciliationClock;
   current(): AgentSnapshot;
   retireBoot?(): void;
+  /**
+   * Resolves when the active boot catalog load completes, or immediately if
+   * none is running. Callers wait here before retiring boot state.
+   */
+  awaitBootRead?(): Promise<void>;
   publish(snapshot: AgentSnapshot, accepted?: boolean): void;
   refresh(): Promise<unknown>;
   metadata(): Promise<void>;
@@ -240,6 +245,12 @@ export function useDesktopReconciliation(
         connectivity: options.bridge.reconcileServer
           ? (name, context) =>
               options.gate.profile(async () => {
+                if (!context.isCurrent()) return;
+                // Wait for the boot catalog load before starting connectivity
+                // reconciliation. Retiring the boot load would discard its result
+                // while backend processing continued to hold profile admission,
+                // delaying the replacement profile load.
+                await live.current.awaitBootRead?.();
                 if (!context.isCurrent()) return;
                 const current = live.current;
                 const before = current

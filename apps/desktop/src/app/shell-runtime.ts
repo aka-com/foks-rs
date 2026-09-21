@@ -32,6 +32,7 @@ export function useShellRuntime({
   maintenanceOwnership,
   catalog,
   retireBoot,
+  awaitBootRead,
   locations,
   locationKind,
   toasts,
@@ -44,6 +45,7 @@ export function useShellRuntime({
   maintenanceOwnership: MaintenanceOwnership;
   catalog: CatalogRuntime;
   retireBoot: () => void;
+  awaitBootRead?: () => Promise<void>;
   locations: LocationStore;
   locationKind: ReturnType<LocationStore['getSnapshot']>['location']['kind'];
   toasts: ToastController;
@@ -258,6 +260,7 @@ export function useShellRuntime({
     enabled: agentLifecycle.state === 'ready' && locationKind !== 'first-run',
     gate: catalogGate,
     retireBoot,
+    awaitBootRead,
     current: () => latestRef.current,
     publish: publishSnapshot,
     refresh: () => refreshSnapshotRef.current(),
