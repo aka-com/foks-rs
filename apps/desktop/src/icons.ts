@@ -22,10 +22,10 @@ import EyeOff from 'lucide/dist/esm/icons/eye-off.mjs';
 import File from 'lucide/dist/esm/icons/file.mjs';
 import Flag from 'lucide/dist/esm/icons/flag.mjs';
 import Folder from 'lucide/dist/esm/icons/folder.mjs';
-import Grid2x2 from 'lucide/dist/esm/icons/grid-2x2.mjs';
 import Info from 'lucide/dist/esm/icons/info.mjs';
 import KeyRound from 'lucide/dist/esm/icons/key-round.mjs';
 import Laptop from 'lucide/dist/esm/icons/laptop.mjs';
+import LayoutGrid from 'lucide/dist/esm/icons/layout-grid.mjs';
 import List from 'lucide/dist/esm/icons/list.mjs';
 import MessageSquare from 'lucide/dist/esm/icons/message-square.mjs';
 import PanelLeftClose from 'lucide/dist/esm/icons/panel-left-close.mjs';
@@ -57,7 +57,7 @@ export const FOKS_ICONS = {
   user: User,
   vault: Vault,
   search: Search,
-  grid: Grid2x2,
+  grid: LayoutGrid,
   chevronDown: ChevronDown,
   info: Info,
   download: Download,
