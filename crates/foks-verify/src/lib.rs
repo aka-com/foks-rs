@@ -953,23 +953,53 @@ mod tests {
             )
         );
 
-        let mut tampered = USER_CHAIN.to_vec();
-        for index in 0..tampered.len() {
-            tampered[index] ^= 1;
-            if let Ok(candidate) = verify_user_chain(
-                &tampered,
-                &uid,
-                &host,
-                advance.authenticated_roots(),
-                &advance,
-            ) {
-                assert_eq!(
-                    candidate, baseline,
-                    "unauthenticated byte {index} changed verified state"
-                );
+        // Every byte of the response is flipped once and the chain verified
+        // again. The flips are independent, so the byte range is split across
+        // the available cores; verified serially, the pass takes minutes.
+        let workers = std::thread::available_parallelism().map_or(1, |count| count.get());
+        let stride = USER_CHAIN.len().div_ceil(workers).max(1);
+        let swept = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            let handles = (0..USER_CHAIN.len())
+                .step_by(stride)
+                .map(|start| {
+                    let (uid, host, advance, baseline, swept) =
+                        (&uid, &host, &advance, &baseline, &swept);
+                    scope.spawn(move || {
+                        let mut tampered = USER_CHAIN.to_vec();
+                        for index in start..(start + stride).min(tampered.len()) {
+                            swept.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            tampered[index] ^= 1;
+                            if let Ok(candidate) = verify_user_chain(
+                                &tampered,
+                                uid,
+                                host,
+                                advance.authenticated_roots(),
+                                advance,
+                            ) {
+                                assert_eq!(
+                                    &candidate, baseline,
+                                    "unauthenticated byte {index} changed verified state"
+                                );
+                            }
+                            tampered[index] ^= 1;
+                        }
+                    })
+                })
+                .collect::<Vec<_>>();
+            for handle in handles {
+                if let Err(payload) = handle.join() {
+                    std::panic::resume_unwind(payload);
+                }
             }
-            tampered[index] ^= 1;
-        }
+        });
+        // The ranges have to partition the fixture: a split that skipped bytes
+        // would still pass every assertion it did run.
+        assert_eq!(
+            swept.load(std::sync::atomic::Ordering::Relaxed),
+            USER_CHAIN.len(),
+            "the mutation sweep did not cover every byte of the chain"
+        );
     }
 
     #[test]
