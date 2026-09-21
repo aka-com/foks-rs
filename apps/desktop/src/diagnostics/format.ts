@@ -98,6 +98,8 @@ interface Stat {
   values: number[];
   last?: number;
   phases: Map<string, number[]>;
+  /** The steps an operation timed inside itself, from its `phases` attr. */
+  steps: Map<string, number[]>;
   flags: Map<string, { yes: number; n: number }>;
   labels: Map<string, number>;
 }
@@ -108,6 +110,7 @@ function stat(): Stat {
     error: 0,
     values: [],
     phases: new Map(),
+    steps: new Map(),
     flags: new Map(),
     labels: new Map(),
   };
@@ -134,6 +137,17 @@ function add(into: Map<string, Stat>, key: string, event: TimingEvent): Stat {
       if (value) flag.yes++;
     } else if (name === 'waited') {
       entry.labels.set(value, (entry.labels.get(value) ?? 0) + 1);
+    } else if (name === 'phases') {
+      // One attribute holds every step the operation measured, as
+      // `name:milliseconds` pairs in the order it ran them.
+      for (const step of value.split(',')) {
+        const [label, milliseconds] = step.split(':');
+        const elapsed = Number(milliseconds);
+        if (!label || !Number.isFinite(elapsed)) continue;
+        let series = entry.steps.get(label);
+        if (!series) entry.steps.set(label, (series = []));
+        series.push(elapsed);
+      }
     }
   }
   return entry;
@@ -311,6 +325,21 @@ export function formatTimings(
       }),
     ),
   ];
+  // An operation that timed itself states where its time went. Only those
+  // operations have steps, so the section is absent when none reported any.
+  const stepped = frequent(ops).filter(([, entry]) => entry.steps.size);
+  if (stepped.length)
+    summaries.push(
+      '--- agent op steps (the agent’s own phases) ---',
+      ...stepped.map(
+        ([op, entry]) =>
+          `${op} ×${entry.n} · ${[...entry.steps]
+            .map(([name, values]) => `${name} p50 ${p(values, 0.5)}`)
+            .join(' · ')}`,
+      ),
+      '',
+    );
+
   const chatLines: string[] = [];
   const chatStat = (name: string) => chat.get(name);
   const polls = chatStat('chat.poll');

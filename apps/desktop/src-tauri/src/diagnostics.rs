@@ -222,6 +222,25 @@ pub fn agent_operation(
             attrs.insert("wait", number(timing.wait_ms));
             attrs.insert("rescope", number(timing.rescope_ms));
         }
+        // The steps an operation measured inside itself go in one attribute
+        // rather than one each: a record's attributes are few and short. A
+        // step that took no measurable time states nothing, and one that
+        // would not fit whole is left out rather than cut mid-number.
+        let mut steps = String::new();
+        for (name, elapsed) in timing.phases.iter().filter(|(_, elapsed)| *elapsed > 0) {
+            let step = format!("{name}:{elapsed}");
+            let separator = usize::from(!steps.is_empty());
+            if steps.len() + separator + step.len() > MAX_TEXT {
+                continue;
+            }
+            if separator > 0 {
+                steps.push(',');
+            }
+            steps.push_str(&step);
+        }
+        if !steps.is_empty() {
+            attrs.insert("phases", TimingValue::Text(steps));
+        }
     }
     TimingEvent {
         at: now_millis(),
@@ -342,5 +361,84 @@ mod tests {
         assert_eq!(busy.outcome, Some("busy"));
         assert_eq!(busy.code.as_deref(), Some("profile-busy"));
         assert!(!serde_json::to_string(&busy).unwrap().contains("private"));
+    }
+
+    #[test]
+    fn an_operation_that_timed_itself_records_its_steps_as_one_attribute() {
+        let label = Label {
+            command: "reconcile_server",
+            scope: Some("personal".to_owned()),
+        };
+        let event = agent_operation(
+            Some(&label),
+            "ReconcileProfile",
+            Duration::from_millis(1_842),
+            outcome_of(Ok(&ResponseResult::Success {
+                value: serde_json::Value::Null,
+            })),
+            Some(&ResponseTiming {
+                body_ms: 1_842,
+                phases: vec![
+                    ("admit".to_owned(), 4),
+                    ("open".to_owned(), 131),
+                    ("host".to_owned(), 1_702),
+                    ("lease".to_owned(), 0),
+                    ("fetch".to_owned(), 221),
+                    ("apply".to_owned(), 37),
+                ],
+                ..ResponseTiming::default()
+            }),
+        );
+        let steps = match &event.attrs["phases"] {
+            TimingValue::Text(text) => text.clone(),
+            other => panic!("the steps were not recorded as text: {other:?}"),
+        };
+        assert_eq!(steps, "admit:4,open:131,host:1702,fetch:221,apply:37");
+        // One attribute, within the bounds a record is held to.
+        assert!(steps.len() <= MAX_TEXT, "the steps do not fit: {steps}");
+        assert_eq!(event.attrs.len(), 8);
+        let log = TimingLog::default();
+        log.record(event);
+        assert_eq!(
+            log.since(0).events[0].attrs["phases"],
+            TimingValue::Text(steps)
+        );
+        // More steps than one attribute holds: the ones that fit are stated
+        // whole, and none is cut mid-number.
+        let many = agent_operation(
+            None,
+            "ReconcileProfile",
+            Duration::from_millis(60_000),
+            outcome_of(Ok(&ResponseResult::Success {
+                value: serde_json::Value::Null,
+            })),
+            Some(&ResponseTiming {
+                phases: (0..8)
+                    .map(|index| (format!("step{index}"), 20_000 + index))
+                    .collect(),
+                ..ResponseTiming::default()
+            }),
+        );
+        let TimingValue::Text(text) = &many.attrs["phases"] else {
+            panic!("the steps were not recorded as text");
+        };
+        assert!(text.len() <= MAX_TEXT, "the steps do not fit: {text}");
+        for step in text.split(',') {
+            let (name, elapsed) = step.split_once(':').expect("a step without its time");
+            assert!(name.starts_with("step"));
+            assert_eq!(elapsed.parse::<u32>().unwrap() / 1_000, 20);
+        }
+        // An operation the request loop timed from the outside states no
+        // steps of its own.
+        let outside = agent_operation(
+            None,
+            "ListKv",
+            Duration::from_millis(3),
+            outcome_of(Ok(&ResponseResult::Success {
+                value: serde_json::Value::Null,
+            })),
+            Some(&ResponseTiming::default()),
+        );
+        assert!(!outside.attrs.contains_key("phases"));
     }
 }

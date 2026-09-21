@@ -24,7 +24,47 @@ fn flight_key(root: &Path, profile: &str, identity: bool) -> FlightKey {
     let revision = None;
     (root.to_owned(), profile.to_owned(), identity, revision)
 }
-type FlightResult = watch::Receiver<Option<ResponseResult>>;
+/// The named steps of one connectivity observation, in the order they ran,
+/// in milliseconds. Carried back with the observation so a readout states
+/// where a reconcile spent its time rather than only how long it took.
+type Phases = Vec<(String, u32)>;
+
+/// Measures the consecutive steps of one observation. A step ends where the
+/// previous one ended, so the steps partition the observation's time; a step
+/// measured inside a worker is added with the duration that worker reported.
+struct Steps {
+    marker: Instant,
+    phases: Phases,
+}
+
+impl Steps {
+    fn new() -> Self {
+        Self {
+            marker: Instant::now(),
+            phases: Phases::new(),
+        }
+    }
+
+    /// Ends the step that began where the previous step ended.
+    fn step(&mut self, name: &str) {
+        let now = Instant::now();
+        let elapsed = now.saturating_duration_since(self.marker);
+        self.marker = now;
+        self.add(name, elapsed);
+    }
+
+    /// Records a step measured elsewhere, leaving the current one running.
+    fn add(&mut self, name: &str, elapsed: Duration) {
+        self.phases
+            .push((name.to_owned(), ResponseTiming::millis(elapsed)));
+    }
+
+    fn into_phases(self) -> Phases {
+        self.phases
+    }
+}
+
+type FlightResult = watch::Receiver<Option<(ResponseResult, Phases)>>;
 static FLIGHTS: OnceLock<Mutex<BTreeMap<FlightKey, FlightResult>>> = OnceLock::new();
 static FETCH_CAPACITY: OnceLock<Arc<Semaphore>> = OnceLock::new();
 const MAX_FLIGHTS: usize = 64;
@@ -108,10 +148,14 @@ fn scoped_error(profile: &str, error: &(dyn std::error::Error + 'static)) -> Res
     result
 }
 
-async fn coalesce<F, Fut>(key: FlightKey, timeout: Duration, work: F) -> ResponseResult
+/// Runs one observation per flight key and answers every caller waiting on
+/// it with that observation and the steps it took. A caller that joined a
+/// flight is answered with the leading observation's steps: they are the
+/// steps of the observation it is given.
+async fn coalesce<F, Fut>(key: FlightKey, timeout: Duration, work: F) -> (ResponseResult, Phases)
 where
     F: FnOnce() -> Fut + Send + 'static,
-    Fut: Future<Output = ResponseResult> + Send + 'static,
+    Fut: Future<Output = (ResponseResult, Phases)> + Send + 'static,
 {
     let mut receiver = {
         let mut flights = FLIGHTS
@@ -122,7 +166,10 @@ where
             receiver.clone()
         } else {
             if flights.len() >= MAX_FLIGHTS {
-                return failure(&key.1, ErrorCode::Busy, "connectivity admission is full");
+                return (
+                    failure(&key.1, ErrorCode::Busy, "connectivity admission is full"),
+                    Phases::new(),
+                );
             }
             let (sender, receiver) = watch::channel(None);
             flights.insert(key.clone(), receiver.clone());
@@ -142,10 +189,13 @@ where
                 return result;
             }
             if receiver.changed().await.is_err() {
-                return failure(
-                    &profile,
-                    ErrorCode::OperationFailed,
-                    "connectivity worker stopped",
+                return (
+                    failure(
+                        &profile,
+                        ErrorCode::OperationFailed,
+                        "connectivity worker stopped",
+                    ),
+                    Phases::new(),
                 );
             }
         }
@@ -153,10 +203,13 @@ where
     tokio::time::timeout(timeout, wait)
         .await
         .unwrap_or_else(|_| {
-            failure(
-                &profile,
-                ErrorCode::DeadlineExceeded,
-                "connectivity observation exceeded its deadline",
+            (
+                failure(
+                    &profile,
+                    ErrorCode::DeadlineExceeded,
+                    "connectivity observation exceeded its deadline",
+                ),
+                Phases::new(),
             )
         })
 }
@@ -167,12 +220,27 @@ pub(super) async fn renew(
     client: reqwest::Client,
     timeout: Duration,
 ) -> ResponseResult {
+    renew_observed(state_dir, profile, client, timeout).await.0
+}
+
+/// The compatibility renewal with the steps it took: reading the profile's
+/// lease snapshot, fetching the signed canary, and applying it.
+async fn renew_observed(
+    state_dir: &Path,
+    profile: &str,
+    client: reqwest::Client,
+    timeout: Duration,
+) -> (ResponseResult, Phases) {
     let root = state_dir.to_owned();
     let profile = profile.to_owned();
     coalesce(
         flight_key(&root, &profile, false),
         timeout,
-        move || async move { renew_one(&root, &profile, &client, timeout).await },
+        move || async move {
+            let mut steps = Steps::new();
+            let result = renew_one(&root, &profile, &client, timeout, &mut steps).await;
+            (result, steps.into_phases())
+        },
     )
     .await
 }
@@ -182,11 +250,13 @@ async fn renew_one(
     profile: &str,
     client: &reqwest::Client,
     timeout: Duration,
+    steps: &mut Steps,
 ) -> ResponseResult {
     let started = Instant::now();
     let capacity = FETCH_CAPACITY.get_or_init(|| Arc::new(Semaphore::new(MAXIMUM_CANARY_FETCHES)));
     let Ok(Ok(worker)) = tokio::time::timeout(timeout, capacity.clone().acquire_owned()).await
     else {
+        steps.step("lease");
         return failure(
             profile,
             ErrorCode::Busy,
@@ -202,7 +272,10 @@ async fn renew_one(
         .await
     {
         Ok(permit) => permit,
-        Err(error) => return scoped_error(profile, &error),
+        Err(error) => {
+            steps.step("lease");
+            return scoped_error(profile, &error);
+        }
     };
     let snapshot_root = root.to_owned();
     let snapshot_profile = profile.to_owned();
@@ -215,6 +288,10 @@ async fn renew_one(
         (snapshot, worker)
     })
     .await;
+    // Waiting for a fetch worker and for registry admission, then reading
+    // the profile's renewal snapshot. The half states this step however it
+    // ends, so what it waited on is never left out of the observation.
+    steps.step("lease");
     let (snapshot, worker) = match snapshot {
         Ok((Ok(Some(snapshot)), worker)) => (snapshot, worker),
         Ok((Ok(None), _)) => return success("not-required"),
@@ -227,12 +304,13 @@ async fn renew_one(
             )
         }
     };
-    let bytes = match tokio::time::timeout(
+    let fetched = tokio::time::timeout(
         timeout.saturating_sub(started.elapsed()),
         fetch_canary(client, snapshot.url()),
     )
-    .await
-    {
+    .await;
+    steps.step("fetch");
+    let bytes = match fetched {
         Ok(Ok(bytes)) => bytes,
         Err(_)
         | Ok(Err(LeaseFetchError::Transport | LeaseFetchError::Status(408 | 429 | 500..=599))) => {
@@ -287,6 +365,9 @@ async fn renew_one(
         snapshot.apply(&signed, now)
     })
     .await;
+    // Parsing the signed artifact, waiting for the profile's admission and
+    // applying the artifact to the profile's local state.
+    steps.step("apply");
     let applied = match applied {
         Ok(result) => result,
         Err(_) => {
@@ -366,72 +447,92 @@ fn identity_network_budget(remaining: Duration) -> Duration {
     remaining.min(IDENTITY_NETWORK_BUDGET)
 }
 
+/// The identity check with the steps it took: waiting for the profile's
+/// admission and a worker, opening the profile's session, and the round trip
+/// that reconciles the saved host.
 async fn identity(
     root: &Path,
     profile: &str,
     timeout: Duration,
     network_budget: Duration,
     workers: Arc<Semaphore>,
-) -> ResponseResult {
+) -> (ResponseResult, Phases) {
     let root = root.to_owned();
     let profile = profile.to_owned();
     coalesce(
         flight_key(&root, &profile, true),
         timeout,
         move || async move {
+            let mut steps = Steps::new();
             let started = Instant::now();
             let admission = match profile_work::coordinator()
                 .acquire(&root, profile_work::Scope::profile(&profile), timeout)
                 .await
             {
                 Ok(permit) => permit,
-                Err(error) => return scoped_error(&profile, &error),
+                Err(error) => {
+                    steps.step("admit");
+                    return (scoped_error(&profile, &error), steps.into_phases());
+                }
             };
             let remaining = timeout.saturating_sub(started.elapsed());
             let worker = match tokio::time::timeout(remaining, workers.acquire_owned()).await {
                 Ok(Ok(worker)) => worker,
                 _ => {
-                    return failure(
-                        &profile,
-                        ErrorCode::Busy,
-                        "connectivity worker capacity timed out",
-                    )
+                    steps.step("admit");
+                    return (
+                        failure(
+                            &profile,
+                            ErrorCode::Busy,
+                            "connectivity worker capacity timed out",
+                        ),
+                        steps.into_phases(),
+                    );
                 }
             };
+            steps.step("admit");
             let fallback = profile.clone();
-            tokio::task::spawn_blocking(move || {
+            let observed = tokio::task::spawn_blocking(move || {
                 let _admission = admission;
                 let _worker = worker;
                 let remaining = timeout.saturating_sub(started.elapsed());
                 let cancellation = CancellationToken::new();
-                let result = foks_keystore::without_user_interaction(|| {
-                    profile_work::with_control(remaining, cancellation.clone(), || {
-                        let registry = read_registry_snapshot(started, timeout, || {
-                            ProfileRegistry::try_open(&root)
-                        })?;
-                        // The shared base client's pool validates an idle
-                        // connection at checkout by peeking the socket, so a
-                        // peer that has gone away is discarded rather than
-                        // reported here as a reachable server.
-                        let session = crate::read_cache::open_profile_session(
-                            &registry,
-                            &profile,
-                            timeout.saturating_sub(started.elapsed()),
-                            cancellation,
-                        )?;
-                        let credentials = ClientCredentials::open(&root)?;
-                        checked_session(&credentials, &session, |session| {
-                            session
-                                .reconcile_saved_host_with_timeout(
-                                    timeout
-                                        .saturating_sub(started.elapsed())
-                                        .min(network_budget),
-                                )
-                                .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
+                let body = Instant::now();
+                let (result, phases) = profile_work::with_phase_timing(|| {
+                    foks_keystore::without_user_interaction(|| {
+                        profile_work::with_control(remaining, cancellation.clone(), || {
+                            let registry = read_registry_snapshot(started, timeout, || {
+                                ProfileRegistry::try_open(&root)
+                            })?;
+                            // The shared base client's pool validates an idle
+                            // connection at checkout by peeking the socket, so a
+                            // peer that has gone away is discarded rather than
+                            // reported here as a reachable server.
+                            let session = crate::read_cache::open_profile_session(
+                                &registry,
+                                &profile,
+                                timeout.saturating_sub(started.elapsed()),
+                                cancellation,
+                            )?;
+                            let credentials = ClientCredentials::open(&root)?;
+                            checked_session(&credentials, &session, |session| {
+                                session
+                                    .reconcile_saved_host_with_timeout(
+                                        timeout
+                                            .saturating_sub(started.elapsed())
+                                            .min(network_budget),
+                                    )
+                                    .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
+                            })
                         })
                     })
                 });
-                match result {
+                // Opening the session, and any wait for the profile's file
+                // lock against another process, are what the request's own
+                // phase accumulator counted; the rest of the worker is the
+                // round trip to the server.
+                let elapsed = body.elapsed();
+                let result = match result {
                     Ok((host_id, configured_probe)) => {
                         Response::success(
                             0,
@@ -444,38 +545,68 @@ async fn identity(
                         .result
                     }
                     Err(error) => identity_error(&profile, error.as_ref()),
-                }
-            })
-            .await
-            .unwrap_or_else(|_| {
-                failure(
-                    &fallback,
-                    ErrorCode::OperationFailed,
-                    "identity worker stopped",
+                };
+                (
+                    result,
+                    phases.session,
+                    phases.lock,
+                    elapsed
+                        .saturating_sub(phases.session)
+                        .saturating_sub(phases.lock),
                 )
             })
+            .await;
+            match observed {
+                Ok((result, opened, locked, host)) => {
+                    steps.add("open", opened);
+                    // Only a contended profile waits for the file lock, and
+                    // a step that did not happen is not worth a name.
+                    if !locked.is_zero() {
+                        steps.add("lock", locked);
+                    }
+                    steps.add("host", host);
+                    (result, steps.into_phases())
+                }
+                Err(_) => (
+                    failure(
+                        &fallback,
+                        ErrorCode::OperationFailed,
+                        "identity worker stopped",
+                    ),
+                    steps.into_phases(),
+                ),
+            }
         },
     )
     .await
 }
 
+/// Observes one profile's server: its identity and its compatibility lease,
+/// concurrently. The response carries the steps both halves took, so a
+/// readout states where an observation that took seconds spent them. The
+/// halves run at the same time, so their steps do not add up to the
+/// observation's own duration.
 pub(super) async fn reconcile(
     root: &Path,
     profile: &str,
     timeout: Duration,
     workers: Arc<Semaphore>,
-) -> serde_json::Value {
+) -> (serde_json::Value, ResponseTiming) {
+    let started = Instant::now();
     let compatibility = async {
         match compatibility_http_client(timeout) {
-            Ok(client) => renew(root, profile, client, timeout).await,
-            Err(_) => failure(
-                profile,
-                ErrorCode::OperationFailed,
-                "compatibility transport could not be initialized",
+            Ok(client) => renew_observed(root, profile, client, timeout).await,
+            Err(_) => (
+                failure(
+                    profile,
+                    ErrorCode::OperationFailed,
+                    "compatibility transport could not be initialized",
+                ),
+                Phases::new(),
             ),
         }
     };
-    let (identity, compatibility) = tokio::join!(
+    let ((identity, identity_phases), (compatibility, compatibility_phases)) = tokio::join!(
         identity(
             root,
             profile,
@@ -485,7 +616,21 @@ pub(super) async fn reconcile(
         ),
         compatibility
     );
-    serde_json::json!({"profile": profile, "identity": identity, "compatibility": compatibility})
+    let mut phases = identity_phases;
+    phases.extend(compatibility_phases);
+    let timing = ResponseTiming {
+        body_ms: ResponseTiming::millis(started.elapsed()),
+        phases,
+        ..ResponseTiming::default()
+    };
+    (
+        serde_json::json!({
+            "profile": profile,
+            "identity": identity,
+            "compatibility": compatibility,
+        }),
+        timing,
+    )
 }
 
 #[cfg(test)]
@@ -564,7 +709,7 @@ mod tests {
             accepted = listener.accept() => accepted.unwrap().0,
             result = &mut request => panic!("identity never reached the stalled server: {result:?}"),
         };
-        let result = tokio::time::timeout(Duration::from_secs(2), request)
+        let (result, phases) = tokio::time::timeout(Duration::from_secs(2), request)
             .await
             .expect("identity exceeded its network budget");
         assert!(matches!(
@@ -574,6 +719,24 @@ mod tests {
                 ..
             }
         ));
+        // The steps say where the check stopped: waiting on the server, not
+        // on admission or on opening the profile.
+        assert_eq!(
+            phases
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["admit", "open", "host"]
+        );
+        let step = |name: &str| {
+            phases
+                .iter()
+                .find(|(step, _)| step == name)
+                .map(|(_, ms)| *ms)
+                .unwrap()
+        };
+        assert!(step("host") >= 400, "identity phases: {phases:?}");
+        assert!(step("admit") < 400, "identity phases: {phases:?}");
         assert_eq!(workers.available_permits(), 1);
         let permit = profile_work::coordinator()
             .acquire(
@@ -609,14 +772,57 @@ mod tests {
             "identity stopped while waiting for the local lock: {waiting:?}"
         );
         assert_eq!(available_workers, 0);
-        let result = tokio::time::timeout(Duration::from_secs(2), request)
+        let (result, phases) = tokio::time::timeout(Duration::from_secs(2), request)
             .await
             .expect("identity did not resume after the local lock was released");
         let ResponseResult::Success { value } = result else {
             panic!("identity failed after waiting for the local lock: {result:?}");
         };
         assert_eq!(value["status"], "connected");
+        // A wait on another process's lock is its own step, so a readout
+        // does not read it as time spent talking to the server.
+        let locked = phases
+            .iter()
+            .find(|(name, _)| name == "lock")
+            .map(|(_, ms)| *ms)
+            .unwrap_or_default();
+        assert!(locked >= 500, "identity phases: {phases:?}");
         assert_eq!(workers.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_reconcile_states_the_steps_of_both_halves() {
+        let (_environment, _server, root) = saved_identity_profile();
+        let (value, timing) = reconcile(
+            &root,
+            "saved",
+            Duration::from_secs(10),
+            Arc::new(Semaphore::new(1)),
+        )
+        .await;
+        assert_eq!(value["identity"]["value"]["status"], "connected");
+        let names = timing
+            .phases
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>();
+        // The identity check's steps first, then the compatibility half's.
+        // This profile carries no hosted lease, so that half ends at the
+        // step that read its renewal snapshot, whatever that read answered.
+        assert_eq!(names.first().copied(), Some("admit"));
+        assert_eq!(names.last().copied(), Some("lease"));
+        for step in ["open", "host"] {
+            assert!(names.contains(&step), "reconcile phases: {names:?}");
+        }
+        let total: u32 = timing.phases.iter().map(|(_, ms)| *ms).sum();
+        // The two halves run at the same time, so the steps together cover
+        // at least what the observation took.
+        assert!(
+            timing.body_ms <= total + 500,
+            "reconcile phases {:?} do not account for {}ms",
+            timing.phases,
+            timing.body_ms
+        );
     }
 
     #[test]
@@ -814,7 +1020,7 @@ mod tests {
                         release.acquire().await.unwrap().forget();
                         drop(permit);
                         finished.send(()).unwrap();
-                        success("unchanged")
+                        (success("unchanged"), Phases::new())
                     })
                     .await;
                 }
@@ -869,7 +1075,7 @@ mod tests {
             coalesce(first_key, Duration::from_secs(5), move || async move {
                 first_started.notify_one();
                 first_release.notified().await;
-                success("renewed")
+                (success("renewed"), vec![("fetch".to_owned(), 7)])
             })
             .await
         });
@@ -883,6 +1089,9 @@ mod tests {
         };
         let (second, _) = tokio::join!(second, releaser);
         assert_eq!(first.await.unwrap(), second);
+        // The caller that joined the flight is answered with the steps of
+        // the observation it is given, not with none of its own.
+        assert_eq!(second.1, [("fetch".to_owned(), 7)]);
     }
 
     #[tokio::test]
@@ -893,16 +1102,18 @@ mod tests {
         let worker_release = release.clone();
         let first = coalesce(key.clone(), Duration::from_millis(10), move || async move {
             worker_release.notified().await;
-            success("renewed")
+            (success("renewed"), Phases::new())
         })
         .await;
         assert!(matches!(
-            first,
+            first.0,
             ResponseResult::Error {
                 code: ErrorCode::DeadlineExceeded,
                 ..
             }
         ));
+        // A caller that gave up on the flight measured no steps of its own.
+        assert!(first.1.is_empty());
         let second = coalesce(key, Duration::from_secs(5), || async {
             panic!("active flight was replaced")
         });
@@ -911,7 +1122,7 @@ mod tests {
             release.notify_one();
         };
         let (result, _) = tokio::join!(second, releaser);
-        assert_eq!(result, success("renewed"));
+        assert_eq!(result.0, success("renewed"));
     }
 
     #[tokio::test]
@@ -928,7 +1139,7 @@ mod tests {
                 trust: TrustRoot::WebPki,
             })
             .unwrap();
-        let result = reconcile(
+        let (result, timing) = reconcile(
             directory.path(),
             "saved",
             Duration::from_secs(5),
@@ -939,6 +1150,17 @@ mod tests {
         assert_eq!(result["identity"]["fields"]["profile"], "saved");
         assert_eq!(result["compatibility"]["value"]["status"], "not-required");
         assert_eq!(result["profile"], "saved");
+        // An observation states the steps of both halves even when it fails:
+        // the identity check reached the saved host, and the compatibility
+        // half stopped at the profile's renewal snapshot.
+        assert_eq!(
+            timing
+                .phases
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["admit", "open", "host", "lease"]
+        );
     }
 
     #[test]

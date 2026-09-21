@@ -2097,6 +2097,12 @@ pub struct ResponseTiming {
     pub wait_ms: u32,
     #[serde(default)]
     pub rescope_ms: u32,
+    /// The named steps of an operation that times itself, in the order the
+    /// operation ran them, in milliseconds. Only operations measured from
+    /// the inside fill it; the names are the operation's own, fixed and
+    /// short, and name no request field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub phases: Vec<(String, u32)>,
 }
 
 impl ResponseTiming {
@@ -2330,7 +2336,23 @@ mod tests {
         let encoded = serde_json::to_value(&timed).unwrap();
         assert_eq!(encoded["timing"]["queue_ms"], 3);
         assert_eq!(encoded["timing"]["waited_behind"], "security-root");
+        // An operation the request loop timed from the outside states no
+        // steps, and the field is left off the wire entirely.
+        assert!(encoded["timing"].get("phases").is_none());
         assert_eq!(serde_json::from_value::<Response>(encoded).unwrap(), timed);
+        let stepped = Response::success(7, serde_json::json!(1)).with_timing(ResponseTiming {
+            phases: vec![("host".to_owned(), 1_702), ("fetch".to_owned(), 221)],
+            ..ResponseTiming::default()
+        });
+        let encoded = serde_json::to_value(&stepped).unwrap();
+        assert_eq!(
+            encoded["timing"]["phases"],
+            serde_json::json!([["host", 1_702], ["fetch", 221]])
+        );
+        assert_eq!(
+            serde_json::from_value::<Response>(encoded).unwrap(),
+            stepped
+        );
         // A timing with a field this build does not know still decodes.
         let newer = serde_json::json!({ "version": PROTOCOL_VERSION, "id": 7, "status": "success", "value": 1, "timing": { "queue_ms": 1, "future_ms": 2 } });
         assert_eq!(

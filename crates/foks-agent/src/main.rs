@@ -805,10 +805,15 @@ async fn handle_connection(
             }
         }
         if let Operation::ReconcileProfile { profile } = &request.operation {
-            let value =
+            let (value, timing) =
                 connectivity::reconcile(&state_dir, profile, timeout, capacity.blocking.clone())
                     .await;
-            write_response(&mut stream, &Response::success(request.id, value), timeout).await?;
+            write_response(
+                &mut stream,
+                &Response::success(request.id, value).with_timing(timing),
+                timeout,
+            )
+            .await?;
             continue;
         }
         if let Operation::RefreshLease { profile } = &request.operation {
