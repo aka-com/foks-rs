@@ -702,6 +702,8 @@ impl FoksClient {
             rotations,
             no_passphrase.is_some(),
         )?;
+        // Only a retried attempt returns one, and it carries the Merkle
+        // position the annex was actually built against.
         if let Some(refreshed) = refreshed {
             authenticated = refreshed;
         }
@@ -1488,6 +1490,19 @@ impl FoksClient {
         Ok(updated)
     }
 
+    /// Builds the PPE annex a rotation that touches the owner PUK must carry,
+    /// and the outcome it was built against when that is no longer the
+    /// caller's own.
+    ///
+    /// The first attempt reuses the caller's outcome: every caller produces it
+    /// immediately before this call and performs no request in between, so
+    /// authenticating again could only restate it. A retry does authenticate
+    /// again, because the errors this loop retries are exactly the ones a
+    /// stale Merkle position produces: the settings read below checks the
+    /// outcome's tree root against the root it advances to, so an outcome
+    /// held fixed across attempts would fail every attempt identically and
+    /// turn a recoverable move into a failure. The identity chain must still
+    /// be the one the caller signed for, which is what the guard asserts.
     fn owner_passphrase_rotation_annex(
         &self,
         host: &PinnedHost,
@@ -1505,19 +1520,28 @@ impl FoksClient {
         else {
             return Ok((None, None));
         };
+        let mut first_attempt = true;
         self.retry_chain_load(host, |current_host| {
-        let fresh = self.authenticate_and_pin(current_host, credential)?;
-        if fresh.verified.chain_seqno() != authenticated.verified.chain_seqno()
-            || fresh.verified.chain_tail_hash() != authenticated.verified.chain_tail_hash()
-        {
-            return Err(Error::UserBinding(
-                "user chain changed while preparing the passphrase annex",
-            ));
-        }
+            // The outcome is not `Clone`, so the retry's own is held here and
+            // handed back by move at whichever return the attempt reaches.
+            let refreshed = if std::mem::take(&mut first_attempt) {
+                None
+            } else {
+                let fresh = self.authenticate_and_pin(current_host, credential)?;
+                if fresh.verified.chain_seqno() != authenticated.verified.chain_seqno()
+                    || fresh.verified.chain_tail_hash() != authenticated.verified.chain_tail_hash()
+                {
+                    return Err(Error::UserBinding(
+                        "user chain changed while preparing the passphrase annex",
+                    ));
+                }
+                Some(fresh)
+            };
+            let authenticated = refreshed.as_ref().unwrap_or(authenticated);
             let (_, authenticated_settings, _) = self.authenticated_user_settings(
                 current_host,
                 credential,
-                &fresh.verified,
+                &authenticated.verified,
             )?;
         let parcel = match self.fetch_ppe_parcel(current_host, credential) {
             Ok(_) if confirmed_no_passphrase => {
@@ -1538,7 +1562,7 @@ impl FoksClient {
                         "owner PUK rotation needs a trusted local no-passphrase attestation",
                     ));
                 }
-                return Ok((None, Some(fresh)));
+                return Ok((None, refreshed));
             }
             Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
                 code: foks_rpc::STATUS_PASSPHRASE_NOT_FOUND_ERROR,
@@ -1573,7 +1597,7 @@ impl FoksClient {
         Ok((Some(self.with_user_settings_link(
             current_host,
             credential,
-            &fresh,
+            authenticated,
             update.argument(),
             Some(&parcel),
             crate::passphrase::PassphrasePukTarget::FutureOwner {
@@ -1581,10 +1605,15 @@ impl FoksClient {
                 new_seed: &owner.new_seed,
                 new_generation: owner_generation,
             },
-        )?), Some(fresh)))
+        )?), refreshed))
         })
     }
 
+    /// Hardware-backed [`Self::owner_passphrase_rotation_annex`]. The same
+    /// empty window applies to the first attempt, which is what spares the
+    /// card a second operation; a retry pays for one, because a retry means
+    /// the position the caller's outcome was verified at is no longer the
+    /// one the settings read checks against.
     fn owner_passphrase_rotation_annex_yubi(
         &self,
         host: &PinnedHost,
@@ -1602,19 +1631,28 @@ impl FoksClient {
         else {
             return Ok((None, None));
         };
+        let mut first_attempt = true;
         self.retry_chain_load(host, |current_host| {
-            let fresh = self.authenticate_yubi_and_pin(current_host, credential)?;
-            if fresh.verified.chain_seqno() != authenticated.verified.chain_seqno()
-                || fresh.verified.chain_tail_hash() != authenticated.verified.chain_tail_hash()
-            {
-                return Err(Error::UserBinding(
-                    "user chain changed while preparing the passphrase annex",
-                ));
-            }
+            // The outcome is not `Clone`, so the retry's own is held here and
+            // handed back by move at whichever return the attempt reaches.
+            let refreshed = if std::mem::take(&mut first_attempt) {
+                None
+            } else {
+                let fresh = self.authenticate_yubi_and_pin(current_host, credential)?;
+                if fresh.verified.chain_seqno() != authenticated.verified.chain_seqno()
+                    || fresh.verified.chain_tail_hash() != authenticated.verified.chain_tail_hash()
+                {
+                    return Err(Error::UserBinding(
+                        "user chain changed while preparing the passphrase annex",
+                    ));
+                }
+                Some(fresh)
+            };
+            let authenticated = refreshed.as_ref().unwrap_or(authenticated);
             let (_, authenticated_settings, _) = self.authenticated_user_settings_yubi(
                 current_host,
                 credential,
-                &fresh.verified,
+                &authenticated.verified,
             )?;
             let parcel = match self.fetch_ppe_parcel_yubi(current_host, credential) {
                 Ok(_) if confirmed_no_passphrase => {
@@ -1637,7 +1675,7 @@ impl FoksClient {
                             "owner PUK rotation needs a trusted local no-passphrase attestation",
                         ));
                     }
-                    return Ok((None, Some(fresh)));
+                    return Ok((None, refreshed));
                 }
                 Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
                     code: foks_rpc::STATUS_PASSPHRASE_NOT_FOUND_ERROR,
@@ -1673,7 +1711,7 @@ impl FoksClient {
                 Some(self.with_user_settings_link_yubi(
                     current_host,
                     credential,
-                    &fresh,
+                    authenticated,
                     update.argument(),
                     Some(&parcel),
                     crate::passphrase::PassphrasePukTarget::FutureOwner {
@@ -1682,7 +1720,7 @@ impl FoksClient {
                         new_generation: owner_generation,
                     },
                 )?),
-                Some(fresh),
+                refreshed,
             ))
         })
     }

@@ -1014,12 +1014,12 @@ impl CheckedProfileSession<'_> {
         self.profile.require(Capability::Passphrases)?;
         let loaded = vault.account(alias)?;
         let host = self.pinned_host()?;
-        let metadata = self
-            .client
-            .set_passphrase(&host, &loaded.credential, &passphrase)?;
-        let verification = self
-            .client
-            .verify_passphrase(&host, &loaded.credential, &passphrase)?;
+        // The write already read the committed parcel back and validated it
+        // against the argument it signed, so the confirmation here is the
+        // server login assertion alone.
+        let (metadata, verification) =
+            self.client
+                .set_passphrase_verified(&host, &loaded.credential, &passphrase)?;
         PassphraseReport::from_verified(metadata, verification)
     }
 
@@ -1032,12 +1032,9 @@ impl CheckedProfileSession<'_> {
         self.profile.require(Capability::Passphrases)?;
         let loaded = vault.account(alias)?;
         let host = self.pinned_host()?;
-        let metadata = self
-            .client
-            .change_passphrase(&host, &loaded.credential, &passphrase)?;
-        let verification = self
-            .client
-            .verify_passphrase(&host, &loaded.credential, &passphrase)?;
+        let (metadata, verification) =
+            self.client
+                .change_passphrase_verified(&host, &loaded.credential, &passphrase)?;
         PassphraseReport::from_verified(metadata, verification)
     }
 

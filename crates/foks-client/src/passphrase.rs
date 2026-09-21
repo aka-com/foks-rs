@@ -112,6 +112,37 @@ impl FoksClient {
         credential: &DeviceCredential,
         passphrase: &Passphrase,
     ) -> Result<PassphraseMetadata> {
+        let (_, stored) = self.write_passphrase_enrollment(host, credential, passphrase)?;
+        Ok(metadata(&stored))
+    }
+
+    /// [`Self::set_passphrase`] followed by the public login assertion,
+    /// reusing the parcel the write read back and the outcome it
+    /// authenticated instead of running a second full verification.
+    pub fn set_passphrase_verified(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        passphrase: &Passphrase,
+    ) -> Result<(PassphraseMetadata, PassphraseVerification)> {
+        let (authenticated, stored) =
+            self.write_passphrase_enrollment(host, credential, passphrase)?;
+        let verification = self.verify_committed_passphrase(
+            host,
+            &credential.uid,
+            &authenticated,
+            passphrase,
+            &stored,
+        )?;
+        Ok((metadata(&stored), verification))
+    }
+
+    fn write_passphrase_enrollment(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        passphrase: &Passphrase,
+    ) -> Result<(crate::AuthenticatedUserOutcome, PpeParcel)> {
         let authenticated = self.authenticate_and_pin(host, credential)?;
         let owner = current_owner_puk(&authenticated)?;
         let stretch = self.authenticated_stretch_version(host, credential)?;
@@ -146,7 +177,7 @@ impl FoksClient {
             encode_set_passphrase_request(&argument)?,
             &argument,
         )?;
-        Ok(metadata(&stored))
+        Ok((authenticated, stored))
     }
 
     pub fn set_passphrase_yubi(
@@ -155,6 +186,35 @@ impl FoksClient {
         credential: &YubiCredential<'_>,
         passphrase: &Passphrase,
     ) -> Result<PassphraseMetadata> {
+        let (_, stored) = self.write_passphrase_enrollment_yubi(host, credential, passphrase)?;
+        Ok(metadata(&stored))
+    }
+
+    /// Hardware-backed [`Self::set_passphrase_verified`].
+    pub fn set_passphrase_yubi_verified(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+        passphrase: &Passphrase,
+    ) -> Result<(PassphraseMetadata, PassphraseVerification)> {
+        let (authenticated, stored) =
+            self.write_passphrase_enrollment_yubi(host, credential, passphrase)?;
+        let verification = self.verify_committed_passphrase(
+            host,
+            &credential.uid,
+            &authenticated,
+            passphrase,
+            &stored,
+        )?;
+        Ok((metadata(&stored), verification))
+    }
+
+    fn write_passphrase_enrollment_yubi(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+        passphrase: &Passphrase,
+    ) -> Result<(crate::AuthenticatedUserOutcome, PpeParcel)> {
         let authenticated = self.authenticate_yubi_and_pin(host, credential)?;
         let owner = current_owner_puk(&authenticated)?;
         let stretch = self.authenticated_stretch_version_yubi(host, credential)?;
@@ -189,7 +249,7 @@ impl FoksClient {
             encode_set_passphrase_request(&argument)?,
             &argument,
         )?;
-        Ok(metadata(&stored))
+        Ok((authenticated, stored))
     }
 
     pub fn change_passphrase(
@@ -198,6 +258,37 @@ impl FoksClient {
         credential: &DeviceCredential,
         new_passphrase: &Passphrase,
     ) -> Result<PassphraseMetadata> {
+        let (_, stored) = self.write_passphrase_change(host, credential, new_passphrase)?;
+        Ok(metadata(&stored))
+    }
+
+    /// [`Self::change_passphrase`] followed by the public login assertion,
+    /// reusing the parcel the write read back and the outcome it
+    /// authenticated instead of running a second full verification.
+    pub fn change_passphrase_verified(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        new_passphrase: &Passphrase,
+    ) -> Result<(PassphraseMetadata, PassphraseVerification)> {
+        let (authenticated, stored) =
+            self.write_passphrase_change(host, credential, new_passphrase)?;
+        let verification = self.verify_committed_passphrase(
+            host,
+            &credential.uid,
+            &authenticated,
+            new_passphrase,
+            &stored,
+        )?;
+        Ok((metadata(&stored), verification))
+    }
+
+    fn write_passphrase_change(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        new_passphrase: &Passphrase,
+    ) -> Result<(crate::AuthenticatedUserOutcome, PpeParcel)> {
         let authenticated = self.authenticate_and_pin(host, credential)?;
         let owner = current_owner_puk(&authenticated)?;
         let current = self.fetch_ppe_parcel(host, credential)?;
@@ -237,7 +328,7 @@ impl FoksClient {
             encode_change_passphrase_request(&argument)?,
             &argument,
         )?;
-        Ok(metadata(&stored))
+        Ok((authenticated, stored))
     }
 
     pub fn change_passphrase_yubi(
@@ -246,6 +337,35 @@ impl FoksClient {
         credential: &YubiCredential<'_>,
         new_passphrase: &Passphrase,
     ) -> Result<PassphraseMetadata> {
+        let (_, stored) = self.write_passphrase_change_yubi(host, credential, new_passphrase)?;
+        Ok(metadata(&stored))
+    }
+
+    /// Hardware-backed [`Self::change_passphrase_verified`].
+    pub fn change_passphrase_yubi_verified(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+        new_passphrase: &Passphrase,
+    ) -> Result<(PassphraseMetadata, PassphraseVerification)> {
+        let (authenticated, stored) =
+            self.write_passphrase_change_yubi(host, credential, new_passphrase)?;
+        let verification = self.verify_committed_passphrase(
+            host,
+            &credential.uid,
+            &authenticated,
+            new_passphrase,
+            &stored,
+        )?;
+        Ok((metadata(&stored), verification))
+    }
+
+    fn write_passphrase_change_yubi(
+        &self,
+        host: &PinnedHost,
+        credential: &YubiCredential<'_>,
+        new_passphrase: &Passphrase,
+    ) -> Result<(crate::AuthenticatedUserOutcome, PpeParcel)> {
         let authenticated = self.authenticate_yubi_and_pin(host, credential)?;
         let owner = current_owner_puk(&authenticated)?;
         let current = self.fetch_ppe_parcel_yubi(host, credential)?;
@@ -285,7 +405,7 @@ impl FoksClient {
             encode_change_passphrase_request(&argument)?,
             &argument,
         )?;
-        Ok(metadata(&stored))
+        Ok((authenticated, stored))
     }
 
     /// Performs the public v0.1.9 login challenge and opens the returned PPE
@@ -470,6 +590,21 @@ impl FoksClient {
                 "registration and stored passphrase stretch versions differ",
             ));
         }
+        self.assert_passphrase_login(host, uid, passphrase, parcel)
+    }
+
+    /// The public login assertion for a parcel the caller already holds. The
+    /// caller owns the stretch-version agreement: a read compares the
+    /// registration endpoint against the stored parcel, while a write already
+    /// took its stretch version from the authenticated endpoint and proved the
+    /// server stored exactly that argument.
+    fn assert_passphrase_login(
+        &self,
+        host: &PinnedHost,
+        uid: &foks_proto::EntityId,
+        passphrase: &Passphrase,
+        parcel: &PpeParcel,
+    ) -> Result<PassphraseVerification> {
         let login = prepare_passphrase_login(passphrase, &parcel.salt, parcel.stretch_version)?;
         let challenge_bytes = self.call_after_vhost_selection(
             host,
@@ -500,6 +635,27 @@ impl FoksClient {
         Ok(PassphraseVerification {
             generation: keyring.generation(),
         })
+    }
+
+    /// Confirms a passphrase this same operation just committed. `stored` is
+    /// the parcel [`Self::submit_passphrase_update`] read back from the server
+    /// and validated against the submitted argument, and `authenticated` is
+    /// the outcome that signed the write, so nothing is re-authenticated or
+    /// re-read: only the public challenge and login round trips remain, and
+    /// they still prove the server accepts the new passphrase key.
+    fn verify_committed_passphrase(
+        &self,
+        host: &PinnedHost,
+        uid: &foks_proto::EntityId,
+        authenticated: &crate::AuthenticatedUserOutcome,
+        passphrase: &Passphrase,
+        stored: &PpeParcel,
+    ) -> Result<PassphraseVerification> {
+        let verified = self.assert_passphrase_login(host, uid, passphrase, stored)?;
+        // The write's own trust pin names the predecessor parcel; pin the
+        // committed one so unattended reboxing still has a local anchor.
+        self.trust_passphrase_parcel_if_safe(host, uid, authenticated, stored)?;
+        Ok(verified)
     }
 
     pub fn passphrase_metadata(

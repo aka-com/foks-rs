@@ -1609,12 +1609,12 @@ impl CheckedProfileSession<'_> {
             vault,
             master_key,
         )?;
-        let metadata = self
-            .client
-            .set_passphrase_yubi(&host, &credential, &passphrase)?;
-        let verification = self
-            .client
-            .verify_passphrase_yubi(&host, &credential, &passphrase)?;
+        // The write already read the committed parcel back and validated it
+        // against the argument it signed, so the confirmation here is the
+        // server login assertion alone.
+        let (metadata, verification) =
+            self.client
+                .set_passphrase_yubi_verified(&host, &credential, &passphrase)?;
         PassphraseReport::from_verified(metadata, verification)
     }
 
@@ -1641,15 +1641,20 @@ impl CheckedProfileSession<'_> {
             vault,
             master_key,
         )?;
-        let metadata = self
-            .client
-            .change_passphrase_yubi(&host, &credential, &passphrase)?;
-        let verification = self
-            .client
-            .verify_passphrase_yubi(&host, &credential, &passphrase)?;
+        let (metadata, verification) =
+            self.client
+                .change_passphrase_yubi_verified(&host, &credential, &passphrase)?;
         PassphraseReport::from_verified(metadata, verification)
     }
 
+    /// Verifies a passphrase and reports what the server holds. This is a
+    /// read: it does not run the unlocked security responders, so it matches
+    /// the software surface, which also verifies once and sweeps nothing. The
+    /// rollback guard that used to follow existed only to bracket the
+    /// interposed sweep, so it goes with it; a command that does mutate still
+    /// runs the responders itself, and the periodic account sync runs them
+    /// whether or not a passphrase is ever verified. Taking no vault master
+    /// key is the visible form of that: nothing here can rewrap one.
     pub fn verify_yubi_passphrase(
         &self,
         alias: &str,
@@ -1657,7 +1662,6 @@ impl CheckedProfileSession<'_> {
         passphrase: Passphrase,
         provider: &dyn YubiProvider,
         vault: &mut AccountVault<'_>,
-        master_key: &[u8; 32],
     ) -> Result<PassphraseReport> {
         self.profile.require(Capability::Passphrases)?;
         let loaded = vault.yubi_account(alias)?;
@@ -1667,25 +1671,8 @@ impl CheckedProfileSession<'_> {
         let verification = self
             .client
             .verify_passphrase_yubi(&host, &credential, &passphrase)?;
-        let authenticated = self.client.authenticate_yubi_and_pin(&host, &credential)?;
-        self.run_unlocked_yubi_security_responders(
-            alias,
-            &host,
-            &credential,
-            authenticated,
-            vault,
-            master_key,
-        )?;
-        let current = self
-            .client
-            .verify_passphrase_yubi(&host, &credential, &passphrase)?;
-        if current.generation < verification.generation {
-            return Err(Error::InvalidAccount(
-                "passphrase generation rolled back during security refresh",
-            ));
-        }
         Ok(PassphraseReport {
-            generation: current.generation,
+            generation: verification.generation,
             stretch_version: "v1",
             verified: true,
         })

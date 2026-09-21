@@ -467,8 +467,14 @@ impl CheckedProfileSession<'_> {
                     return Err(Error::InvalidAccount("team belongs to another account"));
                 }
                 let team = EntityId::from_bytes(team.team_id.clone())?;
-                let row =
-                    self.invitation_inbox_handle(&host, credential, &team, &request_id, vault)?;
+                let row = self.invitation_inbox_handle(
+                    &host,
+                    credential,
+                    &team,
+                    None,
+                    &request_id,
+                    vault,
+                )?;
                 prepare(
                     InvitationIntent::Rejection {
                         team,
@@ -636,11 +642,17 @@ impl CheckedProfileSession<'_> {
         Ok((rows, possibly_truncated))
     }
 
+    /// Re-reads one stored handle from the live pending inbox. `destination`
+    /// lets a caller that has already authenticated and loaded this team
+    /// within the same operation supply that outcome instead of paying for
+    /// another; the inbox page itself is still read from the server, so the
+    /// row's continued presence is observed, not assumed.
     fn invitation_inbox_handle(
         &self,
         host: &foks_client::PinnedHost,
         credential: FederationCredential<'_, '_>,
         team: &EntityId,
+        destination: Option<&foks_client::AuthenticatedTeamOutcome>,
         id: &str,
         vault: &mut AccountVault<'_>,
     ) -> Result<RawInboxRow> {
@@ -654,16 +666,23 @@ impl CheckedProfileSession<'_> {
         let row = foks_proto::decode_team_inbox(&row.row)?
             .pop()
             .ok_or(Error::InvalidAccount("empty invitation handle"))?;
-        let fresh = self.client.team_invitation_inbox(
-            host,
-            credential,
-            team,
-            Some(InboxPagination {
-                start: row.time,
-                end: row.time,
-                limit: 1000,
-            }),
-        )?;
+        let pagination = Some(InboxPagination {
+            start: row.time,
+            end: row.time,
+            limit: 1000,
+        });
+        let fresh = match destination {
+            Some(destination) => self.client.team_invitation_inbox_with_team(
+                host,
+                credential,
+                team,
+                destination,
+                pagination,
+            )?,
+            None => self
+                .client
+                .team_invitation_inbox(host, credential, team, pagination)?,
+        };
         fresh
             .into_iter()
             .find(|r| r.receipt == row.receipt)

@@ -119,7 +119,6 @@ fn product_vault_covers_yubikey_provisioning_recovery_administration_and_revocat
                 Passphrase::new("hardware-only rotated recovery phrase")?,
                 &signup_provider,
                 &mut vault,
-                &master,
             )?;
             assert_eq!(verified.generation, 2);
             let resumed_signup = session.resume_yubi_account(

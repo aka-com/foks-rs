@@ -207,8 +207,14 @@ impl CheckedProfileSession<'_> {
                     return Err(Error::InvalidAccount("team belongs to another account"));
                 }
                 let team = EntityId::from_bytes(stored.team_id.clone())?;
-                let row =
-                    self.invitation_inbox_handle(&home, credential, &team, &request_id, vault)?;
+                let row = self.invitation_inbox_handle(
+                    &home,
+                    credential,
+                    &team,
+                    None,
+                    &request_id,
+                    vault,
+                )?;
                 let foks_proto::RawInboxRequest::Remote(request) = row.request else {
                     return Err(Error::InvalidAccount(
                         "local request does not need a remote profile",

@@ -509,24 +509,28 @@ impl CheckedProfileSession<'_> {
         master_key: &[u8; 32],
     ) -> Result<TeamMemberMutationReport> {
         self.profile.require(Capability::Teams)?;
-        let context = self.load_local_team_context(team_alias, vault)?;
-        let uid = self.client.resolve_username(
-            &context.host,
-            &context.account.credential,
-            username,
-            true,
-        )?;
-        let target = self.client.load_and_pin_open_local_user(
-            &context.host,
-            &context.account.credential,
-            &uid,
-        )?;
-        self.add_verified_local_team_member(team_alias, &target, destination, vault, master_key)
+        let stored = vault.team(team_alias)?;
+        require_named_active_team(&stored)?;
+        let host = self.pinned_host()?;
+        let account = vault.account(&stored.account_alias)?;
+        let uid = self
+            .client
+            .resolve_username(&host, &account.credential, username, true)?;
+        let (context, target) = self.load_local_team_addition_context(team_alias, vault, &uid)?;
+        self.add_verified_local_team_member(
+            team_alias,
+            &context,
+            &target,
+            destination,
+            vault,
+            master_key,
+        )
     }
 
     pub(super) fn add_verified_local_team_member(
         &self,
         team_alias: &str,
+        context: &LocalTeamContext,
         target: &foks_verify::VerifiedUserState,
         destination: TeamMemberRole,
         vault: &mut AccountVault<'_>,
@@ -547,7 +551,6 @@ impl CheckedProfileSession<'_> {
                 "team has a pending membership mutation; resume it first",
             ));
         }
-        let context = self.load_local_team_context(team_alias, vault)?;
         if target.host() != context.host.host_id()
             || target.uid() == &context.account.credential.uid
             || context
@@ -639,15 +642,27 @@ impl CheckedProfileSession<'_> {
             ))?;
         let plan = local_addition_plan(pending)?;
         let removal_key = SecretSeed::new(pending.removal_key);
-        let context = self.load_local_team_context(team_alias, vault)?;
+        // A durable resume replays the retained signed request and never
+        // reads the prospective member, so only the other branch asks the
+        // context loader for one.
+        let durable = HardStateStore::open(&self.paths.hard_database)?
+            .team_mutation(&plan.operation_id)?
+            .is_some();
+        let (context, target) = if durable {
+            (
+                self.load_local_team_addition_context_without_target(team_alias, vault)?,
+                None,
+            )
+        } else {
+            let (context, target) =
+                self.load_local_team_addition_context(team_alias, vault, &plan.target_id)?;
+            (context, Some(target))
+        };
         let mut mutations = EncryptedFileMutationStore::open(
             &self.paths.protected_mutations,
             derive_mutation_key(master_key),
         )?;
-        let added = if HardStateStore::open(&self.paths.hard_database)?
-            .team_mutation(&plan.operation_id)?
-            .is_some()
-        {
+        let added = if durable {
             self.client.resume_durable_local_team_member_addition(
                 &context.host,
                 &context.account.credential,
@@ -656,13 +671,11 @@ impl CheckedProfileSession<'_> {
                 &mut mutations,
             )?
         } else {
-            let target = self.client.load_and_pin_open_local_user(
-                &context.host,
-                &context.account.credential,
-                &plan.target_id,
-            )?;
+            let target = target.as_ref().ok_or(Error::InvalidAccount(
+                "team addition context did not load the requested member",
+            ))?;
             let request = foks_client::AddLocalTeamMemberRequest {
-                target_user: &target,
+                target_user: target,
                 destination_role: plan.destination_role,
                 removal_key: &removal_key,
             };
@@ -1103,7 +1116,9 @@ impl CheckedProfileSession<'_> {
         team_alias: &str,
         vault: &mut AccountVault<'_>,
     ) -> Result<LocalTeamContext> {
-        self.load_local_team_context_with_reuse(team_alias, vault, false)
+        Ok(self
+            .load_local_team_context_with_reuse(team_alias, vault, false, true, None)?
+            .0)
     }
 
     /// The same context for a read, which may be served from this session's
@@ -1113,7 +1128,41 @@ impl CheckedProfileSession<'_> {
         team_alias: &str,
         vault: &mut AccountVault<'_>,
     ) -> Result<LocalTeamContext> {
-        self.load_local_team_context_with_reuse(team_alias, vault, true)
+        Ok(self
+            .load_local_team_context_with_reuse(team_alias, vault, true, true, None)?
+            .0)
+    }
+
+    /// The context a local-member addition acts on. An addition reads only
+    /// the host, account, team and team id, so the roster is not expanded and
+    /// `context.users` holds the actor alone. The prospective member is loaded
+    /// inside the same bounded retry loop as the team, so a roster that moves
+    /// under the load is retried instead of being reported as a snapshot
+    /// mismatch, and the equal-root check covers target and team together.
+    pub(super) fn load_local_team_addition_context(
+        &self,
+        team_alias: &str,
+        vault: &mut AccountVault<'_>,
+        target: &EntityId,
+    ) -> Result<(LocalTeamContext, foks_verify::VerifiedUserState)> {
+        let (context, target) =
+            self.load_local_team_context_with_reuse(team_alias, vault, false, false, Some(target))?;
+        let target = target.ok_or(Error::InvalidAccount(
+            "team addition context did not load the requested member",
+        ))?;
+        Ok((context, target))
+    }
+
+    /// The non-expanding context for a membership mutation that already knows
+    /// its target, or needs none. `context.users` holds the actor alone.
+    pub(super) fn load_local_team_addition_context_without_target(
+        &self,
+        team_alias: &str,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<LocalTeamContext> {
+        Ok(self
+            .load_local_team_context_with_reuse(team_alias, vault, false, false, None)?
+            .0)
     }
 
     fn load_local_team_context_with_reuse(
@@ -1121,7 +1170,9 @@ impl CheckedProfileSession<'_> {
         team_alias: &str,
         vault: &mut AccountVault<'_>,
         reuse: bool,
-    ) -> Result<LocalTeamContext> {
+        expand_roster: bool,
+        target: Option<&EntityId>,
+    ) -> Result<(LocalTeamContext, Option<foks_verify::VerifiedUserState>)> {
         let stored = vault.team(team_alias)?;
         if !stored.active {
             return Err(Error::InvalidAccount("team creation is still pending"));
@@ -1158,33 +1209,53 @@ impl CheckedProfileSession<'_> {
                 actor.verified.uid().as_bytes().to_vec(),
                 actor.verified.clone(),
             );
-            for member in team.verified.members() {
-                if member.scoped_host.is_none()
-                    && member.party.entity_type() == foks_proto::ENTITY_USER
-                    && !users.contains_key(member.party.as_bytes())
-                {
-                    let user = self.client.load_and_pin_user_as_local_team(
-                        &host,
-                        &account.credential,
-                        &member.party,
-                        &team.view_token,
-                    )?;
-                    users.insert(member.party.as_bytes().to_vec(), user);
+            if expand_roster {
+                for member in team.verified.members() {
+                    if member.scoped_host.is_none()
+                        && member.party.entity_type() == foks_proto::ENTITY_USER
+                        && !users.contains_key(member.party.as_bytes())
+                    {
+                        let user = self.client.load_and_pin_user_as_local_team(
+                            &host,
+                            &account.credential,
+                            &member.party,
+                            &team.view_token,
+                        )?;
+                        users.insert(member.party.as_bytes().to_vec(), user);
+                    }
                 }
             }
+            // A prospective member is loaded here rather than after the loop
+            // so a root that moves between the two loads is retried by the
+            // same bound that already covers the roster.
+            let target_user = match target {
+                Some(target) => Some(self.client.load_and_pin_open_local_user(
+                    &host,
+                    &account.credential,
+                    target,
+                )?),
+                None => None,
+            };
             if actor.verified.tree_root() == team.verified.tree_root()
                 && users
                     .values()
                     .all(|user| user.tree_root() == team.verified.tree_root())
+                && target_user
+                    .as_ref()
+                    .map(|user| user.tree_root() == team.verified.tree_root())
+                    .unwrap_or(true)
             {
-                return Ok(LocalTeamContext {
-                    host,
-                    account,
-                    actor,
-                    team_id,
-                    team,
-                    users,
-                });
+                return Ok((
+                    LocalTeamContext {
+                        host,
+                        account,
+                        actor,
+                        team_id,
+                        team,
+                        users,
+                    },
+                    target_user,
+                ));
             }
             last_race = Some(foks_client::Error::TeamRequest(
                 "team roster snapshot does not match the latest authenticated Merkle root",
@@ -1225,6 +1296,9 @@ pub(super) struct LocalTeamContext {
     pub(super) actor: std::sync::Arc<AuthenticatedUserOutcome>,
     pub(super) team_id: EntityId,
     pub(super) team: AuthenticatedTeamOutcome,
+    /// The verified state of every local roster member, keyed by uid. A
+    /// context from a non-expanding loader holds the actor alone, so only a
+    /// caller that asked for the expanded context may index this.
     pub(super) users: std::collections::BTreeMap<Vec<u8>, foks_verify::VerifiedUserState>,
 }
 

@@ -139,7 +139,23 @@ impl FoksClient {
             &user.puks,
             team,
         )?;
-        super::verified_team_private_history(&loaded)?;
+        self.open_remote_invitation_with_team(host, team, &loaded, request)
+    }
+
+    /// [`Self::open_remote_invitation`] against a destination team the caller
+    /// has already authenticated with the same credential, so an approval
+    /// opens its request against one destination load rather than its own.
+    /// The opening itself is local: only the destination's retained admin
+    /// PTKs can unseal the request.
+    pub fn open_remote_invitation_with_team(
+        &self,
+        host: &PinnedHost,
+        team: &EntityId,
+        loaded: &crate::AuthenticatedTeamOutcome,
+        request: &RemoteJoinRequest,
+    ) -> Result<RemoteJoinPayload> {
+        super::invitations::require_invitation_destination(host, team, loaded)?;
+        super::verified_team_private_history(loaded)?;
         for key in loaded.ptks.iter().filter(|k| k.role == Role::ADMIN) {
             let receiver = foks_crypto::SharedKeyDecapsulator::new(&key.seed, team.clone())?;
             if foks_crypto::hepk_fingerprint(foks_crypto::HybridSecretDecapsulator::hepk(

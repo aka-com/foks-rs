@@ -929,7 +929,7 @@ fn passphrase_command(
         }
         PassphraseCommand::Verify(arguments) => {
             let session = ProfileSession::open(&registry, &arguments.profile)?;
-            with_vault(state_dir, &session, |session, vault, master| {
+            with_vault(state_dir, &session, |session, vault, _master| {
                 let passphrase = Passphrase::new(read_passphrase(&arguments.passphrase_file)?)?;
                 let report = match arguments.pin_file.as_deref() {
                     Some(path) => session.verify_yubi_passphrase(
@@ -938,7 +938,6 @@ fn passphrase_command(
                         passphrase,
                         &provider,
                         vault,
-                        master,
                     )?,
                     None => session.verify_passphrase(&arguments.alias, passphrase, vault)?,
                 };

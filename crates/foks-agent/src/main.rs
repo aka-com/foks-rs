@@ -4037,14 +4037,13 @@ fn dispatch_result_inner(
         } => {
             let session =
                 read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
-            with_vault_and_master(state_dir, &session, |session, vault, master| {
+            with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(session.verify_yubi_passphrase(
                     &alias,
                     Pin::new(pin.expose())?,
                     Passphrase::new(passphrase.expose())?,
                     &HardwareYubiProvider::new(),
                     vault,
-                    master,
                 )?)?)
             })
         }

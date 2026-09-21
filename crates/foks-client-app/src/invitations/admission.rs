@@ -119,7 +119,29 @@ impl CheckedProfileSession<'_> {
                 "invitation member receipt capacity reached",
             ));
         }
-        let row = self.invitation_inbox_handle(&home, credential, &team, request_id, vault)?;
+        // One authenticated destination serves the inbox re-read, the joiner
+        // load and the plan below. Nothing between them posts a link, so the
+        // head this outcome names cannot have moved because of this
+        // operation; the durable addition further down authenticates again
+        // and re-validates the plan against that fresh head.
+        let user = self
+            .client
+            .authenticate_credential_and_pin(&home, credential)?;
+        let loaded = self.client.load_and_pin_team_with_credential(
+            &home,
+            credential,
+            &user.verified,
+            &user.puks,
+            &team,
+        )?;
+        let row = self.invitation_inbox_handle(
+            &home,
+            credential,
+            &team,
+            Some(&loaded),
+            request_id,
+            vault,
+        )?;
         let (party, source_role) = match (&row.request, other) {
             (
                 foks_proto::RawInboxRequest::Local {
@@ -130,22 +152,20 @@ impl CheckedProfileSession<'_> {
                 None,
             ) => {
                 let party = if joiner.entity_type() == foks_proto::ENTITY_USER {
-                    Party::User(
-                        self.client
-                            .load_local_invitation_joiner(&home, credential, &team, &row)?,
-                    )
+                    Party::User(self.client.load_local_invitation_joiner_with_team(
+                        &home, credential, &team, &loaded, &row,
+                    )?)
                 } else {
-                    Party::Team(
-                        self.client
-                            .load_local_invitation_team(&home, credential, &team, &row)?,
-                    )
+                    Party::Team(self.client.load_local_invitation_team_with_team(
+                        &home, credential, &team, &loaded, &row,
+                    )?)
                 };
                 (party, *source_role)
             }
             (foks_proto::RawInboxRequest::Remote(request), Some(_)) => {
                 let payload = self
                     .client
-                    .open_remote_invitation(&home, credential, &team, request)?;
+                    .open_remote_invitation_with_team(&home, &team, &loaded, request)?;
                 let source_role = payload.source_role;
                 let party = if payload.joiner.party.entity_type() == foks_proto::ENTITY_USER {
                     Party::RemoteUser(
@@ -166,16 +186,6 @@ impl CheckedProfileSession<'_> {
                 ))
             }
         };
-        let user = self
-            .client
-            .authenticate_credential_and_pin(&home, credential)?;
-        let loaded = self.client.load_and_pin_team_with_credential(
-            &home,
-            credential,
-            &user.verified,
-            &user.puks,
-            &team,
-        )?;
         let removal = SecretSeed::new(random_array()?);
         let plan: LocalTeamMemberAdditionPlan = match &party {
             Party::User(u) => self.client.local_team_member_addition_plan(
