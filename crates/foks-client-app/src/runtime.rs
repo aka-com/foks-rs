@@ -22,8 +22,12 @@ use crate::{
     CheckedProfileSession, Error, ProfilePaths, Result,
 };
 
-const USER_REFRESH_JOB_TYPE_ID: u64 = 0xb1a8_c09a_d2b9_4de7;
-const TEAM_REFRESH_JOB_TYPE_ID: u64 = 0x8583_9c90_0eb4_b47e;
+/// The durable identities of the refresh jobs a profile registers for each of
+/// its users. Visible to the crate because a federation cascade reads the same
+/// rows to decide whether a remote profile's own scheduler has already swept,
+/// and a second copy of these would let the two drift silently.
+pub(crate) const USER_REFRESH_JOB_TYPE_ID: u64 = 0xb1a8_c09a_d2b9_4de7;
+pub(crate) const TEAM_REFRESH_JOB_TYPE_ID: u64 = 0x8583_9c90_0eb4_b47e;
 const TEAM_REFRESH_ALIAS_TYPE_ID: u64 = 0xb5ee_e7c5_3473_ed98;
 const DEFAULT_USER_REFRESH_INTERVAL_MICROS: u64 = 15 * 60 * 1_000_000;
 const DEFAULT_TEAM_REFRESH_INTERVAL_MICROS: u64 = 17 * 60 * 1_000_000;
@@ -3272,7 +3276,7 @@ fn register_default_refresh_job(
     Ok(())
 }
 
-fn refresh_job_id(
+pub(crate) fn refresh_job_id(
     type_id: u64,
     host: &foks_proto::EntityId,
     uid: &foks_proto::EntityId,

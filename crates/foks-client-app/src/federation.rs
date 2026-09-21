@@ -10,6 +10,67 @@ const FEDERATION_JOB_TYPE_ID: u64 = 0xc426_0c8c_25bb_912d;
 const FEDERATION_REFRESH_INTERVAL_MICROS: u64 = 17 * 60 * 1_000_000;
 const FEDERATION_FIRST_RETRY_MICROS: u64 = 5 * 60 * 1_000_000;
 
+/// The durable identities of the ordinary refresh jobs a profile registers for
+/// each of its users, read here to decide whether that profile's own scheduler
+/// has already swept. Taken from the registration side rather than restated,
+/// so a job identity cannot drift between the two.
+use crate::runtime::{refresh_job_id, TEAM_REFRESH_JOB_TYPE_ID, USER_REFRESH_JOB_TYPE_ID};
+
+/// Counts of the network work one federation refresh performed, kept per
+/// thread because a refresh runs to completion on the thread that started it.
+///
+/// These exist so the cost of a refresh can be asserted on rather than
+/// described: the reuse rules below are only worth their complexity if they
+/// actually remove loads, and only safe if the post-commit selection still
+/// shows up as a load. Recording them unconditionally keeps the instrumented
+/// path and the shipped path the same code.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct FederationReadCounters {
+    /// Authenticated local team graphs discovered for a federated selection.
+    graph_loads: u64,
+    /// Selections served from a graph a previous load had already produced.
+    reused_selections: u64,
+    /// Remote profile sessions opened, one connection pool each.
+    remote_sessions: u64,
+    /// Remote responder sweeps this cascade ran.
+    ran_responders: u64,
+    /// Remote responder sweeps skipped because the remote profile's own
+    /// scheduler had already run them within their interval.
+    skipped_responders: u64,
+    /// Skipped sweeps a stale recipient forced this cascade to run after all.
+    unskipped_responders: u64,
+    /// `graph_loads` as it stood when the last commit was recorded. A refresh
+    /// whose final value is higher performed a fresh authenticated read after
+    /// everything it committed.
+    graph_loads_at_last_commit: u64,
+}
+
+thread_local! {
+    static FEDERATION_READ_COUNTERS: std::cell::Cell<FederationReadCounters> =
+        const { std::cell::Cell::new(FederationReadCounters {
+            graph_loads: 0,
+            reused_selections: 0,
+            remote_sessions: 0,
+            ran_responders: 0,
+            skipped_responders: 0,
+            unskipped_responders: 0,
+            graph_loads_at_last_commit: 0,
+        }) };
+}
+
+fn count_federation_read(field: impl FnOnce(&mut FederationReadCounters)) {
+    FEDERATION_READ_COUNTERS.with(|counters| {
+        let mut current = counters.get();
+        field(&mut current);
+        counters.set(current);
+    });
+}
+
+#[cfg(test)]
+fn federation_read_counters() -> FederationReadCounters {
+    FEDERATION_READ_COUNTERS.with(std::cell::Cell::get)
+}
+
 /// One already-unlocked hardware credential offered to a federation refresh.
 /// Only the caller's stack holds it; no PIN and no hardware handle is stored,
 /// journaled, or written to any vault by this module. `profile` binds the
@@ -68,19 +129,48 @@ impl<'device> FederatedActorCredential<'_, 'device> {
     }
 }
 
+/// One authenticated credential together with the entire local team graph
+/// that credential opened.
+///
+/// Discovery is the expensive part of selecting a federated administrator: it
+/// walks and authenticates every membership chain the credential can reach.
+/// Selecting an administrator for a second team of the same profile is a pure
+/// computation over this snapshot, so it is kept behind an `Rc` and shared by
+/// every actor derived from it rather than rediscovered per team.
+///
+/// The contents are immutable for the lifetime of the `Rc`. They are a read of
+/// one host at one instant, so reuse is only sound while nothing this cascade
+/// ran can have moved that host's chains; see [`FederationCascade::commits`].
+struct AuthenticatedFederationGraph<'a, 'device> {
+    credential: FederatedActorCredential<'a, 'device>,
+    user: foks_client::AuthenticatedUserOutcome,
+    teams: Vec<foks_client::AuthenticatedTeamOutcome>,
+    child_first: Vec<EntityId>,
+    edges: Vec<(EntityId, EntityId)>,
+}
+
+impl AuthenticatedFederationGraph<'_, '_> {
+    fn index_of(&self, team: &EntityId) -> Option<usize> {
+        self.teams
+            .iter()
+            .position(|candidate| candidate.verified.team() == team)
+    }
+}
+
 /// An administrator for one federated local team, together with the
 /// authenticated membership graph it was selected from. Keeping the graph
 /// here rather than rediscovering it per binding matters: a cascade visits
 /// the same profile several times per convergence pass, and a redundant walk
 /// is a full round of chain loads against that host.
+///
+/// `target` and `actor_team` are positions in `graph.teams`. They are checked
+/// against that vector when the actor is built and the vector is immutable
+/// behind the `Rc`, so both stay in range for the actor's whole lifetime.
+#[derive(Clone)]
 struct LocalFederatedActor<'a, 'device> {
-    credential: FederatedActorCredential<'a, 'device>,
-    user: foks_client::AuthenticatedUserOutcome,
-    target: foks_client::AuthenticatedTeamOutcome,
-    actor_team: Option<foks_client::AuthenticatedTeamOutcome>,
-    other_teams: Vec<foks_client::AuthenticatedTeamOutcome>,
-    child_first: Vec<EntityId>,
-    edges: Vec<(EntityId, EntityId)>,
+    graph: std::rc::Rc<AuthenticatedFederationGraph<'a, 'device>>,
+    target: usize,
+    actor_team: Option<usize>,
 }
 
 type FederatedGraphRecipients<'a, 'device> = (
@@ -92,19 +182,63 @@ type FederatedGraphRecipients<'a, 'device> = (
     std::collections::BTreeSet<Vec<u8>>,
 );
 
-impl LocalFederatedActor<'_, '_> {
+impl<'a, 'device> LocalFederatedActor<'a, 'device> {
+    /// Binds an already-authenticated graph to one target team and one acting
+    /// party. Returns `None` if either is outside the graph, which is the
+    /// caller's signal that this graph cannot serve the requested team.
+    fn bind(
+        graph: &std::rc::Rc<AuthenticatedFederationGraph<'a, 'device>>,
+        target: &EntityId,
+        actor_team: Option<&EntityId>,
+    ) -> Option<Self> {
+        let target = graph.index_of(target)?;
+        let actor_team = match actor_team {
+            Some(team) => Some(graph.index_of(team)?),
+            None => None,
+        };
+        Some(Self {
+            graph: std::rc::Rc::clone(graph),
+            target,
+            actor_team,
+        })
+    }
+
+    fn credential(&self) -> &FederatedActorCredential<'a, 'device> {
+        &self.graph.credential
+    }
+
+    fn user(&self) -> &foks_client::AuthenticatedUserOutcome {
+        &self.graph.user
+    }
+
+    fn target(&self) -> &foks_client::AuthenticatedTeamOutcome {
+        self.graph
+            .teams
+            .get(self.target)
+            .expect("federated actor target index is checked when the actor is built")
+    }
+
+    fn actor_team(&self) -> Option<&foks_client::AuthenticatedTeamOutcome> {
+        self.actor_team.map(|index| {
+            self.graph
+                .teams
+                .get(index)
+                .expect("federated actor team index is checked when the actor is built")
+        })
+    }
+
+    fn child_first(&self) -> &[EntityId] {
+        &self.graph.child_first
+    }
+
+    fn edges(&self) -> &[(EntityId, EntityId)] {
+        &self.graph.edges
+    }
+
     fn team(&self, team: &EntityId) -> Option<&foks_client::AuthenticatedTeamOutcome> {
-        if self.target.verified.team() == team {
-            return Some(&self.target);
-        }
-        self.actor_team
-            .as_ref()
-            .filter(|candidate| candidate.verified.team() == team)
-            .or_else(|| {
-                self.other_teams
-                    .iter()
-                    .find(|candidate| candidate.verified.team() == team)
-            })
+        self.graph
+            .index_of(team)
+            .and_then(|index| self.graph.teams.get(index))
     }
 }
 
@@ -122,6 +256,51 @@ struct FederationCascade {
     software_refreshed: std::collections::BTreeSet<(String, Vec<u8>)>,
     /// Hardware `(profile, alias)` whose unlocked responders have already run.
     yubi_refreshed: std::collections::BTreeSet<(String, String)>,
+    /// How many times this cascade has run something on each profile that can
+    /// move a chain, rotate a key, or write a caller-durable CLKR journal.
+    ///
+    /// An authenticated graph is a read of one host at one instant. Reusing
+    /// one in place of a fresh selection is sound exactly while this counter
+    /// is unchanged for the profile the graph was read from: every commit in
+    /// this module increments it before the next selection can observe it, so
+    /// a selection that follows a commit on the same profile always reloads.
+    /// See [`CheckedProfileSession::record_federation_commit`].
+    commits: std::collections::BTreeMap<String, u64>,
+    /// Sessions already opened for a remote hop, one per remote profile.
+    ///
+    /// A session owns its connection pool, so reopening one per binding and
+    /// per convergence pass pays a fresh TLS handshake for every remote call.
+    /// Every session in a cascade carries the same operation controls, which
+    /// [`ProfileSession::related_profile`] copies from the caller, so the
+    /// profile name identifies the session completely.
+    sessions: std::collections::BTreeMap<String, std::rc::Rc<ProfileSession>>,
+    /// `(profile, uid)` whose ordinary user and team responders this cascade
+    /// skipped because the profile's own scheduler had already run them within
+    /// their interval. A recipient that then proves stale un-skips them; see
+    /// [`CheckedProfileSession::load_federated_team_recipients`].
+    skipped_responders: std::collections::BTreeSet<(String, Vec<u8>)>,
+}
+
+impl FederationCascade {
+    /// The number of commits recorded for `profile` so far. A caller snapshots
+    /// this beside a graph it intends to reuse and compares before each reuse.
+    fn commits(&self, profile: &str) -> u64 {
+        self.commits.get(profile).copied().unwrap_or_default()
+    }
+
+    fn record_commit(&mut self, profile: &str) {
+        *self.commits.entry(profile.to_owned()).or_default() += 1;
+    }
+
+    fn rooted_at(profile: &str, team_alias: &str) -> Self {
+        Self {
+            visited: std::collections::BTreeSet::from([(
+                profile.to_owned(),
+                team_alias.to_owned(),
+            )]),
+            ..Self::default()
+        }
+    }
 }
 
 fn federated_expulsion_parties<'a>(
@@ -221,6 +400,127 @@ fn federated_recipient_requires_nested_refresh(error: &Error) -> bool {
                 | "team recipient has a stale direct or descendant key"
         ))
     )
+}
+
+/// Chooses the acting party for one federated team from a graph that has
+/// already been authenticated, performing no network read of any kind.
+///
+/// This is the whole of the selection decision: the candidate walk in
+/// [`CheckedProfileSession::select_local_federated_admin`] exists only to
+/// produce a graph to run this against. Keeping the decision here is what lets
+/// a caller that already holds a graph select a second team out of it.
+///
+/// `Ok(Err(reason))` means this graph cannot serve the team and another
+/// candidate's graph may still do so; `reason` is the text the candidate walk
+/// reports. `Err` is a hard failure no other candidate can repair.
+fn federated_actor_in_graph<'a, 'device>(
+    graph: &std::rc::Rc<AuthenticatedFederationGraph<'a, 'device>>,
+    team_id: &EntityId,
+    pending: Option<&super::team::StoredTeamRekey>,
+) -> Result<std::result::Result<LocalFederatedActor<'a, 'device>, String>> {
+    let credential = &graph.credential;
+    let Some(target) = graph
+        .teams
+        .iter()
+        .find(|candidate| candidate.verified.team() == team_id)
+    else {
+        return Ok(Err(format!(
+            "{} cannot reach the federated target through its membership graph",
+            hex(credential.uid().as_bytes())
+        )));
+    };
+    let team = |party: &EntityId| {
+        graph
+            .index_of(party)
+            .and_then(|index| graph.teams.get(index))
+    };
+    let direct_admin = target.verified.members().iter().any(|member| {
+        member.party == *credential.uid()
+            && member.scoped_host.is_none()
+            && matches!(
+                member.role.kind(),
+                foks_proto::RoleType::Admin | foks_proto::RoleType::Owner
+            )
+    });
+    let selected_actor = if let Some(pending) = pending {
+        if pending.transport_uid != credential.uid().as_bytes() {
+            return Ok(Err(format!(
+                "{} is not the caller-durable CLKR transport",
+                hex(credential.uid().as_bytes())
+            )));
+        }
+        let recorded = EntityId::from_bytes(pending.actor_uid.clone())?;
+        let recorded_team_is_current = team(&recorded)
+            .is_some_and(|actor| local_team_can_observe_team_rekey(&target.verified, actor));
+        if (recorded == *credential.uid() && direct_admin) || recorded_team_is_current {
+            recorded
+        } else if target.verified.chain_seqno() >= pending.expected_seqno && direct_admin {
+            credential.uid().clone()
+        } else if target.verified.chain_seqno() >= pending.expected_seqno {
+            let Some(member) = target
+                .verified
+                .members()
+                .iter()
+                .filter(|member| {
+                    member.scoped_host.is_none()
+                        && matches!(
+                            member.party.entity_type(),
+                            foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
+                        )
+                        && matches!(
+                            member.role.kind(),
+                            foks_proto::RoleType::Admin | foks_proto::RoleType::Owner
+                        )
+                        && team(&member.party)
+                            .is_some_and(|actor| actor.holds_roster_private_key(member))
+                })
+                .max_by_key(|member| (member.role, member.source_role))
+            else {
+                return Ok(Err(format!(
+                    "{} cannot recover the visible caller-durable CLKR actor",
+                    hex(credential.uid().as_bytes())
+                )));
+            };
+            member.party.clone()
+        } else {
+            return Ok(Err(format!(
+                "{} cannot recover the caller-durable CLKR actor",
+                hex(credential.uid().as_bytes())
+            )));
+        }
+    } else if direct_admin {
+        credential.uid().clone()
+    } else if let Some(member) = target
+        .verified
+        .members()
+        .iter()
+        .filter(|member| {
+            member.scoped_host.is_none()
+                && matches!(
+                    member.party.entity_type(),
+                    foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
+                )
+                && matches!(
+                    member.role.kind(),
+                    foks_proto::RoleType::Admin | foks_proto::RoleType::Owner
+                )
+                && team(&member.party).is_some_and(|actor| actor.holds_roster_private_key(member))
+        })
+        .max_by_key(|member| (member.role, member.source_role))
+    {
+        member.party.clone()
+    } else {
+        return Ok(Err(format!(
+            "{} has no direct or local-team administrator path",
+            hex(credential.uid().as_bytes())
+        )));
+    };
+    let actor_team = (selected_actor != *credential.uid()).then_some(&selected_actor);
+    LocalFederatedActor::bind(graph, team_id, actor_team)
+        .map(Ok)
+        .ok_or(Error::InvalidAccount(
+            "membership graph lost the federated local-team actor",
+        ))
 }
 
 fn connected_local_team_component(
@@ -592,13 +892,7 @@ impl CheckedProfileSession<'_> {
                     registry,
                     credentials,
                     master_key,
-                    &mut FederationCascade {
-                        visited: std::collections::BTreeSet::from([(
-                            self.profile.name.clone(),
-                            local_team_alias.to_owned(),
-                        )]),
-                        ..FederationCascade::default()
-                    },
+                    &mut FederationCascade::rooted_at(&self.profile.name, local_team_alias),
                 )?;
                 context = self.load_local_team_context(local_team_alias, local_vault)?;
                 parties
@@ -949,7 +1243,7 @@ impl CheckedProfileSession<'_> {
         let remote_team = remote_vault.team(&binding.remote_team_alias)?;
         let local_team_id = EntityId::from_bytes(local_team.team_id.clone())?;
         let remote_team_id = EntityId::from_bytes(remote_team.team_id.clone())?;
-        if remote_actor.target.verified.team() != &remote_team_id {
+        if remote_actor.target().verified.team() != &remote_team_id {
             return Err(Error::InvalidAccount(
                 "remote federation actor loaded a different team",
             ));
@@ -978,19 +1272,19 @@ impl CheckedProfileSession<'_> {
         }
         let request = foks_client::FederatedTeamRefreshRequest {
             remote_host: &remote_host,
-            remote_credential: remote_actor.credential.borrowed(),
+            remote_credential: remote_actor.credential().borrowed(),
             remote_team: &remote_team_id,
             local_host: &local_host,
-            local_credential: local_actor.credential.borrowed(),
+            local_credential: local_actor.credential().borrowed(),
             local_team: &local_team_id,
         };
         self.client
             .refresh_federated_team_capability_with_actors(
                 &request,
-                &remote_actor.user.verified,
-                remote_actor.actor_team.as_ref(),
-                &local_actor.user.verified,
-                local_actor.actor_team.as_ref(),
+                &remote_actor.user().verified,
+                remote_actor.actor_team(),
+                &local_actor.user().verified,
+                local_actor.actor_team(),
             )
             .map_err(Into::into)
     }
@@ -1027,7 +1321,8 @@ impl CheckedProfileSession<'_> {
             let local_vault = &mut *local_vault;
             let cascade = &mut *cascade;
             let outcome = (|| {
-                let remote_session = self.related_profile(registry, &binding.remote_profile)?;
+                let remote_session =
+                    self.federation_session(registry, &binding.remote_profile, cascade)?;
                 // A nested profile can run its own user, team, and hardware
                 // responders before the final bearer refresh. Gate that work
                 // here, before any protected state or network operation is
@@ -1048,54 +1343,14 @@ impl CheckedProfileSession<'_> {
                         )?;
                         // Bring the remote side's own security state current
                         // before reading its roster, exactly as the local side
-                        // does. The software sweep is unattended and PIN-free; a
-                        // hardware actor runs the equivalent already-unlocked
-                        // responders, which the software sweep cannot drive
-                        // because it must never prompt.
-                        let ran_responders = match &remote_actor.credential {
-                            FederatedActorCredential::Software(credential) => {
-                                let key = (
-                                    remote.profile.name.clone(),
-                                    credential.uid.as_bytes().to_vec(),
-                                );
-                                cascade.software_refreshed.insert(key) && {
-                                    remote
-                                        .refresh_user_security(
-                                            credential.uid.as_bytes(),
-                                            &mut remote_vault,
-                                            master_key,
-                                        )
-                                        .map_err(Error::BackgroundRefresh)?;
-                                    remote
-                                        .refresh_team_chains(
-                                            credential.uid.as_bytes(),
-                                            &mut remote_vault,
-                                            master_key,
-                                        )
-                                        .map_err(Error::BackgroundRefresh)?;
-                                    true
-                                }
-                            }
-                            FederatedActorCredential::Yubi { alias, credential } => {
-                                let key = (remote.profile.name.clone(), (*alias).to_owned());
-                                cascade.yubi_refreshed.insert(key) && {
-                                    let remote_host = remote.pinned_host()?;
-                                    let authenticated = remote
-                                        .client
-                                        .authenticate_yubi_and_pin(&remote_host, credential)?;
-                                    remote.run_unlocked_yubi_security_responders(
-                                        alias,
-                                        &remote_host,
-                                        credential,
-                                        authenticated,
-                                        &mut remote_vault,
-                                        master_key,
-                                    )?;
-                                    true
-                                }
-                            }
-                        };
-                        if ran_responders {
+                        // does, unless that profile's own scheduler already did.
+                        if remote.run_federation_responders(
+                            &remote_actor,
+                            &mut remote_vault,
+                            master_key,
+                            cascade,
+                            false,
+                        )? {
                             // Only reselect when the responders could actually
                             // have moved the chain this actor was derived from.
                             remote_actor = remote.select_local_federated_admin(
@@ -1117,6 +1372,39 @@ impl CheckedProfileSession<'_> {
                             master_key,
                             cascade,
                         );
+                        // A stale recipient is the evidence that a skipped
+                        // responder sweep had work after all. Run it now and
+                        // retry before deciding this is the remote profile's
+                        // own federation to repair.
+                        if recipient
+                            .as_ref()
+                            .is_err_and(federated_recipient_requires_nested_refresh)
+                            && remote.unskip_federation_responders(
+                                &remote_actor,
+                                &mut remote_vault,
+                                master_key,
+                                cascade,
+                            )?
+                        {
+                            remote_actor = remote.select_local_federated_admin(
+                                &binding.remote_team_alias,
+                                unlocked,
+                                &mut remote_vault,
+                            )?;
+                            recipient = self.load_federated_team_recipient(
+                                remote,
+                                binding,
+                                local_actor,
+                                &remote_actor,
+                                unlocked,
+                                local_vault,
+                                &mut remote_vault,
+                                registry,
+                                credentials,
+                                master_key,
+                                cascade,
+                            );
+                        }
                         // A stale roster key on the remote side is not this
                         // profile's to fix. Run the remote's own responder here,
                         // under the lock already held, and retry once.
@@ -1188,6 +1476,11 @@ impl CheckedProfileSession<'_> {
         master_key: &[u8; 32],
         cascade: &mut FederationCascade,
     ) -> Result<(TeamRefreshPartyKey, TeamRefreshParty)> {
+        // `remote_actor` is current on entry: the caller reselects it after
+        // anything it ran that could have moved the remote's chains. Taking
+        // the snapshot before any call below keeps that true without relying
+        // on what those calls do.
+        let remote_commits = cascade.commits(&remote.profile.name);
         let public = self.refresh_federated_team(
             remote,
             binding,
@@ -1206,10 +1499,10 @@ impl CheckedProfileSession<'_> {
         // reaches this binding several times per convergence pass, and a
         // redundant discovery is a full round of chain loads against the
         // remote host each time.
-        let relevant = descendant_team_component(public.verified.team(), &remote_actor.edges);
+        let relevant = descendant_team_component(public.verified.team(), remote_actor.edges());
         let mut recipients =
             std::collections::BTreeMap::<Vec<u8>, foks_client::VerifiedTeamRecipient>::new();
-        for team_id in &remote_actor.child_first {
+        for team_id in remote_actor.child_first() {
             let team_key = team_id.as_bytes().to_vec();
             if !relevant.contains(&team_key) {
                 continue;
@@ -1264,10 +1557,17 @@ impl CheckedProfileSession<'_> {
                         remote_team_alias: nested.remote_team_alias.clone(),
                         destination: nested.destination,
                     };
-                    let nested_actor = remote.select_local_federated_admin(
+                    // The remote's graph is already authenticated and covers
+                    // every team of that profile the credential can reach, so
+                    // the descendant walk selects out of it instead of paying
+                    // a discovery per scoped roster row.
+                    let nested_actor = remote.select_federated_admin_reusing(
                         nested_alias,
+                        remote_actor,
+                        remote_commits,
                         unlocked,
                         remote_vault,
+                        cascade,
                     )?;
                     // Resolve the next hop from the remote's own point of
                     // view: it is the local side of that binding.
@@ -1292,7 +1592,7 @@ impl CheckedProfileSession<'_> {
                         foks_proto::ENTITY_USER => {
                             TeamRefreshParty::User(remote.load_team_refresh_user(
                                 &remote_host,
-                                remote_actor.credential.team_refresh(),
+                                remote_actor.credential().team_refresh(),
                                 &member.party,
                                 &team.view_token,
                             )?)
@@ -1358,8 +1658,7 @@ impl CheckedProfileSession<'_> {
         local_vault: &mut AccountVault<'_>,
     ) -> Result<LocalFederatedActor<'a, 'device>> {
         let host = self.pinned_host()?;
-        let stored = local_vault.team(local_team_alias)?;
-        let team_id = EntityId::from_bytes(stored.team_id.clone())?;
+        let team_id = self.federated_team_id(local_team_alias, local_vault)?;
         let pending = local_vault
             .team_rekey_for_team(team_id.as_bytes())?
             .map(|(_, pending)| pending);
@@ -1432,135 +1731,21 @@ impl CheckedProfileSession<'_> {
                     continue;
                 }
             };
-            let Some(target) = graph.team(&team_id) else {
-                errors.push(format!(
-                    "{} cannot reach the federated target through its membership graph",
-                    hex(credential.uid().as_bytes())
-                ));
-                continue;
-            };
-            let direct_admin = target.verified.members().iter().any(|member| {
-                member.party == *credential.uid()
-                    && member.scoped_host.is_none()
-                    && matches!(
-                        member.role.kind(),
-                        foks_proto::RoleType::Admin | foks_proto::RoleType::Owner
-                    )
-            });
-            let selected_actor = if let Some(pending) = pending.as_ref() {
-                if pending.transport_uid != credential.uid().as_bytes() {
-                    errors.push(format!(
-                        "{} is not the caller-durable CLKR transport",
-                        hex(credential.uid().as_bytes())
-                    ));
-                    continue;
-                }
-                let recorded = EntityId::from_bytes(pending.actor_uid.clone())?;
-                let recorded_team_is_current = graph.team(&recorded).is_some_and(|actor| {
-                    local_team_can_observe_team_rekey(&target.verified, actor)
-                });
-                if (recorded == *credential.uid() && direct_admin) || recorded_team_is_current {
-                    recorded
-                } else if target.verified.chain_seqno() >= pending.expected_seqno && direct_admin {
-                    credential.uid().clone()
-                } else if target.verified.chain_seqno() >= pending.expected_seqno {
-                    let Some(member) = target
-                        .verified
-                        .members()
-                        .iter()
-                        .filter(|member| {
-                            member.scoped_host.is_none()
-                                && matches!(
-                                    member.party.entity_type(),
-                                    foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
-                                )
-                                && matches!(
-                                    member.role.kind(),
-                                    foks_proto::RoleType::Admin | foks_proto::RoleType::Owner
-                                )
-                                && graph
-                                    .team(&member.party)
-                                    .is_some_and(|actor| actor.holds_roster_private_key(member))
-                        })
-                        .max_by_key(|member| (member.role, member.source_role))
-                    else {
-                        errors.push(format!(
-                            "{} cannot recover the visible caller-durable CLKR actor",
-                            hex(credential.uid().as_bytes())
-                        ));
-                        continue;
-                    };
-                    member.party.clone()
-                } else {
-                    errors.push(format!(
-                        "{} cannot recover the caller-durable CLKR actor",
-                        hex(credential.uid().as_bytes())
-                    ));
-                    continue;
-                }
-            } else {
-                if direct_admin {
-                    credential.uid().clone()
-                } else if let Some(member) = target
-                    .verified
-                    .members()
-                    .iter()
-                    .filter(|member| {
-                        member.scoped_host.is_none()
-                            && matches!(
-                                member.party.entity_type(),
-                                foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM
-                            )
-                            && matches!(
-                                member.role.kind(),
-                                foks_proto::RoleType::Admin | foks_proto::RoleType::Owner
-                            )
-                            && graph.team(&member.party).is_some()
-                            && graph
-                                .team(&member.party)
-                                .is_some_and(|actor| actor.holds_roster_private_key(member))
-                    })
-                    .max_by_key(|member| (member.role, member.source_role))
-                {
-                    member.party.clone()
-                } else {
-                    errors.push(format!(
-                        "{} has no direct or local-team administrator path",
-                        hex(credential.uid().as_bytes())
-                    ));
-                    continue;
-                }
-            };
-            let mut teams = graph.teams;
-            let child_first = graph.child_first;
-            let edges = graph.edges;
-            let target_index = teams
-                .iter()
-                .position(|team| team.verified.team() == &team_id)
-                .ok_or(Error::InvalidAccount(
-                    "membership graph lost the federated target",
-                ))?;
-            let target = teams.remove(target_index);
-            let actor_team = if selected_actor == *credential.uid() {
-                None
-            } else {
-                let index = teams
-                    .iter()
-                    .position(|team| team.verified.team() == &selected_actor)
-                    .ok_or(Error::InvalidAccount(
-                        "membership graph lost the federated local-team actor",
-                    ))?;
-                Some(teams.remove(index))
-            };
-            return Ok(LocalFederatedActor {
+            count_federation_read(|counters| counters.graph_loads += 1);
+            let graph = std::rc::Rc::new(AuthenticatedFederationGraph {
                 credential,
                 user: actor,
-                target,
-                actor_team,
-                other_teams: teams,
-                child_first,
-                edges,
+                teams: graph.teams,
+                child_first: graph.child_first,
+                edges: graph.edges,
             });
+            match federated_actor_in_graph(&graph, &team_id, pending.as_ref())? {
+                Ok(actor) => return Ok(actor),
+                Err(reason) => {
+                    errors.push(reason);
+                    continue;
+                }
+            }
         }
         if !locked_yubi.is_empty() {
             return Err(Error::YubiUnlockRequired(format!(
@@ -1578,6 +1763,256 @@ impl CheckedProfileSession<'_> {
         } else {
             errors.join("; ")
         }))
+    }
+
+    /// Whether this profile's own scheduler has already brought the ordinary
+    /// user and team security state current for `uid`, so running those
+    /// responders again inside a federation cascade would repeat work the
+    /// profile itself considers done.
+    ///
+    /// The job rows alone are not enough, because they only say when the
+    /// profile last swept, not what has happened since. Two conditions that
+    /// are current by construction are checked first:
+    ///
+    /// * A stale user shared key is exactly what the user responder repairs,
+    ///   and the selection that produced `actor` authenticated the user a
+    ///   moment ago, so the answer is read from that authentication.
+    /// * A caller-durable CLKR journal is work only the team responder
+    ///   resumes. Nothing later in the refresh would surface it, so an
+    ///   outstanding journal always runs the responders.
+    ///
+    /// Everything else the responders would repair shows up as a stale
+    /// recipient when the roster is projected, and
+    /// [`Self::unskip_federation_responders`] runs them then. The skip is
+    /// therefore never the last word on whether the work was needed.
+    fn federation_responders_are_current(
+        &self,
+        uid: &EntityId,
+        actor: &LocalFederatedActor<'_, '_>,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<bool> {
+        if !actor.user().verified.stale_shared_key_roles().is_empty() {
+            return Ok(false);
+        }
+        if !vault.team_rekey_aliases()?.is_empty() {
+            return Ok(false);
+        }
+        let host = self.pinned_host()?;
+        let now = now_microseconds()?;
+        let store = HardStateStore::open(&self.paths.hard_database)?;
+        for (type_id, kind) in [
+            (USER_REFRESH_JOB_TYPE_ID, ScheduledJobKind::UserRefresh),
+            (TEAM_REFRESH_JOB_TYPE_ID, ScheduledJobKind::TeamRefresh),
+        ] {
+            let Some(job) = store.scheduled_job(&refresh_job_id(type_id, host.host_id(), uid))?
+            else {
+                return Ok(false);
+            };
+            // A failing job never counts as current however recently it ran:
+            // its backoff moves its next run into the future, which is the one
+            // way a job row can look settled while nothing is being repaired.
+            let settled = job.kind == kind
+                && job.host_id == host.host_id().as_bytes()
+                && job.scope_id == uid.as_bytes()
+                && job.failure_count == 0
+                && job.last_completed_at.is_some_and(|completed| {
+                    completed <= now && now - completed < job.interval_micros
+                });
+            if !settled {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Brings this profile's own security state current before its roster is
+    /// read, exactly as the side that started the refresh does for itself.
+    ///
+    /// Returns whether anything ran, which is the caller's signal that the
+    /// actor it holds was derived from a chain that may have moved.
+    ///
+    /// The software sweep is unattended and PIN-free; a hardware actor runs
+    /// the equivalent already-unlocked responders, which the software sweep
+    /// cannot drive because it must never prompt.
+    fn run_federation_responders(
+        &self,
+        actor: &LocalFederatedActor<'_, '_>,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+        cascade: &mut FederationCascade,
+        force: bool,
+    ) -> Result<bool> {
+        match actor.credential() {
+            FederatedActorCredential::Software(credential) => {
+                let key = (
+                    self.profile.name.clone(),
+                    credential.uid.as_bytes().to_vec(),
+                );
+                if cascade.software_refreshed.contains(&key) {
+                    return Ok(false);
+                }
+                if !force
+                    && self.federation_responders_are_current(&credential.uid, actor, vault)?
+                {
+                    count_federation_read(|counters| counters.skipped_responders += 1);
+                    cascade.skipped_responders.insert(key);
+                    return Ok(false);
+                }
+                cascade.skipped_responders.remove(&key);
+                cascade.software_refreshed.insert(key);
+                count_federation_read(|counters| counters.ran_responders += 1);
+                self.refresh_user_security(credential.uid.as_bytes(), vault, master_key)
+                    .map_err(Error::BackgroundRefresh)?;
+                self.refresh_team_chains(credential.uid.as_bytes(), vault, master_key)
+                    .map_err(Error::BackgroundRefresh)?;
+                self.record_federation_commit(cascade);
+                Ok(true)
+            }
+            FederatedActorCredential::Yubi { alias, credential } => {
+                let key = (self.profile.name.clone(), (*alias).to_owned());
+                if !cascade.yubi_refreshed.insert(key) {
+                    return Ok(false);
+                }
+                count_federation_read(|counters| counters.ran_responders += 1);
+                let host = self.pinned_host()?;
+                let authenticated = self.client.authenticate_yubi_and_pin(&host, credential)?;
+                self.run_unlocked_yubi_security_responders(
+                    alias,
+                    &host,
+                    credential,
+                    authenticated,
+                    vault,
+                    master_key,
+                )?;
+                self.record_federation_commit(cascade);
+                Ok(true)
+            }
+        }
+    }
+
+    /// Runs a responder sweep this cascade skipped, after a roster projection
+    /// proved the remote side was not current after all.
+    ///
+    /// A skip is always provisional. The only work the sweep does that can
+    /// change this refresh's outcome is repairing a key some roster row still
+    /// depends on, and that is precisely what makes a recipient projection
+    /// fail, so the one error that follows a wrong skip is the one that undoes
+    /// it. Returns whether the sweep ran, so the caller retries only then.
+    fn unskip_federation_responders(
+        &self,
+        actor: &LocalFederatedActor<'_, '_>,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+        cascade: &mut FederationCascade,
+    ) -> Result<bool> {
+        let FederatedActorCredential::Software(credential) = actor.credential() else {
+            return Ok(false);
+        };
+        let key = (
+            self.profile.name.clone(),
+            credential.uid.as_bytes().to_vec(),
+        );
+        if !cascade.skipped_responders.contains(&key) {
+            return Ok(false);
+        }
+        count_federation_read(|counters| counters.unskipped_responders += 1);
+        self.run_federation_responders(actor, vault, master_key, cascade, true)
+    }
+
+    fn federated_team_id(
+        &self,
+        local_team_alias: &str,
+        local_vault: &mut AccountVault<'_>,
+    ) -> Result<EntityId> {
+        Ok(EntityId::from_bytes(
+            local_vault.team(local_team_alias)?.team_id.clone(),
+        )?)
+    }
+
+    /// Selects an administrator for `local_team_alias` out of a graph this
+    /// cascade already authenticated, falling back to a full candidate walk
+    /// when that graph cannot serve the team.
+    ///
+    /// Two conditions gate the reuse, and both are necessary:
+    ///
+    /// * Nothing this cascade ran may have moved the profile the graph was
+    ///   read from since `held` was selected. `held_commits` is the caller's
+    ///   snapshot of [`FederationCascade::commits`] taken when `held` was
+    ///   known current, and every commit increments that counter before
+    ///   control can return here, so a selection that follows a commit on the
+    ///   same profile always reloads. This is what keeps the selection after
+    ///   the local CLKR commit a fresh cross-host read rather than a replay of
+    ///   the pre-commit graph.
+    /// * Reuse for a *different* team must not change which credential acts.
+    ///   The candidate walk tries software before already-unlocked hardware,
+    ///   so a hardware graph is reused only for the team it was selected for,
+    ///   or on a profile that holds no software account at all. Reuse for the
+    ///   same team cannot change the credential: the walk is deterministic in
+    ///   the vault and the host state, and the host state is unmoved.
+    fn select_federated_admin_reusing<'a, 'device>(
+        &self,
+        local_team_alias: &str,
+        held: &LocalFederatedActor<'a, 'device>,
+        held_commits: u64,
+        unlocked: &'a [UnlockedYubiActor<'a, 'device>],
+        local_vault: &mut AccountVault<'_>,
+        cascade: &FederationCascade,
+    ) -> Result<LocalFederatedActor<'a, 'device>> {
+        if cascade.commits(&self.profile.name) == held_commits {
+            let team_id = self.federated_team_id(local_team_alias, local_vault)?;
+            let credential_is_unchanged = held.target().verified.team() == &team_id
+                || matches!(held.credential(), FederatedActorCredential::Software(_))
+                || local_vault.aliases()?.is_empty();
+            if credential_is_unchanged {
+                let pending = local_vault
+                    .team_rekey_for_team(team_id.as_bytes())?
+                    .map(|(_, pending)| pending);
+                if let Ok(actor) =
+                    federated_actor_in_graph(&held.graph, &team_id, pending.as_ref())?
+                {
+                    count_federation_read(|counters| counters.reused_selections += 1);
+                    return Ok(actor);
+                }
+            }
+        }
+        self.select_local_federated_admin(local_team_alias, unlocked, local_vault)
+    }
+
+    /// Records that this profile's durable state may have moved, so no graph
+    /// read before this point is reused for it again.
+    ///
+    /// Called immediately after every operation in this module that can commit
+    /// a chain link, rotate a key, or write a caller-durable CLKR journal.
+    fn record_federation_commit(&self, cascade: &mut FederationCascade) {
+        cascade.record_commit(&self.profile.name);
+        count_federation_read(|counters| {
+            counters.graph_loads_at_last_commit = counters.graph_loads;
+        });
+    }
+
+    /// The session for one remote hop, opened once per cascade.
+    ///
+    /// Opening it per binding and per convergence pass builds a fresh
+    /// connection pool each time, so every remote call in the refresh pays its
+    /// own TLS handshake. The cached session is equivalent to a freshly opened
+    /// one: [`ProfileSession::related_profile`] derives it from the registry
+    /// snapshot this call already holds, and copies operation controls that are
+    /// identical for every session in one cascade.
+    fn federation_session(
+        &self,
+        registry: &ProfileRegistry,
+        name: &str,
+        cascade: &mut FederationCascade,
+    ) -> Result<std::rc::Rc<ProfileSession>> {
+        if let Some(session) = cascade.sessions.get(name) {
+            return Ok(std::rc::Rc::clone(session));
+        }
+        let session = std::rc::Rc::new(self.related_profile(registry, name)?);
+        count_federation_read(|counters| counters.remote_sessions += 1);
+        cascade
+            .sessions
+            .insert(name.to_owned(), std::rc::Rc::clone(&session));
+        Ok(session)
     }
 
     /// Aliases of Yubi accounts this profile holds that the caller has not
@@ -1616,15 +2051,14 @@ impl CheckedProfileSession<'_> {
         master_key: &[u8; 32],
         cascade: &mut FederationCascade,
     ) -> Result<FederatedGraphRecipients<'a, 'device>> {
-        let host = self.pinned_host()?;
         let root = self.select_local_federated_admin(root_team_alias, unlocked, local_vault)?;
-        let graph = self.client.discover_local_team_graph_with_credential(
-            &host,
-            root.credential.borrowed(),
-            &root.user.verified,
-            &root.user.puks,
-        )?;
-        let reachable = connected_local_team_component(root.target.verified.team(), &graph.edges);
+        // The graph `root` was read from is current as of this snapshot; every
+        // reuse below re-checks it against the cascade's commit counter.
+        let root_commits = cascade.commits(&self.profile.name);
+        // The selection authenticated this credential and walked its whole
+        // membership graph a moment ago. Rediscovering it here would issue the
+        // identical call and discard the identical answer.
+        let reachable = connected_local_team_component(root.target().verified.team(), root.edges());
         let mut scheduled = Vec::new();
         for alias in local_vault.team_aliases()? {
             let stored = local_vault.team(&alias)?;
@@ -1648,7 +2082,14 @@ impl CheckedProfileSession<'_> {
         }
         let mut supplied = std::collections::BTreeMap::new();
         for (alias, team_id, bindings) in scheduled {
-            let actor = self.select_local_federated_admin(&alias, unlocked, local_vault)?;
+            let actor = self.select_federated_admin_reusing(
+                &alias,
+                &root,
+                root_commits,
+                unlocked,
+                local_vault,
+                cascade,
+            )?;
             let parties = self.load_federated_team_recipients(
                 &bindings,
                 &actor,
@@ -1665,8 +2106,18 @@ impl CheckedProfileSession<'_> {
                 ));
             }
         }
+        // Only the credential of the returned actor is used downstream, and a
+        // remote hop cannot move this profile unless the cascade came back
+        // around to it, which the commit counter records.
         Ok((
-            self.select_local_federated_admin(root_team_alias, unlocked, local_vault)?,
+            self.select_federated_admin_reusing(
+                root_team_alias,
+                &root,
+                root_commits,
+                unlocked,
+                local_vault,
+                cascade,
+            )?,
             supplied,
             reachable,
         ))
@@ -1693,13 +2144,7 @@ impl CheckedProfileSession<'_> {
             registry,
             credentials,
             master_key,
-            &mut FederationCascade {
-                visited: std::collections::BTreeSet::from([(
-                    self.profile.name.clone(),
-                    local_team_alias.to_owned(),
-                )]),
-                ..FederationCascade::default()
-            },
+            &mut FederationCascade::rooted_at(&self.profile.name, local_team_alias),
         )
     }
 
@@ -1739,29 +2184,28 @@ impl CheckedProfileSession<'_> {
             derive_mutation_key(master_key),
         )?;
         self.cleanup_inactive_team_rekeys(&host, local_vault, &mut mutations)?;
+        self.record_federation_commit(cascade);
 
         // First run the local graph without remote projections. Its visible
         // reconciliation path uses only authenticated local evidence, so an
         // unreachable remote profile cannot strand a committed CLKR intent.
         let local_actor =
             self.select_local_federated_admin(local_team_alias, unlocked, local_vault)?;
-        let local_graph = self.client.discover_local_team_graph_with_credential(
-            &host,
-            local_actor.credential.borrowed(),
-            &local_actor.user.verified,
-            &local_actor.user.puks,
-        )?;
-        let local_scope =
-            connected_local_team_component(local_actor.target.verified.team(), &local_graph.edges);
+        // The selection already walked this credential's membership graph.
+        let local_scope = connected_local_team_component(
+            local_actor.target().verified.team(),
+            local_actor.edges(),
+        );
         self.refresh_authenticated_team_graph(
             &host,
-            local_actor.credential.team_refresh(),
+            local_actor.credential().team_refresh(),
             &std::collections::BTreeMap::new(),
             Some(&local_scope),
             None,
             local_vault,
             &mut mutations,
         )?;
+        self.record_federation_commit(cascade);
 
         for convergence in 0..2 {
             let (local_actor, supplied, local_scope) = self.load_federated_graph_recipients(
@@ -1775,18 +2219,22 @@ impl CheckedProfileSession<'_> {
             )?;
             self.refresh_authenticated_team_graph(
                 &host,
-                local_actor.credential.team_refresh(),
+                local_actor.credential().team_refresh(),
                 &supplied,
                 Some(&local_scope),
                 None,
                 local_vault,
                 &mut mutations,
             )?;
+            self.record_federation_commit(cascade);
 
             // Cross-host freshness cannot be committed atomically by the
             // v0.1.9 protocol. Re-read both sides after the local commit and
             // immediately converge once more if a remote PTK advanced in the
-            // race window.
+            // race window. This selection is deliberately the uncached one:
+            // reuse is what the commit just recorded above forbids, and the
+            // whole point of the re-read is to observe what the commit and any
+            // concurrent remote writer did.
             let current =
                 self.select_local_federated_admin(local_team_alias, unlocked, local_vault)?;
             let confirmed = self.load_federated_team_recipients(
@@ -1799,7 +2247,7 @@ impl CheckedProfileSession<'_> {
                 master_key,
                 cascade,
             )?;
-            if federated_roster_matches(&current.target.verified, &confirmed) {
+            if federated_roster_matches(&current.target().verified, &confirmed) {
                 return Ok(());
             }
             if convergence == 1 {
@@ -1837,13 +2285,7 @@ impl CheckedProfileSession<'_> {
             credentials,
             master_key,
         )?;
-        let mut cascade = FederationCascade {
-            visited: std::collections::BTreeSet::from([(
-                self.profile.name.clone(),
-                team_alias.to_owned(),
-            )]),
-            ..FederationCascade::default()
-        };
+        let mut cascade = FederationCascade::rooted_at(&self.profile.name, team_alias);
         let (_, mut supplied, _) = self.load_federated_graph_recipients(
             team_alias,
             &[],
@@ -2132,6 +2574,7 @@ impl CheckedProfileSession<'_> {
                 cascade
                     .yubi_refreshed
                     .insert((self.profile.name.clone(), actor.alias.to_owned()));
+                self.record_federation_commit(cascade);
             }
             let after = self.pending_hardware_team_rekeys(local_vault)?;
             if before == 0 || after == 0 || after >= before {
@@ -2183,13 +2626,7 @@ impl CheckedProfileSession<'_> {
         self.profile.require(Capability::Teams)?;
         self.profile.require(Capability::Federation)?;
         let _scheduler_lock = super::runtime::ProfileLock::scheduler(&self.paths)?;
-        let mut cascade = FederationCascade {
-            visited: std::collections::BTreeSet::from([(
-                self.profile.name.clone(),
-                local_team_alias.to_owned(),
-            )]),
-            ..FederationCascade::default()
-        };
+        let mut cascade = FederationCascade::rooted_at(&self.profile.name, local_team_alias);
         self.prepare_unlocked_yubi_responders(unlocked, local_vault, master_key, &mut cascade)?;
         match self.refresh_federated_team_security_inner(
             local_team_alias,
@@ -2401,5 +2838,426 @@ mod tests {
         for excluded in [&parent, &unrelated_child, &unrelated_parent] {
             assert!(!descendants.contains(excluded.as_bytes()));
         }
+    }
+
+    /// Two profiles on two hosts, each with a named team, joined by one active
+    /// federated membership. This is the smallest shape that exercises a
+    /// convergence pass: one local graph, one remote hop, one local commit and
+    /// one post-commit re-read.
+    struct FederationFixture {
+        _environments: Vec<foks_server_testkit::TestEnvironment>,
+        _servers: Vec<foks_server_testkit::InProcessServer>,
+        _temporary: tempfile::TempDir,
+        credentials: ClientCredentials,
+        registry: ProfileRegistry,
+        master: [u8; 32],
+    }
+
+    impl FederationFixture {
+        fn start() -> Self {
+            let environments = (0..2)
+                .map(|_| foks_server_testkit::TestEnvironment::new().unwrap())
+                .collect::<Vec<_>>();
+            let servers = environments
+                .iter()
+                .map(|environment| environment.start_server().unwrap())
+                .collect::<Vec<_>>();
+            let temporary = tempfile::tempdir().unwrap();
+            let state = temporary.path().join("state");
+            ClientCredentials::initialize(&state, CredentialBackend::PrivateFile).unwrap();
+            let mut registry = ProfileRegistry::open(&state).unwrap();
+            for (index, name) in ["local", "remote"].into_iter().enumerate() {
+                let root = temporary.path().join(format!("{name}-root.der"));
+                environments[index].write_probe_root(&root).unwrap();
+                registry
+                    .add(Profile {
+                        name: name.to_owned(),
+                        label: None,
+                        probe: format!(
+                            "localhost:{}",
+                            environments[index].addresses().unwrap().probe.port()
+                        ),
+                        protocol: ProtocolPolicy::V019,
+                        trust: TrustRoot::CertificateDer { path: root },
+                    })
+                    .unwrap();
+            }
+            let credentials = ClientCredentials::open(&state).unwrap();
+            let master = *credentials.master_key().unwrap();
+            let fixture = Self {
+                _environments: environments,
+                _servers: servers,
+                _temporary: temporary,
+                credentials,
+                registry,
+                master,
+            };
+            for name in ["local", "remote"] {
+                fixture.run(name, |session, _, _| session.probe_and_pin());
+            }
+            fixture.run("local", |local, vault, master| {
+                local.create_account(
+                    "owner",
+                    "localowner",
+                    "local owner",
+                    "local@example.test",
+                    "",
+                    None,
+                    vault,
+                    master,
+                )?;
+                local.create_named_team("owner", "team", "localteam", vault, master)?;
+                Ok(())
+            });
+            fixture.run("remote", |remote, vault, master| {
+                remote.create_account(
+                    "owner",
+                    "remoteowner",
+                    "remote owner",
+                    "remote@example.test",
+                    "",
+                    None,
+                    vault,
+                    master,
+                )?;
+                remote.create_named_team("owner", "team", "remoteteam", vault, master)?;
+                remote.create_account(
+                    "member",
+                    "remotemember",
+                    "remote member",
+                    "remote-member@example.test",
+                    "",
+                    None,
+                    vault,
+                    master,
+                )?;
+                remote.add_local_team_member(
+                    "team",
+                    "remotemember",
+                    super::super::team::TeamMemberRole::Admin,
+                    vault,
+                    master,
+                )?;
+                Ok(())
+            });
+            let local = ProfileSession::open(&fixture.registry, "local").unwrap();
+            let remote = ProfileSession::open(&fixture.registry, "remote").unwrap();
+            fixture
+                .credentials
+                .with_checked_sessions(&local, &remote, |local, remote| {
+                    let mut local_store = foks_keystore::EncryptedFileSecretStore::open(
+                        &local.paths.credential_store,
+                        derive_vault_key(&fixture.master),
+                    )?;
+                    let mut remote_store = foks_keystore::EncryptedFileSecretStore::open(
+                        &remote.paths.credential_store,
+                        derive_vault_key(&fixture.master),
+                    )?;
+                    local.admit_federated_team(
+                        remote,
+                        "team",
+                        "team",
+                        FederationDestinationRole::Member { visibility: 0 },
+                        &mut AccountVault::new(&mut local_store),
+                        &mut AccountVault::new(&mut remote_store),
+                        &fixture.master,
+                    )
+                })
+                .unwrap();
+            fixture
+        }
+
+        fn run<T>(
+            &self,
+            profile: &str,
+            operation: impl FnOnce(
+                &CheckedProfileSession<'_>,
+                &mut AccountVault<'_>,
+                &[u8; 32],
+            ) -> Result<T>,
+        ) -> T {
+            self.try_run(profile, operation).unwrap()
+        }
+
+        fn try_run<T>(
+            &self,
+            profile: &str,
+            operation: impl FnOnce(
+                &CheckedProfileSession<'_>,
+                &mut AccountVault<'_>,
+                &[u8; 32],
+            ) -> Result<T>,
+        ) -> Result<T> {
+            let session = ProfileSession::open(&self.registry, profile).unwrap();
+            self.credentials.with_checked_session(&session, |session| {
+                let mut store = foks_keystore::EncryptedFileSecretStore::open(
+                    &session.paths.credential_store,
+                    derive_vault_key(&self.master),
+                )?;
+                operation(session, &mut AccountVault::new(&mut store), &self.master)
+            })
+        }
+
+        fn refresh(&self) -> Result<()> {
+            self.try_run("local", |local, vault, master| {
+                local.refresh_federated_team_security(
+                    "team",
+                    &[],
+                    vault,
+                    &self.registry,
+                    &self.credentials,
+                    master,
+                )
+            })
+        }
+
+        /// The local team's authenticated state together with the recipient
+        /// projection of every federated binding it holds, exactly as one
+        /// convergence pass computes them.
+        fn converged(&self) -> bool {
+            self.run("local", |local, vault, master| {
+                let mut cascade = FederationCascade::rooted_at(&local.profile.name, "team");
+                let (actor, supplied, _) = local.load_federated_graph_recipients(
+                    "team",
+                    &[],
+                    vault,
+                    &self.registry,
+                    &self.credentials,
+                    master,
+                    &mut cascade,
+                )?;
+                let parties = supplied
+                    .get(actor.target().verified.team().as_bytes())
+                    .ok_or(Error::InvalidAccount("test binding produced no parties"))?;
+                Ok(federated_roster_matches(&actor.target().verified, parties))
+            })
+        }
+
+        /// Rotates the remote team's PTKs without telling the local side, by
+        /// removing a member of that team.
+        fn rotate_remote_team(&self) {
+            self.run("remote", |remote, vault, master| {
+                let party = remote
+                    .list_team_members("team", vault)?
+                    .into_iter()
+                    .find(|member| member.username.as_deref() == Some("remotemember"))
+                    .map(|member| member.party_id_hex)
+                    .ok_or(Error::InvalidAccount("remote member is missing"))?;
+                remote.remove_local_team_member("team", &party, vault, master)?;
+                Ok(())
+            });
+        }
+
+        /// Backdates the remote profile's own user and team refresh jobs to a
+        /// clean completion a moment ago, which is what makes a cascade treat
+        /// that profile's ordinary responders as already run.
+        fn settle_remote_refresh_jobs(&self) {
+            let database = self
+                .registry
+                .prepare_profile_directory("remote")
+                .unwrap()
+                .hard_database;
+            let now = now_microseconds().unwrap();
+            let connection = rusqlite::Connection::open(database).unwrap();
+            let updated = connection
+                .execute(
+                    "UPDATE scheduled_jobs
+                     SET last_completed_at = ?1, failure_count = 0, last_error = NULL,
+                         lease_until = NULL, next_run_at = ?1 + interval_micros
+                     WHERE job_kind IN (?2, ?3)",
+                    rusqlite::params![
+                        now as i64,
+                        ScheduledJobKind::UserRefresh as u8,
+                        ScheduledJobKind::TeamRefresh as u8,
+                    ],
+                )
+                .unwrap();
+            assert!(
+                updated >= 2,
+                "the remote profile must have both ordinary refresh jobs registered"
+            );
+        }
+    }
+
+    /// The reuse rules have to pay for themselves: a refresh must not walk the
+    /// same credential's membership graph again for every team and every pass.
+    ///
+    /// Before the graph behind a selection was shared, this shape performed ten
+    /// authenticated graph discoveries per refresh: seven on the local side,
+    /// two of them verbatim rediscoveries of a graph the selection immediately
+    /// before had just produced, and three on the remote side. It now performs
+    /// six, or five once the remote profile's own scheduler has swept, and the
+    /// only ones left are the loads a commit boundary makes mandatory.
+    #[test]
+    fn a_federation_refresh_reuses_authenticated_graphs_instead_of_rediscovering_them() {
+        let fixture = FederationFixture::start();
+        let before = federation_read_counters();
+        fixture.refresh().unwrap();
+        let after = federation_read_counters();
+        let loads = after.graph_loads - before.graph_loads;
+        let reused = after.reused_selections - before.reused_selections;
+        let sessions = after.remote_sessions - before.remote_sessions;
+        assert!(
+            reused >= 2,
+            "the selections a commit did not invalidate must reuse a loaded graph: {after:?}"
+        );
+        assert!(
+            loads <= 6,
+            "a two-profile refresh must not load more than six authenticated graphs: {loads}"
+        );
+        assert_eq!(
+            sessions, 1,
+            "the one remote profile must be opened once, so its connection pool is reused"
+        );
+
+        assert!(
+            (after.ran_responders - before.ran_responders) >= 1,
+            "a remote profile with no recorded sweep must have one run for it"
+        );
+
+        // A second refresh skips the remote profile's ordinary responders once
+        // that profile's own scheduler has run them within their interval.
+        fixture.settle_remote_refresh_jobs();
+        let before = federation_read_counters();
+        fixture.refresh().unwrap();
+        let after = federation_read_counters();
+        assert_eq!(
+            after.ran_responders - before.ran_responders,
+            0,
+            "a settled remote profile must not have its user and team sweep repeated"
+        );
+        assert!(
+            (after.skipped_responders - before.skipped_responders) >= 1,
+            "the sweep must be recorded as skipped rather than silently omitted"
+        );
+        assert_eq!(
+            after.unskipped_responders - before.unskipped_responders,
+            0,
+            "nothing was stale, so no skipped sweep should have been forced"
+        );
+    }
+
+    /// The re-read after the local CLKR commit is the whole cross-host
+    /// freshness guarantee: it is what notices a remote PTK that advanced
+    /// inside the race window the protocol cannot close. It must therefore
+    /// never be served from a graph read before that commit.
+    #[test]
+    fn the_federated_selection_after_the_local_commit_is_a_fresh_read() {
+        let fixture = FederationFixture::start();
+        let before = federation_read_counters();
+        fixture.refresh().unwrap();
+        let after = federation_read_counters();
+        assert!(
+            after.graph_loads > after.graph_loads_at_last_commit,
+            "a refresh must authenticate a graph again after the last state it committed: {after:?}"
+        );
+        assert!(after.graph_loads_at_last_commit > before.graph_loads);
+
+        // The gate itself: a recorded commit forces the very next selection
+        // for the same profile back onto a fresh candidate walk, and without
+        // one the identical call is served from the held graph.
+        fixture.run("local", |local, vault, master| {
+            let _ = master;
+            let mut cascade = FederationCascade::rooted_at(&local.profile.name, "team");
+            let held = local.select_local_federated_admin("team", &[], vault)?;
+            let commits = cascade.commits(&local.profile.name);
+
+            let before = federation_read_counters();
+            local.select_federated_admin_reusing("team", &held, commits, &[], vault, &cascade)?;
+            let after = federation_read_counters();
+            assert_eq!(
+                after.graph_loads, before.graph_loads,
+                "an uncommitted selection must not reload"
+            );
+            assert_eq!(after.reused_selections, before.reused_selections + 1);
+
+            local.record_federation_commit(&mut cascade);
+            let before = federation_read_counters();
+            local.select_federated_admin_reusing("team", &held, commits, &[], vault, &cascade)?;
+            let after = federation_read_counters();
+            assert_eq!(
+                after.graph_loads,
+                before.graph_loads + 1,
+                "a selection across a commit must authenticate the graph again"
+            );
+            assert_eq!(
+                after.reused_selections, before.reused_selections,
+                "a selection across a commit must not be served from the held graph"
+            );
+            Ok(())
+        });
+    }
+
+    /// Convergence is declared only when every authenticated roster row names
+    /// the key the remote side currently holds. A remote team that rotated
+    /// behind this profile's back must fail that test, including when the
+    /// remote profile's own responders were skipped as already current.
+    #[test]
+    fn a_stale_remote_roster_fails_convergence_rather_than_matching() {
+        let fixture = FederationFixture::start();
+        fixture.refresh().unwrap();
+        assert!(
+            fixture.converged(),
+            "the first refresh must leave the binding converged"
+        );
+
+        fixture.rotate_remote_team();
+        fixture.settle_remote_refresh_jobs();
+        assert!(
+            !fixture.converged(),
+            "a roster row naming a superseded remote key must not be reported as converged"
+        );
+
+        let before = federation_read_counters();
+        fixture.refresh().unwrap();
+        let after = federation_read_counters();
+        assert!(
+            after.skipped_responders > before.skipped_responders,
+            "the settled remote profile's ordinary responders must have been skipped"
+        );
+        assert!(
+            fixture.converged(),
+            "the refresh must repair the roster rather than leave it stale"
+        );
+    }
+
+    /// The rows this module looks up are the ones a profile actually
+    /// registers. The identities are now shared rather than restated, so this
+    /// no longer guards against two copies drifting; what it still pins is
+    /// that the derivation, the kind and the scope agree end to end with the
+    /// registration, which a shared constant alone does not establish.
+    #[test]
+    fn default_refresh_job_ids_match_the_registered_jobs() {
+        let fixture = crate::test_support::AccountFixture::start();
+        let uid = fixture.run(|session, vault, master| {
+            session.create_account(
+                "owner",
+                "jobidowner",
+                "job id owner",
+                "jobid@example.test",
+                "",
+                None,
+                vault,
+                master,
+            )?;
+            let uid = vault.account("owner")?.credential.uid.clone();
+            session.register_default_refresh_jobs_for(&uid, now_microseconds()?)?;
+            Ok(uid)
+        });
+        fixture.run(|session, _, _| {
+            let host = session.pinned_host()?;
+            let store = HardStateStore::open(&session.paths.hard_database)?;
+            for (type_id, kind) in [
+                (USER_REFRESH_JOB_TYPE_ID, ScheduledJobKind::UserRefresh),
+                (TEAM_REFRESH_JOB_TYPE_ID, ScheduledJobKind::TeamRefresh),
+            ] {
+                let job = store
+                    .scheduled_job(&refresh_job_id(type_id, host.host_id(), &uid))?
+                    .unwrap_or_else(|| panic!("{kind:?} job is registered under another identity"));
+                assert_eq!(job.kind, kind);
+                assert_eq!(job.scope_id, uid.as_bytes());
+            }
+            Ok(())
+        });
     }
 }
