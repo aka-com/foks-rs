@@ -597,6 +597,7 @@ body {
 .verified-mark .ic {
   width: 15px;
   height: 15px;
+  transform: translate(-1px, 1px);
 }
 
 .group-settings p.fn,

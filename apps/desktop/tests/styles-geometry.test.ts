@@ -335,6 +335,10 @@ test('app stylesheet uses design tokens and declares no hardcoded colors', async
   assert.doesNotMatch(app, /\.rt[^{]*\{[^}]*grid-template-columns/);
   assert.match(app, /\.tab\.on::after/);
   assert.match(app, /\.inset\.danger\s*\{[^}]*overflow: visible/);
+  assert.match(
+    app,
+    /\.verified-mark \.ic\s*\{[^}]*transform: translate\(-1px, 1px\);/,
+  );
 });
 
 test('refresh status uses a fixed overlay and an opaque bounded surface', async () => {

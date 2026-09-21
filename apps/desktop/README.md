@@ -322,9 +322,8 @@ collapsed rail keeps its glyphs, the unread count on the Chat glyph's corner
 and the attention dot on the avatar's, with the labels becoming tooltips. The
 width is the one the reader chose: a collapsed rail does not expand on hover or
 on focus. The toggle is in the topbar, not in the rail, and writes
-`sideCollapsed` to `localStorage` through `src/sidebar-prefs.ts`. Opening the
-details panel collapses the rail and closing it restores the rail, on
-transitions only and without touching the stored preference. First run
+`sideCollapsed` to `localStorage` through `src/sidebar-prefs.ts`. Item
+selection and navigation leave that chosen width unchanged. First run
 replaces the rail with its own step list, which is `nav.side` without `rail`
 and has no toggle; the blue styling is scoped to `.side.rail` for that reason.
 

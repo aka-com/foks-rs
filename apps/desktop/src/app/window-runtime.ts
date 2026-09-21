@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { Bridge } from '../bridge';
 import type { Location, LocationStore } from '../location';
 import { applyRailColor, storedRailColor } from '../rail-theme';
@@ -12,13 +12,11 @@ export function useWindowRuntime({
   bridge,
   locations,
   here,
-  detailsShown,
   commandError,
 }: {
   bridge: Bridge;
   locations: LocationStore;
   here: Location;
-  detailsShown: boolean;
   commandError: CommandErrorHandler;
 }) {
   const [sideCollapsed, setSideCollapsed] = useState(storedSideCollapsedPref);
@@ -27,8 +25,8 @@ export function useWindowRuntime({
   useEffect(() => {
     applyRailColor(storedRailColor());
   }, []);
-  // The topbar's toggle is the only writer of the stored preference; the
-  // details panel's reaction below changes the width without recording it.
+  // The explicit rail/topbar toggle is the only interaction that changes the
+  // width, and the chosen width persists across navigation and item details.
   const toggleSidebar = useCallback(() => {
     const collapsed = !sideCollapsed;
     setSideCollapsed(collapsed);
@@ -97,16 +95,6 @@ export function useWindowRuntime({
         .setTrafficLightsVisible(trafficLightsVisible)
         .catch(commandError);
   }, [bridge, commandError, trafficLightsVisible]);
-  // Adjust rail width when details visibility changes. Opening details
-  // collapses the rail; closing details restores it. This transient layout
-  // state is not persisted, and an initially open details panel collapses the
-  // rail once.
-  const detailsWasShown = useRef(false);
-  useEffect(() => {
-    if (detailsWasShown.current === detailsShown) return;
-    detailsWasShown.current = detailsShown;
-    setSideCollapsed(detailsShown);
-  }, [detailsShown]);
   // Scrollbars show while a pane is scrolling and for 700ms after. Scroll
   // events do not bubble, so the listener is capture-phase; that also covers
   // keyboard scrolling, which no pointer event would report.

@@ -1,6 +1,6 @@
 /**
- * The collapsible rail: the topbar's toggle and its stored preference, and the
- * layout reaction to the details panel.
+ * The collapsible rail: the topbar's toggle, its stored preference, and the
+ * item interactions that must leave the chosen width alone.
  *
  * Assertions read the DOM and `localStorage` rather than shell state, because
  * both are the contract: collapsing is CSS driven by `.side.is-narrow`, and the
@@ -140,7 +140,7 @@ test('a collapsed rail stays collapsed under the pointer and the keyboard', asyn
   assert.ok(document.querySelector('.app.side-narrow'));
 });
 
-test('opening details collapses the rail and closing it restores the chosen width', async () => {
+test('selecting an item and closing its details leave the rail expanded', async () => {
   await shell({ kind: 'all' }, '*');
   const stored = window.localStorage.getItem('sideCollapsed');
 
@@ -149,9 +149,8 @@ test('opening details collapses the rail and closing it restores the chosen widt
   ui.fireEvent.click(row);
   await ui.waitFor(() => {
     assert.ok(document.querySelector('.details'));
-    assert.ok(document.querySelector('.side.is-narrow'));
   });
-  // A layout reaction, not a preference.
+  assert.equal(document.querySelector('.side.is-narrow'), null);
   assert.equal(window.localStorage.getItem('sideCollapsed'), stored);
 
   const close = document.querySelector<HTMLButtonElement>(
@@ -161,27 +160,37 @@ test('opening details collapses the rail and closing it restores the chosen widt
   ui.fireEvent.click(close);
   await ui.waitFor(() => {
     assert.equal(document.querySelector('.details'), null);
-    assert.equal(document.querySelector('.side.is-narrow'), null);
   });
+  assert.equal(document.querySelector('.side.is-narrow'), null);
   assert.equal(window.localStorage.getItem('sideCollapsed'), stored);
 });
 
-test('an expand made while details are open sticks', async () => {
+test('an explicit collapse while details are open sticks after closing', async () => {
   await shell({ kind: 'all' }, '*');
   const row = document.querySelector<HTMLElement>('.body .row');
   assert.ok(row);
   ui.fireEvent.click(row);
   await ui.waitFor(() => {
-    assert.ok(document.querySelector('.side.is-narrow'));
+    assert.ok(document.querySelector('.details'));
   });
+  assert.equal(document.querySelector('.side.is-narrow'), null);
 
   ui.fireEvent.click(toggle());
   await ui.waitFor(() => {
-    assert.equal(document.querySelector('.side.is-narrow'), null);
+    assert.ok(document.querySelector('.side.is-narrow'));
   });
-  // The panel is still open; nothing re-collapses the rail behind the reader.
-  assert.ok(document.querySelector('.details'));
-  assert.equal(window.localStorage.getItem('sideCollapsed'), '0');
+  assert.equal(window.localStorage.getItem('sideCollapsed'), '1');
+
+  const close = document.querySelector<HTMLButtonElement>(
+    '.details [aria-label="Close"]',
+  );
+  assert.ok(close);
+  ui.fireEvent.click(close);
+  await ui.waitFor(() => {
+    assert.equal(document.querySelector('.details'), null);
+  });
+  assert.ok(document.querySelector('.side.is-narrow'));
+  assert.equal(window.localStorage.getItem('sideCollapsed'), '1');
 });
 
 test('first run draws no collapse toggle and never narrows the shell', async () => {

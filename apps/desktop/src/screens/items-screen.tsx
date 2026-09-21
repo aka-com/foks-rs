@@ -607,7 +607,6 @@ export function ItemsScreen({
             }
             icon="folder"
             name={folder.name}
-            count={folder.count}
             open={open}
             expandable={folder.folders.length > 0}
             onSelect={() => selectFolder(treeStore, folder.path)}
@@ -639,7 +638,6 @@ export function ItemsScreen({
             )
           }
           name={tree.store.name}
-          count={tree.root.count}
           open
           expandable={false}
           action={
@@ -661,7 +659,7 @@ export function ItemsScreen({
           onSelect={() => selectFolder(tree.store, '/')}
           onToggle={() => {}}
         />
-        {drawFolders(tree.root.folders, tree.store, 1)}
+        {drawFolders(tree.root.folders, tree.store, 0)}
       </Fragment>
     );
   };

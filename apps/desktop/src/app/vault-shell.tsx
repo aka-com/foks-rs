@@ -350,7 +350,6 @@ export function VaultShell({
       bridge,
       locations,
       here,
-      detailsShown,
       commandError,
     });
   const selectedAccessGeneration = state.selection

@@ -121,9 +121,22 @@ test('All items is the first tree row; stores follow under their headings', asyn
   assert.ok(accountMark);
   assert.equal(accountMark.textContent, 'S');
   assert.equal(treeRow('Personal').querySelector('.fselect > .ic'), null);
-  // Item counts appear only on rows that contain items.
-  assert.equal(treeRow('Personal').querySelector('.c')?.textContent, '6');
-  assert.equal(treeRow('Work (Acme)').querySelector('.c'), null);
+  // The aggregate count belongs to All items. Vault and folder rows stay
+  // uncluttered regardless of whether they contain anything.
+  assert.equal(treeRow('All items').querySelector('.c')?.textContent, '13');
+  assert.equal(treeRow('Personal').querySelector('.c'), null);
+  assert.equal(treeRow('Household').querySelector('.c'), null);
+  assert.equal(treeRow('logins').querySelector('.c'), null);
+  // The first folder level aligns with its vault mark; deeper folders retain
+  // one indent for each level below it.
+  assert.equal(
+    treeRow('logins').parentElement?.style.getPropertyValue('--d'),
+    '0',
+  );
+  assert.equal(
+    treeRow('prod').parentElement?.style.getPropertyValue('--d'),
+    '1',
+  );
 });
 
 test('a store with nothing in it is still reachable from the tree', async () => {
@@ -309,7 +322,7 @@ test('typing a query leaves the folder tree unchanged', async () => {
   );
   assert.ok(search);
   // The tree is the browser's map: a search narrows the list beside it, not
-  // the folders it is searching within, and never the counts they state.
+  // the folders it is searching within, and does not change its aggregate.
   ui.fireEvent.change(search, { target: { value: 'github' } });
   await ui.waitFor(() =>
     assert.equal(document.querySelectorAll('.lpane .body .row').length, 1),
