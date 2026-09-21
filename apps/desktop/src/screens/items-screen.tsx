@@ -13,9 +13,17 @@
 import { Fragment, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
+import { anyDialogOpen, ContextMenu, Menu } from '/kit/overlay-primitives';
 import { useDismissedOnboardingTip } from '../onboarding-tips';
 import { virtualListWindow } from '/kit/virtual-list';
-import { Band, Button, Icon, Notice, SegmentedControl } from '../components';
+import {
+  Band,
+  Button,
+  Icon,
+  MenuItem,
+  Notice,
+  SegmentedControl,
+} from '../components';
 import type { FilterKind } from '../components';
 import type { FoksIconName } from '../icons';
 import { PageHeader } from '../shell/page-header';
@@ -65,7 +73,11 @@ import {
 } from './scope';
 import type { FolderNode } from './scope';
 import { AccountMark } from './account-switcher';
-import { StoreAccessTakeover, storeAccessBands } from './store-access';
+import {
+  itemActionProblem,
+  StoreAccessTakeover,
+  storeAccessBands,
+} from './store-access';
 
 /* --------------------------------------------------------------- pieces -- */
 
@@ -164,6 +176,8 @@ interface RowProps {
   onCopy: (item: Item) => void;
   onReveal: (item: Item) => void;
   onDownload: (item: Item) => void;
+  onDelete: (item: Item) => void;
+  accessNow: () => number;
 }
 
 function Row({
@@ -177,12 +191,35 @@ function Row({
   onCopy,
   onReveal,
   onDownload,
+  onDelete,
+  accessNow,
 }: RowProps): ReactNode {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [menuPoint, setMenuPoint] = useState<{ x: number; y: number } | null>(
+    null,
+  );
+  const closeMenu = (): void => setMenuPoint(null);
+  const dismissMenu = (): void => {
+    closeMenu();
+    if (!anyDialogOpen()) rowRef.current?.focus();
+  };
   const kind = kindOf(item) as FilterKind;
   const store = storeOf(snapshot, item.store);
   const name = nameOf(item.path);
   const prefix = prefixOf(item.path);
   const password = kind === 'Password';
+  const readProblem = menuPoint
+    ? itemActionProblem(snapshot, item, false, accessNow())
+    : undefined;
+  const writeProblem = menuPoint
+    ? itemActionProblem(snapshot, item, true, accessNow())
+    : undefined;
+  const choose =
+    (run: () => void): (() => void) =>
+    () => {
+      closeMenu();
+      run();
+    };
   const action = (
     label: string,
     icon: FoksIconName,
@@ -201,63 +238,135 @@ function Row({
     </button>
   );
   return (
-    <div
-      className={columnClass(
-        columns,
-        'row',
-        'one',
-        selected ? 'sel' : '',
-        readOnly ? 'ro' : '',
-      )}
-      role="button"
-      tabIndex={0}
-      aria-pressed={selected}
-      onClick={onSelect}
-      onKeyDown={(event) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        event.preventDefault();
-        onSelect();
-      }}
-    >
-      <span className="name">
-        <Icon
-          name={password ? 'key' : 'file'}
-          className={password ? 'k' : 'f'}
-        />
-        <span className="nm">{name}</span>
-        {/* Inside a folder every row shares the location, so the path is
-            drawn only where rows come from more than one of them. */}
-        {columns.location && prefix ? (
-          <span className="fpath">/{prefix}</span>
-        ) : null}
-      </span>
-      <span className="cell kind">{kindLabel(kind)}</span>
-      {columns.location ? (
-        <span className="cell mark">
-          {store ? (
-            <StoreMark
-              snapshot={snapshot}
-              store={store}
-              hue={hues.get(store.id)}
-            />
-          ) : null}
-          <span>{whereOf(snapshot, item)}</span>
-        </span>
-      ) : null}
-      <span className="cell num">
-        {item.size === null ? '' : fmtSize(item.size)}
-      </span>
-      <span className="acts">
-        {item.kind !== 'File' ? (
-          <>
-            {action('Copy', 'copy', onCopy)}
-            {action('Reveal', 'eye', onReveal)}
-          </>
-        ) : (
-          action('Download', 'download', onDownload)
+    <>
+      <div
+        ref={rowRef}
+        className={columnClass(
+          columns,
+          'row',
+          'one',
+          selected ? 'sel' : '',
+          readOnly ? 'ro' : '',
         )}
-      </span>
-    </div>
+        role="button"
+        tabIndex={0}
+        aria-pressed={selected}
+        aria-haspopup="menu"
+        onClick={onSelect}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          rowRef.current?.focus();
+          setMenuPoint({ x: event.clientX, y: event.clientY });
+        }}
+        onKeyDown={(event) => {
+          if (
+            event.key === 'ContextMenu' ||
+            (event.key === 'F10' && event.shiftKey)
+          ) {
+            event.preventDefault();
+            const bounds = event.currentTarget.getBoundingClientRect();
+            setMenuPoint({ x: bounds.left, y: bounds.bottom });
+            return;
+          }
+          if (event.target !== event.currentTarget) return;
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          onSelect();
+        }}
+      >
+        <span className="name">
+          <Icon
+            name={password ? 'key' : 'file'}
+            className={password ? 'k' : 'f'}
+          />
+          <span className="nm">{name}</span>
+          {/* Inside a folder every row shares the location, so the path is
+            drawn only where rows come from more than one of them. */}
+          {columns.location && prefix ? (
+            <span className="fpath">/{prefix}</span>
+          ) : null}
+        </span>
+        <span className="cell kind">{kindLabel(kind)}</span>
+        {columns.location ? (
+          <span className="cell mark">
+            {store ? (
+              <StoreMark
+                snapshot={snapshot}
+                store={store}
+                hue={hues.get(store.id)}
+              />
+            ) : null}
+            <span>{whereOf(snapshot, item)}</span>
+          </span>
+        ) : null}
+        <span className="cell num">
+          {item.size === null ? '' : fmtSize(item.size)}
+        </span>
+        <span className="acts">
+          {item.kind !== 'File' ? (
+            <>
+              {action('Copy', 'copy', onCopy)}
+              {action('Reveal', 'eye', onReveal)}
+            </>
+          ) : (
+            action('Download', 'download', onDownload)
+          )}
+        </span>
+      </div>
+      {menuPoint ? (
+        <ContextMenu
+          point={menuPoint}
+          className="menu-portal"
+          onClose={dismissMenu}
+        >
+          <Menu
+            className="menu"
+            aria-label={`${name} actions`}
+            anchorRef={rowRef}
+            initialFocus="first"
+            onClose={closeMenu}
+          >
+            <MenuItem icon="file" onClick={choose(onSelect)}>
+              Show details
+            </MenuItem>
+            {item.kind === 'File' ? (
+              <MenuItem
+                icon="download"
+                reason={readProblem}
+                onClick={choose(() => onDownload(item))}
+              >
+                Download
+              </MenuItem>
+            ) : (
+              <>
+                <MenuItem
+                  icon="copy"
+                  reason={readProblem}
+                  onClick={choose(() => onCopy(item))}
+                >
+                  Copy
+                </MenuItem>
+                <MenuItem
+                  icon="eye"
+                  reason={readProblem}
+                  onClick={choose(() => onReveal(item))}
+                >
+                  Reveal
+                </MenuItem>
+              </>
+            )}
+            <MenuItem
+              icon="trash"
+              danger
+              reason={writeProblem}
+              onClick={choose(() => onDelete(item))}
+            >
+              Delete
+            </MenuItem>
+          </Menu>
+        </ContextMenu>
+      ) : null}
+    </>
   );
 }
 
@@ -503,7 +612,6 @@ export interface ItemsScreenProps {
   onReveal: (item: Item) => void;
   onNew: (kind: NewKind, storeId: string, folder?: string) => void;
   onResume: (storeId: string) => Promise<void>;
-  /** Unused now that delete is details-panel-only; kept for the caller's wiring. */
   onDelete: (item: Item) => void;
   onSettings: (storeId: string) => void;
   onCommandError: (error: unknown, item?: Item) => void;
@@ -531,6 +639,7 @@ export function ItemsScreen({
   onReveal,
   onNew,
   onResume,
+  onDelete,
   onSettings,
   onCommandError,
   onUploadDroppedFile,
@@ -829,7 +938,14 @@ export function ItemsScreen({
     path: item.path,
     version: item.version,
   });
+  const allowAction = (item: Item, write = false): boolean => {
+    const problem = itemActionProblem(snapshot, item, write, accessNow());
+    if (!problem) return true;
+    toasts.show(problem, { tone: 'warning' });
+    return false;
+  };
   const copyItem = (item: Item): void => {
+    if (!allowAction(item)) return;
     void bridge.copyItemValue(request(item)).then(
       () =>
         toasts.show(
@@ -839,12 +955,14 @@ export function ItemsScreen({
     );
   };
   const revealItem = (item: Item): void => {
+    if (!allowAction(item)) return;
     // Reveal happens in the details panel, where the value is masked again on
     // a selection change or a lost window: select the item, then ask for it.
     locations.select({ store: item.store, path: item.path });
     onReveal(item);
   };
   const downloadItem = (item: Item): void => {
+    if (!allowAction(item)) return;
     void bridge.downloadFile(request(item)).then(
       ({ saved }) =>
         toasts.show(
@@ -881,6 +999,10 @@ export function ItemsScreen({
       onCopy={copyItem}
       onReveal={revealItem}
       onDownload={downloadItem}
+      onDelete={(item) => {
+        if (allowAction(item, true)) onDelete(item);
+      }}
+      accessNow={accessNow}
     />
   );
 
@@ -1061,7 +1183,6 @@ export function ItemsScreen({
             />
           ) : null}
         </div>
-        {dropStrip}
         {nextUp}
       </div>
     )
@@ -1082,10 +1203,10 @@ export function ItemsScreen({
         }}
       />
       <div className="virtual-rows">{paneRows}</div>
-      {dropStrip}
       {nextUp}
     </div>
   );
+  const listShown = flatMode ? items.length > 0 : !showEmptyFolder;
 
   return (
     <div className="drop-area">
@@ -1246,6 +1367,7 @@ export function ItemsScreen({
               ) : null}
               {listBody}
             </div>
+            {listShown ? dropStrip : null}
           </section>
         </div>
       </div>

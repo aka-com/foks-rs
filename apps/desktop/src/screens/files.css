@@ -387,9 +387,10 @@
   visibility: hidden;
 }
 
-/* A visual affordance for the drop the window already accepts. */
-.folder-body .dropzone {
-  margin: 6px 10px 0;
+/* Keep the drop affordance at the bottom of the Files pane. */
+.lpane > .dropzone {
+  flex: none;
+  margin: 0 22px 12px;
   padding: 10px;
   border: 1.5px dashed var(--line-mid);
   border-radius: 10px;
@@ -400,7 +401,7 @@
   color: var(--faint);
   font-size: 12px;
 }
-.folder-body .dropzone .ic {
+.lpane > .dropzone .ic {
   font-size: 15px;
 }
 
