@@ -64,6 +64,8 @@ async function group(
       error: unknown,
       options?: { report?: boolean },
     ) => Promise<void>;
+    /** The shell's read-back, for a test that checks what it is scoped to. */
+    onApplied?: (message: string, profile?: string) => Promise<void>;
   } = {},
 ) {
   const { GroupSettingsScreen } = (await vite.ssrLoadModule(
@@ -97,7 +99,7 @@ async function group(
           location: { kind: 'group-settings', ref, tab },
           ...(options.accessNow ? { accessNow: options.accessNow } : {}),
           onNavigate: options.onNavigate ?? (() => {}),
-          onApplied: async () => {},
+          onApplied: options.onApplied ?? (async () => {}),
           onError: (error: unknown) => {
             throw error;
           },
@@ -807,4 +809,44 @@ test('incomplete group recovery describes durable creation evidence', async () =
     }
     ui.cleanup();
   }
+});
+
+test('an explicit team refresh reads one profile and waives the roster reuse', async () => {
+  const { resetProfileRosterStaleness, consumeProfileRosterStaleness } =
+    (await vite.ssrLoadModule(
+      '/src/roster-staleness.ts',
+    )) as typeof import('../src/roster-staleness');
+  const snapshot = await fixture();
+  const store = snapshot.stores.find((store) => store.id === 'team:household');
+  assert.ok(store);
+  const profile = store.server;
+  const applied: (string | undefined)[] = [];
+  resetProfileRosterStaleness();
+  const rendered = await group('team:household', 'people', {
+    snapshot,
+    onApplied: async (_message, forProfile) => {
+      applied.push(forProfile);
+    },
+  });
+  // The header menu's "Refresh team": nothing was written, so without the
+  // staleness mark the profile read would reuse the roster it already holds
+  // and the user's request would do nothing visible.
+  ui.fireEvent.click(
+    rendered.getByRole('button', { name: `Actions for ${store.name}` }),
+  );
+  const refresh = [
+    ...document.querySelectorAll<HTMLButtonElement>('.menu button'),
+  ].find((candidate) => candidate.textContent?.includes('Refresh team'));
+  assert.ok(refresh, 'no Refresh team menu item');
+  await ui.act(async () => {
+    ui.fireEvent.click(refresh);
+  });
+  assert.deepEqual(applied, [profile], 'the read back was not scoped');
+  assert.equal(
+    consumeProfileRosterStaleness(profile),
+    true,
+    'the roster reuse was not waived, so the refresh reads nothing',
+  );
+  // Consumed by that read, not left standing for the next one.
+  assert.equal(consumeProfileRosterStaleness(profile), false);
 });

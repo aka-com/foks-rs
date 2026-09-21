@@ -835,7 +835,12 @@ function FederationRemovalSheet({
   store: Extract<Store, { kind: 'team' }>;
   entry: FederationEntry;
   onClose: () => void;
-  onApplied: (message: string) => Promise<void>;
+  /**
+   * Takes the profile, so the read back after a removal is that profile's
+   * rather than every profile's. The parent already passes a handler with
+   * this signature; the narrower declaration here only hid the argument.
+   */
+  onApplied: (message: string, profile?: string) => Promise<void>;
   onMutationError: MutationFailureHandler;
 }): ReactNode {
   const [confirmed, setConfirmed] = useState(false);
@@ -859,7 +864,10 @@ function FederationRemovalSheet({
           });
         },
         () =>
-          onApplied(`${entry.remote_team_alias} removed and team keys rotated`),
+          onApplied(
+            `${entry.remote_team_alias} removed and team keys rotated`,
+            store.server,
+          ),
       );
       if (
         await reportMutationOutcome(result, onMutationError, () => {
@@ -2370,7 +2378,14 @@ export function GroupSettingsScreen({
                   }
                   onClick={() => {
                     close();
-                    void onApplied('Team refreshed').catch(onError);
+                    // Nothing was written, so the team's chain sequence is
+                    // unchanged and the profile read would reuse the roster it
+                    // already holds. The user asked for a roster read, so say
+                    // so; without this the button does nothing visible.
+                    markProfileRostersStale(store.server);
+                    void onApplied('Team refreshed', store.server).catch(
+                      onError,
+                    );
                   }}
                 >
                   Refresh team
@@ -2555,10 +2570,17 @@ export function GroupSettingsScreen({
                   menuParty={menuParty}
                   failure={rosterFailure}
                   federationFailure={federationFailure}
-                  onRetry={() => void onApplied('Refreshing team members…')}
-                  onRetryFederation={() =>
-                    void onApplied('Refreshing external teams…')
-                  }
+                  onRetry={() => {
+                    // As with "Refresh team": these retry a roster read that
+                    // failed or looked stale, and no write moved the chain, so
+                    // the reuse has to be waived explicitly.
+                    markProfileRostersStale(store.server);
+                    void onApplied('Refreshing team members…', store.server);
+                  }}
+                  onRetryFederation={() => {
+                    markProfileRostersStale(store.server);
+                    void onApplied('Refreshing external teams…', store.server);
+                  }}
                   onRerun={resumeAdmission}
                   onRemoveAdmission={setRemovalTarget}
                   onCopy={(text, message) => void copy(text, message)}
