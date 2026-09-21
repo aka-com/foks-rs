@@ -493,8 +493,62 @@ impl MaintenanceWorker<'_> {
 /// that have to run to completion rather than the parked reads.
 const MAINTENANCE_RESERVATION_WAIT: Duration = Duration::from_secs(5);
 
+/// Closed while the desktop's startup check runs on a background thread, so a
+/// command the webview issues meanwhile waits for a verified agent instead of
+/// reaching a socket that is not bound yet.
+///
+/// The startup check itself never waits on this: it reserves the transport
+/// directly and probes with `call_unreserved`, neither of which consults the
+/// gate. Gating the reservation instead would deadlock the check against its
+/// own gate, because `ensure_started_with_confirmation` reserves while the
+/// gate is closed.
+#[derive(Default)]
+struct StartupGate {
+    open: Mutex<bool>,
+    ready: Condvar,
+}
+
+impl StartupGate {
+    fn new_open() -> Self {
+        Self {
+            open: Mutex::new(true),
+            ready: Condvar::new(),
+        }
+    }
+
+    fn hold(&self) {
+        *self
+            .open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
+    }
+
+    fn release(&self) {
+        *self
+            .open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+        self.ready.notify_all();
+    }
+
+    fn wait(&self) {
+        let mut guard = self
+            .open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while !*guard {
+            guard = self
+                .ready
+                .wait(guard)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+}
+
 struct ObservedTransport {
     client: AgentClient,
+    /// Shared with the handle that opens it.
+    startup_gate: Arc<StartupGate>,
     maintenance: RwLock<()>,
     /// Set while a maintenance command waits for its exclusive reservation.
     /// Calls that are safe to abandon observe it and cancel, and no further
@@ -622,6 +676,7 @@ impl ObservedTransport {
         operation: Operation,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Value, DesktopAgentError> {
+        self.startup_gate.wait();
         let _use = self.reserve_use()?;
         let name = operation.name();
         let preemptible = !operation.is_mutation();
@@ -643,6 +698,7 @@ impl ObservedTransport {
         header: foks_agent_proto::KvUploadHeader,
         reader: &mut dyn std::io::Read,
     ) -> Result<Value, DesktopAgentError> {
+        self.startup_gate.wait();
         let _use = self.reserve_use()?;
         let started = Instant::now();
         let response = self
@@ -750,7 +806,7 @@ pub struct AgentHandle {
     /// frontend cannot reach an agent that has not been verified, started, or
     /// taken over yet. Open by default so tests and the smoke test are
     /// unaffected.
-    startup_gate: (Mutex<bool>, Condvar),
+    startup_gate: Arc<StartupGate>,
     #[cfg(test)]
     managed_endpoint_override: bool,
 }
@@ -762,9 +818,11 @@ impl AgentHandle {
             .set_timeout(Duration::from_secs(60))
             .expect("the agent client accepts a 60-second timeout");
         let connection_failure = Arc::new(Mutex::new(None));
+        let startup_gate = Arc::new(StartupGate::new_open());
         Self {
             transport: Arc::new(ObservedTransport {
                 client,
+                startup_gate: Arc::clone(&startup_gate),
                 maintenance: RwLock::new(()),
                 maintenance_pending: AtomicBool::new(false),
                 disposition: Mutex::new(TransportDisposition::Current),
@@ -784,7 +842,7 @@ impl AgentHandle {
             pending_stop_pid: Mutex::new(None),
             maintenance_process: Arc::new(NativeMaintenanceProcess),
             maintenance_readiness: Arc::new(safe_selected_root),
-            startup_gate: (Mutex::new(true), Condvar::new()),
+            startup_gate,
             #[cfg(test)]
             managed_endpoint_override: false,
         }
@@ -793,31 +851,16 @@ impl AgentHandle {
     /// Holds ordinary commands until `release_startup` runs. Call before the
     /// webview can issue its first command.
     pub fn hold_commands_for_startup(&self) {
-        let (open, _) = &self.startup_gate;
-        *open
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
+        self.startup_gate.hold();
     }
 
     /// Opens the startup gate and wakes every command waiting on it.
     pub fn release_startup(&self) {
-        let (open, ready) = &self.startup_gate;
-        *open
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
-        ready.notify_all();
+        self.startup_gate.release();
     }
 
     fn wait_for_startup(&self) {
-        let (open, ready) = &self.startup_gate;
-        let mut guard = open
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        while !*guard {
-            guard = ready
-                .wait(guard)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-        }
+        self.startup_gate.wait();
     }
 
     #[cfg(test)]
@@ -3466,6 +3509,32 @@ mod tests {
         assert!(!transport.maintenance_pending.load(Ordering::Acquire));
         drop(retained);
         assert!(transport.reserve_use().is_ok());
+    }
+
+    #[test]
+    fn the_startup_gate_holds_an_ordinary_command_and_releases_it() {
+        use std::sync::mpsc;
+
+        let gate = Arc::new(StartupGate::new_open());
+        gate.hold();
+
+        let (sender, receiver) = mpsc::channel();
+        let waiter = Arc::clone(&gate);
+        let thread = std::thread::spawn(move || {
+            waiter.wait();
+            sender.send(()).expect("the receiver outlives this send");
+        });
+
+        // The command is held: nothing arrives while the gate is closed.
+        assert!(receiver.recv_timeout(Duration::from_millis(100)).is_err());
+        gate.release();
+        receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("releasing the gate wakes the waiting command");
+        thread.join().expect("the waiting thread finishes");
+
+        // Once open it stays open, so a later command does not wait at all.
+        gate.wait();
     }
 
     #[test]
