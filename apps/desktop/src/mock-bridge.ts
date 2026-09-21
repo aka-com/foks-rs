@@ -13,6 +13,7 @@ import type {
 } from './bridge';
 import { roleDto, normalizeCommandError } from './bridge';
 import { FIXTURE } from './fixture';
+import type { RenameProgress } from './rename-contract';
 import { catalog } from './model/lease';
 import { parseRole, roleRank, visibilityOf } from './model/roles';
 import { itemKey } from './model/types';
@@ -47,6 +48,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       ? 'The agent socket closed while reading the catalog.'
       : null;
   const ssoModes = new Map<string, import('./sso-contract').SsoPurpose>();
+  const renames = new Map<string, RenameProgress[]>();
   const stores: Store[] = snapshot.stores.map((store) => ({ ...store }));
   const servers = snapshot.servers.map((server) => ({ ...server }));
   const serverProbes = new Map(
@@ -971,24 +973,47 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       account.localAlias = label === account.alias ? undefined : label;
       return { store, alias: label };
     },
-    renameAccount: async (_profile, accountAlias, action) =>
-      action
-        ? [
-            {
-              operation_id: '2'.repeat(32),
-              account_alias: accountAlias,
-              state:
-                action.action === 'prepare'
-                  ? 'prepared'
-                  : action.action === 'cancel'
-                    ? 'rejected'
-                    : 'complete',
-              target: action.action === 'prepare' ? action.username : null,
-              current_username: null,
-              hardware_required: false,
-            },
-          ]
-        : [],
+    // Persist mock operations across calls. Listings omit target usernames.
+    renameAccount: async (profile, accountAlias, action) => {
+      const key = `${profile}/${accountAlias}`;
+      const rows = renames.get(key) ?? [];
+      if (!action)
+        return rows.map((row) => ({
+          ...row,
+          target: null,
+          current_username: null,
+        }));
+      if (action.action === 'prepare') {
+        if (rows.some((row) => !['complete', 'rejected'].includes(row.state)))
+          throw new Error(
+            'A username change is already pending. Confirm or discard it first.',
+          );
+        const row: RenameProgress = {
+          operation_id: (renames.size + rows.length + 2)
+            .toString(16)
+            .padStart(32, '0'),
+          account_alias: accountAlias,
+          state: 'prepared',
+          target: action.username,
+          current_username:
+            accounts.find(
+              (entry) =>
+                entry.server === profile && entry.alias === accountAlias,
+            )?.username ?? null,
+          hardware_required: false,
+        };
+        renames.set(key, [row, ...rows]);
+        return [{ ...row }];
+      }
+      const row = rows.find(
+        (entry) => entry.operation_id === action.operation_id,
+      );
+      if (!row) throw new Error('Rename operation not found.');
+      if (action.action === 'cancel') row.state = 'rejected';
+      else if (action.action === 'attempt' && row.state === 'prepared')
+        row.state = 'complete';
+      return [{ ...row }];
+    },
     sso: async (profile, accountAlias, action) => {
       const key = `${profile}/${accountAlias}`;
       const begins =

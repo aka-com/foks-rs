@@ -63,7 +63,7 @@ test('rename status rejects secrets, unknown fields and invalid handles', () => 
   );
   assert.throws(() => decodeRenameProgress(Array(161).fill(progress)));
 });
-test('prepare requires explicit confirmation and uncertain outcomes are checked without replay', async () => {
+test('the dialog prepares a rename and returns its operation', async () => {
   const { RenamePanel } = (await vite.ssrLoadModule(
     '/src/components/rename-panel.tsx',
   )) as typeof import('../src/components/rename-panel');
@@ -71,6 +71,7 @@ test('prepare requires explicit confirmation and uncertain outcomes are checked 
     '/src/mock-bridge.ts',
   )) as typeof import('../src/mock-bridge');
   const actions: string[] = [];
+  const prepared: RenameProgress[][] = [];
   const bridge = {
     ...mockBridge(),
     renameAccount: async (
@@ -79,13 +80,7 @@ test('prepare requires explicit confirmation and uncertain outcomes are checked 
       action: import('../src/rename-contract').RenameAction | null,
     ): Promise<RenameProgress[]> => {
       actions.push(action?.action ?? 'list');
-      return [
-        {
-          ...progress,
-          state:
-            action?.action === 'prepare' ? 'prepared' : 'submission-unknown',
-        },
-      ];
+      return [progress];
     },
   };
   const r = ui.render(
@@ -95,26 +90,25 @@ test('prepare requires explicit confirmation and uncertain outcomes are checked 
         profile: 'host',
         account: 'work',
         presentation,
-        onComplete: () => {
-          throw new Error('not completed');
+        onPrepared: (rows) => {
+          prepared.push(rows);
         },
       }),
     ),
   );
+  // Pending-operation actions are on the account page.
+  assert.equal(r.queryByText('Show pending changes'), null);
+  assert.equal(r.queryByText('Confirm'), null);
+  const prepare = r.getByRole('button', { name: 'Prepare rename' });
+  assert.equal(prepare.hasAttribute('disabled'), true);
   ui.fireEvent.change(r.getByLabelText('Username'), {
     target: { value: 'newname' },
   });
-  ui.fireEvent.click(r.getByRole('button', { name: 'Change username' }));
-  await ui.waitFor(() => assert.ok(r.getByText('Confirm')));
+  ui.fireEvent.click(prepare);
+  await ui.waitFor(() => assert.deepEqual(prepared, [[progress]]));
   assert.deepEqual(actions, ['prepare']);
-  ui.fireEvent.click(r.getByText('Confirm'));
-  await ui.waitFor(() => assert.ok(r.queryByText('Confirm') === null));
-  ui.fireEvent.click(r.getByText('Check status'));
-  await ui.waitFor(() =>
-    assert.deepEqual(actions, ['prepare', 'attempt', 'status']),
-  );
 });
-test('recover lists original handles and rejects another account response', async () => {
+test('a prepare answered for another account is rejected', async () => {
   const { RenamePanel } = (await vite.ssrLoadModule(
     '/src/components/rename-panel.tsx',
   )) as typeof import('../src/components/rename-panel');
@@ -132,11 +126,15 @@ test('recover lists original handles and rejects another account response', asyn
         profile: 'host',
         account: 'work',
         presentation,
-        onComplete: () => {},
+        onPrepared: () => {
+          throw new Error('not prepared');
+        },
       }),
     ),
   );
-  ui.fireEvent.click(r.getByText('Show pending changes'));
+  ui.fireEvent.change(r.getByLabelText('Username'), {
+    target: { value: 'newname' },
+  });
+  ui.fireEvent.click(r.getByRole('button', { name: 'Prepare rename' }));
   await ui.waitFor(() => assert.ok(r.getByRole('alert')));
-  assert.ok(r.queryByText('Confirm') === null);
 });

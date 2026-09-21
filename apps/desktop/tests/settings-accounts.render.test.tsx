@@ -977,9 +977,401 @@ test('local alias appears in account controls while commands keep the original a
   });
   // The header no longer carries the alias as a chip; the Shown as row does.
   assert.ok(rendered.getAllByText('Private account').length >= 1);
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Change…' }));
-  ui.fireEvent.click(
-    rendered.getByRole('button', { name: 'Show pending changes' }),
-  );
+  // The page lists the account's username changes as it opens, by the
+  // account's original alias.
   await ui.waitFor(() => assert.deepEqual(calls, ['personal']));
+});
+
+/** Pending operation returned by the agent. */
+const pendingRename = (
+  state: import('../src/rename-contract').RenameProgress['state'],
+): import('../src/rename-contract').RenameProgress => ({
+  operation_id: 'a'.repeat(32),
+  account_alias: 'personal',
+  state,
+  target: null,
+  current_username: null,
+  hardware_required: false,
+});
+
+test('the account page confirms pending renames and offers discard', async () => {
+  const actions: string[] = [];
+  let row = pendingRename('prepared');
+  const { rendered, refreshed } = await renderPeople(
+    await fixture(),
+    'acct:personal',
+    () => {},
+    {
+      decorate: (base) => ({
+        ...base,
+        renameAccount: async (_profile, _alias, action) => {
+          actions.push(action?.action ?? 'list');
+          if (action?.action === 'attempt') row = { ...row, state: 'complete' };
+          return [row];
+        },
+      }),
+    },
+  );
+  const band = (
+    await rendered.findByText(/waiting for your confirmation/)
+  ).closest('.band') as HTMLElement;
+  assert.ok(
+    ui.within(band).getByText('Nothing has changed on the server yet.'),
+  );
+  assert.equal(band.getAttribute('title'), `Operation ${'a'.repeat(32)}`);
+  // Disable preparation while an operation is pending.
+  const change = rendered.getByRole('button', { name: 'Change…' });
+  assert.equal(change.hasAttribute('disabled'), true);
+  assert.equal(
+    change.getAttribute('title'),
+    'Confirm or discard the pending username change first.',
+  );
+  assert.ok(ui.within(band).getByRole('button', { name: 'Discard' }));
+
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(band).getByRole('button', { name: 'Confirm' }),
+    );
+  });
+  await ui.waitFor(() => assert.deepEqual(actions, ['list', 'attempt']));
+  await ui.waitFor(() => assert.ok(refreshed.includes('Username updated')));
+  assert.equal(rendered.queryByText(/waiting for your confirmation/), null);
+  assert.equal(
+    rendered.getByRole('button', { name: 'Change…' }).hasAttribute('disabled'),
+    false,
+  );
+});
+
+test('unknown rename outcomes use the status action', async () => {
+  const actions: string[] = [];
+  const { rendered } = await renderPeople(
+    await fixture(),
+    'acct:personal',
+    () => {},
+    {
+      decorate: (base) => ({
+        ...base,
+        renameAccount: async (_profile, _alias, action) => {
+          actions.push(action?.action ?? 'list');
+          return [pendingRename('submission-unknown')];
+        },
+      }),
+    },
+  );
+  const band = (
+    await rendered.findByText(/may or may not have been applied/)
+  ).closest('.band') as HTMLElement;
+  assert.equal(
+    ui.within(band).queryByRole('button', { name: 'Confirm' }),
+    null,
+  );
+  assert.equal(
+    ui.within(band).queryByRole('button', { name: 'Discard' }),
+    null,
+  );
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(band).getByRole('button', { name: 'Check status' }),
+    );
+  });
+  await ui.waitFor(() => assert.deepEqual(actions, ['list', 'status']));
+});
+
+test('security-key confirmation submits the PIN from a dialog', async () => {
+  const pins: (string | null)[] = [];
+  const { rendered, refreshed } = await renderPeople(
+    await fixture(),
+    'acct:personal',
+    () => {},
+    {
+      decorate: (base) => ({
+        ...base,
+        renameAccount: async (_profile, _alias, action) => {
+          if (!action) return [pendingRename('prepared')];
+          assert.equal(action.action, 'attempt');
+          pins.push(action.pin);
+          return [
+            action.pin
+              ? pendingRename('complete')
+              : { ...pendingRename('prepared'), hardware_required: true },
+          ];
+        },
+      }),
+    },
+  );
+  const band = (
+    await rendered.findByText(/waiting for your confirmation/)
+  ).closest('.band') as HTMLElement;
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(band).getByRole('button', { name: 'Confirm' }),
+    );
+  });
+  const dialog = await rendered.findByRole('dialog');
+  assert.equal(
+    ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
+    'Unlock security key',
+  );
+  const confirm = ui.within(dialog).getByRole('button', {
+    name: 'Confirm rename',
+  });
+  assert.equal(confirm.hasAttribute('disabled'), true);
+  ui.fireEvent.change(ui.within(dialog).getByLabelText('Security key PIN'), {
+    target: { value: '123456' },
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(confirm);
+  });
+  await ui.waitFor(() => assert.deepEqual(pins, [null, '123456']));
+  await ui.waitFor(() => assert.ok(refreshed.includes('Username updated')));
+  assert.equal(rendered.queryByRole('dialog'), null);
+});
+
+test('preparing a rename closes the dialog and displays the target', async () => {
+  const { rendered } = await renderPeople(await fixture(), 'acct:personal');
+  await ui.waitFor(() =>
+    assert.equal(rendered.queryByText(/waiting for your confirmation/), null),
+  );
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Change…' }));
+  const dialog = await rendered.findByRole('dialog');
+  ui.fireEvent.change(ui.within(dialog).getByLabelText('Username'), {
+    target: { value: 'nakamoto' },
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(dialog).getByRole('button', { name: 'Prepare rename' }),
+    );
+  });
+  await ui.waitFor(() => assert.equal(rendered.queryByRole('dialog'), null));
+  const band = (
+    await rendered.findByText(
+      'Rename to nakamoto is waiting for your confirmation.',
+    )
+  ).closest('.band') as HTMLElement;
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(band).getByRole('button', { name: 'Discard' }),
+    );
+  });
+  await ui.waitFor(() =>
+    assert.equal(rendered.queryByText(/waiting for your confirmation/), null),
+  );
+});
+
+test('a delayed listing does not erase a newly prepared rename', async () => {
+  let release!: (
+    rows: import('../src/rename-contract').RenameProgress[],
+  ) => void;
+  const listed = new Promise<import('../src/rename-contract').RenameProgress[]>(
+    (r) => {
+      release = r;
+    },
+  );
+  const { rendered } = await renderPeople(
+    await fixture(),
+    'acct:personal',
+    () => {},
+    {
+      decorate: (base) => ({
+        ...base,
+        renameAccount: async (profile, alias, action) =>
+          action ? base.renameAccount(profile, alias, action) : listed,
+      }),
+    },
+  );
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Change…' }));
+  ui.fireEvent.change(rendered.getByLabelText('Username'), {
+    target: { value: 'changedname' },
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      rendered.getByRole('button', { name: 'Prepare rename' }),
+    );
+  });
+  assert.ok(rendered.getByText(/waiting for your confirmation/));
+  await ui.act(async () => {
+    release([]);
+    await listed;
+  });
+  assert.ok(
+    rendered.queryByText(/waiting for your confirmation/),
+    'late pre-prepare listing erased the banner',
+  );
+});
+
+test('an ambiguous submission offers status reconciliation', async () => {
+  const actions: string[] = [];
+  const { rendered, refreshed } = await renderPeople(
+    await fixture(),
+    'acct:personal',
+    () => {},
+    {
+      decorate: (base) => ({
+        ...base,
+        renameAccount: async (_profile, _alias, action) => {
+          actions.push(action?.action ?? 'list');
+          if (action?.action === 'status') return [pendingRename('complete')];
+          if (action?.action === 'attempt')
+            throw new Error('Transport disconnected; outcome unknown');
+          return [pendingRename('prepared')];
+        },
+      }),
+    },
+  );
+  await rendered.findByText(/waiting for your confirmation/);
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Confirm' }));
+  });
+  assert.ok(
+    rendered.queryByRole('button', { name: 'Check status' }),
+    'ambiguous attempt still only offers Confirm/Discard',
+  );
+  assert.equal(rendered.queryByRole('button', { name: 'Discard' }), null);
+  assert.equal(
+    rendered.queryByText('Nothing has changed on the server yet.'),
+    null,
+  );
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Check status' }));
+  });
+  assert.deepEqual(actions, ['list', 'attempt', 'status']);
+  assert.deepEqual(refreshed, ['Username updated']);
+});
+
+test('a completed rename remains complete when the account refresh fails', async () => {
+  const { rendered, reported, refreshed } = await renderPeople(
+    await fixture(),
+    'acct:personal',
+    () => {},
+    {
+      collectErrors: true,
+      holdRefresh: async () => {
+        throw new Error('Catalog refresh failed');
+      },
+      decorate: (base) => ({
+        ...base,
+        renameAccount: async (_profile, _alias, action) => [
+          pendingRename(action ? 'complete' : 'prepared'),
+        ],
+      }),
+    },
+  );
+  await rendered.findByText(/waiting for your confirmation/);
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Confirm' }));
+  });
+  assert.deepEqual(refreshed, ['Username updated']);
+  assert.equal(reported.length, 1);
+  assert.equal(rendered.queryByRole('button', { name: 'Confirm' }), null);
+  assert.equal(rendered.queryByRole('button', { name: 'Check status' }), null);
+});
+
+test('late rename listings are ignored after switching away and back', async () => {
+  let release!: (
+    rows: import('../src/rename-contract').RenameProgress[],
+  ) => void;
+  let personalReads = 0;
+  const held = new Promise<import('../src/rename-contract').RenameProgress[]>(
+    (resolve) => {
+      release = resolve;
+    },
+  );
+  const { rendered, showAccount } = await renderPeople(
+    await fixture(),
+    'acct:personal',
+    () => {},
+    {
+      decorate: (base) => ({
+        ...base,
+        renameAccount: async (_profile, alias) => {
+          if (alias === 'personal' && personalReads++ === 0) return held;
+          return [];
+        },
+      }),
+    },
+  );
+  await showAccount('acct:work');
+  await showAccount('acct:personal');
+  await ui.act(async () => {
+    release([pendingRename('prepared')]);
+    await held;
+  });
+  assert.equal(rendered.queryByText(/waiting for your confirmation/), null);
+});
+
+test('late preparation results do not update a different account', async () => {
+  let release!: (
+    rows: import('../src/rename-contract').RenameProgress[],
+  ) => void;
+  const held = new Promise<import('../src/rename-contract').RenameProgress[]>(
+    (resolve) => {
+      release = resolve;
+    },
+  );
+  const { rendered, showAccount } = await renderPeople(
+    await fixture(),
+    'acct:personal',
+    () => {},
+    {
+      decorate: (base) => ({
+        ...base,
+        renameAccount: async (_profile, _alias, action) => (action ? held : []),
+      }),
+    },
+  );
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Change…' }));
+  ui.fireEvent.change(rendered.getByLabelText('Username'), {
+    target: { value: 'newname' },
+  });
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Prepare rename' }));
+  await showAccount('acct:work');
+  await ui.act(async () => {
+    release([pendingRename('prepared')]);
+    await held;
+  });
+  assert.equal(rendered.queryByText(/waiting for your confirmation/), null);
+});
+
+test('a failed security-key attempt retries with a status request', async () => {
+  const actions: string[] = [];
+  const { rendered, refreshed } = await renderPeople(
+    await fixture(),
+    'acct:personal',
+    () => {},
+    {
+      decorate: (base) => ({
+        ...base,
+        renameAccount: async (_profile, _alias, action) => {
+          if (!action) return [pendingRename('prepared')];
+          actions.push(action.action);
+          if (action.action === 'attempt' && action.pin)
+            throw new Error('Response lost');
+          if (action.action === 'status') return [pendingRename('complete')];
+          return [{ ...pendingRename('prepared'), hardware_required: true }];
+        },
+      }),
+    },
+  );
+  await rendered.findByText(/waiting for your confirmation/);
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Confirm' }));
+  });
+  const dialog = await rendered.findByRole('dialog');
+  const pin = ui.within(dialog).getByLabelText('Security key PIN');
+  ui.fireEvent.change(pin, { target: { value: '123456' } });
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(dialog).getByRole('button', { name: 'Confirm rename' }),
+    );
+  });
+  assert.equal((pin as HTMLInputElement).value, '');
+  ui.fireEvent.change(pin, { target: { value: '123456' } });
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(dialog).getByRole('button', { name: 'Check status' }),
+    );
+  });
+  assert.deepEqual(actions, ['attempt', 'attempt', 'status']);
+  assert.deepEqual(refreshed, ['Username updated']);
+  assert.equal(rendered.queryByRole('dialog'), null);
 });

@@ -1,3 +1,5 @@
+import { useToast } from '/kit/toasts';
+import { synchronizeApplied } from '../operation-outcome';
 import { useDeviceMetadata } from '../device-cache';
 import type { metadataFreshness } from '../device-cache';
 import { WorkflowProvider, useWorkflowAccess } from '../workflow-context';
@@ -34,6 +36,10 @@ import type { ReactNode } from 'react';
 import { AdminPanel } from '../components/admin-panel';
 import { BotPanel } from '../components/bot-panel';
 import { RenamePanel } from '../components/rename-panel';
+import { RenameBanner, RenameUnlockSheet } from '../components/rename-banner';
+import { useRenameStatus } from '../rename-status';
+import type { RenameStatus } from '../rename-status';
+import type { RenameAction } from '../rename-contract';
 import { SsoPanel } from '../components/sso-panel';
 import {
   Band,
@@ -79,6 +85,7 @@ const ACTION_UNAVAILABLE =
 type AccountSheet =
   | 'local-alias'
   | 'rename'
+  | 'rename-unlock'
   | 'passphrase'
   | 'bot'
   | 'admin'
@@ -356,6 +363,16 @@ export function AccountSection({
   onMutationError,
   serverSection,
 }: AccountSectionProps): ReactNode {
+  const toasts = useToast();
+  const renameComplete = async (profile: string): Promise<void> => {
+    const result = await synchronizeApplied(() =>
+      onRefresh('Username updated', profile),
+    );
+    if (result.synchronization === 'pending') {
+      toasts.show('Username updated. Refresh pending.');
+      onError(result.error);
+    }
+  };
   const stores = accountStores(snapshot);
   // Select by exact StoreRef: two servers may both hold an account aliased
   // `personal`, so an alias would not say which one an address means.
@@ -368,6 +385,20 @@ export function AccountSection({
     AccountSheet | 'go-profile' | null
   >('settings.account.sheet', null, false);
   const [pairingProfile, setPairingProfile] = useState<Server | undefined>();
+  // Keep pending renames on the account page after preparation closes.
+  const renameAllowed =
+    !!selected &&
+    workflowAvailability(snapshot, 'account-rename', {
+      profile: selected.server,
+      account: selected.account,
+    }).available;
+  const rename = useRenameStatus({
+    bridge,
+    profile: selected?.server,
+    account: selected?.account,
+    enabled: renameAllowed,
+  });
+  const [unlock, setUnlock] = useState<RenameAction | null>(null);
   // What this account holds: the keys are read here because the profile's
   // Devices row counts them, not because anything on this page acts on one.
   const stopped = selected
@@ -527,6 +558,12 @@ export function AccountSection({
                 loading={loadingKeys}
                 failed={keysFailed}
                 stopped={stopped}
+                rename={rename}
+                onRenameUnlock={(action) => {
+                  setUnlock(action);
+                  setSheet('rename-unlock');
+                }}
+                onRenameComplete={() => renameComplete(selected.server)}
                 onNavigate={onNavigate}
                 onSheet={(next) => {
                   // The import sheet opened from the account's own line adds an
@@ -606,7 +643,27 @@ export function AccountSection({
             title: 'Change username',
             onClose: () => setSheet(null),
           }}
-          onComplete={() => onRefresh('Username updated', selected.server)}
+          onPrepared={(rows) => {
+            // Store the prepared operation before displaying its actions.
+            setSheet(null);
+            rename.learn(rows);
+          }}
+        />
+      ) : null}
+      {selected && sheet === 'rename-unlock' && unlock ? (
+        <RenameUnlockSheet
+          profile={selected.server}
+          account={selected.account}
+          action={unlock}
+          status={rename}
+          presentation={{
+            title: 'Unlock security key',
+            onClose: () => setSheet(null),
+          }}
+          onDone={async (completed) => {
+            setSheet(null);
+            if (completed) await renameComplete(selected.server);
+          }}
         />
       ) : null}
       {selected && sheet === 'passphrase' ? (
@@ -702,6 +759,9 @@ function AccountPanel({
   loading,
   failed,
   stopped,
+  rename,
+  onRenameUnlock,
+  onRenameComplete,
   onNavigate,
   onSheet,
   notices,
@@ -710,6 +770,10 @@ function AccountPanel({
 }: {
   snapshot: AgentSnapshot;
   store: AccountStore;
+  /** Pending rename state. */
+  rename: RenameStatus;
+  onRenameUnlock: (action: RenameAction) => void;
+  onRenameComplete: () => void | Promise<void>;
   /** The keys this account holds, once the agent has answered. */
   lists: DeviceLists;
   /** Whether the keys behind the counts are current, stale or on their way. */
@@ -762,6 +826,13 @@ function AccountPanel({
         </Band>
       ) : null}
       {notices}
+      <RenameBanner
+        status={rename}
+        profile={store.server}
+        account={store.account}
+        onUnlock={onRenameUnlock}
+        onComplete={onRenameComplete}
+      />
       <Inset
         className={`settings-inset middle wide${freshness.stale ? ' stale' : ''}`}
       >
@@ -769,9 +840,16 @@ function AccountPanel({
           label="Username"
           action={
             <>
+              {/* Resolve the pending operation before preparing another. */}
               <Button
                 size="sm"
-                {...access.props('account-rename', target)}
+                {...(rename.pending
+                  ? {
+                      disabled: true,
+                      title:
+                        'Confirm or discard the pending username change first.',
+                    }
+                  : access.props('account-rename', target))}
                 onClick={() => onSheet('rename')}
               >
                 Change…
