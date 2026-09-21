@@ -16,12 +16,15 @@ import type { Location } from '../location';
 /**
  * What identifies a page's screen for the boundary's key: the fields that
  * pick which screen the router mounts, without the conceal signal, on which
- * the screens already remount. A change here remounts the screen.
+ * the screens already remount. A change here remounts the screen. The Chat
+ * tab keeps its team column across a team switch and keys the conversation
+ * beside it on the team itself, so its `ref` names a page of the tab, not a
+ * screen; it belongs to the identity below.
  */
 export function screenBoundaryKey(location: Location): string {
   return [
     location.kind,
-    'ref' in location ? location.ref : '',
+    'ref' in location && location.kind !== 'chat' ? location.ref : '',
     'section' in location ? location.section : '',
   ].join(':');
 }
@@ -33,6 +36,7 @@ export function screenBoundaryKey(location: Location): string {
 export function screenIdentity(location: Location): string {
   return [
     screenBoundaryKey(location),
+    'ref' in location ? location.ref : '',
     'store' in location ? location.store : '',
     'profile' in location ? location.profile : '',
     'device' in location ? location.device : '',

@@ -124,6 +124,13 @@ test('the boundary key identifies screens and page identity includes route field
       { kind: 'chat', ref: 'team:eng', channel: 'a' },
       { kind: 'chat', ref: 'team:eng', channel: 'b' },
     ],
+    // The Chat tab keeps its team column across a team switch: the router
+    // keys the tab on its kind and the conversation on the team.
+    [
+      { kind: 'chat', ref: 'team:eng', channel: 'a' },
+      { kind: 'chat', ref: 'team:ops', channel: 'a' },
+    ],
+    [{ kind: 'chat' }, { kind: 'chat', ref: 'team:eng' }],
     [
       { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
       { kind: 'group-settings', ref: 'team:eng', tab: 'settings' },
@@ -186,5 +193,39 @@ test('moving to another channel of the same team clears a failure without remoun
   // A further channel of the same team keeps the healthy screen mounted.
   ui.act(() => setChannel('other'));
   assert.ok(rendered.getByText(`Channel other (${drawn})`));
+  assert.equal(mounts, drawn);
+});
+
+test('opening Chat with no team and switching teams keeps the healthy tab mounted', () => {
+  let setRef!: (ref: string | undefined) => void;
+  let mounts = 0;
+  function Tab({ team }: { team: string | undefined }) {
+    const [mounted] = useState(() => ++mounts);
+    if (team === 'broken') throw new Error('Team broken');
+    return createElement('p', null, `Team ${team ?? 'none'} (${mounted})`);
+  }
+  function Shell() {
+    const [ref, update] = useState<string | undefined>('broken');
+    setRef = update;
+    const location: Location = ref ? { kind: 'chat', ref } : { kind: 'chat' };
+    return createElement(boundary.ScreenErrorBoundary, {
+      key: boundary.screenBoundaryKey(location),
+      identity: boundary.screenIdentity(location),
+      children: createElement(Tab, { team: ref }),
+    });
+  }
+  const { value: rendered } = quietly(() => ui.render(createElement(Shell)));
+  assert.ok(rendered.getByRole('alert'));
+  // The failure clears for the next team, which mounts the tab.
+  ui.act(() => setRef(undefined));
+  assert.ok(rendered.getByText(/Team none/));
+  assert.equal(rendered.queryByRole('alert'), null);
+  const drawn = mounts;
+  // The tab resolves a team for the bare location and navigates to it, then
+  // the user switches teams: the tab stays mounted through both.
+  ui.act(() => setRef('team:eng'));
+  assert.ok(rendered.getByText(`Team team:eng (${drawn})`));
+  ui.act(() => setRef('team:ops'));
+  assert.ok(rendered.getByText(`Team team:ops (${drawn})`));
   assert.equal(mounts, drawn);
 });
