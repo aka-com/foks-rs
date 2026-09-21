@@ -119,8 +119,8 @@ impl CheckedProfileSession<'_> {
                 _ => return Err(Error::InvalidKvPath("stat node type changed")),
             }
         }
-        // Go reports zero for a large file: its metadata does not contain the
-        // plaintext length. Preserve that behavior without scanning file chunks.
+        // Preserve Go's large-file stat placeholder even when the catalog can
+        // expose the Rust size extension through its separate optional field.
         if node_id.node_type()? == KvNodeType::File {
             result.size = Some(0);
         }

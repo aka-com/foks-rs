@@ -1169,7 +1169,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(inspected, KvFetchedNode::LargeFile);
+        assert_eq!(inspected, KvFetchedNode::LargeFile { size: None });
         assert!(inspect_requests.is_empty());
 
         let mut requests = VecDeque::from([

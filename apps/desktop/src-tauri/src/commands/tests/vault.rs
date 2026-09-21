@@ -280,9 +280,8 @@ impl foks_desktop::AgentTransport for DownloadTransport {
                 path,
                 version,
                 node_type: "file".to_owned(),
-                // As the agent answers now: a large file has no size it can
-                // report without downloading itself, so the loop below is
-                // driven by the end-of-file flag alone.
+                // Model a legacy file without the optional size extension;
+                // the download loop must still use its end-of-file flag.
                 size: None,
                 read_role: KvRole::Owner,
                 write_role: KvRole::Owner,
@@ -312,7 +311,7 @@ impl foks_desktop::AgentTransport for DownloadTransport {
     }
 }
 
-pub(super) fn download_item(total: u64) -> CatalogItem {
+pub(super) fn download_item(_total: u64) -> CatalogItem {
     let store = foks_agent_proto::AccountStoreRef {
         profile: "foks.example".to_owned(),
         account_alias: "personal".to_owned(),

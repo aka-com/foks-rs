@@ -290,7 +290,7 @@ fn item_dto(item: &CatalogItem) -> Result<ItemDto, AgentError> {
                 ));
             }
         },
-        // Catalog metadata intentionally omits plaintext content sizes.
+        // Large-file sizes remain optional for legacy and Go-created files.
         size: item.metadata.size,
         version: item.metadata.version,
         read: item.metadata.read_role.into(),
@@ -371,16 +371,17 @@ pub(super) fn download_to_path(
         .map_err(AgentError::from_desktop)?;
     let mut read: KvReadResult = serde_json::from_value(value)
         .map_err(|error| AgentError::new("invalid-response", error.to_string(), false))?;
-    // The size is deliberately not bound. A catalog entry never carries one,
-    // because FOKS does not expose a plaintext size in node metadata, and a
-    // large-file read no longer reports one either, so comparing them refuses
-    // every download. The store, path, version, node type and both roles are
-    // what identify the entry; a small file's assembled length is still
-    // checked against the size that read reports for it.
+    // A legacy file can have a locally measured catalog size while its node
+    // metadata still has none. Compare sizes only when both paths report one.
+    let size_matches = match (item.metadata.size, read.size) {
+        (Some(expected), Some(actual)) => expected == actual,
+        _ => true,
+    };
     let metadata_matches = read.store == store
         && read.path == item.metadata.path
         && read.version == item.metadata.version
         && read.node_type == item.metadata.node_type
+        && size_matches
         && read.read_role == item.metadata.read_role
         && read.write_role == item.metadata.write_role;
     if !metadata_matches {
@@ -453,11 +454,9 @@ pub(super) fn download_to_path(
                     false,
                 ));
             }
-            // A large file reports no size: the agent would have to download
-            // and decrypt the whole file to measure one, doubling the bytes
-            // this loop is about to move. The end-of-file flag ends the loop,
-            // and `MAXIMUM_DOWNLOAD_BYTES` bounds it against an agent that
-            // never sets that flag.
+            // Legacy files may not report a size, so the authenticated
+            // end-of-file flag still controls this loop. The bound also
+            // protects against an agent that never sets that flag.
             let mut offset = 0u64;
             loop {
                 let length = DOWNLOAD_CHUNK_BYTES;
@@ -509,6 +508,18 @@ pub(super) fn download_to_path(
                 })?;
                 offset = next;
                 if eof {
+                    if item
+                        .metadata
+                        .size
+                        .or(read.size)
+                        .is_some_and(|expected| expected != offset)
+                    {
+                        return Err(AgentError::new(
+                            "response-binding",
+                            "The downloaded file length does not match its authenticated size.",
+                            false,
+                        ));
+                    }
                     break;
                 }
             }

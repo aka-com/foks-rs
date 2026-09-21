@@ -1488,6 +1488,7 @@ async fn handle_streaming_upload(
                     &worker_header.store,
                     &worker_header.path,
                     UploadReader::new(receiver, worker_header.total_length),
+                    Some(worker_header.total_length),
                     worker_header.precondition,
                     worker_header.read_role,
                     worker_header.write_role,
@@ -3008,6 +3009,7 @@ fn put_kv_reader<R: std::io::Read>(
     store: &KvStoreRef,
     path: &str,
     mut reader: R,
+    expected_size: Option<u64>,
     precondition: KvPrecondition,
     read_role: KvRole,
     write_role: KvRole,
@@ -3017,10 +3019,11 @@ fn put_kv_reader<R: std::io::Read>(
         read_cache::open_profile_session(registry, kv_store_profile(store), timeout, cancellation)?;
     with_vault_and_master(state_dir, &session, |session, vault, master| {
         let report = match store {
-            KvStoreRef::Account(store) => session.put_kv_file_checked(
+            KvStoreRef::Account(store) => session.put_kv_file_checked_with_size(
                 &store.account_alias,
                 path,
                 &mut reader,
+                expected_size,
                 wire_precondition(precondition),
                 wire_role_to_app(read_role),
                 wire_role_to_app(write_role),
@@ -3028,12 +3031,13 @@ fn put_kv_reader<R: std::io::Read>(
                 vault,
                 master,
             )?,
-            KvStoreRef::Team(store) => session.put_team_kv_file_checked(
+            KvStoreRef::Team(store) => session.put_team_kv_file_checked_with_size(
                 &store.account_alias,
                 &store.team_alias,
                 &store.team_id,
                 path,
                 &mut reader,
+                expected_size,
                 wire_precondition(precondition),
                 wire_role_to_app(read_role),
                 wire_role_to_app(write_role),
@@ -4869,6 +4873,7 @@ fn dispatch_result_inner(
                 )));
             }
             let content = Zeroizing::new(content);
+            let content_size = u64::try_from(content.len())?;
             put_kv_reader(
                 state_dir,
                 &registry,
@@ -4877,6 +4882,7 @@ fn dispatch_result_inner(
                 &store,
                 &path,
                 std::io::Cursor::new(content.as_slice()),
+                Some(content_size),
                 precondition,
                 read_role,
                 write_role,

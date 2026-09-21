@@ -408,15 +408,15 @@ impl CheckedProfileSession<'_> {
             self.data_path_tree(&account, &user, team.as_ref(), path, KvPathScope::Parent)?;
         let entry = checked_entry(&tree, path, version)?;
         if KvNodeId(entry.node_id).node_type()? == KvNodeType::File {
-            // A large file's roles come from the dirent and the node metadata
-            // this walk already authenticated, which is the same pair the
-            // catalog would report for this row. Measuring its size would
-            // cost the whole file, so it stays absent.
+            // The path walk already authenticated the node metadata and may
+            // have recovered an encrypted or locally measured size.
             return read_report_from_fetched(
                 &tree,
                 path,
                 version,
-                foks_client::KvFetchedNode::LargeFile,
+                foks_client::KvFetchedNode::LargeFile {
+                    size: entry.large_file_size,
+                },
             );
         }
         let host = self.pinned_host()?;

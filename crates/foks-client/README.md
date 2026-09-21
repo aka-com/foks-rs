@@ -41,6 +41,17 @@ same targeted incremental synchronization path after success. Merkle
 advancement always starts from SQLite hard state, so an untrusted response can
 never bless its own root.
 
+Rust uploads with a known plaintext length store a versioned, authenticated
+size extension in `KvLargeFileMetadata.custom_metadata`. The payload is opaque
+to the server and is bound to the immutable file ID and metadata version. The
+Rust server preserves this field. The v0.1.9 Go server accepts the metadata
+object but reconstructs it from the key fields when reading, which drops
+`custom_metadata`; files served through it therefore use an exact local
+transfer/full-sync measurement when available and otherwise report an unknown
+size. The upload RPC has no metadata-update operation after `UploadInit`, so an
+unknown-length stream cannot publish its final size without first buffering or
+spooling the stream. Listings never download chunks to fill this information.
+
 User and team refreshes also start at the last authenticated chain sequence
 and send the v0.1.9 current-name cursor. Only the returned suffix is replayed:
 its first `previous` hash and hidden tree location must extend the stored tail,

@@ -7,6 +7,29 @@ mod data_write;
 pub use data::*;
 pub use data_write::*;
 
+fn record_completed_chunk_size(
+    soft_database: &Path,
+    host_id: &[u8],
+    party_id: &[u8],
+    node_id: &[u8; 17],
+    offset: u64,
+    content_len: usize,
+    eof: bool,
+) -> Result<()> {
+    if !eof {
+        return Ok(());
+    }
+    let size = offset
+        .checked_add(
+            u64::try_from(content_len)
+                .map_err(|_| Error::InvalidAccount("large-file size overflow"))?,
+        )
+        .ok_or(Error::InvalidAccount("large-file size overflow"))?;
+    foks_client_db::SoftStateStore::open(soft_database)?
+        .record_large_file_size(host_id, party_id, node_id, size)?;
+    Ok(())
+}
+
 impl CheckedProfileSession<'_> {
     pub fn list_kv(&self, alias: &str, vault: &mut AccountVault<'_>) -> Result<KvListReport> {
         self.profile.require(Capability::Kv)?;
@@ -119,13 +142,22 @@ impl CheckedProfileSession<'_> {
                     &remembered.versions,
                 ) {
                     Ok(Some(chunk)) => {
+                        record_completed_chunk_size(
+                            &self.paths.soft_database,
+                            host.host_id().as_bytes(),
+                            loaded.credential.uid.as_bytes(),
+                            &remembered.node_id,
+                            offset,
+                            chunk.content.len(),
+                            chunk.eof,
+                        )?;
                         return Ok(KvChunkReport {
                             path: path.to_owned(),
                             version,
                             offset,
                             eof: chunk.eof,
                             content: chunk.content,
-                        })
+                        });
                     }
                     // The server refused the vector. The remembered node is
                     // not the node at this path any more, or may not be;
@@ -159,6 +191,15 @@ impl CheckedProfileSession<'_> {
             KvNodeId(entry.node_id),
             offset,
             length,
+        )?;
+        record_completed_chunk_size(
+            &self.paths.soft_database,
+            &directories[0].host_id,
+            &directories[0].party_id,
+            &entry.node_id,
+            offset,
+            chunk.content.len(),
+            chunk.eof,
         )?;
         if let Some((cache, key)) = memo {
             cache.put(
@@ -236,13 +277,22 @@ impl CheckedProfileSession<'_> {
                     &remembered.versions,
                 ) {
                     Ok(Some(chunk)) => {
+                        record_completed_chunk_size(
+                            &self.paths.soft_database,
+                            host.host_id().as_bytes(),
+                            team.verified.team().as_bytes(),
+                            &remembered.node_id,
+                            offset,
+                            chunk.content.len(),
+                            chunk.eof,
+                        )?;
                         return Ok(KvChunkReport {
                             path: path.to_owned(),
                             version,
                             offset,
                             eof: chunk.eof,
                             content: chunk.content,
-                        })
+                        });
                     }
                     Ok(None) => cache.invalidate(key),
                     Err(error) => {
@@ -270,6 +320,15 @@ impl CheckedProfileSession<'_> {
             KvNodeId(entry.node_id),
             offset,
             length,
+        )?;
+        record_completed_chunk_size(
+            &self.paths.soft_database,
+            &directories[0].host_id,
+            &directories[0].party_id,
+            &entry.node_id,
+            offset,
+            chunk.content.len(),
+            chunk.eof,
         )?;
         if let Some((cache, key)) = memo {
             cache.put(
@@ -332,6 +391,34 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
+        self.put_kv_file_checked_with_size(
+            alias,
+            path,
+            reader,
+            None,
+            precondition,
+            read_role,
+            write_role,
+            mkdir_p,
+            vault,
+            master_key,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn put_kv_file_checked_with_size<R: Read>(
+        &self,
+        alias: &str,
+        path: &str,
+        reader: &mut R,
+        expected_size: Option<u64>,
+        precondition: KvMutationPrecondition,
+        read_role: KvRoleSummary,
+        write_role: KvRoleSummary,
+        mkdir_p: bool,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<KvWriteReport> {
         self.put_kv_node_checked(
             alias,
             path,
@@ -341,7 +428,9 @@ impl CheckedProfileSession<'_> {
             mkdir_p,
             vault,
             master_key,
-            |session, parent, name, options| session.put_file(parent, name, reader, options),
+            |session, parent, name, options| {
+                session.put_file_with_size(parent, name, reader, expected_size, options)
+            },
         )
     }
 
@@ -360,6 +449,38 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
+        self.put_team_kv_file_checked_with_size(
+            account_alias,
+            team_alias,
+            team_id_hex,
+            path,
+            reader,
+            None,
+            precondition,
+            read_role,
+            write_role,
+            mkdir_p,
+            vault,
+            master_key,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn put_team_kv_file_checked_with_size<R: Read>(
+        &self,
+        account_alias: &str,
+        team_alias: &str,
+        team_id_hex: &str,
+        path: &str,
+        reader: &mut R,
+        expected_size: Option<u64>,
+        precondition: KvMutationPrecondition,
+        read_role: KvRoleSummary,
+        write_role: KvRoleSummary,
+        mkdir_p: bool,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<KvWriteReport> {
         self.put_team_kv_node_checked(
             account_alias,
             team_alias,
@@ -371,7 +492,9 @@ impl CheckedProfileSession<'_> {
             mkdir_p,
             vault,
             master_key,
-            |session, parent, name, options| session.put_file(parent, name, reader, options),
+            |session, parent, name, options| {
+                session.put_file_with_size(parent, name, reader, expected_size, options)
+            },
         )
     }
 
@@ -651,6 +774,14 @@ impl CheckedProfileSession<'_> {
                         .checked_add(chunk.content.len() as u64)
                         .ok_or(Error::InvalidAccount("large-file size overflow"))?;
                     if chunk.eof {
+                        let mut soft =
+                            foks_client_db::SoftStateStore::open(&self.paths.soft_database)?;
+                        soft.record_large_file_size(
+                            &directories[0].host_id,
+                            &directories[0].party_id,
+                            &entry.node_id,
+                            offset,
+                        )?;
                         return Ok(offset);
                     }
                     if chunk.content.is_empty() {
@@ -1249,12 +1380,8 @@ fn read_report_from_fetched(
             let size = Some(target.len() as u64);
             (None, Some(target), size, projected_read_role(entry)?)
         }
-        // A large file reports no size. Measuring one means downloading and
-        // decrypting the whole file, which every caller of this report is
-        // about to do for itself; readers drive their chunk loop by the
-        // end-of-file flag each chunk carries instead.
-        (KvNodeType::File, foks_client::KvFetchedNode::LargeFile) => {
-            (None, None, None, projected_read_role(entry)?)
+        (KvNodeType::File, foks_client::KvFetchedNode::LargeFile { size }) => {
+            (None, None, size, projected_read_role(entry)?)
         }
         (KvNodeType::Directory, foks_client::KvFetchedNode::Directory { read_role }) => {
             (None, None, None, read_role)
@@ -1812,7 +1939,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_large_file_read_reports_no_size_and_no_content() {
+    fn exact_legacy_large_file_read_reports_no_size_and_no_content() {
         let fixture = |name: &str| {
             std::fs::read(format!(
                 "../foks-snowpack/tests/fixtures/foks-v0.1.9/user/{name}"
@@ -1856,10 +1983,11 @@ mod tests {
             &tree,
             "/archive.bin",
             4,
-            foks_client::KvFetchedNode::LargeFile,
+            foks_client::KvFetchedNode::LargeFile { size: None },
         )
         .unwrap();
-        // No size and no content: both would cost the whole file on the wire.
+        // The official Go fixture has no custom metadata, and node reads do
+        // not fetch content to compensate.
         assert_eq!(report.size, None);
         assert!(report.content.is_none());
     }

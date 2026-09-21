@@ -1164,6 +1164,22 @@ impl FoksClient {
                                         )?;
                                         let _file_seed =
                                             keys.open_file_seed(entry.value, &metadata)?;
+                                        let metadata_size =
+                                            keys.open_large_file_size(entry.value, &metadata)?;
+                                        let measured_size = store.measured_large_file_size(
+                                            host.host_id.as_bytes(),
+                                            party.party.as_bytes(),
+                                            &entry.value.0,
+                                        )?;
+                                        if metadata_size.is_some()
+                                            && measured_size.is_some()
+                                            && metadata_size != measured_size
+                                        {
+                                            return Err(Error::KvResponse(
+                                                "large-file size metadata does not match cached content",
+                                            ));
+                                        }
+                                        projected.large_file_size = metadata_size.or(measured_size);
                                         entries.push(projected);
                                         continue;
                                     }
@@ -1225,6 +1241,14 @@ impl FoksClient {
                                         large_files.push(stage);
                                         size
                                     };
+                                    if keys
+                                        .open_large_file_size(entry.value, &metadata)?
+                                        .is_some_and(|metadata_size| metadata_size != size)
+                                    {
+                                        return Err(Error::KvResponse(
+                                            "large-file size metadata does not match content",
+                                        ));
+                                    }
                                     projected.large_file_size = Some(size);
                                 }
                                 KvNodeType::None => unreachable!("rejected above"),
@@ -1450,7 +1474,8 @@ where
             // entire file to report a length the caller is about to read
             // anyway, so the node read stops at its metadata.
             let _ = keys.open_file_seed(node, &metadata)?;
-            Ok(KvFetchedNode::LargeFile)
+            let size = keys.open_large_file_size(node, &metadata)?;
+            Ok(KvFetchedNode::LargeFile { size })
         }
         _ => Err(Error::KvResponse("KV node response type mismatch")),
     }
@@ -1786,13 +1811,19 @@ mod cached_node_tests {
             KvNodeId(node)
         }
 
-        fn large_file(&mut self, name: &str) -> KvNodeId {
+        fn large_file_with_size(&mut self, name: &str, size: Option<u64>) -> KvNodeId {
             let node = self.node_id(KvNodeType::File);
             let file_seed = SecretSeed::new([node.0[1]; 32]);
-            let metadata = derive_kv_keys(&self.seed)
-                .unwrap()
+            let keys = derive_kv_keys(&self.seed).unwrap();
+            let mut metadata = keys
                 .seal_file_seed(node, self.key, 1, &file_seed, [node.0[1]; 16])
                 .unwrap();
+            if let Some(size) = size {
+                metadata.custom_metadata = Some(
+                    keys.seal_large_file_size(node, metadata.version, size, [node.0[1]; 16])
+                        .unwrap(),
+                );
+            }
             self.nodes
                 .insert(node.0, KvNode::File(metadata).encoded().unwrap());
             self.link(name, node);
@@ -1866,7 +1897,7 @@ mod cached_node_tests {
     fn dropped_store(host: &PinnedHost) -> DroppedFiles {
         let mut store = DroppedFiles::new(party_for(host));
         for index in 0..8 {
-            store.large_file(&format!("drop-{index:02}"));
+            store.large_file_with_size(&format!("drop-{index:02}"), Some(index));
         }
         store.symlink("latest", "/drop-00");
         store
@@ -1901,6 +1932,14 @@ mod cached_node_tests {
         let projections = first.unwrap();
         assert_eq!(projections.len(), 1);
         assert_eq!(projections[0].entries.len(), 9);
+        assert_eq!(
+            projections[0]
+                .entries
+                .iter()
+                .filter_map(|entry| entry.large_file_size)
+                .collect::<Vec<_>>(),
+            (0..8).collect::<Vec<_>>()
+        );
         // The initial pass fetches one node for each large file and symlink.
         assert_eq!(fetched.len(), 9);
 
@@ -1913,6 +1952,30 @@ mod cached_node_tests {
             .entries
             .iter()
             .all(|entry| entry.node_bytes.is_some()));
+    }
+
+    #[test]
+    fn legacy_metadata_uses_a_node_bound_local_measurement_without_chunks() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, host) = pinned(&directory);
+        let soft = directory.path().join("soft.sqlite3");
+        let mut remote = DroppedFiles::new(party_for(&host));
+        let node = remote.large_file_with_size("legacy.bin", None);
+        let mut cache = SoftStateStore::open(&soft).unwrap();
+        cache
+            .record_large_file_size(
+                host.host_id.as_bytes(),
+                remote.party.party.as_bytes(),
+                &node.0,
+                42,
+            )
+            .unwrap();
+        drop(cache);
+
+        let (result, fetched) = metadata_pass(&client, &host, &remote, &soft);
+        let projections = result.unwrap();
+        assert_eq!(fetched, vec![node.0]);
+        assert_eq!(projections[0].entries[0].large_file_size, Some(42));
     }
 
     /// Flips one byte of the sealed payload of every cached node, leaving the

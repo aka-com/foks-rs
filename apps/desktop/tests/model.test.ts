@@ -326,7 +326,7 @@ test('nameOf and prefixOf extract filename and parent directory from path', () =
 /* ----------------------------------------------------------------- format -- */
 
 test('fmtSize formats byte counts with standard human-readable units', () => {
-  assert.equal(fmtSize(null), 'Size unavailable');
+  assert.equal(fmtSize(null), 'Unknown');
   assert.equal(fmtSize(0), '0 B');
   assert.equal(fmtSize(142), '142 B');
   assert.equal(fmtSize(999), '999 B');

@@ -115,17 +115,15 @@ pub struct KvWriteResult {
 /// carries the read role of its active generation, which a path-scoped read
 /// cannot take from the parent projection that named it.
 ///
-/// A large file carries no size. Its plaintext length is not in its metadata,
-/// so the only way to report one is to fetch and decrypt every chunk — which
-/// is the whole file, on the wire, before the caller's own read begins.
-/// Callers stream the file with [`KvFetchedChunk`] and stop on the
-/// end-of-file flag each chunk carries.
+/// A large file may carry an authenticated plaintext size extension. Legacy
+/// and Go-created files omit it; callers still stream those files until the
+/// end-of-file flag rather than downloading content just to measure it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum KvFetchedNode {
     Directory { read_role: Role },
     SmallFile(Vec<u8>),
     Symlink(Vec<u8>),
-    LargeFile,
+    LargeFile { size: Option<u64> },
 }
 
 /// One requested range of a large KV file. The plaintext is caller-owned and

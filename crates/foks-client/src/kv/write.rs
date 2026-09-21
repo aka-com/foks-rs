@@ -244,6 +244,26 @@ impl KvWriteSession<'_> {
         reader: &mut R,
         options: KvWriteOptions,
     ) -> Result<KvWriteResult> {
+        self.put_file_with_size(parent, name, reader, None, options)
+    }
+
+    /// Uploads a file whose plaintext length may already be known.
+    ///
+    /// A declared length is encrypted into large-file metadata before the
+    /// first upload request and is checked against the bytes actually read.
+    /// The protocol cannot amend metadata after `UploadInit`, so callers with
+    /// genuinely unknown-length streams should pass `None`.
+    pub fn put_file_with_size<R: Read>(
+        &mut self,
+        parent: [u8; 16],
+        name: &str,
+        reader: &mut R,
+        expected_size: Option<u64>,
+        options: KvWriteOptions,
+    ) -> Result<KvWriteResult> {
+        if expected_size.is_some_and(|size| size > Self::MAX_UPLOAD_BYTES) {
+            return Err(Error::KvRequest("upload exceeds FOKS file size limit"));
+        }
         validate_kv_component(name.as_bytes())?;
         let tree = self.scoped_tree(parent)?;
         let (first, mut carry, first_is_final) = read_kv_upload_chunk(reader)?;
@@ -262,30 +282,33 @@ impl KvWriteSession<'_> {
             false,
         )?;
         let (content_seed, key) = self.current_content_key(options.read_role)?;
-        let (node_id, boxed_small, large_metadata, first_chunk, file_seed) =
-            if node_type == KvNodeType::SmallFile {
-                let id = random_kv_node_id(KvNodeType::SmallFile)?;
-                let boxed = derive_kv_keys(content_seed)?.seal_small_file(
-                    id,
-                    key,
-                    KvSmallFilePlaintext::File(first),
-                )?;
-                (id, Some(boxed), None, None, None)
-            } else {
-                let id = random_kv_node_id(KvNodeType::File)?;
-                let file_seed = SecretSeed::new(random_bytes()?);
-                let metadata = derive_kv_keys(content_seed)?.seal_file_seed(
-                    id,
-                    key,
-                    1,
-                    &file_seed,
-                    random_bytes()?,
-                )?;
-                let chunk = seal_kv_chunk(&file_seed, id, 0, first_is_final, &first, 0)?;
-                (id, None, Some(metadata), Some(chunk), Some(file_seed))
-            };
+        let (node_id, boxed_small, large_metadata, first_chunk, file_seed) = if node_type
+            == KvNodeType::SmallFile
+        {
+            let id = random_kv_node_id(KvNodeType::SmallFile)?;
+            let boxed = derive_kv_keys(content_seed)?.seal_small_file(
+                id,
+                key,
+                KvSmallFilePlaintext::File(first),
+            )?;
+            (id, Some(boxed), None, None, None)
+        } else {
+            let id = random_kv_node_id(KvNodeType::File)?;
+            let file_seed = SecretSeed::new(random_bytes()?);
+            let keys = derive_kv_keys(content_seed)?;
+            let mut metadata = keys.seal_file_seed(id, key, 1, &file_seed, random_bytes()?)?;
+            if let Some(size) = expected_size {
+                metadata.custom_metadata =
+                    Some(keys.seal_large_file_size(id, metadata.version, size, random_bytes()?)?);
+            }
+            let chunk = seal_kv_chunk(&file_seed, id, 0, first_is_final, &first, 0)?;
+            (id, None, Some(metadata), Some(chunk), Some(file_seed))
+        };
 
+        let actual_size;
         if let Some(boxed) = boxed_small {
+            actual_size =
+                u64::try_from(first_len).map_err(|_| Error::KvResponse("upload size overflow"))?;
             self.call(KvRequest::PutSmall { id: node_id, boxed })?;
         } else {
             let metadata = large_metadata.expect("large-file metadata was constructed");
@@ -338,9 +361,36 @@ impl KvWriteSession<'_> {
             if clear_offset > Self::MAX_UPLOAD_BYTES || !carry.is_empty() {
                 return Err(Error::KvResponse("upload exceeds FOKS file size limit"));
             }
+            actual_size = clear_offset;
         }
 
-        self.link_uploaded_node(tree, parent, name.as_bytes(), node_id, options)
+        if expected_size.is_some_and(|expected| expected != actual_size) {
+            return Err(Error::KvRequest(
+                "upload length does not match declared size",
+            ));
+        }
+        if node_type == KvNodeType::File {
+            SoftStateStore::open(&self.soft_database_path)?.record_large_file_size(
+                self.host.host_id.as_bytes(),
+                self.party.party.as_bytes(),
+                &node_id.0,
+                actual_size,
+            )?;
+        }
+        let mut result =
+            self.link_uploaded_node(tree, parent, name.as_bytes(), node_id, options)?;
+        if node_type == KvNodeType::File {
+            for directory in &mut result.path {
+                if let Some(entry) = directory
+                    .entries
+                    .iter_mut()
+                    .find(|entry| entry.node_id == node_id.0)
+                {
+                    entry.large_file_size = Some(actual_size);
+                }
+            }
+        }
+        Ok(result)
     }
 
     pub fn put_symlink(

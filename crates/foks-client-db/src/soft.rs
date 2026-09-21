@@ -119,6 +119,64 @@ pub struct SoftStateStore {
 }
 
 impl SoftStateStore {
+    /// Returns an exact size measured while this immutable file node was
+    /// completely materialized locally. The node ID prevents a value from
+    /// carrying across replacement of a directory entry.
+    pub fn measured_large_file_size(
+        &self,
+        host_id: &[u8],
+        party_id: &[u8],
+        node_id: &[u8; 17],
+    ) -> Result<Option<u64>> {
+        let materialized = self
+            .connection
+            .query_row(
+                "SELECT size FROM kv_large_files WHERE host_id = ?1 AND party_id = ?2 \
+                 AND node_id = ?3 AND complete = 1 ORDER BY id DESC LIMIT 1",
+                params![host_id, party_id, node_id.as_slice()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(|size| stored_unsigned("KV large file size", size))
+            .transpose()?;
+        if materialized.is_some() {
+            return Ok(materialized);
+        }
+        self.connection
+            .query_row(
+                "SELECT size FROM kv_large_file_measurements WHERE host_id = ?1 \
+                 AND party_id = ?2 AND node_id = ?3",
+                params![host_id, party_id, node_id.as_slice()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(|size| stored_unsigned("KV measured file size", size))
+            .transpose()
+    }
+
+    pub fn record_large_file_size(
+        &mut self,
+        host_id: &[u8],
+        party_id: &[u8],
+        node_id: &[u8; 17],
+        size: u64,
+    ) -> Result<()> {
+        self.connection.execute(
+            "INSERT INTO kv_large_file_measurements (host_id, party_id, node_id, size) \
+             VALUES (?1, ?2, ?3, ?4) ON CONFLICT(host_id, party_id, node_id) DO NOTHING",
+            params![
+                host_id,
+                party_id,
+                node_id.as_slice(),
+                sqlite_integer("KV measured file size", size)?
+            ],
+        )?;
+        if self.measured_large_file_size(host_id, party_id, node_id)? != Some(size) {
+            return Err(Error::InvalidKvProjection);
+        }
+        Ok(())
+    }
+
     /// Validates an exclusively reserved existing snapshot without rebuilding caches.
     pub fn inspect_existing(path: &Path) -> Result<Self> {
         let connection = crate::inspection::open_existing(path, APPLICATION_ID, VERSION, |c| {
@@ -1156,7 +1214,29 @@ impl SoftStateStore {
                         entry.dirent_bytes
                     ],
                 )?;
-                let large_file_id = if entry.readable && entry.node_id[0] == 2 && !metadata_only {
+                let large_file_id = if entry.readable && entry.node_id[0] == 2 && metadata_only {
+                    transaction
+                        .query_row(
+                            "SELECT id, size FROM kv_large_files WHERE host_id = ?1 AND \
+                             party_id = ?2 AND node_id = ?3 AND complete = 1 \
+                             ORDER BY id DESC LIMIT 1",
+                            params![
+                                snapshot.host_id,
+                                snapshot.party_id,
+                                entry.node_id.as_slice()
+                            ],
+                            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                        )
+                        .optional()?
+                        .map(|(id, size)| {
+                            let size = stored_unsigned("KV large file size", size)?;
+                            if entry.large_file_size != Some(size) {
+                                return Err(Error::InvalidKvProjection);
+                            }
+                            Ok(id)
+                        })
+                        .transpose()?
+                } else if entry.readable && entry.node_id[0] == 2 {
                     let stage = large_files
                         .get(&entry.node_id)
                         .ok_or(Error::InvalidKvProjection)?;
@@ -1225,6 +1305,12 @@ impl SoftStateStore {
                 &root.host_id,
                 &root.party_id,
                 &root.root_directory_id,
+            )?;
+            transaction.execute(
+                "DELETE FROM kv_large_file_measurements WHERE host_id = ?1 AND party_id = ?2 \
+                 AND NOT EXISTS (SELECT 1 FROM kv_entries e WHERE e.host_id = ?1 \
+                 AND e.party_id = ?2 AND e.node_id = kv_large_file_measurements.node_id)",
+                params![root.host_id, root.party_id],
             )?;
         }
         transaction.execute(
@@ -1626,6 +1712,18 @@ fn initialize(connection: &mut Connection, path: &Path) -> Result<()> {
             supported: VERSION,
         });
     }
+    // Version 6 originally shipped without the optional transfer-size cache.
+    // Adding it is backward compatible because soft state is replaceable and
+    // no existing table changes shape.
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS kv_large_file_measurements (
+            host_id BLOB NOT NULL CHECK (length(host_id) = 33),
+            party_id BLOB NOT NULL CHECK (length(party_id) = 33),
+            node_id BLOB NOT NULL CHECK (length(node_id) = 17),
+            size INTEGER NOT NULL CHECK (size >= 0),
+            PRIMARY KEY (host_id, party_id, node_id)
+        ) STRICT, WITHOUT ROWID;",
+    )?;
     Ok(())
 }
 
@@ -1659,7 +1757,12 @@ fn validate(snapshot: &KvDirectoryProjection, metadata_only: bool) -> Result<()>
                                 || entry.symlink.is_some()
                                 || entry.large_file_size.is_some()
                         }
-                        2..=4 => {
+                        2 => {
+                            entry.node_bytes.is_none()
+                                || entry.content.is_some()
+                                || entry.symlink.is_some()
+                        }
+                        3..=4 => {
                             entry.node_bytes.is_none()
                                 || entry.content.is_some()
                                 || entry.symlink.is_some()
@@ -2689,6 +2792,57 @@ mod tests {
             Err(Error::KvProjectionConflict(_))
         ));
         store.append_large_file(&mut stage, b"still live").unwrap();
+    }
+
+    #[test]
+    fn measured_file_sizes_are_bound_to_the_immutable_node() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("soft.sqlite3");
+        let mut store = SoftStateStore::open(&path).unwrap();
+        let host = [1; 33];
+        let party = [2; 33];
+        let mut first = [3; 17];
+        first[0] = 2;
+        let mut replacement = first;
+        replacement[16] = 4;
+
+        store
+            .record_large_file_size(&host, &party, &first, 0)
+            .unwrap();
+        assert_eq!(
+            store
+                .measured_large_file_size(&host, &party, &first)
+                .unwrap(),
+            Some(0)
+        );
+        assert_eq!(
+            store
+                .measured_large_file_size(&host, &party, &replacement)
+                .unwrap(),
+            None
+        );
+        assert!(store
+            .record_large_file_size(&host, &party, &first, 1)
+            .is_err());
+    }
+
+    #[test]
+    fn version_six_database_adds_the_optional_size_cache_on_open() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("soft.sqlite3");
+        drop(SoftStateStore::open(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute("DROP TABLE kv_large_file_measurements", [])
+            .unwrap();
+        drop(connection);
+
+        let mut store = SoftStateStore::open(&path).unwrap();
+        let mut node = [5; 17];
+        node[0] = 2;
+        store
+            .record_large_file_size(&[1; 33], &[2; 33], &node, 7)
+            .unwrap();
     }
 
     #[cfg(unix)]

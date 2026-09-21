@@ -122,6 +122,9 @@ type HybridDerivation = (Zeroizing<[u8; 32]>, Zeroizing<Vec<u8>>);
 
 const SMALL_FILE_PAYLOAD_TYPE_ID: u64 = 0xaeec_688f_3145_fddf;
 const DIR_KEY_SEED_TYPE_ID: u64 = 0x8aec_e656_6b24_4356;
+// Rust extension stored in KvLargeFileMetadata.custom_metadata. Servers treat
+// this field as opaque; the encrypted payload carries its own format version.
+const LARGE_FILE_SIZE_PAYLOAD_TYPE_ID: u64 = 0xb752_f13b_2ad6_7234;
 
 /// Application-specific MAC and box keys derived from one exact PUK/PTK seed.
 pub struct KvKeySet {
@@ -250,6 +253,74 @@ impl KvKeySet {
             return Err(Error::KvBinding);
         }
         Ok(seed)
+    }
+
+    /// Opens the Rust large-file size extension.
+    ///
+    /// `Ok(None)` means that the metadata is absent or uses a newer,
+    /// authenticated payload version. Authentication and identity-binding
+    /// failures remain errors.
+    pub fn open_large_file_size(
+        &self,
+        id: KvNodeId,
+        metadata: &KvLargeFileMetadata,
+    ) -> Result<Option<u64>> {
+        let Some(boxed) = &metadata.custom_metadata else {
+            return Ok(None);
+        };
+        let plaintext = open_typed_secretbox(
+            &self.box_key,
+            LARGE_FILE_SIZE_PAYLOAD_TYPE_ID,
+            &boxed.nonce,
+            &boxed.ciphertext,
+        )?;
+        let (value, consumed) = decode_prefix(&plaintext)?;
+        require_zero_padding(&plaintext, consumed)?;
+        let Value::Array(fields) = value else {
+            return Err(Error::KvBinding);
+        };
+        let Some(Value::Unsigned(format_version)) = fields.first() else {
+            return Err(Error::KvBinding);
+        };
+        if *format_version != 1 {
+            return Ok(None);
+        }
+        if fields.len() != 4
+            || fields[1] != Value::Binary(id.object_id().to_vec())
+            || fields[2] != Value::Unsigned(metadata.version)
+        {
+            return Err(Error::KvBinding);
+        }
+        let Value::Unsigned(size) = fields[3] else {
+            return Err(Error::KvBinding);
+        };
+        Ok(Some(size))
+    }
+
+    pub fn seal_large_file_size(
+        &self,
+        id: KvNodeId,
+        metadata_version: u64,
+        size: u64,
+        nonce: [u8; 16],
+    ) -> Result<SecretBox> {
+        let object_id = id.object_id();
+        let plaintext = Zeroizing::new(encode_ref(&ValueRef::Array(vec![
+            ValueRef::Unsigned(1),
+            ValueRef::Binary(&object_id),
+            ValueRef::Unsigned(metadata_version),
+            ValueRef::Unsigned(size),
+        ]))?);
+        Ok(SecretBox {
+            nonce,
+            ciphertext: seal_typed_secretbox(
+                &self.box_key,
+                LARGE_FILE_SIZE_PAYLOAD_TYPE_ID,
+                &nonce,
+                &plaintext,
+                false,
+            )?,
+        })
     }
 
     pub fn seal_directory_seed(
@@ -6607,6 +6678,11 @@ mod tests {
         let large_id = listing.entries[2].value;
         let file_seed = keys.open_file_seed(large_id, &metadata).unwrap();
         assert_eq!(file_seed.as_slice(), user_fixture("kv-file-seed.bin"));
+        // The official Go v0.1.9 fixture predates the Rust size extension.
+        assert_eq!(
+            keys.open_large_file_size(large_id, &metadata).unwrap(),
+            None
+        );
         let chunk = KvEncryptedChunk::decode(&user_fixture("kv-large-chunk.snowp")).unwrap();
         assert_eq!(
             open_kv_chunk(&file_seed, large_id, 0, &chunk).unwrap(),
@@ -6676,6 +6752,63 @@ mod tests {
             bind_kv_dirent(&directory_seed, &expected).unwrap(),
             expected.binding_mac
         );
+    }
+
+    #[test]
+    fn large_file_size_metadata_is_versioned_bound_and_authenticated() {
+        let seed = SecretSeed::new([7; 32]);
+        let keys = derive_kv_keys(&seed).unwrap();
+        let mut id_bytes = [0; 17];
+        id_bytes[0] = 2;
+        id_bytes[1..].copy_from_slice(&[9; 16]);
+        let id = KvNodeId(id_bytes);
+        let key = RoleAndGeneration {
+            role: Role::OWNER,
+            generation: 1,
+        };
+        let mut metadata = keys
+            .seal_file_seed(id, key, 4, &SecretSeed::new([3; 32]), [1; 16])
+            .unwrap();
+        metadata.custom_metadata = Some(
+            keys.seal_large_file_size(id, metadata.version, 0, [2; 16])
+                .unwrap(),
+        );
+        assert_eq!(keys.open_large_file_size(id, &metadata).unwrap(), Some(0));
+
+        let mut other_id = id;
+        other_id.0[16] ^= 1;
+        assert!(matches!(
+            keys.open_large_file_size(other_id, &metadata),
+            Err(Error::KvBinding)
+        ));
+        let mut other_version = metadata.clone();
+        other_version.version += 1;
+        assert!(matches!(
+            keys.open_large_file_size(id, &other_version),
+            Err(Error::KvBinding)
+        ));
+
+        let mut tampered = metadata.clone();
+        tampered.custom_metadata.as_mut().unwrap().ciphertext[0] ^= 1;
+        assert!(matches!(
+            keys.open_large_file_size(id, &tampered),
+            Err(Error::Decryption)
+        ));
+
+        let nonce = [4; 16];
+        let unsupported = encode_ref(&ValueRef::Array(vec![ValueRef::Unsigned(2)])).unwrap();
+        metadata.custom_metadata = Some(SecretBox {
+            nonce,
+            ciphertext: seal_typed_secretbox(
+                &keys.box_key,
+                LARGE_FILE_SIZE_PAYLOAD_TYPE_ID,
+                &nonce,
+                &unsupported,
+                false,
+            )
+            .unwrap(),
+        });
+        assert_eq!(keys.open_large_file_size(id, &metadata).unwrap(), None);
     }
 
     #[test]

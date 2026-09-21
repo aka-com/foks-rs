@@ -137,6 +137,16 @@ CREATE TABLE kv_large_file_chunks (
     FOREIGN KEY (file_id) REFERENCES kv_large_files(id) ON DELETE CASCADE
 ) STRICT, WITHOUT ROWID;
 
+-- Exact plaintext sizes measured by completed local transfers. This cache is
+-- independent of chunk retention and is bound to the immutable file node ID.
+CREATE TABLE kv_large_file_measurements (
+    host_id BLOB NOT NULL CHECK (length(host_id) = 33),
+    party_id BLOB NOT NULL CHECK (length(party_id) = 33),
+    node_id BLOB NOT NULL CHECK (length(node_id) = 17),
+    size INTEGER NOT NULL CHECK (size >= 0),
+    PRIMARY KEY (host_id, party_id, node_id)
+) STRICT, WITHOUT ROWID;
+
 -- Beacon answers are routing hints, never trust anchors. Keeping them in the
 -- replaceable soft-state database makes that distinction structural.
 CREATE TABLE federation_discovery_hints (

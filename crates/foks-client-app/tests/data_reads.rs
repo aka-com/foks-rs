@@ -73,10 +73,12 @@ fn scoped_reads_bind_identity_preserve_absent_roots_and_verify_team_and_file_dat
                 .unwrap();
             assert_eq!(roots, 0, "read adapters must not initialize the namespace");
             let data = vec![0x61; 300 * 1024];
-            session.put_kv_file_checked(
+            let data_size = data.len() as u64;
+            session.put_kv_file_checked_with_size(
                 "owner",
                 "/large",
                 &mut data.as_slice(),
+                Some(data_size),
                 KvMutationPrecondition::Create,
                 KvRoleSummary::Owner,
                 KvRoleSummary::Owner,
@@ -93,11 +95,30 @@ fn scoped_reads_bind_identity_preserve_absent_roots_and_verify_team_and_file_dat
             assert!(row.modified_microseconds > 0);
             let node =
                 session.data_entry("owner", None, "/large", row.metadata.version, &mut vault)?;
-            assert_eq!(node.size, None);
+            assert_eq!(node.size, Some(data_size));
             assert!(
                 node.content.is_none(),
                 "large-file metadata must not fetch content"
             );
+            assert!(session
+                .put_kv_file_checked_with_size(
+                    "owner",
+                    "/wrong-size",
+                    &mut data.as_slice(),
+                    Some(data_size - 1),
+                    KvMutationPrecondition::Create,
+                    KvRoleSummary::Owner,
+                    KvRoleSummary::Owner,
+                    false,
+                    &mut vault,
+                    &master,
+                )
+                .is_err());
+            assert!(session
+                .data_catalog("owner", None, &mut vault)?
+                .entries
+                .iter()
+                .all(|entry| entry.metadata.path != "/wrong-size"));
             let chunk = session.data_chunk(
                 "owner",
                 None,

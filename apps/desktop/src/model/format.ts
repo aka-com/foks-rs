@@ -6,7 +6,7 @@
  * Formats a byte count into human-readable units (B, KB, MB).
  */
 export function fmtSize(bytes: number | null): string {
-  if (bytes === null) return 'Size unavailable';
+  if (bytes === null) return 'Unknown';
   if (bytes === 0) return '0 B';
   if (bytes < 1000) return `${bytes} B`;
   if (bytes < 1e6) return `${(bytes / 1000).toFixed(bytes < 10000 ? 1 : 0)} KB`;
