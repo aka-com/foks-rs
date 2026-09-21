@@ -125,6 +125,7 @@
   height: 16px;
   border-radius: 4px;
   font-size: var(--mark-type);
+  padding-bottom: 1px;
   flex: none;
 }
 .folder-split .tpane .fn .fselect > .ic {
@@ -212,6 +213,7 @@
   height: 16px;
   border-radius: 4px;
   font-size: var(--mark-type);
+  padding-bottom: 1px;
   flex: none;
 }
 .lpane > .lt .sp {
@@ -341,6 +343,7 @@
   height: 16px;
   border-radius: 4px;
   font-size: var(--mark-type);
+  padding-bottom: 5px;
   flex: none;
 }
 
@@ -686,6 +689,7 @@
   height: 16px;
   border-radius: 4px;
   font-size: var(--mark-type);
+  padding-bottom: 1px;
   flex: none;
 }
 .details .prev .irow {
