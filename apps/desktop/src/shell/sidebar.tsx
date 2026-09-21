@@ -24,7 +24,6 @@ import {
   storeAvailability,
   storeDescription,
   storeDescriptionState,
-  storeHues,
   storeNavigationOrder,
 } from '../model';
 import type { AccountStore, AgentSnapshot, StoreRef } from '../model';
@@ -39,6 +38,7 @@ import {
   railTabOf,
 } from '../location';
 import type { Location, RailTab } from '../location';
+import { AccountMark } from '../screens/account-switcher';
 import { filesFolderCrumb } from '../screens/scope';
 
 interface RailTabSpec {
@@ -332,9 +332,7 @@ export function AccountHeader({
     else onNavigate({ kind: 'people', store: store.id });
   };
   const servers = [...new Set(accounts.map((store) => store.server))];
-  // The same hue the Files and Teams rows draw each store's mark in, so an
-  // account's initial is white on its own color rather than on nothing.
-  const hues = storeHues(storeNavigationOrder(snapshot));
+  // Account marks use the same username-derived hue as the Files vault row.
   const close = (): void => setOpen(false);
   return (
     <div className={compact ? 'account-switch' : 'rail-head'}>
@@ -447,13 +445,7 @@ export function AccountHeader({
                             selectAccount(store);
                           }}
                         >
-                          <span
-                            className="av team"
-                            style={{ background: hues.get(store.id) }}
-                            aria-hidden="true"
-                          >
-                            {usernameOf(store).slice(0, 1).toUpperCase()}
-                          </span>
+                          <AccountMark name={usernameOf(store)} />
                           <span className="t">
                             {usernameOf(store)}
                             <small>{localAliasOf(snapshot, store)}</small>

@@ -37,6 +37,7 @@ import {
   storeNavigationOrder,
   storeOf,
   storeReadable,
+  usernameOf,
 } from '../model';
 import type { Item, Store, AgentSnapshot } from '../model';
 import type {
@@ -60,6 +61,7 @@ import {
   whereOf,
 } from './scope';
 import type { FolderNode } from './scope';
+import { AccountMark } from './account-switcher';
 import { StoreAccessTakeover, storeAccessBands } from './store-access';
 
 /* --------------------------------------------------------------- pieces -- */
@@ -630,7 +632,11 @@ export function ItemsScreen({
           mark={
             tree.store.kind === 'team' ? (
               <StoreMark store={tree.store} hue={hues.get(tree.store.id)} />
-            ) : undefined
+            ) : (
+              <AccountMark
+                name={usernameOf(snapshot, tree.store) ?? tree.store.account}
+              />
+            )
           }
           name={tree.store.name}
           count={tree.root.count}

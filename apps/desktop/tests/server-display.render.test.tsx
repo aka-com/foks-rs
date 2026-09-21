@@ -76,6 +76,11 @@ for (const label of ['Local server alias', null]) {
     assert.ok(captions.length > 0);
     for (const caption of captions)
       assert.equal(caption.textContent?.trim(), h.name);
+    const accountMark = document.querySelector(
+      '.rail-account-menu .acct .kico.account',
+    );
+    assert.ok(accountMark);
+    assert.ok(accountMark.getAttribute('style')?.includes('background'));
     assert.equal(
       Boolean(document.querySelector('.rail-account-menu .cap .host')),
       false,

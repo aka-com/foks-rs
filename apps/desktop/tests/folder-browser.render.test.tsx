@@ -115,9 +115,12 @@ test('All items is the first tree row; stores follow under their headings', asyn
   // folders with children render a toggle.
   assert.equal(document.querySelector('.tpane .fn.root .twist'), null);
   assert.ok(document.querySelector('.tpane .fn:not(.root) .twist'));
-  // Teams are marked with their initials; vaults keep the vault glyph.
+  // Teams and personal vaults are marked with their respective initials.
   assert.ok(treeRow('Household').querySelector('.av.team'));
-  assert.equal(treeRow('Personal').querySelector('.av.team'), null);
+  const accountMark = treeRow('Personal').querySelector('.kico.account');
+  assert.ok(accountMark);
+  assert.equal(accountMark.textContent, 'S');
+  assert.equal(treeRow('Personal').querySelector('.fselect > .ic'), null);
   // Item counts appear only on rows that contain items.
   assert.equal(treeRow('Personal').querySelector('.c')?.textContent, '6');
   assert.equal(treeRow('Work (Acme)').querySelector('.c'), null);

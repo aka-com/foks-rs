@@ -189,6 +189,7 @@ test('shell stylesheet contains required grid and flexbox layout rules', async (
   // The vault's scoped search is the same width as the topbar's own field,
   // and the kind filter's options are each as wide as their own label.
   assert.match(shell, /\.toolbar-rest \.search\{width:240px/);
+  assert.match(shell, /\.toolbar-rest>\.search\{margin-left:auto\}/);
   assert.match(shell, /\.toolbar-filter \.seg button,[^{]*\{flex:0 1 auto/);
   // Allow main column flex shrinking to prevent horizontal window overflow.
   assert.match(shell, /\.main\{[^}]*min-width:0[^}]*\}/);

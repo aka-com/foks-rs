@@ -160,7 +160,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .rail-account-menu .cap{font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rail-account-menu .cap .host{font-weight:500;letter-spacing:0;text-transform:none;color:var(--faint)}
 .rail-account-menu .acct{align-items:flex-start;gap:9px}
-.rail-account-menu .acct .av{align-self:center;border-color:#fff;margin-top:0}
+.rail-account-menu .acct .kico{align-self:center;margin-top:0}
 .rail-account-menu .acct .t{flex:1;min-width:0;line-height:1.3}
 .rail-account-menu .acct .t small{display:block;font-size:12px;font-weight:400;color:var(--muted)}
 .rail-account-menu .acct.on .t small{color:inherit;opacity:.8}
@@ -248,7 +248,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .loc-copy{min-width:0;flex:1 1 auto;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .loc h1{display:inline;font-size:20px;font-weight:700;letter-spacing:-.01em}
 /* Subtitle layout */
-.loc-copy:has(>.sub)>h1{display:block;line-height:1.15}
+.loc-copy:has(>.sub)>h1{display:block;margin-bottom:1px;font-size:17px;line-height:1.15}
 .loc-copy .sub{display:flex;align-items:center;gap:8px;min-width:0;font-size:13px;line-height:1.3;color:var(--muted)}
 .loc-copy .sub>span{overflow:hidden;text-overflow:ellipsis}
 .loc small{display:inline;font-size:13px;color:var(--muted);margin-left:9px}
@@ -270,7 +270,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .toolbar-filter .seg button,.toolbar-filter .seg.txt button{flex:0 1 auto;width:auto;min-width:0;justify-content:center;padding:0 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .toolbar-rest{flex:1 1 200px;min-width:0;display:flex;align-items:center;gap:6px;padding-left:14px}
 /* New stays at the right edge now that search no longer fills the cell. */
-.toolbar-rest>:last-child{margin-left:auto}
+.toolbar-rest>.search{margin-left:auto}
 .toolbar .spacer{flex:1 1 8px}
 .toolbar .btn,.toolbar .seg{height:32px}.toolbar .btn,.toolbar .seg.txt button{font-size:13px}
 .toolbar .btn.primary,.empty .btn.primary{height:30px}
@@ -363,6 +363,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .kico .ic{font-size:15px;color:#fff;width:auto}
 .kico.big{width:48px;height:48px;border-radius:var(--radius-lg);font-size:23px}.kico.big .ic{font-size:26px}
 .kico.md{width:30px;height:30px;border-radius:8px;font-size:15px}.kico.md .ic{font-size:17px}
+.kico.account{border-radius:50%}
 .kico.Password{background:var(--c-password)}.kico.Document{background:var(--c-file)}
 .kico.danger{background:var(--danger-wash);color:var(--danger-ink)}.kico.danger .ic{color:var(--danger-ink)}
 
@@ -470,8 +471,9 @@ details.dd li b{color:var(--ink-2)}
 .tpane .fn:has(>.twist){padding-left:calc(4px + var(--d,0) * 18px - 18px)}
 /* Tree twist offset */
 .tpane .fn>.twist{margin-left:3px;margin-right:-3px}
-/* Team mark */
+/* Store marks */
 .tpane .fn .fselect>.av.team{width:18px;height:18px;border-radius:4px;font-size:var(--mark-type);flex:none}
+.tpane .fn .fselect>.kico.account{width:18px;height:18px;font-size:var(--mark-type)}
 /* Row action button */
 .tpane .fn .fact{flex:none;width:22px;height:22px;margin-right:4px;border-radius:5px;display:grid;place-items:center;color:var(--accent-ink);font-size:14px}
 .tpane .fn .fact:hover{background:var(--accent-wash-2)}
@@ -506,7 +508,7 @@ details.dd li b{color:var(--ink-2)}
 .crumbs button{padding:2px 7px;border-radius:6px;color:var(--muted);font-weight:500}
 .crumbs button:hover{background:var(--hover);color:var(--ink)}
 /* Active page title crumb */
-.crumbs h1.cur{padding:0;color:var(--ink);white-space:nowrap}
+.crumbs h1.cur{padding:0;color:var(--ink);font-size:19px;white-space:nowrap}
 .crumbs>button:first-child{margin-left:-7px}
 .crumbs .sep{display:inline-grid;place-items:center;color:var(--faint);font-size:12px;transform:rotate(-90deg)}
 .kic.Folder{background:rgba(245,158,11,.14);color:#b45309}

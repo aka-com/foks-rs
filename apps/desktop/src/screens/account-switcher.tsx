@@ -31,7 +31,7 @@ export function AccountMark({
 }): ReactNode {
   return (
     <span
-      className={['kico', size === 'sm' ? '' : size, 'group']
+      className={['kico', size === 'sm' ? '' : size, 'group', 'account']
         .filter(Boolean)
         .join(' ')}
       // The initial stands for the name beside it, which is always drawn.
