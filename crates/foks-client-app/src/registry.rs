@@ -10,6 +10,16 @@ const PINNED_CLIENT_VERSION: SemVer = SemVer {
 
 const PROFILE_PUBLICATION_MARKER: &str = ".profile-publication-v1";
 const PROFILE_STAGING_PREFIX: &str = ".pending-profile-";
+/// Held for as long as a publication owns its staging directory. It lives
+/// inside that directory and is unlinked before the directory is published, so
+/// it never reaches a profile's committed state.
+const PROFILE_PUBLICATION_LOCK: &str = ".publication-lock";
+/// How many times an add re-reads the registry after waiting out a concurrent
+/// publication of the same name. Each wait ends when that publication commits,
+/// fails or dies, and a commit is then visible to the next read, so more than a
+/// couple of rounds means something is republishing the name in a loop rather
+/// than that this caller needs to keep waiting.
+const PROFILE_PUBLICATION_ATTEMPTS: u32 = 8;
 const PROFILE_PUBLICATION_MARKER_VERSION: u32 = 1;
 const PROFILE_PUBLICATION_BINDING_TYPE_ID: u64 = 0x9171_dbed_137a_c227;
 
@@ -624,12 +634,33 @@ impl ProfileRegistry {
         Self::open_with_wait(root.as_ref(), true)
     }
 
+    /// Opens the registry under a *shared* lock, which every reader can hold at
+    /// once, and upgrades to the exclusive lock only for the uncommon open that
+    /// actually has interrupted-publication state to clean up.
+    ///
+    /// The shared hold still excludes every registry writer, so `profiles.toml`
+    /// cannot be replaced under the parse and no profile state directory can be
+    /// created, renamed or removed under the scan. It no longer excludes
+    /// another reader running the same parse and scan, which is the point: two
+    /// agent requests on different profiles no longer serialize here.
     fn open_with_wait(root: &Path, wait: bool) -> Result<Self> {
         let lease = ClientStateLease::acquire(root)?;
         let root = lease.root().to_owned();
-        let _lock = RegistryMutationLock::acquire_with_wait(&root, wait)?;
+        let lock = RegistryMutationLock::acquire_shared_with_wait(&root, wait)?;
         let profiles = load_registry(&root)?;
-        recover_profile_publications(&root, &profiles)?;
+        let profiles = if scan_profile_publications(&root, &profiles, ScanMode::Observe)? {
+            // The observing scan held no lock against a concurrent recovery by
+            // another reader, so nothing it saw can be acted on directly. Drop
+            // the shared hold, take the exclusive one, and redo both the parse
+            // and the scan against whatever state that lock now protects.
+            drop(lock);
+            let _lock = RegistryMutationLock::acquire_with_wait(&root, wait)?;
+            let profiles = load_registry(&root)?;
+            scan_profile_publications(&root, &profiles, ScanMode::Recover)?;
+            profiles
+        } else {
+            profiles
+        };
         Ok(Self {
             root,
             profiles,
@@ -684,6 +715,15 @@ impl ProfileRegistry {
         )
     }
 
+    /// Publishes `profile` without holding the registry lock across the network
+    /// probe.
+    ///
+    /// The lock is taken three times instead of once: to read the registry and
+    /// reserve a staging directory, then -- after the probe, with no lock held
+    /// -- to re-verify and commit, and finally to clean a failure up. The
+    /// staging reservation is what makes the unlocked window safe: it excludes
+    /// another publication of the same name, and it stops a concurrent registry
+    /// open from recovering a staging directory that is still in use.
     fn check_and_add_profile_for_host_with_control<A: ProfilePublicationAuthorizer>(
         &mut self,
         authorizer: &A,
@@ -697,57 +737,83 @@ impl ProfileRegistry {
             return Err(Error::InvalidConfig("zero profile operation timeout"));
         }
         self.lease.validate()?;
-        let _lock = RegistryMutationLock::acquire(&self.root)?;
-        let current = load_registry(&self.root)?;
-        recover_profile_publications(&self.root, &current)?;
-        if let Some(existing) = current.get(&profile.name) {
-            if existing == &profile {
-                let marker = read_profile_publication_marker(
-                    &self
-                        .root
-                        .join("profiles")
-                        .join(&profile.name)
-                        .join(PROFILE_PUBLICATION_MARKER),
-                )?;
-                if let Some((marker, _)) = marker {
-                    if marker.profile != profile {
-                        return Err(Error::InvalidConfig(
-                            "profile publication registry binding changed",
-                        ));
-                    }
-                    if expected_host.is_some_and(|host| marker.probe.host_id_hex != hex(host)) {
-                        return Err(Error::InvalidProfile(
-                            "saved server does not match the expected host",
-                        ));
-                    }
-                    return Ok(ProfilePublicationReport {
-                        profile: marker.profile,
-                        probe: marker.probe,
-                    });
+        let profiles_directory = self.root.join("profiles");
+        let mut attempts = 0;
+        let staging = loop {
+            let reserved = {
+                let _lock = RegistryMutationLock::acquire(&self.root)?;
+                let current = load_registry(&self.root)?;
+                scan_profile_publications(&self.root, &current, ScanMode::Recover)?;
+                if let Some(report) =
+                    committed_publication(&self.root, &current, &profile, expected_host)?
+                {
+                    return Ok(report);
                 }
+                let profiles_directory = prepare_private_directory(&profiles_directory)?;
+                if profiles_directory.join(&profile.name).exists() {
+                    return Err(Error::InvalidConfig(
+                        "unpublished profile state directory already exists",
+                    ));
+                }
+                PublicationStaging::reserve(&profiles_directory, &profile.name)?
+            };
+            if let Some(staging) = reserved {
+                break staging;
             }
-            return Err(Error::ProfileExists);
-        }
-        let profiles_directory = prepare_private_directory(&self.root.join("profiles"))?;
+            // Another publication of this name is between its probe and its
+            // commit. Waiting for it requires releasing the registry lock,
+            // which the owner needs to commit; re-read everything afterwards,
+            // since by then it may have published the profile.
+            attempts += 1;
+            if attempts == PROFILE_PUBLICATION_ATTEMPTS {
+                return Err(Error::ProfileRegistryChanged);
+            }
+            PublicationStaging::wait_for_release(&profiles_directory, &profile.name)?;
+        };
+        self.publish_checked_profile(
+            authorizer,
+            profile,
+            timeout,
+            cancellation,
+            expected_host,
+            staging,
+        )
+    }
+
+    /// Probes the server with no registry lock held, then re-acquires it to
+    /// commit. `staging` is held throughout, so nothing else recovers or
+    /// republishes this name in between.
+    fn publish_checked_profile<A: ProfilePublicationAuthorizer>(
+        &mut self,
+        authorizer: &A,
+        profile: Profile,
+        timeout: Duration,
+        cancellation: CancellationToken,
+        expected_host: Option<&[u8; 33]>,
+        mut staging: PublicationStaging,
+    ) -> Result<ProfilePublicationReport> {
+        // The reservation created its directory under the prepared, canonical
+        // profiles directory, so publishing is a rename between siblings.
+        let staging_directory = staging.directory.clone();
+        let profiles_directory = staging_directory
+            .parent()
+            .ok_or(Error::InvalidConfig("profile publication has no parent"))?
+            .to_owned();
         let final_directory = profiles_directory.join(&profile.name);
-        if final_directory.exists() {
-            return Err(Error::InvalidConfig(
-                "unpublished profile state directory already exists",
-            ));
-        }
-        let staging_directory =
-            profiles_directory.join(format!("{PROFILE_STAGING_PREFIX}{}", profile.name));
-        if staging_directory.exists() {
-            remove_profile_publication_directory(&staging_directory)?;
-        }
-        let staging_directory = prepare_private_directory(&staging_directory)?;
-        create_private_config(
+        let started = create_private_config(
             &staging_directory.join(PROFILE_PUBLICATION_MARKER),
             b"profile-publication-v1",
-        )?;
-        let authorization = match authorizer.begin(&profile.name) {
+        )
+        .and_then(|()| authorizer.begin(&profile.name));
+        let authorization = match started {
             Ok(authorization) => authorization,
             Err(error) => {
+                // Nothing is published yet and the reservation is still held,
+                // so this directory is provably this publication's own; the
+                // registry lock keeps the removal from racing a concurrent
+                // open's scan of the same directory.
+                let _lock = RegistryMutationLock::acquire(&self.root)?;
+                staging.release()?;
                 remove_profile_publication_directory(&staging_directory)?;
                 return Err(error);
             }
@@ -801,6 +867,23 @@ impl ProfileRegistry {
             )?;
             authorizer.bind(&profile.name, &authorization, &marker_digest)?;
 
+            // Everything above ran without the registry lock. Re-take it and
+            // re-verify what the reservation does not already cover: the name
+            // must still be unpublished, and its published directory must still
+            // be absent. Other profiles may have changed freely, so the commit
+            // merges into the registry as it is now rather than into the copy
+            // read before the probe.
+            let _lock = RegistryMutationLock::acquire(&self.root)?;
+            let latest = load_registry(&self.root)?;
+            if latest.contains_key(&profile.name) {
+                return Err(Error::ProfileRegistryChanged);
+            }
+            if final_directory.exists() {
+                return Err(Error::InvalidConfig(
+                    "unpublished profile state directory already exists",
+                ));
+            }
+            staging.release()?;
             fs::rename(&staging_directory, &final_directory)?;
             File::open(&profiles_directory)?.sync_all()?;
 
@@ -820,7 +903,7 @@ impl ProfileRegistry {
                 ));
             }
 
-            let mut next = current.clone();
+            let mut next = latest;
             next.insert(profile.name.clone(), profile.clone());
             self.save(&next)?;
             self.profiles = next;
@@ -852,14 +935,34 @@ impl ProfileRegistry {
             // Ordinary failures are cleaned immediately. Crash-injection
             // paths intentionally retain the marker so reopen recovery is
             // exercised by tests.
-            let pending = if final_directory.exists() {
-                &final_directory
+            //
+            // The removal takes the registry lock so it cannot race a
+            // concurrent open's scan of the same directory; the closure above
+            // has already dropped its own hold on every path that reaches here.
+            let lock = RegistryMutationLock::acquire(&self.root)?;
+            if staging.holds_reservation() {
+                // Nothing was published, and the reservation still proves this
+                // directory belongs to this publication.
+                staging.release()?;
+                if staging_directory.exists() {
+                    remove_profile_publication_directory(&staging_directory)?;
+                }
             } else {
-                &staging_directory
-            };
-            if pending.exists() {
-                remove_profile_publication_directory(pending)?;
+                // The reservation was released for the rename, so between then
+                // and now a concurrent open may have recovered the directory
+                // and another publication of this name may have taken the path.
+                // Only the one-time authorization in the marker still
+                // identifies this publication's own directory.
+                for pending in [&final_directory, &staging_directory] {
+                    if publication_is_authorized_by(pending, &authorization) {
+                        remove_profile_publication_directory(pending)?;
+                        break;
+                    }
+                }
             }
+            drop(lock);
+            // A stale cancel is a no-op: the stored authorization must still
+            // begin with this one for the record to be removed.
             authorizer.cancel(&profile.name, &authorization)?;
         }
         publication
@@ -986,13 +1089,36 @@ impl ProfilePaths {
     }
 }
 
-fn recover_profile_publications(root: &Path, profiles: &BTreeMap<String, Profile>) -> Result<()> {
+/// What a publication scan may do about what it finds.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ScanMode {
+    /// Report whether recovery is needed and touch nothing. Safe to run while
+    /// the registry lock is held shared.
+    Observe,
+    /// Perform the recovery. The caller must hold the registry lock
+    /// exclusively.
+    Recover,
+}
+
+/// Validates every profile state directory and, in [`ScanMode::Recover`],
+/// removes what an interrupted publication left behind. Returns whether any
+/// removal was, or would have been, needed.
+///
+/// Both modes run the same validation and report the same errors, so an open
+/// that never upgrades to the exclusive lock still rejects exactly the unsafe
+/// states an exclusive open rejects. Only the removals are withheld.
+fn scan_profile_publications(
+    root: &Path,
+    profiles: &BTreeMap<String, Profile>,
+    mode: ScanMode,
+) -> Result<bool> {
     let directory = root.join("profiles");
     let entries = match fs::read_dir(&directory) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error.into()),
     };
+    let mut recovery_needed = false;
     for entry in entries {
         let entry = entry?;
         let name = entry.file_name();
@@ -1000,14 +1126,29 @@ fn recover_profile_publications(root: &Path, profiles: &BTreeMap<String, Profile
             .to_str()
             .ok_or(Error::InvalidConfig("profile state name is not UTF-8"))?;
         let path = entry.path();
-        let metadata = fs::symlink_metadata(&path)?;
+        // A publication that fails cleans its own staging directory up without
+        // the registry lock, so an entry can disappear between the directory
+        // read and this stat. Its absence is the state the scan wants anyway.
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
         if name.starts_with(PROFILE_STAGING_PREFIX) {
             if metadata.file_type().is_symlink() || !metadata.is_dir() {
                 return Err(Error::InvalidConfig(
                     "profile publication staging path is unsafe",
                 ));
             }
-            remove_profile_publication_directory(&path)?;
+            if PublicationStaging::is_live(&path)? {
+                // A running publication owns this directory. Removing it would
+                // destroy an add that is only waiting on its network probe.
+                continue;
+            }
+            recovery_needed = true;
+            if mode == ScanMode::Recover {
+                remove_profile_publication_directory(&path)?;
+            }
             continue;
         }
         let marker = path.join(PROFILE_PUBLICATION_MARKER);
@@ -1032,10 +1173,15 @@ fn recover_profile_publications(root: &Path, profiles: &BTreeMap<String, Profile
                     "profile publication registry binding changed",
                 ));
             }
-            None => remove_profile_publication_directory(&path)?,
+            None => {
+                recovery_needed = true;
+                if mode == ScanMode::Recover {
+                    remove_profile_publication_directory(&path)?;
+                }
+            }
         }
     }
-    Ok(())
+    Ok(recovery_needed)
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1064,6 +1210,59 @@ fn read_profile_publication_marker(
         marker,
         prefixed_hash(PROFILE_PUBLICATION_BINDING_TYPE_ID, &contents),
     )))
+}
+
+/// The report for a publication that is already committed to the registry but
+/// whose marker has not been consumed yet, if `profile` is such a publication.
+/// `Err(ProfileExists)` for any other already-registered profile of that name.
+///
+/// The caller must hold the registry lock, since this decides whether to start
+/// a new publication of the same name.
+fn committed_publication(
+    root: &Path,
+    current: &BTreeMap<String, Profile>,
+    profile: &Profile,
+    expected_host: Option<&[u8; 33]>,
+) -> Result<Option<ProfilePublicationReport>> {
+    let Some(existing) = current.get(&profile.name) else {
+        return Ok(None);
+    };
+    if existing == profile {
+        if let Some((marker, _)) =
+            read_profile_publication_marker(&profile_publication_marker_path(root, &profile.name))?
+        {
+            if &marker.profile != profile {
+                return Err(Error::InvalidConfig(
+                    "profile publication registry binding changed",
+                ));
+            }
+            if expected_host.is_some_and(|host| marker.probe.host_id_hex != hex(host)) {
+                return Err(Error::InvalidProfile(
+                    "saved server does not match the expected host",
+                ));
+            }
+            return Ok(Some(ProfilePublicationReport {
+                profile: marker.profile,
+                probe: marker.probe,
+            }));
+        }
+    }
+    Err(Error::ProfileExists)
+}
+
+/// Whether the pending publication directory at `path` carries `authorization`
+/// in its marker, which is the only proof of ownership left once a publication
+/// has released its staging reservation.
+///
+/// A missing, unreadable or malformed marker answers no. Failing closed here
+/// means an abandoned directory is left for the next open's recovery to remove,
+/// which is exactly what recovery is for; failing open would let one
+/// publication delete another's committed state directory.
+fn publication_is_authorized_by(path: &Path, authorization: &[u8; 32]) -> bool {
+    matches!(
+        read_profile_publication_marker(&path.join(PROFILE_PUBLICATION_MARKER)),
+        Ok(Some((publication, _))) if &publication.authorization == authorization
+    )
 }
 
 fn profile_publication_marker_path(root: &Path, profile: &str) -> PathBuf {
@@ -1273,6 +1472,22 @@ impl RegistryMutationLock {
     }
 
     fn acquire_with_wait(root: &Path, wait: bool) -> Result<Self> {
+        Self::acquire_mode(root, wait, true)
+    }
+
+    /// Acquires the registry lock shared.
+    ///
+    /// A shared hold still excludes every registry *writer*, because each one
+    /// takes this same lock exclusively: `profiles.toml` cannot be replaced,
+    /// and no profile state directory can be created, renamed or removed,
+    /// while any shared holder exists. It does not exclude other shared
+    /// holders, so a caller that may itself mutate the state root must drop it
+    /// and re-acquire exclusively before doing so.
+    fn acquire_shared_with_wait(root: &Path, wait: bool) -> Result<Self> {
+        Self::acquire_mode(root, wait, false)
+    }
+
+    fn acquire_mode(root: &Path, wait: bool, exclusive: bool) -> Result<Self> {
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true).truncate(false);
         #[cfg(unix)]
@@ -1281,10 +1496,11 @@ impl RegistryMutationLock {
             options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
         }
         let file = options.open(root.join(REGISTRY_LOCK_FILE))?;
-        if wait {
-            fs2::FileExt::lock_exclusive(&file)?;
-        } else {
-            fs2::FileExt::try_lock_exclusive(&file)?;
+        match (wait, exclusive) {
+            (true, true) => fs2::FileExt::lock_exclusive(&file)?,
+            (false, true) => fs2::FileExt::try_lock_exclusive(&file)?,
+            (true, false) => fs2::FileExt::lock_shared(&file)?,
+            (false, false) => fs2::FileExt::try_lock_shared(&file)?,
         }
         Ok(Self(file))
     }
@@ -1293,6 +1509,161 @@ impl RegistryMutationLock {
 impl Drop for RegistryMutationLock {
     fn drop(&mut self) {
         let _ = fs2::FileExt::unlock(&self.0);
+    }
+}
+
+/// A staging directory reserved for one in-flight profile publication.
+///
+/// A publication no longer holds the registry lock across its network probe,
+/// so something else has to tell a concurrent registry open whether a staging
+/// directory belongs to a running publication or to one that died. The
+/// exclusive lock this holds on [`PROFILE_PUBLICATION_LOCK`] answers exactly
+/// that, and the kernel answers it even for a publication that was killed: the
+/// lock is released when the owning file description closes, so a staging
+/// directory left by a crash always becomes recoverable, while one left by a
+/// live publication is never removed under it.
+///
+/// Lock ordering: a holder of this lock may block on the registry lock (that
+/// is what a publication does to commit), so a holder of the registry lock
+/// must only ever *try* this one, never wait on it. [`Self::reserve`] and
+/// [`Self::is_live`] are the only callers under the registry lock and both
+/// only try, so the two locks cannot deadlock against each other.
+struct PublicationStaging {
+    directory: PathBuf,
+    lock: Option<File>,
+}
+
+impl PublicationStaging {
+    fn directory_for(profiles_directory: &Path, name: &str) -> PathBuf {
+        profiles_directory.join(format!("{PROFILE_STAGING_PREFIX}{name}"))
+    }
+
+    /// Opens the lock file for `directory`. A probe opens it read-only, since
+    /// it only needs a file description to lock; only a reservation creates it.
+    fn open_lock_file(directory: &Path, create: bool) -> Result<Option<File>> {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        if create {
+            options.write(true).create(true).truncate(false);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        }
+        match options.open(directory.join(PROFILE_PUBLICATION_LOCK)) {
+            Ok(file) => Ok(Some(file)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Whether a publication still owns `directory`. Never blocks, so it is
+    /// safe to call while the registry lock is held.
+    ///
+    /// The probe takes the lock *shared*, so two concurrent probes cannot make
+    /// each other report a live owner; only the exclusive hold a publication
+    /// keeps blocks it. A staging directory with no lock file at all is not
+    /// live either: the file is unlinked only under the exclusive registry
+    /// lock, immediately before the rename that publishes the directory, so its
+    /// absence means the publication died inside that window.
+    fn is_live(directory: &Path) -> Result<bool> {
+        let Some(file) = Self::open_lock_file(directory, false)? else {
+            return Ok(false);
+        };
+        match fs2::FileExt::try_lock_shared(&file) {
+            Ok(()) => {
+                let _ = fs2::FileExt::unlock(&file);
+                Ok(false)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(true),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Reserves the staging directory for `name`. The caller must hold the
+    /// registry lock exclusively and must already have recovered stale staging
+    /// directories, so a live directory found here belongs to a publication
+    /// that is still running and `Ok(None)` is returned for it.
+    fn reserve(profiles_directory: &Path, name: &str) -> Result<Option<Self>> {
+        let directory = Self::directory_for(profiles_directory, name);
+        match fs::symlink_metadata(&directory) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Err(Error::InvalidConfig(
+                        "profile publication staging path is unsafe",
+                    ));
+                }
+                if Self::is_live(&directory)? {
+                    return Ok(None);
+                }
+                remove_profile_publication_directory(&directory)?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        let directory = prepare_private_directory(&directory)?;
+        let file = Self::open_lock_file(&directory, true)?
+            .ok_or(Error::InvalidConfig("profile publication lock is missing"))?;
+        match fs2::FileExt::try_lock_exclusive(&file) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                // Nothing else reserves a name without the registry lock, so
+                // this is only the microsecond during which a concurrent scan
+                // holds its shared probe. The caller waits and re-reads.
+                return Ok(None);
+            }
+            Err(error) => return Err(error.into()),
+        }
+        Ok(Some(Self {
+            directory,
+            lock: Some(file),
+        }))
+    }
+
+    /// Blocks until the publication that owns `name` releases its staging
+    /// directory. The caller must not hold the registry lock, since the owner
+    /// needs it to commit.
+    fn wait_for_release(profiles_directory: &Path, name: &str) -> Result<()> {
+        let directory = Self::directory_for(profiles_directory, name);
+        let Some(file) = Self::open_lock_file(&directory, false)? else {
+            return Ok(());
+        };
+        fs2::FileExt::lock_exclusive(&file)?;
+        let _ = fs2::FileExt::unlock(&file);
+        Ok(())
+    }
+
+    /// Whether this still holds the reservation. Once it does not, the staging
+    /// path alone no longer proves ownership of the directory at it.
+    fn holds_reservation(&self) -> bool {
+        self.lock.is_some()
+    }
+
+    /// Unlinks the lock file, so a published directory never carries it, and
+    /// drops the reservation.
+    ///
+    /// The caller must hold the registry lock exclusively and must rename or
+    /// remove the staging directory before releasing that lock: from here on a
+    /// scan reads the directory as abandoned and will recover it.
+    fn release(&mut self) -> Result<()> {
+        match fs::remove_file(self.directory.join(PROFILE_PUBLICATION_LOCK)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        if let Some(file) = self.lock.take() {
+            let _ = fs2::FileExt::unlock(&file);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for PublicationStaging {
+    fn drop(&mut self) {
+        if let Some(file) = &self.lock {
+            let _ = fs2::FileExt::unlock(file);
+        }
     }
 }
 
@@ -1917,6 +2288,232 @@ mod tests {
                 &mut *self.store.lock().unwrap(),
             )
         }
+    }
+
+    fn registry_only_profile(name: &str) -> Profile {
+        Profile {
+            name: name.to_owned(),
+            label: None,
+            probe: "foks.example.test".to_owned(),
+            protocol: ProtocolPolicy::V019,
+            trust: TrustRoot::WebPki,
+        }
+    }
+
+    /// States exactly what the shared open still excludes. Readers no longer
+    /// exclude one another, but every writer takes the same lock exclusively,
+    /// so a shared holder still excludes every registry mutation: no rewrite of
+    /// `profiles.toml` and no creation, rename or removal of a profile state
+    /// directory can overlap a parse or a scan.
+    #[test]
+    fn a_shared_registry_open_still_excludes_every_writer() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut registry = ProfileRegistry::open(temporary.path().join("state")).unwrap();
+        registry.add(registry_only_profile("one")).unwrap();
+        registry.add(registry_only_profile("two")).unwrap();
+        let root = registry.root().to_owned();
+        drop(registry);
+
+        let shared = RegistryMutationLock::acquire_shared_with_wait(&root, false).unwrap();
+        // Readers share: an open succeeds, and so does another shared hold.
+        assert_eq!(
+            ProfileRegistry::try_open(&root).unwrap().profiles().len(),
+            2
+        );
+        let second = RegistryMutationLock::acquire_shared_with_wait(&root, false).unwrap();
+        // Writers do not: every mutation path takes this lock exclusively.
+        assert!(RegistryMutationLock::acquire_with_wait(&root, false).is_err());
+        drop((shared, second));
+
+        // And an exclusive holder still excludes readers, so no parse or scan
+        // ever observes a half-written registry.
+        let exclusive = RegistryMutationLock::acquire_with_wait(&root, false).unwrap();
+        assert!(ProfileRegistry::try_open(&root).is_err());
+        drop(exclusive);
+        assert!(ProfileRegistry::try_open(&root).is_ok());
+    }
+
+    /// Two reads on different profiles complete while a third shared holder is
+    /// parked on the lock. Under an exclusive open they would serialize behind
+    /// it and the receive would time out.
+    #[test]
+    fn two_reads_on_different_profiles_open_concurrently() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut registry = ProfileRegistry::open(temporary.path().join("state")).unwrap();
+        registry.add(registry_only_profile("one")).unwrap();
+        registry.add(registry_only_profile("two")).unwrap();
+        let root = registry.root().to_owned();
+        drop(registry);
+
+        let parked = RegistryMutationLock::acquire_shared_with_wait(&root, false).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let threads: Vec<_> = ["one", "two"]
+            .into_iter()
+            .map(|name| {
+                let root = root.clone();
+                let sender = sender.clone();
+                std::thread::spawn(move || {
+                    let registry = ProfileRegistry::open(&root).unwrap();
+                    registry.profile(name).unwrap();
+                    sender.send(name).unwrap();
+                })
+            })
+            .collect();
+        for _ in 0..2 {
+            receiver
+                .recv_timeout(Duration::from_secs(20))
+                .expect("a read must not wait for another reader's registry lock");
+        }
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        drop(parked);
+    }
+
+    /// The publication scan is read-only under the shared lock and recovers
+    /// only after the upgrade, so an interrupted publication still disappears.
+    #[test]
+    fn an_interrupted_publication_is_still_recovered_after_a_shared_open() {
+        let temporary = tempfile::tempdir().unwrap();
+        let registry = ProfileRegistry::open(temporary.path().join("state")).unwrap();
+        let root = registry.root().to_owned();
+        drop(registry);
+        let profiles_directory = prepare_private_directory(&root.join("profiles")).unwrap();
+        let abandoned = PublicationStaging::directory_for(&profiles_directory, "ghost");
+        prepare_private_directory(&abandoned).unwrap();
+        create_private_config(&abandoned.join(PROFILE_PUBLICATION_LOCK), b"").unwrap();
+
+        {
+            let _shared = RegistryMutationLock::acquire_shared_with_wait(&root, false).unwrap();
+            let profiles = load_registry(&root).unwrap();
+            assert!(scan_profile_publications(&root, &profiles, ScanMode::Observe).unwrap());
+            assert!(abandoned.exists(), "an observing scan removes nothing");
+        }
+        drop(ProfileRegistry::open(&root).unwrap());
+        assert!(!abandoned.exists());
+
+        // The same holds for a published directory whose registry commit never
+        // landed: no marker owner means the state is unreachable and removed.
+        let orphan = profiles_directory.join("orphan");
+        prepare_private_directory(&orphan).unwrap();
+        create_private_config(&orphan.join(PROFILE_PUBLICATION_MARKER), b"{}").unwrap();
+        {
+            let _shared = RegistryMutationLock::acquire_shared_with_wait(&root, false).unwrap();
+            let profiles = load_registry(&root).unwrap();
+            assert!(matches!(
+                scan_profile_publications(&root, &profiles, ScanMode::Observe),
+                Err(Error::InvalidConfig(
+                    "profile publication marker is malformed"
+                ))
+            ));
+        }
+    }
+
+    /// The staging reservation is what replaces holding the registry lock
+    /// across a probe: it refuses a second publication of the same name, and a
+    /// concurrent reader neither blocks on it nor destroys it.
+    #[test]
+    fn a_live_publication_reservation_excludes_a_second_add_of_the_same_name() {
+        let temporary = tempfile::tempdir().unwrap();
+        let registry = ProfileRegistry::open(temporary.path().join("state")).unwrap();
+        let root = registry.root().to_owned();
+        drop(registry);
+        let profiles_directory = prepare_private_directory(&root.join("profiles")).unwrap();
+
+        let staging = PublicationStaging::reserve(&profiles_directory, "inflight")
+            .unwrap()
+            .expect("the first publication reserves the name");
+        assert!(
+            PublicationStaging::reserve(&profiles_directory, "inflight")
+                .unwrap()
+                .is_none(),
+            "a second publication of the same name must not reserve it"
+        );
+        // A different name is unaffected.
+        let other_name = PublicationStaging::reserve(&profiles_directory, "other")
+            .unwrap()
+            .expect("a different name reserves independently");
+
+        let profiles = load_registry(&root).unwrap();
+        assert!(
+            !scan_profile_publications(&root, &profiles, ScanMode::Observe).unwrap(),
+            "a live reservation is not recovery work, so a reader never upgrades"
+        );
+        drop(ProfileRegistry::try_open(&root).unwrap());
+        assert!(staging.directory.exists());
+
+        // Once the publication ends -- including by dying, since the kernel
+        // drops the lock with the file description -- the next open recovers it.
+        let directory = staging.directory.clone();
+        drop(staging);
+        let profiles = load_registry(&root).unwrap();
+        assert!(scan_profile_publications(&root, &profiles, ScanMode::Observe).unwrap());
+        drop(ProfileRegistry::open(&root).unwrap());
+        assert!(!directory.exists());
+        // The still-live reservation for the other name survived that recovery.
+        assert!(other_name.directory.exists());
+    }
+
+    /// The whole point of splitting the add path: an add parked on its network
+    /// probe no longer holds the registry lock, so every other profile stays
+    /// readable while it runs.
+    #[test]
+    fn an_add_parked_on_its_probe_does_not_block_other_profiles() {
+        let _guard = TEST_PROFILE_PUBLICATION_MUTEX.lock().unwrap();
+        let environment = TestEnvironment::new().unwrap();
+        let state = environment
+            .client_path("add-probe-window", "state")
+            .unwrap();
+        let mut registry = ProfileRegistry::open(&state).unwrap();
+        registry
+            .add(local_profile(
+                &environment,
+                "existing",
+                "127.0.0.1:1".to_owned(),
+            ))
+            .unwrap();
+        drop(registry);
+
+        // A bound but never accepted listener completes the TCP connection from
+        // the backlog and then answers nothing, so the probe stays in flight
+        // until its own timeout.
+        let listener = environment.reserve_loopback_listener().unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let slow = local_profile(&environment, "slow", format!("127.0.0.1:{port}"));
+        let authorizer = std::sync::Arc::new(MemoryPublicationAuthorizer::new());
+        let add = {
+            let state = state.clone();
+            let authorizer = authorizer.clone();
+            std::thread::spawn(move || {
+                let mut registry = ProfileRegistry::open(&state).unwrap();
+                registry.check_and_add_profile_with_control(
+                    authorizer.as_ref(),
+                    slow,
+                    Duration::from_secs(10),
+                    CancellationToken::new(),
+                )
+            })
+        };
+
+        let staging = PublicationStaging::directory_for(&state.join("profiles"), "slow");
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !staging.exists() {
+            assert!(std::time::Instant::now() < deadline, "probe never started");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // The probe is in flight. Every other profile is still readable, and
+        // the reader does not have to wait out the probe's timeout to say so.
+        let started = std::time::Instant::now();
+        let other = ProfileRegistry::try_open(&state).unwrap();
+        assert!(other.profile("existing").is_ok());
+        assert!(matches!(other.profile("slow"), Err(Error::ProfileMissing)));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        drop(other);
+
+        assert!(add.join().unwrap().is_err());
+        assert!(!staging.exists());
+        assert!(!authorizer.contains("slow"));
+        drop(listener);
     }
 
     fn local_profile(environment: &TestEnvironment, name: &str, probe: String) -> Profile {
