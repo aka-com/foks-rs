@@ -55,6 +55,15 @@ const DEFAULT_SOCKET_NAME: &str = "foks-rs.sock";
 const AGENT_LOCK_NAME: &str = ".foks-rs.lock";
 const MAXIMUM_REQUESTS_PER_CONNECTION: usize = 128;
 const CANCELLATION_GRACE: Duration = Duration::from_secs(1);
+/// How much of the request budget admission leaves for its reply to travel.
+/// A client waits its own budget from before it connects, and the agent's
+/// begins once the request has been read, so admission that waited the whole
+/// budget answered after every client with the same budget had given up: the
+/// definite "not started" arrived as an ambiguous timeout, and a mutation the
+/// agent never began was reported as one that may have applied. Admission
+/// and the wait for a worker end this much earlier; a budget too short to
+/// spare it keeps a quarter for the work.
+const ADMISSION_REPLY_MARGIN: Duration = Duration::from_secs(2);
 const MAXIMUM_CANARY_BYTES: usize = 64 * 1024;
 const MAXIMUM_CANARY_FETCHES: usize = 4;
 const MAXIMUM_CONCURRENT_READS: usize = 4;
@@ -438,6 +447,13 @@ const SCHEDULED_NETWORK_BUDGET: Duration = Duration::from_secs(20);
 /// bounded by what background work may hold every profile for.
 fn scheduled_job_budget(remaining: Duration) -> Duration {
     remaining.min(SCHEDULED_NETWORK_BUDGET)
+}
+
+/// How long a request may wait for admission and a worker before the agent
+/// answers that it did not start: the budget less the margin its reply needs
+/// to reach a client that waits that same budget.
+fn admission_budget(timeout: Duration) -> Duration {
+    timeout.saturating_sub(ADMISSION_REPLY_MARGIN.min(timeout / 4))
 }
 
 // Each worker runs one job through checkpoint publication. No protected state
@@ -836,7 +852,7 @@ async fn handle_connection(
             .acquire(
                 &state_dir,
                 profile_work::operation_scope(&request.operation),
-                timeout,
+                admission_budget(timeout),
             )
             .await
         {
@@ -851,7 +867,7 @@ async fn handle_connection(
                 continue;
             }
         };
-        let remaining = timeout.saturating_sub(admitted_at.elapsed());
+        let remaining = admission_budget(timeout).saturating_sub(admitted_at.elapsed());
         let worker_pool = capacity.worker_pool(&request.operation);
         let permit = match tokio::time::timeout(remaining, worker_pool.acquire_owned()).await {
             Ok(Ok(permit)) => permit,
@@ -7176,6 +7192,92 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(workers.available_permits(), 1);
+    }
+
+    #[test]
+    fn admission_budget_leaves_the_reply_room_before_the_client_deadline() {
+        assert_eq!(
+            admission_budget(Duration::from_secs(60)),
+            Duration::from_secs(58)
+        );
+        assert_eq!(
+            admission_budget(Duration::from_secs(15)),
+            Duration::from_secs(13)
+        );
+        assert_eq!(
+            admission_budget(Duration::from_secs(1)),
+            Duration::from_millis(750)
+        );
+        assert_eq!(admission_budget(Duration::ZERO), Duration::ZERO);
+    }
+
+    /// The desktop launches the agent with the budget its client waits, and
+    /// the agent's clock starts after the request is read. An admission that
+    /// runs out must still answer "not started" with time to spare before that
+    /// client gives up, or the client reports an ambiguous timeout for a
+    /// request the agent never began.
+    #[tokio::test]
+    async fn admission_deadline_answers_before_a_client_with_the_same_budget_gives_up() {
+        let temporary = tempfile::tempdir().unwrap();
+        let state_dir = temporary.path().to_path_buf();
+        let held = profile_work::coordinator()
+            .try_acquire(&state_dir, profile_work::Scope::profile("a"))
+            .unwrap()
+            .unwrap();
+        let timeout = Duration::from_secs(1);
+        let capacity = ConnectionCapacity {
+            recovery: Arc::new(Semaphore::new(1)),
+            blocking: Arc::new(Semaphore::new(1)),
+            local: Arc::new(Semaphore::new(1)),
+            chat_polling: Arc::new(Semaphore::new(1)),
+            active_chat_polls: Arc::new(Mutex::new(std::collections::HashSet::new())),
+        };
+        let active = Arc::new(Semaphore::new(1));
+        let permit = active.clone().acquire_owned().await.unwrap();
+        let (mut client, server_stream) = tokio::net::UnixStream::pair().unwrap();
+        let server = tokio::spawn(handle_connection(
+            server_stream,
+            state_dir.clone(),
+            capacity,
+            Arc::new(AtomicBool::new(true)),
+            timeout,
+            permit,
+        ));
+        let frame = foks_agent_proto::encode(&foks_agent_proto::Request {
+            version: foks_agent_proto::PROTOCOL_VERSION,
+            id: 7,
+            operation: Operation::ListPendingOperations {
+                profile: "a".to_owned(),
+            },
+        })
+        .unwrap();
+        // A client's deadline runs from before it writes the request.
+        let started = Instant::now();
+        let answered = tokio::time::timeout(timeout * 2, async {
+            client.write_all(&frame).await.unwrap();
+            read_frame(&mut client).await.unwrap()
+        })
+        .await;
+        let elapsed = started.elapsed();
+        drop(held);
+        server.abort();
+        let frame = answered
+            .expect("the agent answered within twice the budget")
+            .expect("a response frame");
+        let response = foks_agent_proto::decode_response(&frame).unwrap();
+        assert!(
+            matches!(
+                response.result,
+                ResponseResult::Error { code: ErrorCode::Busy, ref fields, .. }
+                if fields.reason.as_deref() == Some("admission-not-started")
+            ),
+            "the client saw {:?}",
+            response.result
+        );
+        assert!(
+            elapsed + Duration::from_millis(100) <= timeout,
+            "the answer left at {elapsed:?}, too late for a client that waits {timeout:?}"
+        );
     }
 
     #[test]
