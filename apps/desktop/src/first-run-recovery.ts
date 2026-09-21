@@ -48,7 +48,7 @@ function save(entries: RetainedSetup[]): void {
   );
 }
 /**
- * Drops every retained attempt. Starting setup over discards what this device
+ * Drops every retained attempt. Restarting setup discards what this device
  * was carrying; accounts already created on a server are unaffected, and the
  * write is unconditional so a storage failure is reported rather than leaving
  * an attempt that a later setup would reconcile against.

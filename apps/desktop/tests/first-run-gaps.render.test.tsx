@@ -335,6 +335,10 @@ test('checklist names whether the account was created or restored', async () => 
   assert.ok(created.view.getByText('Select a server'));
   assert.ok(created.view.getByText('Using localhost'));
   assert.ok(created.view.getByText('Created as satoshi'));
+  assert.ok(created.view.getByText('Recovery phrase not saved'));
+  const heading = created.view.getByRole('heading', { name: 'Get started' });
+  assert.ok(heading.closest('.pane')?.querySelector('.lead'));
+  assert.equal(created.view.container.querySelector('.path'), null);
   ui.cleanup();
   const restored = h.render(
     {

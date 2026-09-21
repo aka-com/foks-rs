@@ -1611,7 +1611,7 @@ body {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
 .first-run-main .checklist .fr .v > b {

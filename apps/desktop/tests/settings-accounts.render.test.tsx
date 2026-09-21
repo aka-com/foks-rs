@@ -189,7 +189,7 @@ test('the account panel keeps every workflow row from the accounts pane', async 
 
   // One account is shown at a time now, so each fact and each workflow
   // appears once: the primary facts' actions, the passphrase action, and the
-  // six quieter links below them.
+  // six quieter links below the device-wide server inventory.
   for (const name of [
     'Change…',
     'Server details ›',

@@ -414,7 +414,7 @@ export function useAccountOperations({
             ? 'Account setup was interrupted. Resume it to continue.'
             : adoptable
               ? 'An account with this username already exists on this server. You can use this account, start over, or check your server settings.'
-              : 'Account setup still could not be confirmed. Check again, start over, or check your server settings.',
+              : 'Account setup still could not be confirmed. Start over, or check your server settings.',
         ),
       );
     } catch (error) {

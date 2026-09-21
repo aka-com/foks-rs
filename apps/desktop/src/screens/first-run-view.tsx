@@ -93,7 +93,7 @@ export function SetupSidebar({
       onClick={onRestart}
     >
       <Icon name="flag" />
-      <span className="t">Start setup over</span>
+      <span className="t">Restart setup</span>
     </button>
   ) : null;
   if (checkpoint.managedLocal) {
@@ -169,7 +169,7 @@ export function SetupSidebar({
     'Get started',
     'Select a server',
     'Create account',
-    'Save recovery codes',
+    'Recovery codes',
     ...(path === 'invited' ? ['Join a team'] : []),
     'Complete',
   ];

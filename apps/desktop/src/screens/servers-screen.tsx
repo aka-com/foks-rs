@@ -594,15 +594,15 @@ function ServerList({
   const ready = rows.filter((row) => !needsAttention(row));
   const ordered = [...attention, ...ready];
   const add = (
-    <span className="right">
-      <Button size="sm" icon="plus" onClick={onAdd}>
-        Add a server…
-      </Button>
-    </span>
+    <Button size="sm" icon="plus" onClick={onAdd}>
+      Add a server…
+    </Button>
   );
   return (
     <>
-      <SectionLabel action={add}>Servers on this device</SectionLabel>
+      <SectionLabel className="server-list-label" action={add}>
+        Servers
+      </SectionLabel>
       <Inset className="settings-inset middle">
         {ordered.map(({ server, state, expiry }) => (
           <ServerRow

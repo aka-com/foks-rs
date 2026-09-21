@@ -574,8 +574,8 @@ overrides stay in Chat's info panel, with a link here, and none of these
 preferences sync between devices. Device: Application (version, Lock now),
 Agent (status with Retry connection while it is not ready, socket with Copy),
 FOKS data (export, import, verify online, move the data folder) and a danger
-zone whose Reset this Mac runs the per-server reset once per profile, each with
-its own one-use preview token and typed profile name; the sheet states a token
+zone whose Reset this device runs the per-server reset once per profile, each
+with its own one-use preview token and typed profile name; the sheet states a token
 lifetime only once every server has reported one, and names the servers, not
 the profile ids, when they differ. Older `section=` addresses — `credentials`,
 `notifications`, `device`, `about`, `agent`, `security-keys` — resolve to the
@@ -1025,7 +1025,7 @@ kept so deep links defined in the design specification resolve to this location.
 | `checklist-invited` · `checklist-own`                                                | Get started inside the ordinary shell   | resumable nonsecret progress summary                                                                    |
 | `first-run&step=<step>&path=<path>`                                                  | the resumable first-run location codec  | used after the first in-app transition and across reload                                                |
 | `servers-list` · `servers-server` · `servers-lapsed` · `servers-rollback`            | Settings › Servers                      | the list, then one server's page; `profile=` opens it                                                   |
-| `servers-reset` · `servers-add` · `servers-unprobed` · `servers-check`               | Settings › Servers                      | typed removal, add/check and explicit result states                                                       |
+| `servers-reset` · `servers-add` · `servers-unprobed` · `servers-check`               | Settings › Servers                      | typed removal, add/check and explicit result states                                                     |
 | `settings&section=servers` · `settings&section=preferences` · `settings&section=mac` | Settings                                | the three pages of the sub-navigation; retired section names resolve to the page that holds them        |
 | `settings-macs` · `settings-macs-work` · `settings-phrase`                           | Devices                                 | Macs, pairing and the one-time paper-key reveal; `settings-macs-work` names the exact `acct:work` store |
 | `settings-keys` · `settings-enrol`                                                   | Devices                                 | the Security key enrollments section and the YubiKey account sheet                                      |

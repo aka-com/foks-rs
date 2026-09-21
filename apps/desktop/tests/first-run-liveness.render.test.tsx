@@ -337,7 +337,9 @@ test('recovery phrase commit shows a saving label while waiting for confirmation
     },
   );
   ui.fireEvent.click(
-    rendered.view.getByRole('button', { name: 'Show my phrase' }),
+    rendered.view.getByRole('button', {
+      name: 'Generate a recovery phrase',
+    }),
   );
   ui.fireEvent.click(
     await rendered.view.findByRole('button', {
@@ -350,7 +352,9 @@ test('recovery phrase commit shows a saving label while waiting for confirmation
   });
   assert.equal((saving as HTMLButtonElement).disabled, true);
   await ui.act(async () => commit.resolve({ applied: true }));
-  await rendered.view.findByRole('button', { name: 'Show my phrase' });
+  await rendered.view.findByRole('button', {
+    name: 'Generate a recovery phrase',
+  });
 });
 
 test('multiple groups refresh the catalog and preserve a selected unavailable vault across restart', async () => {
@@ -651,7 +655,9 @@ test('focus loss conceals a prepared recovery phrase without closing its sheet',
     },
   );
   ui.fireEvent.click(
-    rendered.view.getByRole('button', { name: 'Show my phrase' }),
+    rendered.view.getByRole('button', {
+      name: 'Generate a recovery phrase',
+    }),
   );
   await rendered.view.findByText('KEPT_SECRET');
   const dialog = rendered.view.getByRole('dialog');
@@ -924,7 +930,7 @@ for (const method of ['copy', 'pair', 'resume-pair'] as const) {
         name:
           method === 'copy'
             ? /Import this device’s FOKS CLI credentials/
-            : /Use the CLI to approve this as a new device/,
+            : /Use the FOKS CLI to link this as a new device/,
       }),
     );
     if (method === 'copy')
@@ -1061,7 +1067,7 @@ function pendingOperation(
   };
 }
 
-test('allows starting over when unconfirmed setup has no resume path', async () => {
+test('allows going back when unconfirmed setup has no resume path', async () => {
   const h = await harness();
   let mutations = 0;
   const absent = {
@@ -1086,7 +1092,7 @@ test('allows starting over when unconfirmed setup has no resume path', async () 
     },
   });
   ui.fireEvent.click(
-    await rendered.view.findByRole('button', { name: 'Start over' }),
+    await rendered.view.findByRole('button', { name: 'Go back' }),
   );
   assert.ok(rendered.view.getByRole('button', { name: 'Create my account' }));
   assert.equal(h.saved()?.state, 'account');
@@ -1094,7 +1100,7 @@ test('allows starting over when unconfirmed setup has no resume path', async () 
   assert.equal(mutations, 0);
 });
 
-test('shows a missing-server warning with the start-over action for an unconfirmed operation', async () => {
+test('keeps the missing-server warning separate from the go-back action', async () => {
   const h = await harness();
   const missingProfile = {
     ...h.complete,
@@ -1125,9 +1131,11 @@ test('shows a missing-server warning with the start-over action for an unconfirm
         'The account you were creating could not be found on the server. This may happen because of a restart, server reset, or other error.',
       ),
   );
-  assert.ok(ui.within(warning).getByRole('button', { name: 'Start over' }));
+  assert.equal(ui.within(warning).queryByRole('button'), null);
+  const goBack = rendered.view.getByRole('button', { name: 'Go back' });
+  assert.ok(goBack.closest('.operation-actions'));
   assert.equal(
-    rendered.view.getAllByRole('button', { name: 'Start over' }).length,
+    rendered.view.getAllByRole('button', { name: 'Go back' }).length,
     1,
   );
 });
@@ -1167,7 +1175,7 @@ test('an unreadable receipt still probes pending operations and reports the rece
       /\(Details: This setup attempt does not match the current account or workspace\.\)/,
     ),
   );
-  assert.ok(rendered.view.getByRole('button', { name: 'Start over' }));
+  assert.ok(rendered.view.getByRole('button', { name: 'Go back' }));
   assert.equal(
     rendered.view.queryByRole('button', {
       name: 'Continue with existing account',
@@ -1220,6 +1228,12 @@ test('allows continuing with an existing account when a receipt cannot be read',
     rendered.view.getByText(
       /An account with this username already exists on this server/,
     ),
+  );
+  assert.deepEqual(
+    [
+      ...rendered.view.container.querySelectorAll('.operation-actions button'),
+    ].map((button) => button.textContent),
+    ['Continue with existing account', 'Check status', 'Go back'],
   );
   ui.fireEvent.click(adopt);
   await rendered.view.findByRole('button', { name: 'Show recovery phrase' });
@@ -1347,14 +1361,11 @@ test('cannot discard account setup while it is still running', async () => {
     },
   );
   await rendered.view.findByText(/Account setup is still running/);
-  assert.equal(
-    rendered.view.queryByRole('button', { name: 'Start over' }),
-    null,
-  );
+  assert.equal(rendered.view.queryByRole('button', { name: 'Go back' }), null);
   assert.equal(
     (
       rendered.view.getByRole('button', {
-        name: 'Start setup over',
+        name: 'Restart setup',
       }) as HTMLButtonElement
     ).disabled,
     true,

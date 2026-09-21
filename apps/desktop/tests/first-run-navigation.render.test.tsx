@@ -40,12 +40,12 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-/** Start setup over asks before it discards; the dialog carries Start over. */
-function startSetupOver(view: ReturnType<typeof ui.render>): void {
-  ui.fireEvent.click(view.getByRole('button', { name: 'Start setup over' }));
+/** Restart setup asks before it discards; the dialog carries Start over. */
+function restartSetup(view: ReturnType<typeof ui.render>): void {
+  ui.fireEvent.click(view.getByRole('button', { name: 'Restart setup' }));
   ui.fireEvent.click(
     ui
-      .within(view.getByRole('alertdialog'))
+      .within(view.getByRole('alertdialog', { name: 'Restart setup?' }))
       .getByRole('button', { name: 'Start over' }),
   );
 }
@@ -114,7 +114,7 @@ async function harness() {
     firstRunFixture: undefined,
   };
   const controller = new ToastController();
-  // Setup confirms Start setup over in a sheet, as the shell mounts it.
+  // Setup confirms Restart setup in a sheet, as the shell mounts it.
   const element = (props: FirstRunExperienceProps) =>
     createElement(OverlayProvider, {
       backgroundRef: { current: null },
@@ -307,7 +307,7 @@ test('entry without prerequisites and changed navigation resolve to valid steps'
   assert.ok(next.view.getByRole('heading', { name: 'Select a server' }));
 });
 
-test('starting setup over is confirmed first and then drops retained attempts', async () => {
+test('restarting setup is confirmed first and then drops retained attempts', async () => {
   const h = await harness();
   const { retainSetup, retainedSetups } = (await vite.ssrLoadModule(
     '/src/first-run-recovery.ts',
@@ -319,11 +319,18 @@ test('starting setup over is confirmed first and then drops retained attempts', 
   retainSetup(pending);
   const r = h.render(pending, { bridge: { ...h.bridge, native: false } });
   await r.view.findByText(/Couldn’t load your account details/);
-  ui.fireEvent.click(r.view.getByRole('button', { name: 'Start setup over' }));
+  ui.fireEvent.click(r.view.getByRole('button', { name: 'Restart setup' }));
+  assert.ok(
+    ui
+      .within(r.view.getByRole('alertdialog'))
+      .getByText(
+        'The setup in progress on this device will be discarded. If an account was already created on the server, you will need a recovery key to reconnect to it.',
+      ),
+  );
   ui.fireEvent.click(r.view.getByRole('button', { name: 'Cancel' }));
   assert.equal(h.saved()?.state, 'identity-pending');
   assert.equal(retainedSetups().length, 1);
-  startSetupOver(r.view);
+  restartSetup(r.view);
   assert.equal(h.saved()?.state, 'who');
   assert.ok(r.view.getByRole('heading', { name: 'How are you joining?' }));
   assert.deepEqual(retainedSetups(), []);
@@ -364,7 +371,7 @@ test('resumable recovery without its phrase can start a different setup', async 
     name: 'Resume account setup',
   });
   assert.equal((resume as HTMLButtonElement).disabled, true);
-  startSetupOver(r.view);
+  restartSetup(r.view);
   assert.equal(h.saved()?.state, 'who');
   assert.equal(h.saved()?.provisioning, undefined);
   assert.equal(
@@ -484,7 +491,7 @@ test('restart during identity loading ignores the old read when it completes', a
     onRefreshSnapshot: () => read.promise,
   });
   await r.view.findByRole('button', { name: 'Loading account details…' });
-  startSetupOver(r.view);
+  restartSetup(r.view);
   await ui.act(async () => {
     read.resolve(h.complete);
   });
@@ -558,7 +565,7 @@ test('failed recovery-reference persistence prevents reset from dropping the che
     original(key, value);
   };
   try {
-    startSetupOver(r.view);
+    restartSetup(r.view);
     assert.ok(r.view.getByText('Storage is full'));
     assert.equal(h.saved()?.state, 'identity-pending');
   } finally {

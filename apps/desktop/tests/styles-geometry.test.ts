@@ -290,6 +290,18 @@ test('shell stylesheet contains required grid and flexbox layout rules', async (
   assert.match(shell, /\.radio\{[^}]*text-align:left[^}]*width:100%/);
   // Layout server settings rows with right-aligned action banners.
   assert.match(shell, /\.settings-inset \.fr \.v\.srv\{flex-direction:row/);
+  assert.match(
+    shell,
+    /\.settings-main>\.server-list-label\{margin-bottom:2px\}/,
+  );
+  // Settings labels remain centered beside both single- and multi-line values.
+  assert.match(shell, /\.settings-inset \.fr \.k\{align-self:center/);
+  // Wrapped shared alert text stays compact.
+  assert.match(shell, /\.band\{[^}]*line-height:1\.35/);
+  // Inline hint links keep the surrounding text's type size and weight.
+  assert.match(shell, /\.hint \.lnk\{font-size:inherit;font-weight:inherit\}/);
+  // Header breadcrumb text sits on the visual baseline of adjacent controls.
+  assert.match(shell, /\.topbar \.crumbs\{position:relative;top:1px/);
   assert.match(shell, /\.band \.a\{margin-left:auto/);
   // Prevent chip elements from stretching full width inside flex value columns.
   assert.match(shell, /\.chip\{[^}]*width:max-content/);
@@ -327,7 +339,7 @@ test('app stylesheet uses design tokens and declares no hardcoded colors', async
   assert.match(app, /background: var\(--main-surface\)/);
   assert.match(
     app,
-    /\.first-run-main \.checklist \.fr \.v\s*\{[^}]*display: flex;[^}]*flex-direction: column;/,
+    /\.first-run-main \.checklist \.fr \.v\s*\{[^}]*display: flex;[^}]*flex-direction: column;[^}]*gap: 1px;/,
   );
   assert.match(app, /\.first-run-main \.crit\s*\{[^}]*margin-bottom: 16px;/);
   assert.doesNotMatch(app, /(?:^|\n)\.crit\s*\{/);

@@ -488,12 +488,12 @@ function DeviceSection({
           }
         >
           <small>
-            Encrypted backups copy device credentials. Use a new device for
-            independent revocation.
+            Exports this desktop app's credentials exactly. We recommend linking
+            a new device instead.
           </small>
         </InsetRow>
         <InsetRow
-          label="Verify imported accounts"
+          label="Verify all servers"
           action={
             <Button
               size="sm"
@@ -507,8 +507,7 @@ function DeviceSection({
           }
         >
           <small>
-            Check current account and device authority before enabling imported
-            state.
+            Check the current account is still valid on all connected servers.
           </small>
         </InsetRow>
         <InsetRow
@@ -527,7 +526,7 @@ function DeviceSection({
         >
           <small>
             Move every profile and its credentials to another folder on this
-            device. Requires restarting the application.
+            device. Requires restart.
           </small>
         </InsetRow>
       </Inset>
@@ -535,7 +534,7 @@ function DeviceSection({
       <Inset className="settings-inset middle wide danger-box">
         <InsetRow
           className="dangerrow"
-          label="Reset this Mac"
+          label="Reset this device"
           action={
             <Button
               size="sm"
@@ -548,14 +547,13 @@ function DeviceSection({
               }
               onClick={onReset}
             >
-              Reset this Mac…
+              Reset…
             </Button>
           }
         >
           <small>
             Deletes local account keys, trust history, cached state, and pending
-            operations. Remote accounts and other enrolled devices are not
-            affected.
+            operations.
           </small>
         </InsetRow>
       </Inset>
@@ -714,7 +712,7 @@ function RestartAgentSheet({
 }
 
 /**
- * Reset this Mac: `describe_reset` and `reset_server` once per server.
+ * Reset this device: `describe_reset` and `reset_server` once per server.
  *
  * There is no command that spans profiles, so each server answers with its own
  * one-use token and each profile name is typed. A run that fails part way says
@@ -860,7 +858,7 @@ function ResetMacSheet({
         if (busy) return;
         onClose();
       }}
-      title="Reset this Mac?"
+      title="Reset this device?"
       glyph={
         <span className="server-mark danger">
           <Icon name="trash" />
@@ -902,7 +900,7 @@ function ResetMacSheet({
           >
             {excluded.length && included.length
               ? `Reset ${included.length} of ${servers.length} servers`
-              : 'Reset this Mac'}
+              : 'Reset this device'}
           </Button>
         </>
       }

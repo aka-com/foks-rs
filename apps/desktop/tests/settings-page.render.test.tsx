@@ -290,7 +290,10 @@ test('Account opens first and carries the server inventory at its bottom', async
   const panel = rendered.getByRole('tabpanel');
   assert.equal(panel.id, account.getAttribute('aria-controls'));
   assert.ok(ui.within(panel).getByText('Username'));
-  assert.ok(rendered.getByText('Servers on this device'));
+  const serversLabel = ui.within(panel).getByText('Servers');
+  assert.ok(
+    serversLabel.closest('.sec')?.classList.contains('server-list-label'),
+  );
   assert.ok(rendered.getByRole('button', { name: 'Add a server…' }));
   assert.equal(rendered.queryByText('Needs attention'), null);
   assert.equal(rendered.queryByText('Configured servers'), null);
@@ -301,6 +304,12 @@ test('Account opens first and carries the server inventory at its bottom', async
     serverRows.every(
       (row) => row.parentElement === serverRows[0].parentElement,
     ),
+  );
+  const accountActions = panel.querySelector('.account-more');
+  assert.ok(accountActions);
+  assert.equal(
+    [...panel.querySelectorAll('.settings-inset, .account-more')].at(-1),
+    accountActions,
   );
   const usernameRow = rendered
     .getByText('Username')
@@ -323,7 +332,7 @@ test('the server inventory remains available when this device has no account', a
   });
 
   assert.ok(rendered.getByText('No available account on this device'));
-  assert.ok(rendered.getByText('Servers on this device'));
+  assert.ok(rendered.getByText('Servers'));
   assert.ok(rendered.getByRole('button', { name: 'Add a server…' }));
 });
 
@@ -480,7 +489,7 @@ test('a retired Servers address opens the list at the bottom of Account', async 
     'true',
   );
   assert.ok(rendered.getByRole('heading', { level: 1, name: 'satoshi' }));
-  assert.ok(rendered.getByText('Servers on this device'));
+  assert.ok(rendered.getByText('Servers'));
   assert.ok(rendered.getByText('foks.example.net'));
   assert.ok(rendered.getByRole('button', { name: 'Add a server…' }));
   // A server that answered carries no chip — its mark already reads as one —
@@ -784,10 +793,7 @@ test('a profile address opens that server instead of the page', async () => {
       .within(rendered.getByRole('navigation', { name: 'Settings sections' }))
       .getByRole('tab', { name: 'Device' }),
   );
-  assert.equal(
-    rendered.queryByRole('button', { name: 'Reset this Mac…' }),
-    null,
-  );
+  assert.equal(rendered.queryByRole('button', { name: 'Reset…' }), null);
   assert.equal(rendered.queryByRole('button', { name: 'Lock now' }), null);
   // The audit log reads the two numbers the agent reports, not a date.
   assert.ok(rendered.getByText(/12 entries · Checkpoint 4821/));
@@ -1089,10 +1095,10 @@ test('Device displays application, agent, and data sections above local reset', 
   assert.ok(rendered.getByRole('button', { name: 'Import…' }));
   assert.ok(rendered.getByRole('button', { name: 'Verify online' }));
   assert.ok(rendered.getByRole('button', { name: 'Choose folder…' }));
-  assert.ok(rendered.getByRole('button', { name: 'Reset this Mac…' }));
+  assert.ok(rendered.getByRole('button', { name: 'Reset…' }));
   assert.ok(
     rendered.getByText(
-      /Remote accounts and other enrolled devices are not affected/,
+      'Deletes local account keys, trust history, cached state, and pending operations.',
     ),
   );
   // While disconnected, the Status row is multi-line and top-aligned. When
@@ -1110,15 +1116,13 @@ test('Device displays application, agent, and data sections above local reset', 
   assert.equal(socket.querySelector('.v small'), null);
 });
 
-test('Reset this Mac asks for one typed profile name per server', async () => {
+test('Reset this device asks for one typed profile name per server', async () => {
   const rendered = await renderSettings(await fixture(), {
     where: { section: 'mac' },
   });
 
   await ui.act(async () => {
-    ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Reset this Mac…' }),
-    );
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Reset…' }));
   });
   const dialog = await ui.waitFor(() => rendered.getByRole('alertdialog'));
   await ui.waitFor(() => {
@@ -1126,7 +1130,9 @@ test('Reset this Mac asks for one typed profile name per server', async () => {
   });
   const confirms = ui.within(dialog).getAllByPlaceholderText(/to confirm$/);
   assert.equal(confirms.length, 3);
-  const run = ui.within(dialog).getByRole('button', { name: 'Reset this Mac' });
+  const run = ui
+    .within(dialog)
+    .getByRole('button', { name: 'Reset this device' });
   assert.equal(run.hasAttribute('disabled'), true);
 
   for (const [index, profile] of ['personal', 'acme', 'partner'].entries())
@@ -1159,9 +1165,7 @@ test('the reset consumes each profile’s single-use confirmation token', async 
   });
 
   await ui.act(async () => {
-    ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Reset this Mac…' }),
-    );
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Reset…' }));
   });
   const dialog = await ui.waitFor(() => rendered.getByRole('alertdialog'));
   await ui.waitFor(() => {
@@ -1174,7 +1178,7 @@ test('the reset consumes each profile’s single-use confirmation token', async 
     });
   await ui.act(async () => {
     ui.fireEvent.click(
-      ui.within(dialog).getByRole('button', { name: 'Reset this Mac' }),
+      ui.within(dialog).getByRole('button', { name: 'Reset this device' }),
     );
   });
 
@@ -1214,9 +1218,7 @@ test('one server whose preview fails does not hold the reset of the others', asy
     }),
   });
   await ui.act(async () => {
-    ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Reset this Mac…' }),
-    );
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Reset…' }));
   });
   const dialog = await ui.waitFor(() => rendered.getByRole('alertdialog'));
   await ui.waitFor(() => {
@@ -1250,7 +1252,7 @@ test('one server whose preview fails does not hold the reset of the others', asy
   });
   await ui.waitFor(() =>
     assert.ok(
-      ui.within(dialog).getByRole('button', { name: 'Reset this Mac' }),
+      ui.within(dialog).getByRole('button', { name: 'Reset this device' }),
     ),
   );
   assert.equal(
@@ -1262,7 +1264,7 @@ test('one server whose preview fails does not hold the reset of the others', asy
   });
   await ui.act(async () => {
     ui.fireEvent.click(
-      ui.within(dialog).getByRole('button', { name: 'Reset this Mac' }),
+      ui.within(dialog).getByRole('button', { name: 'Reset this device' }),
     );
   });
   assert.deepEqual(spent, ['personal', 'acme', 'partner']);
@@ -1292,9 +1294,7 @@ test('a preview that could not read this Mac’s credentials still authorizes th
     }),
   });
   await ui.act(async () => {
-    ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Reset this Mac…' }),
-    );
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Reset…' }));
   });
   const dialog = await ui.waitFor(() => rendered.getByRole('alertdialog'));
   await ui.waitFor(() => {
@@ -1313,7 +1313,7 @@ test('a preview that could not read this Mac’s credentials still authorizes th
     });
   await ui.act(async () => {
     ui.fireEvent.click(
-      ui.within(dialog).getByRole('button', { name: 'Reset this Mac' }),
+      ui.within(dialog).getByRole('button', { name: 'Reset this device' }),
     );
   });
   assert.deepEqual(spent, ['personal', 'acme', 'partner']);
@@ -1341,9 +1341,7 @@ test('a reset that fails part way reloads every preview', async () => {
   });
 
   await ui.act(async () => {
-    ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Reset this Mac…' }),
-    );
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Reset…' }));
   });
   const dialog = await ui.waitFor(() => rendered.getByRole('alertdialog'));
   await ui.waitFor(() => {
@@ -1357,7 +1355,7 @@ test('a reset that fails part way reloads every preview', async () => {
     });
   await ui.act(async () => {
     ui.fireEvent.click(
-      ui.within(dialog).getByRole('button', { name: 'Reset this Mac' }),
+      ui.within(dialog).getByRole('button', { name: 'Reset this device' }),
     );
   });
 

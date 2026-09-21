@@ -17,6 +17,9 @@ interface Props {
 const shortId = (value: string): string =>
   `${value.slice(0, 8)}…${value.slice(-8)}`;
 
+const displayServer = (value: string): string =>
+  value.endsWith(':4430') ? value.slice(0, -5) || value : value;
+
 export function GoProfileChooser({
   candidates,
   selected,
@@ -49,8 +52,9 @@ export function GoProfileChooser({
                 )}
               </b>
               <small>
-                {candidate.serverHint ??
-                  `Server (${shortId(candidate.hostId)})`}{' '}
+                {candidate.serverHint
+                  ? displayServer(candidate.serverHint)
+                  : `Server (${shortId(candidate.hostId)})`}{' '}
                 ·{' '}
                 {candidate.role.toLowerCase() === 'owner'
                   ? 'Account owner'

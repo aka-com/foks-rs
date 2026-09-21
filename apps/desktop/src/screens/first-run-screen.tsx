@@ -118,7 +118,7 @@ function StepLabel({
   );
 }
 
-function MissingServerWarning({ action }: { action: ReactNode }): ReactNode {
+function MissingServerWarning({ action }: { action?: ReactNode }): ReactNode {
   return (
     <div className="alt-path warning" role="alert">
       <div className="t">
@@ -1417,13 +1417,13 @@ function FirstRunSession({
       Your name must contain at least one letter or number.
     </p>
   ) : null;
-  /* Sign-in authentication methods: backup phrase recovery, or credential
-     import and pairing when an eligible FOKS CLI profile is detected. When only
-     one method is available, it is selected automatically. */
+  /* Sign-in authentication methods: CLI pairing and credential import when an
+     eligible FOKS CLI profile is detected, followed by backup phrase recovery.
+     When only one method is available, it is selected automatically. */
   const signinMethods: SigninMethod[] = [
-    'recover',
-    ...(goCandidate?.copyable ? (['import'] as const) : []),
     ...(goCandidate?.pairable ? (['pair'] as const) : []),
+    ...(goCandidate?.copyable ? (['import'] as const) : []),
+    'recover',
   ];
   const pendingFor = (kind: PendingOperation['kind']): boolean =>
     pending.some((row) => row.kind === kind && row.alias === accountAlias);
@@ -1490,33 +1490,33 @@ function FirstRunSession({
       <StepLabel n={first}>Sign in method</StepLabel>
       <Inset>
         <RadioGroup label="Sign-in method">
-          <RadioCard
-            title="Recover with your backup phrase"
-            detail="Enter all 17 words from your backup phrase to restore full access on this device."
-            selected={signinMethod === 'recover'}
-            onSelect={() => setChosenSigninMethod('recover')}
-          />
-          {goCandidate?.copyable ? (
-            <RadioCard
-              title="Import this device’s FOKS CLI credentials"
-              detail="Both apps share the same device credentials. This may require a Keychain prompt."
-              selected={signinMethod === 'import'}
-              onSelect={() => setChosenSigninMethod('import')}
-            />
-          ) : null}
           {goCandidate?.pairable ? (
             <RadioCard
-              title="Use the CLI to approve this as a new device"
+              title="Use the FOKS CLI to link this as a new device"
               detail={
                 <>
-                  Pair with <code>foks --simple-ui key assist</code> in
-                  Terminal.
+                  Pair the desktop app with{' '}
+                  <strong>foks --simple-ui key assist</strong> in Terminal.
                 </>
               }
               selected={signinMethod === 'pair'}
               onSelect={() => setChosenSigninMethod('pair')}
             />
           ) : null}
+          {goCandidate?.copyable ? (
+            <RadioCard
+              title="Import this device’s FOKS CLI credentials"
+              detail="Copy your device credentials from the FOKS CLI. This may require a Keychain prompt."
+              selected={signinMethod === 'import'}
+              onSelect={() => setChosenSigninMethod('import')}
+            />
+          ) : null}
+          <RadioCard
+            title="Recover with backup phrase"
+            detail="Enter your backup phrase to restore full access on this device."
+            selected={signinMethod === 'recover'}
+            onSelect={() => setChosenSigninMethod('recover')}
+          />
         </RadioGroup>
       </Inset>
       {/* If the account already exists, display its details as read-only fields
@@ -1569,9 +1569,8 @@ function FirstRunSession({
           {aliasInvalidNotice}
           {signinMethod === 'import' ? (
             <p className="hint">
-              Both apps will share the same device credentials. This may require
-              a Keychain prompt. Revoking the device in either client will
-              disable both.
+              Both apps will share the same device credentials. Revoking the
+              device in either client will disable both.
             </p>
           ) : null}
           {signinMethod === 'pair' ? (
@@ -1635,15 +1634,7 @@ function FirstRunSession({
               : 'Checking account status…'}
         </p>
         {operationProblem === 'profile-missing' && operationStatus ? (
-          <MissingServerWarning
-            action={
-              abortable ? (
-                <Button variant="danger" onClick={discardProvisioning}>
-                  Start over
-                </Button>
-              ) : null
-            }
-          />
+          <MissingServerWarning />
         ) : null}
         {operationResumable && intent?.kind === 'recovery' ? (
           <div className="local-field-card">
@@ -1688,6 +1679,9 @@ function FirstRunSession({
                 ? 'Checking status…'
                 : 'Check status'}
           </Button>
+          {abortable ? (
+            <Button onClick={discardProvisioning}>Go back</Button>
+          ) : null}
         </div>
         {intent?.kind === 'sso' && intent.ssoOperationId && profile && !busy ? (
           <SsoPanel
@@ -1702,20 +1696,6 @@ function FirstRunSession({
             executeSignup={executeSsoSignup}
             onComplete={() => void checkOperationStatus()}
           />
-        ) : null}
-        {abortable && operationProblem !== 'profile-missing' ? (
-          <div className="alt-path">
-            <div className="t">
-              <b>Start over</b>
-              <span>
-                Starting over won’t delete any account already created on the
-                server. You can find existing accounts under Settings › Account.
-              </span>
-            </div>
-            <Button variant="danger" onClick={discardProvisioning}>
-              Start over
-            </Button>
-          </div>
         ) : null}
       </Pane>
     );
@@ -2786,10 +2766,8 @@ function FirstRunSession({
     // details are available in Settings. If recovery setup was skipped, the
     // warning banner explains that unbacked accounts cannot be recovered.
     content = (
-      <Pane
-        title="Get started"
-        subtitle={`${stepsDone} of ${stepsTotal} steps completed`}
-      >
+      <Pane title="Get started" header={false}>
+        <h1>Get started</h1>
         <p className="lead">
           {stepsDone === stepsTotal
             ? 'Your account is ready. Start using your Personal vault.'
@@ -2831,7 +2809,7 @@ function FirstRunSession({
                   ]
                     .filter(Boolean)
                     .join(' · ')
-                : 'Backup method not configured'}
+                : 'Recovery phrase not saved'}
             </span>
           </InsetRow>
           {checkpoint.path === 'invited' ? (
@@ -3120,8 +3098,8 @@ function FirstRunSession({
         <NavigationPrompt
           verdict={{
             verdict: 'prompt',
-            title: 'Start setup over?',
-            body: 'The setup in progress on this device is discarded. Accounts already created on the server are kept.',
+            title: 'Restart setup?',
+            body: 'The setup in progress on this device will be discarded. If an account was already created on the server, you will need a recovery key to reconnect to it.',
             confirm: 'Start over',
           }}
           onConfirm={startSetupOver}

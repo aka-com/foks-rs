@@ -53,6 +53,7 @@ import {
   normalizeChannelName,
 } from '../chat/presentation';
 import { chatTeams, noChatReason, noChatTeams } from './chat-teams';
+import { GroupMark } from './group-mark';
 
 const fieldText = (value: string): string =>
   lowercaseChatText(value.replace(/\r\n?|\n/g, ' '));
@@ -550,6 +551,7 @@ export function NewChatSheet({
                   options={[
                     ...choices.map((choice) => ({
                       id: choice.store.id,
+                      mark: <GroupMark store={choice.store} />,
                       title: choice.store.name,
                       detail: choice.reason || choice.detail,
                       off: Boolean(choice.reason),
@@ -561,6 +563,7 @@ export function NewChatSheet({
                       ? [
                           {
                             id: active.store.id,
+                            mark: <GroupMark store={active.store} />,
                             title: active.store.name,
                             detail: 'Unavailable',
                             off: true,

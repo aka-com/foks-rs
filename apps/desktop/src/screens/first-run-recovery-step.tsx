@@ -165,7 +165,7 @@ export function RecoveryStep({
         </p>
         <div className="two">
           <div className="pcard">
-            <h3>Backup phrase</h3>
+            <h3>Recovery phrase</h3>
             <p>
               Write down these 17 words to recover your account if every device
               is lost.
@@ -174,7 +174,7 @@ export function RecoveryStep({
               disabled={busy || (checkpoint.backupCommitted && !backupPhrase)}
               onClick={() => go('phrase')}
             >
-              Show my phrase
+              Generate a recovery phrase
             </Button>
           </div>
           <div className="pcard">
@@ -230,7 +230,8 @@ export function RecoveryStep({
             <>
               <p>
                 Anyone with these words can access your account. Store them
-                somewhere safe, like an offline vault, or your password manager.
+                somewhere safe, like an offline vault, or another password
+                manager.
               </p>
               <RecoveryPhrase
                 phrase={backupPhrase}

@@ -236,7 +236,9 @@ async function personaWalks(context, origin) {
     await page.getByText('Team chat is ready.', { exact: true }).waitFor();
     // The sheet opens straight onto the creation form, with the team chosen
     // from its own selector rather than from a step in front of the form.
-    await page.getByRole('button', { name: 'New channel', exact: true }).click();
+    await page
+      .getByRole('button', { name: 'New channel', exact: true })
+      .click();
     await page.getByRole('button', { name: 'Team', exact: true }).click();
     await page.getByRole('option', { name: /^Household/ }).click();
     await page
@@ -646,9 +648,7 @@ async function firstRunWalk(context, origin) {
     await page.getByRole('radio', { name: /Join an existing team/ }).click();
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
     await reloadAt('Select a server address');
-    await page
-      .getByRole('button', { name: 'Continue', exact: true })
-      .click();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
     await page.locator('.pane', { hasText: 'verified' }).waitFor();
     await reloadAt('verified');
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
@@ -661,14 +661,20 @@ async function firstRunWalk(context, origin) {
     await reloadAt('Save recovery phrase');
 
     await page
-      .getByRole('button', { name: 'Show my phrase', exact: true })
+      .getByRole('button', {
+        name: 'Generate a recovery phrase',
+        exact: true,
+      })
       .click();
     await page.locator('.sheet .word').first().waitFor();
     await page.reload({ waitUntil: 'load' });
     if (await page.locator('.sheet').count())
       failures.push('a prepared backup phrase survived reload');
     await page
-      .getByRole('button', { name: 'Show my phrase', exact: true })
+      .getByRole('button', {
+        name: 'Generate a recovery phrase',
+        exact: true,
+      })
       .click();
     await page.locator('.sheet .word').first().waitFor();
     await page.locator('.sheet .check').click();
@@ -677,7 +683,10 @@ async function firstRunWalk(context, origin) {
       .getByRole('button', { name: 'Done', exact: true })
       .click();
     await page
-      .getByRole('button', { name: 'Show my phrase', exact: true })
+      .getByRole('button', {
+        name: 'Generate a recovery phrase',
+        exact: true,
+      })
       .click();
     await page.locator('.sheet .word').first().waitFor();
     await page

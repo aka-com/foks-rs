@@ -1178,9 +1178,9 @@ function DeviceDetail({
                   }
                 >
                   <small>
-                    To remove this Mac, use another enrolled device. Or, use the
-                    Reset this Mac option in Settings to erase local data and
-                    delete credentials across servers.
+                    To remove this device, use another enrolled device. Or, use
+                    the Reset this device option in Settings to erase local data
+                    and delete credentials across servers.
                   </small>
                 </InsetRow>
               ) : source.kind === 'device' ? (

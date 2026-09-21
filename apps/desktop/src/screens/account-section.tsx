@@ -18,8 +18,8 @@ import { useTabSheetState } from '../navigation-guard';
  * properties with management links: Username, Shown as (the local alias),
  * Server, Devices, and Teams. Secondary integrations (Bot accounts, web
  * administration, SSO, FOKS CLI import, account recovery, and hardware-backed
- * account creation) render below the primary properties. The selected
- * account's passphrase is managed here as well.
+ * account creation) render after the device-wide server inventory. The
+ * selected account's passphrase is managed here as well.
  * Alerts without a navigable destination, such as catalog read failures,
  * render above the details list; entity-specific alerts render in their
  * corresponding Settings or Teams views.
@@ -545,6 +545,16 @@ export function AccountSection({
             </>
           )}
           {serverSection}
+          {selected ? (
+            <AccountActions
+              snapshot={snapshot}
+              store={selected}
+              onSheet={(next) => {
+                if (next === 'go-profile') setPairingProfile(undefined);
+                setSheet(next);
+              }}
+            />
+          ) : null}
         </div>
       </div>
       {sheet === 'go-profile' ? (
@@ -872,62 +882,78 @@ function AccountPanel({
         freshness={freshness}
         onRetry={onRetry}
       />
-      <div className="fn account-more">
-        <Button
-          variant="plain"
-          size="sm"
-          className="lnk"
-          {...access.props('bot-list', target)}
-          onClick={() => onSheet('bot')}
-        >
-          Bot accounts
-        </Button>
-        <Button
-          variant="plain"
-          size="sm"
-          className="lnk"
-          {...access.props('web-admin-configure', target)}
-          onClick={() => onSheet('admin')}
-        >
-          Open web admin panel
-        </Button>
-        <Button
-          variant="plain"
-          size="sm"
-          className="lnk"
-          {...access.props('sso-login', target)}
-          onClick={() => onSheet('sso')}
-        >
-          Sign in via SSO
-        </Button>
-        <Button
-          variant="plain"
-          size="sm"
-          className="lnk"
-          onClick={() => onSheet('go-profile')}
-        >
-          Import from FOKS CLI
-        </Button>
-        <Button
-          variant="plain"
-          size="sm"
-          className="lnk"
-          {...access.props('account-recover', { profile: store.server })}
-          onClick={() => onSheet('recover')}
-        >
-          Connect an existing account with a paper key
-        </Button>
-        <Button
-          variant="plain"
-          size="sm"
-          className="lnk"
-          {...access.props('yubi-create', { profile: store.server })}
-          onClick={() => onSheet('enroll')}
-        >
-          Create an account on a YubiKey…
-        </Button>
-      </div>
     </>
+  );
+}
+
+/** Secondary account workflows, placed after the device-wide server list. */
+function AccountActions({
+  snapshot,
+  store,
+  onSheet,
+}: {
+  snapshot: AgentSnapshot;
+  store: AccountStore;
+  onSheet: (sheet: AccountSheet) => void;
+}): ReactNode {
+  const access = useWorkflowAccess(snapshot);
+  const target = { profile: store.server, account: store.account };
+  return (
+    <div className="fn account-more">
+      <Button
+        variant="plain"
+        size="sm"
+        className="lnk"
+        {...access.props('bot-list', target)}
+        onClick={() => onSheet('bot')}
+      >
+        Bot accounts
+      </Button>
+      <Button
+        variant="plain"
+        size="sm"
+        className="lnk"
+        {...access.props('web-admin-configure', target)}
+        onClick={() => onSheet('admin')}
+      >
+        Open web admin panel
+      </Button>
+      <Button
+        variant="plain"
+        size="sm"
+        className="lnk"
+        {...access.props('sso-login', target)}
+        onClick={() => onSheet('sso')}
+      >
+        Sign in via SSO
+      </Button>
+      <Button
+        variant="plain"
+        size="sm"
+        className="lnk"
+        onClick={() => onSheet('go-profile')}
+      >
+        Import from FOKS CLI
+      </Button>
+      <Button
+        variant="plain"
+        size="sm"
+        className="lnk"
+        {...access.props('account-recover', { profile: store.server })}
+        onClick={() => onSheet('recover')}
+      >
+        Connect an existing account with a paper key
+      </Button>
+      <Button
+        variant="plain"
+        size="sm"
+        className="lnk"
+        {...access.props('yubi-create', { profile: store.server })}
+        onClick={() => onSheet('enroll')}
+      >
+        Create an account on a YubiKey…
+      </Button>
+    </div>
   );
 }
 

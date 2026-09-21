@@ -290,6 +290,9 @@ test('invalid lengths show concise field errors instead of instructional hints',
 test('creation is one team/name/description/audience form with protocol validation', async () => {
   const { team, opened } = await mount();
   await form(team);
+  const selectedTeam = ui.screen.getByRole('button', { name: 'Team' });
+  assert.ok(selectedTeam.querySelector('.kico.group'));
+  assert.equal(selectedTeam.querySelector('.kico.group')?.textContent, 'H');
   assert.ok(ui.screen.getByRole('textbox', { name: 'Channel description' }));
   assert.ok(ui.screen.getByRole('radiogroup', { name: 'Channel audience' }));
   ui.fireEvent.change(

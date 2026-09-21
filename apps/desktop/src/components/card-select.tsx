@@ -11,6 +11,8 @@ import { Icon } from './icon';
 export interface CardOption {
   /** The unique option identifier. */
   id: string;
+  /** Optional leading mark shared by the trigger and option row. */
+  mark?: ReactNode;
   /** Primary label text. */
   title: ReactNode;
   /** Secondary explanatory text displayed below the title. */
@@ -67,6 +69,7 @@ export function CardSelect({
           setOpen(true);
         }}
       >
+        {chosen?.mark}
         <span className="t">
           <b>{chosen ? chosen.title : placeholder}</b>
           {chosen?.detail === undefined ? null : <small>{chosen.detail}</small>}
@@ -111,6 +114,7 @@ export function CardSelect({
                     close();
                   }}
                 >
+                  {option.mark}
                   <span className="t">
                     <b>{option.title}</b>
                     {option.detail === undefined ? null : (
