@@ -57,12 +57,26 @@ export function pendingOperationsQuery(
         ...(target === undefined ? {} : { target }),
       }));
     },
+    // The agent journals these when this app starts one, and every
+    // membership write invalidates the row whether it was applied or
+    // refused, so it need not be re-read on the metadata cadence.
+    PENDING_OPERATION_FRESHNESS,
   );
 }
+
+/** How long a profile's journal of unfinished operations is current. */
+export const PENDING_OPERATION_FRESHNESS = 5 * 60_000;
 
 const rows = (value: InvitationReply) =>
   Array.isArray(value) ? value : (value.rows ?? [value]);
 
+/**
+ * How much invitation work is unfinished for a team. Kept on the default
+ * freshness window rather than the request count's: half of it counts the
+ * team's own invited members, which advance with the team chain on an
+ * ordinary catalog read, so this count moves without a local mutation to
+ * invalidate it.
+ */
 export function invitationRecoveryQuery(
   repository: MetadataRepository,
   bridge: Bridge,
@@ -136,7 +150,8 @@ export function teamRequestCountQuery(
         // read only. A newer agent costs nothing; an older one costs one
         // refused request per badge read rather than a badge that silently
         // reads whole inboxes for the rest of the session.
-        if (normalizeCommandError(error).code !== 'invalid-request') throw error;
+        if (normalizeCommandError(error).code !== 'invalid-request')
+          throw error;
         return fullInbox();
       }
       const count = Array.isArray(reply) ? undefined : reply.count;

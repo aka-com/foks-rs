@@ -23,6 +23,7 @@ import type { PanelPresentation } from './index';
 import { serverDisplayName } from '../model';
 import type { Server } from '../model';
 import { INVITATION_ACTIVITY } from '../invitation-activity';
+import { pendingOperationKey } from '../operation-queries';
 export { INVITATION_ACTIVITY };
 
 /** The part of a configured profile the join sheet's server picker needs. */
@@ -233,6 +234,11 @@ export function InvitationPanel({
         // Teams list and the rail follow the decision this panel just made.
         queries.invalidate(['invitation-recovery', profile, account]);
         queries.invalidate(['team-requests', profile, account]);
+        // An admission is a membership write, so it can journal a resumable
+        // operation on the team it admits into. A team page open elsewhere
+        // holds that journal, and this is the only writer of it that is not
+        // already one of that page's own actions.
+        queries.invalidate(pendingOperationKey(profile));
         window.dispatchEvent(
           new window.CustomEvent(INVITATION_ACTIVITY, {
             detail: { profile, account },

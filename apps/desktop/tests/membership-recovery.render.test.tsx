@@ -139,6 +139,10 @@ for (const kind of ['team-member-addition', 'team-member-edit'] as const) {
       );
     });
     assert.ok(reconciled);
+    // The journal is held for minutes, so the resume offer can only come
+    // from the read the write's own outcome asked for, not from the
+    // freshness window elapsing.
+    assert.equal(reads, 2);
     // A failed sheet stays open. Close it to use the newly displayed Resume action.
     ui.fireEvent.click(rendered.getByRole('button', { name: 'Cancel' }));
     const resumeName = addition
@@ -148,6 +152,7 @@ for (const kind of ['team-member-addition', 'team-member-edit'] as const) {
       ui.fireEvent.click(rendered.getByRole('button', { name: resumeName }));
     });
     assert.ok(resumed);
+    assert.equal(reads, 3);
     assert.equal(
       rendered.queryByText('Finish a pending membership change'),
       null,

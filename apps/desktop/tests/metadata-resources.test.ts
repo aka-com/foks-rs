@@ -14,10 +14,15 @@ import {
   useMetadataRepository,
   useQueryRepository,
 } from '../src/query-hooks';
-import { appInfoKey, appInfoQuery } from '../src/resources/application';
+import {
+  APP_INFO_FRESHNESS,
+  appInfoKey,
+  appInfoQuery,
+} from '../src/resources/application';
 import {
   invitationRecoveryKey,
   invitationRecoveryQuery,
+  PENDING_OPERATION_FRESHNESS,
   pendingOperationKey,
   pendingOperationsQuery,
   reportableTeamRequestError,
@@ -87,7 +92,7 @@ test('app info coalesces, publishes only display metadata, and remains reusable 
   unsubscribe();
   await query.load();
   assert.equal(calls, 1);
-  now = 60_000;
+  now = APP_INFO_FRESHNESS;
   await repository.reconcileSubscribed();
   assert.equal(calls, 1);
   const stop = query.subscribe(() => {});
@@ -503,4 +508,57 @@ test('a per-profile invalidation reaches every kind of that profile’s metadata
       profile === 'alpha' ? 2 : 1,
       JSON.stringify(key),
     );
+});
+
+test('application facts are held for minutes and re-read the moment a refresh discards them', async () => {
+  let now = 0;
+  let calls = 0;
+  const repository = new MetadataRepository(() => now);
+  const query = appInfoQuery(repository, {
+    appInfo: async () => ({
+      version: String(++calls),
+      agentSocket: '/agent.sock',
+    }),
+  });
+  assert.equal((await query.load()).version, '1');
+  // The metadata cadence used to re-read it here; nothing it reports can
+  // have changed, so the held row answers.
+  now = 60_000 + 1;
+  assert.equal((await query.load()).version, '1');
+  // A manual refresh discards every row, and the next read is made at once
+  // rather than after the rest of the window.
+  repository.invalidate([]);
+  assert.equal((await query.load()).version, '2');
+  now += APP_INFO_FRESHNESS + 1;
+  assert.equal((await query.load()).version, '3');
+});
+
+test('a membership write re-reads the operation journal without waiting out its window', async () => {
+  let now = 0;
+  let calls = 0;
+  const bridge = {
+    listPendingOperations: async () => {
+      calls++;
+      return [];
+    },
+  } as unknown as Bridge;
+  const repository = new MetadataRepository(() => now);
+  const query = pendingOperationsQuery(repository, bridge, 'profile');
+  await query.load();
+  assert.equal(calls, 1);
+  now = 60_000 + 1;
+  await query.load();
+  assert.equal(calls, 1);
+  // What the group operation controller does after every membership change,
+  // applied or refused: the read follows the write, not the window.
+  query.invalidate();
+  await query.load();
+  assert.equal(calls, 2);
+  // And what a forced refresh does for each profile whose catalog moved.
+  repository.invalidate(pendingOperationKey('profile'));
+  await query.load();
+  assert.equal(calls, 3);
+  now += PENDING_OPERATION_FRESHNESS + 1;
+  await query.load();
+  assert.equal(calls, 4);
 });

@@ -354,3 +354,79 @@ test('a resumed hardware-key request can receive its PIN on step one', async () 
   await ui.waitFor(() => assert.deepEqual(received, [null, '123456']));
   await ui.waitFor(() => assert.equal(r.queryByText('Submit'), null));
 });
+
+test('an invitation action discards the profile’s journal of unfinished operations', async () => {
+  const { InvitationPanel } = (await vite.ssrLoadModule(
+    '/src/components/invitation-panel.tsx',
+  )) as typeof import('../src/components/invitation-panel');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { MetadataRepository } = (await vite.ssrLoadModule(
+    '/src/metadata-repository.ts',
+  )) as typeof import('../src/metadata-repository');
+  const { MetadataRepositoryContext } = (await vite.ssrLoadModule(
+    '/src/query-hooks.ts',
+  )) as typeof import('../src/query-hooks');
+  const { pendingOperationsQuery } = (await vite.ssrLoadModule(
+    '/src/operation-queries.ts',
+  )) as typeof import('../src/operation-queries');
+  let now = 0;
+  let reads = 0;
+  const repository = new MetadataRepository(() => now);
+  const bridge = {
+    ...mockBridge(),
+    listPendingOperations: async () => {
+      reads++;
+      return [];
+    },
+    invitation: async (
+      _p: string,
+      _a: string,
+      a: InvitationAction,
+    ): Promise<InvitationReply> =>
+      a.action === 'preview'
+        ? {
+            team_id: '3'.repeat(66),
+            host_id: 'a'.repeat(66),
+            name: 'project',
+            membership: false,
+          }
+        : { operation_id: '1'.repeat(32), state: 'prepared' },
+  };
+  // The journal a team page open elsewhere is holding.
+  const journal = pendingOperationsQuery(repository, bridge, 'local');
+  await journal.load();
+  assert.equal(reads, 1);
+  const r = ui.render(
+    await overlay(
+      createElement(MetadataRepositoryContext.Provider, {
+        value: repository,
+        children: createElement(InvitationPanel, {
+          bridge,
+          profile: 'local',
+          account: 'work',
+          presentation,
+          onComplete: () => {},
+        }),
+      }),
+    ),
+  );
+  ui.fireEvent.change(r.getByLabelText('Invitation'), {
+    target: { value: 'Invite123' },
+  });
+  ui.fireEvent.click(r.getByText('Continue'));
+  await ui.waitFor(() =>
+    assert.equal(
+      (r.getByText('Request membership') as HTMLButtonElement).disabled,
+      false,
+    ),
+  );
+  ui.fireEvent.click(r.getByText('Request membership'));
+  await ui.waitFor(() => assert.ok(r.getByText('Submit')));
+  // Well inside the journal's freshness window, so only the invalidation the
+  // admission made can be what reads it again.
+  now = 1_000;
+  await journal.load();
+  assert.equal(reads, 2);
+});

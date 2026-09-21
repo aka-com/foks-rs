@@ -13,7 +13,6 @@ import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge } from '../src/bridge';
 import type { Location, SettingsSection } from '../src/location';
-import type { MetadataRepository } from '../src/metadata-repository';
 import type { AgentSnapshot } from '../src/model';
 import { installDom } from './lib/dom-harness';
 
@@ -57,8 +56,6 @@ interface SettingsOptions {
   /** Collects the failures a test expects, instead of raising them. */
   onMutationError?: (error: unknown) => void;
   onRefresh?: (message: string) => Promise<void>;
-  /** The shell's shared metadata repository, for a test that watches its rows. */
-  repository?: MetadataRepository;
   /**
    * Mounts the screen the way the shell does: under the screen error boundary,
    * keyed on the location, with the sub-navigation's own moves re-addressing
@@ -78,7 +75,6 @@ async function renderSettings(
       throw error;
     },
     onRefresh = async () => {},
-    repository,
     shellKeyed = false,
   }: SettingsOptions = {},
 ) {
@@ -99,9 +95,6 @@ async function renderSettings(
   const { ChatInboxProvider } = await vite.ssrLoadModule(
     '/src/chat/inbox-provider.tsx',
   );
-  const { MetadataRepositoryContext } = (await vite.ssrLoadModule(
-    '/src/query-hooks.ts',
-  )) as typeof import('../src/query-hooks');
   const boundary = (await vite.ssrLoadModule(
     '/src/app/screen-error-boundary.tsx',
   )) as typeof import('../src/app/screen-error-boundary');
@@ -140,12 +133,7 @@ async function renderSettings(
         }),
       }),
     });
-    return repository
-      ? createElement(MetadataRepositoryContext.Provider, {
-          value: repository,
-          children: screen,
-        })
-      : screen;
+    return screen;
   };
   function ShellKeyed() {
     const [at, setAt] = useState<SettingsOptions['where']>(where);
@@ -164,7 +152,11 @@ async function renderSettings(
     await Promise.resolve();
   });
   /** Re-address the page, as the sub-navigation does. */
-  const show = async (at: SettingsOptions['where']): Promise<void> => {
+  const show = async (
+    at: SettingsOptions['where'],
+    nextSnapshot = snapshot,
+  ): Promise<void> => {
+    snapshot = nextSnapshot;
     await ui.act(async () => {
       rendered.rerender(page(at));
       await Promise.resolve();
@@ -173,44 +165,121 @@ async function renderSettings(
   return Object.assign(rendered, { show });
 }
 
-test('server statuses are shared rows: leaving Servers and returning does not read them again until they are invalidated', async () => {
-  const { MetadataRepository } = (await vite.ssrLoadModule(
-    '/src/metadata-repository.ts',
-  )) as typeof import('../src/metadata-repository');
-  const repository = new MetadataRepository();
-  let reads = 0;
-  const rendered = await renderSettings(await fixture(), {
+/** The long and short forms the Servers page states an expiry in. */
+const expiresLong = (value: number): string =>
+  new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value * 1000));
+const expiresShort = (value: number): string =>
+  new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(value * 1000));
+
+/** Counts `describe_server_status` requests behind the mock bridge. */
+function countingStatus(counter: { reads: number }) {
+  return (bridge: Bridge): Bridge => ({
+    ...bridge,
+    describeServerStatus: async (profile, fresh) => {
+      counter.reads++;
+      return bridge.describeServerStatus(profile, fresh);
+    },
+  });
+}
+
+test('the Servers page states lease and identity from the catalog, reading no server status', async () => {
+  const { applyLease } = (await vite.ssrLoadModule(
+    '/src/model/index.ts',
+  )) as typeof import('../src/model');
+  const now = Math.floor(Date.now() / 1000);
+  const expiresAt = now + 12 * 86_400;
+  const snapshot = applyLease(await fixture(), 'fresh', 'acme', now);
+  const counter = { reads: 0 };
+  const rendered = await renderSettings(snapshot, {
     where: { section: 'servers' },
-    repository,
-    decorate: (bridge) => ({
-      ...bridge,
-      describeServerStatus: async (profile, fresh) => {
-        reads++;
-        return bridge.describeServerStatus(profile, fresh);
-      },
-    }),
+    decorate: countingStatus(counter),
   });
-  await ui.waitFor(() =>
-    assert.ok(rendered.getAllByText('foks.example.net').length),
-  );
-  await ui.waitFor(() => assert.ok(reads > 0));
-  const loaded = reads;
 
-  // Away to Device and back: the rows are the repository's, still fresh.
-  await rendered.show({ section: 'mac' });
-  assert.ok(rendered.getByRole('button', { name: 'Reset this Mac…' }));
-  await rendered.show({ section: 'servers' });
-  await ui.waitFor(() =>
-    assert.ok(rendered.getAllByText('foks.example.net').length),
+  // The list states the lease from the signed result the catalog carries.
+  const row = [...rendered.container.querySelectorAll('.srow')].find((entry) =>
+    entry.textContent?.includes('Acme'),
   );
-  assert.equal(reads, loaded);
+  assert.ok(row);
+  assert.ok(
+    row.textContent?.includes(`Valid until ${expiresShort(expiresAt)}`),
+  );
 
-  // Invalidated, they are read again for the page that shows them.
+  // So does the server's own page, with the pinned identity beside it.
+  await rendered.show({ profile: 'acme' });
+  assert.ok(rendered.getByText(expiresLong(expiresAt)));
+  assert.ok(rendered.getByText(/33 entries · checkpoint 90417/));
+  assert.equal(counter.reads, 0);
+});
+
+test('the explicit check reads the signed status fresh and states what it read', async () => {
+  const { applyLease } = (await vite.ssrLoadModule(
+    '/src/model/index.ts',
+  )) as typeof import('../src/model');
+  const now = Math.floor(Date.now() / 1000);
+  const snapshot = applyLease(await fixture(), 'fresh', 'acme', now);
+  const renewed = now + 30 * 86_400;
+  const counter = { reads: 0 };
+  const rendered = await renderSettings(snapshot, {
+    where: { profile: 'acme' },
+    decorate: (bridge) => {
+      const counted = countingStatus(counter)(bridge);
+      return {
+        ...counted,
+        // The check's read is the one that answers for a renewed lease; the
+        // catalog this page is rendering still carries the previous one.
+        describeServerStatus: async (profile, fresh) => {
+          const status = await counted.describeServerStatus(profile, fresh);
+          return status.compatibility.status === 'required'
+            ? {
+                ...status,
+                compatibility: { ...status.compatibility, expiresAt: renewed },
+                leaseExpiresAt: renewed,
+              }
+            : status;
+        },
+      };
+    },
+  });
+  assert.equal(counter.reads, 0);
+
   await ui.act(async () => {
-    repository.invalidate(['server-status']);
-    await Promise.resolve();
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Check' }));
   });
-  await ui.waitFor(() => assert.ok(reads > loaded));
+  await ui.waitFor(() => assert.equal(counter.reads, 1));
+  await ui.waitFor(() =>
+    assert.ok(rendered.getByText('Last checked now. No issues.')),
+  );
+  assert.ok(rendered.getByText(expiresLong(renewed)));
+  // Once a new catalog arrives, its signed status supersedes the check's
+  // temporary report even though the profile and pinned host are unchanged.
+  const latestExpiry = renewed + 86_400;
+  await rendered.show(
+    { profile: 'acme' },
+    {
+      ...snapshot,
+      servers: snapshot.servers.map((server) =>
+        server.id === 'acme' && server.compatibility.status === 'required'
+          ? {
+              ...server,
+              compatibility: {
+                ...server.compatibility,
+                expiresAt: latestExpiry,
+              },
+            }
+          : server,
+      ),
+    },
+  );
+  assert.ok(rendered.getByText(expiresLong(latestExpiry)));
+  assert.equal(counter.reads, 1);
 });
 
 test('the sub-navigation lists every section, and Account opens first', async () => {

@@ -6,8 +6,6 @@ import { DeviceMetadata, isDeviceQuery } from '../device-metadata';
 import { deviceAlertRegistry } from '../screens/device-alert';
 import { accountStopped, type AgentSnapshot } from '../model';
 import { readRecoveryFor } from '../query-read-recovery';
-import { serverStatusKey } from '../resources/servers';
-import { serverBinding } from '../screens/servers/server-workflow';
 
 /**
  * The metadata query kinds whose key names the profile immediately after the
@@ -98,15 +96,6 @@ export function useMetadataRuntime({
     for (const profile of profiles) {
       for (const kind of PROFILE_METADATA_KINDS)
         deviceCache.repository.invalidate([kind, profile]);
-      // A server's signed status is keyed by its binding rather than by the
-      // profile name, so it is named through the server row it belongs to.
-      const server = deviceSnapshot.current.servers.find(
-        (candidate) => candidate.id === profile,
-      );
-      if (server)
-        deviceCache.repository.invalidate([
-          ...serverStatusKey(serverBinding(server)),
-        ]);
     }
   };
   metadataReconciliation.current = async () => {

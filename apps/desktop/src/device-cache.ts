@@ -94,6 +94,12 @@ export class DeviceCache {
     });
   }
 
+  /**
+   * An account's devices and paper keys. Kept on the default freshness
+   * window: the lists are the account's own sigchain, which another of this
+   * user's devices can provision from or revoke on, so they move without a
+   * local mutation to invalidate them.
+   */
   account(profile: string, store: StoreRef) {
     return this.repository.query<AccountKeys>(
       accountDeviceKey(profile, store),
@@ -122,6 +128,7 @@ export class DeviceCache {
     );
   }
 
+  /** Security-key enrollments, on the default window for the same reason. */
   enrollments(profile: string) {
     return this.repository.query<YubiEnrollment[]>(
       profileEnrollmentKey(profile),

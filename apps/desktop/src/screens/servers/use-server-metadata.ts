@@ -1,23 +1,33 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { shouldReportPassiveServerStatusError } from '../../bridge';
-import type { Bridge, CheckedServer } from '../../bridge';
-import { useDeviceCache } from '../../device-cache';
+import { useEffect, useRef, useState } from 'react';
+import type { Bridge, CheckedServer, ServerStatusSnapshot } from '../../bridge';
 import type { AgentSnapshot, Server } from '../../model';
 import type { MutationFailureHandler } from '../../mutation-recovery';
-import { useMetadataQueries, useMetadataRepository } from '../../query-hooks';
-import { serverStatusKey, serverStatusQuery } from '../../resources/servers';
-import {
-  canReadServer,
-  serverBinding,
-  ServerCheckController,
-} from './server-workflow';
+import { serverBinding, ServerCheckController } from './server-workflow';
+
+interface Reports {
+  bridge: Bridge;
+  checked: Map<string, CheckedServer>;
+  statuses: Map<string, { server: Server; status: ServerStatusSnapshot }>;
+}
+
+/** The reports of this page's own checks, keyed by profile for the caller. */
+function byProfile<T>(
+  snapshot: AgentSnapshot,
+  rows: Map<string, T> | undefined,
+): Map<string, T> {
+  return new Map(
+    snapshot.servers.flatMap((server) => {
+      const row = rows?.get(serverBinding(server));
+      return row ? [[server.id, row] as const] : [];
+    }),
+  );
+}
 
 export function useServerMetadata({
   bridge,
   snapshot,
   profile,
   enteredScene,
-  onError,
   onMutationError,
   onRefresh,
   toast,
@@ -26,29 +36,19 @@ export function useServerMetadata({
   snapshot: AgentSnapshot;
   profile?: string;
   enteredScene: string;
-  onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
   onRefresh: (message: string) => Promise<void>;
   toast: (message: string) => void;
 }) {
-  // Each server's passive status is a repository row, shared with any other
-  // reader and kept across visits for the repository's freshness window;
-  // the active check's report is this page's own, since it is a mutation
-  // result.
-  const devices = useDeviceCache();
-  const repository = useMetadataRepository(bridge, devices?.repository);
-  const readable = useMemo(
-    () => snapshot.servers.filter(canReadServer),
-    [snapshot.servers],
-  );
-  const statusQueries = useMemo(
-    () =>
-      readable.map((server) => serverStatusQuery(repository, bridge, server)),
-    [readable, repository, bridge],
-  );
-  const [checked, setChecked] = useState({
+  // A server's signed status is already projected onto its catalog row, so
+  // the page states it from the snapshot it is rendering and reads nothing
+  // per server. What is held here is the active check's own report: a
+  // mutation result, and newer than the catalog refresh it asks for until
+  // that refresh lands.
+  const [reports, setReports] = useState<Reports>({
     bridge,
-    rows: new Map<string, CheckedServer>(),
+    checked: new Map(),
+    statuses: new Map(),
   });
   const [busyOwner, setBusyOwner] = useState<ServerCheckController | null>(
     null,
@@ -57,8 +57,6 @@ export function useServerMetadata({
     bridge,
     snapshot,
     profile,
-    repository,
-    onError,
     onMutationError,
     onRefresh,
     toast,
@@ -67,19 +65,10 @@ export function useServerMetadata({
     bridge,
     snapshot,
     profile,
-    repository,
-    onError,
     onMutationError,
     onRefresh,
     toast,
   };
-  const statusStates = useMetadataQueries(statusQueries, {
-    // A passive read's expected failures are not the page's to report.
-    onError: (error) => {
-      if (shouldReportPassiveServerStatusError(error))
-        latest.current.onError(error);
-    },
-  });
   const scope = JSON.stringify([profile, snapshot.servers.map(serverBinding)]);
   const owner = useRef<{
     bridge: Bridge;
@@ -92,23 +81,40 @@ export function useServerMetadata({
     owner.current.scope !== scope
   ) {
     owner.current?.controller.retire();
+    // A report belongs to the bridge it was read through; a new one starts
+    // from no reports rather than restating the previous session's.
+    const retain = (current: Reports): Reports =>
+      current.bridge === bridge
+        ? current
+        : { bridge, checked: new Map(), statuses: new Map() };
     const controller: ServerCheckController = new ServerCheckController(
       bridge,
       () => latest.current,
       {
         busy: (value) => setBusyOwner(value ? controller : null),
         checked: (binding, report) =>
-          setChecked((current) => ({
-            bridge,
-            rows: new Map(current.bridge === bridge ? current.rows : []).set(
-              binding,
-              report,
-            ),
-          })),
-        // The check read the status back; the shared row is asked again so
-        // every reader of it sees the checked server, this page included.
-        status: (binding) =>
-          latest.current.repository.invalidate([...serverStatusKey(binding)]),
+          setReports((current) => {
+            const base = retain(current);
+            return {
+              ...base,
+              checked: new Map(base.checked).set(binding, report),
+            };
+          }),
+        // The check read the signed status back, which is the one fact the
+        // catalog will not carry until its refresh lands.
+        status: (binding, status) => {
+          const server = latest.current.snapshot.servers.find(
+            (row) => serverBinding(row) === binding,
+          );
+          if (!server) return;
+          setReports((current) => {
+            const base = retain(current);
+            return {
+              ...base,
+              statuses: new Map(base.statuses).set(binding, { server, status }),
+            };
+          });
+        },
         toast: (message) => latest.current.toast(message),
         refresh: (message) => latest.current.onRefresh(message),
         error: (error) => latest.current.onMutationError(error),
@@ -137,27 +143,19 @@ export function useServerMetadata({
     });
   }, [bridge, controller, enteredScene, selected]);
 
-  const statuses = useMemo(
-    () =>
-      new Map(
-        readable.flatMap((server, index) => {
-          const status = statusStates[index]?.data;
-          return status ? [[server.id, status] as const] : [];
-        }),
-      ),
-    [readable, statusStates],
-  );
+  const current = reports.bridge === bridge ? reports : undefined;
   return {
-    statuses,
-    checked: new Map(
+    // A check fills the gap until the catalog replaces this server row.
+    // Keeping it beyond that point would hide later signed lease updates.
+    statuses: new Map(
       snapshot.servers.flatMap((server) => {
-        const report =
-          checked.bridge === bridge
-            ? checked.rows.get(serverBinding(server))
-            : undefined;
-        return report ? [[server.id, report] as const] : [];
+        const report = current?.statuses.get(serverBinding(server));
+        return report?.server === server
+          ? [[server.id, report.status] as const]
+          : [];
       }),
     ),
+    checked: byProfile(snapshot, current?.checked),
     busy: busyOwner === controller,
     check: (server: Server) => controller.check(server),
   };

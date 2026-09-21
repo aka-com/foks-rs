@@ -5,10 +5,15 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
-import type { Bridge, CheckedServer, ServerStatusSnapshot } from '../bridge';
+import type {
+  Bridge,
+  CheckedServer,
+  ServerStatusSnapshot,
+  StoredHost,
+} from '../bridge';
 import { useServerMetadata } from './servers/use-server-metadata';
 import { useResetWorkflow } from './servers/use-reset-workflow';
-import { serverBinding } from './servers/server-workflow';
+import { canReadServer, serverBinding } from './servers/server-workflow';
 import {
   Band,
   Button,
@@ -94,6 +99,37 @@ function serverFor(
   return profile
     ? agentSnapshot.servers.find((server) => server.id === profile)
     : undefined;
+}
+
+/** The identity pinned for this server, as the catalog carries it. */
+type PinnedHost = Pick<StoredHost, 'hostId' | 'chain' | 'epoch'>;
+
+function pinnedHost(server: Server): PinnedHost | null {
+  // A server whose trust is blocked, or whose saved schema this client
+  // cannot read, states no identity here; the page says so instead. The
+  // three fields are projected from one signed status, so either all of them
+  // describe a pinned host or none of them does.
+  return canReadServer(server) &&
+    server.host_id !== null &&
+    server.chain !== null &&
+    server.epoch !== null
+    ? { hostId: server.host_id, chain: server.chain, epoch: server.epoch }
+    : null;
+}
+
+/**
+ * When this server's signed compatibility result expires, in Unix seconds,
+ * or null where the pinned protocol states no expiry. The expiry belongs to
+ * the signed result itself, which the catalog carries, so it is read from
+ * there; a check's own status read is newer than the catalog refresh it asks
+ * for and answers until that refresh lands.
+ */
+function leaseExpiry(
+  server: Server,
+  checked?: ServerStatusSnapshot,
+): number | null {
+  const lease = checked?.compatibility ?? server.compatibility;
+  return 'expiresAt' in lease ? lease.expiresAt : null;
 }
 
 /** UI state representing server health and connectivity. */
@@ -208,7 +244,6 @@ export function ServersSection({
     snapshot: agentSnapshot,
     profile,
     enteredScene,
-    onError,
     onMutationError,
     onRefresh,
     toast: (message) => toasts.show(message),
@@ -224,7 +259,7 @@ export function ServersSection({
   );
 
   const currentHost = selected
-    ? (checked.get(selected.id) ?? statuses.get(selected.id)?.host ?? null)
+    ? (checked.get(selected.id) ?? pinnedHost(selected))
     : null;
 
   // Keyboard shortcut: ⌘R / Ctrl+R triggers a check on the selected server.
@@ -521,21 +556,18 @@ function ServerList({
   onAdd,
 }: {
   snapshot: AgentSnapshot;
+  /** Signed statuses this page checked itself, by profile; see `leaseExpiry`. */
   statuses: Map<string, ServerStatusSnapshot>;
   busy: boolean;
   onOpen: (profile: string) => void;
   onCheck: (server: Server) => void;
   onAdd: () => void;
 }): ReactNode {
-  const rows = agentSnapshot.servers.map((server) => {
-    const snapshot = statuses.get(server.id);
-    const state = resolveServerUiState(agentSnapshot, server);
-    const expiry =
-      server.compatibility.status === 'required'
-        ? server.compatibility.expiresAt
-        : (snapshot?.leaseExpiresAt ?? null);
-    return { server, state, expiry };
-  });
+  const rows = agentSnapshot.servers.map((server) => ({
+    server,
+    state: resolveServerUiState(agentSnapshot, server),
+    expiry: leaseExpiry(server, statuses.get(server.id)),
+  }));
   // Servers requiring user attention are displayed at the top of the list. A
   // server that has never been checked is one of them: nothing on it can be
   // used until it is, so Ready would be a false claim about it.
@@ -733,8 +765,9 @@ function ServerBody({
 }: {
   snapshot: AgentSnapshot;
   server: Server;
+  /** The signed status this page checked itself; see `leaseExpiry`. */
   status?: ServerStatusSnapshot;
-  host: ServerStatusSnapshot['host'];
+  host: PinnedHost | null;
   checked?: CheckedServer;
   busy: boolean;
   onCheck: () => void;
@@ -749,10 +782,7 @@ function ServerBody({
   const state = resolveServerUiState(agentSnapshot, server);
   const locked = isLocked(state);
   const blocked = state === 'blocked';
-  const expiry =
-    server.compatibility.status === 'required'
-      ? server.compatibility.expiresAt
-      : (status?.leaseExpiresAt ?? null);
+  const expiry = leaseExpiry(server, status);
   const account = agentSnapshot.accounts.find(
     (item) => item.server === server.id,
   );
