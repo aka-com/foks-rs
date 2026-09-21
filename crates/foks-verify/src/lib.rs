@@ -733,6 +733,110 @@ mod tests {
     }
 
     #[test]
+    fn evidence_dependencies_include_earlier_segment_proof_roots() {
+        for (bytes, extract) in [
+            (
+                USER_CHAIN,
+                user_evidence_root_epochs as fn(&[u8]) -> Result<Vec<u64>>,
+            ),
+            (TEAM_CHAIN, team_evidence_root_epochs),
+        ] {
+            let Value::Array(mut fields) = foks_snowpack::decode(bytes).unwrap() else {
+                panic!()
+            };
+            let Value::Array(paths) = &mut fields[3] else {
+                panic!()
+            };
+            let mut root = MerkleRoot::decode(&encode(&paths[0]).unwrap()).unwrap();
+            root.epoch = 50;
+            paths[0] = foks_snowpack::decode(&root.encoded().unwrap()).unwrap();
+            let older = encode(&Value::Array(fields)).unwrap();
+            let wrapper = encode(&Value::Variant(Some((
+                b"1".to_vec(),
+                Box::new(Value::Array(vec![
+                    Value::Binary(older),
+                    Value::Binary(bytes.to_vec()),
+                ])),
+            ))))
+            .unwrap();
+            let mut expected = extract(bytes).unwrap();
+            assert!(!expected.contains(&50));
+            expected.push(50);
+            expected.sort_unstable();
+            assert_eq!(extract(&wrapper).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn offline_user_and_team_restore_with_only_referenced_roots() {
+        let public = verify_public_host("foks.app", PROBE).unwrap();
+        let advance = verify_merkle_advance(
+            public.snapshot.merkle_root(),
+            USER_ROOT,
+            USER_HISTORY,
+            &trusted_tail(&public),
+        )
+        .unwrap();
+        let chain = UserChain::decode(USER_CHAIN).unwrap();
+        let eldest = chain.links[0].decode_eldest().unwrap();
+        let user = verify_user_chain(
+            USER_CHAIN,
+            &eldest.uid,
+            &eldest.host,
+            advance.authenticated_roots(),
+            &advance,
+        )
+        .unwrap();
+        let snapshot = user.hard_state_snapshot().unwrap();
+        let required = user_evidence_root_epochs(&snapshot.evidence_bytes).unwrap();
+        let mut roots = advance.authenticated_roots().clone();
+        roots.0.retain(|epoch, _| required.contains(epoch));
+        assert!(roots.0.len() < advance.authenticated_roots().0.len());
+        assert_eq!(
+            restore_verified_user(snapshot.parts(), &roots, public.snapshot.chain_bytes()).unwrap(),
+            user
+        );
+        // Wrapped evidence uses the same dependencies as the original response.
+        let wrapper = encode(&Value::Variant(Some((
+            b"1".to_vec(),
+            Box::new(Value::Array(vec![
+                Value::Binary(USER_CHAIN.to_vec()),
+                Value::Binary(USER_CHAIN.to_vec()),
+            ])),
+        ))))
+        .unwrap();
+        assert_eq!(user_evidence_root_epochs(&wrapper).unwrap(), required);
+        assert!(user_evidence_root_epochs(&[0]).is_err());
+
+        let advance = verify_merkle_advance(
+            public.snapshot.merkle_root(),
+            TEAM_ROOT,
+            TEAM_HISTORY,
+            &trusted_tail(&public),
+        )
+        .unwrap();
+        let chain = TeamChain::decode(TEAM_CHAIN).unwrap();
+        let eldest = chain.links[0].decode_team_group_change().unwrap();
+        let team = verify_team_chain(
+            TEAM_CHAIN,
+            &eldest.team,
+            &eldest.host,
+            advance.authenticated_roots(),
+            &advance,
+        )
+        .unwrap();
+        let snapshot = team.hard_state_snapshot().unwrap();
+        let required = team_evidence_root_epochs(&snapshot.evidence_bytes).unwrap();
+        let mut roots = advance.authenticated_roots().clone();
+        roots.0.retain(|epoch, _| required.contains(epoch));
+        assert_eq!(
+            restore_verified_team(snapshot.parts(), &roots, public.snapshot.chain_bytes()).unwrap(),
+            team
+        );
+        assert!(team_evidence_root_epochs(&[0]).is_err());
+    }
+
+    #[test]
     fn local_checkpoint_has_an_explicit_trust_boundary_and_validates_its_projection() {
         let public = verify_public_host("foks.app", PROBE).unwrap();
         let root = public.snapshot.merkle_root();

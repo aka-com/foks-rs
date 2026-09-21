@@ -736,6 +736,10 @@ impl ClientCredentials {
         } else {
             checked_profile_for_use(self, session).map_err(E::from)?
         };
+        // Admission has durably reconciled the external checkpoint and these
+        // outermost sessions hold exclusive profile/database locks. Optional
+        // local maintenance must not prevent the user's operation on deferral.
+        let _ = self.compact_session_merkle_roots(&checked);
         let held = HeldCheckedProfile::enter(key);
         let result = operation(&checked);
         drop(held);
@@ -931,6 +935,10 @@ impl ClientCredentials {
         };
         let material = HeldSessionMaterial::enter(material);
         let checked = checked_profile_for_use(self, session).map_err(E::from)?;
+        // Admission has durably reconciled the external checkpoint and these
+        // outermost sessions hold exclusive profile/database locks. Optional
+        // local maintenance must not prevent the user's operation on deferral.
+        let _ = self.compact_session_merkle_roots(&checked);
         let held = HeldCheckedProfile::enter(key);
         let result = operation(&checked);
         drop(held);

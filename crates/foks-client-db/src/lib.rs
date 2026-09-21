@@ -10,6 +10,8 @@
 mod chat_limits;
 pub use chat_limits::ChatLimits;
 mod merkle_checkpoint;
+mod merkle_gc;
+pub use merkle_gc::MerkleRootPin;
 mod schema;
 mod soft;
 mod soft_schema;
@@ -3580,6 +3582,183 @@ mod tests {
             store.accept_host_parts(direct.parts()).unwrap(),
             Acceptance::Unchanged
         );
+    }
+
+    fn gc_fixture() -> (tempfile::TempDir, HardStateStore) {
+        let (dir, mut store) = store();
+        store.accept_host_parts(snapshot().parts()).unwrap();
+        for epoch in 1..11i64 {
+            store
+                .connection
+                .execute(
+                    "INSERT INTO merkle_roots VALUES (?1, ?2, ?3, NULL)",
+                    params![vec![1u8; 33], epoch, [epoch as u8; 32].as_slice()],
+                )
+                .unwrap();
+        }
+        (dir, store)
+    }
+
+    #[test]
+    fn merkle_collection_retains_external_pins_and_reopens() {
+        let (_dir, mut store) = gc_fixture();
+        let path = store.connection.path().unwrap().to_owned();
+        let before = store.metadata().unwrap();
+        let pin = MerkleRootPin {
+            host_id: vec![1; 33],
+            epoch: 3,
+            root_hash: [3; 32],
+        };
+        assert_eq!(store.compact_merkle_roots(&[pin]).unwrap(), 9);
+        assert!(store.metadata().unwrap().revision > before.revision);
+        drop(store);
+        let mut reopened = HardStateStore::open(std::path::Path::new(&path)).unwrap();
+        assert_eq!(
+            load_authenticated_roots(&reopened.connection, &[1; 33])
+                .unwrap()
+                .iter()
+                .map(|r| r.epoch)
+                .collect::<Vec<_>>(),
+            [3, 11]
+        );
+        assert_eq!(reopened.compact_merkle_roots(&[]).unwrap(), 1);
+        let before = reopened.metadata().unwrap();
+        assert_eq!(reopened.compact_merkle_roots(&[]).unwrap(), 0);
+        assert_eq!(before, reopened.metadata().unwrap());
+    }
+
+    #[test]
+    fn merkle_collection_fails_closed_for_bad_pins_and_evidence_and_defers_pending_work() {
+        let (_dir, mut store) = gc_fixture();
+        let before = store.metadata().unwrap();
+        assert!(store
+            .compact_merkle_roots(&[MerkleRootPin {
+                host_id: vec![1; 33],
+                epoch: 3,
+                root_hash: [99; 32]
+            }])
+            .is_err());
+        assert_eq!(before, store.metadata().unwrap());
+        store
+            .connection
+            .execute(
+                "INSERT INTO import_readiness VALUES (1, ?1, ?2, 1)",
+                params![[1u8; 16].as_slice(), [2u8; 32].as_slice()],
+            )
+            .unwrap();
+        let before = store.metadata().unwrap();
+        assert_eq!(store.compact_merkle_roots(&[]).unwrap(), 0);
+        assert_eq!(before, store.metadata().unwrap());
+        store
+            .connection
+            .execute("DELETE FROM import_readiness", [])
+            .unwrap();
+        store.accept_user_parts(user_snapshot().parts()).unwrap();
+        let before = store.metadata().unwrap();
+        assert!(
+            store.compact_merkle_roots(&[]).is_err(),
+            "fake fixture evidence cannot authorize deletion"
+        );
+        assert_eq!(before, store.metadata().unwrap());
+        assert_eq!(
+            load_authenticated_roots(&store.connection, &[1; 33])
+                .unwrap()
+                .len(),
+            11
+        );
+    }
+
+    #[test]
+    fn merkle_collection_delete_failure_rolls_back_roots_and_revision() {
+        let (_dir, mut store) = gc_fixture();
+        store.connection.execute_batch("CREATE TRIGGER fail_gc BEFORE DELETE ON merkle_roots WHEN OLD.epoch=3 BEGIN SELECT RAISE(ABORT, 'interrupted collection'); END;").unwrap();
+        let before = store.metadata().unwrap();
+        assert!(store.compact_merkle_roots(&[]).is_err());
+        assert_eq!(before, store.metadata().unwrap());
+        assert_eq!(
+            load_authenticated_roots(&store.connection, &[1; 33])
+                .unwrap()
+                .len(),
+            11
+        );
+    }
+
+    #[test]
+    fn merkle_collection_retains_embedded_user_and_team_history_and_import_receipts() {
+        let (_dir, mut store) = gc_fixture();
+        let user_bytes =
+            include_bytes!("../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/user-chain.snowp");
+        let team_bytes =
+            include_bytes!("../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/team-chain.snowp");
+        let mut user = user_snapshot();
+        user.evidence_bytes = user_bytes.to_vec();
+        store.accept_user_parts(user.parts()).unwrap();
+        let mut team = team_snapshot();
+        team.evidence_bytes = team_bytes.to_vec();
+        store.accept_team_parts(team.parts()).unwrap();
+        let mut required = std::collections::BTreeSet::new();
+        required.extend(foks_verify::user_evidence_root_epochs(user_bytes).unwrap());
+        required.extend(foks_verify::team_evidence_root_epochs(team_bytes).unwrap());
+        let generic_link = include_bytes!("../../foks-snowpack/tests/fixtures/foks-v0.1.9/user-mutations/named-membership-link.snowp");
+        let decoded = foks_proto::UserLink::decode(generic_link)
+            .unwrap()
+            .decode_generic()
+            .unwrap();
+        required.insert(decoded.root.epoch);
+        let generic = encode(&Value::Array(vec![
+            Value::Unsigned(foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP),
+            decode(generic_link).unwrap(),
+        ]))
+        .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO user_generic_chains VALUES (?1, ?2, ?3, 1, ?4, ?5, 11, ?6)",
+                params![
+                    &user.host_id,
+                    &user.uid,
+                    foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP as i64,
+                    [1u8; 32].as_slice(),
+                    generic,
+                    [7u8; 32].as_slice()
+                ],
+            )
+            .unwrap();
+        for epoch in &required {
+            store
+                .connection
+                .execute(
+                    "INSERT OR IGNORE INTO merkle_roots VALUES (?1, ?2, ?3, NULL)",
+                    params![vec![1u8; 33], *epoch as i64, [42u8; 32].as_slice()],
+                )
+                .unwrap();
+        }
+        store
+            .connection
+            .execute(
+                "INSERT INTO import_accounts VALUES ('imported', 0, 1, 2)",
+                [],
+            )
+            .unwrap();
+        assert_eq!(store.compact_merkle_roots(&[]).unwrap(), 9);
+        required.extend([2, 11]);
+        assert_eq!(
+            load_authenticated_roots(&store.connection, &[1; 33])
+                .unwrap()
+                .iter()
+                .map(|r| r.epoch)
+                .collect::<std::collections::BTreeSet<_>>(),
+            required
+        );
+        // A missing dependency rejects the whole collection before any delete.
+        let missing = *required.iter().find(|e| **e > 11).unwrap();
+        store
+            .connection
+            .execute("DELETE FROM merkle_roots WHERE epoch=?1", [missing as i64])
+            .unwrap();
+        let before = store.metadata().unwrap();
+        assert!(store.compact_merkle_roots(&[]).is_err());
+        assert_eq!(store.metadata().unwrap(), before);
     }
 
     #[test]

@@ -11,6 +11,7 @@ mod pending_chat;
 pub use chat_intent::{LegacyChatIntent, LocalChatIntent, LocalChatIntentStore};
 pub use pending_chat::{PendingChatBinding, PendingChatStore};
 mod adapter_maintenance;
+mod merkle_maintenance;
 pub use adapter_maintenance::{AdapterMaintenanceCursor, AdapterMaintenanceReport};
 mod auth_cache;
 pub use auth_cache::{

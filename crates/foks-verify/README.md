@@ -12,9 +12,13 @@ It verifies:
 - Merkle-root signatures through active delegated Merkle keys; and
 - the Merkle root's commitment to the accepted host-chain tail.
 
-The verifier performs no network or database I/O. It also replays persisted
-evidence before recreating a sealed capability; parsed SQLite projections are
-never accepted independently.
+The verifier performs no network or database I/O. User/team restoration still
+replays persisted chain evidence. Merkle restoration has an explicit trusted-local
+path: `restore_local_merkle_checkpoint` verifies the signed current head and root
+consistency, then accepts retained historical roots as assertions from trusted
+SQLite. Callers enforce external rollback admission separately. The untrusted
+`restore_merkle_anchor` proof-replay API rejects local checkpoints. Network input
+continues to require cryptographic verification before acceptance.
 
 The offline command-line example verifies a captured response:
 

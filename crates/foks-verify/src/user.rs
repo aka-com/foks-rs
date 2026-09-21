@@ -51,6 +51,16 @@ impl VerifiedUserDevice {
     }
 }
 
+/// Roots needed to replay every segment of durable user evidence. This is
+/// dependency discovery only; it does not authenticate the returned epochs.
+pub fn user_evidence_root_epochs(evidence: &[u8]) -> Result<Vec<u64>> {
+    let mut epochs = std::collections::BTreeSet::new();
+    for segment in user_evidence_segments(evidence)? {
+        epochs.extend(user_chain_root_epochs(&segment)?);
+    }
+    Ok(epochs.into_iter().collect())
+}
+
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct VerifiedUserSharedKey {
     pub role: Role,

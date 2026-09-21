@@ -43,6 +43,16 @@ pub fn team_chain_root_epochs(chain_bytes: &[u8]) -> Result<Vec<u64>> {
     Ok(epochs.into_iter().collect())
 }
 
+/// Roots needed to replay every segment of durable team evidence. This is
+/// dependency discovery only; it does not authenticate the returned epochs.
+pub fn team_evidence_root_epochs(evidence: &[u8]) -> Result<Vec<u64>> {
+    let mut epochs = std::collections::BTreeSet::new();
+    for segment in team_evidence_segments(evidence)? {
+        epochs.extend(team_chain_root_epochs(&segment)?);
+    }
+    Ok(epochs.into_iter().collect())
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifiedTeamSnapshot {
     pub(crate) host_id: Vec<u8>,

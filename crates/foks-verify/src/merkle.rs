@@ -143,7 +143,8 @@ impl VerifiedMerkleAdvance {
     }
 }
 
-/// Merkle root hashes issued only by successful host-root verification.
+/// Merkle root hashes issued by host-root verification or explicit restoration
+/// from a trusted local checkpoint.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuthenticatedMerkleRoots(pub(crate) BTreeMap<u64, [u8; 32]>);
 

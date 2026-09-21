@@ -1,7 +1,7 @@
 # foks-client-db
 
 `foks-client-db` is the durable hard-state boundary for a native FOKS
-client. It deliberately contains no AKA vault types and no FOKS wire decoder.
+client. It deliberately contains no AKA vault types.
 
 The store accepts a host snapshot only after a protocol verifier has checked
 the exact Snowpack objects, signatures, host-chain extension, service
@@ -20,7 +20,14 @@ changes to a host projection that are not accompanied by a chain advance.
 These checks are defense in depth; they are not a replacement for FOKS chain
 or Merkle verification.
 
-Wire-level identifiers and signed values remain opaque byte strings here.
+Merkle heads are stored as flat trusted-local checkpoints. Schema 38 upgrades
+to 39 atomically using an iterative legacy reader and signed-head verification;
+all historical roots survive migration. Reference-aware collection retains
+heads, external checkpoint pins, and roots needed by every stored user/team
+proof segment, signed link, generic chain and import receipt. Callers must hold
+exclusive profile access and account for private resumable material; unfinished
+SQLite workflows defer collection. See [the design and reviews](../../docs/merkle-checkpoints.md).
+
 Private device and PUK seeds are expressly excluded and belong in an encrypted
 key store, not ordinary hard-state rows.
 
