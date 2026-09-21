@@ -404,10 +404,18 @@ test('the rail reserves the strip macOS draws its window controls on', async () 
   assert.doesNotMatch(shell, /\.titlebar/);
   assert.match(
     app,
-    /#root > \.native-window \.traffic\s*\{[^}]*min-height: 38px;/,
+    /#root \.native-window \.traffic\s*\{[^}]*min-height: 38px;/,
   );
   assert.match(
     app,
-    /#root > \.native-window\.window-chrome-hidden \.traffic\s*\{[^}]*min-height: 32px;/,
+    /#root \.native-window\.window-chrome-hidden \.traffic\s*\{[^}]*min-height: 32px;/,
+  );
+});
+
+test('the native frame reset reaches the shell through the exit guard', async () => {
+  const app = await readSource('../src/styles/app.css', import.meta.url);
+  assert.match(
+    app,
+    /#root > \.exit-guard-root > \.exit-guard-background > \.window\s*\{[^}]*width: 100%;[^}]*height: 100%;[^}]*border: 0;[^}]*border-radius: 0;[^}]*box-shadow: none;/,
   );
 });
