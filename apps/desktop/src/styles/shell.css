@@ -78,16 +78,17 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .traffic{flex:none;display:flex;align-items:center;min-height:32px;padding:14px 14px 6px}
 .traffic .lights{display:flex;gap:8px}
 .traffic .light{width:12px;height:12px;border-radius:50%;background:rgba(255,255,255,.35)}
-.side.rail .nav{color:var(--rail-ink);border-radius:0;border-left:3px solid transparent;padding:11px 18px;gap:14px;font-size:14px;font-weight:500}
+.side.rail .nav{position:relative;color:var(--rail-ink);border-radius:0;border-left:3px solid transparent;padding:11px 18px;gap:14px;font-size:14px;font-weight:500}
 .side.rail .nav:hover{background:rgba(255,255,255,.08);color:#fff}
 .side.rail .nav.on{background:var(--rail-active);border-left-color:#fff;color:#fff}
 .side.rail .nav .ic,.side.rail .nav.on .ic{color:inherit;font-size:20px;width:20px}
 .side.rail .nav+.nav{margin-top:0}
-/* Rail item tail indicator */
+/* Rail counts trail the label; attention dots overlay the icon. */
 .side.rail .nav .rail-tail{margin-left:auto;flex:none;min-width:20px;height:20px;display:grid;place-items:center;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;color:rgba(255,255,255,.62)}
 .side.rail .nav.on .rail-tail{color:rgba(255,255,255,.85)}
 .side.rail .nav .rail-tail.count.warn{color:var(--warning-dot)}
-.side.rail .nav .rail-tail.dot::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--warning-dot)}
+.side.rail .nav .rail-tail.dot{position:absolute;top:9px;left:35px;margin:0;min-width:0;width:7px;height:7px;border-radius:50%;box-shadow:0 0 0 2px var(--rail)}
+.side.rail .nav .rail-tail.dot::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--warning-dot)}
 .side.rail .nav .rail-tail.dot.warn::before{background:var(--warning-dot)}
 .side.rail .rail-tabs{display:flex;flex-direction:column;padding:10px 0}
 /* Setup step rail */

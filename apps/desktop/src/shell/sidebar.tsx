@@ -561,7 +561,7 @@ function railChatUnread(
 type RailCount = { label: string; description: string; warning?: boolean };
 
 /**
- * Standard trailing status slot for each tab. Unread counts use neutral text,
+ * Status indicator for each tab. Unread counts trail the label in neutral text;
  * dots indicate actionable status without a numeric value, `warn` uses amber,
  * and all dots use amber. A count carrying `warn` is a total
  * that is known to be short of something, drawn in amber rather than dropped.
@@ -611,8 +611,8 @@ export function Sidebar({
   const here = railTabOf(location);
   /**
    * A tab's own indicator: a muted count for Chat and Teams, and amber dots
-   * for Devices and Settings. In collapsed mode, indicators render as overlay
-   * badges on the icon's upper corner.
+   * for Devices and Settings. Dots overlay the icon's upper corner; counts
+   * also become icon dots when the rail is collapsed.
    */
   const railTail = (tab: RailTab): ReactNode => {
     if (tab === 'chat') {
