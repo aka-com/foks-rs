@@ -34,7 +34,7 @@ jobs:
           node-version-file: .node-version
       - name: Install pinned npm and locked dependencies
         run: |
-          npm install --global npm@11.12.1
+          npm install --global "$(node -p "require('./package.json').packageManager")"
           npm ci
       - name: Check frontend
         run: |
@@ -80,7 +80,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes libgtk-3-dev libpcsclite-dev libwebkit2gtk-4.1-dev
       - name: Install pinned npm and locked dependencies
         run: |
-          npm install --global npm@11.12.1
+          npm install --global "$(node -p "require('./package.json').packageManager")"
           npm ci
       - name: Check frontend and desktop
         run: |
@@ -107,14 +107,12 @@ jobs:
           node-version-file: .node-version
       - name: Install pinned npm and locked dependencies
         run: |
-          npm install --global npm@11.12.1
+          npm install --global "$(node -p "require('./package.json').packageManager")"
           npm ci
       - name: Bind release tag to workspace version
         run: |
           workspace_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)
           test "${GITHUB_REF_NAME#foks-desktop-v}" = "$workspace_version"
-      - name: Assemble DMG
-        run: npm run bundle:macos
       - name: Import signing identity
         env:
           CERTIFICATE_P12_B64: ${{ secrets.FOKS_APPLE_CERTIFICATE_P12_B64 }}
@@ -134,23 +132,16 @@ jobs:
           identity=$(security find-identity -v -p codesigning "$keychain" | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p')
           test "$(printf '%s\n' "$identity" | grep -c .)" -eq 1
           echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
-      - name: Sign application
-        run: npm run sign:macos
-      - name: Create, sign, and notarize DMG
+      - name: Build signed and notarized release DMG
         env:
           APPLE_ID: ${{ secrets.FOKS_APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.FOKS_APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.FOKS_APPLE_APP_PASSWORD }}
-        run: |
-          version="${GITHUB_REF_NAME#foks-desktop-v}"
-          mkdir -p "$RUNNER_TEMP/foks-release"
-          scripts/notarize-macos-app.sh \
-            target/release/bundle/macos/foks-desktop.app \
-            "$RUNNER_TEMP/foks-release/foks-desktop-$version-macos-arm64.dmg"
+        run: npm run build:release
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: foks-desktop-macos
-          path: ${{ runner.temp }}/foks-release/*.dmg
+          path: target/release/foks-release/*.dmg
           if-no-files-found: error
 
   linux:
@@ -169,7 +160,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes appstream desktop-file-utils libgtk-3-dev libpcsclite-dev librsvg2-bin libwebkit2gtk-4.1-dev
       - name: Install pinned npm and locked dependencies
         run: |
-          npm install --global npm@11.12.1
+          npm install --global "$(node -p "require('./package.json').packageManager")"
           npm ci
       - name: Build Debian package
         run: npm run bundle:deb

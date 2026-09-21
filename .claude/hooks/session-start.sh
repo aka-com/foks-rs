@@ -60,14 +60,24 @@ if [ "${#missing[@]}" -gt 0 ]; then
   fi
 fi
 
-# `npm ci` rather than `npm install`: this container's npm is older than the
-# version package.json pins, and `npm install` under it silently rewrites
-# package-lock.json (dropping the `libc` fields npm 11 records), which would
-# dirty the tree on every session and drift from what CI installs. `npm ci`
-# only reads the lockfile, so it is skipped when the tree is already current.
+# Bootstrap the exact npm declared by packageManager without requiring global
+# install permissions. The image's npm/npx is used only to obtain that pinned
+# CLI; the pinned CLI is the process that interprets package-lock.json.
 if [ ! -d node_modules ] || [ package-lock.json -nt node_modules ]; then
-  echo "session-start: installing Node dependencies"
-  npm ci --no-audit --no-fund
+  npm_package_manager="$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).packageManager")"
+  if [[ ! "$npm_package_manager" =~ ^npm@([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+    echo "session-start: packageManager must pin an exact npm version" >&2
+    exit 1
+  fi
+  expected_npm_version="${BASH_REMATCH[1]}"
+  pinned_npm=(npx --yes --package="$npm_package_manager" -- npm)
+  actual_npm_version="$("${pinned_npm[@]}" --version)"
+  if [ "$actual_npm_version" != "$expected_npm_version" ]; then
+    echo "session-start: expected npm $expected_npm_version, got $actual_npm_version" >&2
+    exit 1
+  fi
+  echo "session-start: installing Node dependencies with $npm_package_manager"
+  "${pinned_npm[@]}" ci --no-audit --no-fund
 else
   echo "session-start: Node dependencies are current"
 fi

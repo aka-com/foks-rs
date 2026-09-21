@@ -5,8 +5,11 @@ repository root; the package script stages the managed agent under the exact
 Tauri sidecar name:
 
 ```sh
-npm run bundle:deb
+npm run build
 ```
+
+`npm run bundle:deb` remains available when an explicit Linux-only command is
+more useful in packaging automation.
 
 `tauri.bundle.linux.conf.json` is a release overlay. It is deliberately not
 named `tauri.linux.conf.json`, because Tauri auto-merges that platform-suffixed

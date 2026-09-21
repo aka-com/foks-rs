@@ -15,7 +15,7 @@ version in `.node-version`, and the npm version declared in `package.json`, then
 install frontend dependencies:
 
 ```sh
-npm install --global npm@11.12.1
+npm install --global "$(node -p "require('./package.json').packageManager")"
 npm ci
 
 npm run dev             # Run with auto-reload, and a local FOKS server and agent
@@ -60,8 +60,14 @@ suite uses a smaller history page to cover the same cursor boundaries quickly.
 Both Rust commands accept build flags, for example `-- --release`.
 For a focused UI edit, pass the affected files directly to `npx tsx --test`.
 
-Use `npm run build` for a production executable (embedded frontend),
-and `npm run test:foks-desktop:packaged` after building the macOS bundle.
+Use `npm run build` for the platform production bundle: an application and DMG
+on macOS, or a Debian package on Linux. Run
+`npm run test:foks-desktop:packaged` after building the macOS bundle.
+`npm run build:release` is the fail-closed macOS release path. It loads the
+repository's optional `.env`, preserving already-exported environment values,
+and requires the signing identity and Apple notarization credentials before
+it builds anything. Notarization accepts an Apple app-specific password in
+`APPLE_APP_PASSWORD` or, when that is unset or empty, `APPLE_PASSWORD`.
 
 ## Benchmarks
 

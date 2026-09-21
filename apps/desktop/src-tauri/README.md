@@ -17,7 +17,8 @@ The root npm scripts run Tauri from this directory so it selects this
 ```sh
 npm run dev          # local server, agent, and desktop application
 npm run dev:tauri    # Tauri only, using an already-running agent
-npm run build        # production frontend and desktop executable
+npm run build        # macOS app/DMG or Linux Debian package
+npm run build:release # signed, notarized, stapled macOS release DMG
 ```
 
 `dragDropEnabled` remains enabled so Rust receives native file paths without
@@ -41,6 +42,14 @@ if it is unset, the script accepts exactly one installed Developer ID
 Application identity. `scripts/notarize-macos-app.sh` creates a DMG containing
 the signed application, signs the disk image, then submits, staples, and
 validates it using `APPLE_ID`, `APPLE_TEAM_ID`, and `APPLE_APP_PASSWORD`.
+
+For a distributable macOS release, use `npm run build:release`. It requires
+`APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_TEAM_ID`, and
+`APPLE_APP_PASSWORD` up front, validates the identity and notary credentials,
+builds only the application, signs it, and publishes the final DMG under
+`target/release/foks-release/` only after notarization, stapling, and Gatekeeper
+validation succeed. Files under `target/release/bundle/dmg/` are ordinary
+unsigned development bundles.
 
 Linux packaging requires `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`,
 `libpcsclite-dev`, and `librsvg2-bin`. See `linux/README.md` for the installed
