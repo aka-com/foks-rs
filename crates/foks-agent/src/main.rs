@@ -423,6 +423,23 @@ async fn run_scheduled_profiles(
 
 const SCHEDULED_JOBS_PER_PROFILE: usize = 16;
 
+/// How long one scheduled job may spend on the network. The job runs under
+/// `SecurityRoot` admission, which every profile's foreground requests wait
+/// behind, and its remote calls each get the whole budget it is handed as
+/// their deadline. A federated server that accepts a connection and never
+/// answers would otherwise hold every profile for the request timeout, and
+/// the foreground requests queued behind it would expire at that same
+/// deadline without starting. The bound matches the identity check's
+/// (`connectivity::IDENTITY_NETWORK_BUDGET`) and the default request timeout
+/// a command-line agent already runs scheduled jobs under.
+const SCHEDULED_NETWORK_BUDGET: Duration = Duration::from_secs(20);
+
+/// The budget handed to one scheduled job: the remaining request budget,
+/// bounded by what background work may hold every profile for.
+fn scheduled_job_budget(remaining: Duration) -> Duration {
+    remaining.min(SCHEDULED_NETWORK_BUDGET)
+}
+
 // Each worker runs one job through checkpoint publication. No protected state
 // or lock survives into the next reservation, and no unstarted job is leased.
 async fn run_scheduled_batches(
@@ -460,10 +477,11 @@ async fn run_scheduled_batches(
         }
         let control = cancellation.clone();
         let run_one = run_one.clone();
+        let budget = scheduled_job_budget(remaining);
         let ran_job = tokio::task::spawn_blocking(move || {
             let _admission = admission;
             let _permit = permit;
-            run_one(remaining, control)
+            run_one(budget, control)
         })
         .await
         .map_err(|error| error.to_string())??;
@@ -6880,6 +6898,46 @@ mod tests {
         drop(foreground);
         scheduled.await.unwrap().unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn scheduled_job_budget_is_bounded_below_the_request_timeout() {
+        assert_eq!(
+            scheduled_job_budget(Duration::from_secs(60)),
+            SCHEDULED_NETWORK_BUDGET
+        );
+        assert_eq!(
+            scheduled_job_budget(Duration::from_secs(5)),
+            Duration::from_secs(5)
+        );
+        assert_eq!(scheduled_job_budget(Duration::ZERO), Duration::ZERO);
+        assert!(SCHEDULED_NETWORK_BUDGET < Duration::from_secs(60));
+    }
+
+    #[tokio::test]
+    async fn scheduled_batches_hand_each_job_the_bounded_network_budget() {
+        let temporary = tempfile::tempdir().unwrap();
+        let budgets = Arc::new(Mutex::new(Vec::new()));
+        let seen = budgets.clone();
+        run_scheduled_batches(
+            temporary.path(),
+            Duration::from_secs(60),
+            CancellationToken::new(),
+            Arc::new(Semaphore::new(1)),
+            move |remaining, _| {
+                seen.lock().unwrap().push(remaining);
+                Ok(false)
+            },
+        )
+        .await
+        .unwrap();
+        let budgets = budgets.lock().unwrap();
+        assert_eq!(budgets.len(), 1);
+        assert!(
+            budgets[0] <= SCHEDULED_NETWORK_BUDGET,
+            "a job under a 60 s request budget got {:?}",
+            budgets[0]
+        );
     }
 
     #[tokio::test]
