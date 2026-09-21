@@ -2217,8 +2217,8 @@ impl Drop for MutationGuard {
 }
 
 /// The answer for a store that is absent from `catalog.stores` when its
-/// profile's stores were not read, rather than because the vault no longer
-/// holds it. The renderer keeps showing a profile's previous stores while
+/// profile's last read recorded its stores as incomplete, rather than
+/// because the vault no longer holds it. The renderer keeps showing a profile's previous stores while
 /// its read is incomplete, so a request for one of them has to say that the
 /// vault has not been refreshed, and be retryable, instead of claiming the
 /// store is gone. The store still authorizes nothing: only a complete read
@@ -2237,17 +2237,21 @@ fn unrefreshed_store_error(catalog: &CatalogSnapshot, id: &str) -> Option<AgentE
     {
         return None;
     }
-    let complete = catalog
+    // Every read of a profile records its inventory, complete or not. A
+    // catalog with no record for the profile says nothing about a read, so
+    // it is not the unrefreshed case.
+    let Some(inventory) = catalog
         .inventory
         .iter()
         .find(|entry| entry.profile == profile)
-        .is_some_and(|entry| {
-            if kind == "account" {
-                entry.accounts_complete
-            } else {
-                entry.teams_complete
-            }
-        });
+    else {
+        return None;
+    };
+    let complete = if kind == "account" {
+        inventory.accounts_complete
+    } else {
+        inventory.teams_complete
+    };
     if complete {
         return None;
     }
