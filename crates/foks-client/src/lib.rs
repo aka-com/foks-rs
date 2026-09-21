@@ -81,6 +81,7 @@ mod kex;
 mod kv;
 mod mutation;
 mod passphrase;
+mod pinning;
 mod protected_inventory;
 mod protected_store;
 pub use protected_inventory::*;

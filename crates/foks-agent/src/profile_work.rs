@@ -18,6 +18,11 @@ const CONTROL_POLL: Duration = Duration::from_millis(20);
 pub(super) enum Scope {
     None,
     Profiles(Vec<String>),
+    // A read that shares its profile with other reads: it conflicts with an
+    // exclusive hold or waiter on the profile and with root-wide work, never
+    // with another shared read. The session it opens shares the profile's
+    // file locks the same way.
+    SharedProfile(String),
     LocalMetadata(String),
     SecurityRoot,
     // Snapshot reads share admission with profile work and other readers, but
@@ -37,6 +42,7 @@ impl Scope {
         match self {
             Self::None => "none",
             Self::Profiles(_) => "profile",
+            Self::SharedProfile(_) => "profile-shared",
             Self::LocalMetadata(_) => "local-metadata",
             Self::SecurityRoot => "security-root",
             Self::RegistryRead => "registry-read",
@@ -51,6 +57,9 @@ impl Scope {
             (Self::LocalMetadata(_), _) | (_, Self::LocalMetadata(_)) => false,
             (Self::RegistryRead, _) | (_, Self::RegistryRead) => false,
             (Self::SecurityRoot, _) | (_, Self::SecurityRoot) => true,
+            (Self::SharedProfile(_), Self::SharedProfile(_)) => false,
+            (Self::SharedProfile(a), Self::Profiles(b))
+            | (Self::Profiles(b), Self::SharedProfile(a)) => b.contains(a),
             (Self::Profiles(a), Self::Profiles(b)) => a.iter().any(|p| b.contains(p)),
         }
     }
@@ -194,6 +203,41 @@ pub(super) fn operation_scope(operation: &Operation) -> Scope {
         | ResumeTeamMemberAddition { profile, .. }
         | ListFederatedTeams { profile, .. } => Scope::profile(profile),
     }
+}
+
+/// The scope a request is admitted under: its operation scope, in shared
+/// mode for the reads that may share their profile.
+pub(super) fn admission_scope(operation: &Operation) -> Scope {
+    match operation_scope(operation) {
+        Scope::Profiles(mut profiles)
+            if profiles.len() == 1 && crate::read_cache::operation_shares_profile(operation) =>
+        {
+            Scope::SharedProfile(profiles.remove(0))
+        }
+        scope => scope,
+    }
+}
+
+thread_local! {
+    static SHARED_SESSION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `work` with the checked sessions it opens in shared mode when
+/// `shared` is set: the request was admitted beside other reads, and its
+/// session must take the profile's locks the same way.
+pub(super) fn with_shared_session<T>(shared: bool, work: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SHARED_SESSION.with(|slot| slot.set(self.0));
+        }
+    }
+    let _restore = Restore(SHARED_SESSION.with(|slot| slot.replace(shared)));
+    work()
+}
+
+pub(super) fn session_is_shared() -> bool {
+    SHARED_SESSION.with(std::cell::Cell::get)
 }
 
 #[derive(Clone)]
@@ -637,6 +681,106 @@ mod tests {
         drop(third.await.unwrap());
         drop((other_profile, other_root));
         assert!(coordinator.state.lock().unwrap().active.is_empty());
+    }
+
+    #[tokio::test]
+    async fn shared_reads_on_one_profile_are_admitted_together_and_an_exclusive_one_waits_for_them()
+    {
+        let coordinator = Arc::new(Coordinator::default());
+        let root = Path::new("/shared-admission-test");
+        let first = coordinator
+            .acquire(root, Scope::SharedProfile("a".into()), BUDGET)
+            .await
+            .unwrap();
+        let second = coordinator
+            .acquire(root, Scope::SharedProfile("a".into()), BUDGET)
+            .await
+            .unwrap();
+        assert_eq!(second.waited_behind, None);
+        let mut exclusive = Box::pin(coordinator.acquire(root, Scope::profile("a"), BUDGET));
+        assert_pending(exclusive.as_mut()).await;
+        // Another profile's shared read never waits, and a registry read
+        // shares as before.
+        drop(
+            coordinator
+                .acquire(root, Scope::SharedProfile("b".into()), BUDGET)
+                .await
+                .unwrap(),
+        );
+        drop(
+            coordinator
+                .acquire(root, Scope::RegistryRead, BUDGET)
+                .await
+                .unwrap(),
+        );
+        drop(first);
+        assert_pending(exclusive.as_mut()).await;
+        drop(second);
+        let exclusive = exclusive.await.unwrap();
+        assert_eq!(exclusive.waited_behind, Some("profile-shared"));
+        // While the exclusive hold lasts, a shared read waits and says so.
+        let mut shared =
+            Box::pin(coordinator.acquire(root, Scope::SharedProfile("a".into()), BUDGET));
+        assert_pending(shared.as_mut()).await;
+        drop(exclusive);
+        assert_eq!(shared.await.unwrap().waited_behind, Some("profile"));
+        assert!(coordinator.state.lock().unwrap().active.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_shared_read_does_not_overtake_an_earlier_exclusive_waiter() {
+        let coordinator = Arc::new(Coordinator::default());
+        let root = Path::new("/shared-fifo-test");
+        let active = coordinator
+            .acquire(root, Scope::profile("a"), BUDGET)
+            .await
+            .unwrap();
+        let mut writer = Box::pin(coordinator.acquire(root, Scope::profile("a"), BUDGET));
+        assert_pending(writer.as_mut()).await;
+        let mut reader =
+            Box::pin(coordinator.acquire(root, Scope::SharedProfile("a".into()), BUDGET));
+        assert_pending(reader.as_mut()).await;
+        drop(active);
+        // FIFO: the exclusive waiter was first, so the read keeps waiting.
+        let writer = writer.await.unwrap();
+        assert_pending(reader.as_mut()).await;
+        drop(writer);
+        drop(reader.await.unwrap());
+        assert!(coordinator.state.lock().unwrap().active.is_empty());
+    }
+
+    #[test]
+    fn a_read_that_shares_its_profile_is_admitted_in_shared_mode_and_others_are_not() {
+        let store = foks_agent_proto::AccountStoreRef {
+            profile: "a".into(),
+            account_alias: "me".into(),
+        };
+        assert_eq!(
+            admission_scope(&Operation::ListKv {
+                store,
+                cursor: None,
+                limit: 10,
+                fresh: false,
+            }),
+            Scope::SharedProfile("a".into())
+        );
+        assert_eq!(
+            admission_scope(&Operation::ListKnownStores {
+                profile: "a".into()
+            }),
+            Scope::SharedProfile("a".into())
+        );
+        assert_eq!(
+            admission_scope(&Operation::DiscoverTeams {
+                profile: "a".into(),
+                account_alias: "me".into(),
+            }),
+            Scope::profile("a")
+        );
+        assert_eq!(
+            admission_scope(&Operation::ListProfiles),
+            Scope::RegistryRead
+        );
     }
 
     #[test]

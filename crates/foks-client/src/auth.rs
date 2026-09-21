@@ -528,6 +528,7 @@ impl FoksClient {
         target: &EntityId,
         encode_request: impl Fn(u64, Option<(&[u8], u64)>) -> foks_rpc::Result<Vec<u8>>,
     ) -> Result<VerifiedUserState> {
+        let _pinning = crate::pinning::span(&host.database_path);
         target.clone().require_type(ENTITY_USER)?;
         self.retry_chain_load(host, |current| {
             let (_, merkle) = self.advance_merkle_root(current)?;
@@ -697,6 +698,7 @@ impl FoksClient {
         &self,
         pinned: &PinnedHost,
     ) -> Result<(Acceptance, VerifiedMerkleAdvance)> {
+        let _pinning = crate::pinning::span(&pinned.database_path);
         let mut store = HardStateStore::open(&pinned.database_path)?;
         let host = store
             .host_for_lookup(&pinned.lookup_name)?
@@ -928,6 +930,7 @@ impl FoksClient {
         host: &PinnedHost,
         credential: &DeviceCredential,
     ) -> Result<AuthenticatedUserOutcome> {
+        let _pinning = crate::pinning::span(&host.database_path);
         let derived = credential.public_material()?;
         let (merkle_acceptance, merkle) = self.advance_merkle_root(host)?;
         let prior = match self.pinned_user(host, &credential.uid) {
@@ -1048,6 +1051,7 @@ impl FoksClient {
         host: &PinnedHost,
         credential: &YubiCredential<'_>,
     ) -> Result<AuthenticatedUserOutcome> {
+        let _pinning = crate::pinning::span(&host.database_path);
         let subkey = derive_subkey_id(&credential.subkey_seed)?;
         let (merkle_acceptance, merkle) = self.advance_merkle_root(host)?;
         let prior = self.pinned_user(host, &credential.uid)?;

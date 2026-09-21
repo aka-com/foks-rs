@@ -258,7 +258,7 @@ use checkpoint::{
 };
 pub use checkpoint::{
     ClientCredentials, CredentialBackend, ResetArtifactKind, ResetArtifactSummary,
-    ResetStatePreview, RollbackCheckpoint,
+    ResetStatePreview, RollbackCheckpoint, SharedSessionOutcome,
 };
 #[cfg(test)]
 use kv::{display_component, split_parent};

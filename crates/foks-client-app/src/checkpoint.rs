@@ -851,6 +851,140 @@ impl ClientCredentials {
         result.map(Some)
     }
 
+    /// Runs `operation` under a shared checked session: the profile operation
+    /// lock shared within this process and the database lock in shared mode.
+    /// Readers here coexist, but their common exclusive OS profile lock keeps
+    /// other processes out because pinning spans are process-local. Exclusive
+    /// sessions also wait for all of these readers to finish. The
+    /// checkpoint is verified on entry and advanced on exit as it is for an
+    /// exclusive session; nothing is enrolled or claimed, and a profile that
+    /// needs either, or has a publication pending, answers `NeedsExclusive`
+    /// without running the operation.
+    ///
+    /// The acceptances a read performs, of a Merkle head and of the chains
+    /// verified under it, are kept from interleaving across shared sessions
+    /// by the client's per-host pinning span, not by this lock.
+    pub fn try_with_shared_checked_session<T, E>(
+        &self,
+        session: &ProfileSession,
+        operation: impl FnOnce(&CheckedProfileSession<'_>) -> std::result::Result<T, E>,
+    ) -> std::result::Result<SharedSessionOutcome<T>, E>
+    where
+        E: From<Error>,
+    {
+        self.ensure_session_root(session).map_err(E::from)?;
+        let key = held_profile_key(&session.paths.directory);
+        if HeldCheckedProfile::is_held(&key) {
+            let checked = checked_profile_for_use(self, session).map_err(E::from)?;
+            return operation(&checked).map(SharedSessionOutcome::Ran);
+        }
+        let Some(lock) =
+            runtime::ProfileLock::try_operation_shared(session.paths()).map_err(E::from)?
+        else {
+            return Ok(SharedSessionOutcome::Contended);
+        };
+        let database_lock = match self
+            .try_lock_and_verify_checkpoint_shared(session)
+            .map_err(E::from)?
+        {
+            SharedVerification::Verified(database_lock) => database_lock,
+            SharedVerification::Contended => return Ok(SharedSessionOutcome::Contended),
+            SharedVerification::NeedsExclusive => return Ok(SharedSessionOutcome::NeedsExclusive),
+        };
+        let checked = checked_profile_for_use(self, session).map_err(E::from)?;
+        let held = HeldCheckedProfile::enter(key);
+        let result = operation(&checked);
+        drop(held);
+        let checkpoint = self.advance_checkpoint(session);
+        let database_unlock = database_lock
+            .map(runtime::DatabaseLock::release)
+            .transpose();
+        let unlock = lock.release();
+        checkpoint.map_err(E::from)?;
+        database_unlock.map_err(E::from)?;
+        unlock.map_err(E::from)?;
+        result.map(SharedSessionOutcome::Ran)
+    }
+
+    /// The shared-mode counterpart of `try_lock_and_verify_checkpoint`. It
+    /// verifies the checkpoint as the exclusive path does and publishes one
+    /// the database has advanced past, but it enrolls nothing and claims
+    /// nothing: pristine hard state, a checkpoint or database claim not yet
+    /// on record, and a pending publication each need an exclusive session
+    /// first. The checkpoint is read under the manifest lock for the reason
+    /// `advance_checkpoint` gives.
+    fn try_lock_and_verify_checkpoint_shared(
+        &self,
+        session: &ProfileSession,
+    ) -> Result<SharedVerification> {
+        if registry::profile_publication_is_pending(session)? {
+            return Ok(SharedVerification::NeedsExclusive);
+        }
+        if self.backend != CredentialBackend::Native {
+            return Ok(SharedVerification::Verified(None));
+        }
+        if !hard_state_artifacts_exist(&session.paths.hard_database)? {
+            return Ok(SharedVerification::NeedsExclusive);
+        }
+        let database_id = session.rollback_checkpoint()?.database_id;
+        let Some(lock) = runtime::DatabaseLock::try_acquire_shared(&self.root, &database_id)?
+        else {
+            return Ok(SharedVerification::Contended);
+        };
+        let verified = self.try_with_native_manifest(|manifest| {
+            let current = session.rollback_checkpoint()?;
+            if current.database_id != database_id {
+                // The database was replaced under the read; only an
+                // exclusive session settles what replaced it.
+                return Ok(SharedCheck::NeedsExclusive);
+            }
+            self.verify_native_checkpoint_shared_with_store(session, &current, manifest)
+        })?;
+        Ok(match verified {
+            None => SharedVerification::Contended,
+            Some(SharedCheck::Verified) => SharedVerification::Verified(Some(lock)),
+            Some(SharedCheck::NeedsExclusive) => SharedVerification::NeedsExclusive,
+        })
+    }
+
+    fn verify_native_checkpoint_shared_with_store(
+        &self,
+        session: &ProfileSession,
+        current: &RollbackCheckpoint,
+        store: &mut impl CheckpointStore,
+    ) -> Result<SharedCheck> {
+        let key = rollback_record_key(&session.profile.name)?;
+        let publish = match store.get(&key) {
+            Ok(bytes) => {
+                let previous: RollbackCheckpoint =
+                    serde_json::from_slice(&bytes).map_err(|_| {
+                        self.checkpoint_reset_error(session, "external checkpoint is invalid")
+                    })?;
+                let reconciliation = current.reconciliation(&previous).map_err(|error| {
+                    self.checkpoint_reset_error(session, rollback_reason(&error))
+                })?;
+                reconciliation == CheckpointReconciliation::AdvanceExternal
+            }
+            Err(foks_keystore::Error::Missing) => return Ok(SharedCheck::NeedsExclusive),
+            Err(error) => return Err(error.into()),
+        };
+        match store.get(&database_claim_record_key(&current.database_id)) {
+            Ok(profile) if profile.as_slice() == session.profile.name.as_bytes() => {}
+            Ok(_) => {
+                return Err(self.checkpoint_reset_error(
+                    session,
+                    "hard-state database identity is already claimed by another profile",
+                ))
+            }
+            Err(foks_keystore::Error::Missing) => return Ok(SharedCheck::NeedsExclusive),
+            Err(error) => return Err(error.into()),
+        }
+        if publish {
+            store.put(&key, &serde_json::to_vec(current)?)?;
+        }
+        Ok(SharedCheck::Verified)
+    }
+
     fn lock_and_verify_checkpoint(
         &self,
         session: &ProfileSession,
@@ -1225,8 +1359,12 @@ impl ClientCredentials {
         if self.backend != CredentialBackend::Native {
             return Ok(());
         }
-        let current = session.rollback_checkpoint()?;
+        // Read under the manifest lock. A session sharing the profile lock
+        // can write and publish between a read taken outside it and this
+        // reconciliation, and a checkpoint read before that publication would
+        // then be behind the record for a database that has only advanced.
         self.with_native_manifest(|manifest| {
+            let current = session.rollback_checkpoint()?;
             self.verify_native_checkpoint_with_store(session, &current, false, manifest)
         })
     }
@@ -2264,6 +2402,31 @@ pub(super) enum CheckpointReconciliation {
     AdvanceExternal,
 }
 
+/// What a shared-mode admission attempt did.
+#[derive(Debug)]
+pub enum SharedSessionOutcome<T> {
+    /// The operation ran under a shared session.
+    Ran(T),
+    /// A lock an exclusive holder owns refused the shared one; nothing ran.
+    /// Retried as a contended exclusive session is.
+    Contended,
+    /// The profile is in a state only an exclusive session settles: pristine
+    /// hard state, a checkpoint or database claim not yet on record, or a
+    /// publication pending. Nothing ran.
+    NeedsExclusive,
+}
+
+enum SharedVerification {
+    Verified(Option<runtime::DatabaseLock>),
+    Contended,
+    NeedsExclusive,
+}
+
+enum SharedCheck {
+    Verified,
+    NeedsExclusive,
+}
+
 impl RollbackCheckpoint {
     /// Stable non-secret digest of the published checkpoint fields.
     pub fn digest(&self) -> Result<[u8; 32]> {
@@ -2373,6 +2536,105 @@ impl ClientStateMaintenanceGuard {
 mod admission_tests {
     use super::*;
     use crate::{CredentialBackend, Profile, ProfileRegistry, ProtocolPolicy, TrustRoot};
+
+    fn one_profile_state() -> (tempfile::TempDir, std::path::PathBuf) {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        ClientCredentials::initialize(&root, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        registry
+            .add(Profile {
+                name: "a".into(),
+                label: None,
+                probe: "example.test".into(),
+                protocol: ProtocolPolicy::V019,
+                trust: TrustRoot::WebPki,
+            })
+            .unwrap();
+        (temporary, root)
+    }
+
+    #[test]
+    fn shared_sessions_on_one_profile_run_together_and_keep_an_exclusive_one_out() {
+        let (_temporary, root) = one_profile_state();
+        let credentials = ClientCredentials::open(&root).unwrap();
+        let registry = ProfileRegistry::open(&root).unwrap();
+        let session = ProfileSession::open(&registry, "a").unwrap();
+        let holder_credentials = ClientCredentials::open(&root).unwrap();
+        let holder_session = ProfileSession::open(&registry, "a").unwrap();
+        let (entered, observe_entered) = std::sync::mpsc::channel();
+        let (release, observe_release) = std::sync::mpsc::channel::<()>();
+        // One shared session stays open on another thread.
+        let holder = std::thread::spawn(move || {
+            let outcome = holder_credentials
+                .try_with_shared_checked_session(&holder_session, |checked| {
+                    assert_eq!(checked.profile().name, "a");
+                    entered.send(()).unwrap();
+                    observe_release.recv().unwrap();
+                    Ok::<_, Error>(())
+                })
+                .unwrap();
+            assert!(matches!(outcome, SharedSessionOutcome::Ran(())));
+        });
+        observe_entered.recv().unwrap();
+        // A second shared session runs beside it.
+        let outcome = credentials
+            .try_with_shared_checked_session(&session, |checked| {
+                assert_eq!(checked.profile().name, "a");
+                Ok::<_, Error>(7)
+            })
+            .unwrap();
+        assert!(matches!(outcome, SharedSessionOutcome::Ran(7)));
+        // An exclusive session is refused while a shared holder remains.
+        assert_eq!(
+            credentials
+                .try_with_checked_session(&session, |_| {
+                    panic!("an exclusive session must not run beside a shared one");
+                    #[allow(unreachable_code)]
+                    Ok::<_, Error>(())
+                })
+                .unwrap(),
+            None
+        );
+        release.send(()).unwrap();
+        holder.join().unwrap();
+        assert!(credentials
+            .try_with_checked_session(&session, |_| Ok::<_, Error>(()))
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn a_shared_session_is_refused_beside_an_exclusive_one_and_nests_inside_its_own() {
+        let (_temporary, root) = one_profile_state();
+        let credentials = ClientCredentials::open(&root).unwrap();
+        let registry = ProfileRegistry::open(&root).unwrap();
+        let session = ProfileSession::open(&registry, "a").unwrap();
+        let exclusive = runtime::ProfileLock::operation(session.paths()).unwrap();
+        let outcome = credentials
+            .try_with_shared_checked_session(&session, |_| {
+                panic!("a shared session must not run beside an exclusive one");
+                #[allow(unreachable_code)]
+                Ok::<_, Error>(())
+            })
+            .unwrap();
+        assert!(matches!(outcome, SharedSessionOutcome::Contended));
+        drop(exclusive);
+        // Inside a checked session on this thread, a shared request reuses it.
+        let nested = credentials
+            .try_with_checked_session(&session, |_| {
+                credentials.try_with_shared_checked_session(&session, |checked| {
+                    assert_eq!(checked.profile().name, "a");
+                    Ok::<_, Error>(3)
+                })
+            })
+            .unwrap()
+            .unwrap();
+        assert!(matches!(nested, SharedSessionOutcome::Ran(3)));
+        assert!(runtime::ProfileLock::try_operation(session.paths())
+            .unwrap()
+            .is_some());
+    }
 
     #[test]
     fn paired_try_admission_releases_first_lock_and_never_enters_body_on_contention() {

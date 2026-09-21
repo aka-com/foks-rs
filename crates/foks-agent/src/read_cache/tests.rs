@@ -609,3 +609,39 @@ fn a_session_carries_read_caches_only_inside_a_read_scope() {
     assert!(!mutation.serves_reads_from_cache());
     assert!(!open().serves_reads_from_cache());
 }
+
+#[test]
+fn network_chat_state_keeps_exclusive_profile_admission() {
+    let store = TeamStoreRef {
+        profile: "local".into(),
+        account_alias: "owner".into(),
+        team_alias: "team".into(),
+        team_id: format!("03{}", "ab".repeat(32)),
+    };
+    for action in [
+        ChatAction::Channels,
+        ChatAction::Inbox,
+        ChatAction::SyncInbox {
+            blocked_channels: vec![],
+        },
+        ChatAction::History {
+            channel: "12".repeat(16),
+            before: None,
+        },
+        ChatAction::NotificationHistory {
+            channel: "12".repeat(16),
+            before: None,
+        },
+    ] {
+        assert!(!operation_shares_profile(&Operation::Chat {
+            store: store.clone(),
+            action
+        }));
+    }
+    for action in [ChatAction::Pending, ChatAction::CleanupPending] {
+        assert!(operation_shares_profile(&Operation::Chat {
+            store: store.clone(),
+            action
+        }));
+    }
+}

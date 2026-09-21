@@ -41,8 +41,8 @@ use foks_client_app::{
     derive_vault_key, AccountVault, CancellationToken, Capability, CheckedProfileSession,
     ClientCredentials, CredentialBackend, FederationDestinationRole, KexAcceptanceInput,
     KvMutationPrecondition, KvRoleSummary, Passphrase, Profile, ProfileRegistry, ProfileSession,
-    ProtocolPolicy, TeamMemberRole, TrustRoot, UnlockedYubiActor, YubiProvisionInput,
-    YubiSignupInput,
+    ProtocolPolicy, SharedSessionOutcome, TeamMemberRole, TrustRoot, UnlockedYubiActor,
+    YubiProvisionInput, YubiSignupInput,
 };
 use foks_client_db::{KnownStore, KnownTeamStore, SoftStateStore};
 use foks_keystore::EncryptedFileSecretStore;
@@ -867,7 +867,7 @@ async fn handle_connection(
     timeout: Duration,
     _active_permit: OwnedSemaphorePermit,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    for _ in 0..MAXIMUM_REQUESTS_PER_CONNECTION {
+    'requests: for _ in 0..MAXIMUM_REQUESTS_PER_CONNECTION {
         let frame = match tokio::time::timeout(timeout, read_frame(&mut stream)).await {
             Ok(Ok(Some(frame))) => frame,
             Ok(Ok(None)) => return Ok(()),
@@ -1010,97 +1010,131 @@ async fn handle_connection(
             }
             continue;
         }
-        // Admission precedes worker allocation: same-profile waiters must not
-        // occupy every worker and prevent an unrelated profile from proceeding.
-        let admitted_at = Instant::now();
-        let profile_permit = match profile_work::coordinator()
-            .acquire(
-                &state_dir,
-                profile_work::operation_scope(&request.operation),
-                admission_budget(timeout),
-            )
-            .await
-        {
-            Ok(permit) => permit,
-            Err(error) => {
+        // A read that shares its profile is admitted in shared mode. One
+        // that finds the profile in a state only an exclusive session
+        // settles is run again under exclusive admission, once; the answer
+        // it did not get is never written.
+        let request_started = Instant::now();
+        let mut scope = profile_work::admission_scope(&request.operation);
+        let supervised = loop {
+            let remaining_timeout = timeout.saturating_sub(request_started.elapsed());
+            if remaining_timeout.is_zero() {
                 write_response(
                     &mut stream,
-                    &dispatch_error_response(request.id, &error),
+                    &dispatch_error_response(request.id, &profile_work::AdmissionError::Deadline),
                     timeout,
                 )
                 .await?;
-                continue;
+                continue 'requests;
             }
-        };
-        let queue = admitted_at.elapsed();
-        let waited_behind = profile_permit.waited_behind;
-        let remaining = admission_budget(timeout).saturating_sub(queue);
-        let worker_pool = capacity.worker_pool(&request.operation);
-        let pool_started = Instant::now();
-        let permit = match tokio::time::timeout(remaining, worker_pool.acquire_owned()).await {
-            Ok(Ok(permit)) => permit,
-            Ok(Err(_)) => return Err("agent worker pool closed".into()),
-            Err(_) => {
+            let request = request.clone();
+            let exclusive_scope = profile_work::operation_scope(&request.operation);
+            let needs_exclusive = Arc::new(AtomicBool::new(false));
+            // Admission precedes worker allocation: same-profile waiters must not
+            // occupy every worker and prevent an unrelated profile from proceeding.
+            let admitted_at = Instant::now();
+            let profile_permit = match profile_work::coordinator()
+                .acquire(
+                    &state_dir,
+                    scope.clone(),
+                    admission_budget(remaining_timeout),
+                )
+                .await
+            {
+                Ok(permit) => permit,
+                Err(error) => {
+                    write_response(
+                        &mut stream,
+                        &dispatch_error_response(request.id, &error),
+                        timeout,
+                    )
+                    .await?;
+                    continue 'requests;
+                }
+            };
+            let queue = admitted_at.elapsed();
+            let waited_behind = profile_permit.waited_behind;
+            let remaining = admission_budget(remaining_timeout).saturating_sub(queue);
+            let worker_pool = capacity.worker_pool(&request.operation);
+            let pool_started = Instant::now();
+            let permit = match tokio::time::timeout(remaining, worker_pool.acquire_owned()).await {
+                Ok(Ok(permit)) => permit,
+                Ok(Err(_)) => return Err("agent worker pool closed".into()),
+                Err(_) => {
+                    write_response(
+                        &mut stream,
+                        &Response::error(
+                            request.id,
+                            ErrorCode::Busy,
+                            "agent worker pool is saturated",
+                        ),
+                        timeout,
+                    )
+                    .await?;
+                    continue 'requests;
+                }
+            };
+            let state = state_dir.clone();
+            let operation_ready = ready.clone();
+            let operation_timeout = if request.operation.is_device_pairing_wait() {
+                timeout.max(DEVICE_PAIRING_TIMEOUT)
+            } else {
+                remaining_timeout.saturating_sub(admitted_at.elapsed())
+            };
+            if operation_timeout.is_zero() {
                 write_response(
                     &mut stream,
-                    &Response::error(
-                        request.id,
-                        ErrorCode::Busy,
-                        "agent worker pool is saturated",
-                    ),
+                    &dispatch_error_response(request.id, &profile_work::AdmissionError::Deadline),
                     timeout,
                 )
                 .await?;
+                continue 'requests;
+            }
+            let request_timing = RequestTiming {
+                queue,
+                pool: pool_started.elapsed(),
+                spawned_at: Some(Instant::now()),
+                waited_behind,
+            };
+            // Monitor client disconnection for cancellable read operations. Until
+            // disconnection is detected, the request retains its profile admission
+            // and session. Mutations continue because they may change persistent state.
+            let abandonment =
+                read_cache::operation_is_abandonable(&request.operation).then_some(&mut stream);
+            let shared = matches!(scope, profile_work::Scope::SharedProfile(_));
+            let worker_flag = Arc::clone(&needs_exclusive);
+            let supervised = supervise_blocking(
+                request.id,
+                permit,
+                profile_permit,
+                operation_timeout,
+                abandonment,
+                move |cancellation| {
+                    dispatch_timed(
+                        &state,
+                        request,
+                        operation_timeout,
+                        cancellation,
+                        operation_ready,
+                        request_timing,
+                        Admission {
+                            shared,
+                            needs_exclusive: worker_flag,
+                        },
+                    )
+                },
+            )
+            .await;
+            if !supervised.abandoned
+                && !supervised.close_connection
+                && needs_exclusive.load(Ordering::Acquire)
+                && matches!(scope, profile_work::Scope::SharedProfile(_))
+            {
+                scope = exclusive_scope;
                 continue;
             }
+            break supervised;
         };
-        let state = state_dir.clone();
-        let operation_ready = ready.clone();
-        let operation_timeout = if request.operation.is_device_pairing_wait() {
-            timeout.max(DEVICE_PAIRING_TIMEOUT)
-        } else {
-            timeout.saturating_sub(admitted_at.elapsed())
-        };
-        if operation_timeout.is_zero() {
-            write_response(
-                &mut stream,
-                &dispatch_error_response(request.id, &profile_work::AdmissionError::Deadline),
-                timeout,
-            )
-            .await?;
-            continue;
-        }
-        let request_timing = RequestTiming {
-            queue,
-            pool: pool_started.elapsed(),
-            spawned_at: Some(Instant::now()),
-            waited_behind,
-        };
-        // A client that retires a read closes its connection, and until that
-        // is observed the request keeps this profile's admission and its
-        // session while the request behind it waits for both. Only an
-        // operation that commits nothing is ended this way; a mutation runs
-        // to its own conclusion whether or not anyone is left to read it.
-        let abandonment =
-            read_cache::operation_is_abandonable(&request.operation).then_some(&mut stream);
-        let supervised = supervise_blocking(
-            request.id,
-            permit,
-            profile_permit,
-            operation_timeout,
-            abandonment,
-            move |cancellation| {
-                dispatch_timed(
-                    &state,
-                    request,
-                    operation_timeout,
-                    cancellation,
-                    operation_ready,
-                    request_timing,
-                )
-            },
-        )
-        .await;
         if supervised.abandoned {
             return Ok(());
         }
@@ -1572,6 +1606,10 @@ fn dispatch_controlled(
         cancellation,
         ready,
         RequestTiming::default(),
+        Admission {
+            shared: false,
+            needs_exclusive: Arc::new(AtomicBool::new(false)),
+        },
     )
 }
 
@@ -1585,6 +1623,7 @@ fn dispatch_timed(
     cancellation: CancellationToken,
     ready: Arc<AtomicBool>,
     request_timing: RequestTiming,
+    admission: Admission,
 ) -> Response {
     let id = request.id;
     let initializes = matches!(request.operation, Operation::InitializeState { .. });
@@ -1595,16 +1634,24 @@ fn dispatch_timed(
     let body_started = Instant::now();
     let (result, phases) = profile_work::with_phase_timing(|| {
         profile_work::with_control(timeout, cancellation.clone(), || {
-            dispatch_result(
-                state_dir,
-                request.operation,
-                timeout,
-                cancellation,
-                ready.load(Ordering::Acquire),
-            )
+            profile_work::with_shared_session(admission.shared, || {
+                dispatch_result(
+                    state_dir,
+                    request.operation,
+                    timeout,
+                    cancellation,
+                    ready.load(Ordering::Acquire),
+                )
+            })
         })
     });
     let total = body_started.elapsed();
+    if result
+        .as_ref()
+        .is_err_and(|error| error.downcast_ref::<NeedsExclusiveSession>().is_some())
+    {
+        admission.needs_exclusive.store(true, Ordering::Release);
+    }
     if initializes && result.is_ok() {
         ready.store(true, Ordering::Release);
     }
@@ -1658,7 +1705,9 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
     if let Some(error) = error.downcast_ref::<AgentRequestError>() {
         return Response::error(id, ErrorCode::InvalidRequest, error.to_string());
     }
-    if error.downcast_ref::<ProfileBusyError>().is_some() {
+    if error.downcast_ref::<ProfileBusyError>().is_some()
+        || error.downcast_ref::<NeedsExclusiveSession>().is_some()
+    {
         return Response::error(id, ErrorCode::ProfileBusy, error.to_string());
     }
     if let Some(error) = error.downcast_ref::<foks_client_app::Error>() {
@@ -2190,6 +2239,31 @@ impl std::fmt::Display for ProfileBusyError {
 }
 
 impl std::error::Error for ProfileBusyError {}
+
+/// How a request was admitted, as its dispatch needs to know it.
+struct Admission {
+    /// Admitted beside other reads: the sessions it opens share the
+    /// profile's locks.
+    shared: bool,
+    /// Set by the dispatch when a shared session was refused for a state
+    /// only an exclusive one settles, so the connection loop runs the request
+    /// again under exclusive admission.
+    needs_exclusive: Arc<AtomicBool>,
+}
+
+/// A read admitted in shared mode found its profile in a state only an
+/// exclusive session settles. The connection loop runs it again under
+/// exclusive admission; the error is answered only if that cannot happen.
+#[derive(Debug)]
+struct NeedsExclusiveSession;
+
+impl std::fmt::Display for NeedsExclusiveSession {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("This profile needs an exclusive session; retry.")
+    }
+}
+
+impl std::error::Error for NeedsExclusiveSession {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum CatalogStoreBinding {
@@ -5448,6 +5522,26 @@ fn checked_session<T>(
     operation: impl FnOnce(&CheckedProfileSession<'_>) -> Result<T, Box<dyn std::error::Error>>,
 ) -> Result<T, Box<dyn std::error::Error>> {
     let mut operation = Some(operation);
+    if profile_work::session_is_shared() {
+        // Admitted beside other reads: the session shares the profile's
+        // locks. A profile only an exclusive session settles sends the
+        // request back to be admitted that way.
+        loop {
+            profile_work::check_control()
+                .map_err(|_| Box::new(ProfileBusyError) as Box<dyn std::error::Error>)?;
+            match credentials.try_with_shared_checked_session(session, |checked| {
+                operation.take().expect("checked operation runs once")(checked)
+            })? {
+                SharedSessionOutcome::Ran(value) => return Ok(value),
+                SharedSessionOutcome::NeedsExclusive => {
+                    return Err(Box::new(NeedsExclusiveSession));
+                }
+                SharedSessionOutcome::Contended => {}
+            }
+            profile_work::wait_for_external_lock()
+                .map_err(|_| Box::new(ProfileBusyError) as Box<dyn std::error::Error>)?;
+        }
+    }
     loop {
         profile_work::check_control()
             .map_err(|_| Box::new(ProfileBusyError) as Box<dyn std::error::Error>)?;

@@ -517,6 +517,41 @@ pub(crate) fn operation_is_abandonable(operation: &Operation) -> bool {
     operation_serves_reads(operation) || operation_leaves_retained_material(operation)
 }
 
+/// Whether a read may share its profile's admission and locks with other
+/// reads instead of holding them alone.
+///
+/// Narrower than `operation_serves_reads`. Everything here reads the server
+/// and the local state and writes at most the soft-state cache, its own
+/// local operation material, and the pins its verification advances, which the
+/// client's per-host pinning span keeps from interleaving across sessions.
+/// Team discovery writes bindings, the invitation reads write handle blobs,
+/// and the data reads are not classified, so each keeps an exclusive session.
+/// Network-backed chat reads stay exclusive: inbox sync reads and rewrites
+/// account-wide cursors and channel projections across multiple transactions,
+/// and history/channel verification assumes serialized checked-profile reads.
+/// As with the other lists, a new operation shares nothing until it is added.
+pub(crate) fn operation_shares_profile(operation: &Operation) -> bool {
+    use foks_agent_proto::chat::ChatAction;
+    match operation {
+        Operation::ListKv { .. }
+        | Operation::ListTeamKv { .. }
+        | Operation::ReadKv { .. }
+        | Operation::ReadKvChunk { .. }
+        | Operation::ListKnownStores { .. }
+        | Operation::ListTeamDetails { .. }
+        | Operation::ListTeamMembers { .. }
+        | Operation::ListFederatedTeams { .. } => true,
+        Operation::Chat { action, .. } => matches!(
+            action,
+            ChatAction::OperationBody { .. }
+                | ChatAction::Status { .. }
+                | ChatAction::Pending
+                | ChatAction::CleanupPending
+        ),
+        _ => false,
+    }
+}
+
 /// Whether a failed read earns its one retry: it must have been served
 /// retained material, and the failure must be a refusal of that material. A
 /// read that authenticated for itself gets the answer it was given.

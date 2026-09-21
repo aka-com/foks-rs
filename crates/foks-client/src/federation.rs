@@ -628,6 +628,7 @@ impl FoksClient {
         uid: &foks_proto::EntityId,
         token: &PermissionToken,
     ) -> Result<RemoteUserOutcome> {
+        let _pinning = crate::pinning::span(&host.database_path);
         let (merkle_acceptance, merkle) = self.advance_merkle_root(host)?;
         let prior = match self.pinned_user(host, uid) {
             Ok(prior) => prior,
@@ -853,6 +854,7 @@ impl FoksClient {
         team: &foks_proto::EntityId,
         token: &PermissionToken,
     ) -> Result<RemoteTeamOutcome> {
+        let _pinning = crate::pinning::span(&host.database_path);
         let (merkle_acceptance, merkle) = self.advance_merkle_root(host)?;
         let prior = match self.pinned_team(host, team) {
             Ok(prior) => prior,

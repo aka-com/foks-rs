@@ -146,6 +146,7 @@ impl FoksClient {
         target: &ProbeTarget,
         database_path: &Path,
     ) -> Result<ProbeOutcome> {
+        let _pinning = crate::pinning::span(database_path);
         let response = self.probe(target)?;
         let verified = verify_public_host(&target.hostname, &response)?;
         let mut store = HardStateStore::open(database_path)?;
@@ -168,6 +169,7 @@ impl FoksClient {
         expected_host_id: &EntityId,
         database_path: &Path,
     ) -> Result<ProbeOutcome> {
+        let _pinning = crate::pinning::span(database_path);
         expected_host_id
             .clone()
             .require_type(foks_proto::ENTITY_HOST)?;

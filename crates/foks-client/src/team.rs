@@ -346,6 +346,7 @@ impl FoksClient {
         credential: &DeviceCredential,
         user: &VerifiedUserState,
     ) -> Result<AuthenticatedUserSettings> {
+        let _pinning = crate::pinning::span(&host.database_path);
         let response = self.call(
             host,
             &host.user,
@@ -375,6 +376,7 @@ impl FoksClient {
         credential: &YubiCredential<'_>,
         user: &VerifiedUserState,
     ) -> Result<AuthenticatedUserSettings> {
+        let _pinning = crate::pinning::span(&host.database_path);
         let response = self.call_with_material(
             host,
             &host.user,
@@ -964,6 +966,7 @@ impl FoksClient {
         child: &EntityId,
         require_membership: bool,
     ) -> Result<VerifiedTeamRecipient> {
+        let _pinning = crate::pinning::span(&host.database_path);
         if parent.verified.host() != host.host_id()
             || parent.verified.team() == child
             || !matches!(
@@ -1135,6 +1138,7 @@ impl FoksClient {
         certificate_chain: &[Vec<u8>],
         user: &VerifiedUserState,
     ) -> Result<VerifiedUserGenericChain> {
+        let _pinning = crate::pinning::span(&host.database_path);
         let prior = self.pinned_membership_chain(host, uid, user)?;
         let verified = match prior {
             Some(prior) => match self.load_and_verify_membership_chain(
@@ -1244,6 +1248,7 @@ impl FoksClient {
         chain_type: u64,
         chain: &VerifiedUserGenericChain,
     ) -> Result<()> {
+        let _pinning = crate::pinning::span(&host.database_path);
         let root = user.tree_root();
         HardStateStore::open(&host.database_path)?.accept_verified_user_generic_chain(
             &VerifiedUserGenericChainSnapshot {
@@ -3327,6 +3332,7 @@ impl FoksClient {
         team: &EntityId,
         view_token: &[u8; 16],
     ) -> Result<AuthenticatedTeamOutcome> {
+        let _pinning = crate::pinning::span(&host.database_path);
         let (merkle_acceptance, chain_bytes, verified) = self.retry_chain_load(host, |host| {
             let (merkle_acceptance, merkle) = self.advance_merkle_root(host)?;
             for incremental in [true, false] {

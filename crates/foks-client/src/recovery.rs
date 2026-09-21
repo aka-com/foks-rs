@@ -243,6 +243,7 @@ impl FoksClient {
         host: &PinnedHost,
         credential: &LocatedBackupCredential,
     ) -> Result<AuthenticatedUserOutcome> {
+        let _pinning = crate::pinning::span(&host.database_path);
         let (merkle_acceptance, merkle) = self.advance_merkle_root(host)?;
         let chain_request = encode_load_user_chain_request(credential.uid.as_bytes(), 1)?;
         let chain_bytes = self.call_with_pkcs8_material(

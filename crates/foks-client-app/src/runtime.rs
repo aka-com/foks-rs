@@ -1,4 +1,7 @@
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use foks_client::{
     AuthenticatedTeamOutcome, AuthenticatedUserOutcome, DeviceCredential,
@@ -29,7 +32,8 @@ const SCHEDULER_LOCK_FILE: &str = ".scheduler-run.lock";
 const DATABASE_LOCK_DIRECTORY: &str = ".database-operation-locks";
 
 pub(crate) struct ProfileLock {
-    file: File,
+    file: Arc<File>,
+    shared: bool,
 }
 
 pub(crate) struct DatabaseLock {
@@ -49,6 +53,32 @@ impl ProfileLock {
         Self::try_acquire(paths, OPERATION_LOCK_FILE)
     }
 
+    /// Readers in this process share one exclusive OS lock. The client's
+    /// pinning spans are process-local, so readers in another process must
+    /// still wait, just like CLI writers and maintenance.
+    pub(crate) fn try_operation_shared(paths: &ProfilePaths) -> Result<Option<Self>> {
+        static READERS: OnceLock<Mutex<HashMap<PathBuf, Weak<File>>>> = OnceLock::new();
+        let key = std::fs::canonicalize(&paths.directory)?;
+        let mut readers = READERS
+            .get_or_init(Mutex::default)
+            .lock()
+            .map_err(|_| Error::InvalidConfig("shared profile lock registry poisoned"))?;
+        readers.retain(|_, file| file.strong_count() != 0);
+        if let Some(file) = readers.get(&key).and_then(Weak::upgrade) {
+            return Ok(Some(Self { file, shared: true }));
+        }
+        let file = open_lock(paths, OPERATION_LOCK_FILE)?;
+        match file.try_lock_exclusive() {
+            Ok(()) => {
+                let file = Arc::new(file);
+                readers.insert(key, Arc::downgrade(&file));
+                Ok(Some(Self { file, shared: true }))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     pub(crate) fn scheduler(paths: &ProfilePaths) -> Result<Self> {
         Self::acquire(paths, SCHEDULER_LOCK_FILE)
     }
@@ -60,20 +90,30 @@ impl ProfileLock {
     fn acquire(paths: &ProfilePaths, name: &str) -> Result<Self> {
         let file = open_lock(paths, name)?;
         file.lock_exclusive()?;
-        Ok(Self { file })
+        Ok(Self {
+            file: Arc::new(file),
+            shared: false,
+        })
     }
 
     fn try_acquire(paths: &ProfilePaths, name: &str) -> Result<Option<Self>> {
         let file = open_lock(paths, name)?;
         match file.try_lock_exclusive() {
-            Ok(()) => Ok(Some(Self { file })),
+            Ok(()) => Ok(Some(Self {
+                file: Arc::new(file),
+                shared: false,
+            })),
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
             Err(error) => Err(error.into()),
         }
     }
 
     pub(crate) fn release(self) -> Result<()> {
-        self.file.unlock()?;
+        // A shared reader must never unlock the file while peers still hold
+        // it. Closing the last Arc releases the OS lock, including on unwind.
+        if !self.shared {
+            self.file.unlock()?;
+        }
         Ok(())
     }
 }
@@ -113,6 +153,21 @@ impl DatabaseLock {
     ) -> Result<Option<Self>> {
         let file = open_database_lock(root, database_id)?;
         match file.try_lock_exclusive() {
+            Ok(()) => Ok(Some(Self { file })),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// The database lock in shared mode, for a session that reads. The
+    /// maintenance guard still reserves the same inode exclusively, so a
+    /// shared holder keeps maintenance out as an exclusive one does.
+    pub(crate) fn try_acquire_shared(
+        root: &std::path::Path,
+        database_id: &[u8; 16],
+    ) -> Result<Option<Self>> {
+        let file = open_database_lock(root, database_id)?;
+        match fs2::FileExt::try_lock_shared(&file) {
             Ok(()) => Ok(Some(Self { file })),
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
             Err(error) => Err(error.into()),
@@ -4211,6 +4266,37 @@ mod tests {
         scheduler.release().unwrap();
         other_profile.release().unwrap();
         operation.release().unwrap();
+    }
+
+    #[test]
+    fn local_readers_keep_other_file_lock_holders_out_until_the_last_release() {
+        let temporary = tempfile::tempdir().unwrap();
+        let profile = paths(temporary.path(), "readers");
+        let first = ProfileLock::try_operation_shared(&profile)
+            .unwrap()
+            .unwrap();
+        let second = ProfileLock::try_operation_shared(&profile)
+            .unwrap()
+            .unwrap();
+        // A separately opened descriptor models another process's shared lock.
+        let foreign = open_lock(&profile, OPERATION_LOCK_FILE).unwrap();
+        assert_eq!(
+            fs2::FileExt::try_lock_shared(&foreign).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        first.release().unwrap();
+        assert!(ProfileLock::try_operation(&profile).unwrap().is_none());
+        assert_eq!(
+            fs2::FileExt::try_lock_shared(&foreign).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        second.release().unwrap();
+        fs2::FileExt::try_lock_shared(&foreign).unwrap();
+        assert!(ProfileLock::try_operation_shared(&profile)
+            .unwrap()
+            .is_none());
+        fs2::FileExt::unlock(&foreign).unwrap();
+        assert!(ProfileLock::try_operation(&profile).unwrap().is_some());
     }
 
     #[test]
