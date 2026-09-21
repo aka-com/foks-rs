@@ -98,11 +98,22 @@ interface Account {
   retry: number;
   busy: boolean;
   blocked?: CommandError;
+  /** The poll failure the account is backing off from, until a poll succeeds. */
+  failure?: CommandError;
   pollClient?: ReturnType<typeof chatClient>;
   pollTeam?: string;
 }
 const keyOf = accountKey;
 const identity = teamIdentity;
+/**
+ * Whether a catalog read answers the failure: the backend reported that the
+ * profile's catalog was retired or not yet read, or that it no longer lists
+ * the store. Until the next read lands, retries can only repeat the answer,
+ * and once it has landed the backoff they built up has nothing left to wait
+ * for.
+ */
+const answeredByCatalog = (failure: CommandError | undefined): boolean =>
+  failure?.code === 'catalog-required' || failure?.code === 'store-not-found';
 const initial = (): TeamInbox => ({
   state: 'loading',
   error: '',
@@ -320,8 +331,21 @@ export class ChatInboxService {
             server?.compatibility.status === 'required'
               ? server.compatibility.expiresAt * 1000
               : undefined;
+          // The catalog this snapshot carries was read after the failure the
+          // team is backing off from, so the next attempt is due now.
+          if (answeredByCatalog(this.snapshot.get(store.id)?.failure)) {
+            team.dirty = true;
+            team.due = 0;
+            team.retry = 250;
+          }
         }
       }
+    }
+    for (const account of this.accounts.values()) {
+      if (!answeredByCatalog(account.failure)) continue;
+      account.failure = undefined;
+      account.due = 0;
+      account.retry = 250;
     }
     for (const listener of this.listeners) listener();
     this.kick();
@@ -709,6 +733,7 @@ export class ChatInboxService {
         }
       }
       account.retry = 250;
+      account.failure = undefined;
       account.due = this.clock.now() + 250;
     } catch (cause) {
       const error = normalizeCommandError(cause);
@@ -726,6 +751,7 @@ export class ChatInboxService {
         return;
       }
       if (this.handleError(team.store.id, error)) return;
+      account.failure = error;
       account.due = this.clock.now() + this.delay(account.retry);
       account.retry = Math.min(30_000, account.retry * 2);
     } finally {

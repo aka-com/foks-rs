@@ -15,7 +15,7 @@ use crate::commands::vault::store_id;
 use foks_desktop::{
     CatalogItem, CatalogLoadToken, CatalogSnapshot, CatalogStoreRef, CatalogStoreSummary,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -72,6 +72,11 @@ pub struct AppState {
     scopes: Arc<Mutex<HashMap<MutationScope, Arc<MutationScopeState>>>>,
     pending_drop_paths: Arc<Mutex<HashMap<String, PathBuf>>>,
     local_accounts: Arc<Mutex<HashMap<String, foks_agent_proto::AccountStoreRef>>>,
+    /// Profiles whose catalog a mutation retired and no read has covered
+    /// since. Their stores are absent from the catalog without being known
+    /// to be gone, so a lookup answers with the unrefreshed vault rather
+    /// than a missing store. Locked innermost and only briefly.
+    retired_profiles: Arc<Mutex<HashSet<String>>>,
     pub(super) accounts: Arc<Mutex<HashMap<String, AccountDto>>>,
     pub(super) devices: Arc<Mutex<HashMap<String, Vec<DeviceDto>>>>,
     pub(super) rosters: Arc<Mutex<HashMap<String, Vec<PartyDto>>>>,
@@ -104,6 +109,7 @@ impl AppState {
             )]))),
             pending_drop_paths: Arc::default(),
             local_accounts: Arc::default(),
+            retired_profiles: Arc::default(),
             accounts: Arc::default(),
             devices: Arc::default(),
             rosters: Arc::default(),
@@ -550,6 +556,14 @@ impl AppState {
             .filter(|profile| profile_catalog_complete(&catalog, profile))
             .cloned()
             .collect::<Vec<_>>();
+        // Progressive snapshots name all configured profiles, including ones
+        // not read yet. Only incoming inventory can answer a retirement;
+        // retained inventory from an earlier publication cannot do so.
+        let observed_profiles = catalog
+            .inventory
+            .iter()
+            .map(|inventory| inventory.profile.clone())
+            .collect::<HashSet<_>>();
         let complete = catalog.full_item_reads.is_some()
             && catalog.failures.is_empty()
             && catalog.blocked_profiles.is_empty()
@@ -638,6 +652,12 @@ impl AppState {
             retained.profile_overviews.extend(catalog.profile_overviews);
             retained.failures.extend(catalog.failures);
             retained.blocked_profiles.extend(catalog.blocked_profiles);
+            if observed_profiles.contains(profile) {
+                self.retired_profiles
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(profile);
+            }
             self.clear_profile_facts(profile);
             self.catalog_generation.store(generation, Ordering::Release);
             self.advance_root_generation(if preserve_unchanged {
@@ -671,6 +691,10 @@ impl AppState {
                 }
             }
         }
+        self.retired_profiles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|profile| !observed_profiles.contains(profile));
         let changed_profiles = preserve_unchanged.then(|| {
             let previous = self
                 .catalog
@@ -839,6 +863,10 @@ impl AppState {
                     .profile_overviews
                     .retain(|overview| overview.profile != profile);
             }
+            self.retired_profiles
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(profile.to_owned());
             self.clear_profile_facts(profile);
             let generation = self.next_generation();
             self.catalog_load_generation
@@ -1218,6 +1246,27 @@ impl AppState {
         }
     }
 
+    /// The error for a store the catalog does not list because a mutation
+    /// retired its profile's catalog and no read has covered the profile
+    /// since. The store is not known to be gone, so the answer names the
+    /// unrefreshed vault and invites a retry, as an incomplete read's does.
+    fn retired_store_error(&self, id: &str) -> Option<AgentError> {
+        let value: serde_json::Value = serde_json::from_str(id).ok()?;
+        let profile = value.get("profile")?.as_str()?;
+        let retired = self
+            .retired_profiles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(profile);
+        retired.then(|| {
+            AgentError::new(
+                "catalog-required",
+                format!("The vault for {profile} changed and has not been read again. Refresh and try again."),
+                true,
+            )
+        })
+    }
+
     pub(super) fn selected_team(&self, store: &str) -> Result<(String, String), AgentError> {
         let catalog = self
             .catalog
@@ -1242,7 +1291,9 @@ impl AppState {
                 _ => None,
             })
             .ok_or_else(|| {
-                unrefreshed_store_error(catalog, store).unwrap_or_else(|| {
+                self.retired_store_error(store)
+                    .or_else(|| unrefreshed_store_error(catalog, store))
+                    .unwrap_or_else(|| {
                     AgentError::new(
                         "store-not-found",
                         "This group is currently inaccessible. There may have been a server issue or you may have been removed.",
@@ -1300,13 +1351,16 @@ impl AppState {
             _ => None,
         });
         let Some(account) = account else {
-            return Err(unrefreshed_store_error(catalog, id).unwrap_or_else(|| {
-                AgentError::new(
-                    "store-not-found",
-                    "This account is no longer in the vault.",
-                    false,
-                )
-            }));
+            return Err(self
+                .retired_store_error(id)
+                .or_else(|| unrefreshed_store_error(catalog, id))
+                .unwrap_or_else(|| {
+                    AgentError::new(
+                        "store-not-found",
+                        "This account is no longer in the vault.",
+                        false,
+                    )
+                }));
         };
         if require_available {
             require_profile_available(catalog, &account.profile)?;
@@ -1429,7 +1483,9 @@ impl AppState {
             _ => None,
         });
         let Some((team, kind, active)) = team else {
-            return Err(unrefreshed_store_error(catalog, id).unwrap_or_else(|| {
+            return Err(self.retired_store_error(id)
+                    .or_else(|| unrefreshed_store_error(catalog, id))
+                    .unwrap_or_else(|| {
                 AgentError::new(
                     "store-not-found",
                     "This group is currently inaccessible. There may have been a server issue or you may have been removed.",
@@ -1483,13 +1539,16 @@ impl AppState {
             _ => None,
         });
         let Some((remote, kind, active)) = remote else {
-            return Err(unrefreshed_store_error(catalog, id).unwrap_or_else(|| {
-                AgentError::new(
-                    "store-not-found",
-                    "The group to admit is no longer in the vault.",
-                    false,
-                )
-            }));
+            return Err(self
+                .retired_store_error(id)
+                .or_else(|| unrefreshed_store_error(catalog, id))
+                .unwrap_or_else(|| {
+                    AgentError::new(
+                        "store-not-found",
+                        "The group to admit is no longer in the vault.",
+                        false,
+                    )
+                }));
         };
         require_profile_available(catalog, &remote.profile)?;
         if remote.profile == local_profile || kind != "named" || !active {
@@ -1709,13 +1768,15 @@ impl AppState {
                 _ => None,
             })
             .ok_or_else(|| {
-                unrefreshed_store_error(catalog, id).unwrap_or_else(|| {
-                    AgentError::new(
-                        "store-not-found",
-                        "This vault is no longer available.",
-                        false,
-                    )
-                })
+                self.retired_store_error(id)
+                    .or_else(|| unrefreshed_store_error(catalog, id))
+                    .unwrap_or_else(|| {
+                        AgentError::new(
+                            "store-not-found",
+                            "This vault is no longer available.",
+                            false,
+                        )
+                    })
             })?;
         let profile = match &selected.0 {
             CatalogStoreRef::Account(store) => &store.profile,

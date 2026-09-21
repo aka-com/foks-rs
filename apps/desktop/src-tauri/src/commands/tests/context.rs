@@ -1281,6 +1281,38 @@ fn mutation_cancels_a_private_catalog_load_and_rejects_its_late_reply() {
 }
 
 #[test]
+fn a_store_of_a_profile_retired_by_a_mutation_reports_catalog_required_until_it_is_read_again() {
+    let state = phase_four_state(vec![]).for_profile("chat").unwrap();
+    let catalog = chat_catalog();
+    let id = store_id(&catalog.stores[0].store_ref());
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.publish_catalog(load, catalog.clone(), |_| {}));
+    assert!(state.selected_chat(&id).is_ok());
+    // A mutation on the profile retires its catalog. The team is not known
+    // to be gone: it is absent until the read the mutation asks for lands,
+    // so a chat request is told to refresh and retry rather than that the
+    // team is inaccessible.
+    state.invalidate_catalog();
+    let error = state.selected_chat(&id).unwrap_err();
+    assert_eq!(error.code, "catalog-required");
+    assert!(error.retryable);
+    let error = state.selected_team(&id).unwrap_err();
+    assert_eq!(error.code, "catalog-required");
+    // The read lands and lists the team again.
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.publish_catalog(load, catalog.clone(), |_| {}));
+    assert!(state.selected_chat(&id).is_ok());
+    // A complete read after the next retirement that no longer lists the
+    // team: it is gone.
+    state.invalidate_catalog();
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.publish_catalog(load, complete_profile_catalog("chat"), |_| {}));
+    let error = state.selected_chat(&id).unwrap_err();
+    assert_eq!(error.code, "store-not-found");
+    assert!(!error.retryable);
+}
+
+#[test]
 fn an_unrefreshed_profile_reports_catalog_required_rather_than_a_missing_store() {
     let state = phase_four_state(vec![]).for_profile("chat").unwrap();
     let catalog = chat_catalog();

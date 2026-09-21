@@ -710,6 +710,62 @@ test('an unrefreshed profile asks for one catalog refresh per profile, not one p
   f.service.stop();
 });
 
+test('a catalog read makes a team and its poll due at once instead of at their backoff', async () => {
+  const f = fixture();
+  f.service.onCatalogRequired = () => {};
+  f.unrefreshed.add('t0');
+  await f.clock.advance(4_000);
+  // Five failed attempts have backed the team off past the next few seconds.
+  const attempts = f.syncs.filter((id) => id === 't0').length;
+  assert.equal(attempts, 5);
+  assert.equal(f.service.getSnapshot().get('t0')?.stale, true);
+  f.unrefreshed.clear();
+  await f.clock.advance(300);
+  assert.equal(f.syncs.filter((id) => id === 't0').length, attempts);
+  // The vault is read again: the team synchronizes on the next drain rather
+  // than when its backoff would have expired.
+  f.service.updateStores(f.snapshot);
+  await f.clock.advance(300);
+  assert.equal(f.syncs.filter((id) => id === 't0').length, attempts + 1);
+  assert.equal(f.service.getSnapshot().get('t0')?.error, '');
+  assert.equal(f.service.getSnapshot().get('t0')?.stale, false);
+
+  // The account's poll backs off the same way when the backend answers it
+  // with the unrefreshed vault, and a catalog read brings it forward too.
+  const refuse = () => {
+    for (const [view, wait] of f.waits) {
+      f.waits.delete(view);
+      wait.reject({
+        code: 'catalog-required',
+        message:
+          'The vault for p has not been refreshed. Refresh and try again.',
+        retryable: true,
+        fatal: false,
+        ambiguous: false,
+      });
+    }
+  };
+  const polls = f.polls.length;
+  assert.equal(f.waits.size, 1);
+  // 250, 500, 1000, 2000 and 4000 ms between attempts: five refusals, five
+  // polls issued again.
+  for (let round = 0; round < 5; round++) {
+    refuse();
+    await f.clock.advance(4_300);
+  }
+  assert.equal(f.polls.length, polls + 5);
+  assert.equal(f.waits.size, 1);
+  // The sixth refusal backs the account off by eight seconds.
+  refuse();
+  await f.clock.advance(300);
+  assert.equal(f.waits.size, 0);
+  assert.equal(f.polls.length, polls + 5);
+  f.service.updateStores(f.snapshot);
+  await f.clock.advance(300);
+  assert.equal(f.waits.size, 1);
+  assert.equal(f.polls.length, polls + 6);
+  f.service.stop();
+});
 test('a hidden window suspends the periodic resynchronization', async () => {
   const f = fixture();
   await f.clock.advance(500);
