@@ -68,7 +68,8 @@ export interface SettingsScreenProps {
   location: Extract<Location, { kind: 'settings' }>;
   scene: string;
   onNavigate: (location: Location, options?: NavigateOptions) => void;
-  onRefresh: (message: string) => Promise<void>;
+  /** Refreshes data after a mutation, optionally scoped to a specific server profile. */
+  onRefresh: (message: string, profile?: string) => Promise<void>;
   onRefreshSnapshot: () => Promise<AgentSnapshot>;
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;

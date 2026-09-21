@@ -117,9 +117,9 @@ test('an expiring open vault conceals details while a healthy neighbor stays usa
     assert.equal(rendered.queryByText('foks_team_token_7f31ac09'), null);
     assert.ok(rendered.getAllByText('Check-in expired').length > 0);
   });
-  // The rail does not list stores; the healthy neighbour is a row on Files,
-  // which the topbar's back chevron returns to.
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Back' }));
+  // Return to the Files root, where the healthy neighbour remains an
+  // available row. The expanded rail intentionally has no Back button.
+  await ui.act(async () => locations.navigate({ kind: 'all' }));
   const personal = await ui.waitFor(() => {
     const row = (rendered.getAllByRole('button') as HTMLButtonElement[]).find(
       (button) => button.textContent?.includes('Personal'),

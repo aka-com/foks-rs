@@ -268,6 +268,30 @@ fn root_and_profile_loads_retire_each_other_without_retiring_siblings() {
 }
 
 #[test]
+fn a_local_alias_reservation_leaves_the_catalog_load_running() {
+    let state = phase_four_state(vec![]);
+    let aliases = state.for_local_aliases().unwrap();
+    // Local alias edits do not modify catalog state, so an in-flight catalog
+    // load remains active and can complete publication.
+    let (root_load, root_token) = state.begin_catalog_load_checked().unwrap();
+    let reservation = aliases.begin_mutation().unwrap();
+    assert!(!root_token.is_cancelled());
+    drop(reservation);
+    assert!(state.publish_catalog(root_load, complete_profile_catalog("a"), |_| {}));
+    // In contrast, profile mutations alter catalog state and must cancel the load.
+    let a = state.for_profile("a").unwrap();
+    let (root_load, root_token) = state.begin_catalog_load_checked().unwrap();
+    let reservation = a.begin_mutation().unwrap();
+    assert!(root_token.is_cancelled());
+    drop(reservation);
+    assert!(
+        !state.publish_catalog(root_load, complete_profile_catalog("a"), |_| panic!(
+            "retired root"
+        ))
+    );
+}
+
+#[test]
 fn denied_expired_and_failed_profile_facts_do_not_authorize_chat() {
     for status in [
         serde_json::json!({"status":"missing"}),

@@ -1936,22 +1936,26 @@ impl AppState {
                     .store(self.next_generation(), Ordering::Release);
             }
         }
+        // Local alias updates only affect local display names and do not modify
+        // catalog data. Therefore, do not cancel ongoing catalog loads (neither
+        // scoped nor root). Cancelling an in-flight root load would abort an
+        // active boot or reconciliation request, forcing the frontend to restart it.
         if self.scope != MutationScope::LocalAliases {
             self.retire_catalog_load();
-        }
-        if self.scope != MutationScope::Root {
-            if let Some(token) = self
-                .root
-                .load
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take()
-            {
-                token.cancel();
+            if self.scope != MutationScope::Root {
+                if let Some(token) = self
+                    .root
+                    .load
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                {
+                    token.cancel();
+                }
+                self.root
+                    .load_generation
+                    .store(self.next_generation(), Ordering::Release);
             }
-            self.root
-                .load_generation
-                .store(self.next_generation(), Ordering::Release);
         }
         Ok(MutationGuard(Arc::clone(&self.mutation_in_flight)))
     }

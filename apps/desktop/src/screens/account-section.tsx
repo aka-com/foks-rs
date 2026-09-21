@@ -332,7 +332,11 @@ export interface AccountSectionProps {
    * may answer for.
    */
   onNavigate: (location: Location, options?: NavigateOptions) => void;
-  onRefresh: (message: string) => Promise<void>;
+  /**
+   * Refreshes data after a mutation. When a profile is specified, only that
+   * server profile is reloaded instead of refreshing the full catalog.
+   */
+  onRefresh: (message: string, profile?: string) => Promise<void>;
   onRefreshSnapshot: () => Promise<AgentSnapshot>;
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
@@ -547,14 +551,20 @@ export function AccountSection({
         <GoProfileConnectSheet
           bridge={bridge}
           existingProfile={pairingProfile}
-          onAdded={async () => {
+          onAdded={async (profile) => {
             setSheet(null);
-            await onRefresh('Server connected. Pair an account to continue.');
+            await onRefresh(
+              'Server connected. Pair an account to continue.',
+              profile,
+            );
           }}
           onClose={() => setSheet(null)}
-          onConnected={async (_profile, alias) => {
+          onConnected={async (profile, alias) => {
             setSheet(null);
-            await onRefresh(`Connected account "${alias}" from FOKS CLI`);
+            await onRefresh(
+              `Connected account "${alias}" from FOKS CLI`,
+              profile,
+            );
           }}
           onError={(error) => void onMutationError(error)}
         />
@@ -570,8 +580,10 @@ export function AccountSection({
             onClose: () => setSheet(null),
           }}
           onComplete={async () => {
-            await onRefresh('Local alias updated');
+            // Close the sheet immediately after saving without waiting for the
+            // background catalog refresh to prevent blocking user navigation.
             setSheet(null);
+            await onRefresh('Local alias updated', selected.server);
           }}
         />
       ) : null}
@@ -584,7 +596,7 @@ export function AccountSection({
             title: 'Change username',
             onClose: () => setSheet(null),
           }}
-          onComplete={() => onRefresh('Username updated')}
+          onComplete={() => onRefresh('Username updated', selected.server)}
         />
       ) : null}
       {selected && sheet === 'passphrase' ? (
@@ -594,7 +606,9 @@ export function AccountSection({
           onClose={() => setSheet(null)}
           onDone={(message) => {
             setSheet(null);
-            void onRefresh(message).catch((error) => onMutationError(error));
+            void onRefresh(message, selected.server).catch((error) =>
+              onMutationError(error),
+            );
           }}
           onError={(error) => void onMutationError(error)}
         />
@@ -608,7 +622,7 @@ export function AccountSection({
             title: 'Bot accounts',
             onClose: () => setSheet(null),
           }}
-          onComplete={() => onRefresh('Bot account updated')}
+          onComplete={() => onRefresh('Bot account updated', selected.server)}
         />
       ) : null}
       {selected && sheet === 'admin' ? (
@@ -632,7 +646,7 @@ export function AccountSection({
             title: 'Sign in via SSO',
             onClose: () => setSheet(null),
           }}
-          onComplete={() => onRefresh('SSO sign-in verified')}
+          onComplete={() => onRefresh('SSO sign-in verified', selected.server)}
         />
       ) : null}
       {selected && sheet === 'recover' ? (
@@ -642,7 +656,10 @@ export function AccountSection({
           onClose={() => setSheet(null)}
           onDone={async () => {
             setSheet(null);
-            await onRefresh('Recovery submitted successfully.');
+            await onRefresh(
+              'Recovery submitted successfully.',
+              selected.server,
+            );
           }}
           onError={(error) => void onMutationError(error)}
         />
@@ -655,7 +672,10 @@ export function AccountSection({
           onClose={() => setSheet(null)}
           onDone={async () => {
             setSheet(null);
-            await onRefresh('YubiKey account created successfully.');
+            await onRefresh(
+              'YubiKey account created successfully.',
+              selected.server,
+            );
           }}
           onError={(error) => void onMutationError(error)}
         />

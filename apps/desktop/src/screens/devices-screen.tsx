@@ -190,7 +190,11 @@ export interface DevicesScreenProps {
    * may answer for.
    */
   onNavigate: (location: Location, options?: NavigateOptions) => void;
-  onRefresh: (message: string) => Promise<void>;
+  /**
+   * Refreshes data after a mutation. Device operations are scoped to the
+   * selected account's server profile.
+   */
+  onRefresh: (message: string, profile?: string) => Promise<void>;
   onRefreshSnapshot: () => Promise<AgentSnapshot>;
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
@@ -351,7 +355,7 @@ export function DevicesScreen({
           ]
         : [];
     const versions = resources.map((query) => query.getSnapshot().invalidation);
-    const result = await synchronizeApplied(() => onRefresh(message));
+    const result = await synchronizeApplied(() => onRefresh(message, profile));
     if (result.synchronization === 'pending') {
       toasts.show(`${message} Refresh pending.`);
       onError(result.error);

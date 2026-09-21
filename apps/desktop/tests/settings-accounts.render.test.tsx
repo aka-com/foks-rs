@@ -50,13 +50,19 @@ interface PeopleOptions {
   decorate?: (bridge: Bridge) => Bridge;
   /** Collects what the page reports instead of failing the test on it. */
   collectErrors?: boolean;
+  /** Optional callback to pause during post-mutation refresh for testing pending UI states. */
+  holdRefresh?: () => Promise<void>;
 }
 
 async function renderPeople(
   snapshot: AgentSnapshot,
   store: string | undefined = 'acct:personal',
   onNavigate: (location: Location) => void = () => {},
-  { decorate = (bridge) => bridge, collectErrors = false }: PeopleOptions = {},
+  {
+    decorate = (bridge) => bridge,
+    collectErrors = false,
+    holdRefresh,
+  }: PeopleOptions = {},
 ) {
   const { AccountSection } = (await vite.ssrLoadModule(
     '/src/screens/account-section.tsx',
@@ -73,6 +79,8 @@ async function renderPeople(
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   const refreshed: string[] = [];
+  /** Recorded refresh calls formatted as `[message, profile]` tuples. */
+  const readBacks: [string, string | undefined][] = [];
   const reported: unknown[] = [];
   const bridge = decorate(mockBridge(snapshot));
   const controller = new ToastController();
@@ -92,8 +100,10 @@ async function renderPeople(
           },
           panel: { id: 'settings-sections-panel-account', labelledBy: 'tab' },
           onNavigate,
-          onRefresh: async (message: string) => {
+          onRefresh: async (message: string, profile?: string) => {
             refreshed.push(message);
+            readBacks.push([message, profile]);
+            await holdRefresh?.();
           },
           onRefreshSnapshot: async () => {
             refreshed.push('snapshot');
@@ -120,7 +130,7 @@ async function renderPeople(
       await Promise.resolve();
     });
   };
-  return { rendered, refreshed, reported, showAccount };
+  return { rendered, refreshed, readBacks, reported, showAccount };
 }
 
 test('an ungranted device capability does not invent a missing backup key', async () => {
@@ -843,7 +853,7 @@ test('a stale address says the account is no longer available', async () => {
 });
 
 test('organization sign-in survives browser focus and can finish the same flow', async () => {
-  const { rendered } = await renderPeople(await fixture());
+  const { rendered, readBacks } = await renderPeople(await fixture());
   await ui.act(async () => {
     ui.fireEvent.click(
       rendered.getByRole('button', { name: 'Sign in via SSO' }),
@@ -870,6 +880,7 @@ test('organization sign-in survives browser focus and can finish the same flow',
   assert.ok(
     rendered.getByText('Account authentication and service access verified.'),
   );
+  assert.deepEqual(readBacks, [['SSO sign-in verified', 'personal']]);
 });
 
 test('local alias save uses the stable account selector and retains input on failure', async () => {
@@ -909,6 +920,41 @@ test('local alias save uses the stable account selector and retains input on fai
     ['acct:personal', 'Private account'],
   ]);
   assert.deepEqual(refreshed, ['Local alias updated']);
+});
+
+test('local alias closes its sheet before the read back and names one profile', async () => {
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const { rendered, readBacks } = await renderPeople(
+    await fixture(),
+    'acct:personal',
+    () => {},
+    { holdRefresh: () => held },
+  );
+  ui.fireEvent.click(
+    rendered.getByRole('button', { name: 'Change local alias' }),
+  );
+  const dialog = rendered.getByRole('dialog', { name: 'Change local alias' });
+  ui.fireEvent.change(
+    ui.within(dialog).getByRole('textbox', { name: 'Local alias' }),
+    { target: { value: 'Private account' } },
+  );
+  await ui.act(async () => {
+    ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Save' }));
+  });
+  // The sheet should close as soon as the write completes without blocking on
+  // the subsequent background refresh.
+  await ui.waitFor(() => assert.equal(readBacks.length, 1));
+  assert.ok(!rendered.queryByRole('dialog'));
+  // Updating a local alias only refreshes the affected account's server profile
+  // rather than reloading the entire catalog.
+  assert.deepEqual(readBacks, [['Local alias updated', 'personal']]);
+  await ui.act(async () => {
+    release();
+    await held;
+  });
 });
 
 test('local alias appears in account controls while commands keep the original alias', async () => {
