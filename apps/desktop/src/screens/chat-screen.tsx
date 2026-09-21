@@ -24,6 +24,7 @@ import {
 import type { AgentSnapshot, AvailabilityOptions, StoreRef } from '../model';
 import type { Location } from '../location';
 import { useChatConversation } from '../chat/use-chat-conversation';
+import { lastPosition } from '../chat/snapshots';
 import { useChatSends } from '../chat/send-provider';
 import { cancelled } from '../chat/errors';
 import { chatTeams } from './chat-teams';
@@ -333,6 +334,11 @@ export function ChatScreen({
             request={guardedRequest}
             refreshPending={guardedRefreshPending}
             revision={channelRevisions?.get(channel.id) ?? 0}
+            position={
+              activeConversation
+                ? String(lastPosition(activeConversation))
+                : null
+            }
             readThrough={activeConversation?.read_through ?? null}
             markRead={guardedMarkRead}
             history={history(channel.id)}

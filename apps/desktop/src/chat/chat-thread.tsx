@@ -35,6 +35,7 @@ export function ChatThread({
   request,
   refreshPending,
   revision,
+  position = null,
   readThrough,
   markRead,
   acceptHistory,
@@ -73,6 +74,12 @@ export function ChatThread({
   refreshPending: () => Promise<void>;
   revision: number;
   incrementalHistory?: boolean;
+  /**
+   * The newest sequence the inbox last published for this channel, or `null`
+   * when it lists no conversation for it. Gates the incremental tail: a
+   * revision that did not move this asks the agent for nothing.
+   */
+  position?: string | null;
   readThrough: string | null;
   markRead: (channel: string, sequence: string) => Promise<void>;
   acceptHistory: (
@@ -126,6 +133,7 @@ export function ChatThread({
     blockHistory,
     capture,
     incrementalHistory,
+    position,
   );
   const outgoingIds = new Set(
     outgoing.flatMap((m) => (m.operation ? [m.operation.id] : [])),

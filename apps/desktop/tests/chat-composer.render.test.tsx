@@ -655,3 +655,166 @@ test('changing channels ignores the old in-flight page and starts a full load', 
     { action: 'history', channel: 'b', before: null },
   ]);
 });
+
+test('a tail costs one read per arrival, and a revision that moved no position costs none', async () => {
+  const { conversationResult } = (await vite.ssrLoadModule(
+    '/src/chat/conversation-model.ts',
+  )) as typeof import('../src/chat/conversation-model');
+  const { eventFromReply } = (await vite.ssrLoadModule(
+    '/src/chat/conversation-events.ts',
+  )) as typeof import('../src/chat/conversation-events');
+  const channel: ChatChannel = {
+    id: channelId,
+    name: '',
+    description: null,
+    admin: false,
+    readable: true,
+    writable: true,
+    read_role: 'member',
+    write_role: 'member',
+  };
+  const calls: ChatAction[] = [];
+  let rows = [2, 1];
+  let gap = false;
+  let missing: string[] = [];
+  const request = async (action: ChatAction): Promise<ChatReply> => {
+    assert.equal(action.action, 'history');
+    calls.push(action);
+    const selected = rows.filter(
+      (n) =>
+        (action.after === undefined || n > Number(action.after)) &&
+        (action.before === null || n < Number(action.before)),
+    );
+    return {
+      scope: {} as ChatScope,
+      result: {
+        kind: 'history',
+        channel: action.channel,
+        messages: selected.map((n) => ({
+          id: `m${n}`,
+          sequence: String(n),
+          sender: null,
+          send_time: '1',
+          insert_time: '1',
+          content: { kind: 'unsupported' },
+        })),
+        before:
+          selected.length && Math.min(...selected) > 1
+            ? String(Math.min(...selected))
+            : null,
+        missing_predecessors: action.after === undefined ? [] : missing,
+        ...(action.after === undefined ? {} : { gap }),
+      },
+    };
+  };
+  let current!: ReturnType<typeof HistoryHook>;
+  function History({
+    revision,
+    position,
+  }: {
+    revision: number;
+    position: string | null;
+  }) {
+    const [held, setHeld] = useState<
+      import('../src/chat/conversation-model').HistoryWindow | null
+    >(null);
+    const accept = useCallback(
+      (
+        page: Extract<
+          import('../src/chat-contract').ChatResult,
+          { kind: 'history' }
+        >,
+        before: string | null,
+        replace?: boolean,
+      ) => {
+        setHeld(
+          (previous) =>
+            conversationResult(
+              { operations: [], history: replace ? null : previous },
+              eventFromReply(
+                { action: 'history', channel: channelId, before },
+                page,
+              ),
+            ).history,
+        );
+      },
+      [],
+    );
+    current = useChatHistory(
+      channel,
+      request,
+      revision,
+      accept,
+      held,
+      undefined,
+      undefined,
+      true,
+      position,
+    );
+    return null;
+  }
+  const view = ui.render(
+    createElement(History, { revision: 0, position: '2' }),
+  );
+  await ui.waitFor(() => assert.equal(current.messages.length, 2));
+  assert.equal(calls.length, 1);
+  // A read on another device advances the read pointer and drops the unread
+  // count by the same amount, so the published position stands still.
+  view.rerender(createElement(History, { revision: 1, position: '2' }));
+  await ui.waitFor(() => assert.equal(current.busy, false));
+  assert.equal(calls.length, 1);
+  // One arrival costs one tail read holding one row, not a page of fifty.
+  rows = [3, 2, 1];
+  view.rerender(createElement(History, { revision: 2, position: '3' }));
+  await ui.waitFor(() => assert.equal(current.messages.length, 3));
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.at(-1), {
+    action: 'history',
+    channel: channelId,
+    before: null,
+    after: '2',
+  });
+  assert.equal(current.before, null);
+  assert.equal(current.missing, false);
+  // A predecessor the tail could not verify is incomplete evidence, and the
+  // conversation says so rather than presenting the row as checked.
+  rows = [4, 3, 2, 1];
+  missing = ['3'];
+  view.rerender(createElement(History, { revision: 3, position: '4' }));
+  await ui.waitFor(() => assert.equal(current.messages.length, 4));
+  assert.equal(current.missing, true);
+  missing = [];
+  // A tail that cannot cover the distance reports a gap, and the fallback
+  // full page is not itself gated by the position it is recovering from.
+  rows = [100, 99];
+  gap = true;
+  view.rerender(createElement(History, { revision: 4, position: '100' }));
+  await ui.waitFor(() =>
+    assert.deepEqual(
+      current.messages.map((m) => m.sequence),
+      ['99', '100'],
+    ),
+  );
+  assert.deepEqual(
+    calls.slice(-2).map((a) => (a.action === 'history' ? a.after : undefined)),
+    ['4', undefined],
+  );
+  // An unknown position never withholds a read.
+  gap = false;
+  rows = [101, 100, 99];
+  const issued = calls.length;
+  view.rerender(createElement(History, { revision: 5, position: null }));
+  await ui.waitFor(() =>
+    assert.deepEqual(
+      current.messages.map((m) => m.sequence),
+      ['99', '100', '101'],
+    ),
+  );
+  assert.equal(calls.length - issued, 1);
+  assert.deepEqual(calls.at(-1), {
+    action: 'history',
+    channel: channelId,
+    before: null,
+    after: '100',
+  });
+});

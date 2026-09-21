@@ -17,7 +17,14 @@ export const accountKey = (store: TeamStore): string =>
 export const teamIdentity = (store: TeamStore): string =>
   key([store.server, store.account, store.alias, store.team_id_hex]);
 
-function lastPosition(conversation: ChatConversation): bigint {
+/**
+ * The newest sequence the inbox states this conversation holds: the read
+ * pointer plus what is unread, where a pending local read stands in for a
+ * read pointer it has not overtaken yet. The agent derives the unread count
+ * from the same stored row's last message, so this equals that row's head
+ * and never falls below it.
+ */
+export function lastPosition(conversation: ChatConversation): bigint {
   const read = BigInt(conversation.read_through);
   const pending = BigInt(conversation.pending_read ?? '0');
   return (read > pending ? read : pending) + BigInt(conversation.unread);

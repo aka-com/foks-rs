@@ -27,6 +27,17 @@ export function useChatHistory(
   onFatal?: (channel: string) => void,
   onLoading?: (before: string | null) => void,
   incrementalHistory = false,
+  /**
+   * The channel's newest position as the inbox last published it, or `null`
+   * when no conversation row states one. A revision moves for reasons other
+   * than arriving content — a conservative degraded projection, a read
+   * authority change, a preview whose message was rewritten — and a read on
+   * another device leaves the position where it was. The tail is gated on
+   * this having passed the held window, so those revisions cost no round
+   * trip. Any increase publishes a new revision with it, so a gated
+   * revision cannot hide one.
+   */
+  position: string | null = null,
 ) {
   const accepted = history?.channel === channel.id ? history : null;
   const messages = accepted?.messages ?? EMPTY_MESSAGES;
@@ -50,6 +61,13 @@ export function useChatHistory(
   const generation = useRef(0);
   const latest = useRef(accepted);
   latest.current = accepted;
+  // Read through a ref: a position in the load's dependencies would rebuild
+  // the callback, and the mount effect depends on it, so every unread count
+  // would reopen the thread with a full page.
+  // Named apart from the page-local `head` computed below, which is the
+  // newest sequence a reply carried rather than the one the inbox published.
+  const publishedHead = useRef(position);
+  publishedHead.current = position;
   const load = useCallback(
     async (older: string | null = null, incremental = false) => {
       if (reading.current) {
@@ -65,6 +83,15 @@ export function useChatHistory(
         latest.current?.channel === channel.id
           ? latest.current.messages.at(-1)?.sequence
           : undefined;
+      // Nothing sits beyond the held window: the revision that asked for this
+      // read moved for something other than an arrival. A tail would ask the
+      // server for rows after its own newest sequence and be told none exist.
+      if (
+        after !== undefined &&
+        publishedHead.current !== null &&
+        BigInt(publishedHead.current) <= BigInt(after)
+      )
+        return;
       reading.current = true;
       setBusy(true);
       setError(null);
