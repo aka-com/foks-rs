@@ -494,3 +494,277 @@ fn realtime_timeout_closes_stream_and_rejects_subsequent_calls() {
         Err(Error::PinnedService("realtime"))
     ));
 }
+
+/// Serves `responses` on one connection and hands back every request frame it
+/// read, so a test can count round trips and inspect what was actually asked.
+fn spawn_recording_server(
+    listener: TcpListener,
+    config: Arc<rustls::ServerConfig>,
+    responses: Vec<Vec<u8>>,
+) -> thread::JoinHandle<Vec<Vec<u8>>> {
+    thread::spawn(move || {
+        let (tcp, _) = listener.accept().unwrap();
+        let connection = rustls::ServerConnection::new(config).unwrap();
+        let mut tls = rustls::StreamOwned::new(connection, tcp);
+        let mut requests = Vec::new();
+        for response in responses {
+            requests.push(read_frame(&mut tls, DEFAULT_MAX_FRAME_LENGTH).unwrap());
+            tls.write_all(&response).unwrap();
+            tls.flush().unwrap();
+        }
+        requests
+    })
+}
+
+struct MarkerFixture {
+    pki: TestPki,
+    directory: tempfile::TempDir,
+    advance: foks_verify::VerifiedMerkleAdvance,
+    head: foks_verify::VerifiedUserState,
+    absence: Vec<foks_proto::MerklePathCompressed>,
+}
+
+/// The pinned v0.1.9 user chain, its authenticated epoch-998 advance, and the
+/// two terminal absence proofs its own response carries: the link past the head
+/// and the username sequence past the head. Those are exactly the paths an
+/// honest server returns for the two change-marker keys.
+fn marker_fixture() -> MarkerFixture {
+    let pki = test_pki();
+    let directory = tempfile::tempdir().unwrap();
+    let public = verify_public_host("foks.app", PROBE).unwrap();
+    HardStateStore::open(&directory.path().join("hard.sqlite3"))
+        .unwrap()
+        .accept_verified_host(&public.snapshot)
+        .unwrap();
+    let advance = foks_verify::verify_merkle_advance(
+        public.snapshot.merkle_root(),
+        &fixture("merkle-root-998.snowp"),
+        &fixture("merkle-historical-response.snowp"),
+        &foks_proto::HostchainTail {
+            seqno: public.snapshot.chain_seqno(),
+            hash: public.snapshot.chain_tail_hash(),
+        },
+    )
+    .unwrap();
+    let chain_bytes = fixture("user-chain.snowp");
+    let chain = foks_proto::UserChain::decode(&chain_bytes).unwrap();
+    let uid = entity("uid.snowp");
+    let host_id = chain.links[0].decode_eldest().unwrap().host;
+    let head = foks_verify::verify_non_self_user_chain(
+        &chain_bytes,
+        &uid,
+        &host_id,
+        advance.authenticated_roots(),
+        &advance,
+    )
+    .unwrap();
+    let names = usize::try_from(chain.num_username_links).unwrap();
+    let absence = vec![
+        chain.merkle.paths().last().unwrap().clone(),
+        chain.merkle.paths()[names - 1].clone(),
+    ];
+    MarkerFixture {
+        pki,
+        directory,
+        advance,
+        head,
+        absence,
+    }
+}
+
+fn marker_host(marker: &MarkerFixture, merkle: &TcpListener) -> PinnedHost {
+    let database = marker.directory.path().join("hard.sqlite3");
+    let client = FoksClient::webpki();
+    let mut host = client.pinned_host("foks.app", &database).unwrap();
+    host.merkle_query = ProbeTarget::parse(&format!(
+        "localhost:{}",
+        merkle.local_addr().unwrap().port()
+    ))
+    .unwrap();
+    host.tls_ca_certificates = vec![marker.pki.server_ca.clone()];
+    host
+}
+
+fn multi_lookup_response(
+    root: &foks_proto::MerkleRoot,
+    paths: Vec<foks_proto::MerklePathCompressed>,
+    sequence: u64,
+) -> Vec<u8> {
+    encode_success_response_at(
+        &foks_proto::MerkleMultiLookupResponse {
+            root: root.clone(),
+            paths,
+        }
+        .encoded()
+        .unwrap(),
+        sequence,
+    )
+    .unwrap()
+}
+
+/// A no-op pass over a roster costs exactly one batched lookup, whatever the
+/// roster size. Before the marker each member cost two: `advance_merkle_root`
+/// on the Merkle service and the chain load on the user service, both inside
+/// `load_and_pin_other_local_user_with_material`. Three members therefore go
+/// from six requests to one, and no user-service connection is opened at all.
+#[test]
+fn a_no_op_refresh_pass_costs_one_batched_merkle_round_trip() {
+    const MEMBERS: usize = 3;
+    let marker = marker_fixture();
+    let merkle = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let user = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    user.set_nonblocking(true).unwrap();
+    let host = marker_host(&marker, &merkle);
+
+    // The fixture supplies one user chain, so the roster's pinned tails repeat.
+    // What is under test is the request count and the batching, not the keys.
+    let pinned = vec![marker.head.clone(); MEMBERS];
+    let paths = marker
+        .absence
+        .iter()
+        .cloned()
+        .cycle()
+        .take(MEMBERS * 2)
+        .collect::<Vec<_>>();
+    let server = spawn_recording_server(
+        merkle,
+        Arc::clone(&marker.pki.unauthenticated_server),
+        vec![
+            fixture("merkle-select-vhost-response.frame"),
+            multi_lookup_response(marker.advance.root(), paths, 1),
+        ],
+    );
+
+    let mut client = FoksClient::with_roots(rustls::RootCertStore::empty());
+    client.set_timeout(Duration::from_secs(5));
+    let marks = client
+        .probe_user_chain_tails(&host, &marker.advance, &pinned)
+        .unwrap();
+    assert_eq!(marks, vec![foks_verify::UserChainTail::Unchanged; MEMBERS]);
+
+    let requests = server.join().unwrap();
+    // One vhost selection on the cold connection, then one lookup covering the
+    // whole roster. The selection is per connection, not per member.
+    assert_eq!(requests.len(), 2);
+    let call = foks_rpc::decode_call(&requests[1]).unwrap();
+    let lookup = foks_rpc::arguments::decode_merkle_multi_lookup(call.argument()).unwrap();
+    assert_eq!(lookup.keys.len(), MEMBERS * 2);
+    assert_eq!(lookup.root, Some(marker.advance.root().epoch));
+    assert!(!lookup.signed);
+    assert!(
+        user.accept().is_err(),
+        "a proved-unchanged pass loads no chains"
+    );
+}
+
+/// Section 11's first risk. The lookup names the pass's epoch, but the server
+/// chooses what it answers with, so an absence proof is only evidence once the
+/// returned root is checked back against the root this pass authenticated.
+/// Epoch 997 is a root this client has independently authenticated and at which
+/// the probed keys really were absent; answering there instead of at 998 is
+/// exactly how a server would forge an absence for a chain that has since
+/// moved, and it must be refused rather than read as "unchanged".
+#[test]
+fn a_forged_absence_under_another_authenticated_root_is_refused() {
+    let marker = marker_fixture();
+    let merkle = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let host = marker_host(&marker, &merkle);
+    let pinned = vec![marker.head.clone()];
+
+    let stale = foks_proto::MerkleRoot::decode(&fixture("merkle-root-997.snowp")).unwrap();
+    assert_ne!(stale.epoch, marker.advance.root().epoch);
+    assert!(
+        marker
+            .advance
+            .authenticated_roots()
+            .contains_epoch(stale.epoch),
+        "the stale root is one this client authenticated, and is still refused"
+    );
+    let mut substituted = marker.advance.root().clone();
+    substituted.root_node[0] ^= 1;
+
+    let server = spawn_recording_server(
+        merkle,
+        Arc::clone(&marker.pki.unauthenticated_server),
+        vec![
+            fixture("merkle-select-vhost-response.frame"),
+            multi_lookup_response(&stale, marker.absence.clone(), 1),
+            multi_lookup_response(&substituted, marker.absence.clone(), 2),
+            multi_lookup_response(marker.advance.root(), marker.absence.clone(), 3),
+        ],
+    );
+
+    let mut client = FoksClient::with_roots(rustls::RootCertStore::empty());
+    client.set_timeout(Duration::from_secs(5));
+
+    // A stale but genuinely authenticated root, carrying proofs that verify
+    // under the epoch the server picked, is not evidence about this epoch.
+    assert!(matches!(
+        client.probe_user_chain_tails(&host, &marker.advance, &pinned),
+        Err(Error::UserBinding(
+            "Merkle change-marker lookup returned an unauthenticated root"
+        ))
+    ));
+    // Nor is a root that claims this pass's epoch but is not this pass's root,
+    // so the binding is to the whole root and not merely to its epoch number.
+    assert!(matches!(
+        client.probe_user_chain_tails(&host, &marker.advance, &pinned),
+        Err(Error::UserBinding(
+            "Merkle change-marker lookup returned an unauthenticated root"
+        ))
+    ));
+    // The same proofs under the pass's own root are accepted, so the refusals
+    // above are about the root and not about the paths.
+    assert_eq!(
+        client
+            .probe_user_chain_tails(&host, &marker.advance, &pinned)
+            .unwrap(),
+        vec![foks_verify::UserChainTail::Unchanged]
+    );
+    server.join().unwrap();
+}
+
+/// A tail location the caller cannot justify must fall back to a full load
+/// rather than being probed at a key derived from something else: a pinned
+/// state newer than the pass's own epoch says nothing about that epoch, and a
+/// server answering fewer paths than keys is not answering the question asked.
+#[test]
+fn an_unusable_tail_falls_back_to_a_full_load() {
+    let marker = marker_fixture();
+    let merkle = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let host = marker_host(&marker, &merkle);
+    let server = spawn_recording_server(
+        merkle,
+        Arc::clone(&marker.pki.unauthenticated_server),
+        vec![
+            fixture("merkle-select-vhost-response.frame"),
+            multi_lookup_response(marker.advance.root(), marker.absence[..1].to_vec(), 1),
+        ],
+    );
+    let mut client = FoksClient::with_roots(rustls::RootCertStore::empty());
+    client.set_timeout(Duration::from_secs(5));
+    assert!(matches!(
+        client.probe_user_chain_tails(&host, &marker.advance, std::slice::from_ref(&marker.head)),
+        Err(Error::UserBinding(
+            "Merkle change-marker lookup returned the wrong number of paths"
+        ))
+    ));
+    server.join().unwrap();
+
+    // No pinned tail at all, and a tail pinned past this pass's epoch, are both
+    // reported as "load" without a key ever being derived for them.
+    let database = marker.directory.path().join("hard.sqlite3");
+    let offline = FoksClient::webpki();
+    let offline_host = offline.pinned_host("foks.app", &database).unwrap();
+    assert_eq!(
+        offline
+            .probe_pinned_user_chains(&offline_host, &marker.advance, &[entity("uid.snowp")])
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(offline
+        .probe_pinned_user_chains(&offline_host, &marker.advance, &[entity("uid.snowp")])
+        .unwrap()[0]
+        .is_none());
+}

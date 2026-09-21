@@ -1555,6 +1555,79 @@ pub(crate) fn find_hepk(hepks: &[Hepk], fingerprint: [u8; 32]) -> Result<Hepk> {
     Err(Error::MissingHepk)
 }
 
+/// Whether a pinned user-chain tail is still the chain head.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UserChainTail {
+    /// The link one past the pinned tail is provably absent under the root the
+    /// path was verified against, so the pinned state is still the head.
+    Unchanged,
+    /// Absence was not proved. The chain may have advanced, or the server may
+    /// have answered with something that is not an absence proof at all; in
+    /// either case the caller must load and fully verify the chain.
+    Advanced,
+}
+
+/// Merkle key of the link one past a verified user-chain tail.
+///
+/// This is the same key [`verify_user_chain`] proves absent before it accepts a
+/// response as terminal, and it is derived from already-verified state alone:
+/// the tail sequence number and the tree location the tail link commits to
+/// through `next_location_commitment`. Because an honest server must publish
+/// link `seqno + 1` under exactly this key -- any other placement fails the
+/// increment verifier -- absence of this key under an authenticated root is
+/// proof that the pinned state is still the head at that root's epoch.
+pub fn user_chain_next_link_key(pinned: &VerifiedUserState) -> Result<[u8; 32]> {
+    let next = pinned
+        .chain_seqno
+        .checked_add(1)
+        .ok_or(Error::UserChainContinuity)?;
+    user_merkle_key(&pinned.uid, next, Some(&pinned.next_tree_location))
+}
+
+/// Merkle key of the username claim one past a verified user-chain tail.
+///
+/// This is the second absence proof [`verify_user_chain`] demands before it
+/// accepts a response: it fixes the disclosed username's ownership sequence, so
+/// a rename by this user -- or a takeover of the name by another -- makes the
+/// key present. Probing it alongside [`user_chain_next_link_key`] is what makes
+/// a proved-unchanged pinned state equivalent to a fresh load rather than only
+/// equivalent in its chain links.
+pub fn user_chain_next_username_key(pinned: &VerifiedUserState) -> Result<[u8; 32]> {
+    let next = pinned
+        .username_sequence
+        .checked_add(1)
+        .ok_or(Error::UserDisclosure)?;
+    username_merkle_key(&pinned.username, &pinned.host, next)
+}
+
+/// Classifies one Merkle path returned for [`user_chain_next_link_key`] or
+/// [`user_chain_next_username_key`].
+///
+/// `expected_root_node` must come from a root the caller has already
+/// authenticated against the host chain; this performs no root authentication
+/// of its own, and an unauthenticated root makes the result meaningless. Only a
+/// path that verifies as an absence proof for `key` under that root yields
+/// [`UserChainTail::Unchanged`]; a leaf at `key`, a truncated path, a path
+/// under another root and anything malformed yield [`UserChainTail::Advanced`],
+/// so a server can at worst force the caller to do the chain load it would have
+/// done anyway.
+///
+/// Which query a path was minted for does not matter. The path's prefixes and
+/// branches are replayed from `key`'s own bits, so a path that reconstructs the
+/// root at all is proof about `key` and nothing else. Soundness therefore rests
+/// on `key` being derived locally and on `expected_root_node` being
+/// authenticated, not on trusting the response to answer the question asked.
+pub fn classify_user_chain_tail(
+    path: &foks_proto::MerklePathCompressed,
+    key: &[u8; 32],
+    expected_root_node: &[u8; 32],
+) -> UserChainTail {
+    match verify_merkle_path(path, key, None, expected_root_node) {
+        Ok(()) => UserChainTail::Unchanged,
+        Err(_) => UserChainTail::Advanced,
+    }
+}
+
 fn user_merkle_key(uid: &EntityId, seqno: u64, location: Option<&[u8; 32]>) -> Result<[u8; 32]> {
     chain_merkle_key(0, uid, seqno, location)
 }
@@ -1749,5 +1822,276 @@ mod account_normalization_tests {
                 "{input}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod change_marker_tests {
+    use super::*;
+    use crate::{verify_merkle_advance, verify_public_host};
+    use foks_proto::{MerklePathCompressed, MerkleTerminal};
+
+    const PROBE: &[u8] = include_bytes!(
+        "../../foks-snowpack/tests/fixtures/foks-v0.1.9/foks.app/probe-response.snowp"
+    );
+    const USER_CHAIN: &[u8] =
+        include_bytes!("../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/user-chain.snowp");
+    const USER_ROOT: &[u8] =
+        include_bytes!("../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/merkle-root-998.snowp");
+    const USER_HISTORY: &[u8] = include_bytes!(
+        "../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/merkle-historical-response.snowp"
+    );
+    const UID: &[u8] =
+        include_bytes!("../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/uid.snowp");
+
+    /// The pinned fixture chain is exactly the case section 11 warns about: its
+    /// third link revokes the device the second link provisioned and rotates
+    /// the owner PUK to generation 2, all on the member's own user chain.
+    struct Fixture {
+        chain: UserChain,
+        uid: EntityId,
+        host: EntityId,
+        head: VerifiedUserState,
+        root_node: [u8; 32],
+    }
+
+    fn fixture() -> Fixture {
+        let chain = UserChain::decode(USER_CHAIN).unwrap();
+        let Value::Binary(uid) = foks_snowpack::decode(UID).unwrap() else {
+            panic!("uid fixture is not binary");
+        };
+        let uid = EntityId::from_bytes(uid).unwrap();
+        let host = chain.links[0].decode_eldest().unwrap().host;
+        let public = verify_public_host("foks.app", PROBE).unwrap();
+        let advance = verify_merkle_advance(
+            public.snapshot.merkle_root(),
+            USER_ROOT,
+            USER_HISTORY,
+            &foks_proto::HostchainTail {
+                seqno: public.snapshot.chain_seqno,
+                hash: public.snapshot.chain_tail_hash,
+            },
+        )
+        .unwrap();
+        let head = verify_user_chain(
+            USER_CHAIN,
+            &uid,
+            &host,
+            advance.authenticated_roots(),
+            &advance,
+        )
+        .unwrap();
+        let root_node = chain.merkle.root().root_node;
+        Fixture {
+            chain,
+            uid,
+            host,
+            head,
+            root_node,
+        }
+    }
+
+    /// Replays the fixture chain up to `links` and projects the state a team
+    /// roster would have frozen at that point.
+    fn tail_at(fixture: &Fixture, links: usize) -> VerifiedUserState {
+        let chain = &fixture.chain;
+        let eldest = chain.links[0].decode_eldest().unwrap();
+        let mut replay = UserReplayState::from_eldest(
+            VerifiedDevice {
+                id: eldest.member.clone(),
+                role: Role::OWNER,
+                hepk: find_hepk(&chain.hepks, eldest.member_hepk_fingerprint).unwrap(),
+                subkey: eldest.member_subkey.clone(),
+            },
+            VerifiedSharedKey {
+                role: Role::OWNER,
+                generation: 1,
+                verify_key: eldest.puk_verify_key.clone(),
+                hepk: find_hepk(&chain.hepks, eldest.puk_hepk_fingerprint).unwrap(),
+            },
+        );
+        for link in &chain.links[1..links] {
+            let change = link.decode_group_change().unwrap();
+            replay
+                .replay(link, &change, &chain.hepks, &fixture.host)
+                .unwrap();
+        }
+        let (devices, shared_keys, shared_key_history, stale_shared_key_roles) =
+            replay.into_parts();
+        VerifiedUserState {
+            uid: fixture.uid.clone(),
+            host: fixture.host.clone(),
+            chain_tail_hash: prefixed_hash(
+                LINK_OUTER_TYPE_ID,
+                &chain.links[links - 1].encoded().unwrap(),
+            )
+            .unwrap(),
+            merkle_root_hash: fixture.head.merkle_root_hash,
+            merkle_epoch: fixture.head.merkle_epoch,
+            merkle_root_bytes: fixture.head.merkle_root_bytes.clone(),
+            authenticated_chain_bytes: authenticated_user_chain_bytes(&chain.links[..links])
+                .unwrap(),
+            evidence_bytes: USER_CHAIN.to_vec(),
+            chain_seqno: u64::try_from(links).unwrap(),
+            next_tree_location: chain.locations[links - 1],
+            username: fixture.head.username.clone(),
+            username_utf8: fixture.head.username_utf8.clone(),
+            username_sequence: fixture.head.username_sequence,
+            device_display_names: fixture.head.device_display_names.clone(),
+            devices,
+            shared_keys,
+            shared_key_history,
+            stale_shared_key_roles,
+        }
+    }
+
+    /// Inclusion path for the link at `sequence`, as the response carries it.
+    fn link_path(fixture: &Fixture, sequence: usize) -> &MerklePathCompressed {
+        let offset = usize::try_from(fixture.chain.num_username_links).unwrap();
+        &fixture.chain.merkle.paths()[offset + sequence - 1]
+    }
+
+    /// The response-wide terminal absence proof for the link past the head.
+    fn head_absence(fixture: &Fixture) -> &MerklePathCompressed {
+        fixture.chain.merkle.paths().last().unwrap()
+    }
+
+    /// The terminal absence proof for the head's username sequence.
+    fn username_absence(fixture: &Fixture) -> &MerklePathCompressed {
+        let offset = usize::try_from(fixture.chain.num_username_links).unwrap();
+        &fixture.chain.merkle.paths()[offset - 1]
+    }
+
+    /// Section 11's first named risk in reverse: the marker must not report a
+    /// member unchanged when that member revoked a device, because the refresh
+    /// pass decides to rotate by comparing the member's live shared-key
+    /// generation against the one frozen in the team roster, and a revocation
+    /// advances the user chain while the team chain stays put.
+    #[test]
+    fn revoking_a_device_advances_the_marker_and_still_plans_a_key_rotation() {
+        let fixture = fixture();
+        let frozen = tail_at(&fixture, 2);
+
+        // What a roster froze when this member was added, and what the pass
+        // would still see if the marker wrongly reported "unchanged".
+        let roster_generation = frozen.shared_key(Role::OWNER).unwrap().generation;
+        assert_eq!(roster_generation, 1);
+        assert!(
+            frozen.shared_key(Role::OWNER).unwrap().generation <= roster_generation,
+            "reusing the frozen state plans no rotation, which is the failure to avoid"
+        );
+
+        // The revocation is only observable on the user chain: the next link
+        // key derived from the frozen tail is present, not absent.
+        let key = user_chain_next_link_key(&frozen).unwrap();
+        assert_eq!(
+            user_merkle_key(&fixture.uid, 3, Some(&fixture.chain.locations[1])).unwrap(),
+            key
+        );
+        assert_eq!(
+            classify_user_chain_tail(link_path(&fixture, 3), &key, &fixture.root_node),
+            UserChainTail::Advanced
+        );
+
+        // So the pass loads, and the loaded state does plan a rotation.
+        let live = fixture.head.shared_key(Role::OWNER).unwrap().generation;
+        assert_eq!(live, 2);
+        assert!(live > roster_generation);
+        assert!(fixture.head.devices().iter().all(|device| device.id
+            != fixture.chain.links[1]
+                .decode_group_change()
+                .unwrap()
+                .changes[0]
+                .entity));
+
+        // The head itself is genuinely unchanged, so a later no-op pass still
+        // short-circuits.
+        let head_key = user_chain_next_link_key(&fixture.head).unwrap();
+        assert_eq!(
+            classify_user_chain_tail(head_absence(&fixture), &head_key, &fixture.root_node),
+            UserChainTail::Unchanged
+        );
+        let name_key = user_chain_next_username_key(&fixture.head).unwrap();
+        assert_eq!(
+            classify_user_chain_tail(username_absence(&fixture), &name_key, &fixture.root_node),
+            UserChainTail::Unchanged
+        );
+    }
+
+    /// Nothing short of an absence proof for the exact locally derived key,
+    /// under the exact root node the caller authenticated, may be read as
+    /// "unchanged". Each case here is a proof the server can produce honestly
+    /// in some other context and replay here.
+    #[test]
+    fn a_forged_absence_is_refused() {
+        let fixture = fixture();
+        let head_key = user_chain_next_link_key(&fixture.head).unwrap();
+        let frozen_key = user_chain_next_link_key(&tail_at(&fixture, 2)).unwrap();
+
+        // Control: the genuine proof for the genuine key does say unchanged.
+        assert_eq!(
+            classify_user_chain_tail(head_absence(&fixture), &head_key, &fixture.root_node),
+            UserChainTail::Unchanged
+        );
+
+        // The attack this marker has to survive: replay an absence proof to
+        // claim a tail is still current when its next link is in fact present.
+        // The path's edges are replayed against the queried key's own bits, so
+        // no path can verify as absence for a key the tree holds. (A path that
+        // does verify for a key genuinely proves that key absent, whatever
+        // query it was minted for; soundness rests on deriving the key locally
+        // and on the root, not on which query produced the path.)
+        assert_eq!(
+            classify_user_chain_tail(head_absence(&fixture), &frozen_key, &fixture.root_node),
+            UserChainTail::Advanced
+        );
+        assert_eq!(
+            classify_user_chain_tail(username_absence(&fixture), &frozen_key, &fixture.root_node),
+            UserChainTail::Advanced
+        );
+
+        // A leaf terminal relabelled to claim it stands for the queried key is
+        // no longer an absence proof at all.
+        let MerkleTerminal::Leaf { leaf, found_key } = head_absence(&fixture).terminal else {
+            panic!("fixture terminal is a leaf");
+        };
+        assert!(found_key.is_some_and(|found| found != head_key));
+        let mut relabelled = head_absence(&fixture).clone();
+        relabelled.terminal = MerkleTerminal::Leaf {
+            leaf,
+            found_key: Some(head_key),
+        };
+        assert_eq!(
+            classify_user_chain_tail(&relabelled, &head_key, &fixture.root_node),
+            UserChainTail::Advanced
+        );
+
+        // Dropping the found key entirely turns it into a presence claim.
+        let mut presence = head_absence(&fixture).clone();
+        presence.terminal = MerkleTerminal::Leaf {
+            leaf,
+            found_key: None,
+        };
+        assert_eq!(
+            classify_user_chain_tail(&presence, &head_key, &fixture.root_node),
+            UserChainTail::Advanced
+        );
+
+        // A proof that does not reconstruct the authenticated root node is
+        // refused even though it is internally well formed.
+        let mut other_root = fixture.root_node;
+        other_root[0] ^= 1;
+        assert_eq!(
+            classify_user_chain_tail(head_absence(&fixture), &head_key, &other_root),
+            UserChainTail::Advanced
+        );
+
+        // Truncating the path so it terminates early cannot be read as absence.
+        let mut truncated = head_absence(&fixture).clone();
+        truncated.edges.pop();
+        assert_eq!(
+            classify_user_chain_tail(&truncated, &head_key, &fixture.root_node),
+            UserChainTail::Advanced
+        );
     }
 }

@@ -2008,9 +2008,16 @@ impl CheckedProfileSession<'_> {
         if actor_member.is_none() {
             return Ok(TeamRefreshAttempt::TryStrongerCredential);
         }
+        // The roster is collected before anything is loaded, so the pass can
+        // ask once, at one authenticated epoch, which members' chains have
+        // moved since they were pinned, rather than loading every member's
+        // chain to find out. The validation below is unchanged and still
+        // refuses a nested or federated party -- now before any load rather
+        // than after the members ahead of it, which is the safer order.
+        let mut pending = Vec::new();
         for member in team.verified.members() {
             let key = team_refresh_party_key(&member.party, member.scoped_host.as_ref());
-            if parties.contains_key(&key) {
+            if parties.contains_key(&key) || pending.iter().any(|(seen, _)| *seen == key) {
                 continue;
             }
             if member.scoped_host.is_some() || member.party.entity_type() != foks_proto::ENTITY_USER
@@ -2023,25 +2030,40 @@ impl CheckedProfileSession<'_> {
                 )
                 .into());
             }
-            {
-                let verified = match credential {
-                    TeamRefreshCredential::Software(credential) => {
-                        self.client.load_and_pin_user_as_local_team(
-                            host,
-                            credential,
-                            &member.party,
-                            &team.view_token,
-                        )?
-                    }
-                    TeamRefreshCredential::Yubi(credential) => {
-                        self.client.load_and_pin_user_as_local_team_yubi(
-                            host,
-                            credential,
-                            &member.party,
-                            &team.view_token,
-                        )?
-                    }
-                };
+            pending.push((key, member.party.clone()));
+        }
+        if !pending.is_empty() {
+            let targets = pending
+                .iter()
+                .map(|(_, party)| party.clone())
+                .collect::<Vec<_>>();
+            let verified = match credential {
+                TeamRefreshCredential::Software(credential) => {
+                    self.client.load_and_pin_users_as_local_team(
+                        host,
+                        credential,
+                        &targets,
+                        &team.view_token,
+                    )?
+                }
+                TeamRefreshCredential::Yubi(credential) => {
+                    self.client.load_and_pin_users_as_local_team_yubi(
+                        host,
+                        credential,
+                        &targets,
+                        &team.view_token,
+                    )?
+                }
+            };
+            // A short result would zip away members without a projection, and
+            // the rotation below reads `parties` as the whole roster.
+            if verified.len() != pending.len() {
+                return Err(foks_client::Error::TeamRequest(
+                    "team refresh loaded fewer roster members than it asked for",
+                )
+                .into());
+            }
+            for ((key, _), verified) in pending.into_iter().zip(verified) {
                 parties.insert(key, TeamRefreshParty::User(verified));
             }
         }
