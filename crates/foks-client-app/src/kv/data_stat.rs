@@ -18,6 +18,18 @@ pub struct DataStatReport {
 }
 
 impl CheckedProfileSession<'_> {
+    /// Reports the authenticated evidence for one addressed path.
+    ///
+    /// Only the directories on `path` are walked, and the final component is
+    /// included so that a directory's own generation is fetched rather than
+    /// looked up in a whole-namespace projection. A non-directory final
+    /// component is not descended into, so a file costs the same walk its
+    /// parent does.
+    ///
+    /// Absence is still decided the way a complete traversal decides it: a
+    /// missing component is missing from the full listing of the directory
+    /// that would hold it. Nothing here reads absence from the rest of the
+    /// store.
     pub fn data_stat(
         &self,
         alias: &str,
@@ -27,7 +39,7 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
     ) -> Result<DataStatReport> {
         let (account, user, team) = self.data_context(alias, team_id, vault)?;
-        let tree = self.data_tree(&account, &user, team.as_ref())?;
+        let tree = self.data_path_tree(&account, &user, team.as_ref(), path, KvPathScope::Entry)?;
         if path == "/" {
             if version.is_some() {
                 return Err(Error::InvalidKvPath("root has no dirent version"));

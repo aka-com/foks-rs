@@ -304,6 +304,56 @@ impl CheckedProfileSession<'_> {
         }
     }
 
+    /// Authenticates only the directories `path` walks through, instead of
+    /// every directory in the store.
+    ///
+    /// Every directory it uses passes the same root verification, dirent and
+    /// node checks as [`Self::data_tree`], and the walk stops exactly where a
+    /// component is absent or unreadable, so the ordinary path helpers report
+    /// the same absent, unreadable and conflicting outcomes against it. The
+    /// capability gate runs before the path is parsed, as it does in
+    /// [`Self::data_tree`].
+    ///
+    /// What it does not carry is the rest of the namespace. A caller may ask
+    /// it whether the addressed path resolves, because the directory that
+    /// would hold each component is listed in full; it may never read that as
+    /// absence anywhere else in the store.
+    pub(super) fn data_path_tree(
+        &self,
+        account: &LoadedAccount,
+        user: &AuthenticatedUserOutcome,
+        team: Option<&AuthenticatedTeamOutcome>,
+        path: &str,
+        scope: KvPathScope,
+    ) -> Result<Vec<KvDirectoryProjection>> {
+        self.profile.require(Capability::Kv)?;
+        let components = match scope {
+            KvPathScope::Parent => parent_components(path)?,
+            KvPathScope::Entry => path_components(path)?,
+        };
+        let host = self.pinned_host()?;
+        match team {
+            Some(team) => Ok(self.client.resolve_team_kv_path(
+                &host,
+                &account.credential,
+                team,
+                &self.paths.soft_database,
+                &components,
+            )?),
+            None => Ok(self.client.resolve_user_kv_path(
+                &host,
+                &account.credential,
+                &user.verified,
+                &user.puks,
+                &self.paths.soft_database,
+                &components,
+            )?),
+        }
+    }
+
+    /// The catalog keeps the complete traversal: it reports every entry in
+    /// the namespace and enforces a whole-namespace entry bound, so a walk
+    /// that observed only one path could not answer it.
     pub fn data_catalog(
         &self,
         alias: &str,
@@ -339,6 +389,12 @@ impl CheckedProfileSession<'_> {
         })
     }
 
+    /// Reports one addressed entry.
+    ///
+    /// Only the directories on `path` are walked. Everything this reports
+    /// comes from the dirent at `path` and the node it names: the entry's
+    /// absence is decided by the complete listing of its own parent, and no
+    /// other directory in the store contributes to the answer.
     pub fn data_entry(
         &self,
         alias: &str,
@@ -348,23 +404,20 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
     ) -> Result<KvReadReport> {
         let (account, user, team) = self.data_context(alias, team_id, vault)?;
-        let tree = self.data_tree(&account, &user, team.as_ref())?;
+        let tree =
+            self.data_path_tree(&account, &user, team.as_ref(), path, KvPathScope::Parent)?;
         let entry = checked_entry(&tree, path, version)?;
         if KvNodeId(entry.node_id).node_type()? == KvNodeType::File {
-            let metadata = flatten_catalog_tree(&tree)?
-                .into_iter()
-                .find(|row| row.path == path)
-                .ok_or(Error::InvalidKvPath("missing file metadata"))?;
-            return Ok(KvReadReport {
-                path: path.to_owned(),
+            // A large file's roles come from the dirent and the node metadata
+            // this walk already authenticated, which is the same pair the
+            // catalog would report for this row. Measuring its size would
+            // cost the whole file, so it stays absent.
+            return read_report_from_fetched(
+                &tree,
+                path,
                 version,
-                node_type: "file".into(),
-                size: None,
-                read_role: metadata.read_role,
-                write_role: metadata.write_role,
-                content: None,
-                symlink_target: None,
-            });
+                foks_client::KvFetchedNode::LargeFile,
+            );
         }
         let host = self.pinned_host()?;
         let node = match team.as_ref() {
@@ -385,6 +438,12 @@ impl CheckedProfileSession<'_> {
         read_report_from_fetched(&tree, path, version, node)
     }
 
+    /// Reads one range of one addressed large file.
+    ///
+    /// A download issues this once per delivered chunk, so the traversal it
+    /// performs is the dominant per-chunk cost. Only the directories on
+    /// `path` are walked; the chunk read itself is authenticated under the
+    /// node the dirent at `path` names.
     #[allow(clippy::too_many_arguments)]
     pub fn data_chunk(
         &self,
@@ -400,7 +459,8 @@ impl CheckedProfileSession<'_> {
             return Err(Error::InvalidKvPath("chunk length exceeds adapter limit"));
         }
         let (account, user, team) = self.data_context(alias, team_id, vault)?;
-        let tree = self.data_tree(&account, &user, team.as_ref())?;
+        let tree =
+            self.data_path_tree(&account, &user, team.as_ref(), path, KvPathScope::Parent)?;
         let entry = checked_entry(&tree, path, version)?;
         let host = self.pinned_host()?;
         let chunk = match team.as_ref() {
@@ -454,6 +514,19 @@ impl CheckedProfileSession<'_> {
             .ok_or(Error::InvalidAccount("usage bytes overflow"))?;
         Ok((files, bytes))
     }
+}
+
+/// How much of an addressed path one scoped walk resolves.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum KvPathScope {
+    /// The directories that contain the entry. That is everything needed to
+    /// decide the entry's presence, version, readability, write role and node
+    /// metadata, because the parent is listed in full.
+    Parent,
+    /// The same, plus the final component's own directory when it names one.
+    /// A final component that is not a directory is never descended into, so
+    /// this costs no more than [`KvPathScope::Parent`] for a file.
+    Entry,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
