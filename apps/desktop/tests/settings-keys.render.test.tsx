@@ -140,7 +140,8 @@ test('one page lists every device, paper key and security key together', async (
 
   // One region, one heading — no more "Computers and security keys", "Paper
   // keys" or "Security keys" sections.
-  assert.ok(rendered.getByRole('region', { name: 'Devices' }));
+  const list = rendered.getByRole('region', { name: 'Devices' });
+  assert.ok(list);
   assert.equal(rendered.queryByText('Computers and security keys'), null);
   assert.equal(rendered.queryByText('Paper keys'), null);
   assert.equal(rendered.queryByText('Security keys'), null);
@@ -194,12 +195,35 @@ test('one page lists every device, paper key and security key together', async (
   );
   assert.equal(rendered.queryByRole('button', { name: 'More…' }), null);
   assert.ok(rendered.getByRole('button', { name: 'Add a device' }));
-  // The recovery action is still reachable, as a quiet link below the list.
-  const recover = rendered.getByRole('button', {
-    name: 'Recover an account with a paper key…',
-  });
-  assert.ok(recover);
-  assert.doesNotMatch(recover.parentElement?.textContent ?? '', /·/);
+  const refreshHardware = ui
+    .within(list)
+    .getByRole('button', { name: 'Refresh hardware keys' });
+  assert.ok(refreshHardware.classList.contains('cap'));
+  assert.equal(
+    [...document.querySelectorAll<HTMLButtonElement>('.path .btn')].some(
+      (button) => button.textContent === 'Refresh hardware keys',
+    ),
+    false,
+  );
+  const rows = list.querySelector('.settings-inset');
+  assert.ok(rows);
+  assert.ok(
+    rows.compareDocumentPosition(refreshHardware) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  );
+  // Account creation and recovery live with the other account workflows.
+  assert.equal(
+    rendered.queryByRole('button', {
+      name: 'Connect an existing account with a paper key',
+    }),
+    null,
+  );
+  assert.equal(
+    rendered.queryByRole('button', {
+      name: 'Create an account on a YubiKey…',
+    }),
+    null,
+  );
 });
 
 /** Open the chooser and continue on the card with this title. */
@@ -289,6 +313,24 @@ test('starting a pairing reveals the phrase with a way to copy it', async () => 
       .hasAttribute('disabled'),
     false,
   );
+
+  ui.fireEvent(window, new Event('blur'));
+  assert.ok(rendered.getByRole('dialog'));
+  assert.equal(rendered.queryByText('cobalt window'), null);
+  assert.ok(rendered.getByRole('button', { name: 'Resume offer' }));
+});
+
+test('losing focus leaves the non-sensitive device chooser open', async () => {
+  const rendered = await renderDevices(await fixture(), {
+    store: 'acct:personal',
+  });
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add a device' }));
+  const chooser = await rendered.findByRole('dialog');
+
+  ui.fireEvent(window, new Event('blur'));
+
+  assert.equal(rendered.getByRole('dialog'), chooser);
+  assert.ok(rendered.getByRole('radiogroup', { name: 'What to add' }));
 });
 
 test('the recovery operations moved to a security key’s own page, each saying when it does not apply', async () => {
@@ -359,11 +401,12 @@ test('a stopped account lists nothing and says why every action is off', async (
   });
   assert.equal(add.hasAttribute('disabled'), true);
   assert.match(add.getAttribute('title') ?? '', /check-in.*expired/i);
-  const recover = rendered.getByRole('button', {
-    name: 'Recover an account with a paper key…',
-  });
-  assert.equal(recover.hasAttribute('disabled'), true);
-  assert.match(recover.getAttribute('title') ?? '', /check-in.*expired/i);
+  assert.equal(
+    rendered.queryByRole('button', {
+      name: 'Connect an existing account with a paper key',
+    }),
+    null,
+  );
 });
 
 test('a Mac with no account says so instead of listing an empty page', async () => {
@@ -1082,22 +1125,24 @@ test('switching accounts drops the last account’s lists and closes an open she
   assert.ok(await rendered.findByText('work key'));
 });
 
-test('a paper key hidden by blur can be recovered once', async () => {
+test('a revealed paper key stays open when the app loses focus', async () => {
   const { rendered, dialog, committed } = await paperKey();
   const words = dialog.querySelector('.words')?.textContent;
   ui.fireEvent(window, new Event('blur'));
-  assert.equal(rendered.queryByRole('dialog'), null);
-  ui.fireEvent.click(
-    rendered.getByRole('button', { name: 'Show the paper key again' }),
-  );
-  const resumed = rendered.getByRole('dialog');
-  assert.equal(resumed.querySelector('.words')?.textContent, words);
-  ui.fireEvent(window, new Event('blur'));
-  assert.equal(rendered.queryByRole('dialog'), null);
-  assert.equal(
-    rendered.queryByRole('button', { name: 'Show the paper key again' }),
-    null,
-  );
+  assert.equal(rendered.getByRole('dialog'), dialog);
+  assert.equal(dialog.querySelector('.words')?.textContent, words);
+
+  Object.defineProperty(document, 'visibilityState', {
+    configurable: true,
+    value: 'hidden',
+  });
+  ui.fireEvent(document, new Event('visibilitychange'));
+  Object.defineProperty(document, 'visibilityState', {
+    configurable: true,
+    value: 'visible',
+  });
+  assert.equal(rendered.getByRole('dialog'), dialog);
+  assert.equal(dialog.querySelector('.words')?.textContent, words);
   assert.deepEqual(committed, []);
 });
 
@@ -1122,7 +1167,7 @@ test('PIN status on a key’s own page acts on that key, not on card or list ord
     }),
   });
   ui.fireEvent.click(
-    rendered.getByRole('button', { name: 'Refresh security keys' }),
+    rendered.getByRole('button', { name: 'Refresh hardware keys' }),
   );
   const pinStatus = await rendered.findByRole('button', {
     name: 'PIN status',
@@ -1194,8 +1239,7 @@ test('Devices reads only the current account and follows sidebar account changes
     }),
   });
   // One computer, no paper keys and no enrollments: the list holds exactly
-  // the one row, with no empty-category filler for the two lists that came
-  // back empty, and the recovery link stays reachable below it.
+  // the one row, with no empty-category filler for the two empty lists.
   assert.ok(await rendered.findByText('Personal Mac'));
   assert.equal(rendered.queryByText('Work Mac'), null);
   assert.equal(
@@ -1205,10 +1249,11 @@ test('Devices reads only the current account and follows sidebar account changes
   // Exactly one row: no empty-category filler for the paper keys and
   // enrollments that came back empty.
   assert.equal(rendered.getAllByRole('button', { name: /^Open / }).length, 1);
-  assert.ok(
-    rendered.getByRole('button', {
-      name: 'Recover an account with a paper key…',
+  assert.equal(
+    rendered.queryByRole('button', {
+      name: 'Connect an existing account with a paper key',
     }),
+    null,
   );
   await rendered.showAccount('acct:work');
   assert.ok(await rendered.findByText('Work Mac'));
@@ -1269,7 +1314,7 @@ test('an account with no paper key gets its own band without publishing shell al
   });
   assert.ok(bridgeRef.current);
   await ui.waitFor(() => {
-    assert.ok(page.getByText('No paper key'));
+    assert.ok(page.getByText('No recovery key configured'));
   });
   assert.equal(
     deviceAlertRegistry(bridgeRef.current)
@@ -1307,5 +1352,5 @@ test('an account with a paper key draws no band without publishing shell alerts'
       .paperKeys.get('acct:personal'),
     undefined,
   );
-  assert.equal(page.queryByText('No paper key'), null);
+  assert.equal(page.queryByText('No recovery key configured'), null);
 });

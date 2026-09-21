@@ -755,21 +755,22 @@ async function adeWalk(context, origin) {
         );
     }
 
+    // The legacy reset scene now opens the unified local-removal dialog.
     await page.goto(`${origin}/?state=servers-reset`, { waitUntil: 'load' });
-    await page.locator('.sheet', { hasText: 'team-creation' }).waitFor();
+    await page
+      .locator('.sheet', {
+        hasText: 'Remove Personal server and its credentials?',
+      })
+      .waitFor();
     await page.locator('.sheet input').fill('personal');
     await page
-      .getByRole('button', { name: 'Erase credentials and reset', exact: true })
+      .getByRole('button', {
+        name: 'Remove server and credentials',
+        exact: true,
+      })
       .click();
     await page.waitForSelector('.sheet', { state: 'detached' });
-    // Resetting local state should retain the server configuration.
-    await toast(page, 'has been reset');
-    await page.locator('.main', { hasText: 'foks.example.net' }).waitFor();
-    const stillConfigured = await page
-      .getByRole('button', { name: 'Erase and reset…', exact: true })
-      .count();
-    if (!stillConfigured)
-      failures.push('the reset server is no longer configured on this Mac');
+    await toast(page, 'Removed Personal server and its credentials');
 
     await page.goto(`${origin}/?state=settings-phrase`, { waitUntil: 'load' });
     const tokens = await page.locator('.sheet .word').count();

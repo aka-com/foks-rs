@@ -10,8 +10,7 @@ import type {
   StoredHost,
 } from '../bridge';
 import { useServerMetadata } from './servers/use-server-metadata';
-import { useResetWorkflow } from './servers/use-reset-workflow';
-import { canReadServer, serverBinding } from './servers/server-workflow';
+import { canReadServer } from './servers/server-workflow';
 import {
   Band,
   Button,
@@ -36,6 +35,7 @@ import {
 } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import type { Server, StoreRef, TeamStore, AgentSnapshot } from '../model';
+import { PageHeader } from '../shell/page-header';
 import { AccountMark } from './account-switcher';
 import { ProfileKeys } from './profile-keys';
 import { GroupMark } from './group-mark';
@@ -49,13 +49,15 @@ interface Props {
   store?: StoreRef;
   /** The named fixture scene Settings was entered at, captured once there. */
   scene: string;
+  /** Account tab panel identity, present when one server owns the page. */
+  panel?: { id: string; labelledBy: string };
   onNavigate: (location: Location) => void;
   onRefresh: (message: string) => Promise<void>;
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
 }
 
-type Sheet = 'add' | 'rename' | 'reset' | 'forget' | null;
+type Sheet = 'add' | 'rename' | 'remove' | null;
 
 const expires = (value: number | null): string => {
   if (value === null) return 'No expiration date';
@@ -226,6 +228,7 @@ export function ServersSection({
   profile,
   store,
   scene,
+  panel,
   onNavigate,
   onRefresh,
   onError,
@@ -236,7 +239,7 @@ export function ServersSection({
     enteredScene === 'servers-add'
       ? 'add'
       : enteredScene === 'servers-reset'
-        ? 'reset'
+        ? 'remove'
         : null,
   );
   const toasts = useToast();
@@ -263,6 +266,12 @@ export function ServersSection({
   const currentHost = selected
     ? (checked.get(selected.id) ?? pinnedHost(selected))
     : null;
+  const selectedState = selected
+    ? resolveServerUiState(agentSnapshot, selected)
+    : null;
+  const selectedAccount = selected
+    ? agentSnapshot.accounts.find((item) => item.server === selected.id)
+    : undefined;
 
   // Keyboard shortcut: ⌘R / Ctrl+R triggers a check on the selected server.
   useEffect(() => {
@@ -293,25 +302,8 @@ export function ServersSection({
         onClose={() => setSheet(null)}
         onAdded={async (added) => {
           setSheet(null);
-          await onRefresh(
-            'Server added. Check the server to verify its connection.',
-          );
+          await onRefresh('Server verified and added.');
           onNavigate(servers(added, store));
-        }}
-        onError={(error) => void onMutationError(error)}
-      />
-    ) : sheet === 'reset' && selected ? (
-      <ResetSheet
-        key={serverBinding(selected)}
-        server={selected}
-        bridge={bridge}
-        onPreviewError={onError}
-        onClose={() => setSheet(null)}
-        onReset={async () => {
-          setSheet(null);
-          await onRefresh(
-            `${serverLocalAlias(selected)} has been reset. Verify the server before reconnecting.`,
-          );
         }}
         onError={(error) => void onMutationError(error)}
       />
@@ -326,97 +318,132 @@ export function ServersSection({
         }}
         onError={(error) => void onMutationError(error)}
       />
-    ) : sheet === 'forget' && selected ? (
-      <ForgetSheet
+    ) : sheet === 'remove' && selected ? (
+      <RemoveServerSheet
         server={selected}
         bridge={bridge}
         onClose={() => setSheet(null)}
-        onForgot={async () => {
+        onRemoved={async () => {
           setSheet(null);
           onNavigate(servers(undefined, store));
-          await onRefresh(`Removed ${serverLocalAlias(selected)}`);
+          await onRefresh(
+            `Removed ${serverLocalAlias(selected)} and its credentials`,
+          );
         }}
         onError={(error) => void onMutationError(error)}
       />
     ) : null;
 
+  const content = selected ? (
+    <>
+      <ServerBody
+        snapshot={agentSnapshot}
+        server={selected}
+        status={statuses.get(selected.id)}
+        host={currentHost}
+        checked={checked.get(selected.id)}
+        busy={busy}
+        onCheck={() => void check(selected)}
+        onRemove={() => setSheet('remove')}
+        onCopy={(text) =>
+          void bridge
+            .copyText(text)
+            .then(() => toasts.show('Host ID copied to clipboard'))
+            .catch(onError)
+        }
+        onOpenGroup={(store) => onNavigate({ kind: 'store', ref: store.id })}
+        onOpenAccount={(store) =>
+          onNavigate({ kind: 'settings', section: 'account', store })
+        }
+      />
+      <ProfileKeys
+        key={selected.id}
+        snapshot={agentSnapshot}
+        server={selected}
+        bridge={bridge}
+        onError={onError}
+      />
+    </>
+  ) : (
+    <ServerList
+      snapshot={agentSnapshot}
+      statuses={statuses}
+      busy={busy}
+      onOpen={(next) => onNavigate(servers(next, store))}
+      onCheck={(server) => void check(server)}
+      onAdd={() => setSheet('add')}
+    />
+  );
+
+  if (selected && selectedState)
+    return (
+      <>
+        <PageHeader
+          ruled
+          title={serverLocalAlias(selected)}
+          mark={<ServerMark state={selectedState} />}
+          sub={
+            selectedAccount && !isLocked(selectedState)
+              ? `Signed in as ${selectedAccount.username}`
+              : selected.configuredProbe
+          }
+          action={
+            <>
+              <StatusChip state={selectedState} />
+              <Button size="sm" onClick={() => setSheet('rename')}>
+                Rename…
+              </Button>
+              <Button
+                size="sm"
+                icon="again"
+                disabled={
+                  busy ||
+                  selectedState === 'blocked' ||
+                  selectedState === 'recovery-required'
+                }
+                title={
+                  selectedState === 'recovery-required'
+                    ? 'Restore saved security state before checking this identity.'
+                    : selectedState === 'blocked'
+                      ? 'This server is blocked because its identity changed'
+                      : 'Verify the saved server identity; this does not renew compatibility permission.'
+                }
+                onClick={() => void check(selected)}
+              >
+                Check
+              </Button>
+            </>
+          }
+        />
+        <div
+          className="body"
+          role="tabpanel"
+          id={panel?.id}
+          aria-labelledby={panel?.labelledBy}
+        >
+          <div className="settings-main">{content}</div>
+        </div>
+        {overlay}
+      </>
+    );
+
   return (
     <>
-      {selected ? (
-        <ServerBody
-          snapshot={agentSnapshot}
-          server={selected}
-          status={statuses.get(selected.id)}
-          host={currentHost}
-          checked={checked.get(selected.id)}
-          busy={busy}
-          onCheck={() => void check(selected)}
-          onRename={() => setSheet('rename')}
-          onReset={() => setSheet('reset')}
-          onForget={() => setSheet('forget')}
-          onCopy={(text) =>
-            void bridge
-              .copyText(text)
-              .then(() => toasts.show('Host ID copied to clipboard'))
-              .catch(onError)
-          }
-          onOpenGroup={(store) => onNavigate({ kind: 'store', ref: store.id })}
-          onOpenAccount={(store) =>
-            onNavigate({ kind: 'settings', section: 'account', store })
-          }
-        />
-      ) : (
-        <ServerList
-          snapshot={agentSnapshot}
-          statuses={statuses}
-          busy={busy}
-          onOpen={(next) => onNavigate(servers(next, store))}
-          onCheck={(server) => void check(server)}
-          onAdd={() => setSheet('add')}
-        />
-      )}
-      {selected ? (
-        <ProfileKeys
-          key={selected.id}
-          snapshot={agentSnapshot}
-          server={selected}
-          bridge={bridge}
-          onError={onError}
-        />
-      ) : null}
+      {content}
       {overlay}
     </>
   );
 }
 
-/** Renders summary status metadata for a server row. */
+/** Explains the attention state of a server row. */
 function StatusLine({
   state,
-  account,
-  groups,
   expiry,
 }: {
   state: ServerUiState;
-  account?: { username: string };
-  groups: string[];
   expiry: number | null;
 }): ReactNode {
   const sep = <span className="sep">·</span>;
-  if (state === 'checked')
-    return (
-      <>
-        {account ? account.username : 'No account'}
-        {sep}
-        {groups.length ? plural(groups.length, 'team') : 'No teams'}
-        {/* A certificate with no expiry has no date to state, and the line
-            says nothing rather than "Valid until no expiration". */}
-        {expiry === null ? null : (
-          <>
-            {sep}Valid until {expiresShort(expiry)}
-          </>
-        )}
-      </>
-    );
   if (state === 'pending')
     return (
       <>
@@ -478,7 +505,6 @@ function StatusLine({
  * Renders an individual server row in the settings server list.
  */
 function ServerRow({
-  snapshot: agentSnapshot,
   server,
   state,
   expiry,
@@ -486,7 +512,6 @@ function ServerRow({
   onOpen,
   onCheck,
 }: {
-  snapshot: AgentSnapshot;
   server: Server;
   state: ServerUiState;
   expiry: number | null;
@@ -494,12 +519,6 @@ function ServerRow({
   onOpen: (profile: string) => void;
   onCheck: (server: Server) => void;
 }): ReactNode {
-  const account = agentSnapshot.accounts.find(
-    (item) => item.server === server.id,
-  );
-  const groups = agentSnapshot.stores
-    .filter((store) => store.kind === 'team' && store.server === server.id)
-    .map((store) => store.name);
   return (
     <InsetRow
       className={['srow', isLocked(state) ? 'crit' : '']
@@ -536,14 +555,11 @@ function ServerRow({
         {server.configuredProbe !== serverLocalAlias(server) && (
           <small>{server.configuredProbe}</small>
         )}
-        <small>
-          <StatusLine
-            state={state}
-            account={account}
-            groups={groups}
-            expiry={expiry}
-          />
-        </small>
+        {state === 'checked' ? null : (
+          <small>
+            <StatusLine state={state} expiry={expiry} />
+          </small>
+        )}
       </span>
     </InsetRow>
   );
@@ -570,29 +586,13 @@ function ServerList({
     state: resolveServerUiState(agentSnapshot, server),
     expiry: leaseExpiry(server, statuses.get(server.id)),
   }));
-  // Servers requiring user attention are displayed at the top of the list. A
-  // server that has never been checked is one of them: nothing on it can be
-  // used until it is, so Ready would be a false claim about it.
+  // Servers requiring user attention stay first, but all configured servers
+  // share one group on the Account page.
   const needsAttention = (row: (typeof rows)[number]): boolean =>
     isLocked(row.state) || row.state === 'unprobed';
   const attention = rows.filter(needsAttention);
   const ready = rows.filter((row) => !needsAttention(row));
-  const box = (entries: typeof rows): ReactNode => (
-    <Inset className="settings-inset middle">
-      {entries.map(({ server, state, expiry }) => (
-        <ServerRow
-          key={server.id}
-          snapshot={agentSnapshot}
-          server={server}
-          state={state}
-          expiry={expiry}
-          busy={busy}
-          onOpen={onOpen}
-          onCheck={onCheck}
-        />
-      ))}
-    </Inset>
-  );
+  const ordered = [...attention, ...ready];
   const add = (
     <span className="right">
       <Button size="sm" icon="plus" onClick={onAdd}>
@@ -602,37 +602,27 @@ function ServerList({
   );
   return (
     <>
-      {attention.length ? (
-        <>
-          <SectionLabel
-            className="danger-title"
-            action={ready.length ? undefined : add}
-          >
-            Needs attention
-          </SectionLabel>
-          {box(attention)}
-        </>
-      ) : null}
-      {ready.length ? (
-        <>
-          <SectionLabel action={add}>
-            {attention.length ? 'Ready' : 'Configured servers'}
-          </SectionLabel>
-          {box(ready)}
-        </>
-      ) : null}
-      {!rows.length ? (
-        <>
-          <SectionLabel action={add}>Servers on this device</SectionLabel>
-          <Inset className="settings-inset">
-            <div className="sempty">
-              <ServerMark state="unprobed" />
-              <b>No servers on this device yet</b>
-              <p>Add a server using the field above to begin.</p>
-            </div>
-          </Inset>
-        </>
-      ) : null}
+      <SectionLabel action={add}>Servers on this device</SectionLabel>
+      <Inset className="settings-inset middle">
+        {ordered.map(({ server, state, expiry }) => (
+          <ServerRow
+            key={server.id}
+            server={server}
+            state={state}
+            expiry={expiry}
+            busy={busy}
+            onOpen={onOpen}
+            onCheck={onCheck}
+          />
+        ))}
+        {!rows.length ? (
+          <div className="sempty">
+            <ServerMark state="unprobed" />
+            <b>No servers on this device yet</b>
+            <p>Add a server using the button above to begin.</p>
+          </div>
+        ) : null}
+      </Inset>
     </>
   );
 }
@@ -645,13 +635,13 @@ function StatusBand({
   expiry,
   busy,
   onCheck,
-  onReset,
+  onRemove,
 }: {
   state: ServerUiState;
   expiry: number | null;
   busy: boolean;
   onCheck: () => void;
-  onReset: () => void;
+  onRemove: () => void;
 }): ReactNode {
   if (state === 'unprobed')
     return (
@@ -717,8 +707,8 @@ function StatusBand({
         severity="crit"
         label="Server identity mismatch"
         action={
-          <Button size="sm" variant="danger" onClick={onReset}>
-            Reset…
+          <Button size="sm" variant="danger" onClick={onRemove}>
+            Remove…
           </Button>
         }
       >
@@ -758,9 +748,7 @@ function ServerBody({
   checked,
   busy,
   onCheck,
-  onRename,
-  onReset,
-  onForget,
+  onRemove,
   onCopy,
   onOpenGroup,
   onOpenAccount,
@@ -773,9 +761,7 @@ function ServerBody({
   checked?: CheckedServer;
   busy: boolean;
   onCheck: () => void;
-  onRename: () => void;
-  onReset: () => void;
-  onForget: () => void;
+  onRemove: () => void;
   onCopy: (text: string) => void;
   onOpenGroup: (store: TeamStore) => void;
   /** The account on this server, on Account, where an account is managed. */
@@ -800,44 +786,16 @@ function ServerBody({
         Number(storeAttentionState(agentSnapshot, a) !== 'normal') -
         Number(storeAttentionState(agentSnapshot, b) !== 'normal'),
     );
-  const subtitle =
-    account && !locked ? `Signed in as ${account.username}` : null;
   const hasHost = Boolean(host) && state !== 'unavailable';
 
   return (
     <>
-      <div className="shead">
-        <ServerMark state={state} />
-        <span className="t">
-          <b>{serverLocalAlias(server)}</b>
-          {subtitle ? <small>{subtitle}</small> : null}
-        </span>
-        <StatusChip state={state} />
-        <Button size="sm" onClick={onRename}>
-          Rename…
-        </Button>
-        <Button
-          size="sm"
-          icon="again"
-          disabled={busy || blocked || state === 'recovery-required'}
-          title={
-            state === 'recovery-required'
-              ? 'Restore saved security state before checking this identity.'
-              : blocked
-                ? 'This server is blocked until its identity is reset'
-                : 'Verify the saved server identity; this does not renew compatibility permission.'
-          }
-          onClick={onCheck}
-        >
-          Check
-        </Button>
-      </div>
       <StatusBand
         state={state}
         expiry={expiry}
         busy={busy}
         onCheck={onCheck}
-        onReset={onReset}
+        onRemove={onRemove}
       />
       {checked?.serverVersion && !checked.serverVersion.compatible ? (
         <Band severity="warn" label="Version mismatch">
@@ -845,7 +803,6 @@ function ServerBody({
         </Band>
       ) : null}
 
-      <SectionLabel>Check-in</SectionLabel>
       <Inset className="settings-inset middle">
         {state === 'checked' ? (
           <>
@@ -987,7 +944,7 @@ function ServerBody({
           {/* `chain` and `epoch` are a length and a checkpoint number, not
               times: they are reported as the two numbers the agent sends. */}
           <InsetRow label="Audit log">
-            Verified · {plural(host.chain, 'entry', 'entries')} · checkpoint{' '}
+            Verified · {plural(host.chain, 'entry', 'entries')} · Checkpoint{' '}
             {host.epoch}
           </InsetRow>
         </Inset>
@@ -1013,32 +970,16 @@ function ServerBody({
       <Inset className="settings-inset middle danger-box">
         <InsetRow
           className="dangerrow"
-          label="Remove local server data"
+          label="Remove server and credentials"
           action={
-            <Button
-              size="sm"
-              icon="trash"
-              disabled={blocked}
-              onClick={onForget}
-            >
-              Remove local data…
-            </Button>
-          }
-        >
-          <small>Removes this server from this device.</small>
-        </InsetRow>
-        <InsetRow
-          className="dangerrow"
-          label="Erase local credentials and reset trust"
-          action={
-            <Button size="sm" variant="danger" onClick={onReset}>
-              Erase and reset…
+            <Button size="sm" icon="trash" variant="danger" onClick={onRemove}>
+              Remove…
             </Button>
           }
         >
           <small>
-            Deletes this server's local account keys, trust history, cache and
-            unfinished operations. A separate recovery method is required.
+            Removes this server, its credentials, trust history, cached data,
+            and unfinished operations from this device.
           </small>
         </InsetRow>
       </Inset>
@@ -1114,12 +1055,8 @@ function AddServerSheet({
             onClick={() => {
               setBusy(true);
               void bridge
-                .addServer(profile, cleanProbe)
-                .then((added) => {
-                  if (added.profile !== profile)
-                    throw new Error('add_server returned a different profile.');
-                  return onAdded(added.profile);
-                })
+                .checkAndAddProfile(profile, cleanProbe)
+                .then((added) => onAdded(added.profile))
                 .catch(onError)
                 .finally(() => setBusy(false));
             }}
@@ -1129,18 +1066,21 @@ function AddServerSheet({
         </>
       }
     >
-      <p>The server is verified after it is added.</p>
+      <p>
+        Add FOKS protocol v019 servers here. The server is saved only after
+        online verification succeeds.
+      </p>
       <Inset>
         <Field
-          label="Profile"
+          label="Server name"
           value={profile}
-          placeholder="partner"
+          placeholder="new-foks"
           onChange={setProfile}
         />
         <Field
           label="Address"
           value={probe}
-          placeholder="foks.partner.dev"
+          placeholder="foks.example.com"
           onChange={setProbe}
         />
       </Inset>
@@ -1213,165 +1153,22 @@ function RenameServerSheet({
   );
 }
 
-function ResetSheet({
+function RemoveServerSheet({
   server,
   bridge,
   onClose,
-  onReset,
-  onError,
-  onPreviewError,
-}: {
-  server: Server;
-  bridge: Bridge;
-  onClose: () => void;
-  onReset: () => Promise<void>;
-  onError: (error: unknown) => void;
-  onPreviewError: (error: unknown) => void;
-}): ReactNode {
-  const [confirmation, setConfirmation] = useState('');
-  const {
-    preview,
-    loading: resetLoading,
-    error: resetError,
-    available,
-    busy,
-    load: onRetryPreview,
-    close,
-    reset,
-  } = useResetWorkflow({ bridge, server, onClose, onError, onPreviewError });
-  // The reset spends its one token and deletes local keys; the sheet is where
-  // it says whether it did.
-  useSheetGuard(
-    busy
-      ? { verdict: 'refuse', reason: 'Wait for the reset to finish.' }
-      : null,
-  );
-  return (
-    <SheetFrame
-      title={`Erase local credentials for ${serverLocalAlias(server)}?`}
-      onClose={close}
-      danger
-      footer={
-        <>
-          <Button disabled={busy} onClick={close}>
-            Cancel
-          </Button>
-          <Button
-            variant="danger"
-            disabled={
-              confirmation !== server.id || !preview || !available || busy
-            }
-            onClick={() => void reset(confirmation, onReset)}
-          >
-            Erase credentials and reset
-          </Button>
-        </>
-      }
-    >
-      <p>
-        Deletes this device's account keys for this server. Your data stays on
-        the server, but without another device or a paper key you cannot get
-        back into the account. The passphrase alone is not enough.
-      </p>
-      <Inset>
-        <InsetRow label="Removed">
-          Local account keys and credentials, server trust history, local cache,
-          and pending operations.
-        </InsetRow>
-        <InsetRow label="Unrecoverable">
-          Pending local changes not yet uploaded to the server will be lost.
-        </InsetRow>
-        <InsetRow label="Recovery required">
-          Verify the server again and recover or pair an account before using it
-          on this device. Saving a paper key here is not part of this operation.
-        </InsetRow>
-        <InsetRow label="Unaffected">
-          Other configured servers and their local data.
-        </InsetRow>
-      </Inset>
-      {preview ? (
-        <>
-          <SectionLabel>Discarded pending operations</SectionLabel>
-          <Inset>
-            {preview.resumables.length ? (
-              preview.resumables.map((row, index) => (
-                <InsetRow
-                  key={`${row.kind}-${row.alias}-${index}`}
-                  label={row.kind}
-                >
-                  {row.alias}
-                  {row.target ? ` · ${row.target}` : ''}
-                </InsetRow>
-              ))
-            ) : (
-              <InsetRow label="None">No resumable operations found.</InsetRow>
-            )}
-          </Inset>
-          <SectionLabel>Local credentials and data to erase</SectionLabel>
-          <Inset>
-            {preview.artifacts.length ? (
-              preview.artifacts.map((row) => (
-                <InsetRow key={row.kind} label={row.kind}>
-                  {row.entries} entries · {row.bytes.toLocaleString()} bytes
-                </InsetRow>
-              ))
-            ) : (
-              <InsetRow label="None">No local data to erase.</InsetRow>
-            )}
-          </Inset>
-          <p className="hint">
-            This confirmation expires in {preview.expiresInSeconds} seconds.
-            {available
-              ? ''
-              : ' Reopen this dialog to generate a new confirmation.'}
-          </p>
-        </>
-      ) : resetError ? (
-        <div style={{ margin: '16px 0' }}>
-          <p
-            className="hint"
-            style={{ color: 'var(--red, #e5484d)', marginBottom: '8px' }}
-          >
-            Failed to load reset preview: {resetError}
-          </p>
-          <Button disabled={resetLoading} onClick={() => void onRetryPreview()}>
-            {resetLoading ? 'Retrying…' : 'Retry loading preview'}
-          </Button>
-        </div>
-      ) : (
-        // `hint` carries the spacing under the facts above it; a plain
-        // paragraph has no top margin and sits against them.
-        <p className="hint">Loading reset preview…</p>
-      )}
-      <Inset>
-        <InsetRow label="Confirm">
-          <input
-            value={confirmation}
-            onChange={(event) => setConfirmation(event.target.value)}
-            placeholder={`Type "${server.id}" to confirm`}
-          />
-        </InsetRow>
-      </Inset>
-    </SheetFrame>
-  );
-}
-
-function ForgetSheet({
-  server,
-  bridge,
-  onClose,
-  onForgot,
+  onRemoved,
   onError,
 }: {
   server: Server;
   bridge: Bridge;
   onClose: () => void;
-  onForgot: () => Promise<void>;
+  onRemoved: () => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
-  // Forgetting a server deletes what this Mac holds for it.
+  // Removing a server deletes what this device holds for it.
   useSheetGuard(
     busy
       ? { verdict: 'refuse', reason: 'Wait for the removal to finish.' }
@@ -1379,7 +1176,7 @@ function ForgetSheet({
   );
   return (
     <SheetFrame
-      title={`Remove local data for ${serverLocalAlias(server)}?`}
+      title={`Remove ${serverLocalAlias(server)} and its credentials?`}
       onClose={onClose}
       danger
       footer={
@@ -1391,19 +1188,19 @@ function ForgetSheet({
             onClick={() => {
               setBusy(true);
               void bridge
-                .forgetServer(server.id, confirmation)
-                .then((forgotten) => {
-                  if (forgotten.profile !== server.id)
+                .removeServerAndCredentials(server.id, confirmation)
+                .then((removed) => {
+                  if (removed.profile !== server.id)
                     throw new Error(
-                      'forget_server returned a different profile.',
+                      'remove_server_and_credentials returned a different profile.',
                     );
-                  return onForgot();
+                  return onRemoved();
                 })
                 .catch(onError)
                 .finally(() => setBusy(false));
             }}
           >
-            Remove local server data
+            Remove server and credentials
           </Button>
         </>
       }
@@ -1413,8 +1210,8 @@ function ForgetSheet({
       </p>
       <Inset>
         <InsetRow label="Removed">
-          All credentials for this server, pinned host identity, connection
-          history, and cached data.
+          This server, all of its credentials, pinned host identity, connection
+          history, cached data, and unfinished operations.
         </InsetRow>
         <InsetRow label="Warning">
           Accounts without a paper key or another paired device cannot be
@@ -1424,7 +1221,7 @@ function ForgetSheet({
           Other configured servers and their local data.
         </InsetRow>
       </Inset>
-      <Inset>
+      <Inset className="confirm-inset">
         <InsetRow label="Confirm">
           <input
             value={confirmation}

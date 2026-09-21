@@ -1,9 +1,8 @@
 import type { Bridge } from './contract';
 import {
-  decodeAddedServer,
   decodeCheckedProfile,
   decodeCheckedServer,
-  decodeForgottenServer,
+  decodeRemovedServer,
   decodeProfileReconciliation,
   decodeServerLabelResponse,
   decodeServers,
@@ -19,9 +18,8 @@ export const serverCommands: Pick<
   | 'describeServerStatus'
   | 'checkServer'
   | 'reconcileServer'
-  | 'addServer'
   | 'setServerLabel'
-  | 'forgetServer'
+  | 'removeServerAndCredentials'
 > = {
   listServers: (generation) =>
     checked(
@@ -53,18 +51,16 @@ export const serverCommands: Pick<
     checked('reconcile_server', { profile }, (value) =>
       decodeProfileReconciliation(value, profile),
     ),
-  addServer: (profileName, probe) =>
-    checkedMutation('add_server', { profileName, probe }, decodeAddedServer),
   setServerLabel: (profile, label) =>
     checkedMutation(
       'set_server_label',
       { profile, label },
       decodeServerLabelResponse,
     ),
-  forgetServer: (profile, confirmation) =>
+  removeServerAndCredentials: (profile, confirmation) =>
     checkedMutation(
-      'forget_server',
+      'remove_server_and_credentials',
       { profile, confirmation },
-      decodeForgottenServer,
+      decodeRemovedServer,
     ),
 };

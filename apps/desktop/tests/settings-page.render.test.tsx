@@ -2,7 +2,7 @@
  * The Settings tab as a sub-navigation of Account, Preferences and Device.
  * Account holds the device-wide server inventory at its bottom; `profile=`
  * opens one server there without hiding the sub-navigation. Device owns the
- * Mac-wide reset that composes the per-server one.
+ * Mac-wide reset, which remains separate from server removal.
  */
 
 import assert from 'node:assert/strict';
@@ -164,18 +164,11 @@ async function renderSettings(
   return Object.assign(rendered, { show });
 }
 
-/** The long and short forms the Servers page states an expiry in. */
+/** The form the server detail page states an expiry in. */
 const expiresLong = (value: number): string =>
   new Intl.DateTimeFormat(undefined, {
     dateStyle: 'medium',
     timeStyle: 'short',
-  }).format(new Date(value * 1000));
-const expiresShort = (value: number): string =>
-  new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
   }).format(new Date(value * 1000));
 
 /** Counts `describe_server_status` requests behind the mock bridge. */
@@ -202,19 +195,18 @@ test('the server inventory states lease and identity from the catalog, reading n
     decorate: countingStatus(counter),
   });
 
-  // The list states the lease from the signed result the catalog carries.
+  // Configured rows stay compact; lease and identity details live on the
+  // server's own page.
   const row = [...rendered.container.querySelectorAll('.srow')].find((entry) =>
     entry.textContent?.includes('Acme'),
   );
   assert.ok(row);
-  assert.ok(
-    row.textContent?.includes(`Valid until ${expiresShort(expiresAt)}`),
-  );
+  assert.equal(row.textContent?.includes('Valid until'), false);
 
-  // So does the server's own page, with the pinned identity beside it.
+  // The server's own page states the lease with the pinned identity beside it.
   await rendered.show({ profile: 'acme' });
   assert.ok(rendered.getByText(expiresLong(expiresAt)));
-  assert.ok(rendered.getByText(/33 entries · checkpoint 90417/));
+  assert.ok(rendered.getByText(/33 entries · Checkpoint 90417/));
   assert.equal(counter.reads, 0);
 });
 
@@ -300,6 +292,27 @@ test('Account opens first and carries the server inventory at its bottom', async
   assert.ok(ui.within(panel).getByText('Username'));
   assert.ok(rendered.getByText('Servers on this device'));
   assert.ok(rendered.getByRole('button', { name: 'Add a server…' }));
+  assert.equal(rendered.queryByText('Needs attention'), null);
+  assert.equal(rendered.queryByText('Configured servers'), null);
+  assert.equal(rendered.queryByText('Ready'), null);
+  const serverRows = [...rendered.container.querySelectorAll('.srow')];
+  assert.ok(serverRows.length > 1);
+  assert.ok(
+    serverRows.every(
+      (row) => row.parentElement === serverRows[0].parentElement,
+    ),
+  );
+  const usernameRow = rendered
+    .getByText('Username')
+    .closest<HTMLElement>('.fr');
+  assert.ok(usernameRow);
+  assert.deepEqual(
+    ui
+      .within(usernameRow)
+      .getAllByRole('button')
+      .map((button) => button.textContent),
+    ['Change…', 'Passphrase…'],
+  );
 });
 
 test('the server inventory remains available when this device has no account', async () => {
@@ -312,6 +325,132 @@ test('the server inventory remains available when this device has no account', a
   assert.ok(rendered.getByText('No available account on this device'));
   assert.ok(rendered.getByText('Servers on this device'));
   assert.ok(rendered.getByRole('button', { name: 'Add a server…' }));
+});
+
+test('Add server explains the protocol and starts with example placeholders', async () => {
+  const rendered = await renderSettings(await fixture());
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add a server…' }));
+
+  const dialog = rendered.getByRole('dialog');
+  assert.ok(
+    ui
+      .within(dialog)
+      .getByText(
+        'Add FOKS protocol v019 servers here. The server is saved only after online verification succeeds.',
+      ),
+  );
+  assert.equal(
+    ui.within(dialog).getByLabelText('Server name').getAttribute('placeholder'),
+    'new-foks',
+  );
+  assert.equal(
+    ui.within(dialog).getByLabelText('Address').getAttribute('placeholder'),
+    'foks.example.com',
+  );
+  assert.equal(
+    ui
+      .within(dialog)
+      .getByRole('button', { name: 'Add server' })
+      .hasAttribute('disabled'),
+    true,
+  );
+});
+
+test('Add server verifies online and opens the profile returned by the backend', async () => {
+  const submitted: Array<[string, string]> = [];
+  const events: string[] = [];
+  const rendered = await renderSettings(await fixture(), {
+    decorate: (bridge) => ({
+      ...bridge,
+      checkAndAddProfile: async (profile, probe) => {
+        submitted.push([profile, probe]);
+        return {
+          profile: 'existing-endpoint',
+          acceptance: 'unchanged',
+          lookupName: 'foks.example.com',
+          canonicalName: 'foks.example.com',
+          hostId: `02${'1'.repeat(64)}`,
+          chain: 8,
+          epoch: 21,
+        };
+      },
+    }),
+    onRefresh: async (message) => {
+      events.push(`refresh:${message}`);
+    },
+    onNavigate: (location) => {
+      if (location.kind === 'settings' && location.profile)
+        events.push(`navigate:${location.profile}`);
+    },
+  });
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add a server…' }));
+  const dialog = rendered.getByRole('dialog');
+  ui.fireEvent.change(ui.within(dialog).getByLabelText('Server name'), {
+    target: { value: 'requested-name' },
+  });
+  ui.fireEvent.change(ui.within(dialog).getByLabelText('Address'), {
+    target: { value: ' foks.example.com ' },
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(dialog).getByRole('button', { name: 'Add server' }),
+    );
+    await Promise.resolve();
+  });
+
+  assert.equal(rendered.queryByRole('dialog'), null);
+  assert.deepEqual(submitted, [['requested-name', 'foks.example.com']]);
+  assert.deepEqual(events, [
+    'refresh:Server verified and added.',
+    'navigate:existing-endpoint',
+  ]);
+});
+
+test('Add server keeps the sheet open and re-enables submission after verification fails', async () => {
+  const failure = new Error('TLS certificate rejected');
+  const errors: unknown[] = [];
+  const navigations: string[] = [];
+  const refreshes: string[] = [];
+  let rejectVerification: ((reason: unknown) => void) | undefined;
+  const verification = new Promise<never>((_resolve, reject) => {
+    rejectVerification = reject;
+  });
+  const rendered = await renderSettings(await fixture(), {
+    decorate: (bridge) => ({
+      ...bridge,
+      checkAndAddProfile: async () => verification,
+    }),
+    onMutationError: (error) => errors.push(error),
+    onRefresh: async (message) => {
+      refreshes.push(message);
+    },
+    onNavigate: (location) => {
+      if (location.kind === 'settings' && location.profile)
+        navigations.push(location.profile);
+    },
+  });
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add a server…' }));
+  const dialog = rendered.getByRole('dialog');
+  ui.fireEvent.change(ui.within(dialog).getByLabelText('Server name'), {
+    target: { value: 'new-foks' },
+  });
+  ui.fireEvent.change(ui.within(dialog).getByLabelText('Address'), {
+    target: { value: 'bad.example' },
+  });
+  const add = ui.within(dialog).getByRole('button', { name: 'Add server' });
+  await ui.act(async () => {
+    ui.fireEvent.click(add);
+    await Promise.resolve();
+  });
+  assert.equal(add.hasAttribute('disabled'), true);
+  assert.ok(rejectVerification);
+  await ui.act(async () => rejectVerification?.(failure));
+
+  assert.equal(add.hasAttribute('disabled'), false);
+  assert.equal(rendered.getByRole('dialog'), dialog);
+  assert.deepEqual(errors, [failure]);
+  assert.deepEqual(refreshes, []);
+  assert.deepEqual(navigations, []);
 });
 
 test('opening a device-wide server retains the selected account', async () => {
@@ -348,6 +487,9 @@ test('a retired Servers address opens the list at the bottom of Account', async 
   // and only the states worth acting on are named.
   assert.equal(rendered.queryByText('Checked'), null);
   assert.ok(document.querySelector('.smark.ok'));
+  const configured = rendered.getByText('foks.example.net').closest('.srow');
+  assert.ok(configured);
+  assert.doesNotMatch(configured.textContent ?? '', /satoshi|teams?/i);
   assert.ok(rendered.getByText('Not verified'));
   // Other Settings pages are not mounted behind Account.
   assert.equal(
@@ -617,7 +759,12 @@ test('a profile address opens that server instead of the page', async () => {
     where: { profile: 'personal' },
   });
 
-  assert.ok(rendered.getByText('Check-in'));
+  assert.equal(rendered.queryByText('Check-in'), null);
+  assert.ok(
+    rendered.getByRole('heading', { level: 1, name: 'Personal server' }),
+  );
+  assert.equal(rendered.queryByText('Username'), null);
+  assert.equal(rendered.container.querySelector('.shead'), null);
   // What stops if this server lapses, as two lists of its own.
   assert.ok(rendered.getByText('Accounts on this server'));
   assert.ok(rendered.getByText('Teams on this server'));
@@ -627,10 +774,8 @@ test('a profile address opens that server instead of the page', async () => {
   assert.ok(rendered.getByText('Address'));
   assert.ok(rendered.getAllByText('foks.example.net').length);
   assert.ok(rendered.getByRole('button', { name: 'Rename…' }));
-  // Forgetting a server and resetting its trust are two commands, so the
-  // danger zone keeps two rows.
-  assert.ok(rendered.getByRole('button', { name: 'Remove local data…' }));
-  assert.ok(rendered.getByRole('button', { name: 'Erase and reset…' }));
+  assert.ok(rendered.getByText('Remove server and credentials'));
+  assert.equal(rendered.getAllByRole('button', { name: 'Remove…' }).length, 1);
   // The sub-navigation stays on screen — "Device" is one of its labels —
   // but that page's own content is not drawn behind a server: the danger
   // zone here is this server's, and the Mac-wide reset is not on it.
@@ -645,7 +790,92 @@ test('a profile address opens that server instead of the page', async () => {
   );
   assert.equal(rendered.queryByRole('button', { name: 'Lock now' }), null);
   // The audit log reads the two numbers the agent reports, not a date.
-  assert.ok(rendered.getByText(/12 entries · checkpoint 4821/));
+  assert.ok(rendered.getByText(/12 entries · Checkpoint 4821/));
+});
+
+test('server removal deletes its local credentials after exact-name confirmation', async () => {
+  const calls: Array<[string, string]> = [];
+  const messages: string[] = [];
+  const rendered = await renderSettings(await fixture(), {
+    where: { profile: 'personal' },
+    decorate: (bridge) => ({
+      ...bridge,
+      removeServerAndCredentials: async (profile, confirmation) => {
+        calls.push([profile, confirmation]);
+        return { profile, removed: true };
+      },
+    }),
+    onRefresh: async (message) => {
+      messages.push(message);
+    },
+  });
+
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Remove…' }));
+  });
+  const dialog = await ui.waitFor(() => rendered.getByRole('alertdialog'));
+  assert.ok(
+    ui.within(dialog).getByText('Remove Personal server and its credentials?'),
+  );
+  const remove = ui
+    .within(dialog)
+    .getByRole('button', { name: 'Remove server and credentials' });
+  assert.equal(remove.hasAttribute('disabled'), true);
+  await ui.act(async () => {
+    ui.fireEvent.change(
+      ui.within(dialog).getByPlaceholderText('Type "personal" to confirm'),
+      { target: { value: 'personal' } },
+    );
+  });
+  assert.equal(remove.hasAttribute('disabled'), false);
+  await ui.act(async () => {
+    ui.fireEvent.click(remove);
+  });
+  await ui.waitFor(() => assert.deepEqual(calls, [['personal', 'personal']]));
+  assert.deepEqual(messages, ['Removed Personal server and its credentials']);
+});
+
+test('server removal remains available after an identity mismatch', async () => {
+  const snapshot = structuredClone(await fixture());
+  const server = snapshot.servers.find((entry) => entry.id === 'personal');
+  assert.ok(server);
+  server.trust = {
+    status: 'blocked',
+    error: {
+      code: 'host-mismatch',
+      message: 'The server identity changed.',
+      retryable: false,
+      ambiguous: false,
+      fatal: false,
+    },
+  };
+  const rendered = await renderSettings(snapshot, {
+    where: { profile: 'personal' },
+  });
+
+  assert.ok(rendered.getByText('Server identity mismatch'));
+  const actions = rendered.getAllByRole('button', { name: 'Remove…' });
+  assert.equal(actions.length, 2);
+  assert.equal(
+    actions.some((button) => button.hasAttribute('disabled')),
+    false,
+  );
+  await ui.act(async () => {
+    ui.fireEvent.click(actions[0]);
+  });
+  assert.ok(await ui.waitFor(() => rendered.getByRole('alertdialog')));
+});
+
+test('the legacy server-reset scene opens unified removal', async () => {
+  const rendered = await renderSettings(await fixture(), {
+    where: { profile: 'personal' },
+    scene: 'servers-reset',
+  });
+  const dialog = await ui.waitFor(() => rendered.getByRole('alertdialog'));
+  assert.ok(
+    ui.within(dialog).getByText('Remove Personal server and its credentials?'),
+  );
+  assert.equal(ui.within(dialog).queryByText(/Erase|reset preview/i), null);
 });
 
 test('server display names can be set and cleared through the stable profile id', async () => {
@@ -1231,20 +1461,14 @@ test('Device offers to restart the agent, and names the process it would stop', 
       },
     }),
   });
-  const row = rendered.getByText('Restart').closest<HTMLElement>('.fr');
-  assert.ok(row);
-  assert.equal(
-    row.querySelector('.v small')?.textContent,
-    'Stop the local agent and start it again.',
-  );
-  // An agent this app started says nothing more on its Status row.
-  const status = rendered.getByText('Status').closest('.fr');
+  const status = rendered.getByText('Status').closest<HTMLElement>('.fr');
   assert.ok(status);
   assert.equal(status.querySelector('.v small'), null);
+  assert.equal(rendered.queryByText('Restart'), null);
 
   await ui.act(async () => {
     ui.fireEvent.click(
-      ui.within(row).getByRole('button', { name: 'Restart…' }),
+      ui.within(status).getByRole('button', { name: 'Restart…' }),
     );
   });
   const sheet = document.querySelector<HTMLElement>('.sheet');

@@ -4,7 +4,7 @@ import type { Location, RailTab, SettingsSection } from './types';
 
 /**
  * The Settings page an address opens. An address that names a section opens
- * it; a server profile is a detail at the bottom of Account; any other address
+ * it; a server profile is its own page under Account; any other address
  * opens the sub-navigation's first page.
  */
 export function settingsSectionOf(

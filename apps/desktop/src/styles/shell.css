@@ -87,9 +87,9 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side.rail .nav .rail-tail{margin-left:auto;flex:none;min-width:20px;height:20px;display:grid;place-items:center;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;color:rgba(255,255,255,.62)}
 .side.rail .nav.on .rail-tail{color:rgba(255,255,255,.85)}
 .side.rail .nav .rail-tail.count.warn{color:var(--warning-dot)}
-.side.rail .nav .rail-tail.dot{position:absolute;top:9px;left:35px;margin:0;min-width:0;width:7px;height:7px;border-radius:50%;box-shadow:0 0 0 2px var(--rail)}
-.side.rail .nav .rail-tail.dot::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--warning-dot)}
-.side.rail .nav .rail-tail.dot.warn::before{background:var(--warning-dot)}
+.side.rail .nav .rail-tail.dot{position:absolute;top:11px;left:33px;margin:0;min-width:0;width:7px;height:7px;border-radius:50%;box-shadow:0 0 0 2px var(--rail)}
+.side.rail .nav .rail-tail.dot::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--unread)}
+.side.rail .nav .rail-tail.dot.warn::before{background:var(--unread)}
 .side.rail .rail-tabs{display:flex;flex-direction:column;padding:10px 0}
 /* Setup step rail */
 .side.rail.setup-side{width:var(--side-w-open)}
@@ -119,8 +119,8 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side.rail .who .t b{display:block;color:#fff;font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .side.rail .who .t small{display:block;font-size:12px;opacity:.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .side.rail .who .chev{display:grid;place-items:center;opacity:.8;flex:none}
-.side.rail .attn{position:absolute;left:43px;top:7px;width:11px;height:11px;padding:0;border-radius:50%;background:var(--warning-dot);border:2px solid var(--rail)}
-.side.rail .attn:hover{background:var(--warning-dot)}
+.side.rail .attn{position:absolute;left:40px;top:10px;width:11px;height:11px;padding:0;border-radius:50%;background:var(--unread);border:2px solid var(--rail)}
+.side.rail .attn:hover{background:var(--unread)}
 /* Status slot */
 .side.rail .side-bottom{padding-bottom:0}
 .side.rail .side-bottom>.nav{font-size:13px;padding:7px 18px;gap:14px}
@@ -146,11 +146,11 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side.rail.is-narrow .traffic .lights{visibility:hidden;gap:5px}
 .side.rail.is-narrow .who{justify-content:center;padding-left:0;padding-right:0;gap:0;border-right:3px solid transparent}
 .side.rail.is-narrow .who .t,.side.rail.is-narrow .who .chev{display:none}
-.side.rail.is-narrow .attn{left:calc(50% + 8px);top:9px}
-.side.rail.is-narrow .nav>.rail-tail{position:absolute;top:9px;left:calc(50% + 8px);margin:0;min-width:0;width:6px;height:6px;border-radius:50%;font-size:0;box-shadow:0 0 0 2px var(--rail)}
+.side.rail.is-narrow .attn{left:calc(50% + 7px);top:9px}
+.side.rail.is-narrow .nav>.rail-tail{position:absolute;top:11px;left:calc(50% + 6px);margin:0;min-width:0;width:6px;height:6px;border-radius:50%;font-size:0;box-shadow:0 0 0 2px var(--rail)}
 .side.rail.is-narrow .nav>.rail-tail.dot::before{width:6px;height:6px}
-.side.rail.is-narrow .nav>.rail-tail.count{background:var(--warning-dot)}
-.side.rail.is-narrow .nav>.rail-tail.count.warn{background:var(--warning-dot)}
+.side.rail.is-narrow .nav>.rail-tail.count{background:var(--unread)}
+.side.rail.is-narrow .nav>.rail-tail.count.warn{background:var(--unread)}
 .side.rail.is-narrow .status{justify-content:center;padding-left:0;padding-right:0;gap:0;border-right:3px solid transparent}
 .side.rail.is-narrow .status .t{display:none}
 /* Account menu */
@@ -195,8 +195,8 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .main{position:relative;min-width:0;min-height:0;display:flex;flex-direction:column;background:#fff;container-type:inline-size}
 /* Refresh status: a badge over the top bar's refresh button, and the per-server popover the button opens on hover. */
 .global-refresh-wrap{position:relative;display:inline-flex;align-items:center;flex:none}
-.sync-badge{position:absolute;top:3px;left:21px;width:8px;height:8px;border-radius:50%;box-shadow:0 0 0 2px #fff;pointer-events:none}
-.sync-badge.failed{background:var(--warning-dot)}
+.sync-badge{position:absolute;top:1px;left:22px;width:8px;height:8px;border-radius:50%;box-shadow:0 0 0 2px #fff;pointer-events:none}
+.sync-badge.failed{background:var(--unread)}
 /* While refreshing, the spinner stands where the icon was: the same ring the popover's rows spin, at the icon's size.
    Qualified with .btn so it outranks the generic button spinner, which paints its ring in the button's text colour from a later stylesheet. */
 .btn.global-refresh .spin{box-sizing:border-box;width:15px;height:15px;border:1.6px solid var(--line-mid);border-top-color:var(--accent);border-right-color:var(--line-mid);border-radius:50%;animation:btn-spin .9s linear infinite}
@@ -501,8 +501,9 @@ details.dd li b{color:var(--ink-2)}
 /* Store marks */
 .tpane .fn .fselect>.av.team{width:18px;height:18px;border-radius:4px;font-size:var(--mark-type);flex:none}
 .tpane .fn .fselect>.kico.account{width:18px;height:18px;font-size:var(--mark-type)}
-/* Row action button */
-.tpane .fn .fact{flex:none;width:22px;height:22px;margin-right:4px;border-radius:5px;display:grid;place-items:center;color:var(--accent-ink);font-size:14px}
+/* Team settings stays mounted so revealing it does not shift the row. */
+.tpane .fn .fact{flex:none;width:22px;height:22px;margin-right:4px;border-radius:5px;display:grid;place-items:center;color:var(--accent-ink);font-size:14px;opacity:0;pointer-events:none}
+.tpane .fn:hover .fact,.tpane .fn.on .fact,.tpane .fn:focus-within .fact{opacity:1;pointer-events:auto}
 .tpane .fn .fact:hover{background:var(--accent-wash-2)}
 .tpane .fn:hover{background:var(--hover)}
 .tpane .fn.on{background:var(--accent-wash-2);color:var(--accent-ink)}
@@ -642,6 +643,7 @@ details.dd li b{color:var(--ink-2)}
 .sheet .btn.primary.danger{background:var(--danger-ink);color:#fff;border-color:transparent}
 .sheet .band{margin-top:10px}
 .sheet .sec{margin-top:12px}.sheet .sb>.sec:first-child{margin-top:4px}
+.sheet .confirm-inset{margin-top:10px}
 .sheet .party{padding:7px 12px}
 .sheet .party .demote{height:24px;padding:0 8px;border-radius:var(--radius-pill);background:var(--chip-bg);font-size:12px;color:var(--chip-ink);display:inline-flex;align-items:center;gap:3px}
 .sheet .party .demote[disabled]{opacity:.45;cursor:default}
@@ -704,13 +706,6 @@ details.dd li b{color:var(--ink-2)}
 .crumb{display:inline-flex;align-items:center;gap:4px;font-size:13px;color:var(--muted);font-weight:500;padding:3px 6px;margin-left:-6px;border-radius:6px}
 .crumb:hover{background:var(--hover);color:var(--ink)}
 .crumb .ic{font-size:14px}
-.shead{display:flex;align-items:center;gap:10px;margin:6px 0 2px;min-width:0}
-.shead .smark{width:32px;height:32px;font-size:18px}
-.shead .t{min-width:0;flex:1;line-height:1.25}
-.shead .t b{display:block;font-size:15px;font-weight:650;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.shead .t small{display:block;font-size:12.5px;color:var(--muted)}
-.shead .chip{margin-left:auto}
-.shead+.band{margin-top:10px}
 .band .t{flex:1;min-width:0}
 .band .a{margin-left:auto;flex:none;display:flex;gap:6px;align-self:center}
 .hostid{display:flex;align-items:center;gap:8px;min-width:0}
@@ -771,7 +766,7 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 .switch .acc:hover{background:var(--hover)}
 .switch .acc.on{border-color:var(--accent-border);background:var(--accent-wash-2)}
 .switch .acc.off{opacity:.62}
-.switch .acc .dot{width:7px;height:7px;border-radius:50%;background:var(--warning-dot);flex:none}
+.switch .acc .dot{width:7px;height:7px;border-radius:50%;background:var(--unread);flex:none}
 .switch .acc .t{min-width:0;line-height:1.25;text-align:left}
 .switch .acc .t b{display:block;font-size:13px;font-weight:650}
 .switch .acc .t small{display:block;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -840,12 +835,8 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 
 /* Collapsed rail nav overrides */
 .side.rail.is-narrow .nav{justify-content:center;padding-left:0;padding-right:0;gap:0;border-right:3px solid transparent}
-.side.rail.is-narrow .attn{left:32px}
+.side.rail.is-narrow .attn{left:31px}
 .side.rail.is-narrow .who .avatar{transform:translateY(2px)}
 .side.rail .traffic{position:relative}
-.rail-back{position:absolute;right:8px;top:calc(50% + 4px);transform:translateY(-50%);display:grid;place-items:center;width:24px;height:24px;border-radius:5px;color:var(--rail-ink);-webkit-app-region:no-drag}
-.rail-back .ic{width:15px;height:15px}
-.rail-back:hover:not(:disabled){background:rgba(255,255,255,.12)}
-.rail-back:disabled{opacity:.35}
 
 .chat-migration { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 20px; font-size: 13px; flex-shrink: 0; }

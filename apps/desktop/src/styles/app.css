@@ -567,6 +567,12 @@ body {
   gap: 6px;
 }
 
+.settings-main .device-list-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
 .settings-main .account-fact-link {
   height: auto;
   padding: 2px 0;

@@ -5,11 +5,11 @@ import { localAliasOf } from '../model';
  *
  * Account, the first page and the one the tab opens on, is one account's
  * profile: the account the address's `store` names. At its bottom are the
- * servers this Mac talks to, each with its own detail, where its security keys
- * are managed. Preferences contains local desktop alert and appearance settings.
+ * servers this Mac talks to. Each server opens its own page, where its security
+ * keys are managed. Preferences contains local desktop alert and appearance settings.
  * Device contains the application version and lock, the agent and its socket,
  * local FOKS data operations, and the device-wide reset. A `section=` address
- * opens its page; `profile=` opens a server detail at the bottom of Account.
+ * opens its page; `profile=` opens a server page under Account.
  *
  * Account draws its own header — the account's mark, username and server —
  * and its own tab panel, and owns its sheets. The other two share the
@@ -77,7 +77,7 @@ export interface SettingsScreenProps {
   onRetryAgent: () => Promise<void>;
 }
 
-/** A sheet this page owns. Add a server and the per-server reset are the
+/** A sheet this page owns. Add a server and server removal are the
  *  embedded server section's own. */
 type Sheet = 'reset-mac' | null;
 
@@ -108,44 +108,24 @@ export function SettingsScreen({
 
   const section: SettingsSection = settingsSectionOf(location);
 
+  const serverPanel = {
+    id: tabPanelId(SETTINGS_TABS, 'account'),
+    labelledBy: tabId(SETTINGS_TABS, 'account'),
+  };
+  const selectedServer = location.profile
+    ? snapshot.servers.find((server) => server.id === location.profile)
+    : undefined;
   const serversSection = (
-    <div className="account-servers">
-      <SectionLabel
-        action={
-          location.profile ? (
-            <Button
-              size="sm"
-              icon="back"
-              onClick={() =>
-                onNavigate(
-                  {
-                    kind: 'settings',
-                    section: 'account',
-                    ...(location.store ? { store: location.store } : {}),
-                  },
-                  { replace: true },
-                )
-              }
-            >
-              All servers
-            </Button>
-          ) : null
-        }
-      >
-        {location.profile ? 'Server details' : 'Servers on this device'}
-      </SectionLabel>
-      <ServersSection
-        snapshot={snapshot}
-        bridge={bridge}
-        profile={location.profile}
-        store={location.store}
-        scene={enteredScene}
-        onNavigate={onNavigate}
-        onRefresh={onRefresh}
-        onError={onError}
-        onMutationError={onMutationError}
-      />
-    </div>
+    <ServersSection
+      snapshot={snapshot}
+      bridge={bridge}
+      store={location.store}
+      scene={enteredScene}
+      onNavigate={onNavigate}
+      onRefresh={onRefresh}
+      onError={onError}
+      onMutationError={onMutationError}
+    />
   );
 
   const page: ReactNode =
@@ -194,15 +174,25 @@ export function SettingsScreen({
         />
       </nav>
       <div className="subnav-page">
-        {section === 'account' ? (
+        {section === 'account' && selectedServer ? (
+          <ServersSection
+            snapshot={snapshot}
+            bridge={bridge}
+            profile={selectedServer.id}
+            store={location.store}
+            scene={enteredScene}
+            panel={serverPanel}
+            onNavigate={onNavigate}
+            onRefresh={onRefresh}
+            onError={onError}
+            onMutationError={onMutationError}
+          />
+        ) : section === 'account' ? (
           <AccountSection
             snapshot={snapshot}
             bridge={bridge}
             location={location}
-            panel={{
-              id: tabPanelId(SETTINGS_TABS, section),
-              labelledBy: tabId(SETTINGS_TABS, section),
-            }}
+            panel={serverPanel}
             onNavigate={onNavigate}
             onRefresh={onRefresh}
             onRefreshSnapshot={onRefreshSnapshot}
@@ -344,7 +334,7 @@ function DeviceSection({
     };
   }, [bridge, ready, agentLifecycle.state]);
   const foreign = process !== null && process.pid !== null && !process.owned;
-  // The restart sheet: opened by the Restart row, or by a maintenance action
+  // The restart sheet: opened from the Status row, or by a maintenance action
   // that the agent's ownership refused, in which case it carries the action
   // to run once the agent is ours.
   const [restart, setRestart] = useState<RestartRequest | null>(null);
@@ -406,7 +396,15 @@ function DeviceSection({
         <InsetRow
           label="Status"
           action={
-            ready ? undefined : (
+            ready ? (
+              <Button
+                size="sm"
+                disabled={maintenanceUnavailable}
+                onClick={() => setRestart({ purpose: 'restart' })}
+              >
+                Restart…
+              </Button>
+            ) : (
               <Button
                 size="sm"
                 variant="primary"
@@ -459,20 +457,6 @@ function DeviceSection({
           }
         >
           {appInfo?.agentSocket ?? 'Reading app info…'}
-        </InsetRow>
-        <InsetRow
-          label="Restart"
-          action={
-            <Button
-              size="sm"
-              disabled={maintenanceUnavailable}
-              onClick={() => setRestart({ purpose: 'restart' })}
-            >
-              Restart…
-            </Button>
-          }
-        >
-          <small>Stop the local agent and start it again.</small>
         </InsetRow>
       </Inset>
       <SectionLabel>FOKS data</SectionLabel>

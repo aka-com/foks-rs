@@ -39,12 +39,8 @@
       "capabilities": ["chat", "kv"]
     }
   },
-  "addedServer": {
-    "profile": "partner",
-    "configuredProbe": "foks.partner.example"
-  },
   "serverLabel": { "profile": "partner", "label": "Partners", "changed": true },
-  "forgottenServer": { "profile": "partner", "removed": true },
+  "removedServer": { "profile": "partner", "removed": true },
   "profileReconciliation": {
     "profile": "work",
     "identity": {

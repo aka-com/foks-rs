@@ -338,7 +338,7 @@ when the address names one, such as "Files › Engineering", "Chat › Household
 #general" or "Settings › Servers" — a flexible gap, the "Search everything"
 trigger with its ⌘K hint, the rail's collapse toggle and the catalog refresh.
 The refresh is one square button: it refreshes on click, carries a spinner
-badge while any server is refreshing and an amber dot when one could not be
+badge while any server is refreshing and an orange dot when one could not be
 refreshed, and pointing at it opens the per-server Refresh status popover
 (`SyncPopover`), which stays up while the pointer is on the button or on the
 popover itself. Its empty parts carry `data-tauri-drag-region`, because the
@@ -561,15 +561,15 @@ closes. A scene is entered once: concealing a phrase remounts the tab without
 reopening the dialog that the scene opened. Navigating to an account ID that is
 no longer present locally displays an account-unavailable screen listing valid
 accounts, rather than reporting that no accounts are configured. Settings is a
-sub-navigation of three pages. Servers: the list, grouped as Needs attention —
-which holds the never-checked as well as the locked, since nothing on either can
-be used — and Ready, each row with its state chip, a Check on the never-checked
-and lapsed rows, and Open for the server's own page, which holds that server's
-security keys and its own reset. Preferences: a Passphrase row per account with
-one Change passphrase… button (the sheet defaults to Change and switches to Set or
-Verify in place; the row of an account whose access has stopped says why the
-button is disabled), then Desktop alerts — this device's desktop-alert and
-message-preview preferences, which the desktop persists locally; channel
+sub-navigation of three pages. Account ends with one Servers on this device
+group, with Add a server… beside its heading. Servers requiring attention stay
+at the top of that group; each row has its state chip, a Check on the
+never-checked and lapsed rows, and Open for the server's own page, which holds
+that server's security keys and its own reset. Passphrase… sits beside Change…
+on the Username row (the sheet defaults to Change and switches to Set or Verify
+in place; an account whose access has stopped explains why the button is
+disabled). Preferences contains Desktop alerts — this device's desktop-alert
+and message-preview preferences, which the desktop persists locally; channel
 overrides stay in Chat's info panel, with a link here, and none of these
 preferences sync between devices. Device: Application (version, Lock now),
 Agent (status with Retry connection while it is not ready, socket with Copy),
@@ -591,8 +591,9 @@ write, its roster summary or its
 state chip, and a row action that opens it; with none, "No groups on this
 server"). Identity and trust holds the
 address, the pinned host id with Copy and the audit log's two numbers, and the
-danger zone keeps two rows, because `forget_server` and `reset_server` are two
-commands with two outcomes.
+danger zone has one Remove server and credentials action. It deletes the local
+profile, credentials, trust history, cache, and unfinished operations without
+changing data on the server.
 A store's abnormal state
 is a chip at the end of its row on each of the four lists that draw one —
 Files, Teams, Accounts’ Teams you're in, and a server's page —
@@ -859,6 +860,12 @@ new channels, member addition, group creation, invitation details, and typed
 pairing acceptance. Screens explicitly opt their selectors and fields into
 `useTabSheetState`; PINs, passphrases, paper-key reveals, card setup, revocation,
 and in-flight writes are not restored. Confirming a discard clears this memory.
+Window focus loss does not dismiss these workflows. `useConcealOnInactive`
+instead belongs to the plaintext surface it protects: pairing offers and
+revealed vault values hide, the first-run recovery phrase stays on its current
+step with its words masked, and plaintext item drafts remain mounted but masked
+until the reader reveals them again. Displayed paper keys and password inputs
+keep their workflow state.
 Other navigation still unmounts the workflow and asks its guard. Every entry point — the rail's tabs, Control-Tab,
 the topbar's back chevron, the account switcher, the ⌘K palette, attention
 links, the trackpad's back swipe — reaches the same three methods on
@@ -1018,7 +1025,7 @@ kept so deep links defined in the design specification resolve to this location.
 | `checklist-invited` · `checklist-own`                                                | Get started inside the ordinary shell   | resumable nonsecret progress summary                                                                    |
 | `first-run&step=<step>&path=<path>`                                                  | the resumable first-run location codec  | used after the first in-app transition and across reload                                                |
 | `servers-list` · `servers-server` · `servers-lapsed` · `servers-rollback`            | Settings › Servers                      | the list, then one server's page; `profile=` opens it                                                   |
-| `servers-reset` · `servers-add` · `servers-unprobed` · `servers-check`               | Settings › Servers                      | typed reset, add/check and explicit result states                                                       |
+| `servers-reset` · `servers-add` · `servers-unprobed` · `servers-check`               | Settings › Servers                      | typed removal, add/check and explicit result states                                                       |
 | `settings&section=servers` · `settings&section=preferences` · `settings&section=mac` | Settings                                | the three pages of the sub-navigation; retired section names resolve to the page that holds them        |
 | `settings-macs` · `settings-macs-work` · `settings-phrase`                           | Devices                                 | Macs, pairing and the one-time paper-key reveal; `settings-macs-work` names the exact `acct:work` store |
 | `settings-keys` · `settings-enrol`                                                   | Devices                                 | the Security key enrollments section and the YubiKey account sheet                                      |

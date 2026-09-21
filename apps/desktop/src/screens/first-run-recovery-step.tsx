@@ -15,6 +15,8 @@ interface Props {
   busy: boolean;
   mutationBusy: boolean;
   backupPhrase: string | null;
+  phraseConcealed: boolean;
+  revealPhrase: () => void;
   phraseWritten: boolean;
   setPhraseWritten: Dispatch<SetStateAction<boolean>>;
   go: (state: FirstRunStateName) => void;
@@ -33,6 +35,8 @@ export function RecoveryStep({
   checkpoint,
   busy,
   backupPhrase,
+  phraseConcealed,
+  revealPhrase,
   phraseWritten,
   setPhraseWritten,
   go,
@@ -94,18 +98,11 @@ export function RecoveryStep({
           </p>
           {state === 'phrase' ? (
             <>
-              {backupPhrase ? (
-                <div className="words">
-                  {backupPhrase.split(/\s+/).map((word, index) => (
-                    <div className="word" key={`${index}-${word}`}>
-                      <i>{index + 1}</i>
-                      {word}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p>Preparing your phrase…</p>
-              )}
+              <RecoveryPhrase
+                phrase={backupPhrase}
+                concealed={phraseConcealed}
+                onReveal={revealPhrase}
+              />
               <label className="local-confirm">
                 <input
                   type="checkbox"
@@ -235,18 +232,11 @@ export function RecoveryStep({
                 Anyone with these words can access your account. Store them
                 somewhere safe, like an offline vault, or your password manager.
               </p>
-              {backupPhrase ? (
-                <div className="words">
-                  {backupPhrase.split(/\s+/).map((word, index) => (
-                    <div className="word" key={`${index}-${word}`}>
-                      <i>{index + 1}</i>
-                      {word}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p>Preparing your phrase…</p>
-              )}
+              <RecoveryPhrase
+                phrase={backupPhrase}
+                concealed={phraseConcealed}
+                onReveal={revealPhrase}
+              />
               <button
                 type="button"
                 aria-label="I have written this down"
@@ -263,4 +253,39 @@ export function RecoveryStep({
     );
 
   return content;
+}
+
+function RecoveryPhrase({
+  phrase,
+  concealed,
+  onReveal,
+}: {
+  phrase: string | null;
+  concealed: boolean;
+  onReveal: () => void;
+}): ReactNode {
+  if (!phrase) return <p>Preparing your phrase…</p>;
+  const words = phrase.split(/\s+/);
+  return (
+    <>
+      <div
+        className="words"
+        aria-label={concealed ? 'Recovery phrase hidden' : undefined}
+      >
+        {words.map((word, index) => (
+          <div
+            className="word"
+            key={`${index}-${concealed ? 'hidden' : word}`}
+            aria-hidden={concealed || undefined}
+          >
+            <i>{index + 1}</i>
+            {concealed ? '••••••' : word}
+          </div>
+        ))}
+      </div>
+      {concealed ? (
+        <Button onClick={onReveal}>Show recovery phrase</Button>
+      ) : null}
+    </>
+  );
 }

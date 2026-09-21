@@ -20,6 +20,7 @@ import {
   SheetDialog,
 } from '../components';
 import type { CardOption, DocumentSourceKind, FilterKind } from '../components';
+import { useConcealOnInactive } from '../use-conceal-on-inactive';
 import {
   isLogin,
   itemKey,
@@ -497,6 +498,7 @@ function NewSheet({
     'item.value',
     workflow.draft?.value ?? '',
   );
+  const [valueConcealed, setValueConcealed] = useState(false);
   const [resourceName, setResourceName] = useTabSheetState(
     'item.resourceName',
     workflow.draft?.resourceName ?? '',
@@ -526,6 +528,10 @@ function NewSheet({
   const canWrite = Boolean(store && canCreateInStore(snapshot, store.id));
   const blocked = store ? writeBlockReason(snapshot, store) : null;
   const itemKind = workflow.itemKind;
+  useConcealOnInactive(
+    () => setValueConcealed(true),
+    itemKind === 'Document' && source === 'text' && Boolean(value),
+  );
   const roleArgs = group ? { readRole, writeRole } : {};
 
   useFileDrop({
@@ -829,6 +835,8 @@ function NewSheet({
                 onValue={setValue}
                 sourcePath={sourcePath}
                 hovering={hovering}
+                concealed={valueConcealed}
+                onReveal={() => setValueConcealed(false)}
               />
             </>
           ) : null}

@@ -341,16 +341,6 @@ export function decodeCheckedServer(value: unknown): CheckedServer {
   };
 }
 
-export const decodeAddedServer = (
-  value: unknown,
-): { profile: string; configuredProbe: string } => {
-  const item = record(value, 'add_server response');
-  return {
-    profile: string(item.profile, 'add_server.profile'),
-    configuredProbe: string(item.configuredProbe, 'add_server.configuredProbe'),
-  };
-};
-
 export const decodeServerLabelResponse = (
   value: unknown,
 ): ServerLabelResponse => {
@@ -368,14 +358,14 @@ export const decodeServerLabelResponse = (
   };
 };
 
-export const decodeForgottenServer = (
+export const decodeRemovedServer = (
   value: unknown,
 ): { profile: string; removed: true } => {
-  const item = record(value, 'forget_server response');
+  const item = record(value, 'remove_server_and_credentials response');
   if (item.removed !== true)
-    throw new Error('forget_server.removed must be true');
+    throw new Error('remove_server_and_credentials.removed must be true');
   return {
-    profile: string(item.profile, 'forget_server.profile'),
+    profile: string(item.profile, 'remove_server_and_credentials.profile'),
     removed: true,
   };
 };

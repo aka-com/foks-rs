@@ -377,16 +377,21 @@ export function BlockedShell({
  * while it runs. The live region keeps its identity across partials so the
  * progress line is re-read rather than announced as a new region.
  */
+export function startingProgressDetail(progress?: BootProgress): string {
+  if (!progress) return 'Startup usually takes a few seconds.';
+  if (progress.devices) {
+    return progress.devices.total <= 3
+      ? 'This may take a few seconds...'
+      : `${progress.devices.ready} of ${progress.devices.total} accounts ready`;
+  }
+  if (progress.total <= 3) return 'This may take a few seconds...';
+  return progress.ready < progress.total
+    ? `${progress.ready} of ${progress.total} profiles ready`
+    : 'Loading items…';
+}
+
 function StartingScreen({ progress }: { progress?: BootProgress }): ReactNode {
-  const detail = progress?.devices
-    ? `${progress.devices.ready} of ${progress.devices.total} accounts ready`
-    : progress && progress.total > 0
-      ? progress.ready < progress.total
-        ? `${progress.ready} of ${progress.total} profiles ready`
-        : 'Loading items…'
-      : progress
-        ? 'This can take a few seconds.'
-        : 'Startup usually takes a few seconds.';
+  const detail = startingProgressDetail(progress);
   return (
     <div className="booting" role="status">
       <span className="spin" aria-hidden="true" />

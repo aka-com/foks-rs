@@ -48,13 +48,22 @@ async function modules() {
   const { FIRST_PAINT_DEADLINE_MS } = (await vite.ssrLoadModule(
     '/src/app/app-bootstrap.ts',
   )) as typeof import('../src/app/app-bootstrap');
+  const { startingProgressDetail } = (await vite.ssrLoadModule(
+    '/src/app/blocking-shell.tsx',
+  )) as typeof import('../src/app/blocking-shell');
   const { FIXTURE } = (await vite.ssrLoadModule(
     '/src/fixture.ts',
   )) as typeof import('../src/fixture');
   const { mockBridge } = (await vite.ssrLoadModule(
     '/src/mock-bridge.ts',
   )) as typeof import('../src/mock-bridge');
-  return { App, FIRST_PAINT_DEADLINE_MS, FIXTURE, mockBridge };
+  return {
+    App,
+    FIRST_PAINT_DEADLINE_MS,
+    FIXTURE,
+    mockBridge,
+    startingProgressDetail,
+  };
 }
 
 /** A catalog read the test drives: partials on demand, completion on demand. */
@@ -195,7 +204,7 @@ test('the shell does not mount on a skeleton partial and reports its progress', 
     await ui.waitFor(() =>
       assert.match(
         document.body.textContent ?? '',
-        new RegExp(`0 of ${full.profiles.length} profiles ready`),
+        /This may take a few seconds\.\.\./,
       ),
     );
     assert.equal(mounted(), false);
@@ -206,7 +215,7 @@ test('the shell does not mount on a skeleton partial and reports its progress', 
     await ui.waitFor(() =>
       assert.match(
         document.body.textContent ?? '',
-        new RegExp(`1 of ${full.profiles.length} profiles ready`),
+        /This may take a few seconds\.\.\./,
       ),
     );
     // The live region is re-read, not replaced, so each partial does not
@@ -223,7 +232,34 @@ test('the shell does not mount on a skeleton partial and reports its progress', 
   }
 });
 
-test('a partial whose stores are still loading holds the paint and says so', async () => {
+test('startup counts are shown only above three profiles or accounts', async () => {
+  const { startingProgressDetail } = await modules();
+  const generic = 'This may take a few seconds...';
+
+  assert.equal(startingProgressDetail({ ready: 1, total: 3 }), generic);
+  assert.equal(
+    startingProgressDetail({ ready: 1, total: 4 }),
+    '1 of 4 profiles ready',
+  );
+  assert.equal(
+    startingProgressDetail({
+      ready: 3,
+      total: 3,
+      devices: { ready: 2, total: 3 },
+    }),
+    generic,
+  );
+  assert.equal(
+    startingProgressDetail({
+      ready: 4,
+      total: 4,
+      devices: { ready: 2, total: 4 },
+    }),
+    '2 of 4 accounts ready',
+  );
+});
+
+test('a small catalog whose stores are still loading keeps the generic detail', async () => {
   const { App, FIXTURE, mockBridge } = await modules();
   const base = mockBridge(FIXTURE);
   const full = await base.listCatalog();
@@ -242,7 +278,10 @@ test('a partial whose stores are still loading holds the paint and says so', asy
   try {
     await driven.emit(listed);
     await ui.waitFor(() =>
-      assert.match(document.body.textContent ?? '', /Loading items…/),
+      assert.match(
+        document.body.textContent ?? '',
+        /This may take a few seconds\.\.\./,
+      ),
     );
     assert.equal(mounted(), false);
   } finally {

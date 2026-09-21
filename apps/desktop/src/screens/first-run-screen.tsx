@@ -18,6 +18,7 @@ import { useServerWorkflow } from './first-run/use-server-workflow';
 import { useTeamDiscovery } from './first-run/use-team-discovery';
 export { profileNameFor } from './first-run/use-server-workflow';
 import { retainSetup, updateRetainedSetup } from '../first-run-recovery';
+import { useConcealOnInactive } from '../use-conceal-on-inactive';
 import { SsoPanel } from '../components/sso-panel';
 import { provisioningInFlight } from '../first-run-operations';
 import type { ProvisioningIntent } from '../first-run-state';
@@ -379,6 +380,7 @@ function FirstRunSession({
   const [goScanError, setGoScanError] = useState<string | null>(null);
   const [goScanAttempt, setGoScanAttempt] = useState(0);
   const [backupPhrase, setBackupPhrase] = useState<string | null>(null);
+  const [backupPhraseConcealed, setBackupPhraseConcealed] = useState(false);
   const [phraseWritten, setPhraseWritten] = useState(false);
   // Pending path selection before confirmation.
   const [pendingPath, setPendingPath] = useState<FirstRunPath | null>(null);
@@ -752,6 +754,7 @@ function FirstRunSession({
 
   const go = useCallback(
     (next: FirstRunStateName): void => {
+      if (next === 'phrase') setBackupPhraseConcealed(false);
       setMessage(null);
       setDuplicateAlias(null);
       setConnectionErrors({ copy: null, recover: null, pair: null });
@@ -905,6 +908,7 @@ function FirstRunSession({
     setPairingPhrase('');
     backupPreparation.current = null;
     setBackupPhrase(null);
+    setBackupPhraseConcealed(false);
     setPhraseWritten(false);
     secretsHeld.current = false;
   }, []);
@@ -972,16 +976,10 @@ function FirstRunSession({
     if (state === 'phrase') go('protect');
   }, [clearSecrets, concealSignal, go, state]);
 
-  useEffect(() => {
-    const concealWhenHidden = (): void => {
-      if (document.visibilityState !== 'hidden') return;
-      clearSecrets();
-      if (state === 'phrase') go('protect');
-    };
-    document.addEventListener('visibilitychange', concealWhenHidden);
-    return () =>
-      document.removeEventListener('visibilitychange', concealWhenHidden);
-  }, [clearSecrets, go, state]);
+  useConcealOnInactive(
+    () => setBackupPhraseConcealed(true),
+    state === 'phrase',
+  );
 
   useEffect(() => {
     if (!agentReady || !profile) {
@@ -2550,6 +2548,8 @@ function FirstRunSession({
         checkpoint={checkpoint}
         busy={busy}
         backupPhrase={backupPhrase}
+        phraseConcealed={backupPhraseConcealed}
+        revealPhrase={() => setBackupPhraseConcealed(false)}
         phraseWritten={phraseWritten}
         setPhraseWritten={setPhraseWritten}
         go={go}

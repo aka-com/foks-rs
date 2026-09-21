@@ -46,6 +46,7 @@ import { useFileDrop } from '../file-drop';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { editableValue } from './edit-value';
 import { itemActionProblem } from './store-access';
+import { useConcealOnInactive } from '../use-conceal-on-inactive';
 
 const FIELD_LABELS: Readonly<Record<string, string>> = {
   user: 'User name',
@@ -258,6 +259,7 @@ export function DetailsPanel({
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
   const [editPasswordShown, setEditPasswordShown] = useState(false);
+  const [editContentConcealed, setEditContentConcealed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [replacementPath, setReplacementPath] = useState<string | null>(null);
   const [dropHover, setDropHover] = useState(false);
@@ -411,6 +413,7 @@ export function DetailsPanel({
     } else {
       setEditing(false);
       setEditValue('');
+      setEditContentConcealed(false);
       editBaseline.current = null;
       editTarget.current = null;
       setReplacementPath(null);
@@ -431,15 +434,24 @@ export function DetailsPanel({
     if (read?.key !== key) void show();
   }, [item, key, onRevealHandled, read?.key, revealRequest, show]);
 
-  // Conceal sensitive values when the window loses focus.
-  useEffect(() => {
-    const conceal = (): void => {
+  // Revealed values and plaintext edit drafts are covered without abandoning
+  // the details panel or its unsaved work.
+  useConcealOnInactive(
+    () => {
       concealEpoch.current += 1;
       setRead(null);
-    };
-    window.addEventListener('blur', conceal);
-    return () => window.removeEventListener('blur', conceal);
-  }, [item]);
+      setEditPasswordShown(false);
+      if (
+        editing &&
+        item &&
+        !isLogin(item) &&
+        item.kind !== 'File' &&
+        !binaryFile
+      )
+        setEditContentConcealed(true);
+    },
+    Boolean(read) || editing || saving,
+  );
 
   // A read in flight when access changes generation is dropped when it lands,
   // so the control it disabled is released now instead of reading forever.
@@ -456,6 +468,7 @@ export function DetailsPanel({
     editTarget.current = null;
     setEditing(false);
     setEditPasswordShown(false);
+    setEditContentConcealed(false);
     setReplacementPath(null);
   }, [accessGeneration, concealSignal]);
 
@@ -467,6 +480,7 @@ export function DetailsPanel({
     if (appliedDraft.current === resumeDraft.epoch) return;
     appliedDraft.current = resumeDraft.epoch;
     setEditValue(resumeDraft.value);
+    setEditContentConcealed(false);
     editBaseline.current = null;
     editTarget.current = item;
     editScope.current = scopeIdentity;
@@ -498,6 +512,7 @@ export function DetailsPanel({
   const clearEdit = useCallback(() => {
     setEditing(false);
     setEditValue('');
+    setEditContentConcealed(false);
     editBaseline.current = null;
     editTarget.current = null;
     setEditPasswordShown(false);
@@ -613,6 +628,7 @@ export function DetailsPanel({
     if (!request || !requireAccess(true)) return;
     setEditError(null);
     if (fileMode) {
+      setEditContentConcealed(false);
       editBaseline.current = '';
       editTarget.current = item;
       editScope.current = scopeIdentity;
@@ -641,6 +657,7 @@ export function DetailsPanel({
       if (!current()) return;
       const opened = editableValue(item, response.value);
       setEditValue(opened);
+      setEditContentConcealed(false);
       editBaseline.current = opened;
       editTarget.current = item;
       editScope.current = scopeIdentity;
@@ -654,6 +671,7 @@ export function DetailsPanel({
       if (typed.code === 'not-text' && item.kind === 'Secret') {
         setBinaryFile(true);
         setRead(null);
+        setEditContentConcealed(false);
         editBaseline.current = '';
         editTarget.current = item;
         editScope.current = scopeIdentity;
@@ -777,6 +795,24 @@ export function DetailsPanel({
             />
           );
         })}
+      </Inset>
+    ) : editing && editContentConcealed ? (
+      <Inset variant="preview">
+        <InsetRow
+          label="Contents"
+          valueClass="mask"
+          action={
+            <button
+              type="button"
+              onClick={() => setEditContentConcealed(false)}
+            >
+              <Icon name="eye" />
+              Show
+            </button>
+          }
+        >
+          {MASK}
+        </InsetRow>
       </Inset>
     ) : editing ? (
       <Inset variant="preview">

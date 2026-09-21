@@ -163,9 +163,7 @@ test('a tab navigates, and Control-Tab walks the six of them', async () => {
   await testingLibrary.waitFor(() => {
     assert.equal(crumbs(), 'Files›All items');
   });
-  testingLibrary.fireEvent.click(
-    testingLibrary.screen.getByRole('button', { name: 'Back' }),
-  );
+  assert.equal(document.querySelector('.side.rail .rail-back'), null);
 });
 
 /** The topbar crumb, segments joined by the separator glyph. */
@@ -198,28 +196,22 @@ test('the Files tree lists the stores the roots page used to enumerate', async (
     assert.equal(crumbs(), 'Files›Engineering');
   });
   // Browsing a store through the tree is client-side selection, not a
-  // location change, but the topbar reads that same selection: its own crumb
-  // names the store too, and the rail's back chevron — which now steps back
-  // through the tree's own selection before it ever moves to a different
-  // location — goes live, since there is somewhere narrower to return from.
+  // location change, but the topbar reads that same selection.
   assert.equal(
     document
       .querySelector('.topbar .crumbs')
       ?.textContent?.includes('Engineering'),
     true,
   );
-  const back = document.querySelector<HTMLButtonElement>(
-    '.side.rail .rail-back',
+  assert.equal(document.querySelector('.side.rail .rail-back'), null);
+  const allItems = rows.find(
+    (row) => row.querySelector('.nm')?.textContent === 'All items',
   );
-  assert.ok(back);
-  assert.equal(back.disabled, false);
-  testingLibrary.fireEvent.click(back);
-  // One step back returns to All items rather than leaving the Files tab: the
-  // leaf the browser opens on is the root there is nowhere further back from.
+  assert.ok(allItems);
+  testingLibrary.fireEvent.click(allItems);
   await testingLibrary.waitFor(() => {
     assert.equal(crumbs(), 'Files›All items');
   });
-  assert.equal(back.disabled, true);
 });
 
 test('the chat tab opens a conversation and lists every team at once', async () => {

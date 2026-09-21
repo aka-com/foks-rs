@@ -95,10 +95,7 @@ test('defaults to All items, displaying all stores in one table', async () => {
   assert.ok(rows.length > 1, 'items from more than one store are listed');
   // Items span stores, so Location identifies each item's store.
   assert.deepEqual(columns(), ['Name', 'Kind', 'Location', 'Size']);
-  // All items is the Files root, so Back is disabled.
-  const back = document.querySelector<HTMLButtonElement>('.rail-back');
-  assert.ok(back);
-  assert.equal(back.disabled, true);
+  assert.equal(document.querySelector('.rail-back'), null);
 });
 
 test('All items is the first tree row; stores follow under their headings', async () => {
@@ -159,7 +156,12 @@ test('a store with nothing in it is still reachable from the tree', async () => 
 test('an empty team displays shared-item details and inline settings', async () => {
   await mount({ kind: 'all' });
   // "Homelab" is a team with nothing in it.
-  assert.equal(treeRow('Homelab').parentElement?.querySelector('.fact'), null);
+  assert.ok(
+    treeRow('Homelab').parentElement?.querySelector(
+      '.fact[aria-label="Team settings"]',
+    ),
+    'team settings is mounted before selection so row hover can reveal it',
+  );
   ui.fireEvent.click(treeRow('Homelab'));
   await ui.waitFor(() => assert.equal(currentTitle(), 'Homelab'));
   assert.equal(

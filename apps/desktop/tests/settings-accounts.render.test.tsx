@@ -179,7 +179,7 @@ test('the account panel keeps every workflow row from the accounts pane', async 
 
   // One account is shown at a time now, so each fact and each workflow
   // appears once: the primary facts' actions, the passphrase action, and the
-  // four quieter links below them.
+  // six quieter links below them.
   for (const name of [
     'Change…',
     'Server details ›',
@@ -190,6 +190,8 @@ test('the account panel keeps every workflow row from the accounts pane', async 
     'Open web admin panel',
     'Sign in via SSO',
     'Import from FOKS CLI',
+    'Connect an existing account with a paper key',
+    'Create an account on a YubiKey…',
   ])
     assert.equal(
       rendered.getAllByRole('button', { name }).length,
@@ -215,6 +217,60 @@ test('the account panel keeps every workflow row from the accounts pane', async 
     null,
   );
   assert.equal(rendered.queryByText('Check-in not required'), null);
+  assert.equal(
+    rendered.queryByText(
+      'Set or change this account’s passphrase on its server.',
+    ),
+    null,
+  );
+  assert.deepEqual(
+    [...document.querySelectorAll('.account-more button')].map((button) =>
+      button.textContent?.trim(),
+    ),
+    [
+      'Bot accounts',
+      'Open web admin panel',
+      'Sign in via SSO',
+      'Import from FOKS CLI',
+      'Connect an existing account with a paper key',
+      'Create an account on a YubiKey…',
+    ],
+  );
+});
+
+test('account recovery and YubiKey creation open after the existing actions', async () => {
+  const { rendered } = await renderPeople(await fixture());
+
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      rendered.getByRole('button', {
+        name: 'Connect an existing account with a paper key',
+      }),
+    );
+  });
+  let dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
+  assert.equal(
+    ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
+    'Connect account via recovery key',
+  );
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(dialog).getByRole('button', { name: 'Cancel' }),
+    );
+  });
+
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      rendered.getByRole('button', {
+        name: 'Create an account on a YubiKey…',
+      }),
+    );
+  });
+  dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
+  assert.equal(
+    ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
+    'Create a YubiKey account',
+  );
 });
 
 test('the profile’s Teams and Devices facts summarize the account and link to where they are managed', async () => {
@@ -440,6 +496,22 @@ test('the username row opens a sheet titled for the workflow, not the account', 
   assert.ok(ui.within(dialog).getByLabelText('Username'));
 });
 
+test('losing focus keeps a masked account workflow open', async () => {
+  const { rendered } = await renderPeople(await fixture());
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Change…' }));
+  const dialog = await rendered.findByRole('dialog');
+
+  ui.fireEvent(window, new Event('blur'));
+
+  assert.equal(rendered.getByRole('dialog'), dialog);
+  assert.equal(
+    rendered
+      .getByLabelText('Security key PIN (enrolled keys only)')
+      .getAttribute('type'),
+    'password',
+  );
+});
+
 test('the header names the account and carries no switcher of its own', async () => {
   const { rendered } = await renderPeople(await fixture(), 'acct:personal');
 
@@ -466,6 +538,32 @@ test('the header names the account and carries no switcher of its own', async ()
   assert.equal(panel.id, 'settings-sections-panel-account');
   assert.ok(ui.within(panel).getByText('Username'));
   assert.ok(rendered.getByRole('button', { name: 'Server details ›' }));
+});
+
+test('an unpaired server is hidden until its account inventory loads successfully', async () => {
+  const snapshot = await fixture();
+  const failed: AgentSnapshot = {
+    ...snapshot,
+    profileInventory: snapshot.profileInventory.map((inventory) =>
+      inventory.profile === 'partner'
+        ? { ...inventory, accounts: 'unavailable' }
+        : inventory,
+    ),
+    notifications: [
+      {
+        id: 'catalog-partner-profile-0',
+        profile: 'partner',
+        severity: 'warn',
+        title: 'Could not load profile overview on partner',
+        detail: 'The external rollback checkpoint is missing.',
+        action: 'Inspect',
+      },
+    ],
+  };
+  const { rendered } = await renderPeople(failed);
+
+  assert.ok(rendered.getByText('Could not load profile overview on partner'));
+  assert.equal(rendered.queryByText('Connected, not paired'), null);
 });
 
 test('a notice this page can route elsewhere is not repeated here', async () => {
@@ -540,17 +638,22 @@ test('a team note with the same alias on two profiles routes to neither', async 
   assert.equal(rendered.queryByRole('button', { name: 'Open Homelab' }), null);
   const list = rendered.getByRole('region', { name: /^Needs attention/ });
   assert.ok(ui.within(list).getByText('Resume creation'));
-  // The band qualifies this account's facts, so it sits directly above them
-  // rather than ahead of the account the page names.
+  // The band qualifies this account's facts, so it stays above both the
+  // unpaired-server row and those facts rather than ahead of the account the
+  // page names.
   const section = list.closest('.people-attention');
   assert.ok(section, 'the notes are drawn in the page’s notice section');
   assert.ok(
     section.closest('.account-main'),
     'the section is in the page body, under the header that names the account',
   );
+  const unpaired = section.nextElementSibling;
+  if (!unpaired) throw new Error('the unpaired server row is missing');
+  assert.ok(unpaired.classList.contains('inset'));
+  assert.match(unpaired.textContent ?? '', /Connected, not paired/);
   assert.ok(
-    section.nextElementSibling?.classList.contains('settings-inset'),
-    'the section precedes the facts',
+    unpaired.nextElementSibling?.classList.contains('settings-inset'),
+    'the server row precedes the account facts',
   );
 });
 

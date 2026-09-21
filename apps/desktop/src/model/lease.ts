@@ -696,7 +696,7 @@ export function notesNow(snapshot: AgentSnapshot): Notification[] {
   });
 }
 
-/** A server whose check-in has lapsed or whose trust has never been verified: the two reasons the Settings tab's amber dot answers for. */
+/** A server whose check-in has lapsed or whose trust has never been verified: the two reasons the Settings tab's orange dot answers for. */
 function serverFlaggedForSettings(availability: Availability): boolean {
   return (
     !availability.available &&
@@ -706,11 +706,11 @@ function serverFlaggedForSettings(availability: Availability): boolean {
 }
 
 /**
- * The Settings tab's amber dot: on when a server's check-in has lapsed or it
+ * The Settings tab's orange dot: on when a server's check-in has lapsed or it
  * has never been verified. Every other access problem — blocked trust, an
  * incompatible schema, an unreadable status — already has its own row in the
- * Account page's "Needs attention" server list, which is the dot's other half:
- * the band that resolves it.
+ * server list on the Account page, where its row leads to the band that
+ * resolves it.
  */
 export function settingsAlertSummary(
   snapshot: AgentSnapshot,

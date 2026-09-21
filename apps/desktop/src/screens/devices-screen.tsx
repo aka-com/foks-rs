@@ -72,7 +72,6 @@ import {
   PairSheet,
   PhraseSheet,
   ProvisionSheet,
-  RecoverSheet,
   RemoveDeviceSheet,
   RevokeBackupSheet,
   RevokeSheet,
@@ -89,15 +88,12 @@ import {
 import type { DeviceEntry } from './device-model';
 import { UnavailableAccount } from './account-section';
 
-import { paperKeyResume } from './paper-key-resume';
-import type { PaperKeyDraft } from './paper-key-resume';
 import { deviceAlertRegistry } from './device-alert';
 
 type Sheet =
   | 'add'
   | 'pair'
   | 'phrase'
-  | 'recover'
   | 'enroll'
   | 'provision'
   | 'yubi'
@@ -255,15 +251,6 @@ export function DevicesScreen({
           : null,
     (value) => value === 'pair' && pairMode === 'accept',
   );
-  const paperResume = paperKeyResume(bridge, selected?.id ?? '');
-  const retainedPaperKey = useSyncExternalStore(
-    paperResume.subscribe,
-    paperResume.get,
-  );
-  const [resumedPaperKey, setResumedPaperKey] = useState<PaperKeyDraft | null>(
-    null,
-  );
-  useEffect(() => () => paperResume.conceal(), [paperResume]);
   const [cards, setCards] = useState<{ serial: number }[]>([]);
   const [pendingYubi, setPendingYubi] = useState<SimpleYubiAction | null>(null);
   const [removing, setRemoving] = useState<AccountDevice | null>(null);
@@ -301,29 +288,12 @@ export function DevicesScreen({
     : false;
 
   const closeSheets = useCallback((): void => {
-    paperResume.conceal();
-    setResumedPaperKey(null);
     setSheet(null);
     setPendingYubi(null);
     setRemoving(null);
     setRevoking(null);
     setActingKey(null);
-  }, [paperResume, setSheet]);
-
-  // A phrase, a PIN or an unlock code must not stay on screen behind another
-  // window.
-  useEffect(() => {
-    const conceal = (): void => closeSheets();
-    const concealWhenHidden = (): void => {
-      if (document.hidden) conceal();
-    };
-    window.addEventListener('blur', conceal);
-    document.addEventListener('visibilitychange', concealWhenHidden);
-    return () => {
-      window.removeEventListener('blur', conceal);
-      document.removeEventListener('visibilitychange', concealWhenHidden);
-    };
-  }, [closeSheets]);
+  }, [setSheet]);
 
   // Normalize the route to the active account's StoreRef. Because the
   // destination matches the current location, navigation guards are bypassed
@@ -587,11 +557,11 @@ export function DevicesScreen({
     />
   );
   const staleClass = freshness.stale ? ' stale' : '';
-  // A scan of the Mac's own ports, so it sits with the page's actions rather
-  // than beside a list.
-  const refreshSecurityKeys = (
+  // A scan of the Mac's own ports. On the list it follows the rows it updates;
+  // a key's own page keeps the same control available for card operations.
+  const refreshHardwareKeys = (
     <Button
-      icon="key"
+      size="sm"
       {...access.props('yubi-scan', { profile: selected.server })}
       onClick={() =>
         void refreshConnectedCards(
@@ -609,7 +579,7 @@ export function DevicesScreen({
         )
       }
     >
-      Refresh security keys
+      Refresh hardware keys
     </Button>
   );
 
@@ -634,7 +604,7 @@ export function DevicesScreen({
           cards={cards}
           metadataStatus={metadataStatus}
           stale={freshness.stale}
-          refreshSecurityKeys={refreshSecurityKeys}
+          refreshHardwareKeys={refreshHardwareKeys}
           onBack={backToList}
           onNavigate={onNavigate}
           onCopy={(text) => copyText(text, 'Key id copied')}
@@ -660,18 +630,15 @@ export function DevicesScreen({
             title="Devices"
             subtitle={subtitle}
             action={
-              <>
-                {refreshSecurityKeys}
-                <Button
-                  variant="primary"
-                  icon="plus"
-                  disabled={!canAdd}
-                  title={addReason}
-                  onClick={() => setSheet('add')}
-                >
-                  Add a device
-                </Button>
-              </>
+              <Button
+                variant="primary"
+                icon="plus"
+                disabled={!canAdd}
+                title={addReason}
+                onClick={() => setSheet('add')}
+              >
+                Add a device
+              </Button>
             }
           />
           <div className="body">
@@ -723,7 +690,7 @@ export function DevicesScreen({
               !backupsUnknown &&
               !backups.length ? (
                 <Band
-                  label="No paper key"
+                  label="No recovery key configured"
                   action={
                     <Button
                       size="sm"
@@ -790,31 +757,8 @@ export function DevicesScreen({
                   )}
                 </Inset>
                 {metadataStatus}
+                <div className="device-list-actions">{refreshHardwareKeys}</div>
               </div>
-              {/* The two actions that make an account rather than act on a
-                  device in the list above. */}
-              <p className="fn account-more">
-                <Button
-                  variant="plain"
-                  size="sm"
-                  className="lnk"
-                  {...access.props('account-recover', {
-                    profile: selected.server,
-                  })}
-                  onClick={() => setSheet('recover')}
-                >
-                  Recover an account with a paper key…
-                </Button>
-                <Button
-                  variant="plain"
-                  size="sm"
-                  className="lnk"
-                  {...access.props('yubi-create', { profile: selected.server })}
-                  onClick={() => setSheet('enroll')}
-                >
-                  Create an account on a YubiKey…
-                </Button>
-              </p>
             </div>
           </div>
         </>
@@ -844,57 +788,20 @@ export function DevicesScreen({
           onError={(error) => void onMutationError(error)}
         />
       ) : null}
-      {!sheet && retainedPaperKey?.hidden ? (
-        <Band
-          label="Paper key not saved"
-          action={
-            <>
-              <Button
-                onClick={() => {
-                  setResumedPaperKey(paperResume.take());
-                  setSheet('phrase');
-                }}
-              >
-                Show the paper key again
-              </Button>
-              <Button onClick={paperResume.forget}>Dismiss paper key</Button>
-            </>
-          }
-        >
-          The phrase can be shown once more for two minutes after it was hidden.
-        </Band>
-      ) : null}
       {sheet === 'phrase' && selected ? (
         <PhraseSheet
           bridge={bridge}
           profile={selected.server}
           accountAlias={selected.account}
-          seedAlias={resumedPaperKey?.alias}
-          onPrepared={resumedPaperKey ? undefined : paperResume.prepare}
-          onForget={paperResume.forget}
           seedPhrase={
-            resumedPaperKey?.phrase ??
-            (enteredScene === 'settings-phrase'
+            enteredScene === 'settings-phrase'
               ? bridge.firstRunFixture?.backupPhrase
-              : undefined)
+              : undefined
           }
-          onClose={() => {
-            setResumedPaperKey(null);
-            setSheet(null);
-          }}
+          onClose={() => setSheet(null)}
           onDone={async () => {
-            setResumedPaperKey(null);
             await applied('Paper key created.');
           }}
-          onError={(error) => void onMutationError(error)}
-        />
-      ) : null}
-      {sheet === 'recover' && selected ? (
-        <RecoverSheet
-          bridge={bridge}
-          store={selected}
-          onClose={() => setSheet(null)}
-          onDone={async () => applied('Recovery submitted successfully.')}
           onError={(error) => void onMutationError(error)}
         />
       ) : null}
@@ -1026,7 +933,7 @@ function DeviceDetail({
   cards,
   metadataStatus,
   stale,
-  refreshSecurityKeys,
+  refreshHardwareKeys,
   onBack,
   onNavigate,
   onCopy,
@@ -1050,7 +957,7 @@ function DeviceDetail({
   metadataStatus: ReactNode;
   /** The lists this page reads could not be refreshed. */
   stale: boolean;
-  refreshSecurityKeys: ReactNode;
+  refreshHardwareKeys: ReactNode;
   onBack: () => void;
   onNavigate: (location: Location) => void;
   onCopy: (text: string) => void;
@@ -1090,7 +997,7 @@ function DeviceDetail({
                   <Button variant="primary" onClick={onBack}>
                     Back to Devices
                   </Button>
-                  {refreshSecurityKeys}
+                  {refreshHardwareKeys}
                 </>
               }
             >
@@ -1145,7 +1052,7 @@ function DeviceDetail({
             </Chip>
           ) : null
         }
-        action={refreshSecurityKeys}
+        action={refreshHardwareKeys}
       />
       <div className="body">
         <div className="settings-main">

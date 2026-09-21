@@ -239,6 +239,25 @@ test('Escape on a sheet with something in it asks the same question', async () =
   );
 });
 
+test('losing focus masks a plaintext document draft without closing it', async () => {
+  const { rendered } = await mount();
+  await openSheet(rendered, 'Document');
+  const value = rendered.getByLabelText('Value') as HTMLInputElement;
+  ui.fireEvent.change(value, { target: { value: 'private draft token' } });
+
+  ui.fireEvent(window, new Event('blur'));
+
+  const concealed = rendered.getByLabelText('Value') as HTMLInputElement;
+  assert.equal(concealed.type, 'password');
+  assert.equal(concealed.value, 'private draft token');
+  assert.ok(rendered.getByText('New document'));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Show' }));
+  assert.equal(
+    (rendered.getByLabelText('Value') as HTMLInputElement).type,
+    'text',
+  );
+});
+
 test('Path expands below the vault selector and disappears when no vault is available', async () => {
   const { rendered, App, appProps } = await mount();
   await openSheet(rendered, 'Password');

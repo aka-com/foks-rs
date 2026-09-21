@@ -210,7 +210,7 @@ export function decodeProductionLocation(search: string): Location | null {
       section && SETTINGS_SECTION_ALIASES[section]
         ? SETTINGS_SECTION_ALIASES[section]
         : section;
-    // A profile opens a server detail at the bottom of Account. The retired
+    // A profile opens a server page under Account. The retired
     // Servers section and addresses with no section keep their profile.
     // Legacy `security-keys` URLs identified only a list, so they redirect to
     // the Account root.

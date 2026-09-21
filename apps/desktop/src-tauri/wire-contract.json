@@ -1131,16 +1131,12 @@
       ]
     }
   },
-  "addedServer": {
-    "profile": "partner",
-    "configuredProbe": "foks.partner.example"
-  },
   "serverLabel": {
     "profile": "partner",
     "label": "Partners",
     "changed": true
   },
-  "forgottenServer": {
+  "removedServer": {
     "profile": "partner",
     "removed": true
   },

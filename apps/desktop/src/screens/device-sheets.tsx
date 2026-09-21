@@ -31,6 +31,7 @@ import type { WorkflowOperation } from '../model/workflow-availability';
 
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { useConcealOnInactive } from '../use-conceal-on-inactive';
 import {
   removeDevice,
   revokePaperKey,
@@ -248,9 +249,6 @@ export function PhraseSheet({
   profile,
   accountAlias,
   seedPhrase,
-  seedAlias,
-  onPrepared,
-  onForget,
   onClose,
   onDone,
   onError,
@@ -259,12 +257,6 @@ export function PhraseSheet({
   profile: string;
   accountAlias: string;
   seedPhrase?: string;
-  seedAlias?: string;
-  onPrepared?: (
-    draft: { phrase: string; alias: string },
-    concealed?: boolean,
-  ) => void;
-  onForget?: () => void;
   onClose: () => void;
   onDone: () => Promise<void>;
   onError: (error: unknown) => void;
@@ -276,21 +268,18 @@ export function PhraseSheet({
     JSON.stringify([profile, accountAlias]),
   );
   const [phrase, setPhrase] = useState<string | null>(() => seedPhrase ?? null);
-  const [alias, setAlias] = useState(seedAlias ?? 'paper-backup');
+  const [alias, setAlias] = useState('paper-backup');
   const [written, setWritten] = useState(false);
   const [busy, setBusy] = useState(false);
   const words = phrase?.split(/\s+/) ?? [];
   const mounted = useRef(false);
   useEffect(() => {
     mounted.current = true;
-    if (seedPhrase)
-      onPrepared?.({ phrase: seedPhrase, alias: seedAlias ?? 'paper-backup' });
     return () => {
       mounted.current = false;
     };
-  }, [onPrepared, seedAlias, seedPhrase]);
+  }, []);
   const discard = (): void => {
-    onForget?.();
     setPhrase(null);
     setWritten(false);
     onClose();
@@ -322,7 +311,6 @@ export function PhraseSheet({
                 onClick={() => {
                   setBusy(true);
                   const once = phrase;
-                  onForget?.();
                   setPhrase(null);
                   void controller
                     .run(
@@ -362,10 +350,6 @@ export function PhraseSheet({
                       ),
                     )
                     .then((result) => {
-                      onPrepared?.(
-                        { phrase: result.phrase, alias: alias.trim() },
-                        !mounted.current,
-                      );
                       if (mounted.current) setPhrase(result.phrase);
                     })
                     .catch(onError)
@@ -382,8 +366,8 @@ export function PhraseSheet({
       {phrase ? (
         <>
           <p>
-            Write these {words.length} words down now. After you close this,
-            they can be shown once more from Devices, within two minutes.
+            Write these {words.length} words down now. The phrase cannot be
+            shown again after you close this.
           </p>
           <div className="words">
             {words.map((word, index) => (
@@ -464,6 +448,13 @@ export function PairSheet({
     mode === 'accept',
   );
   const [busy, setBusy] = useState(false);
+  useConcealOnInactive(
+    () => {
+      setOffer(null);
+      setResumed(false);
+    },
+    mode === 'offer' && offer !== null,
+  );
   const queued = <T,>(task: () => Promise<T>): Promise<T> =>
     queuedDeviceWork(
       bridge,
@@ -745,7 +736,7 @@ export function RecoverSheet({
   );
   return (
     <DeviceSheetFrame
-      title="Recover on this device"
+      title="Connect account via recovery key"
       onClose={() => {
         setPhrase('');
         onClose();

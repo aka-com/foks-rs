@@ -1308,6 +1308,14 @@ test('a server added after unmount is listed on Accounts and pairs without anoth
         accounts: [],
       },
     ],
+    profileInventory: [
+      ...FIXTURE.profileInventory,
+      {
+        profile: 'cli-local',
+        accounts: 'complete' as const,
+        teams: 'complete' as const,
+      },
+    ],
   };
   let resolve!: (
     value: Awaited<ReturnType<Bridge['checkAndAddGoProfile']>>,

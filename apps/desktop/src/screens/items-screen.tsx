@@ -641,7 +641,7 @@ export function ItemsScreen({
           open
           expandable={false}
           action={
-            active && tree.store.kind === 'team' ? (
+            tree.store.kind === 'team' ? (
               <button
                 type="button"
                 className="fact"

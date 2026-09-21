@@ -204,36 +204,10 @@ pub(super) fn checked_server_response(
     })
 }
 
-pub(super) fn added_server_response(
+pub(super) fn removed_server_response(
     value: serde_json::Value,
     expected_profile: &str,
-    expected_probe: &str,
-) -> Result<AddedServerDto, AgentError> {
-    let profile: ProfileSummary = serde_json::from_value(value.clone())
-        .map_err(|error| invalid_response(error.to_string()))?;
-    let canonical =
-        serde_json::to_value(&profile).map_err(|error| invalid_response(error.to_string()))?;
-    if canonical != value
-        || profile.name != expected_profile
-        || profile.probe != expected_probe
-        || !valid_profile_summary(&profile)
-        || profile.protocol != ProfileProtocolSummary::V019
-        || profile.trust != ProfileTrustSummary::WebPki
-    {
-        return Err(invalid_response(
-            "The agent returned an invalid server profile record.",
-        ));
-    }
-    Ok(AddedServerDto {
-        profile: profile.name,
-        configured_probe: profile.probe,
-    })
-}
-
-pub(super) fn forgotten_server_response(
-    value: serde_json::Value,
-    expected_profile: &str,
-) -> Result<ForgottenServerDto, AgentError> {
+) -> Result<RemovedServerDto, AgentError> {
     let response: RemovedProfileResponse =
         serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
     if response.profile != expected_profile || !response.removed {
@@ -241,7 +215,7 @@ pub(super) fn forgotten_server_response(
             "Failed to confirm removal of the selected server profile.",
         ));
     }
-    Ok(ForgottenServerDto {
+    Ok(RemovedServerDto {
         profile: response.profile,
         removed: response.removed,
     })
@@ -517,13 +491,6 @@ pub struct ServerDto {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AddedServerDto {
-    pub profile: String,
-    pub configured_probe: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ServerLabelDto {
     pub profile: String,
     pub label: Option<String>,
@@ -566,7 +533,7 @@ pub struct CheckedServerDto {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ForgottenServerDto {
+pub struct RemovedServerDto {
     pub profile: String,
     pub removed: bool,
 }
@@ -1013,48 +980,6 @@ pub async fn check_and_add_profile(
 }
 
 #[tauri::command]
-pub async fn add_server(
-    app: tauri::AppHandle,
-    webview: tauri::Webview,
-    state: State<'_, AppState>,
-    profile_name: String,
-    probe: String,
-) -> Result<AddedServerDto, AgentError> {
-    require_main_window(&webview)?;
-    crate::applock::require_unlocked(&app)?;
-    let _mutation = state.begin_mutation()?;
-    let profile_name = bounded_local_name(
-        &profile_name,
-        "Server profile name must be 1 to 64 letters, numbers, hyphens, or underscores.",
-    )?;
-    let probe = bounded_field(
-        &probe,
-        2 * 1024,
-        "Server address must be 2,048 bytes or fewer.",
-    )?;
-    if !valid_probe_target(&probe) {
-        return Err(invalid_request(
-            "Enter a valid DNS name, IP address, or host and port.",
-        ));
-    }
-    let expected_profile = profile_name.clone();
-    let expected_probe = probe.clone();
-    let value = apply_operation_value(
-        &state,
-        Operation::AddProfile {
-            name: profile_name,
-            probe,
-            protocol: ProfileProtocol::V019,
-            trust: ProfileTrust::WebPki,
-        },
-        MutationKind::Create,
-    )
-    .await?;
-    added_server_response(value, &expected_profile, &expected_probe)
-        .map_err(|error| ambiguous_mutation_response(&state, error.message))
-}
-
-#[tauri::command]
 pub async fn set_server_label(
     app: tauri::AppHandle,
     webview: tauri::Webview,
@@ -1084,20 +1009,19 @@ pub async fn set_server_label(
 }
 
 #[tauri::command]
-pub async fn forget_server(
+pub async fn remove_server_and_credentials(
     app: tauri::AppHandle,
     webview: tauri::Webview,
     state: State<'_, AppState>,
     profile: String,
     confirmation: String,
-) -> Result<ForgottenServerDto, AgentError> {
+) -> Result<RemovedServerDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     super::chat_migration::require_recovered(&app)?;
     let _mutation = state.begin_mutation()?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
-    exact_profile_confirmation(&profile, &confirmation, "forget")?;
-    state.ensure_profile_available(&profile)?;
+    exact_profile_confirmation(&profile, &confirmation, "remove")?;
     let expected = profile.clone();
     let value = apply_profile_operation_value(
         &state,
@@ -1106,8 +1030,11 @@ pub async fn forget_server(
         MutationKind::Guarded,
     )
     .await?;
-    forgotten_server_response(value, &expected)
-        .map_err(|error| ambiguous_mutation_response(&state, error.message))
+    let result = removed_server_response(value, &expected)
+        .map_err(|error| ambiguous_mutation_response(&state, error.message))?;
+    super::chat_local::forget_profile(&app, &expected)
+        .map_err(|error| ambiguous_mutation_response(&state, error.message))?;
+    Ok(result)
 }
 
 #[tauri::command]

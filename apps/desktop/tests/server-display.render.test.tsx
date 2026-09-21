@@ -113,14 +113,8 @@ for (const label of ['Local server alias', null]) {
     const detail = ui.render(
       h.wrap(createElement(ServersSection, { ...props, profile })),
     );
-    assert.equal(
-      detail.container.querySelector('.shead b')?.textContent,
-      h.name,
-    );
-    assert.doesNotMatch(
-      detail.container.querySelector('.shead')?.textContent ?? '',
-      /Profile /,
-    );
+    assert.equal(detail.getByRole('heading', { level: 1 }).textContent, h.name);
+    assert.equal(detail.container.querySelector('.shead'), null);
     assert.ok(detail.getByText('Internal ID'));
     assert.equal(
       crumbTrail(

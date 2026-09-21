@@ -17,13 +17,11 @@ use crate::commands::groups::{
     DiscoveredGroupDto, FederationEntryDto, GroupDiscoveryDto, PartyDto,
 };
 use crate::commands::servers::{
-    added_server_response, checked_server_response, forgotten_server_response,
-    reset_preview_response, server_status_response, validate_compatibility, AddedServerDto,
-    CheckedProfileDto, CheckedServerDto, CheckedServerVersionDto, ForgottenServerDto,
-    ResetArtifactDto, ResetPreviewDto, ServerDto, ServerLabelDto, ServerStatusSnapshotDto,
-    StoredHostDto,
+    checked_server_response, removed_server_response, reset_preview_response,
+    server_status_response, validate_compatibility, CheckedProfileDto, CheckedServerDto,
+    CheckedServerVersionDto, RemovedServerDto, ResetArtifactDto, ResetPreviewDto, ServerDto,
+    ServerLabelDto, ServerStatusSnapshotDto, StoredHostDto,
 };
-use crate::commands::tests::support::test_profile_value;
 use crate::commands::types::{CommandAck, MutationDto, RoleDto};
 use crate::commands::validation::exact_profile_confirmation;
 use crate::commands::vault::{
@@ -767,11 +765,6 @@ fn wire_contract_fixture_matches_serialized_shapes() {
         serde_json::to_value(status).unwrap(),
         fixture["serverStatus"]
     );
-    let added = AddedServerDto {
-        profile: "partner".to_owned(),
-        configured_probe: "foks.partner.example".to_owned(),
-    };
-    assert_eq!(serde_json::to_value(added).unwrap(), fixture["addedServer"]);
     let labeled = ServerLabelDto {
         profile: "partner".to_owned(),
         label: Some("Partners".to_owned()),
@@ -781,13 +774,13 @@ fn wire_contract_fixture_matches_serialized_shapes() {
         serde_json::to_value(labeled).unwrap(),
         fixture["serverLabel"]
     );
-    let forgotten = ForgottenServerDto {
+    let removed = RemovedServerDto {
         profile: "partner".to_owned(),
         removed: true,
     };
     assert_eq!(
-        serde_json::to_value(forgotten).unwrap(),
-        fixture["forgottenServer"]
+        serde_json::to_value(removed).unwrap(),
+        fixture["removedServer"]
     );
     let checked = CheckedServerDto {
         profile: "work".to_owned(),
@@ -979,27 +972,7 @@ fn phase_six_wire_responses_are_exact_bounded_and_request_bound() {
             "invalid-request"
         );
     }
-    let added =
-        added_server_response(test_profile_value("partner"), "partner", "foks.example").unwrap();
-    assert_eq!(added.profile, "partner");
-    assert_eq!(added.configured_probe, "foks.example");
-    assert_eq!(
-        added_server_response(
-            serde_json::json!({
-                "name":"partner",
-                "probe":"foks.example",
-                "protocol":{"generation":"v019"},
-                "trust":{"kind":"web-pki"},
-                "invented":true
-            }),
-            "partner",
-            "foks.example"
-        )
-        .unwrap_err()
-        .code,
-        "invalid-response"
-    );
-    assert!(forgotten_server_response(
+    assert!(removed_server_response(
         serde_json::json!({"profile":"partner","removed":true}),
         "partner"
     )
@@ -1010,7 +983,7 @@ fn phase_six_wire_responses_are_exact_bounded_and_request_bound() {
         serde_json::json!({"profile":"partner","removed":true,"invented":true}),
     ] {
         assert_eq!(
-            forgotten_server_response(malformed, "partner")
+            removed_server_response(malformed, "partner")
                 .unwrap_err()
                 .code,
             "invalid-response"

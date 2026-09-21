@@ -145,6 +145,37 @@ test('stylesheet contains no dark mode media queries or theme overrides', async 
   }
 });
 
+test('attention dots use the shared orange while status failures stay amber', async () => {
+  const shell = await readSource(SHELL, import.meta.url);
+  assert.match(
+    shell,
+    /\.rail-tail\.dot::before\{[^}]*background:var\(--unread\)/,
+  );
+  assert.match(shell, /\.side\.rail \.attn\{[^}]*background:var\(--unread\)/);
+  assert.match(shell, /\.switch \.acc \.dot\{[^}]*background:var\(--unread\)/);
+  assert.match(shell, /\.sync-badge\.failed\{background:var\(--unread\)\}/);
+  assert.match(shell, /\.sync-dot\.failed\{background:var\(--warning-dot\)\}/);
+  assert.match(
+    shell,
+    /\.freshness \.dot\{[^}]*background:var\(--warning-dot\)/,
+  );
+});
+
+test('rail and refresh attention dots use the specified offsets', async () => {
+  const shell = await readSource(SHELL, import.meta.url);
+  assert.match(
+    shell,
+    /\.side\.rail \.nav \.rail-tail\.dot\{[^}]*top:11px;left:33px/,
+  );
+  assert.match(
+    shell,
+    /\.side\.rail\.is-narrow \.nav>\.rail-tail\{[^}]*top:11px;left:calc\(50% \+ 6px\)/,
+  );
+  assert.match(shell, /\.side\.rail \.attn\{[^}]*left:40px;top:10px/);
+  assert.match(shell, /\.side\.rail\.is-narrow \.attn\{left:31px\}/);
+  assert.match(shell, /\.sync-badge\{[^}]*top:1px;left:22px/);
+});
+
 test('shell stylesheet contains required grid and flexbox layout rules', async () => {
   const shell = await readSource(SHELL, import.meta.url);
 

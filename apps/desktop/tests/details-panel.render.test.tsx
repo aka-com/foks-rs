@@ -349,6 +349,71 @@ test('a retired access ticket rejects a late secret read without relying on comp
   assert.equal(view.queryByText(/retired-secret-marker/), null);
 });
 
+test('losing focus remasks a revealed vault value', async () => {
+  const p = await setup(async (request) => ({
+    store: request.storeId,
+    path: request.path,
+    version: request.version,
+    value: 'visible-secret-marker',
+  }));
+  const rendered = ui.render(p.draw());
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Show' }));
+  await rendered.findByText('visible-secret-marker');
+
+  ui.fireEvent(window, new Event('blur'));
+
+  assert.equal(rendered.queryByText('visible-secret-marker'), null);
+  assert.ok(rendered.getByText('••••••••••••'));
+});
+
+test('losing focus covers a plaintext vault edit without discarding it', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/deploy/staging-token',
+  );
+  const rendered = ui.render(p.draw());
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
+  const contents = await rendered.findByRole('textbox', { name: 'Contents' });
+  ui.fireEvent.change(contents, { target: { value: 'retained private edit' } });
+
+  ui.fireEvent(window, new Event('blur'));
+
+  assert.equal(rendered.queryByRole('textbox', { name: 'Contents' }), null);
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Show' }));
+  assert.equal(
+    (rendered.getByRole('textbox', { name: 'Contents' }) as HTMLTextAreaElement)
+      .value,
+    'retained private edit',
+  );
+});
+
+test('a plaintext edit response arriving after focus loss stays concealed', async () => {
+  let finish!: (response: ReadItemResponse) => void;
+  const pending = new Promise<ReadItemResponse>((resolve) => {
+    finish = resolve;
+  });
+  const p = await setup(
+    () => pending,
+    (item) => item.path === '/deploy/staging-token',
+  );
+  const rendered = ui.render(p.draw());
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
+  ui.fireEvent(window, new Event('blur'));
+
+  await ui.act(async () => {
+    finish({
+      store: p.subject.store,
+      path: p.subject.path,
+      version: p.subject.version,
+      value: 'late private edit',
+    });
+    await pending;
+  });
+
+  assert.equal(rendered.queryByText('late private edit'), null);
+  assert.equal(rendered.queryByRole('textbox', { name: 'Contents' }), null);
+});
+
 test('a pending read cannot reveal into a different selection', async () => {
   let finish!: (response: ReadItemResponse) => void;
   const pending = new Promise<ReadItemResponse>((resolve) => {

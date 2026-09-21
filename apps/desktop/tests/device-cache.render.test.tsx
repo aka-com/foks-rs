@@ -98,7 +98,7 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
   await navigate('Devices');
   assert.equal(calls.cards, 0);
   ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Refresh security keys' }),
+    ui.screen.getByRole('button', { name: 'Refresh hardware keys' }),
   );
   await ui.waitFor(() => assert.equal(calls.cards, 1));
   assert.deepEqual(calls, { ...initial, cards: 1 });
@@ -110,7 +110,7 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
   await navigate('Devices');
   assert.equal(calls.cards, 1);
   ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Refresh security keys' }),
+    ui.screen.getByRole('button', { name: 'Refresh hardware keys' }),
   );
   await ui.waitFor(() => assert.equal(calls.cards, 2));
   assert.equal(calls.devices, initial.devices);
@@ -148,7 +148,7 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
   assert.equal(calls.enrollments, initial.enrollments * 2);
   assert.equal(calls.cards, 2);
   ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Refresh security keys' }),
+    ui.screen.getByRole('button', { name: 'Refresh hardware keys' }),
   );
   await ui.waitFor(() => {
     assert.equal(calls.cards, 3);
@@ -161,7 +161,7 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
   await ui.waitFor(() => assert.equal(calls.devices, initial.devices * 3));
   assert.equal(calls.cards, 3);
   ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Refresh security keys' }),
+    ui.screen.getByRole('button', { name: 'Refresh hardware keys' }),
   );
   await ui.waitFor(() => {
     assert.equal(calls.cards, 4);

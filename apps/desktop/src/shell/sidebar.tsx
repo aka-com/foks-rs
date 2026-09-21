@@ -31,15 +31,9 @@ import type { AgentLifecycle } from '../agent-lifecycle';
 import type { FoksIconName } from '../icons';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { teamUnread } from '../chat/unread';
-import {
-  accountAtLocation,
-  chatTabLocation,
-  parentLocation,
-  railTabOf,
-} from '../location';
+import { accountAtLocation, chatTabLocation, railTabOf } from '../location';
 import type { Location, RailTab } from '../location';
 import { AccountMark } from '../screens/account-switcher';
-import { filesFolderCrumb } from '../screens/scope';
 
 interface RailTabSpec {
   id: RailTab;
@@ -213,8 +207,6 @@ export interface SidebarProps {
   /** Absent while the agent is starting: the rail draws its frame regardless. */
   snapshot?: AgentSnapshot;
   location: Location;
-  /** The Files tree's selected folder (`LocationState.folder`). */
-  folder?: string;
   account?: StoreRef;
   /**
    * Notices no tab's own badge can resolve — a catalog read that only a
@@ -234,10 +226,6 @@ export interface SidebarProps {
    */
   settingsAlert?: { description: string } | null;
   onNavigate: (location: Location) => void;
-  /** Steps the Files tree's selection back one folder. Omitted where the
-   *  tree's selection is not reachable, in which case Back only ever
-   *  navigates a location. */
-  onSetFolder?: (folder: string) => void;
   onTabNavigate?: (tab: RailTab) => void;
   /**
    * Rows between the tabs and the foot. First run puts its progress there;
@@ -562,8 +550,8 @@ type RailCount = { label: string; description: string; warning?: boolean };
 
 /**
  * Status indicator for each tab. Unread counts trail the label in neutral text;
- * dots indicate actionable status without a numeric value, `warn` uses amber,
- * and all dots use amber. A count carrying `warn` is a total
+ * dots indicate actionable status without a numeric value, and all dots use
+ * the same orange as unread markers. A count carrying `warn` is a total
  * that is known to be short of something, drawn in amber rather than dropped.
  */
 function RailTail({
@@ -589,14 +577,12 @@ function RailTail({
 export function Sidebar({
   snapshot,
   location,
-  folder = '',
   account,
   attention = 0,
   teamRequests = null,
   devicesAlert = null,
   settingsAlert = null,
   onNavigate,
-  onSetFolder,
   onTabNavigate,
   status,
   onReenter,
@@ -610,7 +596,7 @@ export function Sidebar({
   const unread = snapshot ? railChatUnread(snapshot, chatInbox) : null;
   const here = railTabOf(location);
   /**
-   * A tab's own indicator: a muted count for Chat and Teams, and amber dots
+   * A tab's own indicator: a muted count for Chat and Teams, and orange dots
    * for Devices and Settings. Dots overlay the icon's upper corner; counts
    * also become icon dots when the rail is collapsed.
    */
@@ -676,20 +662,6 @@ export function Sidebar({
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [blocked, location, onNavigate, onTabNavigate]);
 
-  // One step back can be a narrower folder within the same page — the Files
-  // tree's own selection, which `parentLocation` does not see — before it is
-  // a different location. Matches the topbar's identical chevron, drawn
-  // there instead once the rail collapses too narrow to carry its own.
-  const folderBack = blocked
-    ? null
-    : filesFolderCrumb(snapshot, location, folder).back;
-  const parent = blocked ? null : parentLocation(location);
-  const canGoBack = folderBack !== null || Boolean(parent);
-  const goBack = (): void => {
-    if (folderBack !== null) onSetFolder?.(folderBack);
-    else if (parent) onNavigate(parent);
-  };
-
   return (
     <nav
       className={['side', 'rail', collapsed ? 'is-narrow' : '']
@@ -697,20 +669,7 @@ export function Sidebar({
         .join(' ')}
       aria-label="Main Navigation"
     >
-      <TrafficStrip native={nativeChrome}>
-        {!collapsed ? (
-          <button
-            type="button"
-            className="rail-back"
-            aria-label="Back"
-            title="Back"
-            disabled={!canGoBack}
-            onClick={goBack}
-          >
-            <Icon name="back" />
-          </button>
-        ) : null}
-      </TrafficStrip>
+      <TrafficStrip native={nativeChrome} />
       <div className={blocked ? 'rail-body is-blocked' : 'rail-body'}>
         {snapshot ? (
           <AccountHeader

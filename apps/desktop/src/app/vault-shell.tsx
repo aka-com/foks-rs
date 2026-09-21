@@ -507,7 +507,6 @@ export function VaultShell({
               <Sidebar
                 snapshot={shown}
                 location={here}
-                folder={state.folder}
                 account={locations.getAccount()}
                 attention={unroutedNotices(shown).length}
                 teamRequests={teamRequestsBadge(shown, teamRequestCounts)}
@@ -517,7 +516,6 @@ export function VaultShell({
                 onNavigate={(location) => {
                   locations.navigate(location);
                 }}
-                onSetFolder={(folder) => locations.setFolder(folder)}
                 onLock={lockFromMenu}
                 status={
                   pendingFirstRun ? (

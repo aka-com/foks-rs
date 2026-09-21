@@ -93,19 +93,6 @@ export function GoProfileConnectSheet({
       alive = false;
     };
   }, [bridge, onError]);
-  useEffect(() => {
-    const clear = (): void => setPhrase('');
-    const hidden = (): void => {
-      if (document.hidden) clear();
-    };
-    window.addEventListener('blur', clear);
-    document.addEventListener('visibilitychange', hidden);
-    return () => {
-      window.removeEventListener('blur', clear);
-      document.removeEventListener('visibilitychange', hidden);
-    };
-  }, []);
-
   const choose = (candidate: GoProfileCandidate): void => {
     setSelected(candidate);
     setChecked(existingProfile ? { profile: existingProfile.id } : null);

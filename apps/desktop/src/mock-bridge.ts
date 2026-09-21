@@ -1200,34 +1200,6 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
         ...host,
       };
     },
-    addServer: async (profileName, probe) => {
-      if (servers.some((server) => server.id === profileName))
-        throw failure(
-          'already-exists',
-          'A server with that name already exists.',
-        );
-      servers.push({
-        id: profileName,
-        name: profileName,
-        label: null,
-        configuredProbe: probe,
-        host_id: null,
-        chain: null,
-        epoch: null,
-        accounts: [],
-        trust: { status: 'unprobed' },
-        compatibility: { status: 'required-unavailable' },
-        passiveStatus: {
-          status: 'available',
-          source: 'signed-server-status',
-        },
-        connectivity: { status: 'unknown' },
-        services: { chat: null },
-        restrictions: [],
-      });
-      serverProbes.set(profileName, probe);
-      return { profile: profileName, configuredProbe: probe };
-    },
     setServerLabel: async (profile, label) => {
       const server = servers.find((entry) => entry.id === profile);
       if (!server)
@@ -1247,11 +1219,11 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       server.label = normalized;
       return { profile, label: normalized, changed };
     },
-    forgetServer: async (profile, confirmation) => {
+    removeServerAndCredentials: async (profile, confirmation) => {
       if (profile !== confirmation)
         throw failure(
           'invalid-request',
-          'Type the exact server profile to forget it.',
+          'Type the exact server name to remove it.',
         );
       const index = servers.findIndex((server) => server.id === profile);
       if (index >= 0) servers.splice(index, 1);

@@ -1,7 +1,7 @@
 import { useDeviceQueries, metadataFreshness } from '../device-cache';
 import { FreshnessCaption } from '../components/metadata-status';
 import { useMetadataQuery } from '../query-hooks';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { Bridge } from '../bridge';
 import { Button, Inset, InsetRow, SectionLabel } from '../components';
 import { WorkflowProvider, useWorkflowAccess } from '../workflow-context';
@@ -37,18 +37,6 @@ export function ProfileKeys({
     available && state.data === undefined && state.error !== undefined;
   const loading = available && state.data === undefined && !failed;
   const freshness = metadataFreshness([state]);
-  useEffect(() => {
-    const conceal = () => setAction(null);
-    const hidden = () => {
-      if (document.hidden) conceal();
-    };
-    window.addEventListener('blur', conceal);
-    document.addEventListener('visibilitychange', hidden);
-    return () => {
-      window.removeEventListener('blur', conceal);
-      document.removeEventListener('visibilitychange', hidden);
-    };
-  }, []);
   return (
     <WorkflowProvider snapshot={snapshot}>
       <section aria-label="Security keys">

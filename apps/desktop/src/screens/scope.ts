@@ -175,7 +175,7 @@ export function folderSelection(
  * The Files tab's crumb trail beyond "Files" — the store, then each folder
  * down to the one the tree has selected — and the folder value one step
  * back from it. Reads the exact selection `ItemsScreen` reads, so the
- * topbar's crumb and the rail's Back chevron never disagree with the page's
+ * topbar's crumb and Back button never disagree with the page's
  * own breadcrumb; a stale deep link to a folder that no longer exists falls
  * back to the store's root the same way `ItemsScreen` does, rather than
  * naming a folder that is not there.

@@ -415,16 +415,18 @@ test('compatibility decoding preserves rejected outcomes and validates grant set
   );
 });
 
-test('mock service support stays unknown until a new server is checked', async () => {
+test('mock verification failure leaves the server catalog unchanged', async () => {
   const bridge = mockBridge(FIXTURE);
-  await bridge.addServer('new-server', 'new.example');
-  const before = await bridge.describeServerStatus('new-server');
-  assert.equal(before.host, null);
-  assert.equal(before.chatSupported, null);
-  await bridge.checkServer('new-server');
-  const after = await bridge.describeServerStatus('new-server');
-  assert.ok(after.host);
-  assert.equal(after.chatSupported, false);
+  const before = await bridge.listServers();
+  await assert.rejects(
+    bridge.checkAndAddProfile('new-server', 'new.example'),
+    (error: unknown) =>
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === 'io',
+  );
+  assert.deepEqual(await bridge.listServers(), before);
 });
 
 test('a successful observation of no host remains verification-required', async () => {

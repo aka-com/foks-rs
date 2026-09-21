@@ -280,7 +280,7 @@ test('device rendering never scans hardware or prompts for credentials', async (
   assert.equal(scans, 0);
   assert.equal(hardwareCommands, 0);
   ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Refresh security keys' }),
+    ui.screen.getByRole('button', { name: 'Refresh hardware keys' }),
   );
   await ui.waitFor(() => assert.equal(scans, 1));
   assert.equal(hardwareCommands, 0);

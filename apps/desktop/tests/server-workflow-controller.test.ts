@@ -4,12 +4,10 @@ import { enqueueProfileWork, sharedServerStatus } from '../src/bridge';
 import type {
   Bridge,
   CheckedServer,
-  ResetPreview,
   ServerStatusSnapshot,
 } from '../src/bridge';
 import { decodeServers } from '../src/bridge/servers';
 import type { AgentSnapshot, Server } from '../src/model';
-import { ResetWorkflow } from '../src/screens/servers/reset-workflow';
 import {
   readCurrentServerStatus,
   ServerCheckController,
@@ -64,16 +62,6 @@ const status = (profile = 'p'): ServerStatusSnapshot => ({
   chatSupported: null,
 });
 
-const preview = (token = 'one-use'): ResetPreview => ({
-  profile: 'p',
-  token,
-  expiresInSeconds: 60,
-  resumables: [],
-  artifacts: [],
-});
-
-const unexpected = (): never => assert.fail('Unexpected workflow callback.');
-
 const ambiguous = {
   code: 'agent-lost',
   message: 'The result is unknown.',
@@ -108,175 +96,6 @@ function checkHarness(bridge: Bridge) {
     },
   };
 }
-
-for (const reason of [
-  'blur',
-  'close',
-  'profile-change',
-  'StrictMode cleanup',
-]) {
-  test(`reset preview retirement on ${reason} discards a late one-use token`, async () => {
-    const response = deferred<ResetPreview>();
-    const started = deferred<void>();
-    let writes = 0;
-    const bridge = {
-      describeReset: () => {
-        started.resolve();
-        return response.promise;
-      },
-      resetServer: async () => {
-        writes++;
-      },
-    } as unknown as Bridge;
-    const workflow = new ResetWorkflow(
-      bridge,
-      'p',
-      () => true,
-      () => assert.fail('stale preview error'),
-      () => assert.fail('stale mutation error'),
-    );
-    workflow.activate();
-    const pending = workflow.load();
-    await started.promise;
-    workflow.retire();
-    response.resolve(preview());
-    await pending;
-    assert.equal(workflow.getSnapshot().preview, null);
-    assert.equal(workflow.getSnapshot().available, false);
-    await workflow.reset('p', async () => assert.fail('retired reset applied'));
-    assert.equal(writes, 0);
-  });
-}
-
-test('reset preview queued before retirement never dispatches', async () => {
-  const held = deferred<void>();
-  let reads = 0;
-  const bridge = {
-    describeReset: async () => {
-      reads++;
-      return preview();
-    },
-  } as unknown as Bridge;
-  const blocker = enqueueProfileWork(bridge, 'p', () => held.promise);
-  const workflow = new ResetWorkflow(
-    bridge,
-    'p',
-    () => true,
-    unexpected,
-    unexpected,
-  );
-  workflow.activate();
-  const pending = workflow.load();
-  workflow.retire();
-  held.resolve();
-  await blocker;
-  await pending;
-  assert.equal(reads, 0);
-  assert.equal(workflow.getSnapshot().preview, null);
-});
-
-test('StrictMode setup after cleanup cannot revive the previous preview request', async () => {
-  const first = deferred<ResetPreview>();
-  const firstStarted = deferred<void>();
-  const second = deferred<ResetPreview>();
-  const secondStarted = deferred<void>();
-  let reads = 0;
-  const bridge = {
-    describeReset: () => {
-      reads++;
-      if (reads === 1) {
-        firstStarted.resolve();
-        return first.promise;
-      }
-      secondStarted.resolve();
-      return second.promise;
-    },
-  } as unknown as Bridge;
-  const workflow = new ResetWorkflow(
-    bridge,
-    'p',
-    () => true,
-    unexpected,
-    unexpected,
-  );
-  workflow.activate();
-  const old = workflow.load();
-  await firstStarted.promise;
-  workflow.retire();
-  workflow.activate();
-  const next = workflow.load();
-  first.resolve(preview('old'));
-  await old;
-  await secondStarted.promise;
-  assert.equal(workflow.getSnapshot().preview, null);
-  assert.equal(workflow.getSnapshot().loading, true);
-  second.resolve(preview('new'));
-  await next;
-  assert.equal(workflow.getSnapshot().preview?.token, 'new');
-});
-
-test('reset preview binding changes suppress errors and token publication', async () => {
-  const read = deferred<ResetPreview>();
-  const started = deferred<void>();
-  let current = true;
-  const bridge = {
-    describeReset: () => {
-      started.resolve();
-      return read.promise;
-    },
-  } as unknown as Bridge;
-  const workflow = new ResetWorkflow(
-    bridge,
-    'p',
-    () => current,
-    unexpected,
-    unexpected,
-  );
-  workflow.activate();
-  const pending = workflow.load();
-  await started.promise;
-  current = false;
-  read.reject(ambiguous);
-  await pending;
-  assert.equal(workflow.getSnapshot().preview, null);
-});
-
-test('reset spends its token synchronously and never replays an ambiguous mutation', async () => {
-  const write = deferred<void>();
-  let writes = 0;
-  let errors = 0;
-  const bridge = {
-    describeReset: async () => preview(),
-    resetServer: () => {
-      writes++;
-      return write.promise;
-    },
-  } as unknown as Bridge;
-  const workflow = new ResetWorkflow(
-    bridge,
-    'p',
-    () => true,
-    unexpected,
-    () => {
-      errors++;
-    },
-  );
-  workflow.activate();
-  await workflow.load();
-  const first = workflow.reset('p', async () =>
-    assert.fail('ambiguous reset applied'),
-  );
-  const duplicate = workflow.reset('p', async () =>
-    assert.fail('duplicate reset applied'),
-  );
-  assert.equal(writes, 1);
-  write.reject(ambiguous);
-  await Promise.all([first, duplicate]);
-  await workflow.reset('p', async () => assert.fail('token reused'));
-  assert.equal(writes, 1);
-  assert.equal(errors, 1);
-  assert.equal(workflow.getSnapshot().available, false);
-});
 
 test('status reads check currentness after waiting for profile queue admission', async () => {
   const held = deferred<void>();
@@ -486,34 +305,6 @@ test('fixture-seeded checks require the fixture capability and consume seeding o
   await Promise.all([blocker, old, next]);
   assert.equal(writes, 1);
   assert.equal(seeded, 1);
-});
-
-test('an observed reset still reports refresh failure when its success callback closes the sheet', async () => {
-  let errors = 0;
-  let writes = 0;
-  const bridge = {
-    describeReset: async () => preview(),
-    resetServer: async () => {
-      writes++;
-    },
-  } as unknown as Bridge;
-  const workflow = new ResetWorkflow(
-    bridge,
-    'p',
-    () => true,
-    unexpected,
-    () => {
-      errors++;
-    },
-  );
-  workflow.activate();
-  await workflow.load();
-  await workflow.reset('p', async () => {
-    workflow.retire();
-    throw ambiguous;
-  });
-  assert.equal(writes, 1);
-  assert.equal(errors, 1);
 });
 
 test('current ambiguous check failure reports once and never retries', async () => {

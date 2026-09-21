@@ -151,7 +151,7 @@ const SYNC_HOVER_CLOSE_MS = 180;
 /**
  * The refresh button with its status: one square button that refreshes on
  * click, a spinner in the icon's place while any server is refreshing and an
- * amber dot when one could not be refreshed. Pointing at the button — or
+ * orange dot when one could not be refreshed. Pointing at the button — or
  * reaching it with the keyboard — opens the per-server popover; there is no
  * separate trigger for it. The spinner and the dot are decorative; the button
  * carries the accessible name.

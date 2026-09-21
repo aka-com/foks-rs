@@ -296,15 +296,11 @@ export interface Bridge {
   ): Promise<ServerStatusSnapshot>;
   checkServer(profile: string): Promise<CheckedServer>;
   reconcileServer?(profile: string): Promise<ProfileReconciliation>;
-  addServer(
-    profileName: string,
-    probe: string,
-  ): Promise<{ profile: string; configuredProbe: string }>;
   setServerLabel(
     profile: string,
     label: string | null,
   ): Promise<ServerLabelResponse>;
-  forgetServer(
+  removeServerAndCredentials(
     profile: string,
     confirmation: string,
   ): Promise<{ profile: string; removed: true }>;

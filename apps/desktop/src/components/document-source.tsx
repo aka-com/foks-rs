@@ -48,6 +48,8 @@ export function DocumentSourceRow({
   placeholder = 'A note, key, or token',
   sourcePath,
   hovering = false,
+  concealed = false,
+  onReveal,
 }: {
   source: DocumentSourceKind;
   value: string;
@@ -57,6 +59,9 @@ export function DocumentSourceRow({
   sourcePath: string | null;
   /** A file is being dragged over the form. */
   hovering?: boolean;
+  /** Masks a retained plaintext draft after the application loses focus. */
+  concealed?: boolean;
+  onReveal?: () => void;
 }): ReactNode {
   if (source === 'text') {
     return (
@@ -65,6 +70,14 @@ export function DocumentSourceRow({
         value={value}
         onChange={onValue}
         placeholder={placeholder}
+        type={concealed ? 'password' : 'text'}
+        action={
+          concealed && onReveal ? (
+            <button type="button" onClick={onReveal}>
+              Show
+            </button>
+          ) : undefined
+        }
       />
     );
   }

@@ -566,7 +566,7 @@ test('a native receipt confirms a lost reply without replaying account creation'
   assert.equal(h.saved()?.state, 'protect');
 });
 
-for (const cancellation of ['conceal', 'hidden', 'readiness'] as const) {
+for (const cancellation of ['conceal', 'readiness'] as const) {
   test(`phrase preparation releases busy ownership on ${cancellation} and ignores its late result`, async () => {
     const h = await harness();
     const old = deferred<{ backupAlias: string; phrase: string }>();
@@ -591,19 +591,7 @@ for (const cancellation of ['conceal', 'hidden', 'readiness'] as const) {
       ),
     );
     if (cancellation === 'conceal') rendered.rerender({ concealSignal: 1 });
-    else if (cancellation === 'readiness')
-      rendered.rerender({ agentReady: false });
-    else {
-      Object.defineProperty(document, 'visibilityState', {
-        configurable: true,
-        value: 'hidden',
-      });
-      ui.fireEvent(document, new Event('visibilitychange'));
-      Object.defineProperty(document, 'visibilityState', {
-        configurable: true,
-        value: 'visible',
-      });
-    }
+    else rendered.rerender({ agentReady: false });
     await ui.waitFor(() =>
       assert.equal(
         rendered.view.container
@@ -647,6 +635,85 @@ for (const cancellation of ['conceal', 'hidden', 'readiness'] as const) {
     );
   });
 }
+
+test('focus loss conceals a prepared recovery phrase without closing its sheet', async () => {
+  const h = await harness();
+  const rendered = h.render(
+    { ...h.checkpoint, managedLocal: false },
+    {
+      bridge: {
+        ...h.bridge,
+        prepareOwnerBackup: async () => ({
+          backupAlias: 'paper',
+          phrase: 'KEPT_SECRET',
+        }),
+      },
+    },
+  );
+  ui.fireEvent.click(
+    rendered.view.getByRole('button', { name: 'Show my phrase' }),
+  );
+  await rendered.view.findByText('KEPT_SECRET');
+  const dialog = rendered.view.getByRole('dialog');
+  const written = rendered.view.getByRole('button', {
+    name: 'I have written this down',
+  });
+  ui.fireEvent.click(written);
+
+  ui.fireEvent(window, new Event('blur'));
+
+  assert.equal(rendered.view.getByRole('dialog'), dialog);
+  assert.equal(rendered.view.queryByText('KEPT_SECRET'), null);
+  assert.ok(rendered.view.getByLabelText('Recovery phrase hidden'));
+  assert.ok(written.classList.contains('on'));
+  ui.fireEvent.click(
+    rendered.view.getByRole('button', { name: 'Show recovery phrase' }),
+  );
+  assert.ok(rendered.view.getByText('KEPT_SECRET'));
+});
+
+test('a recovery phrase prepared while the window is hidden stays concealed', async () => {
+  const h = await harness();
+  const preparation = deferred<{ backupAlias: string; phrase: string }>();
+  let preparations = 0;
+  const rendered = h.render(h.checkpoint, {
+    bridge: {
+      ...h.bridge,
+      prepareOwnerBackup: () => {
+        preparations++;
+        return preparation.promise;
+      },
+    },
+  });
+  ui.fireEvent.click(
+    rendered.view.getByRole('button', { name: 'Show recovery phrase' }),
+  );
+  await ui.waitFor(() => assert.equal(preparations, 1));
+  Object.defineProperty(document, 'visibilityState', {
+    configurable: true,
+    value: 'hidden',
+  });
+  ui.fireEvent(document, new Event('visibilitychange'));
+  Object.defineProperty(document, 'visibilityState', {
+    configurable: true,
+    value: 'visible',
+  });
+  await ui.act(async () => {
+    preparation.resolve({ backupAlias: 'paper', phrase: 'LATE_SECRET' });
+    await preparation.promise;
+  });
+
+  assert.ok(
+    rendered.view.getByRole('button', { name: 'Hide recovery phrase' }),
+  );
+  assert.equal(preparations, 1);
+  assert.equal(rendered.view.queryByText('LATE_SECRET'), null);
+  assert.ok(rendered.view.getByLabelText('Recovery phrase hidden'));
+  ui.fireEvent.click(
+    rendered.view.getByRole('button', { name: 'Show recovery phrase' }),
+  );
+  assert.ok(rendered.view.getByText('LATE_SECRET'));
+});
 
 test('acknowledged signup is persisted before refresh and resumes read-only after restart', async () => {
   const h = await harness();

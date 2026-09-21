@@ -17,8 +17,9 @@ import { useTabSheetState } from '../navigation-guard';
  * and it sits beside this section. The body displays primary account
  * properties with management links: Username, Shown as (the local alias),
  * Server, Devices, and Teams. Secondary integrations (Bot accounts, web
- * administration, SSO, and FOKS CLI import) render below the primary
- * properties. The selected account's passphrase is managed here as well.
+ * administration, SSO, FOKS CLI import, account recovery, and hardware-backed
+ * account creation) render below the primary properties. The selected
+ * account's passphrase is managed here as well.
  * Alerts without a navigable destination, such as catalog read failures,
  * render above the details list; entity-specific alerts render in their
  * corresponding Settings or Teams views.
@@ -28,7 +29,7 @@ import { useTabSheetState } from '../navigation-guard';
  * shared header draws.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AdminPanel } from '../components/admin-panel';
 import { BotPanel } from '../components/bot-panel';
@@ -42,7 +43,6 @@ import {
   Inset,
   InsetRow,
   Notice,
-  SectionLabel,
 } from '../components';
 import type { Bridge } from '../bridge';
 import {
@@ -70,7 +70,7 @@ import { AccountMark } from './account-switcher';
 import { deviceEntries } from './device-model';
 import type { DeviceLists } from './device-model';
 import { GoProfileConnectSheet } from './go-profile-connect';
-import { PassphraseSheet } from './device-sheets';
+import { EnrollSheet, PassphraseSheet, RecoverSheet } from './device-sheets';
 
 const ACTION_UNAVAILABLE =
   'Resolve this under Account servers, or in the team’s settings.';
@@ -83,6 +83,8 @@ type AccountSheet =
   | 'bot'
   | 'admin'
   | 'sso'
+  | 'recover'
+  | 'enroll'
   | 'go-profile';
 
 function canRetry(note: Notification): boolean {
@@ -389,31 +391,6 @@ export function AccountSection({
     onError,
   });
 
-  // Secrets typed into a panel must not stay on screen behind another window.
-  // Browser sign-in is the exception: it hands focus away on purpose.
-  const open = useRef(sheet);
-  open.current = sheet;
-  useEffect(() => {
-    const conceal = (): void => {
-      if (
-        open.current === 'local-alias' ||
-        open.current === 'go-profile' ||
-        open.current === 'sso'
-      )
-        return;
-      setSheet(null);
-    };
-    const concealWhenHidden = (): void => {
-      if (document.hidden) conceal();
-    };
-    window.addEventListener('blur', conceal);
-    document.addEventListener('visibilitychange', concealWhenHidden);
-    return () => {
-      window.removeEventListener('blur', conceal);
-      document.removeEventListener('visibilitychange', concealWhenHidden);
-    };
-  }, [setSheet]);
-
   // Normalize the route to the active account's StoreRef. Because the
   // destination matches the current location, navigation guards are bypassed
   // and active dialogs remain open.
@@ -464,6 +441,43 @@ export function AccountSection({
       onError={onError}
     />
   );
+  const unpairedServers =
+    snapshot.profileInventoryStatus === 'complete'
+      ? snapshot.servers.filter(
+          (server) =>
+            server.accounts.length === 0 &&
+            snapshot.profileInventory.find(
+              (inventory) => inventory.profile === server.id,
+            )?.accounts === 'complete',
+        )
+      : [];
+  const noticesAndUnpairedServers = (
+    <>
+      {notices}
+      {unpairedServers.map((server) => (
+        <Inset key={server.id}>
+          {/* The server's name is the value, not the label: the label column
+              is a fixed 88px and a hostname overran it. */}
+          <InsetRow
+            label="Server"
+            action={
+              <Button
+                onClick={() => {
+                  setPairingProfile(server);
+                  setSheet('go-profile');
+                }}
+              >
+                Pair
+              </Button>
+            }
+          >
+            {serverDisplayName(server)}{' '}
+            <span className="dim">Connected, not paired</span>
+          </InsetRow>
+        </Inset>
+      ))}
+    </>
+  );
 
   return (
     <WorkflowProvider snapshot={snapshot}>
@@ -481,33 +495,9 @@ export function AccountSection({
         aria-labelledby={panel.labelledBy}
       >
         <div className="settings-main account-main">
-          {snapshot.servers
-            .filter((server) => server.accounts.length === 0)
-            .map((server) => (
-              <Inset key={server.id}>
-                {/* The server's name is the value, not the label: the label
-                    column is a fixed 88px and a hostname overran it. */}
-                <InsetRow
-                  label="Server"
-                  action={
-                    <Button
-                      onClick={() => {
-                        setPairingProfile(server);
-                        setSheet('go-profile');
-                      }}
-                    >
-                      Pair
-                    </Button>
-                  }
-                >
-                  {serverDisplayName(server)}{' '}
-                  <span className="dim">Connected, not paired</span>
-                </InsetRow>
-              </Inset>
-            ))}
           {unavailable ? (
             <>
-              {notices}
+              {noticesAndUnpairedServers}
               <UnavailableAccount
                 stores={stores}
                 snapshot={snapshot}
@@ -524,7 +514,7 @@ export function AccountSection({
           ) : selected ? (
             <>
               <AccountPanel
-                notices={notices}
+                notices={noticesAndUnpairedServers}
                 freshness={freshness}
                 onRetry={retryMetadata}
                 snapshot={snapshot}
@@ -544,7 +534,7 @@ export function AccountSection({
             </>
           ) : (
             <>
-              {notices}
+              {noticesAndUnpairedServers}
               <NoAvailableAccount
                 onConnectGoProfile={() => setSheet('go-profile')}
               />
@@ -645,6 +635,31 @@ export function AccountSection({
           onComplete={() => onRefresh('SSO sign-in verified')}
         />
       ) : null}
+      {selected && sheet === 'recover' ? (
+        <RecoverSheet
+          bridge={bridge}
+          store={selected}
+          onClose={() => setSheet(null)}
+          onDone={async () => {
+            setSheet(null);
+            await onRefresh('Recovery submitted successfully.');
+          }}
+          onError={(error) => void onMutationError(error)}
+        />
+      ) : null}
+      {selected && sheet === 'enroll' ? (
+        <EnrollSheet
+          bridge={bridge}
+          store={selected}
+          card={snapshot.cardsConnected[0]}
+          onClose={() => setSheet(null)}
+          onDone={async () => {
+            setSheet(null);
+            await onRefresh('YubiKey account created successfully.');
+          }}
+          onError={(error) => void onMutationError(error)}
+        />
+      ) : null}
     </WorkflowProvider>
   );
 }
@@ -723,13 +738,22 @@ function AccountPanel({
         <InsetRow
           label="Username"
           action={
-            <Button
-              size="sm"
-              {...access.props('account-rename', target)}
-              onClick={() => onSheet('rename')}
-            >
-              Change…
-            </Button>
+            <>
+              <Button
+                size="sm"
+                {...access.props('account-rename', target)}
+                onClick={() => onSheet('rename')}
+              >
+                Change…
+              </Button>
+              <Button
+                size="sm"
+                {...access.props('passphrase', target)}
+                onClick={() => onSheet('passphrase')}
+              >
+                Passphrase…
+              </Button>
+            </>
           }
         >
           <b>{username ?? 'Identity unavailable'}</b>
@@ -828,22 +852,6 @@ function AccountPanel({
         freshness={freshness}
         onRetry={onRetry}
       />
-      <SectionLabel>Passphrase</SectionLabel>
-      <Inset className="settings-inset middle wide">
-        <InsetRow
-          action={
-            <Button
-              size="sm"
-              {...access.props('passphrase', target)}
-              onClick={() => onSheet('passphrase')}
-            >
-              Passphrase…
-            </Button>
-          }
-        >
-          Set or change this account’s passphrase on its server.
-        </InsetRow>
-      </Inset>
       <div className="fn account-more">
         <Button
           variant="plain"
@@ -879,6 +887,24 @@ function AccountPanel({
           onClick={() => onSheet('go-profile')}
         >
           Import from FOKS CLI
+        </Button>
+        <Button
+          variant="plain"
+          size="sm"
+          className="lnk"
+          {...access.props('account-recover', { profile: store.server })}
+          onClick={() => onSheet('recover')}
+        >
+          Connect an existing account with a paper key
+        </Button>
+        <Button
+          variant="plain"
+          size="sm"
+          className="lnk"
+          {...access.props('yubi-create', { profile: store.server })}
+          onClick={() => onSheet('enroll')}
+        >
+          Create an account on a YubiKey…
         </Button>
       </div>
     </>
