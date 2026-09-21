@@ -709,3 +709,62 @@ test('an unrefreshed profile asks for one catalog refresh per profile, not one p
   assert.equal(requested.length, 2);
   f.service.stop();
 });
+
+test('a hidden window suspends the periodic resynchronization', async () => {
+  const f = fixture();
+  await f.clock.advance(500);
+  assert.deepEqual(new Set(f.syncs), new Set(['t0', 't1']));
+  f.service.setVisible(false);
+  f.syncs.length = 0;
+  await f.clock.advance(120_000);
+  assert.deepEqual(f.syncs, []);
+  // The account poll is the one round trip a hidden window keeps.
+  assert.equal(f.waits.size, 1);
+  f.service.stop();
+});
+
+test('a poll bump synchronizes its teams while the window is hidden', async () => {
+  const f = fixture();
+  await f.clock.advance(500);
+  f.service.setVisible(false);
+  f.syncs.length = 0;
+  f.bump('2');
+  await f.clock.advance(5_000);
+  assert.deepEqual(new Set(f.syncs), new Set(['t0', 't1']));
+  assert.equal(f.service.getSnapshot().get('t1')?.data?.head, '2');
+  f.syncs.length = 0;
+  await f.clock.advance(120_000);
+  assert.deepEqual(f.syncs, []);
+  f.service.stop();
+});
+
+test('showing the window again resynchronizes every team once', async () => {
+  const f = fixture();
+  await f.clock.advance(500);
+  f.service.setVisible(false);
+  await f.clock.advance(120_000);
+  f.syncs.length = 0;
+  f.service.setVisible(true);
+  await f.clock.advance(500);
+  assert.deepEqual(f.syncs.sort(), ['t0', 't1']);
+  f.service.stop();
+});
+
+test('a hidden window drains every two seconds rather than every quarter second', async () => {
+  const f = fixture();
+  await f.clock.advance(500);
+  const delays = () => {
+    const seen: number[] = [];
+    const before = f.clock.time;
+    for (const task of f.clock.tasks.values()) seen.push(task.due - before);
+    return seen;
+  };
+  assert.deepEqual(delays(), [250]);
+  f.service.setVisible(false);
+  await f.clock.advance(0);
+  assert.deepEqual(delays(), [2_000]);
+  f.service.setVisible(true);
+  await f.clock.advance(0);
+  assert.deepEqual(delays(), [250]);
+  f.service.stop();
+});

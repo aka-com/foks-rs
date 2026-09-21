@@ -95,10 +95,15 @@ export class CatalogCoordinator<T> {
           const isCurrent = (): boolean =>
             reading && this.active && epoch === this.epoch && !this.dirty;
           try {
+            // Publish intermediate results as non-forced updates. Marking each
+            // partial as forced would make consumers rebuild caches once per
+            // profile and again for the completed catalog.
             value = await this.read((partial) => {
-              if (isCurrent()) this.publish(partial, forced);
+              if (isCurrent()) this.publish(partial, false);
             }, isCurrent);
           } catch (error) {
+            // A failed read does not publish a forced result, so dependent caches
+            // remain unchanged until a later successful refresh.
             if (this.dirty) {
               this.report('superseded', started);
               forced = true;

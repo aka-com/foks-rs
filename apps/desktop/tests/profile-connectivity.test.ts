@@ -5,6 +5,7 @@ import { decodeProfileReconciliation } from '../src/bridge';
 import { serverFactAvailability } from '../src/model';
 import {
   canonicalProbeEndpoint,
+  connectionFactsUnchanged,
   connectionObservationFresh,
   connectionSecurityFailure,
   observeProfileConnection,
@@ -221,4 +222,72 @@ test('old reachability is discarded after profile address or pinned identity cha
     assert.deepEqual(retainProfileConnection(changed, observation), {
       status: 'unknown',
     });
+});
+
+test('only an observation that restates every recorded fact counts as unchanged', () => {
+  const server = {
+    ...SERVER,
+    compatibility: { status: 'not-required' } as const,
+  };
+  const report = {
+    profile: server.id,
+    identity: CONNECTED,
+    compatibility: { status: 'not-required' } as const,
+  };
+  assert.equal(connectionFactsUnchanged(server, report), true);
+  // The probe is compared canonically, not textually.
+  assert.equal(
+    connectionFactsUnchanged(server, {
+      ...report,
+      identity: { ...CONNECTED, configuredProbe: SERVER.configuredProbe },
+    }),
+    true,
+  );
+  for (const moved of [
+    { ...report, profile: 'other' },
+    {
+      ...report,
+      identity: { status: 'failed' as const, error: failure('io') },
+    },
+    {
+      ...report,
+      identity: { ...CONNECTED, hostId: `02${'22'.repeat(32)}` },
+    },
+    {
+      ...report,
+      identity: { ...CONNECTED, configuredProbe: 'moved.example.net' },
+    },
+    { ...report, compatibility: { status: 'renewed' as const } },
+    // A lease the agent did not renew says nothing about a server that
+    // records no lease, and the reverse.
+    { ...report, compatibility: { status: 'unchanged' as const } },
+  ])
+    assert.equal(connectionFactsUnchanged(server, moved), false);
+  const leased = {
+    ...server,
+    compatibility: {
+      status: 'required' as const,
+      expiresAt: 10,
+      capabilities: ['kv'] as const,
+    },
+  };
+  assert.equal(
+    connectionFactsUnchanged(leased, {
+      ...report,
+      compatibility: { status: 'unchanged' },
+    }),
+    true,
+  );
+  assert.equal(connectionFactsUnchanged(leased, report), false);
+  // An unverified or unpinned server is one whose facts the observation
+  // cannot be published against at all.
+  for (const trust of [
+    { status: 'unprobed' as const },
+    { status: 'unknown' as const },
+  ])
+    assert.equal(connectionFactsUnchanged({ ...server, trust }, report), false);
+  assert.equal(
+    connectionFactsUnchanged({ ...server, host_id: null }, report),
+    false,
+  );
 });

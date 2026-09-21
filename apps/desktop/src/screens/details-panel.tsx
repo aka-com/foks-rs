@@ -198,7 +198,8 @@ export interface DetailsPanelProps {
   onClose: () => void;
   onDelete: (item: Item) => void;
   onConflict: (item: Item, draft: string) => void;
-  onApplied: (message: string) => Promise<void>;
+  /** Pass the affected profile so post-mutation refresh can reload only that profile. */
+  onApplied: (message: string, profile?: string) => Promise<void>;
   onCommandError: (error: unknown, item?: Item) => void;
   onMutationError: MutationFailureHandler;
   /** Signal counter incremented to clear revealed secrets from view state. */
@@ -700,7 +701,7 @@ export function DetailsPanel({
       editBaseline.current = null;
       editTarget.current = null;
       setEditing(false);
-      await onApplied('Changes saved');
+      await onApplied('Changes saved', storeOf(snapshot, target.store)?.server);
     } catch (error) {
       const typed = normalizeCommandError(error);
       if (typed.code === 'conflict') {

@@ -183,3 +183,79 @@ test('aggregate diagnostics contain no catalog data and cannot alter publication
   await coordinator.refresh();
   assert.equal(events.length, 1);
 });
+
+test('only the value that completes a forced read is published as forced', async () => {
+  const reads = [deferred<number>(), deferred<number>()];
+  const callbacks: ((value: number) => void)[] = [];
+  const published: [number, boolean][] = [];
+  const coordinator = new CatalogCoordinator<number>(
+    (partial) => {
+      callbacks.push(partial);
+      return reads[callbacks.length - 1].promise;
+    },
+    (value, forced) => published.push([value, forced]),
+  );
+  const pending = coordinator.refresh(true);
+  await Promise.resolve();
+  callbacks[0](1);
+  callbacks[0](2);
+  callbacks[0](3);
+  assert.deepEqual(published, [
+    [1, false],
+    [2, false],
+    [3, false],
+  ]);
+  reads[0].resolve(4);
+  assert.equal(await pending, 4);
+  assert.deepEqual(published.at(-1), [4, true]);
+  assert.equal(published.filter(([, forced]) => forced).length, 1);
+});
+
+test('a superseded forced read still publishes its replacement as forced', async () => {
+  const reads = [deferred<number>(), deferred<number>()];
+  const callbacks: ((value: number) => void)[] = [];
+  const published: [number, boolean][] = [];
+  const coordinator = new CatalogCoordinator<number>(
+    (partial) => {
+      callbacks.push(partial);
+      return reads[callbacks.length - 1].promise;
+    },
+    (value, forced) => published.push([value, forced]),
+  );
+  const pending = coordinator.refresh(true);
+  await Promise.resolve();
+  void coordinator.refresh(true);
+  reads[0].resolve(1);
+  await Promise.resolve();
+  await Promise.resolve();
+  callbacks[1](2);
+  reads[1].resolve(3);
+  assert.equal(await pending, 3);
+  assert.deepEqual(published, [
+    [2, false],
+    [3, true],
+  ]);
+});
+
+test('a forced read that fails after its partials publishes no forced value', async () => {
+  const read = deferred<number>();
+  const callbacks: ((value: number) => void)[] = [];
+  const published: [number, boolean][] = [];
+  const coordinator = new CatalogCoordinator<number>(
+    (partial) => {
+      callbacks.push(partial);
+      return read.promise;
+    },
+    (value, forced) => published.push([value, forced]),
+  );
+  const pending = coordinator.refresh(true);
+  await Promise.resolve();
+  callbacks[0](1);
+  callbacks[0](2);
+  read.reject(new Error('catalog unavailable'));
+  await assert.rejects(pending, /catalog unavailable/);
+  assert.deepEqual(published, [
+    [1, false],
+    [2, false],
+  ]);
+});

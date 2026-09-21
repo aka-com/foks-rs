@@ -250,7 +250,7 @@ interface NewSheetProps {
   bridge: Bridge;
   workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'new' }>;
   setWorkflow: (workflow: WriteWorkflow) => void;
-  onApplied: (message: string) => Promise<void>;
+  onApplied: (message: string, profile?: string) => Promise<void>;
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
   accessNow: () => number;
@@ -637,7 +637,10 @@ function NewSheet({
           ...roleArgs,
         });
       }
-      await onApplied(`${kindLabel(itemKind)} created in ${store.name}`);
+      await onApplied(
+        `${kindLabel(itemKind)} created in ${store.name}`,
+        store.server,
+      );
       setWorkflow(null);
     } catch (error) {
       const typed = normalizeCommandError(error);
@@ -663,7 +666,10 @@ function NewSheet({
         await onMutationError(error, { report: false });
       } else if (typed.code === 'inactive-group') {
         try {
-          await onApplied(`Cannot create item: ${store.name} is inactive`);
+          await onApplied(
+            `Cannot create item: ${store.name} is inactive`,
+            store.server,
+          );
           setWorkflow(null);
         } catch (refreshError) {
           onError(refreshError);
@@ -948,7 +954,7 @@ export function WriteOverlay({
   bridge: Bridge;
   workflow: WriteWorkflow;
   setWorkflow: (workflow: WriteWorkflow) => void;
-  onApplied: (message: string) => Promise<void>;
+  onApplied: (message: string, profile?: string) => Promise<void>;
   onError: (error: unknown, item?: Item) => void;
   onMutationError: MutationFailureHandler;
   /**
@@ -1132,7 +1138,7 @@ function DeleteSheet({
   workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'delete' }>;
   bridge: Bridge;
   setWorkflow: (workflow: WriteWorkflow) => void;
-  onApplied: (message: string) => Promise<void>;
+  onApplied: (message: string, profile?: string) => Promise<void>;
   onMutationError: MutationFailureHandler;
   onDeleteConflict: (item: Item) => Promise<void>;
 }): ReactNode {
@@ -1175,7 +1181,10 @@ function DeleteSheet({
                     path: workflow.item.path,
                     version: workflow.item.version,
                   });
-                  await onApplied(`Deleted ${nameOf(workflow.item.path)}`);
+                  await onApplied(
+                    `Deleted ${nameOf(workflow.item.path)}`,
+                    storeOf(snapshot, workflow.item.store)?.server,
+                  );
                   setWorkflow(null);
                 } catch (error) {
                   const typed = normalizeCommandError(error);

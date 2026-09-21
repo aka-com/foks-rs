@@ -366,3 +366,146 @@ test('a snapshot names the next attempt while the job is idle, and none while it
   assert.equal(scheduler.snapshot('p')?.paused, true);
   assert.equal(scheduler.snapshot('p')?.nextAttemptAt, undefined);
 });
+
+test('run waits for the first execution started after the request', async () => {
+  const clock = new Clock(),
+    gates = [deferred(), deferred()];
+  const scheduler = new ReconciliationScheduler(clock);
+  let calls = 0;
+  scheduler.update([
+    job('p', async () => {
+      await gates[calls++].promise;
+    }),
+  ]);
+  scheduler.setEnabled(true);
+  scheduler.request('p', 'foreground');
+  await clock.advance(0);
+  assert.equal(calls, 1);
+  let settled = false;
+  const awaited = scheduler.run('p', 'mutation');
+  assert.ok(awaited);
+  void awaited.then(() => {
+    settled = true;
+  });
+  gates[0].resolve();
+  await flush();
+  await clock.advance(0);
+  // The first run started before the request, so the trailing run answers it.
+  assert.equal(calls, 2);
+  assert.equal(settled, false);
+  gates[1].resolve();
+  await flush();
+  assert.equal(settled, true);
+  scheduler.dispose();
+});
+
+test('run propagates job failures and returns null for unavailable jobs', async () => {
+  const clock = new Clock();
+  const scheduler = new ReconciliationScheduler(clock);
+  let eligible = true;
+  scheduler.update([
+    {
+      ...job('p', async () => {
+        throw { code: 'io', message: 'offline', retryable: true };
+      }),
+      eligible: () => eligible,
+    },
+  ]);
+  // A scheduler that is not running has no run to wait for.
+  assert.equal(scheduler.run('p', 'mutation'), null);
+  scheduler.setEnabled(true);
+  assert.equal(scheduler.run('missing', 'mutation'), null);
+  const failed = scheduler.run('p', 'mutation');
+  assert.ok(failed);
+  const rejection = assert.rejects(failed, { code: 'io' });
+  await clock.advance(0);
+  await rejection;
+  // An ineligible job is never started, so it is declined outright.
+  eligible = false;
+  assert.equal(scheduler.run('p', 'mutation'), null);
+  scheduler.dispose();
+});
+
+test('a job that becomes ineligible rejects its waiters', async () => {
+  const clock = new Clock();
+  const scheduler = new ReconciliationScheduler(clock);
+  let eligible = true,
+    ran = 0;
+  scheduler.update([
+    {
+      ...job('p', async () => {
+        ran++;
+      }),
+      eligible: () => eligible,
+    },
+  ]);
+  scheduler.setEnabled(true);
+  const awaited = scheduler.run('p', 'mutation');
+  assert.ok(awaited);
+  const rejection = assert.rejects(awaited, { code: 'catalog-read-retired' });
+  eligible = false;
+  // Any later scheduling decision is where the job is found unrunnable.
+  scheduler.setVisible(true);
+  await rejection;
+  await clock.advance(60_000);
+  assert.equal(ran, 0);
+  scheduler.dispose();
+});
+
+test('stopping the scheduler rejects waiters for idle jobs', async () => {
+  const clock = new Clock();
+  for (const stop of ['disable', 'hide', 'remove', 'dispose'] as const) {
+    const scheduler = new ReconciliationScheduler(clock);
+    scheduler.update([job('p', async () => {})]);
+    scheduler.setEnabled(true);
+    const awaited = scheduler.run('p', 'mutation');
+    assert.ok(awaited);
+    const rejection = assert.rejects(awaited, {
+      code: 'catalog-read-retired',
+    });
+    if (stop === 'disable') scheduler.setEnabled(false);
+    if (stop === 'hide') scheduler.setVisible(false);
+    if (stop === 'remove') scheduler.update([job('q', async () => {})]);
+    if (stop === 'dispose') scheduler.dispose();
+    await rejection;
+    scheduler.dispose();
+  }
+});
+
+test('stopping during an active job rejects waiters for its follow-up run', async () => {
+  for (const stop of ['disable', 'hide'] as const) {
+    const clock = new Clock(),
+      gate = deferred();
+    const scheduler = new ReconciliationScheduler(clock);
+    let calls = 0;
+    scheduler.update([
+      job('p', async () => {
+        if (++calls === 1) await gate.promise;
+      }),
+    ]);
+    scheduler.setEnabled(true);
+    scheduler.request('p', 'foreground');
+    await clock.advance(0);
+    assert.equal(calls, 1);
+    // The request lands on a run that started before it, so a trailing run
+    // owes the caller an answer — and the scheduler stops before it starts.
+    const awaited = scheduler.run('p', 'mutation');
+    assert.ok(awaited);
+    const rejection = assert.rejects(awaited, {
+      code: 'catalog-read-retired',
+    });
+    if (stop === 'disable') scheduler.setEnabled(false);
+    else scheduler.setVisible(false);
+    gate.resolve();
+    await flush();
+    await clock.advance(60_000);
+    await rejection;
+    assert.equal(calls, 1);
+    // The trailing run is still owed and runs once the scheduler is running.
+    if (stop === 'disable') scheduler.setEnabled(true);
+    else scheduler.setVisible(true);
+    await clock.advance(0);
+    assert.equal(calls, 2);
+    scheduler.dispose();
+  }
+});

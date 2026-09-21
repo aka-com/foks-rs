@@ -98,6 +98,7 @@ export class ChatInboxService {
   private profiles = new Set<string>();
   private polls = 0;
   private running = false;
+  private visible = true;
   private timer: unknown;
   private epoch = 0;
   /**
@@ -146,6 +147,15 @@ export class ChatInboxService {
       this.running = true;
       this.kick();
     }
+  }
+  /**
+   * While hidden, synchronize teams only when account polling reports a change.
+   * Suspend periodic full-team synchronization until the window becomes visible.
+   */
+  setVisible(visible: boolean) {
+    if (visible === this.visible) return;
+    this.visible = visible;
+    this.kick();
   }
   stop() {
     this.running = false;
@@ -450,7 +460,8 @@ export class ChatInboxService {
           !candidate.quarantine &&
           this.accessValid(candidate) &&
           !candidate.busy &&
-          candidate.due <= now,
+          candidate.due <= now &&
+          (this.visible || candidate.dirty),
       );
       if (team && !this.profiles.has(team.store.server))
         void this.sync(account, team);
@@ -474,7 +485,10 @@ export class ChatInboxService {
         void this.poll(account, canonical);
       }
     }
-    this.timer = this.clock.later(() => this.drain(), 250);
+    this.timer = this.clock.later(
+      () => this.drain(),
+      this.visible ? 250 : 2_000,
+    );
   }
   private async sync(account: Account, team: Team) {
     const epoch = this.epoch;

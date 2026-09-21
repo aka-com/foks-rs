@@ -54,6 +54,7 @@ export interface ReconciliationDiagnostic {
   milliseconds: number;
   retry: number;
 }
+type Waiter = { resolve(): void; reject(error: unknown): void };
 type Entry = {
   job: ReconciliationJob;
   due: number;
@@ -62,7 +63,23 @@ type Entry = {
   trailing: boolean;
   active?: AbortController;
   snapshot: ReconciliationSnapshot;
+  /** Callers of `run` waiting for the run that answers their request. */
+  waiters: Waiter[];
 };
+/** What a caller of `run` is told when no run answered its request. */
+export type RetiredRun = Error & {
+  code: 'catalog-read-retired';
+  retryable: false;
+  fatal: false;
+  ambiguous: false;
+};
+const retired = (): RetiredRun =>
+  Object.assign(new Error('The reconciliation job was retired.'), {
+    code: 'catalog-read-retired' as const,
+    retryable: false as const,
+    fatal: false as const,
+    ambiguous: false as const,
+  });
 type Active = { scope: string | null; controller: AbortController };
 
 export class ReconciliationScheduler {
@@ -126,6 +143,7 @@ export class ReconciliationScheduler {
     for (const [key, entry] of this.entries) {
       if (!wanted.has(key)) {
         entry.active?.abort();
+        this.settle(entry, retired());
         this.entries.delete(key);
       }
     }
@@ -134,6 +152,7 @@ export class ReconciliationScheduler {
       if (existing && existing.job.scope === job.scope) existing.job = job;
       else {
         existing?.active?.abort();
+        if (existing) this.settle(existing, retired());
         this.entries.set(job.key, {
           job,
           due: this.clock.now() + Math.max(0, job.initialDelay ?? job.interval),
@@ -141,6 +160,7 @@ export class ReconciliationScheduler {
           trigger: 'periodic',
           trailing: false,
           snapshot: Object.freeze({ refreshing: false }),
+          waiters: [],
         });
       }
     }
@@ -151,12 +171,70 @@ export class ReconciliationScheduler {
     this.enabled = enabled;
     if (!enabled) {
       for (const active of this.active) active.controller.abort();
+      this.retireIdleWaiters();
     }
     this.schedule();
   }
   setVisible(visible: boolean): void {
     this.visible = visible;
+    if (!visible) this.retireIdleWaiters();
     this.schedule();
+  }
+  /**
+   * Reject waiters for idle jobs when the scheduler stops. Waiters attached to
+   * an active job are resolved or rejected when that job completes.
+   */
+  private retireIdleWaiters(): void {
+    for (const entry of this.entries.values())
+      if (!entry.active) this.settle(entry, retired());
+  }
+  private settle(entry: Entry, error?: unknown): void {
+    if (!entry.waiters.length) return;
+    const waiters = entry.waiters;
+    entry.waiters = [];
+    for (const waiter of waiters)
+      if (error === undefined) waiter.resolve();
+      else waiter.reject(error);
+  }
+  /**
+   * Requests a job and returns a promise for the first run started after that
+   * request. An already active run does not satisfy the promise because it may
+   * not include the requested invalidation. Returns `null` when the scheduler
+   * cannot run the job.
+   */
+  run(key: string, trigger: ReconciliationTrigger): Promise<void> | null {
+    const entry = this.entries.get(key);
+    if (
+      !entry ||
+      this.disposed ||
+      !this.enabled ||
+      !this.visible ||
+      entry.job.eligible?.() === false ||
+      this.declines(entry, trigger)
+    )
+      return null;
+    return new Promise<void>((resolve, reject) => {
+      entry.waiters.push({ resolve, reject });
+      this.request(key, trigger, true);
+    });
+  }
+  /**
+   * Returns whether `request` would ignore this trigger because the job is
+   * paused or an idle retry remains in backoff.
+   */
+  private declines(entry: Entry, trigger: ReconciliationTrigger): boolean {
+    if (
+      !Number.isFinite(entry.due) &&
+      trigger !== 'manual' &&
+      trigger !== 'recovery'
+    )
+      return true;
+    return (
+      !entry.active &&
+      entry.retry > 0 &&
+      (trigger === 'foreground' || trigger === 'periodic') &&
+      this.clock.now() < entry.due
+    );
   }
   request(
     key: string,
@@ -164,13 +242,7 @@ export class ReconciliationScheduler {
     invalidate = false,
   ): void {
     const entry = this.entries.get(key);
-    if (!entry || this.disposed) return;
-    if (
-      !Number.isFinite(entry.due) &&
-      trigger !== 'manual' &&
-      trigger !== 'recovery'
-    )
-      return;
+    if (!entry || this.disposed || this.declines(entry, trigger)) return;
     if (entry.active) {
       if (invalidate) {
         entry.trailing = true;
@@ -178,12 +250,6 @@ export class ReconciliationScheduler {
       }
       return;
     }
-    if (
-      entry.retry > 0 &&
-      (trigger === 'foreground' || trigger === 'periodic') &&
-      this.clock.now() < entry.due
-    )
-      return;
     entry.trigger = trigger;
     entry.due = Math.min(
       entry.due,
@@ -217,6 +283,7 @@ export class ReconciliationScheduler {
   }
   dispose(): void {
     this.setEnabled(false);
+    for (const entry of this.entries.values()) this.settle(entry, retired());
     this.disposed = true;
     this.clock.cancel(this.timer);
     this.entries.clear();
@@ -263,6 +330,14 @@ export class ReconciliationScheduler {
     const eligible = [...this.entries.values()].filter((entry) =>
       this.available(entry),
     );
+    // Reject waiters when their job becomes ineligible and cannot be scheduled.
+    for (const entry of this.entries.values())
+      if (
+        entry.waiters.length &&
+        !entry.active &&
+        entry.job.eligible?.() === false
+      )
+        this.settle(entry, retired());
     if (!eligible.length) return;
     const due = Math.min(...eligible.map((entry) => entry.due));
     if (!Number.isFinite(due)) return;
@@ -278,12 +353,12 @@ export class ReconciliationScheduler {
       if (entry.due > this.clock.now() || !this.available(entry)) continue;
       this.entries.delete(key);
       this.entries.set(key, entry);
-      void this.run(entry);
+      void this.execute(entry);
       if (entry.job.scope === null) break;
     }
     this.schedule();
   }
-  private async run(entry: Entry): Promise<void> {
+  private async execute(entry: Entry): Promise<void> {
     const controller = new AbortController();
     const active = { scope: entry.job.scope, controller };
     entry.active = controller;
@@ -310,6 +385,7 @@ export class ReconciliationScheduler {
       retry: entry.retry,
     });
     let outcome: ReconciliationDiagnostic['outcome'] = 'retired';
+    let failure: unknown;
     try {
       await job.run({ signal: controller.signal, trigger, isCurrent });
       if (isCurrent()) {
@@ -338,6 +414,7 @@ export class ReconciliationScheduler {
         )
           return;
         outcome = 'failed';
+        failure = error;
         entry.retry++;
         const delay =
           typed?.retryable === false
@@ -357,7 +434,8 @@ export class ReconciliationScheduler {
     } finally {
       this.active.delete(active);
       if (entry.active === controller) entry.active = undefined;
-      if (this.entries.get(job.key) === entry) {
+      if (this.entries.get(job.key) !== entry) this.settle(entry, retired());
+      else {
         if (outcome === 'retired') {
           entry.due = this.clock.now() + 1_000;
           this.publish(entry, { ...entry.snapshot, refreshing: false });
@@ -365,7 +443,16 @@ export class ReconciliationScheduler {
         if (entry.trailing) {
           entry.trailing = false;
           entry.due = this.clock.now();
-        } else entry.trigger = 'periodic';
+          // Waiters require the follow-up run because the active run began before
+          // their requests. If the scheduler stopped during the active run, reject
+          // those waiters and leave the follow-up run due for the next start.
+          if (this.disposed || !this.enabled || !this.visible)
+            this.settle(entry, retired());
+        } else {
+          entry.trigger = 'periodic';
+          if (outcome === 'success') this.settle(entry);
+          else this.settle(entry, outcome === 'failed' ? failure : retired());
+        }
       }
       this.report({
         kind: job.kind,

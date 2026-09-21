@@ -16,7 +16,10 @@ import {
   DesktopReconciliation,
   profileRefreshKey,
 } from './desktop-reconciliation';
-import { observeProfileConnection } from './profile-connectivity';
+import {
+  connectionFactsUnchanged,
+  observeProfileConnection,
+} from './profile-connectivity';
 import { scheduleProfileWork } from './scheduling/profile-work';
 import type { AgentSnapshot, Server } from './model';
 import { discoveryAccounts, reconcileTeamDiscovery } from './team-discovery';
@@ -279,6 +282,12 @@ export function useDesktopReconciliation(
                     observed,
                     observedAt,
                   });
+                  // Publish unchanged connectivity data immediately without requesting
+                  // a catalog refresh. The catalog job retains its normal 30-second schedule.
+                  if (connectionFactsUnchanged(before, observed)) {
+                    publishObservation(name);
+                    return;
+                  }
                   await requestCatalog(name, context);
                   if (!context.isCurrent()) return;
                   if (errors[0]) throw errors[0];

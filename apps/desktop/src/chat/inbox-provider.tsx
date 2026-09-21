@@ -67,6 +67,16 @@ export function ChatInboxProvider({
     if (enabled) service.start();
     return () => service.stop();
   }, [service, enabled]);
+  // Suspend periodic team synchronization while the window is hidden. Account
+  // polling remains active so reported team changes are synchronized for notifications.
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const observe = () =>
+      service.setVisible(document.visibilityState !== 'hidden');
+    observe();
+    document.addEventListener('visibilitychange', observe);
+    return () => document.removeEventListener('visibilitychange', observe);
+  }, [service]);
   return (
     <Context.Provider value={service}>
       <NotificationProvider

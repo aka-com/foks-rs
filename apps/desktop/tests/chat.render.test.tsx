@@ -1544,3 +1544,112 @@ test('channel info keeps channel overrides and links to device notification sett
     section: 'preferences',
   });
 });
+
+class ManualClock {
+  time = 0;
+  id = 0;
+  tasks = new Map<number, { due: number; fn: () => void }>();
+  now = () => this.time;
+  random = () => 0;
+  later = (fn: () => void, delay: number) => {
+    const id = ++this.id;
+    this.tasks.set(id, { due: this.time + delay, fn });
+    return id;
+  };
+  cancel = (id: unknown) => {
+    this.tasks.delete(id as number);
+  };
+  async advance(milliseconds: number) {
+    const end = this.time + milliseconds;
+    for (;;) {
+      const next = [...this.tasks].sort((a, b) => a[1].due - b[1].due)[0];
+      if (!next || next[1].due > end) break;
+      this.time = next[1].due;
+      this.tasks.delete(next[0]);
+      await ui.act(async () => {
+        next[1].fn();
+        for (let i = 0; i < 50; i++) await Promise.resolve();
+      });
+    }
+    this.time = end;
+  }
+}
+
+test('the provider stops periodic team synchronization while the window is hidden', async () => {
+  const { ChatInboxProvider } = await vite.ssrLoadModule(
+    '/src/chat/inbox-provider.tsx',
+  );
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const snapshot = {
+    ...FIXTURE,
+    stores: FIXTURE.stores.filter(
+      (store) => store.kind !== 'team' || store.id === 'team:eng',
+    ),
+    servers: FIXTURE.servers.map((server) =>
+      server.id === 'acme'
+        ? {
+            ...server,
+            compatibility: { status: 'not-required' as const },
+            services: { ...server.services, chat: true },
+          }
+        : server,
+    ),
+  };
+  const base = mockBridge(snapshot);
+  const syncs: string[] = [];
+  const bridge: Bridge = {
+    ...base,
+    chat: async (store, action, view) => {
+      if (action.action === 'sync-inbox') syncs.push(store);
+      // The poll is answered by nothing in this test: it is the round trip
+      // that stays open while the window is hidden.
+      if (action.action === 'poll-inbox') return new Promise(() => {});
+      return base.chat(store, action, view);
+    },
+  };
+  const visibility = (state: 'visible' | 'hidden') => {
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: state,
+    });
+    Object.defineProperty(document, 'hidden', {
+      configurable: true,
+      value: state === 'hidden',
+    });
+  };
+  visibility('visible');
+  const clock = new ManualClock();
+  try {
+    ui.render(
+      createElement(ChatInboxProvider, {
+        bridge,
+        snapshot,
+        clock,
+        children: null,
+      }),
+    );
+    await clock.advance(1_000);
+    assert.deepEqual(syncs, ['team:eng']);
+    await clock.advance(30_000);
+    assert.equal(syncs.length, 2);
+    visibility('hidden');
+    await ui.act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await clock.advance(120_000);
+    assert.equal(syncs.length, 2);
+    visibility('visible');
+    await ui.act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await clock.advance(1_000);
+    assert.equal(syncs.length, 3);
+  } finally {
+    visibility('visible');
+  }
+});

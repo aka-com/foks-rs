@@ -93,6 +93,34 @@ export function observeProfileConnection(
     compatibility: structuredClone(report.compatibility),
   };
 }
+/**
+ * Returns whether a connectivity result matches all server identity, probe,
+ * trust, and compatibility data already in the snapshot. Results that introduce
+ * or change any of these values require a catalog refresh.
+ */
+export function connectionFactsUnchanged(
+  server: Server,
+  report: ProfileReconciliation,
+): boolean {
+  const { identity, compatibility } = report;
+  if (
+    server.id !== report.profile ||
+    identity.status !== 'connected' ||
+    // Only a verified server has a stored host identity that can be compared with
+    // the observation.
+    server.trust.status !== 'verified' ||
+    server.host_id === null ||
+    server.host_id !== identity.hostId
+  )
+    return false;
+  const probe = canonicalProbeEndpoint(server.configuredProbe);
+  if (!probe || probe !== canonicalProbeEndpoint(identity.configuredProbe))
+    return false;
+  return compatibility.status === 'not-required'
+    ? server.compatibility.status === 'not-required'
+    : compatibility.status === 'unchanged' &&
+        server.compatibility.status === 'required';
+}
 export function retainProfileConnection(
   server: Server,
   observation: ProfileConnectivity | undefined,

@@ -270,6 +270,10 @@ export function useShellRuntime({
     nowSeconds: () => leaseClock.now(),
   });
   reconciliationRef.current = reconciliation;
+  // Configure post-mutation refreshes to reload only the affected profile
+  // through the reconciliation service.
+  catalog.profileRefresh.current = (profile) =>
+    reconciliation.refreshProfile(profile);
   useEffect(
     () =>
       lifetime.subscribe((event) => {

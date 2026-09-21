@@ -233,7 +233,7 @@ export function VaultShell({
     handleAgentReadinessFailure,
     reconciliation,
   } = runtime;
-  const mutationError = useMutationError(commandError, refreshSnapshot);
+  const mutationError = useMutationError(commandError, catalog);
   // A team read that answers "this profile's vault has not been refreshed"
   // asks for that profile's catalog job, so the read that follows can find
   // the team again instead of waiting for the next scheduled refresh.

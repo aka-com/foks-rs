@@ -185,6 +185,17 @@ export class DesktopReconciliation {
       trigger,
     );
   }
+  /**
+   * Requests a profile-scoped catalog refresh and resolves when it completes.
+   * Returns `null` when reconciliation is unavailable, allowing the caller to
+   * reload the full catalog.
+   */
+  refreshProfile(profile: string): Promise<void> | null {
+    return this.scheduler.run(
+      profileRefreshKey(this.reads.snapshot(), profile),
+      'mutation',
+    );
+  }
   invalidate(profile?: string): void {
     if (profile)
       this.scheduler.request(

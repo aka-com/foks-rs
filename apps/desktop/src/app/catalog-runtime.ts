@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { RefObject } from 'react';
 import type { ToastController } from '/kit/toasts';
 import {
   isAgentReadinessError,
@@ -12,7 +13,7 @@ import {
 } from '../catalog-coordinator';
 import { CatalogReadGate } from '../catalog-read-gate';
 import { failWholeCatalogRefresh, markCatalogRefresh } from '../catalog-state';
-import type { AgentSnapshot, Item } from '../model';
+import { storeOf, type AgentSnapshot, type Item } from '../model';
 import {
   reconcileMutationFailure,
   type MutationFailureHandler,
@@ -24,6 +25,28 @@ export type CommandErrorHandler = (
   item?: Item,
   draft?: string,
 ) => void;
+
+/**
+ * Attempts a profile-scoped refresh after a mutation. Returns `false` if no
+ * profile was supplied, scoped refresh is unavailable, or the request was
+ * retired before execution, allowing the caller to reload the full catalog.
+ * Other refresh failures propagate.
+ */
+async function reloadProfile(
+  profileRefresh: RefObject<(profile: string) => Promise<void> | null>,
+  profile: string | undefined,
+): Promise<boolean> {
+  const scoped = profile ? profileRefresh.current(profile) : null;
+  if (!scoped) return false;
+  try {
+    await scoped;
+    return true;
+  } catch (error) {
+    if (normalizeCommandError(error).code !== 'catalog-read-retired')
+      throw error;
+    return false;
+  }
+}
 
 export function useCatalogRuntime({
   lifetime,
@@ -46,6 +69,14 @@ export function useCatalogRuntime({
   const [agentCatalogReady, setAgentCatalogReady] = useState(true);
   const [refreshingSnapshot, setRefreshingSnapshot] = useState(false);
   const metadataInvalidation = useRef<() => void>(() => undefined);
+  /**
+   * Starts a profile-scoped post-mutation refresh through the reconciliation
+   * service. Returns `null` when scoped refresh is unavailable so the caller
+   * can reload the full catalog.
+   */
+  const profileRefresh = useRef<(profile: string) => Promise<void> | null>(
+    () => null,
+  );
   const metadataReconciliation = useRef<() => Promise<void>>(async () => {});
   const [hardwareRefresh, setHardwareRefresh] = useState(0);
   const commandErrorRef = useRef<CommandErrorHandler>(() => undefined);
@@ -122,16 +153,25 @@ export function useCatalogRuntime({
     [catalogCoordinator, retireBoot],
   );
 
+  /**
+   * Refreshes the affected profile after a mutation when possible; otherwise
+   * reloads the full catalog. Both paths report catalog freshness failures.
+   */
+  const reloadApplied = useCallback(
+    async (profile?: string): Promise<void> => {
+      if (await reloadProfile(profileRefresh, profile)) return;
+      const snapshot = await refreshSnapshot(true);
+      const failure = Object.values(
+        snapshot.catalogFreshness?.profiles ?? {},
+      ).find((entry) => entry.error)?.error;
+      if (failure) throw failure;
+    },
+    [refreshSnapshot],
+  );
+
   const refresh = useCallback(
-    async (message: string): Promise<void> => {
-      const result = await synchronizeApplied(async () => {
-        const snapshot = await refreshSnapshot(true);
-        const failure = Object.values(
-          snapshot.catalogFreshness?.profiles ?? {},
-        ).find((entry) => entry.error)?.error;
-        if (failure) throw failure;
-        return snapshot;
-      });
+    async (message: string, profile?: string): Promise<void> => {
+      const result = await synchronizeApplied(() => reloadApplied(profile));
       if (result.synchronization === 'pending') {
         if (result.error.code === 'catalog-read-retired') return;
         if (isAgentReadinessError(result.error))
@@ -145,7 +185,7 @@ export function useCatalogRuntime({
       }
       toasts.show(message);
     },
-    [refreshSnapshot, toasts],
+    [reloadApplied, toasts],
   );
 
   const refreshAll = (
@@ -181,6 +221,7 @@ export function useCatalogRuntime({
     hardwareRefresh,
     metadataInvalidation,
     metadataReconciliation,
+    profileRefresh,
     commandErrorRef,
     catalogGate,
     catalogCoordinator,
@@ -193,8 +234,12 @@ export function useCatalogRuntime({
 
 export function useMutationError(
   commandError: CommandErrorHandler,
-  refreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>,
+  catalog: Pick<
+    CatalogRuntime,
+    'latestRef' | 'profileRefresh' | 'refreshSnapshot'
+  >,
 ): MutationFailureHandler {
+  const { latestRef, profileRefresh, refreshSnapshot } = catalog;
   return useCallback<MutationFailureHandler>(
     async (error, options = {}) => {
       const typed = normalizeCommandError(error);
@@ -203,12 +248,16 @@ export function useMutationError(
       await reconcileMutationFailure(
         error,
         async () => {
+          const profile = options.item
+            ? storeOf(latestRef.current, options.item.store)?.server
+            : undefined;
+          if (await reloadProfile(profileRefresh, profile)) return;
           await refreshSnapshot(true);
         },
         commandError,
       );
     },
-    [commandError, refreshSnapshot],
+    [commandError, latestRef, profileRefresh, refreshSnapshot],
   );
 }
 
