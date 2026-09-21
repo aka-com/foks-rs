@@ -1263,6 +1263,52 @@ impl SoftStateStore {
             .collect()
     }
 
+    /// Returns previously projected node ciphertext for the requested party and
+    /// node types, keyed by node ID.
+    ///
+    /// Node IDs are immutable: overwrites receive new IDs and the server does not
+    /// replace ciphertext under an existing ID. Callers must still authenticate
+    /// and decode cached ciphertext with their own keys.
+    ///
+    /// The query performs one `(host_id, party_id)` prefix scan. Results are
+    /// limited by entry count and encoded size; omitted nodes are fetched normally.
+    pub fn cached_node_bytes(
+        &self,
+        host_id: &[u8],
+        party_id: &[u8],
+        node_types: &[u8],
+    ) -> Result<std::collections::BTreeMap<[u8; 17], Vec<u8>>> {
+        const MAXIMUM_CACHED_NODE_BYTES: usize = 32 * 1024 * 1024;
+        let mut cached = std::collections::BTreeMap::new();
+        if node_types.is_empty() {
+            return Ok(cached);
+        }
+        let placeholders = (3..3 + node_types.len())
+            .map(|index| format!("?{index}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut parameters: Vec<Vec<u8>> = vec![host_id.to_vec(), party_id.to_vec()];
+        parameters.extend(node_types.iter().map(|node_type| vec![*node_type]));
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT node_id, node_bytes FROM kv_entries \
+             WHERE host_id = ?1 AND party_id = ?2 AND node_bytes IS NOT NULL \
+             AND readable = 1 AND substr(node_id, 1, 1) IN ({placeholders})"
+        ))?;
+        let mut rows = statement.query(rusqlite::params_from_iter(parameters.iter()))?;
+        let mut retained = 0usize;
+        while let Some(row) = rows.next()? {
+            let node_id: Vec<u8> = row.get(0)?;
+            let node_id: [u8; 17] = node_id.try_into().map_err(|_| Error::InvalidKvProjection)?;
+            let bytes: Vec<u8> = row.get(1)?;
+            retained = retained.saturating_add(bytes.len());
+            if retained > MAXIMUM_CACHED_NODE_BYTES {
+                break;
+            }
+            cached.insert(node_id, bytes);
+        }
+        Ok(cached)
+    }
+
     /// Invalidates only directories affected by a locally accepted namespace
     /// mutation and marks the party projection incomplete. The next sync must
     /// re-fetch authenticated server state instead of accepting a cache check
@@ -2050,6 +2096,70 @@ mod tests {
             directory_bytes: vec![6],
             entries: vec![entry(1, b"a"), entry(2, b"b")],
         }
+    }
+
+    #[test]
+    fn cached_node_bytes_are_keyed_by_node_id_and_filtered_by_type() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut store = SoftStateStore::open(&temporary.path().join("soft.sqlite3")).unwrap();
+        let mut projection = snapshot();
+        // A symlink, a large file, a small file and an unreadable boundary.
+        projection.entries[0].node_id[0] = 4;
+        projection.entries[0].content = None;
+        projection.entries[0].symlink = Some(vec![b'/']);
+        projection.entries[1].node_id[0] = 2;
+        projection.entries[1].content = None;
+        projection.entries[1].large_file_size = Some(0);
+        let mut small = entry(7, b"c");
+        small.node_bytes = Some(vec![70]);
+        let mut denied = entry(8, b"d");
+        denied.node_id[0] = 2;
+        denied.readable = false;
+        denied.node_bytes = None;
+        denied.content = None;
+        projection.entries.push(small);
+        projection.entries.push(denied);
+        let large_file_id = store
+            .begin_large_file(&projection.host_id, &projection.party_id, [2; 17])
+            .unwrap();
+        store.finish_large_file(&large_file_id).unwrap();
+        store
+            .project_tree_with_large_files(
+                std::slice::from_ref(&projection),
+                std::slice::from_ref(&large_file_id),
+            )
+            .unwrap();
+
+        let cached = store
+            .cached_node_bytes(&projection.host_id, &projection.party_id, &[2, 4])
+            .unwrap();
+        assert_eq!(cached.len(), 2);
+        assert_eq!(
+            cached.get(&[4, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]),
+            Some(&vec![2])
+        );
+        assert_eq!(
+            cached.get(&[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]),
+            Some(&vec![3])
+        );
+        // The small file is excluded by type, the unreadable boundary by its
+        // absent node bytes, and an unasked-for type is never returned.
+        assert!(store
+            .cached_node_bytes(&projection.host_id, &projection.party_id, &[])
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            store
+                .cached_node_bytes(&projection.host_id, &projection.party_id, &[3])
+                .unwrap()
+                .len(),
+            1
+        );
+        // Another party's rows are never served for this one.
+        assert!(store
+            .cached_node_bytes(&projection.host_id, &[9; 33], &[2, 4])
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

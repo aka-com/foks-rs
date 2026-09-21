@@ -754,6 +754,22 @@ impl FoksClient {
         for _ in 0..3 {
             let attempt = (|| -> Result<Vec<KvDirectoryProjection>> {
                 let mut store = SoftStateStore::open(soft_database_path)?;
+                // Reuse projected ciphertext for large-file and symlink metadata.
+                // Cached bytes follow the same decoding and authentication path as
+                // fetched bytes. Small files already arrive in list responses, and
+                // directory traversal fetches directory nodes directly.
+                //
+                // Content synchronization still fetches every node and chunk; caching
+                // here applies only to metadata synchronization.
+                let cached_nodes = if mode == KvSyncMode::Metadata {
+                    store.cached_node_bytes(
+                        host.host_id.as_bytes(),
+                        party.party.as_bytes(),
+                        &[KvNodeType::File as u8, KvNodeType::Symlink as u8],
+                    )?
+                } else {
+                    BTreeMap::new()
+                };
                 // Go's PathVersionVector is a partial assertion: a successful
                 // cache check proves that cited entries are unchanged, but it
                 // cannot prove that a peer did not add an uncited entry. A
@@ -986,13 +1002,20 @@ impl FoksClient {
                                     }
                                 }
                                 KvNodeType::Symlink => {
-                                    let bytes = match fetch(auth, &KvRequest::Node(entry.value)) {
-                                        Err(error) if is_kv_permission_denied(&error) => {
-                                            projected.readable = false;
-                                            entries.push(projected);
-                                            continue;
-                                        }
-                                        result => result?,
+                                    let bytes = match cached_kv_node(
+                                        &cached_nodes,
+                                        entry.value,
+                                        private_keys,
+                                    ) {
+                                        Some(bytes) => bytes,
+                                        None => match fetch(auth, &KvRequest::Node(entry.value)) {
+                                            Err(error) if is_kv_permission_denied(&error) => {
+                                                projected.readable = false;
+                                                entries.push(projected);
+                                                continue;
+                                            }
+                                            result => result?,
+                                        },
                                     };
                                     let KvNode::Symlink(boxed) = KvNode::decode(&bytes)? else {
                                         return Err(Error::KvResponse(
@@ -1020,13 +1043,20 @@ impl FoksClient {
                                     }
                                 }
                                 KvNodeType::File => {
-                                    let bytes = match fetch(auth, &KvRequest::Node(entry.value)) {
-                                        Err(error) if is_kv_permission_denied(&error) => {
-                                            projected.readable = false;
-                                            entries.push(projected);
-                                            continue;
-                                        }
-                                        result => result?,
+                                    let bytes = match cached_kv_node(
+                                        &cached_nodes,
+                                        entry.value,
+                                        private_keys,
+                                    ) {
+                                        Some(bytes) => bytes,
+                                        None => match fetch(auth, &KvRequest::Node(entry.value)) {
+                                            Err(error) if is_kv_permission_denied(&error) => {
+                                                projected.readable = false;
+                                                entries.push(projected);
+                                                continue;
+                                            }
+                                            result => result?,
+                                        },
                                     };
                                     let KvNode::File(metadata) = KvNode::decode(&bytes)? else {
                                         return Err(Error::KvResponse(
@@ -1210,6 +1240,22 @@ impl FoksClient {
             "KV cache changed during three synchronization attempts",
         ))
     }
+}
+
+fn cached_kv_node(
+    cached: &BTreeMap<[u8; 17], Vec<u8>>,
+    node: KvNodeId,
+    private_keys: &[KvPrivateKeyRef<'_>],
+) -> Option<Vec<u8>> {
+    let bytes = cached.get(&node.0)?;
+    // Fall back to the server when cached bytes cannot be decoded.
+    let key = match KvNode::decode(bytes).ok()? {
+        KvNode::SmallFile(boxed) | KvNode::Symlink(boxed) => boxed.key,
+        KvNode::File(metadata) => metadata.key,
+        KvNode::Directory(_) => return None,
+    };
+    kv_key(private_keys, key.role, key.generation).ok()?;
+    Some(bytes.clone())
 }
 
 // Only explicit authorization refusal is an inaccessible child. Integrity,
@@ -1492,5 +1538,321 @@ mod permission_tests {
         assert!(!is_kv_permission_denied(&Error::KvResponse(
             "malformed node"
         )));
+    }
+}
+
+#[cfg(test)]
+mod cached_node_tests {
+    //! Verifies that repeated metadata synchronization reuses projected large-file
+    //! and symlink ciphertext while preserving decoding and authentication checks.
+
+    use foks_client_db::SoftStateStore;
+    use foks_crypto::{derive_kv_keys, seal_kv_dirent_name};
+    use foks_proto::{
+        EntityId, KvDirectory, KvDirent, KvLargeFileMetadata, KvSmallFileBox, Role,
+        RoleAndGeneration, ENTITY_USER,
+    };
+
+    use super::super::support::bound_dirent;
+    use super::*;
+    use crate::{verify_public_host, HardStateStore};
+
+    const PROBE: &[u8] = include_bytes!(
+        "../../../foks-snowpack/tests/fixtures/foks-v0.1.9/foks.app/probe-response.snowp"
+    );
+
+    /// Test fixture containing one directory of large files and symlinks sealed
+    /// with the same key.
+    struct DroppedFiles {
+        party: KvParty,
+        seed: SecretSeed,
+        key: RoleAndGeneration,
+        root: KvRoot,
+        root_directory: [u8; 16],
+        directory: KvDirectoryPair,
+        directory_seed: SecretSeed,
+        entries: Vec<KvDirent>,
+        nodes: BTreeMap<[u8; 17], Vec<u8>>,
+        next_id: u8,
+    }
+
+    impl DroppedFiles {
+        fn new(party: KvParty) -> Self {
+            let seed = SecretSeed::new([0x31; 32]);
+            let key = RoleAndGeneration {
+                role: Role::OWNER,
+                generation: 1,
+            };
+            let root_directory = [1; 16];
+            let keys = derive_kv_keys(&seed).unwrap();
+            let binding_mac = keys.bind_root(&party, root_directory, 1, key).unwrap();
+            let directory_seed = SecretSeed::new([0x41; 32]);
+            let directory = KvDirectory {
+                id: root_directory,
+                version: 1,
+                key,
+                seed_ciphertext: keys
+                    .seal_directory_seed(root_directory, &directory_seed)
+                    .unwrap(),
+                write_role: Role::OWNER,
+                status: KvDirectoryStatus::Active,
+            };
+            Self {
+                party,
+                seed,
+                key,
+                root: KvRoot::new(root_directory, 1, key, binding_mac).unwrap(),
+                root_directory,
+                directory: KvDirectoryPair::from_active(directory).unwrap(),
+                directory_seed,
+                entries: Vec::new(),
+                nodes: BTreeMap::new(),
+                next_id: 2,
+            }
+        }
+
+        fn private_keys(&self) -> Vec<KvPrivateKeyRef<'_>> {
+            vec![KvPrivateKeyRef {
+                role: self.key.role,
+                generation: self.key.generation,
+                seed: &self.seed,
+            }]
+        }
+
+        fn fresh_id(&mut self) -> [u8; 16] {
+            let id = [self.next_id; 16];
+            self.next_id = self
+                .next_id
+                .checked_add(1)
+                .expect("the synthetic store stays small");
+            id
+        }
+
+        fn link(&mut self, name: &str, node: KvNodeId) {
+            let dirent_id = self.fresh_id();
+            let (name_mac, name_box) = seal_kv_dirent_name(
+                &self.directory_seed,
+                self.root_directory,
+                1,
+                name.as_bytes().to_vec(),
+                [dirent_id[0]; 16],
+            )
+            .unwrap();
+            self.entries.push(
+                bound_dirent(
+                    &self.directory_seed,
+                    self.root_directory,
+                    dirent_id,
+                    node,
+                    1,
+                    1,
+                    Role::OWNER,
+                    name_mac,
+                    name_box,
+                    KvDirectoryStatus::Active,
+                    7,
+                )
+                .unwrap(),
+            );
+        }
+
+        fn node_id(&mut self, node_type: KvNodeType) -> KvNodeId {
+            let object = self.fresh_id();
+            let mut node = [0; 17];
+            node[0] = node_type as u8;
+            node[1..].copy_from_slice(&object);
+            KvNodeId(node)
+        }
+
+        fn large_file(&mut self, name: &str) -> KvNodeId {
+            let node = self.node_id(KvNodeType::File);
+            let file_seed = SecretSeed::new([node.0[1]; 32]);
+            let metadata = derive_kv_keys(&self.seed)
+                .unwrap()
+                .seal_file_seed(node, self.key, 1, &file_seed, [node.0[1]; 16])
+                .unwrap();
+            self.nodes
+                .insert(node.0, KvNode::File(metadata).encoded().unwrap());
+            self.link(name, node);
+            node
+        }
+
+        fn symlink(&mut self, name: &str, target: &str) -> KvNodeId {
+            let node = self.node_id(KvNodeType::Symlink);
+            let boxed = derive_kv_keys(&self.seed)
+                .unwrap()
+                .seal_small_file(
+                    node,
+                    self.key,
+                    KvSmallFilePlaintext::Symlink(target.as_bytes().to_vec()),
+                )
+                .unwrap();
+            self.nodes
+                .insert(node.0, KvNode::Symlink(boxed).encoded().unwrap());
+            self.link(name, node);
+            node
+        }
+
+        fn serve(&self, fetched: &mut Vec<[u8; 17]>, request: &KvRequest) -> Result<Vec<u8>> {
+            match request {
+                KvRequest::Root => Ok(self.root.encoded().to_vec()),
+                KvRequest::Directory(id) if *id == self.root_directory => {
+                    Ok(self.directory.encoded().to_vec())
+                }
+                KvRequest::List { .. } => {
+                    Ok(KvListResponse::new(self.entries.clone(), true, Vec::new())
+                        .unwrap()
+                        .encoded()
+                        .to_vec())
+                }
+                KvRequest::Node(node) => {
+                    fetched.push(node.0);
+                    self.nodes
+                        .get(&node.0)
+                        .cloned()
+                        .ok_or(Error::KvResponse("unknown node"))
+                }
+                KvRequest::CacheCheck(_) => Ok(Vec::new()),
+                _ => Err(Error::KvResponse("unexpected request")),
+            }
+        }
+    }
+
+    fn pinned(directory: &tempfile::TempDir) -> (FoksClient, PinnedHost) {
+        let public = verify_public_host("foks.app", PROBE).unwrap();
+        let hard_path = directory.path().join("hard.sqlite3");
+        HardStateStore::open(&hard_path)
+            .unwrap()
+            .accept_verified_host(&public.snapshot)
+            .unwrap();
+        let client = FoksClient::webpki();
+        let host = client.pinned_host("foks.app", &hard_path).unwrap();
+        (client, host)
+    }
+
+    fn party_for(host: &PinnedHost) -> KvParty {
+        let mut party = vec![0x30; 33];
+        party[0] = ENTITY_USER;
+        KvParty {
+            party: EntityId::from_bytes(party).unwrap(),
+            host: host.host_id.clone(),
+        }
+    }
+
+    /// Eight dropped files and one symlink, which is what a store of large
+    /// files looks like to the catalog.
+    fn dropped_store(host: &PinnedHost) -> DroppedFiles {
+        let mut store = DroppedFiles::new(party_for(host));
+        for index in 0..8 {
+            store.large_file(&format!("drop-{index:02}"));
+        }
+        store.symlink("latest", "/drop-00");
+        store
+    }
+
+    fn metadata_pass(
+        client: &FoksClient,
+        host: &PinnedHost,
+        store: &DroppedFiles,
+        soft: &Path,
+    ) -> (Result<Vec<KvDirectoryProjection>>, Vec<[u8; 17]>) {
+        let mut fetched = Vec::new();
+        let outcome = client.list_kv_metadata_with_fetch(
+            host,
+            store.party.clone(),
+            KvAuth::User,
+            &store.private_keys(),
+            soft,
+            |_, request| store.serve(&mut fetched, request),
+        );
+        (outcome, fetched)
+    }
+
+    #[test]
+    fn a_second_metadata_pass_over_dropped_files_fetches_no_nodes() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, host) = pinned(&directory);
+        let soft = directory.path().join("soft.sqlite3");
+        let store = dropped_store(&host);
+
+        let (first, fetched) = metadata_pass(&client, &host, &store, &soft);
+        let projections = first.unwrap();
+        assert_eq!(projections.len(), 1);
+        assert_eq!(projections[0].entries.len(), 9);
+        // The initial pass fetches one node for each large file and symlink.
+        assert_eq!(fetched.len(), 9);
+
+        let (second, fetched) = metadata_pass(&client, &host, &store, &soft);
+        let projections = second.unwrap();
+        assert_eq!(projections[0].entries.len(), 9);
+        assert!(fetched.is_empty(), "{fetched:?}");
+        // The second pass preserves the complete projected ciphertext for every node.
+        assert!(projections[0]
+            .entries
+            .iter()
+            .all(|entry| entry.node_bytes.is_some()));
+    }
+
+    /// Flips one byte of the sealed payload of every cached node, leaving the
+    /// encoding and the key header intact so the traversal reaches the same
+    /// authentication the fetched path performs.
+    fn tamper_cached_nodes(soft: &Path, host: &PinnedHost, party: &KvParty) {
+        let mut store = SoftStateStore::open(soft).unwrap();
+        let mut tree = store
+            .tree(host.host_id.as_bytes(), party.party.as_bytes())
+            .unwrap();
+        let mut tampered = 0;
+        for projection in &mut tree {
+            for entry in &mut projection.entries {
+                let Some(bytes) = entry.node_bytes.as_ref() else {
+                    continue;
+                };
+                let replacement = match KvNode::decode(bytes).unwrap() {
+                    KvNode::Symlink(mut boxed) => {
+                        boxed.ciphertext[0] ^= 0x01;
+                        KvNode::Symlink(KvSmallFileBox {
+                            key: boxed.key,
+                            ciphertext: boxed.ciphertext,
+                        })
+                    }
+                    KvNode::File(metadata) => {
+                        let mut seed = metadata.key_seed;
+                        seed.ciphertext[0] ^= 0x01;
+                        KvNode::File(KvLargeFileMetadata {
+                            key: metadata.key,
+                            key_seed: seed,
+                            version: metadata.version,
+                            custom_metadata: metadata.custom_metadata,
+                        })
+                    }
+                    _ => continue,
+                };
+                entry.node_bytes = Some(replacement.encoded().unwrap());
+                tampered += 1;
+            }
+        }
+        assert_eq!(tampered, 9);
+        store.project_reachable_metadata(&tree).unwrap();
+    }
+
+    #[test]
+    fn a_tampered_cached_node_still_fails_authentication() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, host) = pinned(&directory);
+        let soft = directory.path().join("soft.sqlite3");
+        let store = dropped_store(&host);
+
+        metadata_pass(&client, &host, &store, &soft).0.unwrap();
+        tamper_cached_nodes(&soft, &host, &store.party);
+
+        let (outcome, fetched) = metadata_pass(&client, &host, &store, &soft);
+        // No server nodes are fetched; authentication fails on the tampered cached
+        // ciphertext.
+        assert!(fetched.is_empty(), "{fetched:?}");
+        assert!(
+            matches!(outcome, Err(Error::Crypto(_))),
+            "{:?}",
+            outcome.map(|projections| projections.len())
+        );
     }
 }
