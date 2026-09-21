@@ -233,6 +233,13 @@ export function VaultShell({
     reconciliation,
   } = runtime;
   const mutationError = useMutationError(commandError, refreshSnapshot);
+  // A team read that answers "this profile's vault has not been refreshed"
+  // asks for that profile's catalog job, so the read that follows can find
+  // the team again instead of waiting for the next scheduled refresh.
+  const requestCatalog = useCallback(
+    (profile: string) => reconciliation.invalidate(profile),
+    [reconciliation],
+  );
   const {
     observedExpiredLeases,
     accessGenerations,
@@ -420,6 +427,7 @@ export function VaultShell({
           clock={chatClock}
           accessNow={accessNow}
           accessGenerations={accessGenerations}
+          onCatalogRequired={bridge.native ? requestCatalog : undefined}
         >
           {here.kind === 'first-run' ? (
             <FirstRunExperience

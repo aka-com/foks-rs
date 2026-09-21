@@ -1174,11 +1174,13 @@ impl AppState {
                 _ => None,
             })
             .ok_or_else(|| {
-                AgentError::new(
-                    "store-not-found",
-                    "This group is no longer in the vault.",
-                    false,
-                )
+                unrefreshed_store_error(catalog, store).unwrap_or_else(|| {
+                    AgentError::new(
+                        "store-not-found",
+                        "This group is no longer in the vault.",
+                        false,
+                    )
+                })
             })?;
         require_profile_available(catalog, &selected.0)?;
         Ok(selected)
@@ -1230,11 +1232,13 @@ impl AppState {
             _ => None,
         });
         let Some(account) = account else {
-            return Err(AgentError::new(
-                "store-not-found",
-                "This account is no longer in the vault.",
-                false,
-            ));
+            return Err(unrefreshed_store_error(catalog, id).unwrap_or_else(|| {
+                AgentError::new(
+                    "store-not-found",
+                    "This account is no longer in the vault.",
+                    false,
+                )
+            }));
         };
         if require_available {
             require_profile_available(catalog, &account.profile)?;
@@ -1357,11 +1361,13 @@ impl AppState {
             _ => None,
         });
         let Some((team, kind, active)) = team else {
-            return Err(AgentError::new(
-                "store-not-found",
-                "This group is no longer in the vault.",
-                false,
-            ));
+            return Err(unrefreshed_store_error(catalog, id).unwrap_or_else(|| {
+                AgentError::new(
+                    "store-not-found",
+                    "This group is no longer in the vault.",
+                    false,
+                )
+            }));
         };
         require_profile_available(catalog, &team.profile)?;
         if !active {
@@ -1409,11 +1415,13 @@ impl AppState {
             _ => None,
         });
         let Some((remote, kind, active)) = remote else {
-            return Err(AgentError::new(
-                "store-not-found",
-                "The group to admit is no longer in the vault.",
-                false,
-            ));
+            return Err(unrefreshed_store_error(catalog, id).unwrap_or_else(|| {
+                AgentError::new(
+                    "store-not-found",
+                    "The group to admit is no longer in the vault.",
+                    false,
+                )
+            }));
         };
         require_profile_available(catalog, &remote.profile)?;
         if remote.profile == local_profile || kind != "named" || !active {
@@ -1633,11 +1641,13 @@ impl AppState {
                 _ => None,
             })
             .ok_or_else(|| {
-                AgentError::new(
-                    "store-not-found",
-                    "This vault is no longer available.",
-                    false,
-                )
+                unrefreshed_store_error(catalog, id).unwrap_or_else(|| {
+                    AgentError::new(
+                        "store-not-found",
+                        "This vault is no longer available.",
+                        false,
+                    )
+                })
             })?;
         let profile = match &selected.0 {
             CatalogStoreRef::Account(store) => &store.profile,
@@ -2204,6 +2214,48 @@ impl Drop for MutationGuard {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
     }
+}
+
+/// The answer for a store that is absent from `catalog.stores` when its
+/// profile's stores were not read, rather than because the vault no longer
+/// holds it. The renderer keeps showing a profile's previous stores while
+/// its read is incomplete, so a request for one of them has to say that the
+/// vault has not been refreshed, and be retryable, instead of claiming the
+/// store is gone. The store still authorizes nothing: only a complete read
+/// of the profile does that.
+fn unrefreshed_store_error(catalog: &CatalogSnapshot, id: &str) -> Option<AgentError> {
+    let value: serde_json::Value = serde_json::from_str(id).ok()?;
+    let profile = value.get("profile")?.as_str()?;
+    let kind = value
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("team");
+    if !catalog
+        .profiles
+        .iter()
+        .any(|candidate| candidate == profile)
+    {
+        return None;
+    }
+    let complete = catalog
+        .inventory
+        .iter()
+        .find(|entry| entry.profile == profile)
+        .is_some_and(|entry| {
+            if kind == "account" {
+                entry.accounts_complete
+            } else {
+                entry.teams_complete
+            }
+        });
+    if complete {
+        return None;
+    }
+    Some(AgentError::new(
+        "catalog-required",
+        format!("The vault for {profile} has not been refreshed. Refresh and try again."),
+        true,
+    ))
 }
 
 pub(super) fn catalog_changed_during_read() -> AgentError {

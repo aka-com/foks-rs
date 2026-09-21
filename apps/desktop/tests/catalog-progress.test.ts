@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import type { Channel } from '@tauri-apps/api/core';
 import { vaultCommands } from '../src/bridge/commands-vault';
-import { loadSnapshot, type Bridge, type CatalogDto } from '../src/bridge';
+import {
+  enqueueProfileWork,
+  loadSnapshot,
+  type Bridge,
+  type CatalogDto,
+} from '../src/bridge';
 import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';
 import {
@@ -10,8 +15,11 @@ import {
   serverCapabilityAvailability,
   storeAvailability,
   type AgentSnapshot,
+  type TeamStore,
 } from '../src/model';
 import { failCatalogRefresh, markCatalogRefresh } from '../src/catalog-state';
+
+const tick = () => new Promise<void>((done) => setImmediate(done));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -531,4 +539,65 @@ test('refresh failures retain last success without changing authorization facts'
   assert.equal(failed.catalogFreshness?.profiles[server.id].lastAttemptAt, 3);
   assert.equal(failed.catalogFreshness?.profiles[server.id].refreshing, false);
   assert.strictEqual(failed.servers, previous.servers);
+});
+
+test('a roster the profile queue cannot admit degrades that team, not the whole catalog', async () => {
+  const base = mockBridge(FIXTURE);
+  const team = FIXTURE.stores.find(
+    (store): store is TeamStore => store.kind === 'team',
+  )!;
+  // Timers are mocked for the whole load: the fillers below never run, and
+  // the admission deadline is reached by ticking, not by waiting a minute.
+  mock.timers.enable({ apis: ['setTimeout'] });
+  let filled = false;
+  // The account read is the last read before the roster stage. Filling the
+  // profile's queue there leaves the roster read waiting behind work that
+  // never finishes, so it reaches its admission deadline.
+  const bridge: Bridge = {
+    ...base,
+    listAccounts: async (generation) => {
+      const accounts = await base.listAccounts(generation);
+      for (let i = 0; i < 256; i++)
+        void enqueueProfileWork(
+          bridge,
+          team.server,
+          () => new Promise<never>(() => {}),
+        ).catch(() => undefined);
+      filled = true;
+      return accounts;
+    },
+  };
+  try {
+    const pending = loadSnapshot(bridge, FIXTURE, 1);
+    let settled = false;
+    void pending.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    for (let round = 0; round < 5_000 && !filled; round++) await tick();
+    assert.ok(filled, 'the account read ran');
+    // Let the roster stage submit its reads, then run out their wait.
+    await tick();
+    await tick();
+    mock.timers.tick(60_000);
+    for (let round = 0; round < 5_000 && !settled; round++) {
+      await tick();
+      mock.timers.tick(1_000);
+    }
+    assert.ok(settled, 'the load settled');
+    const snapshot = await pending;
+    const failure = snapshot.groupDetailFailures.find(
+      (entry) => entry.store === team.id,
+    );
+    assert.equal(failure?.source, 'roster');
+    assert.equal(failure?.code, 'profile-busy');
+    assert.match(failure?.message ?? '', /deadline/);
+    assert.ok(snapshot.stores.some((store) => store.id === team.id));
+    assert.ok(
+      snapshot.parties.every((party) => party.store !== team.id),
+      'no roster was read for the refused team',
+    );
+  } finally {
+    mock.timers.reset();
+  }
 });

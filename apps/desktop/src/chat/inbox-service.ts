@@ -100,6 +100,13 @@ export class ChatInboxService {
   private running = false;
   private timer: unknown;
   private epoch = 0;
+  /**
+   * Told when a team's read answers that its profile's vault has not been
+   * refreshed, so the shell can request that profile's catalog job. Asked
+   * once per profile per ten seconds, however many teams or retries say so.
+   */
+  onCatalogRequired?: (profile: string) => void;
+  private catalogRequests = new Map<string, number>();
   constructor(
     private bridge: Bridge,
     private clock = systemChatClock,
@@ -311,9 +318,24 @@ export class ChatInboxService {
   block(id: string, message: string) {
     this.handleError(id, integrity(message));
   }
+  private profileOf(id: string): string | undefined {
+    return [...this.accounts.values()]
+      .flatMap((account) => [...account.teams.values()])
+      .find((team) => team.store.id === id)?.store.server;
+  }
+  private requestCatalogRefresh(profile: string | undefined) {
+    if (!profile || !this.onCatalogRequired) return;
+    const last = this.catalogRequests.get(profile);
+    const now = this.clock.now();
+    if (last !== undefined && now - last < 10_000) return;
+    this.catalogRequests.set(profile, now);
+    this.onCatalogRequired(profile);
+  }
   handleError(id: string, cause: unknown, channel?: string): boolean {
     const error = normalizeCommandError(cause);
     const recovery = commandRecovery(error);
+    if (error.code === 'catalog-required')
+      this.requestCatalogRefresh(this.profileOf(id));
     if (recovery.kind === 'ignore') return true;
     if (recovery.scope === 'channel' && channel) {
       this.blockChannel(id, channel);
@@ -325,9 +347,7 @@ export class ChatInboxService {
       error.code !== 'invalid-response'
     )
       return false;
-    const profile = [...this.accounts.values()]
-      .flatMap((account) => [...account.teams.values()])
-      .find((team) => team.store.id === id)?.store.server;
+    const profile = this.profileOf(id);
     for (const account of this.accounts.values()) {
       const teams = [...account.teams.values()].filter(
         (team) =>

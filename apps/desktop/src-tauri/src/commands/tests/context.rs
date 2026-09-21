@@ -894,13 +894,13 @@ fn known_store_metadata_never_authorizes_an_account_operation() {
         }],
         ..CatalogSnapshot::default()
     });
-    assert_eq!(
-        state
-            .selected_account(&store_id(&CatalogStoreRef::Account(account)))
-            .unwrap_err()
-            .code,
-        "store-not-found"
-    );
+    // The profile's stores were never read here, so the answer is that the
+    // vault has not been refreshed; the operation is refused either way.
+    let error = state
+        .selected_account(&store_id(&CatalogStoreRef::Account(account)))
+        .unwrap_err();
+    assert_eq!(error.code, "catalog-required");
+    assert!(error.retryable);
 }
 
 #[test]
@@ -1113,4 +1113,48 @@ fn mutation_cancels_a_private_catalog_load_and_rejects_its_late_reply() {
     assert!(state.accept_catalog(replacement, catalog.unwrap()));
     assert_eq!(state.catalog_at(None).unwrap().0, replacement);
     assert!(state.catalog_at(None).unwrap().1.is_some());
+}
+
+#[test]
+fn an_unrefreshed_profile_reports_catalog_required_rather_than_a_missing_store() {
+    let state = phase_four_state(vec![]).for_profile("chat").unwrap();
+    let catalog = chat_catalog();
+    let id = store_id(&catalog.stores[0].store_ref());
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.publish_catalog(load, catalog.clone(), |_| {}));
+    assert!(state.selected_chat(&id).is_ok());
+    // The profile's overview read failed: no stores were read and there is no
+    // inventory entry. The team is still shown from the previous read, so the
+    // answer names the unrefreshed vault and invites a retry.
+    let failed = CatalogSnapshot {
+        profiles: vec!["chat".into()],
+        known_stores: catalog.known_stores.clone(),
+        failures: vec![foks_desktop::CatalogFailure {
+            scope: foks_desktop::CatalogFailureScope::Profile {
+                profile: "chat".into(),
+                source: "profile overview".into(),
+            },
+            error: foks_desktop::AgentError::Transport("unavailable".into()),
+        }],
+        ..Default::default()
+    };
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.publish_catalog(load, failed, |_| {}));
+    let error = state.selected_chat(&id).unwrap_err();
+    assert_eq!(error.code, "catalog-required");
+    assert!(error.retryable);
+    // The accounts were read but the teams were not.
+    let mut partial = complete_profile_catalog("chat");
+    partial.inventory[0].teams_complete = false;
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.publish_catalog(load, partial, |_| {}));
+    let error = state.selected_chat(&id).unwrap_err();
+    assert_eq!(error.code, "catalog-required");
+    assert!(error.retryable);
+    // A complete read that does not list the team: it is gone.
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.publish_catalog(load, complete_profile_catalog("chat"), |_| {}));
+    let error = state.selected_chat(&id).unwrap_err();
+    assert_eq!(error.code, "store-not-found");
+    assert!(!error.retryable);
 }

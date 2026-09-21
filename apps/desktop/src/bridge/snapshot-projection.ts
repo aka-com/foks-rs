@@ -554,7 +554,19 @@ export async function projectCatalog(
         background
           ? { ...background, key: `${background.key}:roster:${store.id}` }
           : undefined,
-      );
+      ).catch((error: unknown) => {
+        // Admission itself failed: the profile's queue was full, or the wait
+        // for it ran out. That is one team's roster this refresh could not
+        // read, recorded like any other roster failure, not a reason to
+        // discard the whole catalog. A cancellation is this refresh's own
+        // retirement and stays fatal to it.
+        if (normalizeCommandError(error).code === 'cancelled') throw error;
+        return {
+          parties: [] as Party[],
+          federation: [] as FederationEntry[],
+          failures: [recoverableGroupDetailFailure(error, store.id, 'roster')],
+        };
+      });
       if (parties.some((party) => party.store !== store.id)) {
         throw new Error(
           'list_parties returned a roster for a different store.',

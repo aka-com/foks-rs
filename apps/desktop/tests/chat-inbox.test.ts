@@ -84,6 +84,7 @@ function fixture(count = 2) {
   const polls: string[] = [];
   const fail = new Set<string>();
   const denied = new Set<string>();
+  const unrefreshed = new Set<string>();
   let head = '1';
   const scope = (store: TeamStore) => ({
     store: {
@@ -123,6 +124,15 @@ function fixture(count = 2) {
         throw {
           code: 'io',
           message: 'offline',
+          retryable: true,
+          fatal: false,
+          ambiguous: false,
+        };
+      if (unrefreshed.has(id))
+        throw {
+          code: 'catalog-required',
+          message:
+            'The vault for p has not been refreshed. Refresh and try again.',
           retryable: true,
           fatal: false,
           ambiguous: false,
@@ -179,6 +189,7 @@ function fixture(count = 2) {
     polls,
     fail,
     denied,
+    unrefreshed,
     bump,
     waits,
     snapshot,
@@ -669,5 +680,32 @@ test('channel quarantine survives late sync and soft reset without blocking sibl
   f.service.start();
   await f.clock.advance(500);
   assert.equal(f.service.isChannelBlocked('t0', id), false);
+  f.service.stop();
+});
+
+test('an unrefreshed profile asks for one catalog refresh per profile, not one per team or retry', async () => {
+  const f = fixture();
+  const requested: string[] = [];
+  f.service.onCatalogRequired = (profile) => requested.push(profile);
+  f.unrefreshed.add('t0');
+  f.unrefreshed.add('t1');
+  await f.clock.advance(500);
+  assert.deepEqual(requested, ['p']);
+  assert.equal(
+    f.service.getSnapshot().get('t0')?.error,
+    'The vault for p has not been refreshed. Refresh and try again.',
+  );
+  assert.equal(f.service.getSnapshot().get('t0')?.stale, true);
+  // Retries inside the window are not repeated requests for the same profile.
+  await f.clock.advance(5_000);
+  assert.deepEqual(requested, ['p']);
+  // A profile still unrefreshed after the window is asked for again.
+  await f.clock.advance(20_000);
+  assert.equal(requested.length, 2);
+  // Once the vault is read again the teams synchronize without another ask.
+  f.unrefreshed.clear();
+  await f.clock.advance(30_000);
+  assert.equal(f.service.getSnapshot().get('t0')?.error, '');
+  assert.equal(requested.length, 2);
   f.service.stop();
 });

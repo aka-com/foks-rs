@@ -25,12 +25,19 @@ export function ChatInboxProvider({
   accessNow,
   accessGenerations,
   enabled = true,
+  onCatalogRequired,
 }: {
   enabled?: boolean;
   bridge: Bridge;
   snapshot: AgentSnapshot;
   children: ReactNode;
   onNavigate?: (location: Location) => void;
+  /**
+   * Requests a profile's catalog refresh when a team's read says the
+   * profile's vault has not been refreshed. Without it the read's error is
+   * shown and the service waits for the next refresh on its own.
+   */
+  onCatalogRequired?: (profile: string) => void;
   clock?: ChatClock;
   /**
    * The shell's availability clock in seconds. The service decides which teams
@@ -44,6 +51,9 @@ export function ChatInboxProvider({
     () => new ChatInboxService(bridge, clock),
     [bridge, clock],
   );
+  useLayoutEffect(() => {
+    service.onCatalogRequired = onCatalogRequired;
+  }, [service, onCatalogRequired]);
   useLayoutEffect(() => {
     if (enabled)
       service.updateStores(
