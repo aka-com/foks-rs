@@ -823,12 +823,12 @@ export function completedFirstRunSteps(state: FirstRunCheckpoint): number {
  * for an invitee the group.
  */
 export function firstRunNextStep(state: FirstRunCheckpoint): string {
-  if (!state.profile) return 'choose a server';
-  if (!state.account) return 'create or recover your account';
+  if (!state.profile) return 'Choose a server';
+  if (!state.account) return 'Create or recover your account';
   if (!(state.passphraseSet || state.backupCommitted))
-    return 'save your recovery codes';
-  if (state.path === 'invited' && !state.added) return 'join your team';
-  return 'finish setup';
+    return 'Save your recovery codes';
+  if (state.path === 'invited' && !state.added) return 'Join your team';
+  return 'Finish setup';
 }
 
 /** Returns the setup screen that performs the next incomplete step. */

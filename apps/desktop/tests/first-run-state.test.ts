@@ -5,6 +5,7 @@ import {
   completedFirstRunSteps,
   decodeFirstRunCheckpoint,
   encodeFirstRunCheckpoint,
+  firstRunNextStep,
   initialFirstRun,
   firstRunNextStepState,
   reconcileFirstRunCheckpoint,
@@ -176,8 +177,10 @@ test('skipped steps are excluded from completed step count', () => {
 test('setup continuation targets the next incomplete step', () => {
   const start = initialFirstRun('invited', 'checklist-invited');
   assert.equal(firstRunNextStepState(start), 'who');
+  assert.equal(firstRunNextStep(start), 'Choose a server');
   const profiled = { ...start, profile: checked };
   assert.equal(firstRunNextStepState(profiled), 'account');
+  assert.equal(firstRunNextStep(profiled), 'Create or recover your account');
   const account = {
     ...profiled,
     account: {
@@ -187,9 +190,14 @@ test('setup continuation targets the next incomplete step', () => {
     },
   };
   assert.equal(firstRunNextStepState(account), 'protect');
+  assert.equal(firstRunNextStep(account), 'Save your recovery codes');
   assert.equal(
     firstRunNextStepState({ ...account, passphraseSet: true }),
     'waiting',
+  );
+  assert.equal(
+    firstRunNextStep({ ...account, passphraseSet: true }),
+    'Join your team',
   );
 });
 
