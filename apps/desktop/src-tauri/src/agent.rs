@@ -5,7 +5,7 @@ use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Condvar, Mutex, RwLock};
+use std::sync::{mpsc, Arc, Condvar, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
 use foks_agent_client::AgentClient;
@@ -270,6 +270,9 @@ fn error_details(fields: ErrorFields) -> Option<AgentErrorDetails> {
 }
 
 pub const MAINTENANCE_EVENT: &str = "foks://maintenance-status";
+/// Notifies the webview when the transport first records a connection
+/// loss. The error message is subsequently retrieved via `take_agent_connection_loss`.
+pub const CONNECTION_LOSS_EVENT: &str = "foks://agent-connection-loss";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -560,6 +563,10 @@ struct ObservedTransport {
     maintenance_pending: AtomicBool,
     disposition: Mutex<TransportDisposition>,
     connection_failure: Arc<Mutex<Option<String>>>,
+    /// Callback invoked when a connection loss occurs, eliminating the need
+    /// for client polling. Implemented as a generic callback to decouple the
+    /// transport from window and application handles.
+    connection_loss_notifier: OnceLock<ConnectionLossNotifier>,
     /// Every operation this transport issues, timed, for Copy diagnostics.
     timings: Arc<TimingLog>,
 }
@@ -638,12 +645,26 @@ impl ObservedTransport {
     }
 
     fn record<T>(&self, result: &Result<T, DesktopAgentError>) {
-        if let Err(error) = result {
-            if error.connection_lost() {
-                *self
-                    .connection_failure
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.to_string());
+        let Err(error) = result else { return };
+        if !error.connection_lost() {
+            return;
+        }
+        let first = {
+            let mut failure = self
+                .connection_failure
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let first = failure.is_none();
+            *failure = Some(error.to_string());
+            first
+        };
+        // Notify only on the initial transition to a disconnected state to
+        // avoid redundant events while an error is already pending. Release
+        // the lock before calling the notifier because the callback may
+        // synchronously query connection status.
+        if first {
+            if let Some(notify) = self.connection_loss_notifier.get() {
+                notify();
             }
         }
     }
@@ -792,6 +813,8 @@ fn client_to_desktop(error: foks_agent_client::Error) -> DesktopAgentError {
 
 type MaintenanceReadiness = dyn Fn(&Path, &[PathBuf]) -> SafeRootDisposition + Send + Sync;
 
+type ConnectionLossNotifier = Arc<dyn Fn() + Send + Sync>;
+
 pub struct AgentHandle {
     transport: Arc<ObservedTransport>,
     socket: PathBuf,
@@ -830,6 +853,7 @@ impl AgentHandle {
                 maintenance_pending: AtomicBool::new(false),
                 disposition: Mutex::new(TransportDisposition::Current),
                 connection_failure: Arc::clone(&connection_failure),
+                connection_loss_notifier: OnceLock::new(),
                 timings: Arc::default(),
             }),
             socket,
@@ -1967,6 +1991,19 @@ impl AgentHandle {
             "The previously managed local agent has not finished stopping.",
             true,
         ))
+    }
+
+    /// Registers a callback invoked upon the initial recording of a connection loss.
+    /// The stored error flag remains the authoritative source of truth; dropped
+    /// or duplicate notifications result only in a delayed or redundant status query.
+    pub fn set_connection_loss_notifier<F>(&self, notify: F)
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        let _ = self
+            .transport
+            .connection_loss_notifier
+            .set(Arc::new(notify));
     }
 
     pub fn take_connection_failure(&self) -> Option<String> {
@@ -4014,6 +4051,52 @@ mod tests {
         assert!(error.ambiguous() && error.connection_lost());
         assert!(handle.take_connection_failure().is_some());
         server.join().unwrap();
+    }
+
+    #[test]
+    fn connection_loss_notifies_once_per_pending_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let handle = AgentHandle::new(directory.path().join("agent.sock"));
+        let notifications = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&notifications);
+        let flag = Arc::clone(&handle.connection_failure);
+        handle.set_connection_loss_notifier(move || {
+            // The app layer reads the flag back from this callback, so it must
+            // not run under the flag's own lock.
+            assert!(flag.try_lock().is_ok());
+            counter.fetch_add(1, Ordering::Release);
+        });
+
+        let ambiguous: Result<(), DesktopAgentError> = Err(DesktopAgentError::Ambiguous(
+            "the write may have applied".into(),
+        ));
+        handle.transport.record(&ambiguous);
+        assert_eq!(notifications.load(Ordering::Acquire), 0);
+        assert_eq!(handle.take_connection_failure(), None);
+
+        let lost: Result<(), DesktopAgentError> = Err(DesktopAgentError::Transport(
+            "the agent socket closed".into(),
+        ));
+        handle.transport.record(&lost);
+        assert_eq!(notifications.load(Ordering::Acquire), 1);
+
+        // Subsequent errors while a failure is already pending should not trigger
+        // extra notifications.
+        let again: Result<(), DesktopAgentError> = Err(DesktopAgentError::Transport(
+            "the agent socket closed again".into(),
+        ));
+        handle.transport.record(&again);
+        assert_eq!(notifications.load(Ordering::Acquire), 1);
+        assert_eq!(
+            handle.take_connection_failure().as_deref(),
+            Some("the agent socket closed again")
+        );
+
+        // Once cleared, a subsequent loss represents a new state transition and
+        // notifies again.
+        handle.transport.record(&lost);
+        assert_eq!(notifications.load(Ordering::Acquire), 2);
+        assert!(handle.take_connection_failure().is_some());
     }
 
     #[test]

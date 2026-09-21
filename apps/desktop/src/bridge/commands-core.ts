@@ -47,6 +47,7 @@ export const coreCommands: Pick<
   | 'openChatLink'
   | 'copyText'
   | 'initializeClientState'
+  | 'onAgentConnectionLoss'
   | 'onDropHover'
   | 'onDropPaths'
   | 'onWindowState'
@@ -104,6 +105,8 @@ export const coreCommands: Pick<
   copyText: (text) => checked('copy_text', { text }, decodeCopy),
   initializeClientState: () =>
     checkedMutation('initialize_client_state', undefined, decodeAgentStatus),
+  onAgentConnectionLoss: async (listener) =>
+    listen('foks://agent-connection-loss', () => listener()),
   onDropHover: async (listener) =>
     listen<unknown>('foks://drop-hover', (event) => {
       listener(decodeDropHover(event.payload));

@@ -312,9 +312,18 @@ pub fn run() {
             applock::unlock_app,
         ])
         .setup(move |app| {
+            use tauri::Emitter as _;
+
             #[cfg(target_os = "macos")]
             install_macos_menu(app)?;
             commands::chat_local::platform::install(app.handle());
+            // Forward connection loss events to the main webview window rather
+            // than relying on periodic polling. If emission fails, the frontend
+            // will still read the error via `take_agent_connection_loss`.
+            let losses = app.handle().clone();
+            agent.set_connection_loss_notifier(move || {
+                let _ = losses.emit_to(MAIN, agent::CONNECTION_LOSS_EVENT, ());
+            });
             // Verify agent reachability before handling agent requests; exit
             // with a dialog if unreachable. This runs off the main thread so
             // the window paints its loading state instead of staying blank

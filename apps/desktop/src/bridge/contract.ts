@@ -381,6 +381,12 @@ export interface Bridge {
   listYubiCards(profile: string): Promise<{ serial: number }[]>;
   listYubiAccounts(profile: string): Promise<YubiEnrollment[]>;
   runYubi(command: YubiCommand): Promise<Record<string, unknown>>;
+  /**
+   * Subscribes to connection loss notifications from the native transport.
+   * The event carries no payload; callers must invoke `takeAgentConnectionLoss`
+   * to retrieve the pending error message. Redundant events are safe to ignore.
+   */
+  onAgentConnectionLoss(listener: () => void): Promise<Unlisten>;
   onDropHover(listener: (event: DropHoverEvent) => void): Promise<Unlisten>;
   onDropPaths(listener: (paths: string[]) => void): Promise<Unlisten>;
   onWindowState(listener: (event: WindowStateEvent) => void): Promise<Unlisten>;

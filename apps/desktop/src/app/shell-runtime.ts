@@ -15,7 +15,7 @@ import {
 } from '../bridge';
 import type { Bridge, CommandError } from '../bridge';
 import { rememberChatLocation, type LocationStore } from '../location';
-import type { Item } from '../model';
+import type { AgentSnapshot, Item } from '../model';
 import {
   workflowForError,
   type WriteWorkflow,
@@ -24,6 +24,22 @@ import type { LeaseExpiryClock } from '../scheduling/lease-expiry';
 import { useDesktopReconciliation } from '../use-desktop-reconciliation';
 import type { CatalogRuntime } from './catalog-runtime';
 import type { MaintenanceOwnership } from './maintenance-ownership';
+
+/**
+ * Returns a deterministic fingerprint identifying the current user session
+ * (configured accounts and servers). Display aliases are excluded so cosmetic
+ * renames do not invalidate active sessions.
+ */
+function principalIdentity(snapshot: AgentSnapshot): string {
+  return JSON.stringify([
+    snapshot.servers.map((server) => [server.id, server.host_id]).sort(),
+    snapshot.accounts
+      .map((account) => [account.store, account.server, account.username])
+      .sort(),
+  ]);
+}
+
+type RetainedSession = { principal: string; message: string };
 
 export function useShellRuntime({
   lifetime,
@@ -62,10 +78,28 @@ export function useShellRuntime({
     setAgentCatalogReady,
     metadataReconciliation,
   } = catalog;
-  const [agentLifecycle, setAgentLifecycle] = useState<AgentLifecycle>(() =>
-    agentController.snapshot(),
+  const [observedAgentLifecycle, setAgentLifecycle] = useState<AgentLifecycle>(
+    () => agentController.snapshot(),
   );
+  const [retainedSession, setRetainedSession] =
+    useState<RetainedSession | null>(null);
+  const retainedSessionRef = useRef<RetainedSession | null>(null);
+  // Transport readiness precedes catalog reconciliation. Keep retained screens
+  // and background services blocked until the returning principal is checked.
+  const agentLifecycle: AgentLifecycle =
+    retainedSession && observedAgentLifecycle.state === 'ready'
+      ? { state: 'disconnected', error: retainedSession.message }
+      : observedAgentLifecycle;
   const [concealSignal, setConcealSignal] = useState(0);
+  const finishRetainedSession = useCallback(
+    (session: RetainedSession | null, discard: boolean): void => {
+      if (!session || retainedSessionRef.current !== session) return;
+      retainedSessionRef.current = null;
+      if (discard) setConcealSignal((value) => value + 1);
+      setRetainedSession(null);
+    },
+    [],
+  );
   // A conceal ends the session the remembered chat belonged to: the account
   // that comes back may not have that team on this Mac, so the rail's Chat tab
   // runs the first-team fallback again instead of reopening it. The Chat tab
@@ -85,6 +119,7 @@ export function useShellRuntime({
   const healthProbe = useRef<Promise<void> | null>(null);
   refreshSnapshotRef.current = refreshSnapshot;
   foregroundRefreshAllowed.current =
+    !retainedSession &&
     latest.agent.state === 'ready' &&
     agentController.snapshot().state === 'ready';
 
@@ -95,17 +130,37 @@ export function useShellRuntime({
       retireBoot();
       lifetime.retire('disconnect');
       setAgentCatalogReady(false);
-      setConcealSignal((value) => value + 1);
-      if (bridge.autoRecoverAgent)
-        void recoveryRef.current
-          ?.recover({
-            code: 'agent-lost',
-            message,
-            retryable: true,
-            fatal: true,
-            ambiguous: false,
-          })
-          .catch((error: unknown) => commandErrorRef.current(error));
+      const recovery = bridge.autoRecoverAgent ? recoveryRef.current : null;
+      if (!recovery || recovery.snapshot().halted) {
+        finishRetainedSession(retainedSessionRef.current, false);
+        setConcealSignal((value) => value + 1);
+      } else if (!retainedSessionRef.current) {
+        const session = {
+          principal: principalIdentity(latestRef.current),
+          message,
+        };
+        retainedSessionRef.current = session;
+        setRetainedSession(session);
+      }
+      if (!recovery) return;
+      const session = retainedSessionRef.current;
+      void recovery
+        .recover({
+          code: 'agent-lost',
+          message,
+          retryable: true,
+          fatal: true,
+          ambiguous: false,
+        })
+        .then(() => {
+          // Reconciliation releases a verified session itself. Bootstrap,
+          // cancellation, or a halted recovery cannot validate the old one.
+          finishRetainedSession(session, true);
+        })
+        .catch((error: unknown) => {
+          finishRetainedSession(session, true);
+          commandErrorRef.current(error);
+        });
     },
     [
       agentController,
@@ -114,6 +169,8 @@ export function useShellRuntime({
       retireBoot,
       setAgentCatalogReady,
       commandErrorRef,
+      latestRef,
+      finishRetainedSession,
     ],
   );
 
@@ -242,8 +299,23 @@ export function useShellRuntime({
       lifecycle: agentController,
       isRecoveryPermitted: () => alive,
       reconcile: async (_status, isCurrent) => {
-        if (isCurrent()) await refreshSnapshotRef.current(true);
-        if (isCurrent()) reconciliationRef.current?.wake('recovery');
+        if (!isCurrent()) return;
+        // Verify that the reconnected agent's identity matches the previous session.
+        // If accounts or servers changed, discard the session and conceal state
+        // identically to a quarantine.
+        const session = retainedSessionRef.current;
+        const before =
+          session?.principal ?? principalIdentity(latestRef.current);
+        const restored = await refreshSnapshotRef.current(true);
+        if (!isCurrent()) return;
+        if (session)
+          finishRetainedSession(
+            session,
+            principalIdentity(restored) !== before,
+          );
+        else if (principalIdentity(restored) !== before)
+          setConcealSignal((value) => value + 1);
+        reconciliationRef.current?.wake('recovery');
       },
     });
     recoveryRef.current = recovery;
@@ -252,7 +324,8 @@ export function useShellRuntime({
       recovery.dispose();
       if (recoveryRef.current === recovery) recoveryRef.current = null;
     };
-  }, [agentController]);
+    // latestRef is the catalog's own ref object and never changes identity.
+  }, [agentController, latestRef, finishRetainedSession]);
 
   const reconciliation = useDesktopReconciliation({
     bridge,
@@ -389,31 +462,71 @@ export function useShellRuntime({
 
   useEffect(() => {
     let alive = true;
-    let pending = false;
+    let reading = false;
+    // If a connection loss occurs while a read is in flight, another event
+    // may not be emitted. Re-run the check to ensure error flags in the backend
+    // are not left unconsumed while the shell remains marked connected.
+    let repeat = false;
+    const take = async (): Promise<void> => {
+      const generation = recoveryRef.current?.captureGeneration();
+      const message = await bridge.takeAgentConnectionLoss();
+      if (
+        alive &&
+        message &&
+        recoveryRef.current?.captureGeneration() === generation
+      )
+        disconnectAgent(message);
+    };
     const check = async (): Promise<void> => {
-      if (pending) return;
-      pending = true;
+      if (reading) {
+        repeat = true;
+        return;
+      }
+      reading = true;
       try {
-        const generation = recoveryRef.current?.captureGeneration();
-        const message = await bridge.takeAgentConnectionLoss();
-        if (
-          alive &&
-          message &&
-          recoveryRef.current?.captureGeneration() === generation
-        )
-          disconnectAgent(message);
-      } catch (error) {
-        if (alive && normalizeCommandError(error).code === 'agent-lost')
-          commandError(error);
+        do {
+          repeat = false;
+          try {
+            await take();
+          } catch (error) {
+            // If the query fails, the backend error flag remains intact.
+            // Any error reported in the interim will be handled on the next iteration.
+            if (alive && normalizeCommandError(error).code === 'agent-lost')
+              commandError(error);
+          }
+        } while (repeat && alive);
       } finally {
-        pending = false;
+        reading = false;
       }
     };
-    void check();
-    const timer = window.setInterval(() => void check(), 1000);
+    let unlisten: (() => void) | undefined;
+    let fallbackTimer: number | undefined;
+    // Subscribe before the initial check to prevent race conditions: any loss
+    // after listener registration triggers an event, while any prior loss
+    // is captured by the immediate check that follows.
+    void bridge
+      .onAgentConnectionLoss(() => void check())
+      .then(
+        (stop) => {
+          if (!alive) {
+            stop();
+            return;
+          }
+          unlisten = stop;
+          void check();
+        },
+        (error: unknown) => {
+          if (!alive) return;
+          // If event subscription fails, fall back to periodic polling until unmount.
+          commandError(error);
+          fallbackTimer = window.setInterval(() => void check(), 1000);
+          void check();
+        },
+      );
     return () => {
       alive = false;
-      window.clearInterval(timer);
+      window.clearInterval(fallbackTimer);
+      unlisten?.();
     };
   }, [bridge, commandError, disconnectAgent]);
 

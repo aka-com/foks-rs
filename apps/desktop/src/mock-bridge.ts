@@ -1478,6 +1478,9 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
         return { alias, userChainSequence: 23, removedLocalCredential: true };
       return { alias, managementEnrolled: true, managementGeneration: 2 };
     },
+    // The mock bridge does not maintain an active socket; connection loss
+    // errors are queried directly via `takeAgentConnectionLoss`.
+    onAgentConnectionLoss: async () => () => {},
     onDropHover: async (listener) => {
       hoverListeners.add(listener);
       return () => hoverListeners.delete(listener);
