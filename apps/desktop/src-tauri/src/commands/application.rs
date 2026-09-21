@@ -18,7 +18,7 @@ pub struct AgentStatusDto {
 impl From<foks_agent_proto::AgentStatus> for AgentStatusDto {
     fn from(status: foks_agent_proto::AgentStatus) -> Self {
         match status {
-            foks_agent_proto::AgentStatus::Ready => Self {
+            foks_agent_proto::AgentStatus::Ready { .. } => Self {
                 state: "ready".to_owned(),
                 step: None,
             },
@@ -55,13 +55,16 @@ pub async fn agent_status(
             .call(foks_agent_proto::Operation::AgentStatus)
             .await?,
     )?;
-    serde_json::from_value::<foks_agent_proto::AgentStatus>(value)
-        .map(AgentStatusDto::from)
-        .map_err(|error| {
+    let status =
+        serde_json::from_value::<foks_agent_proto::AgentStatus>(value).map_err(|error| {
             AgentError::unknown(format!(
                 "Could not parse background service status: {error}"
             ))
-        })
+        })?;
+    // The reply carries the agent's background loops. Recording them here is
+    // what puts them in a readout beside the requests they competed with.
+    state.agent.note_agent_timers(&status);
+    Ok(AgentStatusDto::from(status))
 }
 
 #[tauri::command]

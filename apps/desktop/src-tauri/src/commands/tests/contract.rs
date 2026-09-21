@@ -150,7 +150,7 @@ fn shared_agent_lifecycle_contract_matches_native_dtos() {
         [
             (
                 "ready",
-                AgentStatusDto::from(foks_agent_proto::AgentStatus::Ready),
+                AgentStatusDto::from(foks_agent_proto::AgentStatus::ready()),
             ),
             (
                 "bootstrap",

@@ -440,7 +440,7 @@ pub(super) fn execute_initialization_recovery(
     transport: &dyn AgentTransport,
 ) -> Result<foks_agent_proto::AgentStatus, AgentError> {
     let before = read_agent_status(transport)?;
-    if before == foks_agent_proto::AgentStatus::Ready {
+    if before.is_ready() {
         return Ok(before);
     }
     let mut last_uncertain = None;
@@ -457,10 +457,10 @@ pub(super) fn execute_initialization_recovery(
             }
         }
         match read_agent_status(transport) {
-            Ok(foks_agent_proto::AgentStatus::Ready) => {
-                return Ok(foks_agent_proto::AgentStatus::Ready)
-            }
-            Ok(foks_agent_proto::AgentStatus::Bootstrap { .. }) => {
+            Ok(status) => {
+                if status.is_ready() {
+                    return Ok(status);
+                }
                 if last_uncertain.is_none() {
                     last_uncertain = Some(ambiguous_initialization_response(
                         uncertainty,

@@ -999,6 +999,12 @@ impl AgentHandle {
         Arc::clone(&self.transport.timings)
     }
 
+    /// Records background-loop timings reported by agent status. Deduplication
+    /// ensures each loop execution appears once in the timing log.
+    pub fn note_agent_timers(&self, status: &foks_agent_proto::AgentStatus) {
+        self.transport.timings.record_agent_timers(status.timers());
+    }
+
     pub async fn call(self: &Arc<Self>, operation: Operation) -> Result<Response, AgentError> {
         let handle = Arc::clone(self);
         tauri::async_runtime::spawn_blocking(move || handle.call_blocking(operation))
@@ -1037,11 +1043,11 @@ impl AgentHandle {
         let response = self.call_unreserved(Operation::AgentStatus)?;
         match &response.result {
             ResponseResult::Success { value } => {
-                serde_json::from_value::<foks_agent_proto::AgentStatus>(value.clone()).map_err(
-                    |error| {
+                let status = serde_json::from_value::<foks_agent_proto::AgentStatus>(value.clone())
+                    .map_err(|error| {
                         AgentError::new("protocol", format!("Invalid agent status: {error}"), false)
-                    },
-                )?;
+                    })?;
+                self.transport.timings.record_agent_timers(status.timers());
             }
             ResponseResult::Error {
                 code,
@@ -2997,7 +3003,7 @@ mod tests {
                 Some(error) => Err(error.clone()),
                 None => Ok(Response::success(
                     0,
-                    serde_json::to_value(foks_agent_proto::AgentStatus::Ready).unwrap(),
+                    serde_json::to_value(foks_agent_proto::AgentStatus::ready()).unwrap(),
                 )),
             }
         }
@@ -3794,7 +3800,7 @@ mod tests {
                     ),
                     _ => Response::success(
                         request.id,
-                        serde_json::to_value(foks_agent_proto::AgentStatus::Ready).unwrap(),
+                        serde_json::to_value(foks_agent_proto::AgentStatus::ready()).unwrap(),
                     ),
                 };
                 stream

@@ -25,7 +25,7 @@ pub use message::{
     ProfileProtocol, ProfileTrust, Request, ResetArtifactKind, ResetArtifactSummary,
     ResetStatePreview, Response, ResponseResult, ResponseTiming, SecretString,
     ServerStatusSnapshot, StoredHostStatus, TeamDetailsSummary, TeamKind, TeamRole, TeamStoreRef,
-    TeamSummary, YubiFederationUnlockInput, YubiRetryConfiguration, PROTOCOL_VERSION,
+    TeamSummary, TimerStatus, YubiFederationUnlockInput, YubiRetryConfiguration, PROTOCOL_VERSION,
 };
 
 #[cfg(test)]

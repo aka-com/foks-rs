@@ -5,11 +5,17 @@
  * event to one log record; none can throw into the service it observes.
  */
 
+import type { Bridge } from '../bridge';
 import type { CatalogCoordinator } from '../catalog-coordinator';
 import type { MetadataRepository } from '../metadata-repository';
 import { observeProfileWork } from '../scheduling/profile-work';
 import type { ReconciliationScheduler } from '../scheduling/reconciliation';
-import { diagnosticLog, redactKey, type DiagnosticLog } from './log';
+import {
+  diagnosticLog,
+  redactKey,
+  type DiagnosticLog,
+  type TimingEvent,
+} from './log';
 
 export interface DiagnosticSources {
   log?: DiagnosticLog;
@@ -18,6 +24,52 @@ export interface DiagnosticSources {
   workOwner?: object;
   coordinator?: Pick<CatalogCoordinator<unknown>, 'observe'>;
   repository?: MetadataRepository;
+}
+
+/** Bridge methods required to collect backend timing diagnostics. */
+export type BackendTimingBridge = Pick<
+  Bridge,
+  'agentProcessInfo' | 'appInfo' | 'agentStatus'
+> &
+  Pick<Partial<Bridge>, 'diagnosticTimings' | 'probeAgentStatus'>;
+
+/**
+ * Collects backend timing events for diagnostics. Read agent status first to
+ * flush the latest background-loop timings into the backend log, then append
+ * process and build information. Each query is best effort and does not prevent
+ * diagnostics from being copied.
+ */
+export function backendTimingSource(
+  bridge: BackendTimingBridge,
+  now: () => number = Date.now,
+): (() => Promise<readonly TimingEvent[]>) | undefined {
+  const timings = bridge.diagnosticTimings;
+  if (!timings) return undefined;
+  return async () => {
+    await (bridge.probeAgentStatus?.() ?? bridge.agentStatus()).catch(
+      () => null,
+    );
+    const events = (await timings(0)).events;
+    const process = await bridge.agentProcessInfo().catch(() => null);
+    const info = await bridge.appInfo().catch(() => null);
+    if (!process?.pid) return events;
+    return [
+      ...events,
+      {
+        at: now(),
+        layer: 'backend' as const,
+        name: 'agent.process',
+        attrs: {
+          pid: process.pid,
+          owned: process.owned,
+          ...(info?.version ? { version: info.version } : {}),
+          ...(process.startedAt !== null
+            ? { up_min: Math.round((now() / 1_000 - process.startedAt) / 60) }
+            : {}),
+        },
+      },
+    ];
+  };
 }
 
 export function subscribeDiagnostics(sources: DiagnosticSources): () => void {

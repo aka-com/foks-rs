@@ -10,7 +10,7 @@
 //! command names, profiles (server ids) and outcome codes. Never request
 //! fields, values, paths, aliases or error messages.
 
-use foks_agent_proto::{ErrorCode, ResponseResult, ResponseTiming};
+use foks_agent_proto::{ErrorCode, ResponseResult, ResponseTiming, TimerStatus};
 use foks_desktop::AgentError as DesktopAgentError;
 use serde::Serialize;
 use std::collections::{BTreeMap, VecDeque};
@@ -20,6 +20,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// Events retained before the oldest is dropped.
 pub const CAPACITY: usize = 4096;
 const MAX_TEXT: usize = 64;
+/// Background loops tracked for repeat reports. The agent has four; the cap
+/// keeps a bad reply from growing the map without bound.
+const MAX_TIMERS: usize = 16;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
@@ -68,6 +71,10 @@ struct Entries {
 #[derive(Default)]
 pub struct TimingLog {
     entries: Mutex<Entries>,
+    /// The start of the last pass recorded for each of the agent's loops, so
+    /// a status read that reports the same pass again does not record it
+    /// twice.
+    timers: Mutex<BTreeMap<String, u64>>,
 }
 
 impl TimingLog {
@@ -110,6 +117,34 @@ impl TimingLog {
                 .map(|(_, event)| event.clone())
                 .collect(),
             next: entries.next,
+        }
+    }
+
+    /// Records newly reported background-loop executions. Agent status repeats
+    /// the most recent execution for each loop, so the start timestamp is used
+    /// for deduplication.
+    pub fn record_agent_timers(&self, timers: &[TimerStatus]) {
+        for timer in timers {
+            let Some(started_at) = timer.started_at_ms.filter(|started| *started > 0) else {
+                continue;
+            };
+            {
+                let mut seen = self
+                    .timers
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if seen
+                    .get(&timer.name)
+                    .is_some_and(|last| *last >= started_at)
+                {
+                    continue;
+                }
+                if seen.len() >= MAX_TIMERS && !seen.contains_key(&timer.name) {
+                    continue;
+                }
+                seen.insert(timer.name.clone(), started_at);
+            }
+            self.record(agent_timer(timer, started_at));
         }
     }
 
@@ -255,6 +290,39 @@ pub fn agent_operation(
     }
 }
 
+/// Converts one background-loop execution into a diagnostic timing event.
+/// Background loops share profile admission with requests, and `due` records
+/// the reported delay until the next tick.
+pub fn agent_timer(timer: &TimerStatus, started_at: u64) -> TimingEvent {
+    let mut attrs = BTreeMap::new();
+    attrs.insert("runs", TimingValue::Number(timer.runs as f64));
+    if timer.skips > 0 {
+        attrs.insert("skips", TimingValue::Number(timer.skips as f64));
+    }
+    if let Some(due) = timer.next_due_in_ms {
+        attrs.insert("due", TimingValue::Number(due as f64));
+    }
+    TimingEvent {
+        at: started_at,
+        layer: "agent",
+        name: "agent.timer",
+        scope: Some(timer.name.clone()),
+        phase: None,
+        ms: timer.duration_ms.map(f64::from),
+        // Classify every non-successful loop outcome as an error.
+        outcome: Some(match timer.outcome.as_deref() {
+            Some("ok") => "ok",
+            _ => "error",
+        }),
+        code: timer
+            .outcome
+            .as_deref()
+            .filter(|outcome| *outcome != "ok")
+            .map(str::to_owned),
+        attrs,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,6 +374,59 @@ mod tests {
             },
             MAX_TEXT
         );
+    }
+
+    fn timer(name: &str, started_at_ms: Option<u64>) -> TimerStatus {
+        TimerStatus {
+            name: name.to_owned(),
+            started_at_ms,
+            duration_ms: Some(240),
+            outcome: Some("ok".to_owned()),
+            next_due_in_ms: Some(28_000),
+            runs: 3,
+            skips: 1,
+        }
+    }
+
+    #[test]
+    fn each_reported_timer_pass_is_recorded_once_under_its_start() {
+        let log = TimingLog::default();
+        let reported = [
+            timer("scheduler", Some(1_700_000_000_000)),
+            timer("retention", None),
+        ];
+        log.record_agent_timers(&reported);
+        // The pass that never ran contributes nothing.
+        let events = log.since(0).events;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].name, "agent.timer");
+        assert_eq!(events[0].layer, "agent");
+        assert_eq!(events[0].at, 1_700_000_000_000);
+        assert_eq!(events[0].scope.as_deref(), Some("scheduler"));
+        assert_eq!(events[0].ms, Some(240.0));
+        assert_eq!(events[0].outcome, Some("ok"));
+        assert_eq!(
+            serde_json::to_value(&events[0]).unwrap()["attrs"],
+            serde_json::json!({ "runs": 3.0, "skips": 1.0, "due": 28_000.0 })
+        );
+        // The same pass reported again is not recorded twice; a later one is.
+        log.record_agent_timers(&reported);
+        assert_eq!(log.since(0).events.len(), 1);
+        log.record_agent_timers(&[timer("scheduler", Some(1_700_000_030_000))]);
+        assert_eq!(log.since(0).events.len(), 2);
+    }
+
+    #[test]
+    fn a_pass_the_agent_could_not_finish_is_recorded_as_an_error() {
+        let log = TimingLog::default();
+        let mut interrupted = timer("compatibility", Some(1_700_000_000_000));
+        interrupted.outcome = Some("interrupted".to_owned());
+        interrupted.skips = 0;
+        log.record_agent_timers(&[interrupted]);
+        let events = log.since(0).events;
+        assert_eq!(events[0].outcome, Some("error"));
+        assert_eq!(events[0].code.as_deref(), Some("interrupted"));
+        assert!(!serde_json::to_string(&events[0]).unwrap().contains("skips"));
     }
 
     #[test]

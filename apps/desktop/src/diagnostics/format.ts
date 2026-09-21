@@ -74,7 +74,7 @@ function detail(event: TimingEvent): string {
   for (const [key, value] of Object.entries(event.attrs ?? {})) {
     if (
       typeof value === 'number' &&
-      /(^|_)ms$|^(queue|pool|start|session|lock|body|late|wait|prepare|rescope)$/.test(
+      /(^|_)ms$|^(queue|pool|start|session|lock|body|late|wait|prepare|rescope|due)$/.test(
         key,
       )
     )

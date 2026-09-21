@@ -397,11 +397,64 @@ pub enum KvUploadPayload {
     Commit,
 }
 
+/// Status for the most recent execution of one background loop. It includes
+/// start time, duration, outcome, and time until the next tick so diagnostics
+/// can correlate background work with foreground requests. It contains no
+/// profile identifiers or error messages.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TimerStatus {
+    /// The loop: `retention`, `scheduler`, `compatibility` or `ownership`.
+    pub name: String,
+    /// When the last completed pass started, in milliseconds since the epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_ms: Option<u64>,
+    /// How long that pass took.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u32>,
+    /// How it ended: `ok`, `error` or `interrupted`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    /// How long until the next tick is due, from the moment of this read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_due_in_ms: Option<u64>,
+    /// Passes that ran, and ticks that did no work at all.
+    #[serde(default)]
+    pub runs: u64,
+    #[serde(default)]
+    pub skips: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub enum AgentStatus {
-    Bootstrap { step: String },
-    Ready,
+    Bootstrap {
+        step: String,
+    },
+    Ready {
+        /// Most recent execution reported for each background loop. The field is
+        /// omitted when empty for wire compatibility with older agents.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        timers: Vec<TimerStatus>,
+    },
+}
+
+impl AgentStatus {
+    /// Constructs ready status without background-loop timings.
+    pub fn ready() -> Self {
+        Self::Ready { timers: Vec::new() }
+    }
+
+    pub fn is_ready(&self) -> bool {
+        matches!(self, Self::Ready { .. })
+    }
+
+    /// Returns the reported background-loop timings.
+    pub fn timers(&self) -> &[TimerStatus] {
+        match self {
+            Self::Ready { timers } => timers,
+            Self::Bootstrap { .. } => &[],
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -2417,6 +2470,71 @@ mod tests {
             "SetProfileLabel { profile: \"setup-foks-app-4430\", label: Some(\"FOKS\") }"
         );
         assert!(operation.is_mutation());
+    }
+
+    #[test]
+    fn a_ready_status_carries_its_timers_without_changing_the_older_wire_shape() {
+        // An agent reporting no timers is byte-for-byte what it always was,
+        // and a status from one that predates the field still parses.
+        assert_eq!(
+            serde_json::to_value(AgentStatus::ready()).unwrap(),
+            serde_json::json!({ "state": "ready" })
+        );
+        assert_eq!(
+            serde_json::from_value::<AgentStatus>(serde_json::json!({ "state": "ready" })).unwrap(),
+            AgentStatus::ready()
+        );
+        assert!(AgentStatus::ready().is_ready());
+        assert!(AgentStatus::ready().timers().is_empty());
+        let reported = AgentStatus::Ready {
+            timers: vec![TimerStatus {
+                name: "scheduler".to_owned(),
+                started_at_ms: Some(1_700_000_000_000),
+                duration_ms: Some(1_240),
+                outcome: Some("ok".to_owned()),
+                next_due_in_ms: Some(28_000),
+                runs: 9,
+                skips: 4,
+            }],
+        };
+        assert_eq!(
+            serde_json::to_value(&reported).unwrap(),
+            serde_json::json!({
+                "state": "ready",
+                "timers": [{
+                    "name": "scheduler",
+                    "started_at_ms": 1_700_000_000_000u64,
+                    "duration_ms": 1_240,
+                    "outcome": "ok",
+                    "next_due_in_ms": 28_000,
+                    "runs": 9,
+                    "skips": 4,
+                }],
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<AgentStatus>(serde_json::to_value(&reported).unwrap())
+                .unwrap(),
+            reported
+        );
+        assert_eq!(reported.timers().len(), 1);
+        // A timer that has not run yet omits every optional field.
+        assert_eq!(
+            serde_json::to_value(TimerStatus {
+                name: "retention".to_owned(),
+                ..TimerStatus::default()
+            })
+            .unwrap(),
+            serde_json::json!({ "name": "retention", "runs": 0, "skips": 0 })
+        );
+        assert_eq!(
+            serde_json::from_value::<TimerStatus>(serde_json::json!({ "name": "retention" }))
+                .unwrap(),
+            TimerStatus {
+                name: "retention".to_owned(),
+                ..TimerStatus::default()
+            }
+        );
     }
 
     #[test]

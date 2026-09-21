@@ -760,14 +760,14 @@ fn ambiguous_initialization_accepts_authoritative_ready_status() {
         replies: Mutex::new(VecDeque::from([
             status(bootstrap()),
             uncertain(),
-            status(AgentStatus::Ready),
+            status(AgentStatus::ready()),
         ])),
         calls: Mutex::new(Vec::new()),
     };
     let uncertainty = AtomicBool::new(false);
     assert_eq!(
         execute_initialization_recovery(&uncertainty, &transport).unwrap(),
-        AgentStatus::Ready
+        AgentStatus::ready()
     );
     assert!(uncertainty.load(Ordering::Acquire));
 }
@@ -780,14 +780,14 @@ fn ambiguous_initialization_retries_once_when_status_remains_bootstrap() {
             uncertain(),
             status(bootstrap()),
             initialized(),
-            status(AgentStatus::Ready),
+            status(AgentStatus::ready()),
         ])),
         calls: Mutex::new(Vec::new()),
     };
     let uncertainty = AtomicBool::new(false);
     assert_eq!(
         execute_initialization_recovery(&uncertainty, &transport).unwrap(),
-        AgentStatus::Ready
+        AgentStatus::ready()
     );
     assert_eq!(
         transport
@@ -828,13 +828,13 @@ fn initialization_recovery_is_bounded_and_preserves_unrelated_uncertainty() {
         replies: Mutex::new(VecDeque::from([
             status(bootstrap()),
             initialized(),
-            status(AgentStatus::Ready),
+            status(AgentStatus::ready()),
         ])),
         calls: Mutex::new(Vec::new()),
     };
     assert_eq!(
         execute_initialization_recovery(&uncertainty, &successful).unwrap(),
-        AgentStatus::Ready
+        AgentStatus::ready()
     );
     assert!(uncertainty.load(Ordering::Acquire));
 }
@@ -845,7 +845,7 @@ fn initialization_contract_mismatch_is_not_hidden_by_ready_status() {
         replies: Mutex::new(VecDeque::from([
             status(bootstrap()),
             Ok(serde_json::json!({"backend":"private-file"})),
-            status(AgentStatus::Ready),
+            status(AgentStatus::ready()),
         ])),
         calls: Mutex::new(Vec::new()),
     };

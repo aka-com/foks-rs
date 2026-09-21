@@ -9,7 +9,11 @@ import {
   type TimingClock,
   type TimingEvent,
 } from '../src/diagnostics/log';
-import { subscribeDiagnostics } from '../src/diagnostics/subscribe';
+import {
+  backendTimingSource,
+  subscribeDiagnostics,
+  type BackendTimingBridge,
+} from '../src/diagnostics/subscribe';
 import {
   observeProfileWork,
   scheduleProfileWork,
@@ -179,6 +183,71 @@ test('the scheduler and the profile queue report into the log with their scope',
   scheduler.dispose();
 });
 
+test('the backend source reads the agent status before the backend log', async () => {
+  const calls: string[] = [];
+  const timer: TimingEvent = {
+    at: 1_700_000_000_000,
+    layer: 'agent',
+    name: 'agent.timer',
+    scope: 'scheduler',
+    ms: 1_240,
+    outcome: 'ok',
+    attrs: { due: 28_000, runs: 9, skips: 4 },
+  };
+  const bridge = {
+    // Reading the status is what takes the agent's background loops into
+    // the backend's log, so it has to happen before the log is read.
+    probeAgentStatus: async () => {
+      calls.push('status');
+      return { state: 'ready' as const };
+    },
+    agentStatus: async () => {
+      calls.push('agent-status');
+      return { state: 'ready' as const };
+    },
+    diagnosticTimings: async (since: number) => {
+      calls.push(`timings:${since}`);
+      return { events: [timer], next: 1 };
+    },
+    agentProcessInfo: async () => {
+      calls.push('process');
+      return { pid: 4_212, owned: true, startedAt: 1_699_999_940 };
+    },
+    appInfo: async () => {
+      calls.push('info');
+      return { version: '0.3.0', agentSocket: '/tmp/agent.sock' };
+    },
+  } as unknown as BackendTimingBridge;
+  const source = backendTimingSource(bridge, () => 1_700_000_000_000);
+  assert.ok(source);
+  const events = await source();
+  assert.deepEqual(calls, ['status', 'timings:0', 'process', 'info']);
+  assert.deepEqual(events[0], timer);
+  assert.deepEqual(events[1], {
+    at: 1_700_000_000_000,
+    layer: 'backend',
+    name: 'agent.process',
+    attrs: { pid: 4_212, owned: true, version: '0.3.0', up_min: 1 },
+  });
+  // A status read that fails cannot fail the copy.
+  const failing = {
+    ...bridge,
+    probeAgentStatus: async () => {
+      calls.push('status');
+      throw new Error('agent lost');
+    },
+  } as unknown as BackendTimingBridge;
+  assert.deepEqual(
+    await backendTimingSource(failing, () => 1_700_000_000_000)!(),
+    [timer, events[1]],
+  );
+  // A bridge without a backend log contributes no source at all.
+  assert.equal(
+    backendTimingSource({ ...bridge, diagnosticTimings: undefined }),
+    undefined,
+  );
+});
+
 test('a catalog read records how many profiles it covered', async () => {
   const clock = new Clock();
   const log = new DiagnosticLog(8, clock);
@@ -288,6 +357,15 @@ const sample: TimingEvent[] = [
     attrs: { trigger: 'periodic', retry: 0 },
   },
   {
+    at: AT + 5_000,
+    layer: 'agent',
+    name: 'agent.timer',
+    scope: 'scheduler',
+    ms: 1_240,
+    outcome: 'ok',
+    attrs: { due: 28_000, runs: 9, skips: 4 },
+  },
+  {
     at: AT + 8_000,
     layer: 'renderer',
     name: 'invoke',
@@ -349,7 +427,7 @@ test('the formatter prints the timeline and the summaries as fixed text', () => 
   assert.equal(
     text,
     [
-      '--- timing (last 15 min, 12 events, renderer 9 · backend 3 · agent-timed 3, times UTC) ---',
+      '--- timing (last 15 min, 13 events, renderer 9 · backend 3 · agent-timed 4, times UTC) ---',
       'agent ready · 2 servers · 6 teams · window visible',
       '',
       '12:00:33.104  job.catalog        work                     started trigger=periodic retry=0 late=12ms',
@@ -359,6 +437,7 @@ test('the formatter prints the timeline and the summaries as fixed text', () => 
       '12:00:33.112    agent.op         work                     1.84s op=ReconcileProfile command=reconcile_server queue=0ms lock=0ms body=1.84s auth=false report=false phases=admit:4,open:131,host:1702,fetch:221,apply:37',
       '12:00:34.255  catalog.project    work                     71ms servers=2 rosters=0',
       '12:00:34.331  job.catalog        work                     success 1.23s trigger=periodic retry=0',
+      '12:00:38.104    agent.timer      scheduler                1.24s due=28.00s runs=9 skips=4',
       '12:00:41.104  invoke                                      25.01s command=chat_request action=poll-inbox',
       '12:00:41.105  chat.poll          acct#a91f                25.00s bumped=false',
       '12:00:41.106  chat.sync          team#2c                  388ms changed=true conversations=14',
@@ -370,8 +449,9 @@ test('the formatter prints the timeline and the summaries as fixed text', () => 
       'catalog  work   1     1   0     1.23s  1.23s  1.23s  1.23s',
       '',
       '--- steps ---',
-      'step             scope  n  ok  fail  p50   p95   max',
-      'catalog.project  work   1  1   0     71ms  71ms  71ms',
+      'step             scope      n  ok  fail  p50    p95    max',
+      'catalog.project  work       1  1   0     71ms   71ms   71ms',
+      'agent.timer      scheduler  1  1   0     1.24s  1.24s  1.24s',
       '',
       '--- commands (renderer → backend, poll-inbox excluded) ---',
       'command               n  ok  fail  p50    p95    max',

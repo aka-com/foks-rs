@@ -10,6 +10,7 @@ mod profile_work;
 mod read_cache;
 mod retention;
 mod sso;
+mod timers;
 #[cfg(test)]
 use chat_poll::ActiveChatPollGuard;
 use chat_poll::{handle_chat_poll, ChatPollKey};
@@ -90,6 +91,9 @@ const MAXIMUM_CACHED_CATALOGS: usize = 32;
 const MAXIMUM_CACHED_CATALOG_BYTES: usize = 128 * 1024 * 1024;
 const MAXIMUM_SINGLE_CATALOG_BYTES: usize = 64 * 1024 * 1024;
 const CATALOG_CACHE_LIFETIME: Duration = Duration::from_secs(60);
+/// The background loops whose period is fixed rather than configured.
+const RETENTION_PERIOD: Duration = Duration::from_secs(60);
+const OWNERSHIP_PERIOD: Duration = Duration::from_secs(5);
 const RESET_TOKEN_LIFETIME: Duration = Duration::from_secs(60);
 const MAXIMUM_RESET_TICKETS: usize = 64;
 
@@ -247,20 +251,20 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     let chat_polling = Arc::new(Semaphore::new(arguments.chat_poll_workers));
     let active_chat_polls = Arc::new(Mutex::new(std::collections::HashSet::new()));
     let retention_gate = Arc::new(Semaphore::new(1));
-    let mut retention_timer = tokio::time::interval(Duration::from_secs(60));
+    let mut retention_timer = tokio::time::interval(RETENTION_PERIOD);
     retention_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let scheduler_gate = Arc::new(Semaphore::new(1));
     let compatibility_gate = Arc::new(Semaphore::new(1));
     let timeout = Duration::from_secs(arguments.request_timeout_seconds);
     let scheduler_cancellation = CancellationToken::new();
     let _scheduler_cancellation_guard = CancelOnDrop(scheduler_cancellation.clone());
-    let mut scheduler =
-        tokio::time::interval(Duration::from_secs(arguments.scheduler_poll_seconds));
+    let scheduler_period = Duration::from_secs(arguments.scheduler_poll_seconds);
+    let mut scheduler = tokio::time::interval(scheduler_period);
     scheduler.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut compatibility =
-        tokio::time::interval(Duration::from_secs(arguments.compatibility_poll_seconds));
+    let compatibility_period = Duration::from_secs(arguments.compatibility_poll_seconds);
+    let mut compatibility = tokio::time::interval(compatibility_period);
     compatibility.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut ownership = tokio::time::interval(Duration::from_secs(5));
+    let mut ownership = tokio::time::interval(OWNERSHIP_PERIOD);
     ownership.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let compatibility_client = compatibility_http_client(timeout)?;
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
@@ -278,11 +282,16 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                 break;
             }
             _ = ownership.tick() => {
+                let now_ms = timers::now_milliseconds();
+                timers::timers().tick(timers::OWNERSHIP, now_ms, OWNERSHIP_PERIOD);
+                let run = timers::timers().begin(timers::OWNERSHIP, now_ms);
                 if !agent_ownership_is_current(&root_lease, &agent_lock, &socket_guard, &state_dir) {
+                    run.finish(timers::Outcome::Error);
                     eprintln!("foks-agent ownership was displaced; exiting");
                     scheduler_cancellation.cancel();
                     break;
                 }
+                run.finish(timers::Outcome::Ok);
             }
             accepted = listener.accept() => {
                 let (stream, _) = accepted?;
@@ -328,57 +337,80 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                 });
             }
             _ = retention_timer.tick() => {
-                if !agent_ownership_is_current(&root_lease, &agent_lock, &socket_guard, &state_dir) {
-                    eprintln!("foks-agent ownership was displaced; exiting");
-                    scheduler_cancellation.cancel();
-                    break;
-                }
-                if !ready.load(Ordering::Acquire) { continue; }
-                let Ok(permit) = retention_gate.clone().try_acquire_owned() else { continue; };
-                let state=state_dir.clone();
-                tokio::task::spawn_blocking(move || {
-                    let _permit=permit;
-                    retention::run_one_profile(&state);
-                });
-            }
-            _ = scheduler.tick() => {
+                let now_ms = timers::now_milliseconds();
+                timers::timers().tick(timers::RETENTION, now_ms, RETENTION_PERIOD);
                 if !agent_ownership_is_current(&root_lease, &agent_lock, &socket_guard, &state_dir) {
                     eprintln!("foks-agent ownership was displaced; exiting");
                     scheduler_cancellation.cancel();
                     break;
                 }
                 if !ready.load(Ordering::Acquire) {
+                    timers::timers().skipped(timers::RETENTION);
+                    continue;
+                }
+                let Ok(permit) = retention_gate.clone().try_acquire_owned() else {
+                    timers::timers().skipped(timers::RETENTION);
+                    continue;
+                };
+                let state=state_dir.clone();
+                let run = timers::timers().begin(timers::RETENTION, now_ms);
+                tokio::task::spawn_blocking(move || {
+                    let _permit=permit;
+                    retention::run_one_profile(&state);
+                    run.finish(timers::Outcome::Ok);
+                });
+            }
+            _ = scheduler.tick() => {
+                let now_ms = timers::now_milliseconds();
+                timers::timers().tick(timers::SCHEDULER, now_ms, scheduler_period);
+                if !agent_ownership_is_current(&root_lease, &agent_lock, &socket_guard, &state_dir) {
+                    eprintln!("foks-agent ownership was displaced; exiting");
+                    scheduler_cancellation.cancel();
+                    break;
+                }
+                if !ready.load(Ordering::Acquire) {
+                    timers::timers().skipped(timers::SCHEDULER);
                     continue;
                 }
                 let Ok(scheduler_permit) = scheduler_gate.clone().try_acquire_owned() else {
+                    timers::timers().skipped(timers::SCHEDULER);
                     continue;
                 };
                 let state = state_dir.clone();
                 let cancellation = scheduler_cancellation.clone();
                 let workers = blocking.clone();
+                let run = timers::timers().begin(timers::SCHEDULER, now_ms);
                 tokio::spawn(async move {
                     let _scheduler_permit = scheduler_permit;
-                    run_scheduled_profiles(state, timeout, cancellation, workers).await;
+                    let outcome =
+                        run_scheduled_profiles(state, timeout, cancellation, workers).await;
+                    run.finish(outcome);
                 });
             }
             _ = compatibility.tick() => {
+                let now_ms = timers::now_milliseconds();
+                timers::timers().tick(timers::COMPATIBILITY, now_ms, compatibility_period);
                 if !agent_ownership_is_current(&root_lease, &agent_lock, &socket_guard, &state_dir) {
                     eprintln!("foks-agent ownership was displaced; exiting");
                     scheduler_cancellation.cancel();
                     break;
                 }
                 if !ready.load(Ordering::Acquire) {
+                    timers::timers().skipped(timers::COMPATIBILITY);
                     continue;
                 }
                 let Ok(compatibility_permit) = compatibility_gate.clone().try_acquire_owned() else {
+                    timers::timers().skipped(timers::COMPATIBILITY);
                     continue;
                 };
                 let state = state_dir.clone();
                 let client = compatibility_client.clone();
                 let cancellation = scheduler_cancellation.clone();
+                let run = timers::timers().begin(timers::COMPATIBILITY, now_ms);
                 tokio::spawn(async move {
                     let _compatibility_permit = compatibility_permit;
-                    refresh_hosted_profiles(&state, client, cancellation, timeout).await;
+                    let outcome = refresh_hosted_profiles(&state, client, cancellation, timeout).await;
+                    run.finish(outcome);
                 });
             }
         }
@@ -386,17 +418,19 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// One scheduler pass over every profile. Reports how the pass ended, so the
+/// loop's own record says whether the work it held admission for succeeded.
 async fn run_scheduled_profiles(
     state_dir: PathBuf,
     timeout: Duration,
     cancellation: CancellationToken,
     workers: Arc<Semaphore>,
-) {
+) -> timers::Outcome {
     let registry = match ProfileRegistry::open(&state_dir) {
         Ok(registry) => registry,
         Err(error) => {
             eprintln!("foks-agent scheduler could not open profiles: {error}");
-            return;
+            return timers::Outcome::Error;
         }
     };
     let profiles = registry
@@ -415,9 +449,10 @@ async fn run_scheduled_profiles(
         Ok(now) => now,
         Err(error) => {
             eprintln!("foks-agent scheduler could not read time: {error}");
-            return;
+            return timers::Outcome::Error;
         }
     };
+    let mut outcome = timers::Outcome::Ok;
     for profile in profiles {
         if cancellation.is_cancelled() {
             break;
@@ -435,9 +470,11 @@ async fn run_scheduled_profiles(
         )
         .await;
         if let Err(error) = result {
+            outcome = timers::Outcome::Error;
             eprintln!("foks-agent scheduled refresh failed: {error}");
         }
     }
+    outcome
 }
 
 const SCHEDULED_JOBS_PER_PROFILE: usize = 16;
@@ -555,12 +592,12 @@ async fn refresh_hosted_profiles(
     client: reqwest::Client,
     cancellation: CancellationToken,
     timeout: Duration,
-) {
+) -> timers::Outcome {
     let registry = match ProfileRegistry::open(state_dir) {
         Ok(registry) => registry,
         Err(_) => {
             eprintln!("foks-agent compatibility refresh could not open profiles");
-            return;
+            return timers::Outcome::Error;
         }
     };
     let profiles = registry
@@ -571,33 +608,44 @@ async fn refresh_hosted_profiles(
     drop(registry);
 
     let state_dir = state_dir.to_owned();
-    run_hosted_refreshes(profiles, cancellation, move |profile| {
+    let failed = Arc::new(AtomicBool::new(false));
+    let renewal_failed = failed.clone();
+    let outcome = run_hosted_refreshes(profiles, cancellation, move |profile| {
         let state_dir = state_dir.clone();
         let client = client.clone();
+        let failed = renewal_failed.clone();
         async move {
             let result = connectivity::renew(&state_dir, &profile, client, timeout).await;
             if let ResponseResult::Error { code, .. } = result {
+                failed.store(true, Ordering::Relaxed);
                 eprintln!("foks-agent compatibility renewal failed: {code:?}");
             }
         }
     })
     .await;
+    if outcome == timers::Outcome::Ok && failed.load(Ordering::Relaxed) {
+        timers::Outcome::Error
+    } else {
+        outcome
+    }
 }
 
 async fn run_hosted_refreshes<F, Fut>(
     profiles: Vec<String>,
     cancellation: CancellationToken,
     renew: F,
-) where
+) -> timers::Outcome
+where
     F: Fn(String) -> Fut + Send,
     Fut: std::future::Future<Output = ()> + Send + 'static,
 {
     let mut profiles = profiles.into_iter();
     let mut pending = tokio::task::JoinSet::new();
+    let mut outcome = timers::Outcome::Ok;
     loop {
         if cancellation.is_cancelled() {
             pending.abort_all();
-            break;
+            return timers::Outcome::Interrupted;
         }
         while pending.len() < MAXIMUM_CANARY_FETCHES {
             let Some(profile) = profiles.next() else {
@@ -609,10 +657,15 @@ async fn run_hosted_refreshes<F, Fut>(
             break;
         }
         tokio::select! {
-            _ = pending.join_next() => {},
+            result = pending.join_next() => {
+                if let Some(Err(_)) = result {
+                    outcome = timers::Outcome::Error;
+                }
+            },
             _ = tokio::time::sleep(Duration::from_millis(20)) => {},
         }
     }
+    outcome
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2910,7 +2963,11 @@ fn dispatch_result_inner(
         Operation::RetentionStatus => Ok(retention::snapshot()),
         Operation::Ping => Ok(serde_json::json!({ "ready": true })),
         Operation::AgentStatus => Ok(serde_json::to_value(if ready {
-            AgentStatus::Ready
+            // Include background-loop timings in the existing agent-status response
+            // for diagnostic correlation with requests.
+            AgentStatus::Ready {
+                timers: timers::timers().snapshot(timers::now_milliseconds()),
+            }
         } else {
             AgentStatus::Bootstrap {
                 step: "initialize-state".to_owned(),
@@ -5999,7 +6056,7 @@ mod tests {
         assert!(matches!(
             status.result,
             foks_agent_proto::ResponseResult::Success { value }
-                if serde_json::from_value::<AgentStatus>(value.clone()).unwrap() == AgentStatus::Ready
+                if serde_json::from_value::<AgentStatus>(value.clone()).unwrap().is_ready()
         ));
     }
 

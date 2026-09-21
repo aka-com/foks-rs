@@ -66,7 +66,10 @@ import { useCatalogRuntime, useMutationError } from './catalog-runtime';
 import type { MaintenanceOwnership } from './maintenance-ownership';
 import { useMetadataRuntime } from './metadata-runtime';
 import { diagnosticLog } from '../diagnostics/log';
-import { subscribeDiagnostics } from '../diagnostics/subscribe';
+import {
+  backendTimingSource,
+  subscribeDiagnostics,
+} from '../diagnostics/subscribe';
 import { useShellNavigation } from './navigation-runtime';
 import {
   demoAvailabilityFacts,
@@ -382,35 +385,8 @@ export function VaultShell({
   // The backend keeps its own timing log; Copy diagnostics reads it through
   // the log as one more source while the popover is open.
   useEffect(() => {
-    if (!bridge.diagnosticTimings) return;
-    return diagnosticLog.addSource(async () => {
-      const events = (await bridge.diagnosticTimings!(0)).events;
-      // The agent process answering, and the build reading it, so a copy
-      // names what produced it and shows whether the agent predates it.
-      const process = await bridge.agentProcessInfo().catch(() => null);
-      const info = await bridge.appInfo().catch(() => null);
-      if (!process?.pid) return events;
-      return [
-        ...events,
-        {
-          at: Date.now(),
-          layer: 'backend' as const,
-          name: 'agent.process',
-          attrs: {
-            pid: process.pid,
-            owned: process.owned,
-            ...(info?.version ? { version: info.version } : {}),
-            ...(process.startedAt !== null
-              ? {
-                  up_min: Math.round(
-                    (Date.now() / 1_000 - process.startedAt) / 60,
-                  ),
-                }
-              : {}),
-          },
-        },
-      ];
-    });
+    const source = backendTimingSource(bridge);
+    return source && diagnosticLog.addSource(source);
   }, [bridge]);
   // The rail's Teams badge reads the shared request-count rows, one per
   // named team this account can manage, loaded on unlock and kept by the
