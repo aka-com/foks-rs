@@ -324,15 +324,101 @@ impl foks_client::ChatPreviewCache for SharedPreviewCache {
     }
 }
 
+/// How long one completed account-level inbox drain stands in for the other
+/// teams of that account. The inbox scope is host, user and application with
+/// no team in it: whichever team syncs first applies every team's changed
+/// threads to the store, and the rest read what it applied. A team that
+/// syncs after this has elapsed drains again, so a row that arrived since the
+/// drain waits at most this long and a gate set in error corrects itself
+/// within one synchronization cycle rather than across a session. The
+/// desktop runs one team of a profile at a time and resynchronizes an idle
+/// team every twenty-five seconds, so a burst of teams falls inside this and
+/// the periodic pass never does.
+const INBOX_DRAIN_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Maximum number of recently drained account scopes retained by the process.
+/// Expired entries are removed whenever a claim is checked.
+const INBOX_DRAIN_ENTRIES: usize = 64;
+
+/// Builds a length-prefixed key from the store path, host, and user. Including
+/// the store path keeps cursors for the same account in different profiles
+/// independent.
+fn drain_key(store: &Path, host: &[u8], uid: &[u8]) -> Vec<u8> {
+    let mut key = Vec::new();
+    for part in [store.as_os_str().as_encoded_bytes(), host, uid] {
+        key.extend_from_slice(&(part.len() as u64).to_be_bytes());
+        key.extend_from_slice(part);
+    }
+    key
+}
+
+/// Recently completed account-level inbox drains, keyed by store, host, and
+/// user. Entries contain only the drain start time and no chat content.
+#[derive(Default)]
+struct DrainGate {
+    entries: std::collections::VecDeque<(Vec<u8>, std::time::Instant)>,
+}
+
+impl DrainGate {
+    /// Returns whether the caller must perform the version and delta requests.
+    /// A recent completed drain for this account suppresses those requests.
+    fn claim(&mut self, key: &[u8], now: std::time::Instant) -> bool {
+        self.entries
+            .retain(|(_, at)| now.saturating_duration_since(*at) < INBOX_DRAIN_TTL);
+        !self.entries.iter().any(|(entry, _)| entry == key)
+    }
+
+    /// Records a complete, nondegraded drain. The expiration interval starts at
+    /// `started` because the observed inbox head corresponds to the drain start.
+    fn drained(&mut self, key: &[u8], started: std::time::Instant) {
+        if let Some(entry) = self.entries.iter_mut().find(|(entry, _)| entry == key) {
+            entry.1 = entry.1.max(started);
+            return;
+        }
+        while self.entries.len() >= INBOX_DRAIN_ENTRIES {
+            self.entries.pop_front();
+        }
+        self.entries.push_back((key.to_vec(), started));
+    }
+}
+
+fn drain_gate() -> &'static std::sync::Mutex<DrainGate> {
+    static GATE: std::sync::OnceLock<std::sync::Mutex<DrainGate>> = std::sync::OnceLock::new();
+    GATE.get_or_init(|| std::sync::Mutex::new(DrainGate::default()))
+}
+
+/// Records a recent drain only when this synchronization performed it and
+/// reached the inbox head without degradation. Skipped, partial, and degraded
+/// drains leave the account eligible for the next synchronization.
+fn record_drain(key: &[u8], started: std::time::Instant, drain: bool, drained: bool) {
+    if !(drain && drained) {
+        return;
+    }
+    if let Ok(mut gate) = drain_gate().lock() {
+        gate.drained(key, started);
+    }
+}
+
 fn synced_inbox(
     session: &CheckedProfileSession<'_>,
     team: &str,
     vault: &mut AccountVault<'_>,
     blocked: &[RtChannelId],
+    scope: &foks_client_db::ChatScope,
 ) -> Result<foks_client::ChatInbox> {
-    Ok(session
-        .sync_chat_inbox_with_preview_cache(team, vault, blocked, &mut SharedPreviewCache)?
-        .inbox)
+    // If the gate lock is poisoned, perform the drain instead of suppressing
+    // synchronization based on unavailable state.
+    let started = std::time::Instant::now();
+    let key = drain_key(&session.paths().soft_database, &scope.host, &scope.uid);
+    let drain = drain_gate()
+        .lock()
+        .map_or(true, |mut gate| gate.claim(&key, started));
+    let synced =
+        session.sync_chat_inbox_gated(team, vault, blocked, &mut SharedPreviewCache, drain)?;
+    // Failed synchronization returns before recording the drain, so the next
+    // team performs the version and delta requests.
+    record_drain(&key, started, drain, synced.drained);
+    Ok(synced.inbox)
 }
 
 pub(super) fn dispatch(
@@ -508,13 +594,19 @@ fn dispatch_with_page_rows(
                 channels: channels.channels.into_iter().map(channel).collect(),
             }
         }
-        ChatAction::Inbox => inbox(synced_inbox(session, team, vault, &[])?, &resolved)?,
+        ChatAction::Inbox => inbox(
+            synced_inbox(session, team, vault, &[], &resolved)?,
+            &resolved,
+        )?,
         ChatAction::SyncInbox { blocked_channels } => {
             let blocked = blocked_channels
                 .iter()
                 .map(|channel| id(channel).map(RtChannelId))
                 .collect::<Result<Vec<_>>>()?;
-            inbox(synced_inbox(session, team, vault, &blocked)?, &resolved)?
+            inbox(
+                synced_inbox(session, team, vault, &blocked, &resolved)?,
+                &resolved,
+            )?
         }
         ChatAction::MarkRead { channel, sequence } => {
             let sequence = chat_sequence(&sequence)
@@ -779,6 +871,121 @@ pub(super) fn contextual_error(error: Box<dyn std::error::Error>) -> Box<dyn std
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn account(tag: u8) -> Vec<u8> {
+        drain_key(
+            Path::new("/state/local/soft.sqlite3"),
+            &[tag; 33],
+            &[tag.wrapping_add(1); 33],
+        )
+    }
+
+    /// Five teams of one account synchronizing in one cycle: the first runs
+    /// the version query and the delta page, and the four behind it are told
+    /// the account is already current. Two round trips for the cycle rather
+    /// than two per team.
+    #[test]
+    fn completed_drain_suppresses_redundant_account_drains() {
+        let mut gate = DrainGate::default();
+        let account = account(0x10);
+        let start = std::time::Instant::now();
+        assert!(gate.claim(&account, start));
+        gate.drained(&account, start);
+        for step in 1..5 {
+            assert!(!gate.claim(&account, start + INBOX_DRAIN_TTL / 8 * step));
+        }
+    }
+
+    /// A sync that did not reach the head — degraded, short of the head, or
+    /// gated off itself — records nothing, so the next team drains. Nothing
+    /// but a completed drain can answer for the account.
+    #[test]
+    fn incomplete_drains_do_not_suppress_the_next_drain() {
+        let mut gate = DrainGate::default();
+        let account = account(0x20);
+        let start = std::time::Instant::now();
+        for step in 0..4 {
+            // Each team claims, its sync comes back degraded or partial, and
+            // the caller records nothing.
+            assert!(gate.claim(&account, start + INBOX_DRAIN_TTL / 8 * step));
+        }
+        gate.drained(&account, start);
+        assert!(!gate.claim(&account, start));
+    }
+
+    /// The gate expires, so a row that arrived just after a drain waits one
+    /// time to live rather than until the account is next opened.
+    #[test]
+    fn drain_gate_entry_expires_at_the_ttl() {
+        let mut gate = DrainGate::default();
+        let account = account(0x30);
+        let start = std::time::Instant::now();
+        assert!(gate.claim(&account, start));
+        gate.drained(&account, start);
+        assert!(!gate.claim(&account, start + INBOX_DRAIN_TTL / 2));
+        assert!(gate.claim(&account, start + INBOX_DRAIN_TTL));
+        // The expired entry is gone rather than retained for a later claim.
+        assert!(gate.entries.is_empty());
+    }
+
+    /// The gate the process actually consults, driven exactly as
+    /// [`synced_inbox`] drives it. A degraded or partial drain reports no
+    /// drain, and a sync that was itself gated off reports nothing at all:
+    /// neither may close the gate, or a team would read a store that no
+    /// drain had filled.
+    #[test]
+    fn only_a_complete_executed_drain_updates_the_process_gate() {
+        let key = account(0x60);
+        let start = std::time::Instant::now();
+        // Degraded or stopped short of the head, having run the drain.
+        record_drain(&key, start, true, false);
+        // Gated off, so no evidence about the account at all.
+        record_drain(&key, start, false, false);
+        record_drain(&key, start, false, true);
+        assert!(drain_gate()
+            .lock()
+            .expect("gate")
+            .claim(&key, start + INBOX_DRAIN_TTL / 2));
+        record_drain(&key, start, true, true);
+        assert!(!drain_gate()
+            .lock()
+            .expect("gate")
+            .claim(&key, start + INBOX_DRAIN_TTL / 2));
+    }
+
+    /// The cursor is per store, host and user. One account's drain says
+    /// nothing about another's: not another user on the same host, not the
+    /// same user on a second host, and not the same account held by a second
+    /// profile, whose cursor lives in its own store.
+    #[test]
+    fn drain_keys_isolate_store_host_and_user() {
+        let mut gate = DrainGate::default();
+        let store = Path::new("/state/local/soft.sqlite3");
+        let second = Path::new("/state/other/soft.sqlite3");
+        let (host, uid) = ([0x40; 33], [0x41; 33]);
+        let start = std::time::Instant::now();
+        gate.drained(&drain_key(store, &host, &uid), start);
+        assert!(!gate.claim(&drain_key(store, &host, &uid), start));
+        assert!(gate.claim(&drain_key(store, &host, &[0x99; 33]), start));
+        assert!(gate.claim(&drain_key(store, &[0x98; 33], &uid), start));
+        assert!(gate.claim(&drain_key(second, &host, &uid), start));
+    }
+
+    /// A drain recorded out of order never shortens a later one's window,
+    /// and the gate stays bounded however many accounts pass through it.
+    #[test]
+    fn newer_drain_timestamps_are_preserved_and_the_gate_is_bounded() {
+        let mut gate = DrainGate::default();
+        let held = account(0x50);
+        let start = std::time::Instant::now();
+        gate.drained(&held, start);
+        gate.drained(&held, start - INBOX_DRAIN_TTL / 2);
+        assert!(!gate.claim(&held, start + INBOX_DRAIN_TTL / 2));
+        for tag in 0..=u8::try_from(INBOX_DRAIN_ENTRIES).unwrap_or(u8::MAX) {
+            gate.drained(&account(tag), start);
+        }
+        assert!(gate.entries.len() <= INBOX_DRAIN_ENTRIES);
+    }
 
     #[test]
     fn incremental_history_handles_new_rows_gaps_resets_and_unknown_channels() -> Result<()> {

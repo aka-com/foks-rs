@@ -197,10 +197,25 @@ impl CheckedProfileSession<'_> {
         blocked: &[RtChannelId],
         previews: &mut dyn foks_client::ChatPreviewCache,
     ) -> Result<ChatSyncResult> {
+        self.sync_chat_inbox_gated(team_alias, vault, blocked, previews, true)
+    }
+    /// Synchronizes a team inbox while allowing the caller to skip an account-level
+    /// drain already completed in the current cycle. When `drain` is false, the
+    /// inbox is built from stored rows without version or delta requests. Only a
+    /// result with [`ChatSyncResult::drained`] confirms that later calls may skip
+    /// the drain.
+    pub fn sync_chat_inbox_gated(
+        &self,
+        team_alias: &str,
+        vault: &mut AccountVault<'_>,
+        blocked: &[RtChannelId],
+        previews: &mut dyn foks_client::ChatPreviewCache,
+        drain: bool,
+    ) -> Result<ChatSyncResult> {
         self.with_chat_read(team_alias, vault, |chat| {
             let mut soft = SoftStateStore::open(&self.paths.soft_database)?;
             let mut connection = chat.connection()?;
-            Ok(chat.sync_inbox_with_preview_cache(&mut connection, &mut soft, blocked, previews)?)
+            Ok(chat.sync_inbox_gated(&mut connection, &mut soft, blocked, previews, drain)?)
         })
     }
     pub fn list_chat_inbox(

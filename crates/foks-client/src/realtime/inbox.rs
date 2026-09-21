@@ -98,6 +98,16 @@ pub struct ChatInbox {
 pub struct ChatSyncResult {
     pub inbox: ChatInbox,
     pub applied: u64,
+    /// Whether this sync took the account scope to the head it was told,
+    /// applying every changed thread the server had, with no degraded
+    /// observation anywhere in the loop. The inbox scope is host, user and
+    /// application with no team in it, so a caller syncing several teams of
+    /// one account may use this to skip the version and delta phases for the
+    /// rest of a cycle: every row the drain applied is in the store,
+    /// whichever team it belongs to. It is false on a partial page, on the
+    /// degraded path and on a sync that skipped the drain — a drain that
+    /// did not finish is never evidence that the account is current.
+    pub drained: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -158,82 +168,34 @@ impl ChatSession<'_> {
         blocked: &[RtChannelId],
         previews: &mut dyn ChatPreviewCache,
     ) -> Result<ChatSyncResult> {
+        self.sync_inbox_gated(rpc, store, blocked, previews, true)
+    }
+
+    /// Synchronizes a team inbox with caller-controlled account-level draining.
+    /// The version and delta requests use a cursor shared by host, user, and
+    /// application; team filtering occurs after changed rows are stored. When
+    /// `drain` is false, the method reads stored rows without marking the account
+    /// current, because no inbox head was verified by this call.
+    pub fn sync_inbox_gated(
+        &mut self,
+        rpc: &mut impl ChatTransport,
+        store: &mut SoftStateStore,
+        blocked: &[RtChannelId],
+        previews: &mut dyn ChatPreviewCache,
+        drain: bool,
+    ) -> Result<ChatSyncResult> {
         if blocked.len() > ChatLimits::CHANNELS {
             return Err(Error::ChatInvalidInput("too many blocked channels"));
         }
         self.refresh()?;
         let available = self.list_current_channels(rpc)?;
         let scope = self.inbox_scope();
-        let RealtimeResponse::InboxVersion(remote_head) = rpc.request(
-            &RealtimeRequest::GetInboxVersion(RtGetInboxVersionArgument {
-                key: RtInboxKey { app: RtAppId::Chat },
-            }),
-        )?
-        else {
-            return Err(Error::ChatIntegrity("unexpected inbox version response"));
-        };
-        if remote_head > i64::MAX as u64 {
-            return Err(Error::ChatIntegrity("inbox version overflow"));
-        }
-        let mut state = store.chat_inbox_state(&scope)?;
-        if remote_head < state.head || remote_head < state.cursor {
-            store.reset_chat_inbox(&scope)?;
-            state = ChatInboxState::default();
-        }
-        let mut applied = 0u64;
-        let mut maximum = DEFAULT_PAGE;
-        let pages = if state.degraded && remote_head == state.head {
-            0
+        let (applied, drained) = if drain {
+            let (state, applied) = drain_inbox_scope(rpc, store, &scope)?;
+            (applied, scope_drained(&state))
         } else {
-            ChatLimits::INBOX_PAGES
+            (0, false)
         };
-        for _ in 0..pages {
-            let RealtimeResponse::InboxDelta(delta) = rpc.request(
-                &RealtimeRequest::GetChangedThreads(RtGetChangedThreadsArgument {
-                    query: RtChangedThreads {
-                        app: RtAppId::Chat,
-                        since: state.cursor,
-                        maximum,
-                    },
-                }),
-            )?
-            else {
-                return Err(Error::ChatIntegrity("unexpected inbox delta response"));
-            };
-            if delta.app != RtAppId::Chat
-                || delta.inbox_version > i64::MAX as u64
-                || delta.inbox_version < state.cursor
-                || delta.channels.len() > ChatLimits::INBOX_ROWS
-                || delta.channels.len() > maximum as usize
-            {
-                return Err(Error::ChatIntegrity(
-                    "invalid inbox delta identity or bounds",
-                ));
-            }
-            if delta.channels.is_empty() {
-                if delta.inbox_version > state.cursor && maximum < ChatLimits::INBOX_ROWS as u64 {
-                    maximum = ChatLimits::INBOX_ROWS as u64;
-                    continue;
-                }
-                state = store.observe_chat_inbox_head(
-                    &scope,
-                    delta.inbox_version,
-                    delta.inbox_version > state.cursor,
-                )?;
-                break;
-            }
-            state = store.apply_chat_inbox_page(&scope, delta.inbox_version, &delta.channels)?;
-            applied = applied
-                .checked_add(delta.channels.len() as u64)
-                .ok_or(Error::ChatLimit("inbox apply count overflow"))?;
-            maximum = DEFAULT_PAGE;
-            if state.cursor >= state.head {
-                break;
-            }
-        }
-        if state.cursor < state.head && !state.degraded {
-            return Err(Error::ChatLimit("inbox pagination limit"));
-        }
         let retained = available
             .channels
             .iter()
@@ -252,7 +214,11 @@ impl ChatSession<'_> {
         inbox.channels = available.channels;
         inbox.read_retry_pending = read_retry_pending;
         self.hydrate_previews(rpc, &mut inbox, blocked, previews)?;
-        Ok(ChatSyncResult { inbox, applied })
+        Ok(ChatSyncResult {
+            inbox,
+            applied,
+            drained,
+        })
     }
 
     /// The key a preview of `channel`'s last message is cached under, or
@@ -515,6 +481,93 @@ impl ChatSession<'_> {
     }
 }
 
+/// Returns whether synchronization reached the reported inbox head without
+/// encountering an incomplete server response.
+fn scope_drained(state: &ChatInboxState) -> bool {
+    !state.degraded && state.cursor >= state.head
+}
+
+/// Reads the account inbox version and applies changed-thread pages until the
+/// cursor reaches the reported head. Returns the final state and applied-row
+/// count. Stored rows retain their team identifiers for subsequent filtering.
+fn drain_inbox_scope(
+    rpc: &mut impl ChatTransport,
+    store: &mut SoftStateStore,
+    scope: &ChatInboxScope,
+) -> Result<(ChatInboxState, u64)> {
+    let RealtimeResponse::InboxVersion(remote_head) = rpc.request(
+        &RealtimeRequest::GetInboxVersion(RtGetInboxVersionArgument {
+            key: RtInboxKey { app: RtAppId::Chat },
+        }),
+    )?
+    else {
+        return Err(Error::ChatIntegrity("unexpected inbox version response"));
+    };
+    if remote_head > i64::MAX as u64 {
+        return Err(Error::ChatIntegrity("inbox version overflow"));
+    }
+    let mut state = store.chat_inbox_state(scope)?;
+    if remote_head < state.head || remote_head < state.cursor {
+        store.reset_chat_inbox(scope)?;
+        state = ChatInboxState::default();
+    }
+    let mut applied = 0u64;
+    let mut maximum = DEFAULT_PAGE;
+    let pages = if state.degraded && remote_head == state.head {
+        0
+    } else {
+        ChatLimits::INBOX_PAGES
+    };
+    for _ in 0..pages {
+        let RealtimeResponse::InboxDelta(delta) = rpc.request(
+            &RealtimeRequest::GetChangedThreads(RtGetChangedThreadsArgument {
+                query: RtChangedThreads {
+                    app: RtAppId::Chat,
+                    since: state.cursor,
+                    maximum,
+                },
+            }),
+        )?
+        else {
+            return Err(Error::ChatIntegrity("unexpected inbox delta response"));
+        };
+        if delta.app != RtAppId::Chat
+            || delta.inbox_version > i64::MAX as u64
+            || delta.inbox_version < state.cursor
+            || delta.channels.len() > ChatLimits::INBOX_ROWS
+            || delta.channels.len() > maximum as usize
+        {
+            return Err(Error::ChatIntegrity(
+                "invalid inbox delta identity or bounds",
+            ));
+        }
+        if delta.channels.is_empty() {
+            if delta.inbox_version > state.cursor && maximum < ChatLimits::INBOX_ROWS as u64 {
+                maximum = ChatLimits::INBOX_ROWS as u64;
+                continue;
+            }
+            state = store.observe_chat_inbox_head(
+                scope,
+                delta.inbox_version,
+                delta.inbox_version > state.cursor,
+            )?;
+            break;
+        }
+        state = store.apply_chat_inbox_page(scope, delta.inbox_version, &delta.channels)?;
+        applied = applied
+            .checked_add(delta.channels.len() as u64)
+            .ok_or(Error::ChatLimit("inbox apply count overflow"))?;
+        maximum = DEFAULT_PAGE;
+        if state.cursor >= state.head {
+            break;
+        }
+    }
+    if state.cursor < state.head && !state.degraded {
+        return Err(Error::ChatLimit("inbox pagination limit"));
+    }
+    Ok((state, applied))
+}
+
 // Only transport loss is optional. Shared integrity and permission failures
 // propagate; channel content failures are explicitly quarantined by hydration.
 fn optional_network_failure(error: &Error) -> bool {
@@ -534,5 +587,208 @@ mod poll_validation_tests {
         assert!(ChatPollResult::checked(true, 5, 5).is_err());
         assert!(ChatPollResult::checked(false, 6, 5).is_err());
         assert!(ChatPollResult::checked(true, u64::MAX, 5).is_err());
+    }
+}
+
+#[cfg(test)]
+mod drain_tests {
+    use super::*;
+    use foks_proto::{
+        EntityId, RoleAndGeneration, RtBox, RtChannelMetadata, RtChannelTier, RtInboxChannel,
+        RtInboxDelta, RtRolePair, SecretBox, ENTITY_HOST, ENTITY_NAMED_TEAM, ENTITY_USER,
+    };
+
+    /// One reply per request, in order, so a test states exactly what the
+    /// server answered and the drain's round trips are counted, not inferred.
+    struct Replies {
+        requests: Vec<RealtimeRequest>,
+        replies: std::collections::VecDeque<RealtimeResponse>,
+    }
+    impl Replies {
+        fn new(replies: Vec<RealtimeResponse>) -> Self {
+            Self {
+                requests: Vec::new(),
+                replies: replies.into(),
+            }
+        }
+        fn counts(&self) -> (usize, usize) {
+            (
+                self.requests
+                    .iter()
+                    .filter(|r| matches!(r, RealtimeRequest::GetInboxVersion(_)))
+                    .count(),
+                self.requests
+                    .iter()
+                    .filter(|r| matches!(r, RealtimeRequest::GetChangedThreads(_)))
+                    .count(),
+            )
+        }
+    }
+    impl ChatTransport for Replies {
+        fn request(&mut self, request: &RealtimeRequest) -> Result<RealtimeResponse> {
+            self.requests.push(request.clone());
+            self.replies
+                .pop_front()
+                .ok_or(Error::ChatIntegrity("unexpected extra request"))
+        }
+    }
+
+    fn entity(kind: u8, tag: u8) -> EntityId {
+        let mut bytes = vec![kind];
+        bytes.extend_from_slice(&[tag; 32]);
+        EntityId::from_bytes(bytes).expect("entity")
+    }
+    fn scope() -> ChatInboxScope {
+        ChatInboxScope {
+            host: entity(ENTITY_HOST, 1).as_bytes().to_vec(),
+            uid: entity(ENTITY_USER, 2).as_bytes().to_vec(),
+            app: RtAppId::Chat,
+        }
+    }
+    fn store(directory: &tempfile::TempDir, name: &str) -> SoftStateStore {
+        SoftStateStore::open(&directory.path().join(name)).expect("soft store")
+    }
+    /// A changed thread in the account's delta. `team` names which team owns
+    /// it: the scope has no team in it, so one drain applies every team's.
+    fn row(version: u64, channel: u8, team: u8) -> RtInboxChannel {
+        let boxed = RtBox {
+            key: RoleAndGeneration {
+                role: foks_proto::Role::member(0),
+                generation: 1,
+            },
+            boxed: SecretBox {
+                nonce: [0; 16],
+                ciphertext: vec![7; 32],
+            },
+        };
+        RtInboxChannel {
+            metadata: RtChannelMetadata {
+                id: RtChannelId([channel; 16]),
+                team: foks_proto::RtTeamId::new(entity(ENTITY_NAMED_TEAM, team)).expect("team"),
+                app: RtAppId::Chat,
+                sequence: 1,
+                name: boxed.clone(),
+                description: None,
+                roles: RtRolePair {
+                    read: foks_proto::Role::member(0),
+                    write: foks_proto::Role::member(0),
+                },
+                last_message: None,
+                ctime: 1,
+                mtime: 1,
+                updated_at: 1,
+                tier: RtChannelTier::Bottom,
+                unreadable: false,
+            },
+            inbox_version: version,
+            read_through: 0,
+            hidden: false,
+            muted: false,
+        }
+    }
+    fn delta(version: u64, channels: Vec<RtInboxChannel>) -> RealtimeResponse {
+        RealtimeResponse::InboxDelta(RtInboxDelta {
+            inbox_version: version,
+            app: RtAppId::Chat,
+            channels,
+        })
+    }
+
+    /// The account scope is drained once per cycle however many teams sync:
+    /// the first pays the version query and the delta page, and the rest are
+    /// gated off by the caller and pay neither.
+    #[test]
+    fn teams_of_one_account_drain_the_scope_once_and_share_every_row() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let mut soft = store(&directory, "inbox.sqlite3");
+        let scope = scope();
+        let mut rpc = Replies::new(vec![
+            RealtimeResponse::InboxVersion(2),
+            delta(2, vec![row(1, 0xa1, 0xb1), row(2, 0xa2, 0xb2)]),
+        ]);
+        let (state, applied) = drain_inbox_scope(&mut rpc, &mut soft, &scope).expect("drain");
+        assert_eq!(applied, 2);
+        assert!(scope_drained(&state));
+        assert_eq!(rpc.counts(), (1, 1));
+        // Both teams' rows landed under the one account scope, so a team that
+        // skips the drain still reads its own changed thread.
+        for team in [0xb1, 0xb2] {
+            assert_eq!(
+                soft.chat_inbox_entries(&scope, entity(ENTITY_NAMED_TEAM, team).as_bytes())
+                    .expect("entries")
+                    .len(),
+                1
+            );
+        }
+        // The four other teams of this account sync behind the gate in the
+        // same cycle. They run no drain, so the cycle's cost stays at the one
+        // version query and the one delta page above; a transport holding no
+        // replies proves nothing was asked of the server.
+        let mut gated = Replies::new(vec![]);
+        let mut drained = scope_drained(&state);
+        for _ in 0..4 {
+            if !drained {
+                let (left, _) =
+                    drain_inbox_scope(&mut gated, &mut soft, &scope).expect("gated drain");
+                drained = scope_drained(&left);
+            }
+        }
+        assert_eq!(gated.counts(), (0, 0));
+    }
+
+    /// A server that reports a newer version but enumerates no change leaves
+    /// the scope degraded. That is not a drain, and the gate must not be set
+    /// from it: the rows behind that version have never been read.
+    #[test]
+    fn a_degraded_delta_never_reports_the_scope_drained() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let mut soft = store(&directory, "degraded.sqlite3");
+        let scope = scope();
+        let mut rpc = Replies::new(vec![
+            RealtimeResponse::InboxVersion(9),
+            delta(9, vec![]),
+            delta(9, vec![]),
+        ]);
+        let (state, applied) = drain_inbox_scope(&mut rpc, &mut soft, &scope).expect("drain");
+        assert_eq!(applied, 0);
+        assert!(state.degraded);
+        assert!(state.cursor < state.head);
+        assert!(!scope_drained(&state));
+    }
+
+    /// Pages that make progress without reaching the head exhaust the page
+    /// budget and fail. The caller never receives a result, so it never marks
+    /// the scope drained on a partial delta.
+    #[test]
+    fn a_partial_page_never_reports_the_scope_drained() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let mut soft = store(&directory, "partial.sqlite3");
+        let scope = scope();
+        let head = ChatLimits::INBOX_PAGES as u64 + 10;
+        let mut replies = vec![RealtimeResponse::InboxVersion(head)];
+        for version in 1..=ChatLimits::INBOX_PAGES as u64 {
+            replies.push(delta(head, vec![row(version, version as u8, 0xb1)]));
+        }
+        let mut rpc = Replies::new(replies);
+        let error = drain_inbox_scope(&mut rpc, &mut soft, &scope).expect_err("pagination limit");
+        assert!(matches!(error, Error::ChatLimit(_)));
+        // The state the partial pages left behind is not a drained scope.
+        let state = soft.chat_inbox_state(&scope).expect("state");
+        assert!(state.cursor < state.head);
+        assert!(!scope_drained(&state));
+    }
+
+    /// An empty delta at the cursor is a complete drain: the account holds
+    /// every changed thread, and there is nothing degraded about it.
+    #[test]
+    fn an_empty_delta_at_the_head_is_a_drain() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let mut soft = store(&directory, "head.sqlite3");
+        let scope = scope();
+        let mut rpc = Replies::new(vec![RealtimeResponse::InboxVersion(0), delta(0, vec![])]);
+        let (state, applied) = drain_inbox_scope(&mut rpc, &mut soft, &scope).expect("drain");
+        assert_eq!(applied, 0);
+        assert!(scope_drained(&state));
+        assert_eq!(rpc.counts(), (1, 1));
     }
 }
