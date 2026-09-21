@@ -87,7 +87,7 @@ import {
   deviceIsCard,
 } from './device-model';
 import type { DeviceEntry } from './device-model';
-import { UnavailableAccount } from './people-screen';
+import { UnavailableAccount } from './account-section';
 
 import { paperKeyResume } from './paper-key-resume';
 import type { PaperKeyDraft } from './paper-key-resume';
@@ -547,7 +547,7 @@ export function DevicesScreen({
     );
 
   // Devices are scoped by account. If no accounts exist locally, no devices
-  // are displayed; new accounts must be added via the Account tab.
+  // are displayed; new accounts must be added via Settings › Account.
   if (!selected)
     return (
       <>
@@ -559,7 +559,9 @@ export function DevicesScreen({
               actions={
                 <Button
                   variant="primary"
-                  onClick={() => onNavigate({ kind: 'people' })}
+                  onClick={() =>
+                    onNavigate({ kind: 'settings', section: 'account' })
+                  }
                 >
                   Open Account
                 </Button>
@@ -587,7 +589,7 @@ export function DevicesScreen({
   const staleClass = freshness.stale ? ' stale' : '';
   // A scan of the Mac's own ports, so it sits with the page's actions rather
   // than beside a list.
-  const refreshConnectedKeys = (
+  const refreshSecurityKeys = (
     <Button
       icon="key"
       {...access.props('yubi-scan', { profile: selected.server })}
@@ -597,12 +599,17 @@ export function DevicesScreen({
           access,
           selected.server,
           hardware.capture(),
-          setCards,
+          (found) => {
+            setCards(found);
+            // A scan that finds nothing is a legitimate result, not an
+            // error, so the empty case has to say so itself.
+            if (found.length === 0) toasts.show('No security keys found');
+          },
           onError,
         )
       }
     >
-      Refresh connected keys
+      Refresh security keys
     </Button>
   );
 
@@ -627,7 +634,7 @@ export function DevicesScreen({
           cards={cards}
           metadataStatus={metadataStatus}
           stale={freshness.stale}
-          refreshConnectedKeys={refreshConnectedKeys}
+          refreshSecurityKeys={refreshSecurityKeys}
           onBack={backToList}
           onNavigate={onNavigate}
           onCopy={(text) => copyText(text, 'Key id copied')}
@@ -654,7 +661,7 @@ export function DevicesScreen({
             subtitle={subtitle}
             action={
               <>
-                {refreshConnectedKeys}
+                {refreshSecurityKeys}
                 <Button
                   variant="primary"
                   icon="plus"
@@ -684,7 +691,7 @@ export function DevicesScreen({
                         })
                       }
                     >
-                      Open the server…
+                      Open server
                     </Button>
                   }
                 >
@@ -1019,7 +1026,7 @@ function DeviceDetail({
   cards,
   metadataStatus,
   stale,
-  refreshConnectedKeys,
+  refreshSecurityKeys,
   onBack,
   onNavigate,
   onCopy,
@@ -1043,7 +1050,7 @@ function DeviceDetail({
   metadataStatus: ReactNode;
   /** The lists this page reads could not be refreshed. */
   stale: boolean;
-  refreshConnectedKeys: ReactNode;
+  refreshSecurityKeys: ReactNode;
   onBack: () => void;
   onNavigate: (location: Location) => void;
   onCopy: (text: string) => void;
@@ -1083,7 +1090,7 @@ function DeviceDetail({
                   <Button variant="primary" onClick={onBack}>
                     Back to Devices
                   </Button>
-                  {refreshConnectedKeys}
+                  {refreshSecurityKeys}
                 </>
               }
             >
@@ -1138,7 +1145,7 @@ function DeviceDetail({
             </Chip>
           ) : null
         }
-        action={refreshConnectedKeys}
+        action={refreshSecurityKeys}
       />
       <div className="body">
         <div className="settings-main">

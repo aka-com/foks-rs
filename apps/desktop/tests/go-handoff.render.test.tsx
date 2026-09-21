@@ -1267,9 +1267,9 @@ test('identity loading waits out a native mutation instead of failing setup', as
 });
 
 test('a server added after unmount is listed on Accounts and pairs without another add', async () => {
-  const { PeopleScreen } = (await vite.ssrLoadModule(
-    '/src/screens/people-screen.tsx',
-  )) as typeof import('../src/screens/people-screen');
+  const { AccountSection } = (await vite.ssrLoadModule(
+    '/src/screens/account-section.tsx',
+  )) as typeof import('../src/screens/account-section');
   const { GoProfileConnectSheet } = (await vite.ssrLoadModule(
     '/src/screens/go-profile-connect.tsx',
   )) as typeof import('../src/screens/go-profile-connect');
@@ -1364,10 +1364,11 @@ test('a server added after unmount is listed on Accounts and pairs without anoth
   assert.deepEqual(added, ['cli-local']);
   const accounts = ui.render(
     wrap(
-      createElement(PeopleScreen, {
+      createElement(AccountSection, {
         snapshot,
         bridge,
-        location: { kind: 'people' },
+        location: { kind: 'settings', section: 'account' },
+        panel: { id: 'panel', labelledBy: 'tab' },
         onNavigate: () => {},
         onRefresh: async () => {},
         onRefreshSnapshot: async () => snapshot,
@@ -1383,15 +1384,78 @@ test('a server added after unmount is listed on Accounts and pairs without anoth
   // The host is the row's value, not its label: the label column is a fixed
   // width and a hostname overran it, so the row reads "Server" and states the
   // host and its pairing state together.
-  const row = accounts
-    .getByText(/CLI server · Connected, not yet paired/)
-    .closest<HTMLElement>('.fr');
+  // This Mac holds another unpaired server as well, so the row is the one
+  // that names this server rather than the only one in that state.
+  const row = [...accounts.container.querySelectorAll<HTMLElement>('.fr')].find(
+    (candidate) => candidate.textContent?.includes('CLI server'),
+  );
   assert.ok(row);
   assert.ok(ui.within(row).getByText('Server'));
+  assert.ok(
+    ui.within(row).getByText('Connected, not paired').classList.contains('dim'),
+  );
   ui.fireEvent.click(ui.within(row).getByRole('button', { name: 'Pair' }));
   ui.fireEvent.click(await accounts.findByRole('radio', { name: /cli-owner/ }));
   assert.ok(accounts.getByRole('button', { name: 'Pair this device' }));
   assert.ok(accounts.getByRole('button', { name: 'Resume pairing' }));
   assert.equal(accounts.queryByRole('button', { name: 'Add server' }), null);
   assert.equal(adds, 1);
+});
+
+test('CLI pairing resumes without entering a new device name', async () => {
+  const { GoProfileConnectSheet } = (await vite.ssrLoadModule(
+    '/src/screens/go-profile-connect.tsx',
+  )) as typeof import('../src/screens/go-profile-connect');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { OverlayProvider } = (await vite.ssrLoadModule(
+    '/kit/overlay-primitives.tsx',
+  )) as typeof import('../kit/overlay-primitives');
+  const calls: string[][] = [];
+  const bridge: Bridge = {
+    ...mockBridge(),
+    discoverGoProfiles: async () => ({
+      installed: true,
+      candidates: [candidate],
+    }),
+    resumeGoProfilePairing: async (...args) => {
+      calls.push(args);
+      throw new Error('Saved pairing is still pending');
+    },
+  };
+  const rendered = ui.render(
+    createElement(OverlayProvider, {
+      backgroundRef: { current: null },
+      portalRoot: document.getElementById('overlays')!,
+      children: createElement(GoProfileConnectSheet, {
+        bridge,
+        existingProfile: { id: 'local', host_id: candidate.hostId },
+        onClose: () => {},
+        onConnected: async () => {},
+        onError: () => {},
+      }),
+    }),
+  );
+  ui.fireEvent.click(await rendered.findByRole('radio', { name: /cli-owner/ }));
+  assert.equal(
+    (rendered.getByLabelText('Device name') as HTMLInputElement).value,
+    '',
+  );
+  assert.equal(
+    (
+      rendered.getByRole('button', {
+        name: 'Pair this device',
+      }) as HTMLButtonElement
+    ).disabled,
+    true,
+  );
+  const resume = rendered.getByRole('button', {
+    name: 'Resume pairing',
+  }) as HTMLButtonElement;
+  assert.equal(resume.disabled, false);
+  ui.fireEvent.click(resume);
+  await ui.waitFor(() =>
+    assert.deepEqual(calls, [['candidate', 'local', 'cli-owner']]),
+  );
 });

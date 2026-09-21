@@ -12,6 +12,7 @@ export {
   parentLocation,
   railTabOf,
   sameLocation,
+  settingsSectionOf,
 } from './navigation/routes';
 export {
   chatTabLocation,

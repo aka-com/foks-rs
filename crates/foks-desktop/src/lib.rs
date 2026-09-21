@@ -2059,9 +2059,13 @@ impl DesktopModel {
         })
     }
 
+    /// `current` is the passphrase to check before a rotation is submitted.
+    /// It applies only to a change, where omitting it leaves the rotation
+    /// authorized by the device alone.
     pub fn passphrase_operation(
         &self,
         action: PassphraseAction,
+        current: Option<SecretString>,
         passphrase: SecretString,
         confirmation: Option<SecretString>,
     ) -> Result<Operation, &'static str> {
@@ -2075,6 +2079,15 @@ impl DesktopModel {
             .ok_or("select an account first")?;
         if passphrase.expose().is_empty() || passphrase.expose().len() > 1024 {
             return Err("passphrase must contain 1 to 1024 bytes");
+        }
+        if current.is_some() && action != PassphraseAction::Change {
+            return Err("only a change takes a current passphrase");
+        }
+        if current
+            .as_ref()
+            .is_some_and(|current| current.expose().is_empty() || current.expose().len() > 1024)
+        {
+            return Err("current passphrase must contain 1 to 1024 bytes");
         }
         match action {
             PassphraseAction::Set | PassphraseAction::Change => {
@@ -2097,6 +2110,7 @@ impl DesktopModel {
             PassphraseAction::Change => Operation::ChangePassphrase {
                 profile,
                 alias,
+                current,
                 passphrase,
             },
             PassphraseAction::Verify => Operation::VerifyPassphrase {
@@ -4370,6 +4384,7 @@ mod tests {
             model
                 .passphrase_operation(
                     PassphraseAction::Set,
+                    None,
                     SecretString::new("first passphrase"),
                     Some(SecretString::new("first passphrase")),
                 )
@@ -4384,6 +4399,7 @@ mod tests {
             model
                 .passphrase_operation(
                     PassphraseAction::Change,
+                    None,
                     SecretString::new("second passphrase"),
                     Some(SecretString::new("second passphrase")),
                 )
@@ -4391,13 +4407,49 @@ mod tests {
             Operation::ChangePassphrase {
                 profile: "local".to_owned(),
                 alias: "personal".to_owned(),
+                current: None,
                 passphrase: SecretString::new("second passphrase"),
             }
         );
         assert_eq!(
             model
                 .passphrase_operation(
+                    PassphraseAction::Change,
+                    Some(SecretString::new("first passphrase")),
+                    SecretString::new("second passphrase"),
+                    Some(SecretString::new("second passphrase")),
+                )
+                .unwrap(),
+            Operation::ChangePassphrase {
+                profile: "local".to_owned(),
+                alias: "personal".to_owned(),
+                current: Some(SecretString::new("first passphrase")),
+                passphrase: SecretString::new("second passphrase"),
+            }
+        );
+        assert_eq!(
+            model.passphrase_operation(
+                PassphraseAction::Set,
+                Some(SecretString::new("first passphrase")),
+                SecretString::new("second passphrase"),
+                Some(SecretString::new("second passphrase")),
+            ),
+            Err("only a change takes a current passphrase")
+        );
+        assert_eq!(
+            model.passphrase_operation(
+                PassphraseAction::Change,
+                Some(SecretString::new("")),
+                SecretString::new("second passphrase"),
+                Some(SecretString::new("second passphrase")),
+            ),
+            Err("current passphrase must contain 1 to 1024 bytes")
+        );
+        assert_eq!(
+            model
+                .passphrase_operation(
                     PassphraseAction::Verify,
+                    None,
                     SecretString::new("second passphrase"),
                     None,
                 )
@@ -4411,6 +4463,7 @@ mod tests {
         assert_eq!(
             model.passphrase_operation(
                 PassphraseAction::Verify,
+                None,
                 SecretString::new("second passphrase"),
                 Some(SecretString::new("second passphrase")),
             ),

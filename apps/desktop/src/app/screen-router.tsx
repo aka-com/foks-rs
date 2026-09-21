@@ -10,7 +10,6 @@ import { ChatTab } from '../screens/chat-tab';
 import { DevicesScreen } from '../screens/devices-screen';
 import { GroupSettingsScreen } from '../screens/groups-screen';
 import { ItemsScreen, type DropUpload } from '../screens/items-screen';
-import { PeopleScreen } from '../screens/people-screen';
 import { PlaceholderScreen } from '../screens/placeholder-screen';
 import { listsItems } from '../screens/scope';
 import { SettingsScreen } from '../screens/settings-screen';
@@ -36,7 +35,6 @@ export function ScreenRouter({
   commandError,
   mutationError,
   onLock,
-  lockFromMenu,
   agentLifecycle,
   recoverAgentReadiness,
   uploadDroppedFile,
@@ -60,7 +58,6 @@ export function ScreenRouter({
   commandError: CommandErrorHandler;
   mutationError: MutationFailureHandler;
   onLock: () => Promise<boolean>;
-  lockFromMenu: () => void;
   agentLifecycle: AgentLifecycle;
   recoverAgentReadiness: (reconnect: boolean) => Promise<void>;
   uploadDroppedFile: (drop: DropUpload) => Promise<void>;
@@ -149,21 +146,6 @@ export function ScreenRouter({
       accessGenerations={accessGenerations}
       onNavigate={(location, options) => locations.navigate(location, options)}
       onApplied={refresh}
-      onError={commandError}
-      onMutationError={mutationError}
-    />
-  ) : here.kind === 'people' ? (
-    // People owns its own sheets and shares no state with Settings, so it is
-    // given exactly the props it declares.
-    <PeopleScreen
-      onLock={lockFromMenu}
-      key={`people:${concealSignal}`}
-      snapshot={shown}
-      bridge={bridge}
-      location={here}
-      onNavigate={(location, options) => locations.navigate(location, options)}
-      onRefresh={refresh}
-      onRefreshSnapshot={refreshSnapshot}
       onError={commandError}
       onMutationError={mutationError}
     />

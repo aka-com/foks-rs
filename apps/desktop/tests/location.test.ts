@@ -157,9 +157,12 @@ test('sameLocation compares full location properties', () => {
     ),
     true,
   );
-  assert.equal(sameLocation({ kind: 'all' }, { kind: 'people' }), false);
+  assert.equal(sameLocation({ kind: 'all' }, { kind: 'settings' }), false);
   assert.equal(
-    sameLocation({ kind: 'people' }, { kind: 'people', store: 'acct:work' }),
+    sameLocation(
+      { kind: 'settings', section: 'account' },
+      { kind: 'settings', section: 'account', store: 'acct:work' },
+    ),
     false,
   );
   assert.equal(
@@ -205,7 +208,6 @@ test('sameLocation compares full location properties', () => {
 });
 
 test('railTabOf names the tab a location belongs to', () => {
-  assert.equal(railTabOf({ kind: 'people' }), 'people');
   assert.equal(railTabOf({ kind: 'chat' }), 'chat');
   assert.equal(railTabOf({ kind: 'chat', ref: 'team:eng' }), 'chat');
   assert.equal(railTabOf({ kind: 'files' }), 'files');
@@ -225,8 +227,8 @@ const ROUND_TRIP: Location[] = [
   { kind: 'all' },
   { kind: 'store', ref: 'acct:personal' },
   { kind: 'store', ref: 'team:eng' },
-  { kind: 'people' },
-  { kind: 'people', store: 'acct:work' },
+  { kind: 'settings', section: 'account' },
+  { kind: 'settings', section: 'account', store: 'acct:work' },
   { kind: 'chat' },
   { kind: 'chat', ref: 'team:eng' },
   { kind: 'chat', ref: 'team:eng', channel: 'ab'.repeat(16) },
@@ -277,7 +279,8 @@ test('legacy state aliases do not collide with group or first-run routes', () =>
     section: 'servers',
   });
   assert.deepEqual(decodeLocation('?state=settings-account'), {
-    kind: 'people',
+    kind: 'settings',
+    section: 'account',
   });
   assert.deepEqual(decodeLocation('?state=add'), {
     kind: 'group-settings',
@@ -326,7 +329,7 @@ test('the sections that became tabs keep their deep links', () => {
   assert.deepEqual(decodeLocation('?state=teams'), { kind: 'teams' });
   assert.deepEqual(
     decodeLocation('?state=settings&section=account&store=acct:work'),
-    { kind: 'people', store: 'acct:work' },
+    { kind: 'settings', section: 'account', store: 'acct:work' },
   );
   // `section=phrase` is the backup phrase, which the Devices tab's recovery
   // pane opens; `?state=devices` reads it under its own name as well.
@@ -391,14 +394,15 @@ test('the sections that became tabs keep their deep links', () => {
     const href = locationHref('http://localhost/?state=all', location);
     assert.deepEqual(decodeLocation(new URL(href).search), location, href);
   }
-  // Accounts became People, and the address says so.
+  // Accounts is the Account section, and the address says so.
   assert.deepEqual(decodeLocation('?state=settings&section=account'), {
-    kind: 'people',
+    kind: 'settings',
+    section: 'account',
   });
 });
 
-test('the sub-navigation’s three pages deep-link, and an address for a section that no longer exists lands on the tab', () => {
-  for (const section of ['servers', 'preferences', 'mac'] as const) {
+test('the sub-navigation’s four pages deep-link, and an address for a section that no longer exists lands on the tab', () => {
+  for (const section of ['account', 'servers', 'preferences', 'mac'] as const) {
     assert.deepEqual(decodeLocation(`?state=settings&section=${section}`), {
       kind: 'settings',
       section,
@@ -418,7 +422,10 @@ test('the sub-navigation’s three pages deep-link, and an address for a section
 });
 
 test('the aliases for retired pages point at the tabs that replaced them', () => {
-  assert.deepEqual(decodeLocation('?state=alerts'), { kind: 'people' });
+  assert.deepEqual(decodeLocation('?state=alerts'), {
+    kind: 'settings',
+    section: 'account',
+  });
   for (const state of ['join', 'groups', 'create'])
     assert.deepEqual(
       decodeLocation(`?state=${state}`),
@@ -439,7 +446,8 @@ test('the aliases for retired pages point at the tabs that replaced them', () =>
   });
   // An explicit store still overrides the alias's own account.
   assert.deepEqual(decodeLocation('?state=settings-account&store=acct:work'), {
-    kind: 'people',
+    kind: 'settings',
+    section: 'account',
     store: 'acct:work',
   });
   // `team-chat` was the chat location before the team column named the team
@@ -555,7 +563,7 @@ test('navigating away from settings removes store and account parameters', () =>
     'http://localhost/?state=settings&section=macs&store=acct%3Awork&account=work';
   for (const location of [
     { kind: 'all' } as const,
-    { kind: 'people' } as const,
+    { kind: 'teams' } as const,
   ]) {
     const url = new URL(locationHref(from, location));
     assert.equal(url.searchParams.get('account'), null, location.kind);
@@ -671,7 +679,10 @@ test("the mock's own state names still deep-link", () => {
     kind: 'store',
     ref: 'team:household',
   });
-  assert.deepEqual(decodeLocation('?state=alerts'), { kind: 'people' });
+  assert.deepEqual(decodeLocation('?state=alerts'), {
+    kind: 'settings',
+    section: 'account',
+  });
   assert.deepEqual(decodeLocation('?state=servers'), {
     kind: 'settings',
     section: 'servers',
@@ -684,11 +695,16 @@ test('removed group tabs route to People or the group vault', () => {
     ref: 'team:eng',
     tab: 'people',
   });
-  // `people` is the People tab. The mock's name for a *group's* People tab is
-  // `group-people`, alongside `party` and `federation`.
-  assert.deepEqual(decodeLocation('?state=people'), { kind: 'people' });
+  // `people` was the Account tab, which is Settings › Account now. The mock's
+  // name for a *group's* People tab is `group-people`, alongside `party` and
+  // `federation`.
+  assert.deepEqual(decodeLocation('?state=people'), {
+    kind: 'settings',
+    section: 'account',
+  });
   assert.deepEqual(decodeLocation('?state=people&store=acct:work'), {
-    kind: 'people',
+    kind: 'settings',
+    section: 'account',
     store: 'acct:work',
   });
   assert.deepEqual(decodeLocation('?state=group-people'), {
@@ -805,7 +821,7 @@ test('the mock s state names carry what is not a location', () => {
   });
   assert.deepEqual(decodeScene('?state=alerts'), {
     ...INITIAL_SCENE,
-    location: { kind: 'people' },
+    location: { kind: 'settings', section: 'account' },
     lease: 'lapsed',
   });
   assert.deepEqual(decodeScene('?state=show'), {
@@ -864,12 +880,12 @@ test('LocationStore notifies subscribers only when state changes', () => {
   });
 
   assert.deepEqual(store.getSnapshot(), INITIAL_STATE);
-  store.navigate({ kind: 'people' });
+  store.navigate({ kind: 'teams' });
   assert.equal(notifications, 1);
-  assert.deepEqual(store.getSnapshot().location, { kind: 'people' });
+  assert.deepEqual(store.getSnapshot().location, { kind: 'teams' });
 
   // Redundant navigation returns identical state reference, skipping subscriber notification.
-  store.navigate({ kind: 'people' });
+  store.navigate({ kind: 'teams' });
   assert.equal(notifications, 1);
 
   store.dispatch({ type: 'search', query: 'wifi' });
@@ -884,7 +900,7 @@ test('LocationStore notifies subscribers only when state changes', () => {
 test('getSnapshot is stable across reads, as useSyncExternalStore requires', () => {
   const store = new LocationStore();
   assert.equal(store.getSnapshot(), store.getSnapshot());
-  store.navigate({ kind: 'people' });
+  store.navigate({ kind: 'teams' });
   assert.equal(store.getSnapshot(), store.getSnapshot());
 });
 
@@ -892,7 +908,11 @@ test('account context follows objects and persists across cross-account tabs', a
   const { FIXTURE } = await import('../src/fixture');
   const navigation = new LocationStore();
   navigation.setAccountStores(FIXTURE.stores);
-  navigation.navigate({ kind: 'people', store: 'acct:work' });
+  navigation.navigate({
+    kind: 'settings',
+    section: 'account',
+    store: 'acct:work',
+  });
   navigation.navigate({ kind: 'files' });
   navigation.navigate({ kind: 'devices' });
   assert.deepEqual(navigation.getSnapshot().location, {
@@ -957,7 +977,11 @@ test('remembered device pages follow a new acting account without reusing a key 
     store: 'acct:work',
     device: 'old-key',
   });
-  navigation.navigate({ kind: 'people', store: 'acct:personal' });
+  navigation.navigate({
+    kind: 'settings',
+    section: 'account',
+    store: 'acct:personal',
+  });
   navigation.navigateTab('devices');
   assert.deepEqual(navigation.getSnapshot().location, {
     kind: 'devices',
@@ -1008,7 +1032,6 @@ test('a tab root has no parent, and neither does an account parameter', () => {
   for (const location of [
     { kind: 'files' },
     { kind: 'teams', store: 'acct:work' },
-    { kind: 'people', store: 'acct:personal' },
     { kind: 'devices', store: 'acct:work' },
     { kind: 'settings', store: 'acct:work' },
     { kind: 'chat', ref: 'team:household' },

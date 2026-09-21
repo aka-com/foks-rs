@@ -617,8 +617,8 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_is_a_local_v28_mutation_with_no_initial_trust_inputs() {
-        assert_eq!(PROTOCOL_VERSION, 28);
+    fn reconcile_is_a_local_v29_mutation_with_no_initial_trust_inputs() {
+        assert_eq!(PROTOCOL_VERSION, 29);
         let operation = Operation::ReconcileProfile {
             profile: "saved".into(),
         };
@@ -634,8 +634,8 @@ mod tests {
     }
 
     #[test]
-    fn submit_message_is_a_local_v28_mutation() {
-        assert_eq!(PROTOCOL_VERSION, 28);
+    fn submit_message_is_a_local_v29_mutation() {
+        assert_eq!(PROTOCOL_VERSION, 29);
         let request = Request::new(
             20,
             Operation::Chat {
@@ -942,30 +942,38 @@ mod tests {
     #[test]
     fn every_passphrase_operation_redacts_its_secret() {
         let operations = [
-            Operation::SetPassphrase {
-                profile: "local".to_owned(),
-                alias: "personal".to_owned(),
-                passphrase: SecretString::new("set-secret"),
-            },
-            Operation::ChangePassphrase {
-                profile: "local".to_owned(),
-                alias: "personal".to_owned(),
-                passphrase: SecretString::new("change-secret"),
-            },
-            Operation::VerifyPassphrase {
-                profile: "local".to_owned(),
-                alias: "personal".to_owned(),
-                passphrase: SecretString::new("verify-secret"),
-            },
+            (
+                Operation::SetPassphrase {
+                    profile: "local".to_owned(),
+                    alias: "personal".to_owned(),
+                    passphrase: SecretString::new("set-secret"),
+                },
+                &["set-secret"][..],
+            ),
+            (
+                Operation::ChangePassphrase {
+                    profile: "local".to_owned(),
+                    alias: "personal".to_owned(),
+                    current: Some(SecretString::new("current-secret")),
+                    passphrase: SecretString::new("change-secret"),
+                },
+                &["current-secret", "change-secret"][..],
+            ),
+            (
+                Operation::VerifyPassphrase {
+                    profile: "local".to_owned(),
+                    alias: "personal".to_owned(),
+                    passphrase: SecretString::new("verify-secret"),
+                },
+                &["verify-secret"][..],
+            ),
         ];
-        for (operation, secret) in
-            operations
-                .into_iter()
-                .zip(["set-secret", "change-secret", "verify-secret"])
-        {
+        for (operation, secrets) in operations {
             let debug = format!("{operation:?}");
             assert!(debug.contains("<redacted>"));
-            assert!(!debug.contains(secret));
+            for secret in secrets {
+                assert!(!debug.contains(secret));
+            }
             assert_eq!(
                 decode_request(&encode(&Request::new(11, operation.clone())).unwrap())
                     .unwrap()
@@ -973,6 +981,34 @@ mod tests {
                 operation
             );
         }
+    }
+
+    /// A frontend built before the confirmation step omits `current`, which
+    /// must keep decoding as the device-authorized rotation rather than
+    /// failing the request outright.
+    #[test]
+    fn change_passphrase_without_a_current_secret_decodes() {
+        let request = serde_json::json!({
+            "version": PROTOCOL_VERSION,
+            "id": 12,
+            "operation": {
+                "operation": "change-passphrase",
+                "profile": "local",
+                "alias": "personal",
+                "passphrase": "change-secret",
+            },
+        });
+        assert_eq!(
+            decode_request(&encode(&request).unwrap())
+                .unwrap()
+                .operation,
+            Operation::ChangePassphrase {
+                profile: "local".to_owned(),
+                alias: "personal".to_owned(),
+                current: None,
+                passphrase: SecretString::new("change-secret"),
+            }
+        );
     }
 
     #[test]

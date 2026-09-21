@@ -133,11 +133,11 @@ function tabs(): HTMLButtonElement[] {
   ];
 }
 
-test('the rail draws six tabs and marks the one that owns the location', async () => {
+test('the rail draws five tabs and marks the one that owns the location', async () => {
   await rail({ kind: 'group-settings', ref: 'team:eng' });
   assert.deepEqual(
     tabs().map((tab) => tab.querySelector('.t')?.textContent),
-    ['Files', 'Chat', 'Teams', 'Devices', 'Account', 'Settings'],
+    ['Files', 'Chat', 'Teams', 'Devices', 'Settings'],
   );
   // A group's settings page belongs to Teams.
   assert.equal(tabs()[2].getAttribute('aria-current'), 'page');
@@ -158,14 +158,29 @@ test('Chat displays total unread and the avatar displays an attention indicator'
   assert.equal(document.querySelector('.side.rail .rail-tail.loading'), null);
   assert.equal(badge.textContent, '4');
   assert.equal(badge.getAttribute('aria-label'), '4 unread');
-  // Attention is advertised on the account avatar, not on a tab, and the dot
-  // is the control that opens the list.
+  // Attention is advertised on the account avatar, and the dot is the control
+  // that opens the list: Settings › Account, by address, whatever page the
+  // Settings tab last had open.
   const dot = document.querySelector<HTMLButtonElement>('.side.rail .attn');
   assert.ok(dot, 'the avatar carries the dot');
   assert.equal(dot.getAttribute('aria-label'), 'Needs attention');
-  assert.equal(document.querySelector('.rail-tabs .dot'), null);
+  // The Settings tab, whose Account section lists the notices, carries the
+  // same dot and says why; no other tab does.
+  const settingsDot = tabs()[4].querySelector('.rail-tail.dot');
+  assert.ok(settingsDot, 'the Settings tab draws the dot');
+  assert.equal(
+    settingsDot.getAttribute('aria-label'),
+    '3 notices need attention',
+  );
+  assert.equal(
+    document.querySelectorAll('.rail-tabs .rail-tail.dot').length,
+    1,
+  );
   ui.fireEvent.click(dot);
-  assert.deepEqual(journal.navigations.at(-1), { kind: 'people' });
+  assert.deepEqual(journal.navigations.at(-1), {
+    kind: 'settings',
+    section: 'account',
+  });
 });
 
 test('no unread and nothing to attend to leaves both marks off', async () => {
@@ -262,7 +277,7 @@ test('renders a Teams count, Devices and Settings dots, and no empty indicators'
     { description: 'An account has no paper key' },
     { description: 'foks.partner.dev: not verified' },
   );
-  const [, , teamsTab, devicesTab, , settingsTab] = tabs();
+  const [, , teamsTab, devicesTab, settingsTab] = tabs();
   const teamsBadge = teamsTab.querySelector('.rail-tail.count');
   assert.ok(teamsBadge, 'Teams carries a count in the same slot as Chat');
   assert.equal(teamsBadge.textContent, '2');
@@ -306,7 +321,7 @@ test('renders a Teams count, Devices and Settings dots, and no empty indicators'
 
 test('with nothing known, Teams, Devices and Settings draw nothing', async () => {
   await rail({ kind: 'all' }, '0', 0);
-  const [, , teamsTab, devicesTab, , settingsTab] = tabs();
+  const [, , teamsTab, devicesTab, settingsTab] = tabs();
   assert.equal(teamsTab.querySelector('.rail-tail'), null);
   assert.equal(devicesTab.querySelector('.rail-tail'), null);
   assert.equal(settingsTab.querySelector('.rail-tail'), null);
@@ -358,10 +373,10 @@ test('both setup rails omit the connection footer while keeping setup actions', 
   }
 });
 
-test('a tab click and Control-Tab both navigate over the six tabs', async () => {
+test('a tab click and Control-Tab both navigate over the five tabs', async () => {
   const { journal } = await rail({ kind: 'files' });
   ui.fireEvent.click(tabs()[4]);
-  assert.deepEqual(journal.navigations.at(-1), { kind: 'people' });
+  assert.deepEqual(journal.navigations.at(-1), { kind: 'settings' });
 
   // Files is the first tab, so forward is Chat and backward wraps to Settings.
   ui.fireEvent.keyDown(document, { key: 'Tab', ctrlKey: true });
@@ -396,13 +411,13 @@ test('a tab is titled only where its label is hidden', async () => {
   await rail({ kind: 'files' });
   assert.deepEqual(
     tabs().map((tab) => tab.getAttribute('title')),
-    [null, null, null, null, null, null],
+    [null, null, null, null, null],
   );
   ui.cleanup();
   await rail({ kind: 'files' }, '0', 0, true);
   assert.deepEqual(
     tabs().map((tab) => tab.getAttribute('title')),
-    ['Files', 'Chat', 'Teams', 'Devices', 'Account', 'Settings'],
+    ['Files', 'Chat', 'Teams', 'Devices', 'Settings'],
   );
 });
 
@@ -416,7 +431,6 @@ test('the cycle helpers hold the rail order and wrap at both ends', async () => 
     { kind: 'chat' },
     { kind: 'teams' },
     { kind: 'devices' },
-    { kind: 'people' },
     { kind: 'settings' },
   ]);
   // Control-Tab walks the tab a location belongs to, not the location itself:
@@ -447,7 +461,11 @@ test('the cycle helpers hold the rail order and wrap at both ends', async () => 
 });
 
 test('the account menu switches account, adds one, and locks the app', async () => {
-  const { journal } = await rail({ kind: 'people', store: 'acct:personal' });
+  const { journal } = await rail({
+    kind: 'settings',
+    section: 'account',
+    store: 'acct:personal',
+  });
   const header = document.querySelector<HTMLButtonElement>('.side.rail .who');
   assert.ok(header);
   assert.equal(header.querySelector('.t b')?.textContent, 'satoshi');
@@ -478,7 +496,8 @@ test('the account menu switches account, adds one, and locks the app', async () 
   assert.ok(other, 'the menu lists the second fixture account');
   ui.fireEvent.click(other);
   assert.deepEqual(journal.navigations.at(-1), {
-    kind: 'people',
+    kind: 'settings',
+    section: 'account',
     store: 'acct:work',
   });
 
@@ -503,7 +522,11 @@ test('the account menu switches account, adds one, and locks the app', async () 
 });
 
 test('a stopped account is dimmed and carries the way to restore it', async () => {
-  const { journal } = await rail({ kind: 'people', store: 'acct:personal' });
+  const { journal } = await rail({
+    kind: 'settings',
+    section: 'account',
+    store: 'acct:personal',
+  });
   const header = document.querySelector<HTMLButtonElement>('.side.rail .who');
   assert.ok(header);
   ui.fireEvent.click(header);
@@ -601,10 +624,17 @@ test('the settings crumb always names the sub-navigation’s open page', async (
   const { crumbTrail } = (await vite.ssrLoadModule(
     '/src/shell/topbar.tsx',
   )) as typeof import('../src/shell/topbar');
-  // An address with no `section=` still opens a page — Servers, the
+  // An address with no `section=` still opens a page — Account, the
   // sub-navigation's first — so the crumb names it rather than stopping at
   // the tab.
-  assert.deepEqual(crumbTrail({ kind: 'settings' }), ['Settings', 'Servers']);
+  assert.deepEqual(crumbTrail({ kind: 'settings' }), ['Settings', 'Account']);
+  // A server named without its section is that server's page, under Servers.
+  assert.deepEqual(
+    crumbTrail({ kind: 'settings', profile: 'acme' }, {
+      servers: [{ id: 'acme', name: 'internal-acme-profile', label: 'Acme' }],
+    } as unknown as Parameters<typeof crumbTrail>[1]),
+    ['Settings', 'Servers', 'Acme'],
+  );
   assert.deepEqual(crumbTrail({ kind: 'settings', section: 'mac' }), [
     'Settings',
     'Device',

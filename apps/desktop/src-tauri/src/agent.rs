@@ -164,6 +164,9 @@ impl AgentError {
             ErrorCode::CatalogSnapshotChanged => ("catalog-snapshot-changed", true),
             ErrorCode::UnsupportedSchema => ("unsupported-schema", false),
             ErrorCode::Conflict => ("conflict", false),
+            // Retryable: the reader corrects the passphrase in place and
+            // submits the same change again.
+            ErrorCode::CurrentPassphraseRejected => ("current-passphrase-rejected", true),
             ErrorCode::Busy => ("busy", true),
             ErrorCode::DeadlineExceeded => ("deadline-exceeded", true),
             ErrorCode::CapabilityDenied => ("capability-denied", false),

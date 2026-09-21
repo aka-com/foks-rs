@@ -584,6 +584,21 @@ body {
   text-decoration: underline;
 }
 
+/* A verified server states its trust with a mark beside the name, so it
+   reads as a property of the name rather than a second value. */
+.verified-mark {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  color: var(--ok-ink);
+  vertical-align: -2px;
+}
+
+.verified-mark .ic {
+  width: 15px;
+  height: 15px;
+}
+
 .group-settings p.fn,
 .settings-main p.fn,
 .settings-main .fn {

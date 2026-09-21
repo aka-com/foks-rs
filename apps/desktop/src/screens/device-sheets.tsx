@@ -1,6 +1,7 @@
 import { useTabSheetState } from '../navigation-guard';
 import {
   accountPassphrase,
+  accountPassphraseStatus,
   credentialCommand,
 } from './devices/credential-workflow';
 import { queuedDeviceWork } from './devices/operation-controller';
@@ -40,7 +41,9 @@ import type {
   BackupEnrollment,
   Bridge,
   PairingOffer,
+  PassphraseStatus,
 } from '../bridge';
+import { normalizeCommandError } from '../bridge';
 import {
   Band,
   Button,
@@ -51,7 +54,6 @@ import {
   InsetRow,
   RadioCard,
   RadioGroup,
-  SegmentedControl,
   SheetDialog,
 } from '../components';
 import type { AccountStore } from '../model';
@@ -81,7 +83,7 @@ export type SimpleYubiAction =
 type AddChoice = 'pair' | 'pair-accept' | 'phrase' | 'provision';
 
 /** What the passphrase sheet does with what is typed into it. */
-export type PassphraseMode = 'set' | 'change' | 'verify';
+export type PassphraseMode = 'set' | 'change';
 
 /** The label a YubiKey sheet's title reads, by the action it performs. */
 export const YUBI_ACTION_LABELS: Readonly<Record<SimpleYubiAction, string>> = {
@@ -819,7 +821,7 @@ export function EnrollSheet({
   const controller = useDeviceOperation(
     JSON.stringify([store?.id, operation, workflowTarget]),
   );
-  const [alias, setAlias] = useState('work-key');
+  const [alias, setAlias] = useState('');
   const [username, setUsername] = useState('');
   // The card list resolves after the sheet opens, so the default names the
   // card once it is known — unless the field has already been typed into.
@@ -942,7 +944,12 @@ export function EnrollSheet({
         </Band>
       )}
       <Inset>
-        <Field label="Alias" value={alias} onChange={setAlias} />
+        <Field
+          label="Alias"
+          value={alias}
+          placeholder="work-key"
+          onChange={setAlias}
+        />
         <Field label="Username" value={username} onChange={setUsername} />
         <Field
           label="Device name"
@@ -1028,7 +1035,7 @@ export function ProvisionSheet({
   const controller = useDeviceOperation(
     JSON.stringify([store?.id, operation, workflowTarget]),
   );
-  const [targetAlias, setTargetAlias] = useState('new-key');
+  const [targetAlias, setTargetAlias] = useState('');
   const [deviceName, setDeviceName] = useState(
     cards[0] ? `YubiKey ${cards[0].serial}` : 'YubiKey',
   );
@@ -1114,6 +1121,7 @@ export function ProvisionSheet({
         <Field
           label="Key alias"
           value={targetAlias}
+          placeholder="new-key"
           onChange={setTargetAlias}
         />
         <Field
@@ -1581,14 +1589,12 @@ export function RemoveDeviceSheet({
 export function PassphraseSheet({
   bridge,
   store,
-  initialMode,
   onClose,
   onDone,
   onError,
 }: {
   bridge: Bridge;
   store: AccountStore;
-  initialMode: PassphraseMode;
   onClose: () => void;
   onDone: (message: string) => void | Promise<void>;
   onError: (error: unknown) => void;
@@ -1596,35 +1602,91 @@ export function PassphraseSheet({
   const access = useWorkflowAccess();
   const workflowTarget = { profile: store.server, account: store.account };
   const eligibility = access.props('passphrase', workflowTarget);
-  const [mode, setMode] = useState<PassphraseMode>(initialMode);
   const controller = useDeviceOperation(
-    JSON.stringify([store.id, workflowTarget, mode]),
+    JSON.stringify([store.id, workflowTarget]),
   );
+  // The server accepts enrollment and rotation under mutually exclusive
+  // conditions, so the mode is read from it rather than chosen by the reader.
+  // `reload` re-reads it after a lost race.
+  const [status, setStatus] = useState<PassphraseStatus | null>(null);
+  const [unreadable, setUnreadable] = useState(false);
+  const [reload, setReload] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [current, setCurrent] = useState('');
+  const [currentRejected, setCurrentRejected] = useState(false);
+  const [rateLimited, setRateLimited] = useState(false);
   const [passphrase, setPassphrase] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    setLoading(true);
+    setUnreadable(false);
+    void controller
+      .read(
+        () => accountPassphraseStatus(bridge, access, store),
+        async (value) => {
+          setStatus(value);
+          setCurrentRejected(false);
+          setRateLimited(false);
+        },
+        (error) => {
+          // Neither operation can be offered without knowing which one the
+          // server will accept, so the sheet says so rather than guessing.
+          setUnreadable(true);
+          onError(error);
+        },
+      )
+      .finally(controller.settled(() => setLoading(false)));
+    // The controller and access objects are rebuilt every render; the read is
+    // keyed by the account it reads and by an explicit re-read request.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [store.id, reload]);
+  const mode: PassphraseMode | null =
+    status === null ? null : status.configured ? 'change' : 'set';
+  // A change is authorized by this device, so the current passphrase is a
+  // confirmation step rather than the authorization. It is always required.
+  const checking = mode === 'change';
   const submit = (): void => {
+    if (mode === null || loading || unreadable || busy || rateLimited) return;
+    const offered = checking ? current : null;
     const secret = passphrase;
     const repeated = confirmation;
     setBusy(true);
+    setCurrentRejected(false);
+    setRateLimited(false);
     const task = () =>
-      accountPassphrase(bridge, access, store, mode, secret, repeated);
+      accountPassphrase(bridge, access, store, mode, offered, secret, repeated);
     const complete = async (
       report: Awaited<ReturnType<typeof accountPassphrase>>,
     ): Promise<void> => {
+      setCurrent('');
       setPassphrase('');
       setConfirmation('');
       await onDone(
-        mode === 'verify'
-          ? `Passphrase verified (generation ${report.generation})`
-          : 'Passphrase updated successfully.',
+        mode === 'set'
+          ? `Passphrase set (generation ${report.generation}).`
+          : `Passphrase changed (generation ${report.generation}).`,
       );
     };
-    const pending =
-      mode === 'verify'
-        ? controller.read(task, complete, onError)
-        : controller.run(task, complete, onError);
-    void pending.finally(controller.settled(() => setBusy(false)));
+    const failed = (error: unknown): void => {
+      const { code } = normalizeCommandError(error);
+      // The check ran before the change, so a rejection belongs on the field
+      // that carried it and leaves the rest of the form intact.
+      if (code === 'current-passphrase-rejected') setCurrentRejected(true);
+      // The passphrase moved underneath this sheet, on this device or
+      // another. Whichever operation applies now is decided by a fresh read,
+      // not by this form.
+      if (code === 'conflict') setReload((generation) => generation + 1);
+      // The check is never dropped, so a refused check holds the change
+      // back until the server will run it again. This code also covers a
+      // server that is merely busy, so editing the field clears it rather
+      // than stranding a reader whose passphrase was never wrong.
+      if (code === 'rate-limited' && checking) setRateLimited(true);
+      onError(error);
+    };
+    void controller
+      .run(task, complete, failed)
+      .finally(controller.settled(() => setBusy(false)));
   };
   // A passphrase that is being set or changed is a write in flight; one that
   // has only been typed is worth a question, since it was typed twice.
@@ -1632,17 +1694,16 @@ export function PassphraseSheet({
     busy
       ? {
           verdict: 'refuse',
-          reason: `Wait for the passphrase ${
-            mode === 'verify' ? 'check' : 'change'
-          } to finish.`,
+          reason: 'Wait for the passphrase update to finish.',
         }
-      : passphrase || confirmation
+      : current || passphrase || confirmation
         ? {
             verdict: 'prompt',
             title: 'Discard passphrase?',
             body: 'The passphrase typed here has not been submitted.',
             confirm: 'Discard',
             onConfirm: () => {
+              setCurrent('');
               setPassphrase('');
               setConfirmation('');
               onClose();
@@ -1650,17 +1711,27 @@ export function PassphraseSheet({
           }
         : null,
   );
+  const incomplete =
+    !passphrase || passphrase !== confirmation || (checking && !current);
   return (
     <DeviceSheetFrame
-      title="Account passphrase"
+      title={
+        mode === null
+          ? 'Account passphrase'
+          : mode === 'set'
+            ? 'Set passphrase'
+            : 'Change passphrase'
+      }
       onClose={() => {
         if (busy) return;
+        setCurrent('');
         setPassphrase('');
         setConfirmation('');
         onClose();
       }}
       footer={
         <>
+          <span className="spacer" />
           <Button disabled={busy} onClick={onClose}>
             Cancel
           </Button>
@@ -1669,53 +1740,94 @@ export function PassphraseSheet({
             title={eligibility.title}
             disabled={
               eligibility.disabled ||
-              !passphrase ||
-              (mode !== 'verify' && passphrase !== confirmation) ||
-              busy
+              mode === null ||
+              loading ||
+              unreadable ||
+              incomplete ||
+              busy ||
+              rateLimited
             }
             onClick={submit}
           >
-            {mode === 'set'
-              ? 'Set passphrase'
-              : mode === 'change'
-                ? 'Change passphrase'
-                : 'Verify passphrase'}
+            {busy
+              ? mode === 'set'
+                ? 'Setting…'
+                : 'Changing…'
+              : mode === 'set'
+                ? 'Set'
+                : 'Change'}
           </Button>
         </>
       }
     >
-      <SegmentedControl
-        label="Passphrase action"
-        value={mode}
-        onChange={(next) => {
-          setConfirmation('');
-          setMode(next);
-        }}
-        items={[
-          { id: 'set', label: 'Set' },
-          { id: 'change', label: 'Change' },
-          { id: 'verify', label: 'Verify' },
-        ]}
-      />
-      <Inset>
-        <Field
-          label="Passphrase"
-          value={passphrase}
-          onChange={setPassphrase}
-          type="password"
-        />
-        {mode === 'verify' ? null : (
-          <Field
-            label="Confirm"
-            value={confirmation}
-            onChange={setConfirmation}
-            type="password"
-          />
-        )}
-      </Inset>
-      {mode === 'verify' ? (
-        <p className="hint">Checks the passphrase with the server.</p>
-      ) : null}
+      {unreadable ? (
+        <Band
+          label="Passphrase state unavailable"
+          severity="crit"
+          live
+          action={
+            <Button
+              size="sm"
+              onClick={() => setReload((generation) => generation + 1)}
+            >
+              Retry
+            </Button>
+          }
+        >
+          This account's passphrase state could not be read from its server.
+          Setting and changing a passphrase are accepted under different
+          conditions, so neither is offered until it is known which applies.
+        </Band>
+      ) : loading || mode === null ? (
+        <p className="hint">Reading this account's passphrase state…</p>
+      ) : (
+        <>
+          <p>
+            {mode === 'set'
+              ? 'This account has no passphrase yet.'
+              : 'Replaces your current passphrase.'}
+          </p>
+          {checking && rateLimited ? (
+            <Band label="Too many incorrect attempts" severity="crit" live>
+              Passphrase checks for this account are temporarily rate-limited.
+              Your passphrase has not been changed. Try again later.
+            </Band>
+          ) : null}
+          <Inset>
+            {checking ? (
+              <Field
+                label="Current"
+                value={current}
+                onChange={(value) => {
+                  setCurrent(value);
+                  setCurrentRejected(false);
+                  setRateLimited(false);
+                }}
+                type="password"
+                hint={currentRejected ? 'Incorrect passphrase.' : undefined}
+              />
+            ) : null}
+            <Field
+              label={mode === 'set' ? 'Passphrase' : 'New'}
+              value={passphrase}
+              onChange={setPassphrase}
+              type="password"
+            />
+            <Field
+              label="Confirm"
+              value={confirmation}
+              onChange={setConfirmation}
+              type="password"
+            />
+          </Inset>
+          {checking ? (
+            <p className="hint">
+              Your current passphrase is checked before the change is submitted.
+              Repeated wrong attempts temporarily rate-limit this account.
+            </p>
+          ) : null}
+        </>
+      )}
     </DeviceSheetFrame>
   );
 }

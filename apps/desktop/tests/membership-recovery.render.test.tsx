@@ -125,6 +125,12 @@ for (const kind of ['team-member-addition', 'team-member-edit'] as const) {
       rendered.queryByText('Finish a pending membership change'),
       null,
     );
+    // The username field starts empty, so the addition names its member by
+    // being typed rather than by arriving prefilled.
+    if (addition)
+      ui.fireEvent.change(rendered.getByLabelText('Username'), {
+        target: { value: 'jules.park' },
+      });
     await ui.act(async () => {
       ui.fireEvent.click(
         rendered.getByRole('button', {

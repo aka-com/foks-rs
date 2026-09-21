@@ -5,20 +5,24 @@ import type { LeaseState, StoreRef } from '../model/types';
 /**
  * Which page of Settings' sub-navigation an address points at. Each section is
  * a page of its own, with the sub-navigation staying on screen while any one
- * of them is open. `servers` lists the servers this Mac talks to and holds
+ * of them is open. `account` is one account's profile, the account the address
+ * `store` names: its username, local alias, server, and the counts that link
+ * to Devices and Teams. `servers` lists the servers this Mac talks to and holds
  * each server's own page, security keys included. `preferences` contains
  * account passphrases and local desktop alert settings. `mac` is Device: the
  * application version and lock, the agent, the local FOKS data operations and
  * the Mac-wide reset. The section keeps its `mac` id, so older addresses that
  * name it still resolve.
  *
- * Older addresses name sections that folded into these three; `decodeLocation`
- * maps them (`SETTINGS_SECTION_ALIASES`).
+ * Older addresses name sections that folded into these four; `decodeLocation`
+ * maps them (`SETTINGS_SECTION_ALIASES`). The former Account tab
+ * (`state=people`) decodes to the `account` section.
  */
-export type SettingsSection = 'servers' | 'preferences' | 'mac';
+export type SettingsSection = 'account' | 'servers' | 'preferences' | 'mac';
 
 /** The order the sub-navigation lists Settings' pages in. */
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
+  'account',
   'servers',
   'preferences',
   'mac',
@@ -30,6 +34,7 @@ export const DEFAULT_SETTINGS_SECTION: SettingsSection = SETTINGS_SECTIONS[0];
 /** The words the sub-navigation and the topbar's crumb use for each page. */
 export const SETTINGS_SECTION_LABEL: Readonly<Record<SettingsSection, string>> =
   {
+    account: 'Account',
     servers: 'Servers',
     preferences: 'Preferences',
     mac: 'Device',
@@ -61,15 +66,12 @@ export type FirstRunStep = string;
 export type FirstRunPath = 'invited' | 'own';
 
 /** The rail tab a location belongs to. First run belongs to none. */
-export type RailTab =
-  'people' | 'chat' | 'files' | 'teams' | 'devices' | 'settings';
+export type RailTab = 'chat' | 'files' | 'teams' | 'devices' | 'settings';
 
 export type Location =
   | { kind: 'all' }
   | { kind: 'store'; ref: StoreRef }
   | { kind: 'group-settings'; ref: StoreRef; tab?: GroupSettingsTab }
-  /** People: the Account tab, one account's profile at a time. */
-  | { kind: 'people'; store?: StoreRef }
   /**
    * Chat. `ref` is the team whose inbox is mounted and `channel` the open
    * conversation; with no `ref` the tab picks the first team that has chat.
@@ -94,8 +96,10 @@ export type Location =
       device?: string;
     }
   /**
-   * `profile` names the server the Servers section is open on; it means
-   * nothing on any other section and is dropped when moving between them.
+   * `store` names the account the page acts on, which the Account section
+   * shows and the other sections read through. `profile` names the server the
+   * Servers section is open on; it means nothing on any other section and is
+   * dropped when moving between them.
    */
   | {
       kind: 'settings';

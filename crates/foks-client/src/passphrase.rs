@@ -106,6 +106,55 @@ impl FoksClient {
         })
     }
 
+    /// Reports the generation the account's passphrase sits at, or `None` when
+    /// the server holds none. The PPE parcel is authoritative here: user
+    /// settings can be absent on an account whose passphrase predates the
+    /// settings link, so `authenticated_passphrase_settings` returning `None`
+    /// does not by itself mean no passphrase is configured.
+    pub fn passphrase_status(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+    ) -> Result<Option<u64>> {
+        match self.fetch_ppe_parcel(host, credential) {
+            Ok(parcel) => Ok(Some(parcel.generation)),
+            Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
+                code: foks_rpc::STATUS_PASSPHRASE_NOT_FOUND_ERROR,
+                ..
+            })) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Re-reads the account's passphrase state after a failed submission and,
+    /// when it no longer matches what the update was built against, replaces
+    /// the server's error with the lost race it actually describes. `expected`
+    /// is the generation the update assumed, `None` for an enrollment that
+    /// requires the account to hold no passphrase at all.
+    ///
+    /// The server reports a serialization loss as a generic bad-argument
+    /// status, which reads to a caller as a malformed request. Classifying it
+    /// by observation keeps that detail out of this crate and works the same
+    /// against a v0.1.9 server, which words the rejection differently.
+    fn explain_passphrase_conflict(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        expected: Option<u64>,
+        error: Error,
+    ) -> Error {
+        // A submission that was cancelled or ran out of time says nothing
+        // about the account's state, and re-reading it would spend a round
+        // trip on behalf of a caller that has already stopped waiting.
+        if matches!(error, Error::Cancelled | Error::DeadlineExceeded) {
+            return error;
+        }
+        match self.passphrase_status(host, credential) {
+            Ok(found) if found != expected => Error::PassphraseConflict { expected, found },
+            _ => error,
+        }
+    }
+
     pub fn set_passphrase(
         &self,
         host: &PinnedHost,
@@ -154,29 +203,38 @@ impl FoksClient {
             owner.generation,
             stretch,
         )?;
-        let argument = self.with_user_settings_link(
-            host,
-            credential,
-            &authenticated,
-            update.argument(),
-            None,
-            PassphrasePukTarget::CurrentOwner,
-        )?;
+        // An account that gained a passphrase after the caller read its state
+        // fails somewhere along this path: attaching the settings link, the
+        // generation gate below, or the submission itself. Each one is the
+        // same lost race, so each is classified the same way.
+        let raced = |error: Error| self.explain_passphrase_conflict(host, credential, None, error);
+        let argument = self
+            .with_user_settings_link(
+                host,
+                credential,
+                &authenticated,
+                update.argument(),
+                None,
+                PassphrasePukTarget::CurrentOwner,
+            )
+            .map_err(raced)?;
         // Enrollment establishes the first passphrase (generation 1). The Go
         // v0.1.9 server never assigns nextPassphraseGeneration, so gate on the
         // locally derived generation rather than that RPC; the server still
         // rejects a set when a passphrase already exists.
         if argument.generation != 1 {
-            return Err(Error::CredentialBinding(
+            return Err(raced(Error::CredentialBinding(
                 "passphrase enrollment must be generation 1",
-            ));
+            )));
         }
-        let stored = self.submit_passphrase_update(
-            host,
-            credential,
-            encode_set_passphrase_request(&argument)?,
-            &argument,
-        )?;
+        let stored = self
+            .submit_passphrase_update(
+                host,
+                credential,
+                encode_set_passphrase_request(&argument)?,
+                &argument,
+            )
+            .map_err(raced)?;
         Ok((authenticated, stored))
     }
 
@@ -309,25 +367,35 @@ impl FoksClient {
             &owner.seed,
             owner.generation,
         )?;
-        let argument = self.with_user_settings_link(
-            host,
-            credential,
-            &authenticated,
-            update.argument(),
-            Some(&current),
-            PassphrasePukTarget::CurrentOwner,
-        )?;
+        // The passphrase moving between the parcel this rotation was built
+        // from and the point the server takes it fails at one of these three
+        // steps. Each is the same lost race.
+        let raced = |error: Error| {
+            self.explain_passphrase_conflict(host, credential, Some(current.generation), error)
+        };
+        let argument = self
+            .with_user_settings_link(
+                host,
+                credential,
+                &authenticated,
+                update.argument(),
+                Some(&current),
+                PassphrasePukTarget::CurrentOwner,
+            )
+            .map_err(raced)?;
         if argument.generation != next {
-            return Err(Error::CredentialBinding(
+            return Err(raced(Error::CredentialBinding(
                 "local passphrase generation does not match the server",
-            ));
+            )));
         }
-        let stored = self.submit_passphrase_update(
-            host,
-            credential,
-            encode_change_passphrase_request(&argument)?,
-            &argument,
-        )?;
+        let stored = self
+            .submit_passphrase_update(
+                host,
+                credential,
+                encode_change_passphrase_request(&argument)?,
+                &argument,
+            )
+            .map_err(raced)?;
         Ok((authenticated, stored))
     }
 

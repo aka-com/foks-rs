@@ -697,6 +697,11 @@ test('a created group closes its sheet when only the post-write refresh fails', 
       assert.fail('applied creation must not enter mutation failure recovery');
     },
   });
+  // The name field starts empty, so the team is named by being typed rather
+  // than by arriving prefilled.
+  ui.fireEvent.change(rendered.getByLabelText('Name'), {
+    target: { value: 'Platform' },
+  });
   await ui.act(async () => {
     ui.fireEvent.click(rendered.getByRole('button', { name: 'Create team' }));
   });
@@ -749,6 +754,11 @@ test('group creation replaces a cancelled foreground catalog load without repeat
       forces.push(force);
       return coordinator.refresh(force);
     },
+  });
+  // The name field starts empty, so the team is named by being typed rather
+  // than by arriving prefilled.
+  ui.fireEvent.change(rendered.getByLabelText('Name'), {
+    target: { value: 'Platform' },
   });
   await ui.act(async () => {
     ui.fireEvent.click(rendered.getByRole('button', { name: 'Create team' }));

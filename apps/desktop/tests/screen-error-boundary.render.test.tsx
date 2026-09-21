@@ -154,8 +154,8 @@ test('the boundary key identifies screens and page identity includes route field
       { kind: 'devices', section: 'macs', store: 'acct:a' },
     ],
     [
-      { kind: 'people', store: 'acct:a' },
-      { kind: 'people', store: 'acct:b' },
+      { kind: 'settings', section: 'account', store: 'acct:a' },
+      { kind: 'settings', section: 'account', store: 'acct:b' },
     ],
     [
       { kind: 'teams', store: 'acct:a' },

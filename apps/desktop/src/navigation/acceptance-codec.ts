@@ -17,8 +17,9 @@ const STATE_ALIASES: Readonly<Record<string, Location>> = {
   household: { kind: 'store', ref: 'team:household' },
   group: { kind: 'store', ref: 'team:household' },
   homelab: { kind: 'store', ref: 'team:homelab' },
-  // `people` is the People tab, decoded above; the mock's People *tab of a
-  // group* is `group-people`, alongside `party` and `federation`.
+  // `people` is the former Account tab, now Settings › Account, aliased above;
+  // the mock's People *tab of a group* is `group-people`, alongside `party`
+  // and `federation`.
   'group-people': { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
   // Engineering's server offers no chat, so its Channels tab is the reason
   // rather than the tab: the scene opens on the group that has channels.

@@ -5,18 +5,21 @@ import {
   workflowMessage,
 } from '../model/workflow-availability';
 /**
- * The Settings tab: a sub-navigation of three pages, held on screen beside
+ * The Settings tab: a sub-navigation of four pages, held on screen beside
  * whichever one is open.
  *
- * What is left once Account holds the accounts, Devices holds the keys and
- * Teams holds the groups, in three pages. Servers: the servers this Mac talks
- * to, each with its own page, where its security keys are managed.
+ * Account, the first page and the one the tab opens on, is one account's
+ * profile: the account the address's `store` names. Servers: the servers this
+ * Mac talks to, each with its own page, where its security keys are managed.
  * Preferences contains account passphrases and local desktop alert settings.
  * Device contains the application version and lock, the agent and its socket,
  * local FOKS data operations, and the device-wide reset. A `section=` address
- * opens its
- * page; `profile=` opens a server's own page, which is the Servers page's, so
- * it carries `section: 'servers'` with it.
+ * opens its page; `profile=` opens a server's own page, which is the Servers
+ * page's, so it carries `section: 'servers'` with it.
+ *
+ * Account draws its own header — the account's mark, username and server —
+ * and its own tab panel, and owns its sheets. The other three share the
+ * header and panel drawn here.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -42,9 +45,9 @@ import {
   tabPanelId,
 } from '../components';
 import {
-  DEFAULT_SETTINGS_SECTION,
   SETTINGS_SECTIONS,
   SETTINGS_SECTION_LABEL,
+  settingsSectionOf,
 } from '../location';
 import type { Location, NavigateOptions, SettingsSection } from '../location';
 import { useSheetGuard } from '../navigation-guard';
@@ -69,9 +72,9 @@ import type { MutationFailureHandler } from '../mutation-recovery';
 import { agentLifecycleLabel, type AgentLifecycle } from '../agent-lifecycle';
 import { NotificationSettings } from '../chat/notification-provider';
 import { ServersSection } from './servers-screen';
+import { AccountSection } from './account-section';
 import { AccountMark } from './account-switcher';
 import { PassphraseSheet } from './device-sheets';
-import type { PassphraseMode } from './device-sheets';
 
 export interface SettingsScreenProps {
   snapshot: AgentSnapshot;
@@ -113,16 +116,13 @@ export function SettingsScreen({
   const toasts = useToast();
   const stores = accountStores(snapshot);
   const [sheet, setSheet] = useState<Sheet>(null);
-  const [passphrase, setPassphrase] = useState<{
-    store: AccountStore;
-    mode: PassphraseMode;
-  } | null>(null);
+  const [passphrase, setPassphrase] = useState<AccountStore | null>(null);
   const repository = useMetadataRepository(bridge);
   const { data: appInfo } = useMetadataQuery(appInfoQuery(repository, bridge), {
     onError,
   });
 
-  const section: SettingsSection = location.section ?? DEFAULT_SETTINGS_SECTION;
+  const section: SettingsSection = settingsSectionOf(location);
 
   const serversSection = (
     <ServersSection
@@ -138,14 +138,14 @@ export function SettingsScreen({
   );
 
   const page: ReactNode =
-    section === 'servers' ? (
+    section === 'account' ? null : section === 'servers' ? (
       serversSection
     ) : section === 'preferences' ? (
       <PreferencesSection
         snapshot={snapshot}
         stores={stores}
         onPassphrase={(store) => {
-          setPassphrase({ store, mode: 'change' });
+          setPassphrase(store);
           setSheet('passphrase');
         }}
       />
@@ -192,47 +192,65 @@ export function SettingsScreen({
         />
       </nav>
       <div className="subnav-page">
-        <PageHeader
-          ruled
-          title={SETTINGS_SECTION_LABEL[section]}
-          // A server's own page is the Servers page with one server open, so
-          // the way back out of it belongs in that page's header.
-          action={
-            section === 'servers' && location.profile ? (
-              <Button
-                icon="back"
-                onClick={() =>
-                  onNavigate(
-                    {
-                      kind: 'settings',
-                      ...(location.store ? { store: location.store } : {}),
-                      section: 'servers',
-                    },
-                    { replace: true },
-                  )
-                }
-              >
-                All servers
-              </Button>
-            ) : null
-          }
-        />
-        {/* Fixed IDs associate each tab button with its tabpanel. */}
-        <div
-          className="body"
-          role="tabpanel"
-          id={tabPanelId(SETTINGS_TABS, section)}
-          aria-labelledby={tabId(SETTINGS_TABS, section)}
-        >
-          <div className="settings-main">{page}</div>
-        </div>
+        {section === 'account' ? (
+          <AccountSection
+            snapshot={snapshot}
+            bridge={bridge}
+            location={location}
+            panel={{
+              id: tabPanelId(SETTINGS_TABS, section),
+              labelledBy: tabId(SETTINGS_TABS, section),
+            }}
+            onNavigate={onNavigate}
+            onRefresh={onRefresh}
+            onRefreshSnapshot={onRefreshSnapshot}
+            onError={onError}
+            onMutationError={onMutationError}
+          />
+        ) : (
+          <>
+            <PageHeader
+              ruled
+              title={SETTINGS_SECTION_LABEL[section]}
+              // A server's own page is the Servers page with one server open,
+              // so the way back out of it belongs in that page's header.
+              action={
+                section === 'servers' && location.profile ? (
+                  <Button
+                    icon="back"
+                    onClick={() =>
+                      onNavigate(
+                        {
+                          kind: 'settings',
+                          ...(location.store ? { store: location.store } : {}),
+                          section: 'servers',
+                        },
+                        { replace: true },
+                      )
+                    }
+                  >
+                    All servers
+                  </Button>
+                ) : null
+              }
+            />
+            {/* Fixed IDs associate each tab button with its tabpanel. */}
+            <div
+              className="body"
+              role="tabpanel"
+              id={tabPanelId(SETTINGS_TABS, section)}
+              aria-labelledby={tabId(SETTINGS_TABS, section)}
+            >
+              <div className="settings-main">{page}</div>
+            </div>
+          </>
+        )}
       </div>
       {sheet === 'passphrase' && passphrase ? (
         <WorkflowProvider snapshot={snapshot}>
           <PassphraseSheet
             bridge={bridge}
-            store={passphrase.store}
-            initialMode={passphrase.mode}
+            store={passphrase}
             onClose={() => {
               setSheet(null);
               setPassphrase(null);
@@ -300,7 +318,7 @@ function PreferencesSection({
                     title={stopped.stopped ? stopped.reason : undefined}
                     onClick={() => onPassphrase(store)}
                   >
-                    Change passphrase…
+                    Passphrase…
                   </Button>
                 }
               >
@@ -326,11 +344,9 @@ function PreferencesSection({
           <InsetRow label="None">No accounts on this device.</InsetRow>
         )}
       </Inset>
-      {/* The passphrase sheet defaults to Change and provides Set and Verify
-          through the same segmented control. */}
-      <p className="fn">
-        Set, change or verify an account's passphrase on its server.
-      </p>
+      {/* The sheet reads the account's passphrase state and offers whichever
+          of set and change the server will accept. */}
+      <p className="fn">Set or change an account's passphrase on its server.</p>
       <SectionLabel>Desktop alerts</SectionLabel>
       <NotificationSettings />
       <SectionLabel>Appearance</SectionLabel>

@@ -44,8 +44,10 @@ export function GoProfileConnectSheet({
   const [selected, setSelected] = useState<GoProfileCandidate | null>(null);
   const [profileName, setProfileName] = useState('');
   const [server, setServer] = useState('');
-  const [alias, setAlias] = useState('personal');
-  const [deviceName, setDeviceName] = useState('FOKS Desktop');
+  // Suggestions, never values. Picking a candidate fills the alias in from
+  // what was discovered; until then the field is the reader's to write.
+  const [alias, setAlias] = useState('');
+  const [deviceName, setDeviceName] = useState('');
   const [phrase, setPhrase] = useState('');
   const [checked, setChecked] = useState<{ profile: string } | null>(null);
   const [method, setMethod] = useState<'pair' | 'copy'>('pair');
@@ -145,8 +147,8 @@ export function GoProfileConnectSheet({
   };
 
   const pair = async (resume: boolean): Promise<void> => {
-    if (!selected || !checked || !alias.trim() || !deviceName.trim()) return;
-    if (!resume && !phrase.trim()) return;
+    if (!selected || !checked || !alias.trim()) return;
+    if (!resume && (!deviceName.trim() || !phrase.trim())) return;
     const submitted = phrase;
     setPhrase('');
     setWork('pair');
@@ -252,7 +254,7 @@ export function GoProfileConnectSheet({
           ) : checked && method === 'pair' ? (
             <>
               <Button
-                disabled={busy || !alias.trim() || !deviceName.trim()}
+                disabled={busy || !alias.trim()}
                 onClick={() => void pair(true)}
               >
                 Resume pairing
@@ -379,12 +381,14 @@ export function GoProfileConnectSheet({
                   disabled={busy}
                   label="Account name"
                   value={alias}
+                  placeholder="personal"
                   onChange={setAlias}
                 />
                 <Field
                   disabled={busy}
                   label="Device name"
                   value={deviceName}
+                  placeholder="FOKS Desktop"
                   onChange={setDeviceName}
                 />
                 <Field

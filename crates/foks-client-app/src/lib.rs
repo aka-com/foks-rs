@@ -114,6 +114,10 @@ pub enum Error {
     InvalidKvPath(&'static str),
     #[error("FOKS KV item changed since it was read")]
     KvConflict,
+    /// The passphrase offered as the account's current one did not match, so
+    /// the rotation it was guarding was never submitted.
+    #[error("FOKS current passphrase is not correct")]
+    CurrentPassphraseRejected,
     #[error("FOKS application configuration is invalid: {0}")]
     InvalidConfig(&'static str),
     #[error("FOKS client failed: {0}")]
@@ -249,7 +253,8 @@ mod team;
 pub use account::{
     derive_mutation_key, derive_vault_key, AccountVault, BackupEnrollmentReport,
     BackupEnrollmentSummary, BackupRevocationReport, DeviceProvisionReport, DeviceRevocationReport,
-    DeviceSummary, KexAcceptanceInput, KexOfferReport, LoadedAccount, PassphraseReport, SyncReport,
+    DeviceSummary, KexAcceptanceInput, KexOfferReport, LoadedAccount, PassphraseReport,
+    PassphraseStatus, SyncReport,
 };
 use checkpoint::RollbackHostCheckpoint;
 #[cfg(test)]

@@ -398,7 +398,7 @@ test('a Mac with no account says so instead of listing an empty page', async () 
   await ui.act(async () => {
     ui.fireEvent.click(rendered.getByRole('button', { name: 'Open Account' }));
   });
-  assert.deepEqual(chosen.at(-1), { kind: 'people' });
+  assert.deepEqual(chosen.at(-1), { kind: 'settings', section: 'account' });
 });
 
 test('a Devices address written before the page was one lands on the one list', async () => {
@@ -1122,7 +1122,7 @@ test('PIN status on a key’s own page acts on that key, not on card or list ord
     }),
   });
   ui.fireEvent.click(
-    rendered.getByRole('button', { name: 'Refresh connected keys' }),
+    rendered.getByRole('button', { name: 'Refresh security keys' }),
   );
   const pinStatus = await rendered.findByRole('button', {
     name: 'PIN status',

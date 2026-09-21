@@ -98,7 +98,7 @@ const FIXTURE_SCENE_NAMES = [
 
 const PUBLIC_ALIASES: Record<string, Location> = {
   all: { kind: 'all' },
-  alerts: { kind: 'people' },
+  alerts: { kind: 'settings', section: 'account' },
   join: { kind: 'teams' },
   groups: { kind: 'teams' },
   create: { kind: 'teams' },
@@ -110,7 +110,8 @@ const PUBLIC_ALIASES: Record<string, Location> = {
   'settings-phrase': { kind: 'devices', section: 'macs' },
   'settings-keys': { kind: 'devices', section: 'keys' },
   'settings-enrol': { kind: 'devices', section: 'keys' },
-  'settings-account': { kind: 'people' },
+  'settings-account': { kind: 'settings', section: 'account' },
+  people: { kind: 'settings', section: 'account' },
   'settings-agent': { kind: 'settings', section: 'mac' },
   'settings-about': { kind: 'settings', section: 'mac' },
 };
@@ -254,7 +255,7 @@ test('canonical production routes round-trip opaque store references and explici
     { kind: 'store', ref: TEAM },
     { kind: 'group-settings', ref: TEAM, tab: 'channels' },
     { kind: 'group-settings', ref: TEAM, tab: 'requests' },
-    { kind: 'people', store: ACCOUNT },
+    { kind: 'settings', section: 'account', store: ACCOUNT },
     { kind: 'teams', store: ACCOUNT },
     { kind: 'chat' },
     { kind: 'chat', ref: TEAM, channel: CHANNEL },
@@ -265,6 +266,7 @@ test('canonical production routes round-trip opaque store references and explici
       device: 'yubi:primary key',
     },
     { kind: 'settings', store: ACCOUNT, section: 'servers', profile: 'remote' },
+    { kind: 'settings', store: ACCOUNT, profile: 'remote' },
     { kind: 'settings', store: ACCOUNT, section: 'preferences' },
     { kind: 'first-run', step: 'waiting', path: 'invited' },
     { kind: 'first-run', step: 'local', path: 'own' },
@@ -316,7 +318,7 @@ test('folded and retired settings sections remain production deep links', () => 
     phrase: { kind: 'devices', section: 'macs' },
     keys: { kind: 'devices', section: 'keys' },
     groups: { kind: 'teams' },
-    account: { kind: 'people' },
+    account: { kind: 'settings', section: 'account' },
   };
   for (const [section, location] of Object.entries(sections)) {
     const query = search('settings', {

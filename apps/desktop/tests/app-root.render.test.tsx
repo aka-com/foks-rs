@@ -58,7 +58,7 @@ test('the window is the rail and the content column, with no title bar', () => {
   assert.equal(document.querySelector('.side .appname'), null);
 });
 
-test('the rail draws the six tabs, the unread badge and the Settings dot', async () => {
+test('the rail draws the five tabs, the unread badge and the Settings dot', async () => {
   const tabs = [
     ...document.querySelectorAll<HTMLButtonElement>(
       '.side.rail .rail-tabs .nav',
@@ -66,7 +66,7 @@ test('the rail draws the six tabs, the unread badge and the Settings dot', async
   ];
   assert.deepEqual(
     tabs.map((tab) => tab.querySelector('.t')?.textContent),
-    ['Files', 'Chat', 'Teams', 'Devices', 'Account', 'Settings'],
+    ['Files', 'Chat', 'Teams', 'Devices', 'Settings'],
   );
   // The fixture's three notifications each already have a home of their own —
   // Acme's lapsed check-in and Partner's unverified trust show on Settings,
@@ -81,7 +81,7 @@ test('the rail draws the six tabs, the unread badge and the Settings dot', async
   // live once its lease is actually expired, which the running demo agent
   // has not made true here), so the Settings tab carries the amber dot for
   // Partner alone.
-  const settingsDot = tabs[5].querySelector('.rail-tail.dot');
+  const settingsDot = tabs[4].querySelector('.rail-tail.dot');
   assert.ok(settingsDot, 'the Settings tab carries its own dot');
   assert.ok(settingsDot.classList.contains('warn'));
   assert.equal(
@@ -345,11 +345,10 @@ test('Accounts, Devices and Settings draw no StoreRef', async () => {
     ].join(' ');
 
   for (const [name, heading, settled] of [
-    // Account's header names the account it is about, not the tab.
-    ['Account', 'satoshi', 'Switch account'],
     ['Devices', 'Devices', 'paper-backup'],
-    // Settings' sub-navigation opens on Servers, its landing page.
-    ['Settings', 'Servers', 'foks.example.net'],
+    // Settings' sub-navigation opens on Account, its landing page, whose
+    // header names the account it is about rather than the section.
+    ['Settings', 'satoshi', 'devices and keys'],
   ] as const) {
     testingLibrary.fireEvent.click(tab(name));
     const main = await testingLibrary.waitFor(() => {

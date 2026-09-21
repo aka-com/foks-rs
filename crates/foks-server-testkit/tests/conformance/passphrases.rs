@@ -203,3 +203,67 @@ pub(crate) fn signup_set_change_and_public_login_cover_the_passphrase_lifecycle(
         GenericLinkPayload::UserSettings(ref info) if info.generation == 3
     ));
 }
+
+/// The client reads which of enrollment and rotation the server will accept,
+/// and names a submission that lost that race rather than passing on the
+/// server's malformed-request status.
+#[test]
+pub(crate) fn passphrase_status_reports_enrollment_and_names_a_lost_race() {
+    let fixture = Fixture::start("passphrase-status");
+    let account = fixture
+        .client
+        .create_account(fixture.host(), &TestAccountSpec::new("statusphrase", 0xb1))
+        .unwrap();
+    assert_eq!(
+        fixture
+            .client
+            .foks()
+            .passphrase_status(fixture.host(), &account.credential)
+            .unwrap(),
+        None
+    );
+    let first = Passphrase::new("status passphrase one").unwrap();
+    fixture
+        .client
+        .foks()
+        .set_passphrase(fixture.host(), &account.credential, &first)
+        .unwrap();
+    assert_eq!(
+        fixture
+            .client
+            .foks()
+            .passphrase_status(fixture.host(), &account.credential)
+            .unwrap(),
+        Some(1)
+    );
+    // A second enrollment is what a frontend sends when the account gained a
+    // passphrase after the frontend read its state.
+    let raced = fixture
+        .client
+        .foks()
+        .set_passphrase(fixture.host(), &account.credential, &first);
+    assert!(
+        matches!(
+            raced,
+            Err(foks_client::Error::PassphraseConflict {
+                expected: None,
+                found: Some(1)
+            })
+        ),
+        "unexpected enrollment outcome: {raced:?}"
+    );
+    let second = Passphrase::new("status passphrase two").unwrap();
+    fixture
+        .client
+        .foks()
+        .change_passphrase(fixture.host(), &account.credential, &second)
+        .unwrap();
+    assert_eq!(
+        fixture
+            .client
+            .foks()
+            .passphrase_status(fixture.host(), &account.credential)
+            .unwrap(),
+        Some(2)
+    );
+}

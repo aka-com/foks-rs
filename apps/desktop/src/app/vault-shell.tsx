@@ -50,7 +50,7 @@ import {
   FirstRunChecklistStatus,
   FirstRunExperience,
 } from '../screens/first-run-screen';
-import { unroutedNotices } from '../screens/people-screen';
+import { unroutedNotices } from '../screens/account-section';
 import { listsItems } from '../screens/scope';
 import { teamRequestsBadge, useTeamRequestCounts } from '../operation-queries';
 import {
@@ -592,7 +592,6 @@ export function VaultShell({
                     commandError={commandError}
                     mutationError={mutationError}
                     onLock={onLock}
-                    lockFromMenu={lockFromMenu}
                     agentLifecycle={agentLifecycle}
                     recoverAgentReadiness={recoverAgentReadiness}
                     uploadDroppedFile={uploadDroppedFile}

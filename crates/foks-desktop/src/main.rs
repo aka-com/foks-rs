@@ -679,6 +679,7 @@ fn backend_call_for_command(command: Command) -> Result<BackendCall, Box<dyn std
         Command::PassphraseChange(arguments) => Operation::ChangePassphrase {
             profile: arguments.profile,
             alias: arguments.alias,
+            current: None,
             passphrase: read_confirmed_secret(
                 &arguments.passphrase_file,
                 &arguments.passphrase_confirmation_file,

@@ -193,12 +193,12 @@ test('first run draws no collapse toggle and never narrows the shell', async () 
   assert.equal(document.querySelector('.app.side-narrow'), null);
 });
 
-test('every tab draws a glyph, so all six survive the collapsed rail', async () => {
+test('every tab draws a glyph, so all five survive the collapsed rail', async () => {
   await shell();
   const tabs = [...document.querySelectorAll('.side.rail .rail-tabs .nav')];
   assert.deepEqual(
     tabs.map((tab) => tab.querySelector('.t')?.textContent),
-    ['Files', 'Chat', 'Teams', 'Devices', 'Account', 'Settings'],
+    ['Files', 'Chat', 'Teams', 'Devices', 'Settings'],
   );
   for (const tab of tabs)
     assert.ok(tab.querySelector('.ic'), `${tab.textContent} has a glyph`);

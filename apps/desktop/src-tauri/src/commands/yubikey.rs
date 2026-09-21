@@ -598,7 +598,7 @@ pub async fn create_yubi_account(
     {
         return Err(AgentError::new(
             "security-key-not-connected",
-            "The selected security key is not connected. Refresh connected keys and try again.",
+            "The selected security key is not connected. Refresh security keys and try again.",
             false,
         ));
     }
@@ -717,7 +717,7 @@ pub async fn provision_yubi_device(
     {
         return Err(AgentError::new(
             "security-key-not-connected",
-            "The selected security key is not connected. Refresh connected keys and try again.",
+            "The selected security key is not connected. Refresh security keys and try again.",
             false,
         ));
     }

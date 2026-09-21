@@ -670,7 +670,7 @@ details.dd li b{color:var(--ink-2)}
 .vis{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:8px;font-size:12px;color:var(--ink-2)}
 .sheet .visibility-inset{margin-top:10px}
 /* Stepper value */
-.vis-value{min-width:96px;text-align:center;font-size:12px;font-weight:600;color:var(--ink-2)}
+.vis-value{min-width:96px;margin:0 10px;text-align:center;font-size:12px;font-weight:600;color:var(--ink-2)}
 .hint,.sheet .hint{font-size:12px;color:var(--muted);margin:8px 2px 0;line-height:1.45}
 
 /* Server settings section */
@@ -839,7 +839,6 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 /* Collapsed rail nav overrides */
 .side.rail.is-narrow .nav{justify-content:center;padding-left:0;padding-right:0;gap:0;border-right:3px solid transparent}
 .side.rail.is-narrow .attn{left:32px}
-.account-switch{flex:none}
 .side.rail.is-narrow .who .avatar{transform:translateY(2px)}
 .side.rail .traffic{position:relative}
 .rail-back{position:absolute;right:8px;top:calc(50% + 4px);transform:translateY(-50%);display:grid;place-items:center;width:24px;height:24px;border-radius:5px;color:var(--rail-ink);-webkit-app-region:no-drag}

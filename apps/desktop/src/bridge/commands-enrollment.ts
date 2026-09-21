@@ -9,6 +9,7 @@ import {
   decodeGoProfileDiscovery,
   decodePairingOffer,
   decodePassphraseReport,
+  decodePassphraseStatus,
   decodePendingOperations,
   decodeResetPreview,
 } from './enrollment';
@@ -44,6 +45,7 @@ export const enrollmentCommands: Pick<
   | 'setAccountPassphrase'
   | 'changeAccountPassphrase'
   | 'verifyAccountPassphrase'
+  | 'accountPassphraseStatus'
   | 'describeReset'
   | 'resetServer'
 > = {
@@ -236,10 +238,15 @@ export const enrollmentCommands: Pick<
       { accountStoreId, passphrase, confirmation },
       decodePassphraseReport,
     ),
-  changeAccountPassphrase: (accountStoreId, passphrase, confirmation) =>
+  changeAccountPassphrase: (
+    accountStoreId,
+    current,
+    passphrase,
+    confirmation,
+  ) =>
     checkedMutation(
       'change_account_passphrase',
-      { accountStoreId, passphrase, confirmation },
+      { accountStoreId, current, passphrase, confirmation },
       decodePassphraseReport,
     ),
   verifyAccountPassphrase: (accountStoreId, passphrase) =>
@@ -247,6 +254,12 @@ export const enrollmentCommands: Pick<
       'verify_account_passphrase',
       { accountStoreId, passphrase },
       decodePassphraseReport,
+    ),
+  accountPassphraseStatus: (accountStoreId) =>
+    checked(
+      'account_passphrase_status',
+      { accountStoreId },
+      decodePassphraseStatus,
     ),
   describeReset: (profile) =>
     checked('describe_reset', { profile }, decodeResetPreview),

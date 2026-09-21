@@ -549,7 +549,9 @@ function FirstRunSession({
   } = accountOperations;
 
   useEffect(() => {
-    const hasUserName = Boolean(checkpoint.account?.username || facts?.username);
+    const hasUserName = Boolean(
+      checkpoint.account?.username || facts?.username,
+    );
     const hasDeviceName = Boolean(
       checkpoint.account?.deviceName || facts?.deviceName,
     );
@@ -1709,7 +1711,7 @@ function FirstRunSession({
               <b>Start over</b>
               <span>
                 Starting over won’t delete any account already created on the
-                server. You can find existing accounts on the Account tab.
+                server. You can find existing accounts under Settings › Account.
               </span>
             </div>
             <Button variant="danger" onClick={discardProvisioning}>

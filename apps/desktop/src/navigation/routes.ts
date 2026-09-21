@@ -1,5 +1,19 @@
 import type { AccountStore, Store, StoreRef } from '../model/types';
-import type { Location, RailTab } from './types';
+import { DEFAULT_SETTINGS_SECTION } from './types';
+import type { Location, RailTab, SettingsSection } from './types';
+
+/**
+ * The Settings page an address opens. An address that names a section opens
+ * it; one that names a server (`profile`) and no section is that server's
+ * own page, which is the Servers page's; any other opens the sub-navigation's
+ * first page.
+ */
+export function settingsSectionOf(
+  location: Extract<Location, { kind: 'settings' }>,
+): SettingsSection {
+  if (location.section) return location.section;
+  return location.profile ? 'servers' : DEFAULT_SETTINGS_SECTION;
+}
 
 /** Resolve the account through which a page's object is accessed. */
 export function accountAtLocation(
@@ -31,8 +45,6 @@ export function accountAtLocation(
 /** The rail tab that owns a location, or `null` for first run. */
 export function railTabOf(location: Location): RailTab | null {
   switch (location.kind) {
-    case 'people':
-      return 'people';
     case 'chat':
       return 'chat';
     case 'files':
@@ -56,7 +68,7 @@ export function railTabOf(location: Location): RailTab | null {
  *
  * Only an address that opens something *inside* a tab has a parent: a store
  * page under Files, a group page under Teams, a section or a device page under
- * Settings and Devices. The `store` parameter that People, Teams, Devices and
+ * Settings and Devices. The `store` parameter that Teams, Devices and
  * Settings carry names the account the page acts as — every address of those
  * tabs carries one — so it never makes a page below the tab's root. A chat
  * channel returns to its team's inbox, which has no parent.
@@ -108,7 +120,6 @@ export function sameLocation(a: Location, b: Location): boolean {
     return a.ref === b.ref && a.channel === b.channel;
   if (a.kind === 'group-settings' && b.kind === 'group-settings')
     return a.ref === b.ref && a.tab === b.tab;
-  if (a.kind === 'people' && b.kind === 'people') return a.store === b.store;
   if (a.kind === 'teams' && b.kind === 'teams') return a.store === b.store;
   if (a.kind === 'devices' && b.kind === 'devices')
     return (

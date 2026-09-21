@@ -1970,6 +1970,24 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
                     "the reset preview changed; review it again before retrying",
                 );
             }
+            foks_client_app::Error::CurrentPassphraseRejected => {
+                return Response::error(
+                    id,
+                    ErrorCode::CurrentPassphraseRejected,
+                    "that current passphrase is not correct; nothing was changed",
+                );
+            }
+            foks_client_app::Error::Client(foks_client::Error::PassphraseConflict { .. }) => {
+                return Response::error(
+                    id,
+                    // The generation moved, which covers another device's
+                    // change and this one's own submission landing after the
+                    // connection dropped. Neither is named here, because the
+                    // observation cannot tell them apart.
+                    ErrorCode::Conflict,
+                    "the account's passphrase changed since this was prepared; refresh before retrying",
+                );
+            }
             _ => {}
         }
     }
@@ -4113,16 +4131,31 @@ fn dispatch_result_inner(
                 )?)?)
             })
         }
+        Operation::PassphraseStatus { profile, alias } => {
+            let session =
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                Ok(serde_json::to_value(
+                    session.passphrase_status(&alias, vault)?,
+                )?)
+            })
+        }
         Operation::ChangePassphrase {
             profile,
             alias,
+            current,
             passphrase,
         } => {
             let session =
                 read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
+                let current = current
+                    .as_ref()
+                    .map(|current| Passphrase::new(current.expose()))
+                    .transpose()?;
                 Ok(serde_json::to_value(session.change_passphrase(
                     &alias,
+                    current,
                     Passphrase::new(passphrase.expose())?,
                     vault,
                 )?)?)
@@ -7258,6 +7291,9 @@ mod tests {
                 Operation::ChangePassphrase {
                     profile: "local".to_owned(),
                     alias: "personal".to_owned(),
+                    // The rotation is guarded by the passphrase set above, so
+                    // this also covers the check the agent runs before it.
+                    current: Some(foks_agent_proto::SecretString::new("agent passphrase one")),
                     passphrase: foks_agent_proto::SecretString::new("agent passphrase two"),
                 },
             ),

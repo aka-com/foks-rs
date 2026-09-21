@@ -100,9 +100,10 @@ type Sheet = GroupSheetKind | null;
 const VIS_MIN = -32768;
 const VIS_MAX = 32767;
 /**
- * What the two typed fields of the group sheets are drawn with. A field still
- * reading its suggestion has not been typed into, so nothing is asked about
- * it when the reader leaves.
+ * What the two typed fields of the group sheets hint at. The suggestion is a
+ * placeholder, never a value: an empty field has not been typed into, so
+ * nothing is asked about it when the reader leaves, and nothing is submitted
+ * that the reader did not write.
  */
 const SUGGESTED_MEMBER = 'jules.park';
 const SUGGESTED_GROUP = 'Platform';
@@ -1296,10 +1297,7 @@ export function GroupSheet({
   ) => Promise<void>;
   onMutationError: MutationFailureHandler;
 }): ReactNode {
-  const [username, setUsername] = useTabSheetState(
-    'group.username',
-    SUGGESTED_MEMBER,
-  );
+  const [username, setUsername] = useTabSheetState('group.username', '');
   const [visibility, setVisibility] = useTabSheetState('group.visibility', 0);
   const callerParty = partiesOf(snapshot, store.id).find(
     (candidate) => candidate.label === 'you',
@@ -1310,7 +1308,7 @@ export function GroupSheet({
     visibility: 0,
   });
   const [busy, setBusy] = useState(false);
-  const [name, setName] = useTabSheetState('group.name', SUGGESTED_GROUP);
+  const [name, setName] = useTabSheetState('group.name', '');
   const [createKind, setCreateKind] = useTabSheetState<'named' | 'adhoc'>(
     'group.createKind',
     'named',
@@ -1422,25 +1420,25 @@ export function GroupSheet({
   useSheetGuard(
     busy
       ? null
-      : sheet === 'add' && username.trim() && username !== SUGGESTED_MEMBER
+      : sheet === 'add' && username.trim()
         ? {
             verdict: 'prompt',
             title: 'Discard this member?',
             body: `${username.trim()} has not been added to ${store.name}.`,
             confirm: 'Discard',
             onConfirm: () => {
-              setUsername(SUGGESTED_MEMBER);
+              setUsername('');
               onClose();
             },
           }
-        : sheet === 'create' && name.trim() && name !== SUGGESTED_GROUP
+        : sheet === 'create' && name.trim()
           ? {
               verdict: 'prompt',
               title: 'Discard this team?',
               body: `${name.trim()} has not been created.`,
               confirm: 'Discard',
               onConfirm: () => {
-                setName(SUGGESTED_GROUP);
+                setName('');
                 onClose();
               },
             }
@@ -1645,6 +1643,7 @@ export function GroupSheet({
               <Field
                 label="Username"
                 value={username}
+                placeholder={SUGGESTED_MEMBER}
                 // The agent's refusal was of the username that was sent, so a
                 // different one is not refused yet: the sentence goes with it.
                 onChange={(next) => {
@@ -1652,8 +1651,10 @@ export function GroupSheet({
                   setRefused('');
                 }}
               />
+              {/* The server is fixed by the team, not chosen here, so the
+                  value reads as stated rather than as an editable field. */}
               <InsetRow label="Server" action={<Chip>this team’s server</Chip>}>
-                {serverName}
+                <span className="dim">{serverName}</span>
               </InsetRow>
             </Inset>
             {addRefusal ? (
@@ -1733,12 +1734,7 @@ export function GroupSheet({
                       </Button>
                     </>
                   }
-                >
-                  <span className="hint">
-                    Grants access to items matching or exceeding this visibility
-                    level. (Default: 0)
-                  </span>
-                </InsetRow>
+                />
               </Inset>
             ) : null}
           </>
@@ -1868,15 +1864,14 @@ export function GroupSheet({
                 </RadioGroup>
               ) : (
                 <InsetRow label="Team">
-                  <span className="dim">No eligible remote team</span>
+                  <span className="dim">No eligible remote teams</span>
                 </InsetRow>
               )}
             </Inset>
-            <SectionLabel>Role for its members</SectionLabel>
+            <SectionLabel>Role</SectionLabel>
             <Inset>
               <InsetRow label="Role">
                 <Chip>Member</Chip>
-                <span className="dim">for every member</span>
               </InsetRow>
               <InsetRow
                 label="Visibility"
@@ -1905,17 +1900,17 @@ export function GroupSheet({
                 }
               />
             </Inset>
-            <p className="fn">
-              If the remote server becomes unreachable, the federated team
-              status changes to Inactive and its members cannot access items in
-              this team until connectivity is restored.
-            </p>
           </>
         ) : null}
         {sheet === 'create' ? (
           <>
             <Inset>
-              <Field label="Name" value={name} onChange={setName} />
+              <Field
+                label="Name"
+                value={name}
+                placeholder={SUGGESTED_GROUP}
+                onChange={setName}
+              />
             </Inset>
             <p className="fn">
               {createKind === 'named' ? (

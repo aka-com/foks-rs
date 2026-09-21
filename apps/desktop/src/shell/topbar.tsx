@@ -22,17 +22,16 @@ import { channelLabel } from '../chat/presentation';
 import { serverLocalAlias, storeOf } from '../model';
 import type { AgentSnapshot, DeviceLabel } from '../model';
 import {
-  DEFAULT_SETTINGS_SECTION,
   SETTINGS_SECTION_LABEL,
   parentLocation,
   railTabOf,
+  settingsSectionOf,
 } from '../location';
 import type { Location, RailTab } from '../location';
 import { filesFolderCrumb } from '../screens/scope';
 
 /** The word each tab is called, as the rail labels it. */
 const TAB_LABEL: Readonly<Record<RailTab, string>> = {
-  people: 'Account',
   chat: 'Chat',
   files: 'Files',
   teams: 'Teams',
@@ -100,7 +99,7 @@ export function crumbTrail(
     case 'settings': {
       // The sub-navigation always has one page open, so the crumb always
       // names one — the address's own section, or the page it defaults to.
-      const section = location.section ?? DEFAULT_SETTINGS_SECTION;
+      const section = settingsSectionOf(location);
       trail.push(SETTINGS_SECTION_LABEL[section]);
       if (section === 'servers' && location.profile)
         trail.push(

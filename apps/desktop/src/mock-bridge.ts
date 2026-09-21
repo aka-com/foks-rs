@@ -1389,6 +1389,10 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       stretchVersion: 'v1' as const,
       verified: true as const,
     }),
+    accountPassphraseStatus: async () => ({
+      configured: true,
+      generation: 1,
+    }),
     describeReset: async (profile) => {
       const token = `reset-${profile}-${Date.now()}`;
       resetTokens.add(token);

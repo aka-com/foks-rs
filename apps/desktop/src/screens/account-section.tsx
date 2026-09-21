@@ -7,19 +7,24 @@ import { LocalAliasPanel } from '../components/local-alias-panel';
 import { localAliasOf } from '../model';
 import { useTabSheetState } from '../navigation-guard';
 /**
- * The Account tab: one account's profile, the account the rail header names.
+ * Settings › Account: one account's profile, the account the address's
+ * `store` names and the rail header shows.
  *
- * The account is the page's header: its mark, its username as the title, and
- * the server, the server's trust state and the local alias on the line under
- * it — the shape the team page already uses for a team. "Switch account" is
- * the header's action, and opens the same menu the rail header's avatar
- * opens; there is exactly one account switcher, not a second one repeating
- * it. The page body displays primary account properties with management links:
- * Username, Shown as (the local alias), Server, Devices, and Teams. Secondary
- * integrations (Bot accounts, web administration, SSO, and FOKS CLI import)
- * render below the primary properties. Alerts without a navigable destination,
- * such as catalog read failures, render above the details list; entity-specific
- * alerts render in their corresponding Settings or Teams views.
+ * The account is the section's header: its mark, its username as the title,
+ * and the server and the server's trust state on the line under it — the
+ * shape the team page already uses for a team. The header has no switcher:
+ * the rail header's avatar menu is the application's only account switcher,
+ * and it sits beside this section. The body displays primary account
+ * properties with management links: Username, Shown as (the local alias),
+ * Server, Devices, and Teams. Secondary integrations (Bot accounts, web
+ * administration, SSO, and FOKS CLI import) render below the primary
+ * properties. Alerts without a navigable destination, such as catalog read
+ * failures, render above the details list; entity-specific alerts render in
+ * their corresponding Settings or Teams views.
+ *
+ * The section draws its own header and tab panel, because its header is an
+ * identity rather than the section's name, which is what the other sections'
+ * shared header draws.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -28,7 +33,15 @@ import { AdminPanel } from '../components/admin-panel';
 import { BotPanel } from '../components/bot-panel';
 import { RenamePanel } from '../components/rename-panel';
 import { SsoPanel } from '../components/sso-panel';
-import { Band, Button, Chip, Inset, InsetRow, Notice } from '../components';
+import {
+  Band,
+  Button,
+  Chip,
+  Icon,
+  Inset,
+  InsetRow,
+  Notice,
+} from '../components';
 import type { Bridge } from '../bridge';
 import {
   accountStopped,
@@ -52,13 +65,12 @@ import type { Location, NavigateOptions } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { PageHeader } from '../shell/page-header';
 import { AccountMark } from './account-switcher';
-import { AccountHeader } from '../shell/sidebar';
 import { deviceEntries } from './device-model';
 import type { DeviceLists } from './device-model';
 import { GoProfileConnectSheet } from './go-profile-connect';
 
 const ACTION_UNAVAILABLE =
-  'Resolve this in Settings › Servers, or in the team’s settings.';
+  'Resolve this under Servers, or in the team’s settings.';
 
 /** The account panels reached from a row on this page. */
 type AccountSheet =
@@ -158,7 +170,7 @@ function destinationOf(
       : undefined) ?? serverNamedByReason(snapshot, note.id);
   if (namedServer)
     return {
-      label: 'Open the server',
+      label: 'Open server',
       where: `Settings › Servers › ${serverDisplayName(namedServer)}`,
       location: {
         kind: 'settings',
@@ -292,10 +304,16 @@ function teamsOnAccount(
   );
 }
 
-export interface PeopleScreenProps {
+export interface AccountSectionProps {
   snapshot: AgentSnapshot;
   bridge: Bridge;
-  location: Extract<Location, { kind: 'people' }>;
+  /** The Settings address this section is open at; `store` is the account. */
+  location: Extract<Location, { kind: 'settings' }>;
+  /**
+   * The id the sub-navigation's Account tab points at, and the tab's own id,
+   * so the panel this section draws is the one the tab controls.
+   */
+  panel: { id: string; labelledBy: string };
   /**
    * `force` marks the replacement this page makes on its own behalf — the
    * default route resolving to an account's exact `StoreRef` — which is the
@@ -307,20 +325,19 @@ export interface PeopleScreenProps {
   onRefreshSnapshot: () => Promise<AgentSnapshot>;
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
-  onLock?: () => void;
 }
 
-export function PeopleScreen({
+export function AccountSection({
   snapshot,
   bridge,
   location,
+  panel,
   onNavigate,
   onRefresh,
   onRefreshSnapshot,
   onError,
   onMutationError,
-  onLock,
-}: PeopleScreenProps): ReactNode {
+}: AccountSectionProps): ReactNode {
   const stores = accountStores(snapshot);
   // Select by exact StoreRef: two servers may both hold an account aliased
   // `personal`, so an alias would not say which one an address means.
@@ -331,7 +348,7 @@ export function PeopleScreen({
   const unavailable = requested !== undefined && selected === undefined;
   const [sheet, setSheet] = useTabSheetState<
     AccountSheet | 'go-profile' | null
-  >('people.sheet', null, false);
+  >('settings.account.sheet', null, false);
   const [pairingProfile, setPairingProfile] = useState<Server | undefined>();
   // What this account holds: the keys are read here because the profile's
   // Devices row counts them, not because anything on this page acts on one.
@@ -390,7 +407,10 @@ export function PeopleScreen({
   // and active dialogs remain open.
   useEffect(() => {
     if (location.store || !selected) return;
-    onNavigate({ ...location, store: selected.id }, { force: true });
+    onNavigate(
+      { ...location, section: 'account', store: selected.id },
+      { force: true },
+    );
   }, [location, onNavigate, selected]);
 
   // Changing account identity resets input state; query data is selected by
@@ -403,6 +423,11 @@ export function PeopleScreen({
   // as the title, and the server on the line under it. The branches that name no account — an address
   // naming one this Mac no longer holds, or no account at all — have no
   // identity to state, so they keep the tab's own name as the title.
+  //
+  // Whether access is stopped is a fact about the header's subject rather than
+  // part of the account's name or of its server line, so it is the header's
+  // own right-hand mark: at the end of the row, centred against both lines,
+  // instead of trailing the server on the second one.
   const headerUsername = selected ? usernameOf(snapshot, selected) : undefined;
   const identity = selected
     ? {
@@ -410,14 +435,10 @@ export function PeopleScreen({
         mark: (
           <AccountMark name={headerUsername ?? selected.account} size="round" />
         ),
-        sub: (
-          <>
-            <span>{serverName(snapshot, selected)}</span>
-            {stopped.stopped ? (
-              <Chip tone="warn">{storeDescription(snapshot, selected)}</Chip>
-            ) : null}
-          </>
-        ),
+        sub: <span>{serverName(snapshot, selected)}</span>,
+        state: stopped.stopped ? (
+          <Chip tone="warn">{storeDescription(snapshot, selected)}</Chip>
+        ) : undefined,
       }
     : undefined;
 
@@ -439,20 +460,14 @@ export function PeopleScreen({
         title={identity?.title ?? 'Account'}
         mark={identity?.mark}
         sub={identity?.sub}
-        action={
-          selected ? (
-            <AccountHeader
-              compact
-              snapshot={snapshot}
-              location={location}
-              account={selected.id}
-              onNavigate={onNavigate}
-              onLock={onLock}
-            />
-          ) : undefined
-        }
+        action={identity?.state}
       />
-      <div className="body">
+      <div
+        className="body"
+        role="tabpanel"
+        id={panel.id}
+        aria-labelledby={panel.labelledBy}
+      >
         <div className="settings-main account-main">
           {snapshot.servers
             .filter((server) => server.accounts.length === 0)
@@ -473,7 +488,8 @@ export function PeopleScreen({
                     </Button>
                   }
                 >
-                  {serverDisplayName(server)} · Connected, not yet paired
+                  {serverDisplayName(server)}{' '}
+                  <span className="dim">Connected, not paired</span>
                 </InsetRow>
               </Inset>
             ))}
@@ -484,7 +500,11 @@ export function PeopleScreen({
                 stores={stores}
                 snapshot={snapshot}
                 onSelect={(store) =>
-                  onNavigate({ kind: 'people', store: store.id })
+                  onNavigate({
+                    kind: 'settings',
+                    section: 'account',
+                    store: store.id,
+                  })
                 }
                 onRefresh={() => void onRefreshSnapshot().catch(onError)}
               />
@@ -664,12 +684,11 @@ function AccountPanel({
                 })
               }
             >
-              Open the server…
+              Open server
             </Button>
           }
         >
-          Remote operations are unavailable until {serverName(snapshot, store)}{' '}
-          is checked. Local aliases can still be edited.
+          Remote operations are unavailable until a connection is reestablished.
         </Band>
       ) : null}
       {notices}
@@ -720,15 +739,27 @@ function AccountPanel({
                 })
               }
             >
-              Settings › Servers ›
+              Servers ›
             </Button>
           }
         >
-          {stopped.stopped
-            ? `${serverName(snapshot, store)} · ${storeDescription(snapshot, store)}`
-            : server?.trust.status === 'verified'
-              ? `${serverName(snapshot, store)} · verified`
-              : serverName(snapshot, store)}
+          {/* The server names itself; its state is a quieter second phrase
+              after it, not a clause of equal weight behind a middot. The two
+              share one element because this inset stacks its value's children,
+              and the state belongs on the name's own line. */}
+          <span>
+            {serverName(snapshot, store)}
+            {stopped.stopped ? (
+              <>
+                {' '}
+                <span className="dim">{storeDescription(snapshot, store)}</span>
+              </>
+            ) : server?.trust.status === 'verified' ? (
+              <span className="verified-mark" role="img" aria-label="Verified">
+                <Icon name="check-circle" />
+              </span>
+            ) : null}
+          </span>
         </InsetRow>
         <InsetRow
           label="Devices"

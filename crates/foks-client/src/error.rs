@@ -79,6 +79,17 @@ pub enum Error {
     InvalidUserId,
     #[error("FOKS credential binding failed: {0}")]
     CredentialBinding(&'static str),
+    /// The account's passphrase state moved between the point this update was
+    /// built against and the point the server serialized it, so the submission
+    /// applied to a generation that no longer exists. `expected` and `found`
+    /// are passphrase generations, `None` meaning no passphrase is configured.
+    #[error(
+        "FOKS passphrase generation changed on the server: expected {expected:?}, found {found:?}"
+    )]
+    PassphraseConflict {
+        expected: Option<u64>,
+        found: Option<u64>,
+    },
     #[error("FOKS pinned-host binding failed: {0}")]
     HostBinding(&'static str),
     #[error("FOKS federation discovery failed: {0}")]

@@ -66,7 +66,6 @@ export class LocationStore {
   ): { location: Location; saved?: LocationState } | null {
     if (railTabOf(this.current.location) === tab) return null;
     const defaults: Record<RailTab, Location> = {
-      people: { kind: 'people' },
       chat: chatTabLocation(),
       files: { kind: 'files' },
       teams: { kind: 'teams' },
@@ -85,7 +84,6 @@ export class LocationStore {
       location = tab === 'chat' ? { kind: 'chat' } : defaults[tab];
     }
     if (
-      location.kind === 'people' ||
       location.kind === 'teams' ||
       location.kind === 'devices' ||
       location.kind === 'settings'
@@ -181,8 +179,7 @@ export class LocationStore {
     const account = accountAtLocation(this.stores, location, this.getAccount());
     if (
       account &&
-      (location.kind === 'people' ||
-        location.kind === 'devices' ||
+      (location.kind === 'devices' ||
         location.kind === 'settings' ||
         location.kind === 'teams') &&
       !location.store

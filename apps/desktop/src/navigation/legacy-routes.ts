@@ -24,29 +24,38 @@ export const SETTINGS_SECTION_ALIASES: Readonly<
 };
 
 /**
+ * Settings › Account, where every former address for an account's own page
+ * lands: the Account tab (`state=people`), the Alerts page, and the accounts
+ * pane Settings once held (`settings-account`, `section=account`). The last
+ * of these needs no alias: `account` is a current section id, which
+ * `decodeLocation` reads through the sections list.
+ */
+export const ACCOUNT_SECTION: Location = {
+  kind: 'settings',
+  section: 'account',
+};
+
+/**
  * The tab a `section=` value written before the rail belongs to now. Recovery
- * devices, the backup phrase and security keys are Devices; Groups is Teams;
- * Accounts is People.
+ * devices, the backup phrase and security keys are Devices; Groups is Teams.
+ * `account` is a current section and needs no entry here.
  */
 export const RETIRED_SETTINGS_SECTIONS: Readonly<
   Record<
     string,
-    | { kind: 'devices'; section: DevicesSection }
-    | { kind: 'teams' }
-    | { kind: 'people' }
+    { kind: 'devices'; section: DevicesSection } | { kind: 'teams' }
   >
 > = {
   macs: { kind: 'devices', section: 'macs' },
   phrase: { kind: 'devices', section: 'macs' },
   keys: { kind: 'devices', section: 'keys' },
   groups: { kind: 'teams' },
-  account: { kind: 'people' },
 };
 
 export const PUBLIC_LOCATION_ALIASES: Readonly<Record<string, Location>> = {
   all: { kind: 'all' },
-  // The Alerts page is the top of People now.
-  alerts: { kind: 'people' },
+  // The Alerts page is the top of Settings › Account now.
+  alerts: ACCOUNT_SECTION,
   join: { kind: 'teams' },
   groups: { kind: 'teams' },
   create: { kind: 'teams' },
@@ -57,12 +66,14 @@ export const PUBLIC_LOCATION_ALIASES: Readonly<Record<string, Location>> = {
   'servers-list': { kind: 'settings', section: 'servers' },
   'servers-add': { kind: 'settings', section: 'servers' },
   // Recovery devices and security keys are the Devices tab; the accounts pane
-  // is the foot of People.
+  // is the Account section.
   'settings-macs': { kind: 'devices', section: 'macs' },
   'settings-phrase': { kind: 'devices', section: 'macs' },
   'settings-keys': { kind: 'devices', section: 'keys' },
   'settings-enrol': { kind: 'devices', section: 'keys' },
-  'settings-account': { kind: 'people' },
+  'settings-account': ACCOUNT_SECTION,
+  // The Account tab, before it became the first Settings section.
+  people: ACCOUNT_SECTION,
   // The agent and About content is the Device page.
   'settings-agent': { kind: 'settings', section: 'mac' },
   'settings-about': { kind: 'settings', section: 'mac' },
@@ -92,11 +103,7 @@ export function decodeLegacyLocation(
       ...(profile ? { profile } : {}),
     };
   }
-  if (
-    alias?.kind === 'devices' ||
-    alias?.kind === 'people' ||
-    alias?.kind === 'teams'
-  ) {
+  if (alias?.kind === 'devices' || alias?.kind === 'teams') {
     const store = params.get('store') ?? alias.store;
     // A device's own page is addressable under the old Devices names too.
     const device = alias.kind === 'devices' ? params.get('device') : null;

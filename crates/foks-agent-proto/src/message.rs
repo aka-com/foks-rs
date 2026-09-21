@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 28;
+pub const PROTOCOL_VERSION: u32 = 29;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -702,6 +702,13 @@ pub enum Operation {
         phrase: SecretString,
         device_name: String,
     },
+    /// Reports whether the account holds a passphrase on its server. Set and
+    /// change are accepted under mutually exclusive conditions, so a caller
+    /// that offers both reads this first to know which one applies.
+    PassphraseStatus {
+        profile: String,
+        alias: String,
+    },
     SetPassphrase {
         profile: String,
         alias: String,
@@ -710,6 +717,11 @@ pub enum Operation {
     ChangePassphrase {
         profile: String,
         alias: String,
+        /// Checked against the server before the rotation is submitted, and
+        /// the rotation is abandoned if it does not match. Omitted for the
+        /// device-authorized rotation that recovers a forgotten passphrase.
+        #[serde(default)]
+        current: Option<SecretString>,
         passphrase: SecretString,
     },
     VerifyPassphrase {
@@ -1105,6 +1117,7 @@ impl Operation {
             Self::RevokeOwnerBackup { .. } => "RevokeOwnerBackup",
             Self::RecoverOwnerAccount { .. } => "RecoverOwnerAccount",
             Self::ResumeOwnerRecovery { .. } => "ResumeOwnerRecovery",
+            Self::PassphraseStatus { .. } => "PassphraseStatus",
             Self::SetPassphrase { .. } => "SetPassphrase",
             Self::ChangePassphrase { .. } => "ChangePassphrase",
             Self::VerifyPassphrase { .. } => "VerifyPassphrase",
@@ -1234,6 +1247,7 @@ impl Operation {
                 | Self::ListDevices { .. }
                 | Self::ListBackupEnrollments { .. }
                 | Self::DescribeServerStatus { .. }
+                | Self::PassphraseStatus { .. }
                 | Self::VerifyPassphrase { .. }
                 | Self::ListYubiCards { .. }
                 | Self::ListYubiAccounts { .. }
@@ -1507,6 +1521,11 @@ impl std::fmt::Debug for Operation {
                 .field("phrase", &"<redacted>")
                 .field("device_name", device_name)
                 .finish(),
+            Self::PassphraseStatus { profile, alias } => formatter
+                .debug_struct("PassphraseStatus")
+                .field("profile", profile)
+                .field("alias", alias)
+                .finish(),
             Self::SetPassphrase { profile, alias, .. } => formatter
                 .debug_struct("SetPassphrase")
                 .field("profile", profile)
@@ -1517,6 +1536,7 @@ impl std::fmt::Debug for Operation {
                 .debug_struct("ChangePassphrase")
                 .field("profile", profile)
                 .field("alias", alias)
+                .field("current", &"<redacted>")
                 .field("passphrase", &"<redacted>")
                 .finish(),
             Self::VerifyPassphrase { profile, alias, .. } => formatter
@@ -2329,6 +2349,9 @@ pub enum ErrorCode {
     CatalogSnapshotChanged,
     UnsupportedSchema,
     Conflict,
+    /// The passphrase offered as an account's current one did not match, so
+    /// the change it guarded was not submitted.
+    CurrentPassphraseRejected,
     Busy,
     DeadlineExceeded,
     CapabilityDenied,

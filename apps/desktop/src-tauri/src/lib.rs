@@ -255,6 +255,7 @@ pub fn run() {
             commands::accounts::set_account_passphrase,
             commands::accounts::change_account_passphrase,
             commands::accounts::verify_account_passphrase,
+            commands::accounts::account_passphrase_status,
             commands::servers::describe_reset,
             commands::servers::reset_server,
             commands::application::app_info,

@@ -6,7 +6,7 @@ import { installDom } from './lib/dom-harness';
 import type { Bridge } from '../src/bridge';
 
 installDom({
-  url: 'http://localhost/?state=people',
+  url: 'http://localhost/?state=settings',
   body: '<div id="root"></div><div id="overlays"></div>',
   timers: true,
   act: true,
@@ -98,7 +98,7 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
   await navigate('Devices');
   assert.equal(calls.cards, 0);
   ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Refresh connected keys' }),
+    ui.screen.getByRole('button', { name: 'Refresh security keys' }),
   );
   await ui.waitFor(() => assert.equal(calls.cards, 1));
   assert.deepEqual(calls, { ...initial, cards: 1 });
@@ -106,11 +106,11 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
   await ui.act(async () => {
     releaseCard([]);
   });
-  await navigate('Account');
+  await navigate('Settings');
   await navigate('Devices');
   assert.equal(calls.cards, 1);
   ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Refresh connected keys' }),
+    ui.screen.getByRole('button', { name: 'Refresh security keys' }),
   );
   await ui.waitFor(() => assert.equal(calls.cards, 2));
   assert.equal(calls.devices, initial.devices);
@@ -148,7 +148,7 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
   assert.equal(calls.enrollments, initial.enrollments * 2);
   assert.equal(calls.cards, 2);
   ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Refresh connected keys' }),
+    ui.screen.getByRole('button', { name: 'Refresh security keys' }),
   );
   await ui.waitFor(() => {
     assert.equal(calls.cards, 3);
@@ -161,11 +161,17 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
   await ui.waitFor(() => assert.equal(calls.devices, initial.devices * 3));
   assert.equal(calls.cards, 3);
   ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Refresh connected keys' }),
+    ui.screen.getByRole('button', { name: 'Refresh security keys' }),
   );
   await ui.waitFor(() => {
     assert.equal(calls.cards, 4);
     assert.equal(pinStatus.hasAttribute('disabled'), true);
     assert.equal(pinStatus.getAttribute('title'), 'No security key connected.');
+    // A scan that finds nothing looks identical to one that changed nothing,
+    // so the empty result has to announce itself.
+    assert.equal(
+      document.body.textContent?.includes('No security keys found'),
+      true,
+    );
   });
 });

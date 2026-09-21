@@ -137,6 +137,13 @@ export interface PassphraseReport {
   verified: true;
 }
 
+/** Whether an account holds a passphrase on its server, and at which
+ * generation. `generation` is zero exactly when none is configured. */
+export interface PassphraseStatus {
+  configured: boolean;
+  generation: number;
+}
+
 export interface ResetPreview {
   profile: string;
   resumables: PendingOperation[];
@@ -381,6 +388,15 @@ export function decodeDeviceRemoval(value: unknown): {
     ),
   };
 }
+export function decodePassphraseStatus(value: unknown): PassphraseStatus {
+  const item = record(value, 'passphrase status');
+  const configured = item.configured === true;
+  const generation = integer(item.generation, 'passphraseStatus.generation');
+  if (configured === (generation === 0))
+    throw new Error('passphrase status is invalid');
+  return { configured, generation };
+}
+
 export function decodePassphraseReport(value: unknown): PassphraseReport {
   const item = record(value, 'passphrase response');
   if (item.stretchVersion !== 'v1' || item.verified !== true)

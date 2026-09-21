@@ -40,7 +40,7 @@ export function searchPlaceholder(title: string): string {
 export interface PageHeaderProps extends HeaderParts {
   /**
    * A mark drawn before the title, for a page that is about one subject rather
-   * than a list of them — the Account tab's own account.
+   * than a list of them — the Account section's own account.
    */
   mark?: ReactNode;
   /**

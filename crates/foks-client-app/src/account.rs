@@ -1023,15 +1023,59 @@ impl CheckedProfileSession<'_> {
         PassphraseReport::from_verified(metadata, verification)
     }
 
+    /// Reports whether this account has a passphrase on its server, and the
+    /// generation it sits at. Callers use this to choose between enrollment
+    /// and rotation, which the server accepts under mutually exclusive
+    /// conditions.
+    pub fn passphrase_status(
+        &self,
+        alias: &str,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<PassphraseStatus> {
+        self.profile.require(Capability::Passphrases)?;
+        let loaded = vault.account(alias)?;
+        let host = self.pinned_host()?;
+        let generation = self.client.passphrase_status(&host, &loaded.credential)?;
+        Ok(PassphraseStatus {
+            configured: generation.is_some(),
+            generation: generation.unwrap_or_default(),
+        })
+    }
+
+    /// Rotates the account's passphrase. `current`, when supplied, is checked
+    /// against the server first and the rotation is abandoned if it does not
+    /// match.
+    ///
+    /// The rotation itself is authorized by this device's owner PUK and never
+    /// needs `current`; passing `None` is the path that recovers an account
+    /// whose passphrase has been forgotten. A supplied `current` is a
+    /// confirmation step, not an authorization one, and it spends an attempt
+    /// against the server's bad-passphrase rate limit when it is wrong.
     pub fn change_passphrase(
         &self,
         alias: &str,
+        current: Option<Passphrase>,
         passphrase: Passphrase,
         vault: &mut AccountVault<'_>,
     ) -> Result<PassphraseReport> {
         self.profile.require(Capability::Passphrases)?;
         let loaded = vault.account(alias)?;
         let host = self.pinned_host()?;
+        if let Some(current) = current {
+            // A rejected check is the caller's own input and belongs on the
+            // field that carried it. Every other failure, the server's
+            // bad-passphrase rate limit included, stays as it arrived.
+            self.client
+                .verify_passphrase(&host, &loaded.credential, &current)
+                .map_err(|error| match &error {
+                    foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code, .. })
+                        if *code == foks_rpc::STATUS_BAD_PASSPHRASE_ERROR =>
+                    {
+                        Error::CurrentPassphraseRejected
+                    }
+                    _ => error.into(),
+                })?;
+        }
         let (metadata, verification) =
             self.client
                 .change_passphrase_verified(&host, &loaded.credential, &passphrase)?;
@@ -1063,6 +1107,15 @@ pub struct PassphraseReport {
     pub generation: u64,
     pub stretch_version: &'static str,
     pub verified: bool,
+}
+
+/// Whether an account holds a passphrase, and at which generation.
+/// `generation` is zero when none is configured; the server numbers a first
+/// enrollment 1.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct PassphraseStatus {
+    pub configured: bool,
+    pub generation: u64,
 }
 
 impl PassphraseReport {

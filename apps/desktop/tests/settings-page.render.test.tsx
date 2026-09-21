@@ -180,6 +180,7 @@ test('server statuses are shared rows: leaving Servers and returning does not re
   const repository = new MetadataRepository();
   let reads = 0;
   const rendered = await renderSettings(await fixture(), {
+    where: { section: 'servers' },
     repository,
     decorate: (bridge) => ({
       ...bridge,
@@ -198,7 +199,7 @@ test('server statuses are shared rows: leaving Servers and returning does not re
   // Away to Device and back: the rows are the repository's, still fresh.
   await rendered.show({ section: 'mac' });
   assert.ok(rendered.getByRole('button', { name: 'Reset this Mac…' }));
-  await rendered.show({});
+  await rendered.show({ section: 'servers' });
   await ui.waitFor(() =>
     assert.ok(rendered.getAllByText('foks.example.net').length),
   );
@@ -212,7 +213,7 @@ test('server statuses are shared rows: leaving Servers and returning does not re
   await ui.waitFor(() => assert.ok(reads > loaded));
 });
 
-test('the sub-navigation lists every section, and Servers opens first', async () => {
+test('the sub-navigation lists every section, and Account opens first', async () => {
   const rendered = await renderSettings(await fixture());
 
   const nav = rendered.getByRole('navigation', { name: 'Settings sections' });
@@ -220,17 +221,28 @@ test('the sub-navigation lists every section, and Servers opens first', async ()
     .within(nav)
     .getAllByRole('tab')
     .map((tab) => tab.textContent);
-  assert.deepEqual(tabs, ['Servers', 'Preferences', 'Device']);
+  assert.deepEqual(tabs, ['Account', 'Servers', 'Preferences', 'Device']);
+  const account = ui.within(nav).getByRole('tab', { name: 'Account' });
+  assert.equal(account.getAttribute('aria-selected'), 'true');
+  // Account is the sub-navigation's landing page. Its header names the
+  // account, not the section, and its body is the panel the tab controls.
+  assert.ok(rendered.getByRole('heading', { level: 1, name: 'satoshi' }));
+  const panel = rendered.getByRole('tabpanel');
+  assert.equal(panel.id, account.getAttribute('aria-controls'));
+  assert.ok(ui.within(panel).getByText('Username'));
+  assert.equal(rendered.queryByText('Add a server…'), null);
+});
+
+test('the Servers section is its list, with its own state chips', async () => {
+  const rendered = await renderSettings(await fixture(), {
+    where: { section: 'servers' },
+  });
   assert.equal(
-    ui
-      .within(nav)
+    rendered
       .getByRole('tab', { name: 'Servers' })
       .getAttribute('aria-selected'),
     'true',
   );
-  // Servers is the sub-navigation's landing page: its list, with its own
-  // state chips and Add a server…, not a section scrolled past on the way to
-  // it.
   assert.ok(rendered.getByRole('heading', { level: 1, name: 'Servers' }));
   assert.ok(rendered.getByText('foks.example.net'));
   assert.ok(rendered.getByRole('button', { name: 'Add a server…' }));
@@ -239,14 +251,15 @@ test('the sub-navigation lists every section, and Servers opens first', async ()
   assert.equal(rendered.queryByText('Checked'), null);
   assert.ok(document.querySelector('.smark.ok'));
   assert.ok(rendered.getByText('Not verified'));
-  // Only one page is mounted at a time: the other two sections' own content
-  // is not drawn behind Servers.
+  // Only one page is mounted at a time: the other sections' own content is
+  // not drawn behind Servers.
   assert.equal(
     rendered.queryByRole('button', { name: 'Change passphrase…' }),
     null,
   );
   assert.equal(rendered.queryByRole('button', { name: 'Lock now' }), null);
   assert.equal(rendered.queryByText('Danger zone'), null);
+  assert.equal(rendered.queryByText('Username'), null);
 });
 
 test('choosing a sub-navigation section replaces the page, dropping any open server', async () => {
@@ -320,10 +333,10 @@ test('Preferences holds one passphrase row per account, the desktop alert prefer
     ),
     ['Passphrase', 'Desktop alerts', 'Appearance'],
   );
-  // One button per account; the sheet's own control switches its mode.
+  // One button per account; the sheet reads which operation applies.
   const accounts = snapshot.stores.filter((store) => store.kind === 'account');
   const buttons = rendered.getAllByRole('button', {
-    name: 'Change passphrase…',
+    name: 'Passphrase…',
   });
   assert.equal(buttons.length, accounts.length);
   assert.equal(rendered.queryByRole('button', { name: 'Set…' }), null);
@@ -337,9 +350,7 @@ test('Preferences holds one passphrase row per account, the desktop alert prefer
     assert.equal(row.firstElementChild?.className, 'v');
   }
   assert.ok(
-    rendered.getByText(
-      "Set, change or verify an account's passphrase on its server.",
-    ),
+    rendered.getByText("Set or change an account's passphrase on its server."),
   );
   assert.ok(
     rendered.getByRole('checkbox', {
@@ -383,55 +394,149 @@ test('a server address keeps the sub-navigation on screen, Servers still selecte
   assert.ok(ui.within(nav).getByRole('tab', { name: 'Device' }));
 });
 
-test('the passphrase sheet defaults to Change and provides Set and Verify', async () => {
+test('the passphrase sheet changes a configured passphrase behind a check', async () => {
   const rendered = await renderSettings(await fixture(), {
     where: { section: 'preferences' },
   });
 
   await ui.act(async () => {
     ui.fireEvent.click(
-      rendered.getAllByRole('button', { name: 'Change passphrase…' })[0],
+      rendered.getAllByRole('button', { name: 'Passphrase…' })[0],
     );
   });
   const dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
+  // The account in the fixture holds a passphrase, so the sheet settles on
+  // the rotation without ever offering the reader a mode to pick.
+  await ui.waitFor(() =>
+    assert.equal(
+      ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
+      'Change passphrase',
+    ),
+  );
   assert.equal(
-    ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
-    'Account passphrase',
+    ui.within(dialog).queryByRole('group', { name: 'Passphrase action' }),
+    null,
   );
-  assert.equal(dialog.querySelector('.hd small'), null);
-  assert.ok(
-    ui.within(dialog).getByRole('button', { name: 'Change passphrase' }),
-  );
+  assert.ok(ui.within(dialog).getByLabelText('Current'));
+  assert.ok(ui.within(dialog).getByLabelText('New'));
   assert.ok(ui.within(dialog).getByLabelText('Confirm'));
-  // The sheet's segmented control holds the other two modes.
-  const modes = ui.within(dialog).getByRole('group', {
-    name: 'Passphrase action',
-  });
-  assert.deepEqual(
-    ui
-      .within(modes)
-      .getAllByRole('button')
-      .map((mode) => [mode.textContent, mode.getAttribute('aria-pressed')]),
-    [
-      ['Set', 'false'],
-      ['Change', 'true'],
-      ['Verify', 'false'],
-    ],
+  assert.ok(ui.within(dialog).getByRole('button', { name: 'Change' }));
+
+  // The check is the only way through: nothing offers to change the
+  // passphrase without it, so the current field cannot be dismissed.
+  assert.equal(
+    ui.within(dialog).queryByRole('button', { name: 'Forgot?' }),
+    null,
   );
+  assert.equal(
+    ui.within(dialog).queryByText(/without checking the current one/i),
+    null,
+  );
+});
+
+test('the passphrase sheet stops changing once the check is rate-limited', async () => {
+  const failures: unknown[] = [];
+  // The bridge reports failures as command-error records, not Error
+  // instances; only a record carries the code this sheet reacts to.
+  const refused = {
+    code: 'rate-limited',
+    message: 'Passphrase checks are rate-limited.',
+    retryable: true,
+    ambiguous: false,
+    fatal: false,
+  };
+  const rendered = await renderSettings(await fixture(), {
+    where: { section: 'preferences' },
+    decorate: (bridge) => ({
+      ...bridge,
+      changeAccountPassphrase: async () => {
+        throw refused;
+      },
+    }),
+    onMutationError: (error) => failures.push(error),
+  });
+
   await ui.act(async () => {
     ui.fireEvent.click(
-      ui.within(modes).getByRole('button', { name: 'Verify' }),
+      rendered.getAllByRole('button', { name: 'Passphrase…' })[0],
     );
   });
-  assert.ok(
-    ui.within(dialog).getByRole('button', { name: 'Verify passphrase' }),
-  );
-  // Verify asks the server about one passphrase, so there is nothing to confirm.
-  assert.equal(ui.within(dialog).queryByLabelText('Confirm'), null);
+  const dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
+  await ui.waitFor(() => ui.within(dialog).getByLabelText('Current'));
+  const fill = (label: string, value: string): void => {
+    ui.fireEvent.change(ui.within(dialog).getByLabelText(label), {
+      target: { value },
+    });
+  };
   await ui.act(async () => {
-    ui.fireEvent.click(ui.within(modes).getByRole('button', { name: 'Set' }));
+    fill('Current', 'wrong-one');
+    fill('New', 'staplerbrigadefox');
+    fill('Confirm', 'staplerbrigadefox');
   });
-  assert.ok(ui.within(dialog).getByRole('button', { name: 'Set passphrase' }));
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(dialog).getByRole('button', { name: 'Change' }),
+    );
+    await Promise.resolve();
+  });
+  await ui.waitFor(() => assert.deepEqual(failures, [refused]));
+
+  // A refused check is not routed around, so the rotation stops here rather
+  // than falling back to one this device could authorize by itself.
+  await ui.waitFor(() =>
+    assert.ok(ui.within(dialog).getByText(/temporarily rate-limited/i)),
+  );
+  assert.equal(
+    ui
+      .within(dialog)
+      .getByRole('button', { name: 'Change' })
+      .hasAttribute('disabled'),
+    true,
+  );
+
+  // The same code covers a merely busy server, so typing again lets the
+  // reader retry instead of leaving the sheet permanently dead.
+  await ui.act(async () => {
+    fill('Current', 'another-try');
+  });
+  assert.equal(
+    ui
+      .within(dialog)
+      .getByRole('button', { name: 'Change' })
+      .hasAttribute('disabled'),
+    false,
+  );
+});
+
+test('the passphrase sheet sets a first passphrase when the account has none', async () => {
+  const rendered = await renderSettings(await fixture(), {
+    where: { section: 'preferences' },
+    decorate: (bridge) => ({
+      ...bridge,
+      accountPassphraseStatus: async () => ({
+        configured: false,
+        generation: 0,
+      }),
+    }),
+  });
+
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      rendered.getAllByRole('button', { name: 'Passphrase…' })[0],
+    );
+  });
+  const dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
+  await ui.waitFor(() =>
+    assert.equal(
+      ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
+      'Set passphrase',
+    ),
+  );
+  // Nothing to check against, so there is no current field to fill.
+  assert.equal(ui.within(dialog).queryByLabelText('Current'), null);
+  assert.ok(ui.within(dialog).getByLabelText('Passphrase'));
+  assert.ok(ui.within(dialog).getByLabelText('Confirm'));
+  assert.ok(ui.within(dialog).getByRole('button', { name: 'Set' }));
 });
 
 test('a profile address opens that server instead of the page', async () => {
@@ -550,7 +655,9 @@ test('duplicate server labels retain addresses without profile-name suffixes', a
       index < 2 ? { ...server, label: 'Shared' } : server,
     ),
   };
-  const rendered = await renderSettings(duplicated);
+  const rendered = await renderSettings(duplicated, {
+    where: { section: 'servers' },
+  });
   assert.equal(rendered.getAllByText('Shared').length, 2);
   assert.equal(
     Boolean(rendered.container.querySelector('.srow .t > b em')),
@@ -649,7 +756,9 @@ test('a lapsed server can be checked from its row in the list', async () => {
   const { applyLease } = (await vite.ssrLoadModule(
     '/src/model/index.ts',
   )) as typeof import('../src/model');
-  const rendered = await renderSettings(applyLease(await fixture(), 'lapsed'));
+  const rendered = await renderSettings(applyLease(await fixture(), 'lapsed'), {
+    where: { section: 'servers' },
+  });
 
   // The never-checked server and the lapsed one are equally stuck.
   assert.equal(rendered.getAllByRole('button', { name: 'Check' }).length, 2);
@@ -1156,4 +1265,66 @@ test('a maintenance action refused for a foreign agent asks to restart it, then 
   });
   assert.deepEqual(log, ['maintain:export', 'restart:true', 'maintain:export']);
   assert.equal(document.querySelector('.sheet'), null);
+});
+
+test('a passphrase conflict blocks another write until its status refresh succeeds', async () => {
+  let reads = 0;
+  let writes = 0;
+  let rejectStatus!: (error: Error) => void;
+  const rendered = await renderSettings(await fixture(), {
+    where: { section: 'preferences' },
+    onMutationError: () => {},
+    decorate: (bridge) => ({
+      ...bridge,
+      accountPassphraseStatus: async () => {
+        reads++;
+        if (reads === 2)
+          return new Promise((_resolve, reject) => {
+            rejectStatus = reject;
+          });
+        return { configured: true, generation: reads };
+      },
+      changeAccountPassphrase: async () => {
+        writes++;
+        throw {
+          code: 'conflict',
+          message: 'Passphrase changed',
+          retryable: false,
+          ambiguous: false,
+          fatal: false,
+        };
+      },
+    }),
+  });
+  ui.fireEvent.click(
+    rendered.getAllByRole('button', { name: 'Passphrase…' })[0],
+  );
+  const dialog = await rendered.findByRole('dialog');
+  await ui.waitFor(() => ui.within(dialog).getByLabelText('Current'));
+  for (const [label, value] of [
+    ['Current', 'old passphrase'],
+    ['New', 'new passphrase'],
+    ['Confirm', 'new passphrase'],
+  ]) {
+    ui.fireEvent.change(ui.within(dialog).getByLabelText(label), {
+      target: { value },
+    });
+  }
+  const change = () =>
+    ui
+      .within(dialog)
+      .getByRole<HTMLButtonElement>('button', { name: 'Change' });
+  ui.fireEvent.click(change());
+  await ui.waitFor(() => assert.equal(reads, 2));
+  assert.equal(change().disabled, true);
+  await ui.act(async () => rejectStatus(new Error('Status unavailable')));
+  await ui.waitFor(() =>
+    assert.ok(ui.within(dialog).getByText('Passphrase state unavailable')),
+  );
+  assert.equal(change().disabled, true);
+  ui.fireEvent.click(change());
+  assert.equal(writes, 1);
+  ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Retry' }));
+  await ui.waitFor(() => assert.equal(change().disabled, false));
+  assert.equal(reads, 3);
 });

@@ -73,7 +73,8 @@ try {
     };
     try {
       await page.goto(`${site.origin}/?state=people`);
-      // The Account tab's header states the account, not the tab's own name.
+      // `people` is the former Account tab, now Settings › Account, whose
+      // header states the account, not the section's own name.
       await page
         .getByRole('heading', { name: 'satoshi', exact: true })
         .waitFor();

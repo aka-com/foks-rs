@@ -324,7 +324,9 @@ export function ServersSection({
               .catch(onError)
           }
           onOpenGroup={(store) => onNavigate({ kind: 'store', ref: store.id })}
-          onOpenAccount={(store) => onNavigate({ kind: 'people', store })}
+          onOpenAccount={(store) =>
+            onNavigate({ kind: 'settings', section: 'account', store })
+          }
         />
       ) : (
         <ServerList
@@ -1054,8 +1056,10 @@ function AddServerSheet({
   onAdded: (profile: string) => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
-  const [profile, setProfile] = useState('partner');
-  const [probe, setProbe] = useState('foks.partner.dev');
+  // Suggestions, never values: an address that was not typed must not be
+  // submittable, and a profile name is the reader's to choose.
+  const [profile, setProfile] = useState('');
+  const [probe, setProbe] = useState('');
   const [busy, setBusy] = useState(false);
   const cleanProbe = probe.trim();
   const valid =
@@ -1095,8 +1099,18 @@ function AddServerSheet({
     >
       <p>The server is verified after it is added.</p>
       <Inset>
-        <Field label="Profile" value={profile} onChange={setProfile} />
-        <Field label="Address" value={probe} onChange={setProbe} />
+        <Field
+          label="Profile"
+          value={profile}
+          placeholder="partner"
+          onChange={setProfile}
+        />
+        <Field
+          label="Address"
+          value={probe}
+          placeholder="foks.partner.dev"
+          onChange={setProbe}
+        />
       </Inset>
     </SheetFrame>
   );

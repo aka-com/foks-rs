@@ -922,7 +922,7 @@ fn passphrase_command(
                         vault,
                         master,
                     )?,
-                    None => session.change_passphrase(&arguments.alias, passphrase, vault)?,
+                    None => session.change_passphrase(&arguments.alias, None, passphrase, vault)?,
                 };
                 output(json, &report, "passphrase changed and verified")
             })

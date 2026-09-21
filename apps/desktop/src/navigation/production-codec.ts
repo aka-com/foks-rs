@@ -4,6 +4,7 @@ import {
   RETIRED_SETTINGS_SECTIONS,
   SETTINGS_SECTION_ALIASES,
 } from './legacy-routes';
+import { settingsSectionOf } from './routes';
 import { GROUP_SETTINGS_TABS, SETTINGS_SECTIONS } from './types';
 import type {
   DevicesSection,
@@ -88,11 +89,6 @@ export function encodeLocation(location: Location): {
           tab: location.tab ?? null,
         },
       };
-    case 'people':
-      return {
-        state: 'people',
-        params: { ...CLEARED_PARAMS, store: location.store ?? null },
-      };
     case 'teams':
       return {
         state: 'teams',
@@ -118,7 +114,9 @@ export function encodeLocation(location: Location): {
           store: location.store ?? null,
           section: location.section ?? null,
           profile:
-            location.section === 'servers' ? (location.profile ?? null) : null,
+            settingsSectionOf(location) === 'servers'
+              ? (location.profile ?? null)
+              : null,
         },
       };
     case 'first-run':
@@ -174,10 +172,6 @@ export function decodeProductionLocation(search: string): Location | null {
         }
       : null;
   }
-  if (state === 'people') {
-    const store = params.get('store') ?? undefined;
-    return { kind: 'people', ...(store ? { store } : {}) };
-  }
   if (state === 'files') return { kind: 'files' };
   if (state === 'teams') {
     const store = params.get('store') ?? undefined;
@@ -211,16 +205,19 @@ export function decodeProductionLocation(search: string): Location | null {
     // Every tab a section moved to acts on one account, so the account the
     // address named comes with it.
     if (moved) return { ...moved, ...(store ? { store } : {}) };
-    // Sections that folded into one of the three pages open that page.
+    // Sections that folded into one of the four pages open that page.
     const resolved =
       section && SETTINGS_SECTION_ALIASES[section]
         ? SETTINGS_SECTION_ALIASES[section]
         : section;
-    // The `profile` parameter applies only to the Servers section. Legacy
+    // With no section, `profile` opens Servers; otherwise it applies only
+    // to an explicit Servers section. Legacy
     // `security-keys` URLs identified a server row, so they redirect to the
     // root Servers list.
     const profile =
-      section === 'servers' ? (params.get('profile') ?? undefined) : undefined;
+      section === null || section === 'servers'
+        ? (params.get('profile') ?? undefined)
+        : undefined;
     return resolved &&
       (SETTINGS_SECTIONS as readonly string[]).includes(resolved)
       ? {
@@ -229,7 +226,11 @@ export function decodeProductionLocation(search: string): Location | null {
           ...(store ? { store } : {}),
           ...(profile ? { profile } : {}),
         }
-      : { kind: 'settings', ...(store ? { store } : {}) };
+      : {
+          kind: 'settings',
+          ...(store ? { store } : {}),
+          ...(profile ? { profile } : {}),
+        };
   }
   if (state === 'servers') {
     const profile = params.get('profile') ?? undefined;

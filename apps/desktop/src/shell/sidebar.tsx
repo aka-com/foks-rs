@@ -59,12 +59,6 @@ const RAIL_TABS: readonly RailTabSpec[] = [
     location: { kind: 'devices' },
   },
   {
-    id: 'people',
-    label: 'Account',
-    icon: 'person',
-    location: { kind: 'people' },
-  },
-  {
     id: 'settings',
     label: 'Settings',
     icon: 'gear',
@@ -225,15 +219,19 @@ export interface SidebarProps {
   /**
    * Notices no tab's own badge can resolve — a catalog read that only a
    * retry can fix, or a note whose place could not be derived. Draws the dot
-   * on the account avatar; every note type with a tab of its own reaches it
-   * through that tab's badge instead.
+   * on the account avatar and on the Settings tab, whose Account section lists
+   * them; every note type with a tab of its own reaches it through that tab's
+   * badge instead.
    */
   attention?: number;
   /** The Teams tab's badge: pending membership requests this session knows about. */
   teamRequests?: { label: string; description: string } | null;
   /** The Devices tab's dot: an open pairing offer, or an account with no paper key. */
   devicesAlert?: { description: string } | null;
-  /** The Settings tab's dot: a lapsed check-in or an unverified server. */
+  /**
+   * The Settings tab's dot: a lapsed check-in or an unverified server. The
+   * tab also draws the dot for `attention`, with both reasons in its label.
+   */
   settingsAlert?: { description: string } | null;
   onNavigate: (location: Location) => void;
   /** Steps the Files tree's selection back one folder. Omitted where the
@@ -267,20 +265,17 @@ export interface SidebarProps {
 /**
  * The rail's account header and its menu: the accounts on this Mac grouped by
  * server, then the two commands that are not a place — adding an account and
- * locking the app. The dot rides the avatar for a note no tab's own badge can
- * resolve, and opens the Account tab, where that note is still listed.
- * `compact`, used by the Account tab's own "Switch account" button, opens the
- * same menu from a plain button rather than the avatar — it is the same
- * component so there is exactly one switcher, not a second one repeating it.
+ * locking the app. This is the application's only account switcher; the
+ * Account section of Settings names the account in its own header and has no
+ * switcher of its own. The dot rides the avatar for a note no tab's own badge
+ * can resolve, and opens Settings › Account, where that note is still listed.
  */
 export function AccountHeader({
   snapshot,
   location,
   account,
   attention = 0,
-  compact = false,
   onNavigate,
-  onTabNavigate,
   onReenter,
   onLock,
 }: {
@@ -288,9 +283,7 @@ export function AccountHeader({
   location: Location;
   account?: StoreRef;
   attention?: number;
-  compact?: boolean;
   onNavigate: (location: Location) => void;
-  onTabNavigate?: (tab: RailTab) => void;
   onReenter?: () => void;
   onLock?: () => void;
 }): ReactNode {
@@ -310,7 +303,7 @@ export function AccountHeader({
       )
     : 'None on this device';
   // Preserve account-scoped locations when selecting an account; otherwise,
-  // open Account.
+  // open the account's own page, Settings › Account.
   const selectAccount = (store: AccountStore): void => {
     if (location.kind === 'devices') {
       onNavigate({
@@ -329,61 +322,43 @@ export function AccountHeader({
       location.kind === 'teams'
     )
       onNavigate({ ...location, store: store.id });
-    else onNavigate({ kind: 'people', store: store.id });
+    else onNavigate({ kind: 'settings', section: 'account', store: store.id });
   };
   const servers = [...new Set(accounts.map((store) => store.server))];
   // Account marks use the same username-derived hue as the Files vault row.
   const close = (): void => setOpen(false);
   return (
-    <div className={compact ? 'account-switch' : 'rail-head'}>
-      {compact ? (
-        // The Account tab already names the account in its own heading, so
-        // this trigger's job is only to say what it opens — not to repeat the
-        // identity the rail header states.
-        <button
-          type="button"
-          ref={anchorRef}
-          className="btn"
-          aria-haspopup="menu"
-          aria-expanded={open}
-          onClick={() => setOpen(!open)}
-        >
-          Switch account
+    <div className="rail-head">
+      <button
+        type="button"
+        ref={anchorRef}
+        className="who"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`${username} · ${server}`}
+        title={`${username} · ${server}`}
+        onClick={() => setOpen(!open)}
+      >
+        <span className="avatar" aria-hidden="true">
+          {username.slice(0, 1).toUpperCase()}
+        </span>
+        <span className="t">
+          <b>{username}</b>
+          <small>{server}</small>
+        </span>
+        <span className="chev">
           <Icon name="chev" />
-        </button>
-      ) : (
-        <button
-          type="button"
-          ref={anchorRef}
-          className="who"
-          aria-haspopup="menu"
-          aria-expanded={open}
-          aria-label={`${username} · ${server}`}
-          title={`${username} · ${server}`}
-          onClick={() => setOpen(!open)}
-        >
-          <span className="avatar" aria-hidden="true">
-            {username.slice(0, 1).toUpperCase()}
-          </span>
-          <span className="t">
-            <b>{username}</b>
-            <small>{server}</small>
-          </span>
-          <span className="chev">
-            <Icon name="chev" />
-          </span>
-        </button>
-      )}
+        </span>
+      </button>
       {attention > 0 ? (
         <button
           type="button"
           className="attn"
           aria-label="Needs attention"
           title="Needs attention"
-          onClick={() => {
-            if (onTabNavigate) onTabNavigate('people');
-            else onNavigate({ kind: 'people' });
-          }}
+          // The notices are listed on the Account section, so the dot opens
+          // that section by address rather than the tab's remembered page.
+          onClick={() => onNavigate({ kind: 'settings', section: 'account' })}
         />
       ) : null}
       {open ? (
@@ -663,10 +638,17 @@ export function Sidebar({
       return devicesAlert ? (
         <RailTail kind="dot" description={devicesAlert.description} />
       ) : undefined;
-    if (tab === 'settings')
-      return settingsAlert ? (
-        <RailTail kind="dot warn" description={settingsAlert.description} />
+    if (tab === 'settings') {
+      const reasons = [
+        settingsAlert?.description,
+        attention > 0
+          ? `${attention} ${attention === 1 ? 'notice needs' : 'notices need'} attention`
+          : undefined,
+      ].filter((reason): reason is string => Boolean(reason));
+      return reasons.length ? (
+        <RailTail kind="dot warn" description={reasons.join('; ')} />
       ) : undefined;
+    }
     return undefined;
   };
   useEffect(() => {
@@ -737,7 +719,6 @@ export function Sidebar({
             account={account}
             attention={attention}
             onNavigate={onNavigate}
-            onTabNavigate={onTabNavigate}
             onReenter={onReenter}
             onLock={onLock}
           />

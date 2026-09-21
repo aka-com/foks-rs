@@ -46,6 +46,7 @@ import type {
   GoProfileDiscovery,
   PairingOffer,
   PassphraseReport,
+  PassphraseStatus,
   PendingOperation,
   ResetPreview,
   TrackedAccountAttempt,
@@ -357,8 +358,12 @@ export interface Bridge {
     passphrase: string,
     confirmation: string,
   ): Promise<PassphraseReport>;
+  /** `current`, when given, is checked against the server before the change
+   * is submitted. Omitting it keeps the device-authorized rotation, which is
+   * how a forgotten passphrase is replaced. */
   changeAccountPassphrase(
     accountStoreId: StoreRef,
+    current: string | null,
     passphrase: string,
     confirmation: string,
   ): Promise<PassphraseReport>;
@@ -366,6 +371,7 @@ export interface Bridge {
     accountStoreId: StoreRef,
     passphrase: string,
   ): Promise<PassphraseReport>;
+  accountPassphraseStatus(accountStoreId: StoreRef): Promise<PassphraseStatus>;
   describeReset(profile: string): Promise<ResetPreview>;
   resetServer(
     profile: string,

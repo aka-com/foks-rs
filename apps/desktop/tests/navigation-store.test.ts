@@ -168,7 +168,10 @@ test('a refused tab switch does not mutate snapshots, drafts or the acting accou
   assert.equal(store.getAccount(), ACCOUNT_A.id);
   assert.deepEqual(refusals, ['busy']);
   unregister();
-  store.navigate({ kind: 'people', store: ACCOUNT_B.id }, { force: true });
+  store.navigate(
+    { kind: 'settings', section: 'account', store: ACCOUNT_B.id },
+    { force: true },
+  );
   assert.equal(store.getAccount(), ACCOUNT_B.id);
   assert.equal(store.getSnapshot().sheet, undefined);
   store.navigateTab('devices', { force: true });
@@ -197,14 +200,17 @@ test('superseded prompts do not run callbacks and navigateAndSelect stays guarde
     { store: 'team-a', path: '/secret' },
   );
   assert.equal(store.getSnapshot(), initial);
-  store.navigate({ kind: 'people' });
+  store.navigate({ kind: 'settings', section: 'account' });
   resolutions[0](true);
   await Promise.resolve();
   assert.equal(store.getSnapshot(), initial);
   assert.equal(confirmed, 0);
   resolutions[1](true);
   await Promise.resolve();
-  assert.deepEqual(store.getSnapshot().location, { kind: 'people' });
+  assert.deepEqual(store.getSnapshot().location, {
+    kind: 'settings',
+    section: 'account',
+  });
   assert.equal(store.getSnapshot().selection, null);
   assert.equal(confirmed, 1);
   store.navigate({ kind: 'teams' });

@@ -161,6 +161,7 @@ pub(super) fn operation_scope(operation: &Operation) -> Scope {
         | RevokeOwnerBackup { profile, .. }
         | RecoverOwnerAccount { profile, .. }
         | ResumeOwnerRecovery { profile, .. }
+        | PassphraseStatus { profile, .. }
         | SetPassphrase { profile, .. }
         | ChangePassphrase { profile, .. }
         | VerifyPassphrase { profile, .. }

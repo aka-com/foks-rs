@@ -1,7 +1,7 @@
 /**
- * The Account tab: one account's profile at a time, the account the rail
- * header names. A "Switch account" button opens the same menu the rail
- * header's avatar opens, and the account's facts are rows with their action
+ * Settings › Account: one account's profile at a time, the account the rail
+ * header names. The header carries no switcher — the rail header's avatar
+ * menu is the only one — and the account's facts are rows with their action
  * at the right — the same workflows Settings › Accounts used to hold, behind
  * the same panels.
  */
@@ -58,9 +58,9 @@ async function renderPeople(
   onNavigate: (location: Location) => void = () => {},
   { decorate = (bridge) => bridge, collectErrors = false }: PeopleOptions = {},
 ) {
-  const { PeopleScreen } = (await vite.ssrLoadModule(
-    '/src/screens/people-screen.tsx',
-  )) as typeof import('../src/screens/people-screen');
+  const { AccountSection } = (await vite.ssrLoadModule(
+    '/src/screens/account-section.tsx',
+  )) as typeof import('../src/screens/account-section');
   const { mockBridge } = (await vite.ssrLoadModule(
     '/src/mock-bridge.ts',
   )) as typeof import('../src/mock-bridge');
@@ -82,10 +82,15 @@ async function renderPeople(
       portalRoot,
       children: createElement(ToastProvider, {
         controller,
-        children: createElement(PeopleScreen, {
+        children: createElement(AccountSection, {
           snapshot,
           bridge,
-          location: { kind: 'people', ...(at ? { store: at } : {}) },
+          location: {
+            kind: 'settings',
+            section: 'account',
+            ...(at ? { store: at } : {}),
+          },
+          panel: { id: 'settings-sections-panel-account', labelledBy: 'tab' },
           onNavigate,
           onRefresh: async (message: string) => {
             refreshed.push(message);
@@ -177,7 +182,7 @@ test('the account panel keeps every workflow row from the accounts pane', async 
   // below them.
   for (const name of [
     'Change…',
-    'Settings › Servers ›',
+    'Servers ›',
     'Devices ›',
     'Teams ›',
     'Bot accounts',
@@ -190,7 +195,7 @@ test('the account panel keeps every workflow row from the accounts pane', async 
       1,
       `expected one "${name}" button`,
     );
-  for (const name of ['Settings › Servers ›', 'Devices ›', 'Teams ›'])
+  for (const name of ['Servers ›', 'Devices ›', 'Teams ›'])
     assert.ok(
       rendered
         .getByRole('button', { name })
@@ -434,30 +439,33 @@ test('the username row opens a sheet titled for the workflow, not the account', 
   assert.ok(ui.within(dialog).getByLabelText('Username'));
 });
 
-test('the switcher lists every account and switching navigates by StoreRef', async () => {
-  const chosen: Location[] = [];
-  const { rendered } = await renderPeople(
-    await fixture(),
-    'acct:personal',
-    (location) => chosen.push(location),
-  );
+test('the header names the account and carries no switcher of its own', async () => {
+  const { rendered } = await renderPeople(await fixture(), 'acct:personal');
 
-  const trigger = rendered.getByRole('button', { name: 'Switch account' });
+  // The rail header's avatar menu is the application's only account switcher,
+  // and it sits beside this section; a second one here would repeat it.
+  assert.equal(
+    rendered.queryByRole('button', { name: 'Switch account' }),
+    null,
+  );
+  // The header's right-hand slot carries the account's access state when
+  // there is one to state, and never a control: nothing in it is a button.
+  assert.equal(document.querySelector('.path .header-action button'), null);
+  assert.ok(rendered.getByRole('heading', { level: 1, name: 'satoshi' }));
+  // Keep the accessible verified mark brought in by the earlier UI changes.
+  const serverState = rendered.getByRole('img', { name: 'Verified' });
+  assert.ok(serverState.closest('.settings-inset .fr'));
+  assert.equal(rendered.queryByText(/·\s*verified/i), null);
+  // A connected server this Mac has not paired with reads the same way.
   assert.ok(
-    trigger.closest('.path .header-action'),
-    'the switcher sits in the page header, beside the page’s own action',
+    rendered.getByText('Connected, not paired').classList.contains('dim'),
   );
-  await ui.act(async () => ui.fireEvent.click(trigger));
-  const menu = rendered.getByRole('menu', { name: 'Accounts on this device' });
-  assert.equal(menu.querySelectorAll('.acct').length, 2);
-  assert.ok(ui.within(menu).getByLabelText('Current account'));
-  assert.ok(
-    ui.within(menu).getByRole('menuitem', { name: /Add account or server/ }),
-  );
-  await ui.act(async () =>
-    ui.fireEvent.click(menu.querySelectorAll('.acct')[1]),
-  );
-  assert.deepEqual(chosen.at(-1), { kind: 'people', store: 'acct:work' });
+  // The body is the panel the sub-navigation's Account tab controls.
+  const panel = rendered.getByRole('tabpanel');
+  assert.equal(panel.id, 'settings-sections-panel-account');
+  assert.ok(ui.within(panel).getByText('Username'));
+  // Server is a sibling section, so its link names the section alone.
+  assert.ok(rendered.getByRole('button', { name: 'Servers ›' }));
 });
 
 test('a notice this page can route elsewhere is not repeated here', async () => {
@@ -680,14 +688,23 @@ test('a trust block stops remote workflows while local recovery controls remain 
     true,
   );
   assert.ok(rendered.getByText('Account access is stopped'));
-  await ui.act(async () =>
-    ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Switch account' }),
+  assert.ok(
+    rendered.getByText(
+      'Remote operations are unavailable until a connection is reestablished.',
     ),
   );
-  const menu = rendered.getByRole('menu', { name: 'Accounts on this device' });
-  assert.ok(ui.within(menu).getByText('Verification failed'));
-  await ui.act(async () => ui.fireEvent.keyDown(menu, { key: 'Escape' }));
+  assert.ok(rendered.getByRole('button', { name: 'Open server' }));
+  // Access state is a fact about the header's subject, so it is the header's
+  // own right-hand mark rather than a chip trailing the server line.
+  const state = document.querySelector('.path .header-action .chip');
+  assert.ok(state, 'the header states the account’s access at its right');
+  assert.equal(state.textContent, 'Verification failed');
+  assert.equal(document.querySelector('.path .sub .chip'), null);
+  // The Server row states the same thing in the quieter second phrase.
+  assert.equal(
+    document.querySelector('.settings-inset .fr .dim')?.textContent,
+    'Verification failed',
+  );
   for (const name of [
     'Bot accounts',
     'Open web admin panel',
@@ -715,7 +732,11 @@ test('a stale address says the account is no longer available', async () => {
       rendered.getByRole('button', { name: 'personal · Personal server' }),
     );
   });
-  assert.deepEqual(chosen.at(-1), { kind: 'people', store: 'acct:personal' });
+  assert.deepEqual(chosen.at(-1), {
+    kind: 'settings',
+    section: 'account',
+    store: 'acct:personal',
+  });
 });
 
 test('organization sign-in survives browser focus and can finish the same flow', async () => {
@@ -807,9 +828,6 @@ test('local alias appears in account controls while commands keep the original a
   });
   // The header no longer carries the alias as a chip; the Shown as row does.
   assert.ok(rendered.getAllByText('Private account').length >= 1);
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Switch account' }));
-  assert.ok(ui.within(rendered.getByRole('menu')).getByText('Private account'));
-  ui.fireEvent.keyDown(rendered.getByRole('menu'), { key: 'Escape' });
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Change…' }));
   ui.fireEvent.click(
     rendered.getByRole('button', { name: 'Show pending changes' }),

@@ -118,6 +118,12 @@ export const FOKS_ICONS = {
     ['path', { d: 'M7 7h.01M7 17h.01' }],
   ],
   check: [['path', { d: 'M5 12l5 5 9-10' }]],
+  /* A state mark rather than an action: the ring says the check is a
+     fact about the thing beside it, not a button to confirm it. */
+  'check-circle': [
+    ['circle', { cx: 12, cy: 12, r: 8.5 }],
+    ['path', { d: 'M8.5 12l2.5 2.5 4.5-5' }],
+  ],
   pencil: [
     ['path', { d: 'M4 20l4.5-1L19 8.5a2 2 0 0 0-3-3L5.5 16z' }],
     ['path', { d: 'M14 7l3 3' }],

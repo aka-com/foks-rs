@@ -80,11 +80,15 @@ export function credentialCommand({
   }
 }
 
+/** `current` is the passphrase to check before a change is submitted. It is
+ * null for an enrollment, which has none, and for the device-authorized
+ * change that replaces a forgotten one. */
 export function accountPassphrase(
   bridge: Bridge,
   access: ReturnType<typeof useWorkflowAccess>,
   store: AccountStore,
   mode: PassphraseMode,
+  current: string | null,
   secret: string,
   repeated: string,
 ) {
@@ -97,8 +101,21 @@ export function accountPassphrase(
     () =>
       mode === 'set'
         ? bridge.setAccountPassphrase(store.id, secret, repeated)
-        : mode === 'change'
-          ? bridge.changeAccountPassphrase(store.id, secret, repeated)
-          : bridge.verifyAccountPassphrase(store.id, secret),
+        : bridge.changeAccountPassphrase(store.id, current, secret, repeated),
+  );
+}
+
+export function accountPassphraseStatus(
+  bridge: Bridge,
+  access: ReturnType<typeof useWorkflowAccess>,
+  store: AccountStore,
+) {
+  return access.run(
+    'passphrase',
+    {
+      profile: store.server,
+      account: store.account,
+    },
+    () => bridge.accountPassphraseStatus(store.id),
   );
 }

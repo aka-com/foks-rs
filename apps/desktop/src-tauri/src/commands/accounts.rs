@@ -79,6 +79,13 @@ struct PassphraseResponse {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct PassphraseStatusResponse {
+    configured: bool,
+    generation: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BackupCommitResponse {
     backup_alias: String,
     account_alias: String,
@@ -369,6 +376,13 @@ pub struct PassphraseReportDto {
     pub generation: u64,
     pub stretch_version: String,
     pub verified: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PassphraseStatusDto {
+    pub configured: bool,
+    pub generation: u64,
 }
 
 #[derive(Deserialize)]
@@ -714,6 +728,7 @@ pub async fn commit_owner_backup(
 async fn account_passphrase_mutation(
     state: &AppState,
     account: foks_agent_proto::AccountStoreRef,
+    current: Option<SecretString>,
     passphrase: SecretString,
     change: bool,
 ) -> Result<PassphraseReportDto, AgentError> {
@@ -721,6 +736,7 @@ async fn account_passphrase_mutation(
         Operation::ChangePassphrase {
             profile: account.profile.clone(),
             alias: account.account_alias,
+            current,
             passphrase,
         }
     } else {
@@ -752,15 +768,20 @@ pub async fn set_account_passphrase(
     let _mutation = state.begin_mutation()?;
     let account = state.selected_account(&account_store_id)?;
     let passphrase = confirmed_passphrase(passphrase, confirmation)?;
-    account_passphrase_mutation(&state, account, passphrase, false).await
+    account_passphrase_mutation(&state, account, None, passphrase, false).await
 }
 
+/// `current` is checked against the server before the rotation is submitted.
+/// Omitting it keeps the device-authorized rotation, which is the path that
+/// recovers an account whose passphrase has been forgotten or whose
+/// passphrase checks are rate-limited.
 #[tauri::command]
 pub async fn change_account_passphrase(
     app: tauri::AppHandle,
     webview: tauri::Webview,
     state: State<'_, AppState>,
     account_store_id: String,
+    current: Option<String>,
     passphrase: String,
     confirmation: String,
 ) -> Result<PassphraseReportDto, AgentError> {
@@ -769,8 +790,43 @@ pub async fn change_account_passphrase(
     let state = state.for_store(&account_store_id)?;
     let _mutation = state.begin_mutation()?;
     let account = state.selected_account(&account_store_id)?;
+    let current = current
+        .map(|current| {
+            bounded_secret(
+                current,
+                MAXIMUM_PASSPHRASE_BYTES,
+                "Current passphrase must be at most 1,024 bytes.",
+            )
+        })
+        .transpose()?;
     let passphrase = confirmed_passphrase(passphrase, confirmation)?;
-    account_passphrase_mutation(&state, account, passphrase, true).await
+    account_passphrase_mutation(&state, account, current, passphrase, true).await
+}
+
+#[tauri::command]
+pub async fn account_passphrase_status(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    account_store_id: String,
+) -> Result<PassphraseStatusDto, AgentError> {
+    require_main_window(&webview)?;
+    let account = state.selected_account(&account_store_id)?;
+    let operation = Operation::PassphraseStatus {
+        profile: account.profile.clone(),
+        alias: account.account_alias,
+    };
+    let value = read_profile_operation_value(&state, account.profile, operation).await?;
+    let status: PassphraseStatusResponse =
+        serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
+    if status.configured == (status.generation == 0) {
+        return Err(invalid_response(
+            "The agent returned an inconsistent passphrase status.",
+        ));
+    }
+    Ok(PassphraseStatusDto {
+        configured: status.configured,
+        generation: status.generation,
+    })
 }
 
 #[tauri::command]

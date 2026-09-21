@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import type { ReactNode } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge } from '../src/bridge';
@@ -324,7 +324,6 @@ test('a typed passphrase is asked about and an outstanding change is not', async
     createElement(h.sheets.PassphraseSheet, {
       bridge,
       store: h.account,
-      initialMode: 'change',
       onClose: () => {},
       onDone: () => {},
       onError: () => {},
@@ -332,8 +331,15 @@ test('a typed passphrase is asked about and an outstanding change is not', async
   );
   assert.equal(h.verdict(store), null);
 
+  // The sheet reads the account's passphrase state before it draws a form.
   await ui.act(async () => {
-    ui.fireEvent.change(rendered.getByLabelText('Passphrase'), {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  await ui.act(async () => {
+    ui.fireEvent.change(rendered.getByLabelText('Current'), {
+      target: { value: 'stapler brigade' },
+    });
+    ui.fireEvent.change(rendered.getByLabelText('New'), {
       target: { value: 'correct horse' },
     });
     ui.fireEvent.change(rendered.getByLabelText('Confirm'), {
@@ -347,14 +353,12 @@ test('a typed passphrase is asked about and an outstanding change is not', async
   assert.equal(typed.confirm, 'Discard');
 
   await ui.act(async () => {
-    ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Change passphrase' }),
-    );
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Change' }));
     await Promise.resolve();
   });
   assert.deepEqual(h.verdict(store), {
     verdict: 'refuse',
-    reason: 'Wait for the passphrase change to finish.',
+    reason: 'Wait for the passphrase update to finish.',
   });
 });
 
@@ -397,9 +401,9 @@ test('the two default routes are canonicalized without asking the guards', async
   const { DevicesScreen } = (await vite.ssrLoadModule(
     '/src/screens/devices-screen.tsx',
   )) as typeof import('../src/screens/devices-screen');
-  const { PeopleScreen } = (await vite.ssrLoadModule(
-    '/src/screens/people-screen.tsx',
-  )) as typeof import('../src/screens/people-screen');
+  const { AccountSection } = (await vite.ssrLoadModule(
+    '/src/screens/account-section.tsx',
+  )) as typeof import('../src/screens/account-section');
   const { FIXTURE } = (await vite.ssrLoadModule(
     '/src/fixture.ts',
   )) as typeof import('../src/fixture');
@@ -407,22 +411,28 @@ test('the two default routes are canonicalized without asking the guards', async
 
   for (const [screen, kind] of [
     [DevicesScreen, 'devices'],
-    [PeopleScreen, 'people'],
+    [AccountSection, 'settings'],
   ] as const) {
     const moves: { location: Location; force: boolean }[] = [];
     h.mount(
-      createElement(screen as typeof DevicesScreen, {
-        snapshot,
-        bridge: h.bridge(),
-        location: { kind } as Extract<Location, { kind: 'devices' }>,
-        scene: kind,
-        onNavigate: (location, options) =>
-          moves.push({ location, force: Boolean(options?.force) }),
-        onRefresh: async () => {},
-        onRefreshSnapshot: async () => snapshot,
-        onError: () => {},
-        onMutationError: async () => {},
-      }),
+      // Each screen ignores the other's own props: Devices takes `scene`, the
+      // Account section takes `panel`.
+      createElement(
+        screen as unknown as ComponentType<Record<string, unknown>>,
+        {
+          snapshot,
+          bridge: h.bridge(),
+          location: { kind },
+          scene: kind,
+          panel: { id: 'panel', labelledBy: 'tab' },
+          onNavigate: (location: Location, options?: { force?: boolean }) =>
+            moves.push({ location, force: Boolean(options?.force) }),
+          onRefresh: async () => {},
+          onRefreshSnapshot: async () => snapshot,
+          onError: () => {},
+          onMutationError: async () => {},
+        },
+      ),
     );
     await ui.act(async () => {
       await Promise.resolve();
