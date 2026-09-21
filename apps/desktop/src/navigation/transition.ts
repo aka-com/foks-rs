@@ -1,11 +1,11 @@
-import { sameLocation } from './routes';
+import { railTabOf, sameLocation } from './routes';
 import type { LocationAction, LocationState } from './types';
 
 /**
  * Pure transition function for location state actions.
  *
  * Navigating to a new location clears the current item selection while
- * preserving active search queries. Re-navigating to the current location
+ * preserving search queries within the same rail tab. Re-navigating to the current location
  * preserves the active selection.
  */
 export function transition(
@@ -26,9 +26,9 @@ export function transition(
         folder: '',
         closedFolders: [],
         query:
-          action.location.kind === 'chat' || state.location.kind === 'chat'
-            ? ''
-            : state.query,
+          railTabOf(action.location) === railTabOf(state.location)
+            ? state.query
+            : '',
       };
     case 'select':
       // Selecting an item automatically opens the details panel; deselecting keeps the panel open.

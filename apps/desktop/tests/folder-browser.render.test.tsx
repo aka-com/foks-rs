@@ -206,7 +206,7 @@ test('an empty team displays shared-item details and inline settings', async () 
   // "Homelab" is a team with nothing in it.
   assert.ok(
     treeRow('Homelab').parentElement?.querySelector(
-      '.fact[aria-label="Team settings"]',
+      '.fact[aria-label="Homelab settings"]',
     ),
     'team settings is mounted before selection so row hover can reveal it',
   );
@@ -218,20 +218,17 @@ test('an empty team displays shared-item details and inline settings', async () 
   );
   assert.ok(
     treeRow('Homelab').parentElement?.querySelector(
-      '.fact[aria-label="Team settings"]',
+      '.fact[aria-label="Homelab settings"]',
     ),
   );
 });
 
-test('nested folder displays its name, back navigation button, and omits Location column', async () => {
+test('nested folders use explicit tree navigation', async () => {
   await mount({ kind: 'store', ref: 'acct:personal' }, { folder: '/env/prod' });
   assert.equal(currentTitle(), 'prod');
   assert.deepEqual(columns(), ['Name', 'Kind', 'Size']);
 
-  // Clicking the back button in the title row navigates to the parent folder.
-  const back = document.querySelector<HTMLButtonElement>('.lpane .lt .back');
-  assert.ok(back);
-  ui.fireEvent.click(back);
+  ui.fireEvent.click(treeRow('env'));
   await ui.waitFor(() => assert.equal(currentTitle(), 'env'));
   // The parent folder lists its child folder as a row with its item count.
   const folder = document.querySelector('.lpane .row.folder');
@@ -269,7 +266,7 @@ test('the column headers are the sort control', async () => {
   );
 });
 
-test('item row displays item name, folder path, and permitted actions for its kind', async () => {
+test('a row names its item, its folder, and the actions its kind allows', async () => {
   await mount({ kind: 'all' });
   const rows = [...document.querySelectorAll('.lpane .row')];
   const login = rows.find(
@@ -277,27 +274,35 @@ test('item row displays item name, folder path, and permitted actions for its ki
       candidate.querySelector('.name .nm')?.textContent === 'github.com',
   );
   assert.ok(login, 'the GitHub login is listed');
-  // The folder path is displayed beside the item name instead of inside a badge chip.
+  // The folder follows the name, in place of the chip the row used to carry.
   assert.equal(login.querySelector('.name .fpath')?.textContent, '/logins');
   assert.equal(login.querySelector('.pchip'), null);
-  // Passwords support Copy and Reveal actions; documents support Download.
-  assert.deepEqual(
-    [...login.querySelectorAll('.acts button')].map((button) =>
-      button.getAttribute('title'),
-    ),
-    ['Copy', 'Reveal'],
+  // A value the panel reads as text copies and reveals; a file node
+  // downloads. The row decides the same way the details panel does, so a
+  // text Secret filed as a "Document" is not offered Download here and Copy
+  // there.
+  assert.deepEqual(actionsOf(login), ['Copy', 'Reveal']);
+  const named = (name: string): Element => {
+    const node = rows.find(
+      (candidate) => candidate.querySelector('.name .nm')?.textContent === name,
+    );
+    assert.ok(node, `no row named ${name}`);
+    return node;
+  };
+  // A Secret whose value carries no password line: kind "Document", read as
+  // text all the same.
+  const secretDocument = named('DATABASE_URL');
+  assert.equal(
+    secretDocument.querySelector('.cell.kind')?.textContent,
+    'Document',
   );
-  const document_ = rows.find(
-    (candidate) =>
-      candidate.querySelector('.cell.kind')?.textContent === 'Document',
+  assert.deepEqual(actionsOf(secretDocument), ['Copy', 'Reveal']);
+  const fileDocument = named('passport-scan.pdf');
+  assert.equal(
+    fileDocument.querySelector('.cell.kind')?.textContent,
+    'Document',
   );
-  assert.ok(document_);
-  assert.deepEqual(
-    [...document_.querySelectorAll('.acts button')].map((button) =>
-      button.getAttribute('title'),
-    ),
-    ['Download'],
-  );
+  assert.deepEqual(actionsOf(fileDocument), ['Download']);
 });
 
 test('disables grid view button when grid view is not yet supported', async () => {
@@ -430,4 +435,36 @@ test('folder sorting reverses folders and items while keeping folders first', as
   assert.notDeepEqual(rows(), ascending);
   ui.fireEvent.click(name);
   await ui.waitFor(() => assert.deepEqual(rows(), ascending));
+});
+
+function actionsOf(row: Element): (string | null)[] {
+  return [...row.querySelectorAll('.acts button')].map((button) =>
+    button.getAttribute('title'),
+  );
+}
+
+test('the tree’s New team button lands on Teams with the create sheet up', async () => {
+  const { store } = await mount({ kind: 'all' });
+  const plus = document.querySelector<HTMLButtonElement>(
+    '.tpane button.plus[aria-label="New team"]',
+  );
+  assert.ok(plus, 'the Teams heading carries a New team button');
+  await ui.act(async () => {
+    ui.fireEvent.click(plus);
+    await Promise.resolve();
+  });
+  // The sheet the button promises is open on the page it navigated to.
+  await ui.waitFor(() =>
+    assert.ok(
+      [...document.querySelectorAll('.sheet [role="heading"], .sheet h2')].some(
+        (node) => node.textContent === 'Create a team',
+      ),
+      'the create sheet is open',
+    ),
+  );
+  // And the intent is spent: the address left behind is the plain list, so
+  // the sheet is not reopened by a later render or by coming back.
+  const { location } = store.getSnapshot();
+  assert.equal(location.kind, 'teams');
+  assert.equal(location.kind === 'teams' ? location.open : 'unset', undefined);
 });

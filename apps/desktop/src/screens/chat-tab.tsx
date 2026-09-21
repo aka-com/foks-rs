@@ -412,20 +412,19 @@ function NoTeamWithChat({
           Every team has a #general channel. Create a team, or accept an
           invitation, to start.
         </span>
-        {/* Both flows are sheets on the Teams page, which has no address of
-            its own for either, so both buttons open that page. */}
+        {/* Both flows open their matching sheet on the Teams page. */}
         <div className="chat-empty-actions">
           <Button
             variant="primary"
             icon="plus"
             title="Create a team on the Teams page"
-            onClick={() => onNavigate({ kind: 'teams' })}
+            onClick={() => onNavigate({ kind: 'teams', open: 'create' })}
           >
             Create a team
           </Button>
           <Button
             title="Paste an invitation on the Teams page"
-            onClick={() => onNavigate({ kind: 'teams' })}
+            onClick={() => onNavigate({ kind: 'teams', open: 'join' })}
           >
             Accept an invitation
           </Button>

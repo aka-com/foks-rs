@@ -345,20 +345,24 @@ popover itself. Its empty parts carry `data-tauri-drag-region`, because the
 rail's strip alone does not reach across the window. First run draws no
 topbar.
 
-Swiping right with two fingers on the trackpad navigates to the parent location
-of the current page, matching the back chevron (`src/shell/swipe-back.ts`). The webview's own back/forward gestures stay off —
-the app records its scene with `history.replaceState` only, so the back-forward
-list holds one entry — and with them off the swipe arrives as `wheel` events
-carrying `deltaX`, on macOS and on the Linux and Windows webviews alike. The
-gesture is read from that stream: modified and ctrl-wheel (pinch-zoom) events
-are skipped, `|deltaX|` must exceed twice `|deltaY|`, an ancestor pane that can
-take the horizontal scroll itself keeps it, and 120px of back-directed travel
-in events no more than 120ms apart navigates once. The back navigation gesture
-is throttled until wheel events cease for 300ms, preventing trackpad inertia
-from triggering multiple page transitions. The gesture is disabled at the
-navigation root or when a modal dialog is open.
-The page changes in one step: there is no animation and no rubber-band preview
-of the page behind.
+Back and Forward traverse committed app history across tabs and folders. The
+⌘[/⌘], Alt+Left/Right, browser navigation keys, mouse buttons 3/4, and trackpad
+gestures use the same guarded history operations.
+Back never means parent or up; breadcrumbs and the folder tree navigate to
+those destinations explicitly. A new visit clears Forward; replacements and
+view edits preserve it. History restores page state but never transient sheets,
+and session reset clears both stacks.
+
+The webview's native history gestures remain off: the URL uses
+`history.replaceState` for reload restoration, while app history lives in memory.
+Horizontal wheel gestures show an arrow preview in either direction. A 120px
+swipe arms navigation, reversing below that threshold cancels it, and navigation
+commits only after 120ms without wheel events. Wheel events do not expose a
+portable finger-release or momentum phase, so the idle interval approximates
+completion and includes momentum. There is no additional cooldown. Modified,
+vertical, consumed, and scrollable-pane gestures remain scrolling for the whole
+stream; overlays and blocking states disable gestures. Completed swipes use the
+same confirmation dialogs and refusal toasts as buttons and shortcuts.
 
 ### Blocking states
 
@@ -895,10 +899,9 @@ evaluated, so a confirmed prompt can never bypass another guard’s refusal.
 A guard must be a pure answer: it may not navigate, write state, or start work
 of its own.
 
-`navigationVerdict(intent)` runs the same guards without acting on anything. A
-caller that has to stay inert rather than raise a dialog asks it first: the
-back swipe is a trackpad movement, not a decision, so a page it would have to
-ask about is a page it does not go to.
+`navigationVerdict(intent)` runs the same guards without acting on anything.
+History navigation, including completed trackpad gestures, applies the guards
+through the store so prompts and refusals are presented consistently.
 
 `{ force: true }` skips the guards. It belongs to a move the shell makes on its
 own behalf and no screen may refuse:

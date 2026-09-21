@@ -6,6 +6,7 @@ import {
   decodeFirstRunCheckpoint,
   encodeFirstRunCheckpoint,
   initialFirstRun,
+  firstRunNextStepState,
   reconcileFirstRunCheckpoint,
   transitionFirstRun,
 } from '../src/first-run-state';
@@ -170,6 +171,26 @@ test('skipped steps are excluded from completed step count', () => {
     protectSkipped: true,
   };
   assert.equal(completedFirstRunSteps(base), 2);
+});
+
+test('setup continuation targets the next incomplete step', () => {
+  const start = initialFirstRun('invited', 'checklist-invited');
+  assert.equal(firstRunNextStepState(start), 'who');
+  const profiled = { ...start, profile: checked };
+  assert.equal(firstRunNextStepState(profiled), 'account');
+  const account = {
+    ...profiled,
+    account: {
+      alias: 'personal',
+      username: 'satoshi',
+      deviceName: 'Satoshi Mac',
+    },
+  };
+  assert.equal(firstRunNextStepState(account), 'protect');
+  assert.equal(
+    firstRunNextStepState({ ...account, passphraseSet: true }),
+    'waiting',
+  );
 });
 
 test('skipping protection step does not clear an already completed passphrase', () => {

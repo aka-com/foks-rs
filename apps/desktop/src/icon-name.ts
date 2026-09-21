@@ -26,7 +26,6 @@ export type FoksIconName =
   | 'check'
   | 'circleCheck'
   | 'pencil'
-  | 'arrowLeft'
   | 'shield'
   | 'alert'
   | 'refresh'

@@ -45,7 +45,7 @@ import type {
   TeamStore,
 } from '../model';
 import type { Bridge } from '../bridge';
-import type { Location } from '../location';
+import type { Location, NavigateOptions, TeamsSheetIntent } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { markProfileRostersStale } from '../roster-staleness';
 import { PageHeader } from '../shell/page-header';
@@ -65,8 +65,8 @@ export interface TeamsScreenProps {
   snapshot: AgentSnapshot;
   bridge: Bridge;
   location: Extract<Location, { kind: 'teams' }>;
-  scene: string;
-  onNavigate: (location: Location) => void;
+  scene?: string;
+  onNavigate: (location: Location, options?: NavigateOptions) => void;
   onRefresh: (message: string, profile?: string) => Promise<void>;
   onRefreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>;
   onError: (error: unknown) => void;
@@ -273,7 +273,6 @@ export function TeamsScreen({
   snapshot,
   bridge,
   location,
-  scene,
   onNavigate,
   onRefresh,
   onRefreshSnapshot,
@@ -305,17 +304,63 @@ export function TeamsScreen({
     (location.store
       ? accounts.find((store) => store.id === location.store)
       : undefined) ?? accounts[0];
+  // The address can arrive asking for one of these sheets: the Chat tab's
+  // empty pane and the Files tree's New team button send a reader here to
+  // create a team or to paste an invitation, and `?state=create` and
+  // `?state=join` name the same two. The intent is spent on arrival — the
+  // sheet opens once, and the address is then replaced with the plain list so
+  // that Back, a re-render or a return to the tab lands on the list.
+  const intent = location.open;
+  // Neither sheet is seeded from the scene name: `?state=create` and
+  // `?state=join` decode to the `open` intent above, and the scene name lasts
+  // the whole session, so seeding from it would reopen the sheet on every
+  // return to the tab after the reader closed it.
   const [sheet, setSheet] = useTabSheetState<ListSheet | null>(
     'teams.sheet',
-    () =>
-      scene === 'create' && acting ? { kind: 'create', store: acting } : null,
+    null,
     (value) => value?.kind === 'create' || value?.kind === 'add',
   );
   const [joining, setJoining] = useTabSheetState<AccountStore | null>(
     'teams.join',
-    () => (scene === 'join' ? (acting ?? null) : null),
+    null,
     (value) => value !== null,
   );
+  // Read through refs: the acting account is a fresh object on every render
+  // and the shell's callback a fresh closure, neither of which is a new
+  // intent to act on.
+  const actingRef = useRef(acting);
+  actingRef.current = acting;
+  const navigateRef = useRef(onNavigate);
+  navigateRef.current = onNavigate;
+  const actingId = acting?.id;
+  // The intent is spent in two commits: the address is canonicalized first,
+  // and the sheet opens on the commit after that, from the request held here.
+  // Both sheets above are tab-persisted state owned by the address they were
+  // opened under. Opening one while the address still carries `open` would
+  // hand it an owner that the replacement immediately supersedes, and the
+  // saved record would then outlive the reader closing the sheet: the tab
+  // would restore it on the way back.
+  const requested = useRef<TeamsSheetIntent | null>(null);
+  useEffect(() => {
+    // With no account yet the page cannot say who would create or join, so
+    // the intent waits for the catalog rather than being spent on nothing.
+    if (!intent || !actingRef.current) return;
+    requested.current = intent;
+    navigateRef.current(
+      { kind: 'teams', ...(location.store ? { store: location.store } : {}) },
+      // The page the reader is on, with its address canonicalized: no new
+      // entry to go back to, and no screen may refuse it.
+      { replace: true, force: true },
+    );
+  }, [intent, actingId, location.store]);
+  useEffect(() => {
+    const request = requested.current;
+    const store = actingRef.current;
+    if (intent || !request || !store) return;
+    requested.current = null;
+    if (request === 'create') setSheet({ kind: 'create', store });
+    else setJoining(store);
+  }, [intent, actingId, setSheet, setJoining]);
   // The stuck creation a row asked to forget. Held apart from `sheet`, which
   // is the group sheet's own set of kinds.
   const [abandoning, setAbandoning] = useState<TeamStore | null>(null);

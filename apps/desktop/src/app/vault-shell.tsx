@@ -62,6 +62,7 @@ import { useSearchShortcut } from '../shell/search-palette';
 import { Sidebar } from '../shell/sidebar';
 import { Topbar } from '../shell/topbar';
 import { requestNewChat } from '../screens/chat-tab';
+import { chatTeams } from '../screens/chat-teams';
 import { useAccessRuntime } from './access-runtime';
 import { AccessLifetime } from './access-lifetime';
 import { shellBlock, shellChrome } from './blocking-shell';
@@ -334,7 +335,7 @@ export function VaultShell({
     mutationError,
     setWorkflow,
   });
-  const { prompt, settlePrompt } = useShellNavigation({
+  const { prompt, settlePrompt, swipeIndicator } = useShellNavigation({
     locations,
     state,
     lease: scene.lease,
@@ -506,6 +507,12 @@ export function VaultShell({
           accessGenerations={accessGenerations}
           onCatalogRequired={bridge.native ? requestCatalog : undefined}
         >
+          <div
+            ref={swipeIndicator}
+            className="history-swipe"
+            hidden
+            aria-hidden="true"
+          />
           {here.kind === 'first-run' ? (
             <FirstRunExperience
               snapshot={shown}
@@ -591,7 +598,10 @@ export function VaultShell({
                       }
                     : {})}
                   {...(here.kind === 'chat'
-                    ? { onNewChat: requestNewChat }
+                    ? {
+                        onNewChat: requestNewChat,
+                        chatTeamCount: chatTeams(shown).length,
+                      }
                     : {})}
                   {...(filesHere && newStore
                     ? {

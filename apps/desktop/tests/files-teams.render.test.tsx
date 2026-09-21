@@ -11,7 +11,8 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createElement } from 'react';
+import { createElement, useState } from 'react';
+import type { ReactNode } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 
 import { installDom } from './lib/dom-harness';
@@ -79,6 +80,14 @@ interface TeamsOptions {
   store?: string;
   /** The fixture scene, which may open a sheet on mount. */
   scene?: string;
+  /** The sheet the address asks the page to open on arrival. */
+  open?: 'create' | 'join';
+  /**
+   * Re-renders the page at every address it navigates to, the way the shell's
+   * location store does. A `teams` address is the only one this page is drawn
+   * at, so only the tests that follow the intent's own replacement ask for it.
+   */
+  follow?: boolean;
   refresh?: (force?: boolean) => Promise<AgentSnapshot>;
   bridge?: Bridge;
   /** Wraps the mock bridge to observe the commands a row's menu issues. */
@@ -90,7 +99,10 @@ interface TeamsOptions {
 }
 
 async function teams(
-  onNavigate: (location: Location) => void = () => {},
+  onNavigate: (
+    location: Location,
+    options?: { replace?: boolean; force?: boolean },
+  ) => void = () => {},
   options: TeamsOptions = {},
 ) {
   const { TeamsScreen } = (await vite.ssrLoadModule(
@@ -108,36 +120,52 @@ async function teams(
   const snapshot = options.snapshot ?? (await fixture());
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
+  const bridge =
+    options.bridge ??
+    (options.patchBridge
+      ? options.patchBridge(mockBridge(snapshot))
+      : mockBridge(snapshot));
+  const initial: Extract<Location, { kind: 'teams' }> = {
+    kind: 'teams',
+    ...(options.store ? { store: options.store } : {}),
+    ...(options.open ? { open: options.open } : {}),
+  };
+  // The page reads its own address from a prop, so the harness holds that
+  // address in state: with `follow`, a navigation to a `teams` address moves
+  // the harness there, the way the shell's location store would.
+  const Page = (): ReactNode => {
+    const [location, setLocation] = useState(initial);
+    return createElement(TeamsScreen, {
+      snapshot,
+      bridge,
+      location,
+      scene: options.scene ?? 'groups',
+      onNavigate: (
+        next: Location,
+        navigateOptions?: { replace?: boolean; force?: boolean },
+      ) => {
+        onNavigate(next, navigateOptions);
+        if (options.follow && next.kind === 'teams') setLocation(next);
+      },
+      onRefresh: async () => {},
+      onRefreshSnapshot: options.refresh ?? (async () => snapshot),
+      onError: (error: unknown) => {
+        throw error;
+      },
+      onMutationError:
+        options.mutationError ??
+        (async (error: unknown) => {
+          throw error;
+        }),
+    });
+  };
   const rendered = ui.render(
     createElement(OverlayProvider, {
       backgroundRef: { current: null },
       portalRoot,
       children: createElement(ToastProvider, {
         controller: new ToastController(),
-        children: createElement(TeamsScreen, {
-          snapshot,
-          bridge:
-            options.bridge ??
-            (options.patchBridge
-              ? options.patchBridge(mockBridge(snapshot))
-              : mockBridge(snapshot)),
-          location: {
-            kind: 'teams',
-            ...(options.store ? { store: options.store } : {}),
-          },
-          scene: options.scene ?? 'groups',
-          onNavigate,
-          onRefresh: async () => {},
-          onRefreshSnapshot: options.refresh ?? (async () => snapshot),
-          onError: (error: unknown) => {
-            throw error;
-          },
-          onMutationError:
-            options.mutationError ??
-            (async (error: unknown) => {
-              throw error;
-            }),
-        }),
+        children: createElement(Page),
       }),
     }),
   );
@@ -650,7 +678,8 @@ function seededAccount(): string | null {
 test('creating and joining act as the account the address names', async () => {
   const created = await teams(() => {}, {
     store: 'acct:work',
-    scene: 'create',
+    open: 'create',
+    follow: true,
   });
   // The sheet opens on mount, on the account the address named.
   assert.equal(
@@ -668,7 +697,11 @@ test('creating and joining act as the account the address names', async () => {
   ui.cleanup();
 
   // Another account in the address seeds the sheet to that one instead.
-  await teams(() => {}, { store: 'acct:personal', scene: 'create' });
+  await teams(() => {}, {
+    store: 'acct:personal',
+    open: 'create',
+    follow: true,
+  });
   assert.equal(
     document.querySelector('.sheet .hd small')?.textContent,
     undefined,
@@ -678,17 +711,62 @@ test('creating and joining act as the account the address names', async () => {
 
   const joining = await teams(() => {}, {
     store: 'acct:work',
-    scene: 'join',
+    open: 'join',
+    follow: true,
   });
   assert.ok(joining.getByRole('heading', { name: 'Join a team' }));
   // The Teams page already names the account, so the sheet does not.
   assert.equal(document.querySelector('.sheet .hd small'), null);
 });
 
+test('the address opens the sheet it names and then drops the intent', async () => {
+  const journal: { location: Location; replace?: boolean }[] = [];
+  const record = (
+    location: Location,
+    options?: { replace?: boolean; force?: boolean },
+  ): void => {
+    journal.push({ location, ...(options?.replace ? { replace: true } : {}) });
+  };
+  const created = await teams(record, {
+    store: 'acct:work',
+    open: 'create',
+    follow: true,
+  });
+  assert.ok(created.getByRole('heading', { name: 'Create a team' }));
+  assert.equal(seededAccount(), 'Acme');
+  // The intent is spent: the page replaces its address with the plain list,
+  // so nothing reopens the sheet on a later render or on the way back.
+  assert.deepEqual(journal, [
+    { location: { kind: 'teams', store: 'acct:work' }, replace: true },
+  ]);
+  ui.cleanup();
+
+  journal.length = 0;
+  const joining = await teams(record, {
+    store: 'acct:work',
+    open: 'join',
+    follow: true,
+  });
+  assert.ok(joining.getByRole('heading', { name: 'Join a team' }));
+  assert.deepEqual(journal, [
+    { location: { kind: 'teams', store: 'acct:work' }, replace: true },
+  ]);
+});
+
+test('an address with no sheet named opens the list alone', async () => {
+  const journal: Location[] = [];
+  const rendered = await teams((location) => journal.push(location), {
+    store: 'acct:work',
+  });
+  assert.equal(rendered.queryByRole('dialog'), null);
+  assert.equal(journal.length, 0);
+});
+
 test('a created group closes its sheet when only the post-write refresh fails', async () => {
   let reads = 0;
   const rendered = await teams(() => {}, {
-    scene: 'create',
+    open: 'create',
+    follow: true,
     refresh: async () => {
       reads++;
       throw new Error('refresh unavailable');
@@ -742,7 +820,8 @@ test('group creation replaces a cancelled foreground catalog load without repeat
   const forces: boolean[] = [];
   const destinations: Location[] = [];
   const rendered = await teams((location) => destinations.push(location), {
-    scene: 'create',
+    open: 'create',
+    follow: true,
     bridge: {
       ...base,
       createGroup: async (input) => {
@@ -779,6 +858,11 @@ test('group creation replaces a cancelled foreground catalog load without repeat
   assert.equal(reads, 2);
   assert.equal(published.length, 1);
   assert.ok(published[0].stores.some((store) => store.id === 'team:platform'));
-  assert.deepEqual(destinations, [{ kind: 'store', ref: 'team:platform' }]);
+  // The first navigation is the page spending the `open` intent by
+  // canonicalizing its own address; the creation itself lands on the store.
+  assert.deepEqual(destinations, [
+    { kind: 'teams' },
+    { kind: 'store', ref: 'team:platform' },
+  ]);
   assert.equal(rendered.queryByText(/Updated data could not be loaded/), null);
 });

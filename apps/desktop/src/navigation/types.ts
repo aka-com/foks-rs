@@ -66,6 +66,20 @@ export const GROUP_SETTINGS_TABS: readonly GroupSettingsTab[] = [
   'settings',
 ];
 
+/**
+ * The sheet an address asks the Teams page to open when it arrives. Creating
+ * a team and pasting an invitation are sheets over the Teams list rather than
+ * pages of their own, so this is the only way another screen can send a
+ * reader straight into one.
+ */
+export type TeamsSheetIntent = 'create' | 'join';
+
+/** The intents a `?open=` value may name, for decoding an address. */
+export const TEAMS_SHEET_INTENTS: readonly TeamsSheetIntent[] = [
+  'create',
+  'join',
+];
+
 /** A step in the first-run state machine. */
 export type FirstRunStep = string;
 export type FirstRunPath = 'invited' | 'own';
@@ -88,7 +102,7 @@ export type Location =
    * The Teams list, then the group settings the Groups pane carries. `store`
    * names the account the create and discovery rows act as.
    */
-  | { kind: 'teams'; store?: StoreRef }
+  | { kind: 'teams'; store?: StoreRef; open?: TeamsSheetIntent }
   /**
    * Devices. `device` is one row's own page: the key id of a Mac or a paper
    * key, or `yubi:<alias>` for a security-key enrollment, which the agent

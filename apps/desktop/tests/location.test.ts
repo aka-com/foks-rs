@@ -205,6 +205,19 @@ test('sameLocation compares full location properties', () => {
     ),
     true,
   );
+  // Asking the list for a sheet it is not showing is a move, or the page
+  // would never be told to open it.
+  assert.equal(
+    sameLocation({ kind: 'teams' }, { kind: 'teams', open: 'create' }),
+    false,
+  );
+  assert.equal(
+    sameLocation(
+      { kind: 'teams', open: 'create' },
+      { kind: 'teams', open: 'join' },
+    ),
+    false,
+  );
 });
 
 test('railTabOf names the tab a location belongs to', () => {
@@ -235,6 +248,8 @@ const ROUND_TRIP: Location[] = [
   { kind: 'files' },
   { kind: 'teams' },
   { kind: 'teams', store: 'acct:work' },
+  { kind: 'teams', open: 'create' },
+  { kind: 'teams', store: 'acct:work', open: 'join' },
   { kind: 'devices' },
   { kind: 'devices', section: 'macs' },
   { kind: 'devices', section: 'keys', store: 'acct:work' },
@@ -429,12 +444,17 @@ test('the aliases for retired pages point at the tabs that replaced them', () =>
     kind: 'settings',
     section: 'account',
   });
-  for (const state of ['join', 'groups', 'create'])
-    assert.deepEqual(
-      decodeLocation(`?state=${state}`),
-      { kind: 'teams' },
-      state,
-    );
+  assert.deepEqual(decodeLocation('?state=groups'), { kind: 'teams' });
+  // `join` and `create` promise a flow, not just the page it lives on: both
+  // are sheets over the Teams list, so the alias asks for the sheet too.
+  assert.deepEqual(decodeLocation('?state=create'), {
+    kind: 'teams',
+    open: 'create',
+  });
+  assert.deepEqual(decodeLocation('?state=join'), {
+    kind: 'teams',
+    open: 'join',
+  });
   assert.deepEqual(decodeLocation('?state=settings-macs'), {
     kind: 'devices',
     section: 'macs',
@@ -467,8 +487,11 @@ test('the aliases for retired pages point at the tabs that replaced them', () =>
   );
   // A team-chat link with no team named no place at all.
   assert.equal(decodeLocation('?state=team-chat'), null);
-  // A channel that is not a channel identity is rejected on either name.
-  assert.equal(decodeLocation('?state=chat&store=team:eng&channel=zz'), null);
+  // A malformed channel is ignored without discarding its valid team route.
+  assert.deepEqual(decodeLocation('?state=chat&store=team:eng&channel=zz'), {
+    kind: 'chat',
+    ref: 'team:eng',
+  });
   // A channel belongs to the team that names it: with no team the tab resolves
   // one, whose channels this identifier is not.
   assert.deepEqual(decodeLocation(`?state=chat&channel=${'ab'.repeat(16)}`), {

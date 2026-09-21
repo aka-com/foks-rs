@@ -18,6 +18,7 @@ import { PageHeader } from '../shell/page-header';
 import {
   completedFirstRunSteps,
   firstRunNextStep,
+  firstRunNextStepState,
   firstRunStepCount,
   type FirstRunCheckpoint,
   type FirstRunPath,
@@ -243,7 +244,7 @@ export function FirstRunChecklistStatus({
         onSelect={() =>
           onNavigate({
             kind: 'first-run',
-            step: checkpoint.state,
+            step: firstRunNextStepState(checkpoint),
             path: checkpoint.path,
           })
         }
@@ -294,7 +295,7 @@ export function FirstRunAppSidebar({
           onContinue: () =>
             onNavigate({
               kind: 'first-run',
-              step: checkpoint.state,
+              step: firstRunNextStepState(checkpoint),
               path: checkpoint.path,
             }),
         }

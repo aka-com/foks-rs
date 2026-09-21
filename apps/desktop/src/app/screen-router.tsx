@@ -159,7 +159,7 @@ export function ScreenRouter({
       bridge={bridge}
       location={here}
       scene={namedState}
-      onNavigate={(location) => locations.navigate(location)}
+      onNavigate={(location, options) => locations.navigate(location, options)}
       onRefresh={refresh}
       onRefreshSnapshot={refreshSnapshot}
       onError={commandError}

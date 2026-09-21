@@ -820,6 +820,42 @@ test('reselecting the item being edited asks nothing; another item asks', async 
   assert.deepEqual(store.getSnapshot().selection, edited);
 });
 
+test('editing moves focus into the editor and returns it after Cancel', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
+  const rendered = ui.render(p.draw());
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
+  const username = await rendered.findByLabelText('User name');
+  await ui.waitFor(() => assert.equal(document.activeElement, username));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Cancel' }));
+  const edit = await rendered.findByRole('button', { name: 'Edit' });
+  await ui.waitFor(() => assert.equal(document.activeElement, edit));
+});
+
+test('a completed edit returns focus to the item actions', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
+  p.bridge.editTextItem = async () => ({ applied: true });
+  const rendered = ui.render(p.draw());
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
+  const save = await rendered.findByRole('button', { name: 'Save changes' });
+  ui.fireEvent.click(save);
+  const edit = await rendered.findByRole('button', { name: 'Edit' });
+  await ui.waitFor(() => assert.equal(document.activeElement, edit));
+});
+
+test('a file editor with no input focuses Cancel', async () => {
+  const p = await setup(undefined, (item) => item.kind === 'File');
+  const rendered = ui.render(p.draw());
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
+  const cancel = await rendered.findByRole('button', { name: 'Cancel' });
+  await ui.waitFor(() => assert.equal(document.activeElement, cancel));
+});
+
 test('outside clicks close details while clicks inside and dialog interactions do not', async () => {
   const { props, draw } = await setup();
   let closed = 0;

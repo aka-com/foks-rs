@@ -10,7 +10,7 @@
  * (shown when viewing multiple stores), and Size.
  */
 
-import { Fragment, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
 import { useDismissedOnboardingTip } from '../onboarding-tips';
@@ -248,7 +248,7 @@ function Row({
         {item.size === null ? '' : fmtSize(item.size)}
       </span>
       <span className="acts">
-        {password ? (
+        {item.kind !== 'File' ? (
           <>
             {action('Copy', 'copy', onCopy)}
             {action('Reveal', 'eye', onReveal)}
@@ -516,6 +516,7 @@ export interface ItemsScreenProps {
 
 /** Single-line row height now that metadata is displayed in table columns. */
 const ROW_HEIGHT = 38;
+const GRID_VIEW_REASON = 'Grid view is not available yet';
 
 /** Whether `path` is `folder` itself or lies under it. */
 function underFolder(path: string, folder: string): boolean {
@@ -537,6 +538,7 @@ export function ItemsScreen({
   accessNow = () => Date.now() / 1000,
 }: ItemsScreenProps): ReactNode {
   const toasts = useToast();
+  const gridViewReasonId = useId();
   const bodyRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -736,7 +738,7 @@ export function ItemsScreen({
                 type="button"
                 className="fact"
                 title="Team settings"
-                aria-label="Team settings"
+                aria-label={`${tree.store.name} settings`}
                 onClick={(event) => {
                   event.stopPropagation();
                   onSettings(tree.store.id);
@@ -912,13 +914,6 @@ export function ItemsScreen({
     selectedStore?.kind === 'team'
       ? partiesOf(snapshot, selectedStore.id).length
       : 0;
-  const backTo =
-    selectedTree && selected.path !== '/'
-      ? {
-          store: selectedTree.store,
-          path: selected.path.slice(0, selected.path.lastIndexOf('/')) || '/',
-        }
-      : null;
 
   /* ------------------------------------------------------- empty states -- */
 
@@ -1141,7 +1136,9 @@ export function ItemsScreen({
                     className="plus"
                     title="New team"
                     aria-label="New team"
-                    onClick={() => locations.navigate({ kind: 'teams' })}
+                    onClick={() =>
+                      locations.navigate({ kind: 'teams', open: 'create' })
+                    }
                   >
                     <Icon name="plus" />
                   </button>
@@ -1165,37 +1162,6 @@ export function ItemsScreen({
           </aside>
           <section className="lpane" aria-label="Folder contents">
             <div className="lt">
-              {locations.backTarget() ? (
-                <button
-                  type="button"
-                  className="back"
-                  title="Back"
-                  aria-label="Back"
-                  onClick={() => locations.back()}
-                >
-                  <Icon name="arrowLeft" />
-                </button>
-              ) : backTo ? (
-                <button
-                  type="button"
-                  className="back"
-                  title="Parent folder"
-                  aria-label="Parent folder"
-                  onClick={() => selectFolder(backTo.store, backTo.path)}
-                >
-                  <Icon name="arrowLeft" />
-                </button>
-              ) : selectedTree ? (
-                <button
-                  type="button"
-                  className="back"
-                  title="Back to All items"
-                  aria-label="Back to All items"
-                  onClick={() => goAllItems()}
-                >
-                  <Icon name="arrowLeft" />
-                </button>
-              ) : null}
               <span className="where">
                 {state.query ? (
                   <>
@@ -1223,17 +1189,29 @@ export function ItemsScreen({
               </span>
               <span className="sp" />
               <span className="seg" role="group" aria-label="View">
-                <button type="button" className="on" title="List view">
-                  <Icon name="list" />
-                </button>
                 <button
                   type="button"
+                  className="on"
+                  aria-pressed={true}
+                  title="List view"
+                >
+                  <Icon name="list" />
+                </button>
+                {/* Grid is not built. The button keeps its place and says
+                    why, `aria-disabled` rather than `disabled` so the
+                    keyboard still reaches the reason. */}
+                <button
+                  type="button"
+                  aria-pressed={false}
                   aria-disabled="true"
-                  title="Grid view is not available yet"
-                  onClick={(event) => event.preventDefault()}
+                  aria-describedby={gridViewReasonId}
+                  title={GRID_VIEW_REASON}
                 >
                   <Icon name="grid" />
                 </button>
+                <span id={gridViewReasonId} className="offscreen">
+                  {GRID_VIEW_REASON}
+                </span>
               </span>
             </div>
             <div
@@ -1254,8 +1232,8 @@ export function ItemsScreen({
                   <span className="t">
                     <b>Your server session has expired.</b>
                     <p>
-                      Check in again to save changes. Items here can still be
-                      read and copied.
+                      Items in {selectedStore.name} are unavailable until it
+                      checks in again.
                     </p>
                   </span>
                   <Button

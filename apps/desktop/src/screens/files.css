@@ -249,18 +249,6 @@
 .lpane {
   container-type: inline-size;
 }
-@container (max-width: 600px) {
-  .folder-body .row .name .fpath {
-    display: none;
-  }
-  .folder-body .hdr.cols.loc,
-  .folder-body .row.cols.loc {
-    grid-template-columns: minmax(0, 1fr) 90px 66px;
-  }
-  .folder-body .cols.loc > :nth-child(3) {
-    display: none;
-  }
-}
 
 /* Name, Kind, (Location), Size. There is no Modified column: the catalog
    carries no write timestamp. */
@@ -274,6 +262,19 @@
 .folder-body .row.cols.loc {
   grid-template-columns: minmax(0, 1fr) 90px 140px 66px;
 }
+@container (max-width: 600px) {
+  .folder-body .row .name .fpath {
+    display: none;
+  }
+  .folder-body .hdr.cols.loc,
+  .folder-body .row.cols.loc {
+    grid-template-columns: minmax(0, 1fr) 90px 66px;
+  }
+  .folder-body .cols.loc > :nth-child(3) {
+    display: none;
+  }
+}
+
 .folder-body .hdr.cols {
   position: sticky;
   top: 0;
@@ -358,6 +359,7 @@
   box-shadow: var(--shadow-xs);
 }
 .folder-body .row:hover .acts,
+.folder-body .row:focus-within .acts,
 .folder-body .row.sel .acts {
   display: flex;
   opacity: 1;
@@ -756,4 +758,8 @@
   align-self: flex-start;
   padding: 2px;
   border-top: 0;
+}
+
+.folder-body .row:focus-within .cell.num {
+  visibility: hidden;
 }

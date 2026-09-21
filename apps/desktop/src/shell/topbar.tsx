@@ -171,19 +171,25 @@ export interface TopbarProps {
   /** Steps the Files tree's selection. Omitted where the tree's selection is
    *  not reachable, in which case only the tab's own crumb navigates. */
   onSetFolder?: (folder: string) => void;
-  /** Current search/filter query and change handler for the active view. */
+  /** The current view's filter text, and the way to set it. */
   query?: string;
   onQuery?: (query: string) => void;
   collapsed: boolean;
   onToggleCollapsed?: () => void;
   /** Files: opens the new-item sheet for one kind. */
   onNew?: (kind: Exclude<KindFilter, 'All'>) => void;
-  /** Target store or folder name displayed in the New menu header. */
+  /** The store or folder New saves into, for the menu's header line. */
   newDestination?: string;
-  /** Tooltip explanation when the New action is disabled; null when enabled. */
+  /** Why New cannot act here, as its tooltip; null when it can. */
   newBlocked?: string | null;
   /** Chat: opens the New chat sheet. */
   onNewChat?: () => void;
+  /**
+   * Chat: how many teams have chat. With none there is no conversation to
+   * create and nothing to search, so the header offers the team the tab needs
+   * first and draws its field inert.
+   */
+  chatTeamCount?: number;
   /** Files: whether the details panel is open, and the way to toggle it. */
   detailsOpen?: boolean;
   onToggleDetails?: () => void;
@@ -197,14 +203,14 @@ export interface TopbarProps {
   syncService?: DesktopReconciliation;
   /** Opens one server under Settings › Account, from the popover. */
   onOpenServers?: (profile: string) => void;
-  /** Whether the topbar controls are disabled during a blocking operation. */
+  /** A blocking state: the bar is drawn, and nothing on it acts. */
   blocked?: boolean;
 }
 
 /** How long the status popover survives the pointer leaving it. */
 const SYNC_HOVER_CLOSE_MS = 180;
 
-/** Returns the CSS class, icon name, and text label for a given sync state. */
+/** The sync control's four states, as a class, an icon and a word. */
 function syncFace(state: 'synced' | 'syncing' | 'lapsed' | 'failed' | 'lost'): {
   className: string;
   icon: 'refresh' | 'alert' | 'plug';
@@ -283,35 +289,72 @@ function SyncControls({
     closeTimer.current = setTimeout(() => setOpen(false), SYNC_HOVER_CLOSE_MS);
   };
   const track = (key: 'pointer' | 'focus', value: boolean) => (): void => {
+    if (key === 'focus' && movingFocus.current) return;
     on.current[key] = value;
     settle();
   };
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  // Set while the focus is moved programmatically, so the button's own focus
+  // event does not count as the reader arriving and reopen what just closed.
+  const movingFocus = useRef(false);
   const hideNow = (): void => {
     cancelClose();
     on.current = { pointer: false, focus: false };
     setOpen(false);
+    // Escape from inside the popover would otherwise drop the focus on the
+    // body, since the anchor the popover restores to is the inert wrapper.
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && !wrapRef.current?.contains(active)) {
+      movingFocus.current = true;
+      buttonRef.current?.focus();
+      movingFocus.current = false;
+    }
   };
-  const spinning = summary.refreshing;
+  // ArrowDown on the button opens the popover and moves the focus onto its
+  // first control; a popover that is already open takes the focus directly.
+  const [focusRequest, setFocusRequest] = useState(0);
+  const focusFirstControl = (): boolean => {
+    const first = document
+      .getElementById(SYNC_STATUS_ID)
+      ?.querySelector<HTMLElement>('button:not([disabled]), a[href]');
+    if (!first) return false;
+    first.focus();
+    return true;
+  };
+  useEffect(() => {
+    if (!focusRequest || !open) return;
+    focusFirstControl();
+  }, [focusRequest, open]);
+  // Refreshing is one state whichever side reports it: the scheduler's own
+  // activity, or the shell's manual refresh. The face, the busy state and
+  // what the button will accept are all read off the same word.
+  const spinning = summary.refreshing || refreshing;
   // A blocked shell is one whose agent has stopped answering, whatever the
   // servers last reported: the control says that before it says anything
   // about a lease.
-  // A lapsed check-in is a lease fact, not a refresh result: it is said
-  // before a refresh failure, which is what `summary.failed` reports.
+  // A lapsed check-in is a lease fact, not a refresh result. Either of the
+  // two lease states is a lapse: a check-in that expired and one that was
+  // never available both leave the server unusable until it is checked again.
   const lapsed = snapshot.servers.some((server) => {
     const availability = serverAvailability(snapshot, server);
     return (
-      !availability.available && availability.reason === 'check-in-expired'
+      !availability.available &&
+      (availability.reason === 'check-in-expired' ||
+        availability.reason === 'check-in-unavailable')
     );
   });
+  // A lapse on one server must not hide a refresh that failed on another:
+  // the failure is the one a refresh from here would act on, so it is said
+  // first, and the popover lists which server is in which state.
   const face = syncFace(
     blocked
       ? 'lost'
       : spinning
         ? 'syncing'
-        : lapsed
-          ? 'lapsed'
-          : summary.failed
-            ? 'failed'
+        : summary.failed
+          ? 'failed'
+          : lapsed
+            ? 'lapsed'
             : 'synced',
   );
   return (
@@ -324,16 +367,30 @@ function SyncControls({
       onBlur={track('focus', false)}
     >
       <button
+        ref={buttonRef}
         type="button"
         className={`global-refresh ${face.className}`}
-        aria-label={
-          spinning ? 'Refreshing vaults, teams, chat, and devices' : 'Refresh'
-        }
+        onKeyDown={(event) => {
+          if (event.key !== 'ArrowDown' || blocked) return;
+          event.preventDefault();
+          if (open && focusFirstControl()) return;
+          on.current.focus = true;
+          setOpen(true);
+          setFocusRequest((n) => n + 1);
+        }}
+        // The accessible name carries the state the button shows as well as
+        // what pressing it does, so what is read and what is drawn agree.
+        aria-label={`${face.label} — ${
+          spinning
+            ? 'refreshing vaults, teams, chat and devices'
+            : 'refresh vaults, teams, chat and devices'
+        }`}
         title="Refresh vaults, teams, chat and devices"
         aria-busy={spinning || undefined}
         aria-describedby={open ? SYNC_STATUS_ID : undefined}
-        disabled={refreshing || blocked}
-        onClick={onRefresh}
+        aria-disabled={spinning || undefined}
+        disabled={blocked}
+        onClick={spinning ? undefined : onRefresh}
       >
         {face.icon === 'refresh' ? null : <Icon name={face.icon} />}
         {face.label === 'Synced' ? (
@@ -346,11 +403,13 @@ function SyncControls({
           snapshot={snapshot}
           service={service}
           summary={summary}
-          refreshDisabled={refreshing || blocked}
+          refreshDisabled={spinning || blocked}
           anchorRef={wrapRef}
           onClose={hideNow}
           onPointerEnter={track('pointer', true)}
           onPointerLeave={track('pointer', false)}
+          onFocusEnter={track('focus', true)}
+          onFocusLeave={track('focus', false)}
           onOpenServers={onOpenServers}
           onRefresh={blocked ? undefined : onRefresh}
         />
@@ -360,7 +419,11 @@ function SyncControls({
 }
 
 /**
- * Generates clickable breadcrumb segments for the topbar. For the Files tab, segments reflect folder hierarchy and update folder selection; for other tabs, segments are derived from crumbTrail with only the root tab being interactive.
+ * The breadcrumb's segments. Files builds its own from the tree's selection,
+ * so a folder step navigates the tree rather than the location; the other
+ * tabs take `crumbTrail`'s words, of which the tab itself and the one step
+ * its address still names — a channel's team, a server detail's section —
+ * are links.
  */
 function crumbSegments(
   location: Location,
@@ -380,7 +443,26 @@ function crumbSegments(
     },
   };
   if (tab !== 'files') {
-    return [root, ...trail.slice(1).map((label) => ({ label }))];
+    // The steps a non-Files tab can go back to are the places its address
+    // still names: the team a channel belongs to, and the Settings section a
+    // server detail was opened from. The last crumb is the page itself, and
+    // the renderer draws it as current whether or not it carries a click.
+    const inner = trail.slice(1).map((label, index): CrumbSegment => {
+      if (tab === 'chat' && index === 0 && location.kind === 'chat') {
+        const ref = location.ref;
+        if (ref)
+          return { label, onClick: () => onNavigate({ kind: 'chat', ref }) };
+      }
+      if (tab === 'settings' && index === 0 && location.kind === 'settings') {
+        const section = settingsSectionOf(location);
+        return {
+          label,
+          onClick: () => onNavigate({ kind: 'settings', section }),
+        };
+      }
+      return { label };
+    });
+    return [root, ...inner];
   }
   const selected = folderSelection(location, folder);
   if (selected.store === ALL_ITEMS || !snapshot)
@@ -445,6 +527,7 @@ export function Topbar({
   newDestination,
   newBlocked = null,
   onNewChat,
+  chatTeamCount,
   refreshing = false,
   onRefresh,
   syncService,
@@ -486,7 +569,8 @@ export function Topbar({
   const scope = scopeLabel(location, snapshot, folder, channelName);
   // Only the views that filter accept a query; the rest draw the field inert
   // so the header keeps its shape from page to page.
-  const searchable = Boolean(onQuery) && !blocked;
+  const noChatTeams = tab === 'chat' && chatTeamCount === 0;
+  const searchable = Boolean(onQuery) && !blocked && !noChatTeams;
   return (
     <div className="topbar" data-tauri-drag-region="">
       <nav className="crumbs" aria-label="Breadcrumb" data-tauri-drag-region="">
@@ -546,6 +630,19 @@ export function Topbar({
           reason={newBlocked}
           disabled={blocked}
         />
+      ) : noChatTeams ? (
+        // Chat starts in a team: with none, the header's own action is the
+        // team, created on the Teams page where that sheet lives.
+        <Button
+          variant="primary"
+          icon="plus"
+          className="new-chat"
+          disabled={blocked}
+          title="Create a team on the Teams page"
+          onClick={() => onNavigate({ kind: 'teams', open: 'create' })}
+        >
+          New team
+        </Button>
       ) : tab === 'chat' && onNewChat ? (
         <Button
           variant="primary"
@@ -571,7 +668,9 @@ export function Topbar({
           type="button"
           className={`global-refresh ${syncFace(refreshing ? 'syncing' : 'synced').className}`}
           aria-label={
-            refreshing ? 'Refreshing vaults, teams, and devices' : 'Refresh'
+            refreshing
+              ? 'Syncing… — refreshing vaults, teams and devices'
+              : 'Synced — refresh vaults, teams and devices'
           }
           title={
             refreshing

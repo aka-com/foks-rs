@@ -34,6 +34,7 @@ export function useShellNavigation({
   // below, and `refuse` displays an alert toast. The active pending navigation is
   // stored in a ref as well as in state so a newer intent can cancel it without
   // a stale closure.
+  const swipeIndicator = useRef<HTMLDivElement>(null);
   const [prompt, setPrompt] = useState<PendingPrompt | null>(null);
   const promptRef = useRef<PendingPrompt | null>(null);
   const settlePrompt = useCallback((confirmed: boolean) => {
@@ -106,25 +107,33 @@ export function useShellNavigation({
       locations.getSnapshot().location.kind !== 'first-run' &&
       !document.querySelector('[role="menu"], [role="listbox"]');
     const stopSwipe = mountSwipeBack({
-      target: () => locations.backTarget(),
-      enabled: () => {
-        const target = locations.backTarget();
-        return (
-          enabled() &&
-          target !== null &&
-          locations.navigationVerdict({
-            kind: 'navigate',
-            location: target,
-          }) === null
-        );
+      target: (direction) =>
+        direction === 'back'
+          ? locations.backTarget()
+          : locations.forwardTarget(),
+      enabled,
+      navigate: (_target, direction) =>
+        direction === 'back' ? locations.back() : locations.forward(),
+      // Keep per-wheel feedback off the shell's React render path.
+      onProgress: (value) => {
+        const indicator = swipeIndicator.current;
+        if (!indicator) return;
+        indicator.hidden = !value;
+        if (!value) return;
+        indicator.className = `history-swipe ${value.direction}`;
+        indicator.textContent = value.direction === 'back' ? '←' : '→';
+        indicator.style.opacity = String(0.3 + value.progress * 0.7);
+        indicator.style.transform = `translateX(${(1 - value.progress) * (value.direction === 'back' ? -30 : 30)}px)`;
       },
-      navigate: () => locations.back(),
     });
+    const stopWatching = locations.subscribe(() => stopSwipe.cancel());
     const stopInputs = mountBackInputs({
       enabled,
       back: () => locations.back(),
+      forward: () => locations.forward(),
     });
     return () => {
+      stopWatching();
       stopSwipe();
       stopInputs();
     };
@@ -135,5 +144,5 @@ export function useShellNavigation({
     settlePrompt(false);
   }, [here, settlePrompt]);
 
-  return { prompt, settlePrompt };
+  return { prompt, settlePrompt, swipeIndicator };
 }

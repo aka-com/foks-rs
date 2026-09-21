@@ -180,7 +180,7 @@ test('leaving the button without reaching the popover closes it', async () => {
   assert.equal(document.querySelector('.sync-popover'), null);
 });
 
-test('displays spinning icon and "Syncing…" status text while refreshing', async () => {
+test('announces Syncing while refreshing and Synced when finished', async () => {
   const service = reconciliation();
   const activity = service.activities.begin('Loading catalog');
   const rendered = ui.render(
@@ -191,11 +191,11 @@ test('displays spinning icon and "Syncing…" status text while refreshing', asy
   assert.equal(button.getAttribute('aria-busy'), 'true');
   assert.equal(
     button.getAttribute('aria-label'),
-    'Refreshing vaults, teams, chat, and devices',
+    'Syncing… — refreshing vaults, teams, chat and devices',
   );
-  // The sync icon has a spinning animation without an overlay ring or status dot.
+  // Preserve the text-only refresh treatment while exposing its busy state.
   assert.ok(button.classList.contains('busy'));
-  assert.ok(button.querySelector('svg.ic'));
+  assert.equal(button.querySelector('svg.ic'), null);
   assert.equal(button.querySelector('.spin'), null);
   assert.equal(button.querySelector('.dot'), null);
   assert.equal(button.querySelector('.t')?.textContent, 'Syncing…');
@@ -203,7 +203,7 @@ test('displays spinning icon and "Syncing…" status text while refreshing', asy
   rendered.rerender(createElement(Harness, { service, refreshing: false }));
   assert.equal(button.getAttribute('aria-busy'), null);
   assert.equal(button.classList.contains('busy'), false);
-  assert.ok(button.querySelector('svg.ic'));
+  assert.equal(button.querySelector('svg.ic'), null);
   // When idle, displays a green status dot alongside the "Synced" label.
   assert.ok(button.querySelector('.dot.ok'));
   assert.equal(button.querySelector('.t')?.textContent, 'Synced');
@@ -233,16 +233,206 @@ test('remaining work is visible beside healthy jobs and disappears when it settl
   });
   const footerButtons = [...document.querySelectorAll('.sync-foot .btn')];
   assert.deepEqual(footerButtons, [copy, refreshNow]);
-  assert.equal(refreshNow.textContent, '');
+  assert.equal(refreshNow.textContent, 'Refresh now');
   assert.equal(refreshNow.title, 'Refresh now');
   assert.ok(refreshNow.querySelector('svg'));
-  assert.equal(refreshNow.disabled, false);
+  assert.equal(refreshNow.disabled, true);
   assert.equal(button.disabled, false);
+  assert.equal(button.getAttribute('aria-disabled'), 'true');
   rendered.rerender(createElement(Harness, { service, refreshing: true }));
   assert.equal(refreshNow.disabled, true);
-  assert.equal(button.disabled, true);
+  assert.equal(button.getAttribute('aria-disabled'), 'true');
+  rendered.rerender(createElement(Harness, { service, refreshing: false }));
   await ui.act(async () => activity.finish());
   assert.equal(button.getAttribute('aria-busy'), null);
   assert.equal(ui.screen.queryByLabelText('Other refresh activity'), null);
   service.dispose();
+});
+
+test('ArrowDown moves the focus into the popover, and Escape brings it back', async () => {
+  const wrap = mount();
+  const button = wrap.querySelector<HTMLButtonElement>('button');
+  assert.ok(button);
+  await ui.act(async () => {
+    button.focus();
+  });
+  assert.ok(document.querySelector('.sync-popover'));
+
+  await ui.act(async () => {
+    ui.fireEvent.keyDown(button, { key: 'ArrowDown' });
+  });
+  const popover = document.querySelector('.sync-popover');
+  assert.ok(popover);
+  const active = document.activeElement;
+  assert.ok(active instanceof HTMLElement);
+  assert.ok(popover.contains(active), 'focus lands inside the popover');
+  // The button's blur and the control's focus are one move: the popover stays.
+  await settle();
+  assert.ok(document.querySelector('.sync-popover'));
+
+  await ui.act(async () => {
+    ui.fireEvent.keyDown(document, { key: 'Escape' });
+  });
+  await settle();
+  assert.equal(document.querySelector('.sync-popover'), null);
+  assert.equal(document.activeElement, button);
+});
+
+test('the refresh control reads out the state it shows and stops while it runs', () => {
+  ui.render(
+    createElement(Harness, { service: reconciliation(), refreshing: true }),
+  );
+  const button = document.querySelector<HTMLButtonElement>('.global-refresh');
+  assert.ok(button);
+  // The accessible name carries the visible word rather than contradicting it.
+  assert.match(button.getAttribute('aria-label') ?? '', /^Syncing… — /);
+  assert.equal(button.textContent?.includes('Syncing…'), true);
+  // A refresh already in flight is not started again from here.
+  assert.equal(button.disabled, false);
+  assert.equal(button.getAttribute('aria-disabled'), 'true');
+  assert.equal(button.getAttribute('aria-busy'), 'true');
+});
+
+test('Chat with no team that has chat offers a team and disables the field', () => {
+  const navigations: unknown[] = [];
+  const background = { current: null } as { current: HTMLElement | null };
+  ui.render(
+    createElement(
+      'div',
+      null,
+      createElement(OverlayProvider, {
+        backgroundRef: background,
+        portalRoot: document.body,
+        children: createElement(Topbar, {
+          snapshot: FIXTURE,
+          location: { kind: 'chat' },
+          onNavigate: (location) => navigations.push(location),
+          collapsed: false,
+          query: '',
+          onQuery: () => {},
+          onNewChat: () => {},
+          chatTeamCount: 0,
+        }),
+      }),
+    ),
+  );
+  const field = document.querySelector<HTMLInputElement>('.topsearch input');
+  assert.ok(field);
+  assert.equal(field.disabled, true);
+  assert.equal(ui.screen.queryByRole('button', { name: 'New chat' }), null);
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New team' }));
+  assert.deepEqual(navigations, [{ kind: 'teams', open: 'create' }]);
+});
+
+test('Chat with teams keeps New chat and a live field', () => {
+  const background = { current: null } as { current: HTMLElement | null };
+  ui.render(
+    createElement(
+      'div',
+      null,
+      createElement(OverlayProvider, {
+        backgroundRef: background,
+        portalRoot: document.body,
+        children: createElement(Topbar, {
+          snapshot: FIXTURE,
+          location: { kind: 'chat' },
+          onNavigate: () => {},
+          collapsed: false,
+          query: '',
+          onQuery: () => {},
+          onNewChat: () => {},
+          chatTeamCount: 2,
+        }),
+      }),
+    ),
+  );
+  const field = document.querySelector<HTMLInputElement>('.topsearch input');
+  assert.ok(field);
+  assert.equal(field.disabled, false);
+  assert.ok(ui.screen.getByRole('button', { name: 'New chat' }));
+});
+
+for (const location of [
+  { kind: 'chat', ref: 'team:eng', channel: 'general' },
+  { kind: 'settings', section: 'account', profile: 'acme' },
+] as const) {
+  test(`the intermediate ${location.kind} breadcrumb navigates to its parent`, async () => {
+    const navigations: unknown[] = [];
+    const { ChatInboxProvider } = (await vite.ssrLoadModule(
+      '/src/chat/inbox-provider.tsx',
+    )) as typeof import('../src/chat/inbox-provider');
+    const { mockBridge } = (await vite.ssrLoadModule(
+      '/src/mock-bridge.ts',
+    )) as typeof import('../src/mock-bridge');
+    const snapshot = {
+      ...FIXTURE,
+      servers: FIXTURE.servers.map((server) => ({
+        ...server,
+        services: { ...server.services, chat: true },
+      })),
+    };
+    const bridge = mockBridge(snapshot);
+    let target: import('../src/location').Location = location;
+    if (location.kind === 'chat') {
+      const reply = await bridge.chat(location.ref, {
+        action: 'sync-inbox',
+        blocked_channels: [],
+      });
+      assert.equal(reply.result.kind, 'inbox');
+      if (reply.result.kind !== 'inbox') return;
+      target = {
+        ...location,
+        channel: reply.result.conversations[0].channel.id,
+      };
+    }
+    ui.render(
+      createElement(ChatInboxProvider, {
+        snapshot,
+        bridge,
+        children: createElement(Topbar, {
+          snapshot,
+          location: target,
+          collapsed: false,
+          onNavigate: (next) => navigations.push(next),
+        }),
+      }),
+    );
+    await ui.waitFor(() =>
+      assert.equal(document.querySelectorAll('.crumbs button').length, 3),
+    );
+    const crumbs =
+      document.querySelectorAll<HTMLButtonElement>('.crumbs button');
+    assert.equal(crumbs.length, 3);
+    ui.fireEvent.click(crumbs[1]);
+    assert.deepEqual(navigations, [
+      location.kind === 'chat'
+        ? { kind: 'chat', ref: 'team:eng' }
+        : { kind: 'settings', section: 'account' },
+    ]);
+  });
+}
+
+test('an unavailable team retains its settings action in the takeover band', async () => {
+  const { StoreAccessTakeover } = (await vite.ssrLoadModule(
+    '/src/screens/store-access.tsx',
+  )) as typeof import('../src/screens/store-access');
+  const team = FIXTURE.stores.find((store) => store.kind === 'team');
+  assert.ok(team && team.kind === 'team');
+  let opened = 0;
+  ui.render(
+    createElement(StoreAccessTakeover, {
+      snapshot: FIXTURE,
+      store: { ...team, active: false },
+      variant: 'band',
+      onOpenServer: () => {},
+      onFinishSetup: () => {},
+      headerAction: createElement(
+        'button',
+        { onClick: () => opened++ },
+        'Team settings',
+      ),
+    }),
+  );
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Team settings' }));
+  assert.equal(opened, 1);
 });

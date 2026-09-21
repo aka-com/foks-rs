@@ -1,47 +1,26 @@
-/**
- * Implements two-finger swipe-back navigation from horizontal wheel events.
- *
- * Native webview history gestures are disabled because the application uses
- * `history.replaceState` and maintains its own navigation state. A completed
- * gesture returns to the previous committed navigation in the app history.
+/** Bidirectional history gestures with reversible feedback and idle completion.
+ * WheelEvent has no portable finger-release or momentum phase, so a quiet
+ * stream ends the gesture. No navigation occurs while events keep arriving.
  */
-
 import type { Location } from '../location';
 
-/** How long a gap between wheel events ends a gesture, in milliseconds. */
 export const GESTURE_GAP_MS = 120;
-
-/** How far the fingers travel, in CSS pixels, before the page changes. */
 export const BACK_DISTANCE_PX = 120;
-
-/**
- * Required idle interval before accepting another gesture. This prevents
- * momentum events from triggering a second navigation.
- */
-export const QUIET_MS = 300;
-
+export type HistoryDirection = 'back' | 'forward';
+export interface SwipeProgress {
+  direction: HistoryDirection;
+  progress: number;
+}
 export interface SwipeBackOptions {
-  /**
-   * Where a back swipe goes, read when the gesture completes. `null` makes
-   * the gesture inert when there is no earlier visit.
-   */
-  target: () => Location | null;
-  /**
-   * Whether the shell is in a state that accepts the gesture: false while a
-   * blocking state or a dialog owns the window.
-   */
+  target: (direction: HistoryDirection) => Location | null;
   enabled: () => boolean;
-  navigate: (location: Location) => void;
-  /** What the wheel events are read from. Defaults to `window`. */
+  navigate: (location: Location, direction: HistoryDirection) => void;
+  onProgress?: (progress: SwipeProgress | null) => void;
   root?: EventTarget;
-  /** The clock the gesture is timed on. Defaults to `performance.now`. */
-  now?: () => number;
+  /** Schedule completion; injectable for deterministic gesture tests. */
+  schedule?: (finish: () => void) => () => void;
 }
 
-/**
- * Whether a horizontally scrollable element can consume the event in the
- * gesture direction. When it can, shell navigation does not run.
- */
 function absorbsScroll(target: EventTarget | null, deltaX: number): boolean {
   let node = target instanceof Element ? target : null;
   for (; node; node = node.parentElement) {
@@ -58,87 +37,115 @@ function absorbsScroll(target: EventTarget | null, deltaX: number): boolean {
   return false;
 }
 
-/**
- * Accumulates horizontal movement and suppresses momentum after navigation.
- * An injected clock makes gesture timing deterministic in tests.
- */
 export class SwipeBackTracker {
-  private readonly options: SwipeBackOptions;
-  private readonly now: () => number;
-  /** Back-directed distance accumulated in the current gesture, in pixels. */
+  private direction: HistoryDirection | null = null;
+  private destination: Location | null = null;
   private traveled = 0;
-  /** When the last wheel event was read, or null before the first one. */
-  private lastEventAt: number | null = null;
-  /** Set once a gesture is decided: the rest of its events are ignored. */
-  private spent = false;
+  private suppressed = false;
+  private cancelTimer?: () => void;
 
-  constructor(options: SwipeBackOptions) {
-    this.options = options;
-    this.now = options.now ?? (() => performance.now());
+  constructor(private readonly options: SwipeBackOptions) {}
+
+  /** Cancel an in-flight gesture if another input navigates or owns the page. */
+  cancel(): void {
+    if (this.cancelTimer) this.suppressed = true;
+    this.options.onProgress?.(null);
   }
 
-  /** Processes one wheel event and navigates when the back-swipe threshold is reached. */
+  dispose(): void {
+    this.cancelTimer?.();
+    this.cancelTimer = undefined;
+    this.reset();
+  }
+
+  private reset(): void {
+    this.direction = null;
+    this.destination = null;
+    this.traveled = 0;
+    this.suppressed = false;
+    this.options.onProgress?.(null);
+  }
+
+  private finish = (): void => {
+    const { direction, destination, traveled, suppressed } = this;
+    this.cancelTimer = undefined;
+    this.reset();
+    if (
+      !suppressed &&
+      direction &&
+      destination &&
+      traveled >= BACK_DISTANCE_PX &&
+      this.options.enabled() &&
+      this.options.target(direction) === destination
+    ) {
+      this.options.navigate(destination, direction);
+    }
+  };
+
   wheel(event: WheelEvent): void {
-    // Pinch-zoom arrives as a ctrl-wheel on macOS, and any other modifier
-    // means the reader is driving something that is not navigation.
+    this.cancelTimer?.();
+    const schedule =
+      this.options.schedule ??
+      ((finish: () => void) => {
+        const timer = setTimeout(finish, GESTURE_GAP_MS);
+        return () => clearTimeout(timer);
+      });
+    this.cancelTimer = schedule(this.finish);
+    // A scroll or modified gesture owns its entire stream, even after it
+    // reaches an edge. It must not become navigation partway through.
     if (
       event.defaultPrevented ||
       event.ctrlKey ||
       event.metaKey ||
       event.altKey ||
-      event.shiftKey
-    )
-      return;
-    const at = this.now();
-    const gap = this.lastEventAt === null ? Infinity : at - this.lastEventAt;
-    this.lastEventAt = at;
-    if (this.spent) {
-      // Momentum from the decided gesture. Only a quiet stream re-arms, and
-      // every event in it postpones that quiet.
-      if (gap <= QUIET_MS) return;
-      this.spent = false;
-      this.traveled = 0;
-    } else if (gap > GESTURE_GAP_MS) {
-      this.traveled = 0;
+      event.shiftKey ||
+      !this.options.enabled() ||
+      ((event.deltaX !== 0 || event.deltaY !== 0) &&
+        Math.abs(event.deltaX) <= 2 * Math.abs(event.deltaY)) ||
+      absorbsScroll(event.target, event.deltaX)
+    ) {
+      this.cancel();
     }
-    // A vertical scroll that carries a little sideways drift is not a swipe.
-    if (Math.abs(event.deltaX) <= 2 * Math.abs(event.deltaY)) {
-      this.traveled = 0;
-      return;
+    if (this.suppressed || (event.deltaX === 0 && event.deltaY === 0)) return;
+    if (!this.direction) {
+      this.direction = event.deltaX < 0 ? 'back' : 'forward';
+      this.destination = this.options.target(this.direction);
+      if (!this.destination) {
+        this.cancel();
+        return;
+      }
     }
-    if (absorbsScroll(event.target, event.deltaX)) {
-      this.traveled = 0;
-      return;
-    }
-    // Two fingers moving right report a negative `deltaX`; that is back.
-    // Clamping at zero keeps a forward swipe from counting as back distance
-    // when the fingers reverse.
-    this.traveled = Math.max(0, this.traveled - event.deltaX);
-    if (this.traveled < BACK_DISTANCE_PX) return;
-    // Consume the gesture after it reaches the threshold, even when navigation is
-    // disabled. Set the latch before calling `navigate` so exceptions cannot allow
-    // subsequent momentum events to retry navigation.
-    this.spent = true;
-    this.traveled = 0;
-    const destination = this.options.enabled() ? this.options.target() : null;
-    if (destination) this.options.navigate(destination);
+    // Normalize line/page deltas; trackpads normally report CSS pixels.
+    const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 800 : 1;
+    const movement =
+      event.deltaX * scale * (this.direction === 'back' ? -1 : 1);
+    // Capping progress makes reversing a completed preview cancel promptly,
+    // even after a long swipe. The direction stays fixed until idle.
+    this.traveled = Math.max(
+      0,
+      Math.min(BACK_DISTANCE_PX, this.traveled + movement),
+    );
+    this.options.onProgress?.({
+      direction: this.direction,
+      progress: this.traveled / BACK_DISTANCE_PX,
+    });
   }
 }
 
-/**
- * Reads the swipe from the wheel events reaching `root`. The returned function
- * unsubscribes.
- */
-export function mountSwipeBack(options: SwipeBackOptions): () => void {
+export function mountSwipeBack(
+  options: SwipeBackOptions,
+): (() => void) & { cancel: () => void } {
   const root = options.root ?? window;
   const tracker = new SwipeBackTracker(options);
-  const onWheel = (event: Event): void => {
-    tracker.wheel(event as WheelEvent);
-  };
-  // The listener never calls `preventDefault`: a swipe that turns out to be a
-  // scroll must still scroll.
+  const onWheel = (event: Event): void => tracker.wheel(event as WheelEvent);
+  const onBlur = (): void => tracker.cancel();
   root.addEventListener('wheel', onWheel, { passive: true });
-  return () => {
+  root.addEventListener('blur', onBlur);
+  const stop = () => {
     root.removeEventListener('wheel', onWheel);
+    root.removeEventListener('blur', onBlur);
+    tracker.dispose();
   };
+  stop.cancel = () => tracker.cancel();
+  return stop;
 }

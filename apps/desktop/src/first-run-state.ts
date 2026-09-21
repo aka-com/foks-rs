@@ -831,6 +831,17 @@ export function firstRunNextStep(state: FirstRunCheckpoint): string {
   return 'finish setup';
 }
 
+/** Returns the setup screen that performs the next incomplete step. */
+export function firstRunNextStepState(
+  state: FirstRunCheckpoint,
+): FirstRunStateName {
+  if (!state.profile) return 'who';
+  if (!state.account) return 'account';
+  if (!(state.passphraseSet || state.backupCommitted)) return 'protect';
+  if (state.path === 'invited' && !state.added) return 'waiting';
+  return state.state;
+}
+
 /** Personal setup ends after account recovery; invitees also join their group. */
 export function firstRunStepCount(state: FirstRunCheckpoint): number {
   return state.path === 'invited' ? 4 : 3;

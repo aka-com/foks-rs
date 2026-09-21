@@ -5,12 +5,17 @@ import {
   SETTINGS_SECTION_ALIASES,
 } from './legacy-routes';
 import { settingsSectionOf } from './routes';
-import { GROUP_SETTINGS_TABS, SETTINGS_SECTIONS } from './types';
+import {
+  GROUP_SETTINGS_TABS,
+  SETTINGS_SECTIONS,
+  TEAMS_SHEET_INTENTS,
+} from './types';
 import type {
   DevicesSection,
   GroupSettingsTab,
   Location,
   SettingsSection,
+  TeamsSheetIntent,
 } from './types';
 
 /* ------------------------------------------------------------- URL codec -- */
@@ -58,7 +63,15 @@ const CLEARED_PARAMS: Readonly<Record<string, string | null>> = {
   account: null,
   channel: null,
   device: null,
+  open: null,
 };
+
+/** The Teams sheet a `?open=` value names, or nothing for anything else. */
+function teamsSheetIntent(value: string | null): TeamsSheetIntent | undefined {
+  return value && (TEAMS_SHEET_INTENTS as readonly string[]).includes(value)
+    ? (value as TeamsSheetIntent)
+    : undefined;
+}
 
 /** The `?state=` value and extra parameters a location deep-links as. */
 export function encodeLocation(location: Location): {
@@ -92,7 +105,11 @@ export function encodeLocation(location: Location): {
     case 'teams':
       return {
         state: 'teams',
-        params: { ...CLEARED_PARAMS, store: location.store ?? null },
+        params: {
+          ...CLEARED_PARAMS,
+          store: location.store ?? null,
+          open: location.open ?? null,
+        },
       };
     case 'devices':
       return {
@@ -147,8 +164,9 @@ export function decodeProductionLocation(search: string): Location | null {
   // place, with the team named by `store`.
   if (state === 'chat' || state === 'team-chat') {
     const ref = params.get('store') ?? undefined;
-    const channel = params.get('channel');
-    if (channel !== null && !/^[0-9a-f]{32}$/.test(channel)) return null;
+    const named = params.get('channel');
+    const channel =
+      named !== null && /^[0-9a-f]{32}$/.test(named) ? named : null;
     if (state === 'team-chat' && !ref) return null;
     return {
       kind: 'chat',
@@ -175,7 +193,12 @@ export function decodeProductionLocation(search: string): Location | null {
   if (state === 'files') return { kind: 'files' };
   if (state === 'teams') {
     const store = params.get('store') ?? undefined;
-    return { kind: 'teams', ...(store ? { store } : {}) };
+    const open = teamsSheetIntent(params.get('open'));
+    return {
+      kind: 'teams',
+      ...(store ? { store } : {}),
+      ...(open ? { open } : {}),
+    };
   }
   if (state === 'devices') {
     const section = params.get('section');

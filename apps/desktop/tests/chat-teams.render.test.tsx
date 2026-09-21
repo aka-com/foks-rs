@@ -454,6 +454,10 @@ test('search narrows the whole column to matching teams and channels', async () 
     heads().map((row) => row.querySelector('b')?.textContent),
     ['Household'],
   );
+  assert.match(
+    document.querySelector('.chat-inbox [role="status"]')?.textContent ?? '',
+    /^1 of \d+ teams and 1 of \d+ channels match chores\.$/,
+  );
   // A team match keeps all of that team's channels.
   search('engine');
   await ui.waitFor(() =>
@@ -2308,4 +2312,41 @@ test('channel context menu disables opening a channel without read permission', 
   ui.fireEvent.click(create);
   assert.equal(ui.screen.queryByRole('menu'), null);
   assert.ok(await ui.screen.findByRole('dialog'));
+});
+
+test('a quarantined team says what starts chat again instead of offering Retry', async () => {
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  await mount(snapshot, { kind: 'chat', ref: 'team:household' }, (base) => ({
+    ...base,
+    chat: async (store, action, view) => {
+      if (store === 'team:eng' && action.action === 'sync-inbox')
+        throw {
+          code: 'chat-integrity',
+          message: 'Message authentication failed.',
+          fatal: true,
+          retryable: false,
+          ambiguous: false,
+        };
+      return base.chat(store, action, view);
+    },
+  }));
+  const failure = await ui.waitFor(() => {
+    const row = head('Engineering')
+      .closest('.chat-team')
+      ?.querySelector('.chat-channel.fail');
+    assert.ok(row, 'the failure stands in for the channel list');
+    return row as HTMLElement;
+  });
+  // The synchronization is held until a new chat session starts, and
+  // `invalidate` skips a quarantined team, so no Retry is offered: the row
+  // and its tooltip say what releases it instead.
+  assert.match(failure.textContent ?? '', /Channels stopped/);
+  assert.equal(
+    ui.within(failure).queryByRole('button', { name: 'Retry' }),
+    null,
+  );
+  assert.match(
+    failure.getAttribute('title') ?? '',
+    /Lock and unlock FOKS to start a new chat session\./,
+  );
 });

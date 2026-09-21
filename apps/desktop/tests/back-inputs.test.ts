@@ -10,7 +10,12 @@ installDom({
 test('Back inputs navigate once, preserve editing shortcuts, and suppress native navigation when blocked', () => {
   let enabled = true;
   let backs = 0;
-  const stop = mountBackInputs({ enabled: () => enabled, back: () => backs++ });
+  let forwards = 0;
+  const stop = mountBackInputs({
+    enabled: () => enabled,
+    back: () => backs++,
+    forward: () => forwards++,
+  });
   const button = document.getElementById('button')!;
   const input = document.getElementById('edit')!;
   const key = (
@@ -51,7 +56,33 @@ test('Back inputs navigate once, preserve editing shortcuts, and suppress native
       assert.equal(event.defaultPrevented, true);
     }
     assert.equal(backs, 4);
+    key('ArrowRight', { altKey: true });
+    key(']', { metaKey: true });
+    key('BrowserForward');
+    key('BrowserForward', { repeat: true });
+    assert.equal(key(']', { metaKey: true }, input).defaultPrevented, false);
+    assert.equal(
+      key('ArrowRight', { altKey: true }, input).defaultPrevented,
+      false,
+    );
+    assert.equal(forwards, 3);
+    for (const type of ['mousedown', 'mouseup', 'auxclick']) {
+      const event = new window.MouseEvent(type, {
+        button: 4,
+        bubbles: true,
+        cancelable: true,
+      });
+      button.dispatchEvent(event);
+      assert.equal(event.defaultPrevented, true);
+    }
+    assert.equal(forwards, 4);
     enabled = false;
+    assert.equal(key('BrowserForward').defaultPrevented, true);
+    key(']', { metaKey: true });
+    button.dispatchEvent(
+      new window.MouseEvent('mouseup', { button: 4, bubbles: true }),
+    );
+    assert.equal(forwards, 4);
     assert.equal(key('BrowserBack').defaultPrevented, true);
     assert.equal(key('[', { metaKey: true }).defaultPrevented, true);
     button.dispatchEvent(
@@ -62,5 +93,7 @@ test('Back inputs navigate once, preserve editing shortcuts, and suppress native
     stop();
   }
   key('BrowserBack');
+  key('BrowserForward');
   assert.equal(backs, 4);
+  assert.equal(forwards, 4);
 });

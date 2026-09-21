@@ -367,6 +367,11 @@ export function ChatTeamColumn({
   const dimmed = withoutChat.filter(
     (store) => !query || store.name.toLowerCase().includes(query),
   );
+  let listedChannels = 0;
+  const allChannels = rows.reduce(
+    (total, row) => total + (row.channels ?? []).length,
+    0,
+  );
   const contextTeam = context?.team
     ? snapshot.stores.find(
         (store) => store.id === context.team && store.kind === 'team',
@@ -407,6 +412,7 @@ export function ChatTeamColumn({
     );
     if (query && !named && !matching.length) return;
     listed += 1;
+    listedChannels += matching.length;
     teamRows.push(
       <TeamHeading
         key={row.store.id}
@@ -455,7 +461,7 @@ export function ChatTeamColumn({
           fire. */}
       <p className="offscreen" role="status">
         {query
-          ? `${listed + dimmed.length} of ${teams.length + withoutChat.length} teams match ${filter}.`
+          ? `${listed + dimmed.length} of ${teams.length + withoutChat.length} teams and ${listedChannels} of ${allChannels} channels match ${filter}.`
           : ''}
       </p>
       <div className="chat-inbox-scroll">
@@ -654,6 +660,7 @@ function TeamHeading({
   // The channel list this team's row expands, named so the row can point at
   // it rather than leaving the relationship to visual order alone.
   const channelListId = useId();
+  const stopped = row.entry?.state === 'blocked';
   const state = row.badge && !plainCount(row.badge.label) ? row.badge : null;
   const collapsedTotal = collapsed ? channelUnreadTotal(channels) : 0;
   const badge =
@@ -730,8 +737,12 @@ function TeamHeading({
         {row.failed ? (
           <span
             className="chat-team-warn"
-            title="Channels could not be loaded"
-            aria-label="Channels could not be loaded"
+            title={
+              stopped ? 'Channels stopped' : 'Channels could not be loaded'
+            }
+            aria-label={
+              stopped ? 'Channels stopped' : 'Channels could not be loaded'
+            }
           >
             <Icon name="alert" size={14} />
           </span>
@@ -763,14 +774,27 @@ function TeamHeading({
               so the team stays recognizable and the retry is beside what it
               reloads. */}
           {row.failed && (
-            <div className="chat-channel fail" role="status" title={row.status}>
+            <div
+              className="chat-channel fail"
+              role="status"
+              title={
+                stopped
+                  ? `${row.status} · Lock and unlock FOKS to start a new chat session.`
+                  : row.status
+              }
+            >
               <Icon name="alert" size={14} />
               {/* The same sentence the row's warning glyph is labelled
                   with, so the two do not name the failure differently. */}
-              <span className="n">Channels could not be loaded</span>
-              {/* The open team's pane states the failure and carries the
-                  retry, so the row does not offer a second one. */}
-              {row.store.id !== selected && (
+              <span className="n">
+                {stopped ? 'Channels stopped' : 'Channels could not be loaded'}
+              </span>
+              {/* A stopped team is not retried from here: its synchronization
+                  is held until a new chat session starts, so the row states
+                  the condition rather than offering a button that would
+                  reload nothing. The open team's pane states the failure and
+                  carries the retry, so the row does not offer a second one. */}
+              {!stopped && row.store.id !== selected && (
                 <button
                   type="button"
                   className="chat-channel-retry"

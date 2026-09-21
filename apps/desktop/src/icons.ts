@@ -7,7 +7,6 @@
  */
 
 import type { IconNode } from 'lucide';
-import ArrowLeft from 'lucide/dist/esm/icons/arrow-left.mjs';
 import Check from 'lucide/dist/esm/icons/check.mjs';
 import ChevronDown from 'lucide/dist/esm/icons/chevron-down.mjs';
 import CircleAlert from 'lucide/dist/esm/icons/circle-alert.mjs';
@@ -75,7 +74,6 @@ export const FOKS_ICONS = {
   check: Check,
   circleCheck: CircleCheck,
   pencil: Pencil,
-  arrowLeft: ArrowLeft,
   shield: ShieldCheck,
   alert: CircleAlert,
   refresh: RefreshCw,

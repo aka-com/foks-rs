@@ -261,7 +261,12 @@ export function StoreAccessTakeover({
                     : 'crit'
               }
               label={copy.title}
-              action={action}
+              action={
+                <>
+                  {action}
+                  {headerAction}
+                </>
+              }
             >
               {copy.detail}
             </Band>

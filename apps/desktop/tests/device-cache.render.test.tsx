@@ -115,7 +115,7 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
   await ui.waitFor(() => assert.equal(calls.cards, 2));
   assert.equal(calls.devices, initial.devices);
   const refresh = document.querySelector<HTMLButtonElement>(
-    '.topbar button[aria-label="Refresh"]',
+    '.topbar button.global-refresh',
   );
   assert.ok(refresh);
   // "primary key" is the fixture's one complete enrollment on this account,

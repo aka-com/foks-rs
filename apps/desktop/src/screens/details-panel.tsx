@@ -310,6 +310,9 @@ export function DetailsPanel({
   const [dropHover, setDropHover] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [binaryFile, setBinaryFile] = useState(false);
+  const focusEditorOnOpen = useRef(false);
+  const focusActionsOnClose = useRef(false);
+  const editorRef = useRef<HTMLDivElement>(null);
   const concealEpoch = useRef(0);
   // The value the editor opened from, against which `editValue` is unsaved
   // work. `null` while no editor is open, and for a draft restored from a
@@ -532,6 +535,24 @@ export function DetailsPanel({
     editGeneration.current = accessGeneration;
     setEditing(true);
   }, [item, resumeDraft, scopeIdentity, accessGeneration]);
+
+  useEffect(() => {
+    if (!editing || !focusEditorOnOpen.current) return;
+    focusEditorOnOpen.current = false;
+    editorRef.current
+      ?.querySelector<HTMLElement>(
+        'input:not([type="hidden"]), textarea, .eact button',
+      )
+      ?.focus();
+  }, [editing]);
+
+  useEffect(() => {
+    if (editing || !focusActionsOnClose.current) return;
+    focusActionsOnClose.current = false;
+    editorRef.current
+      ?.querySelector<HTMLElement>('.detail-actions button')
+      ?.focus();
+  }, [editing]);
 
   const selectedFileMode = item?.kind === 'File' || binaryFile;
   useFileDrop({
@@ -763,6 +784,7 @@ export function DetailsPanel({
       }
       editBaseline.current = null;
       editTarget.current = null;
+      focusActionsOnClose.current = true;
       setEditing(false);
       await onApplied('Changes saved', storeOf(snapshot, target.store)?.server);
     } catch (error) {
@@ -1074,7 +1096,7 @@ export function DetailsPanel({
           <Icon name="close" />
         </button>
       </div>
-      <div className="scroll">
+      <div className="scroll" ref={editorRef}>
         {blockingReason ? (
           <p id={accessDescriptionId} className="action-error" role="status">
             {blockingReason}
@@ -1099,7 +1121,10 @@ export function DetailsPanel({
               disabled={Boolean(writeProblem) || saving}
               title={writeProblem ?? 'Edit this item'}
               aria-describedby={writeProblem ? accessDescriptionId : undefined}
-              onClick={() => void beginEdit()}
+              onClick={() => {
+                focusEditorOnOpen.current = true;
+                void beginEdit();
+              }}
             >
               {saving ? 'Reading…' : 'Edit'}
             </Button>
@@ -1138,7 +1163,13 @@ export function DetailsPanel({
         ) : null}
         {editing ? (
           <div className="eact">
-            <Button disabled={saving} onClick={clearEdit}>
+            <Button
+              disabled={saving}
+              onClick={() => {
+                focusActionsOnClose.current = true;
+                clearEdit();
+              }}
+            >
               Cancel
             </Button>
             <Button

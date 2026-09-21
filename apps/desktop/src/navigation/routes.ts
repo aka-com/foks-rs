@@ -120,7 +120,10 @@ export function sameLocation(a: Location, b: Location): boolean {
     return a.ref === b.ref && a.channel === b.channel;
   if (a.kind === 'group-settings' && b.kind === 'group-settings')
     return a.ref === b.ref && a.tab === b.tab;
-  if (a.kind === 'teams' && b.kind === 'teams') return a.store === b.store;
+  // The sheet intent is part of the address until the page consumes it:
+  // asking the list for a sheet it is not showing is a move, not a no-op.
+  if (a.kind === 'teams' && b.kind === 'teams')
+    return a.store === b.store && a.open === b.open;
   if (a.kind === 'devices' && b.kind === 'devices')
     return (
       a.section === b.section && a.store === b.store && a.device === b.device

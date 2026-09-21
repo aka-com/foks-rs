@@ -297,3 +297,169 @@ test('first-run blocks history Back even with earlier visits and force enabled',
     step: 'address',
   });
 });
+
+test('a Teams sheet intent is spent where it was handed over, not remembered', () => {
+  const store = new LocationStore();
+  // The Chat tab's empty pane sends a reader to Teams to create a team.
+  store.navigate({ kind: 'teams', open: 'create' });
+  assert.deepEqual(store.getSnapshot().location, {
+    kind: 'teams',
+    open: 'create',
+  });
+  // The page consumes the intent and canonicalizes its own address.
+  store.navigate({ kind: 'teams' }, { replace: true, force: true });
+  assert.deepEqual(store.getSnapshot().location, { kind: 'teams' });
+  store.navigateTab('files');
+  store.navigateTab('teams');
+  // The resumed address names the acting account, which this bare store has
+  // none of; what matters is that no sheet is asked for.
+  assert.deepEqual(store.getSnapshot().location, {
+    kind: 'teams',
+    store: undefined,
+  });
+  // Even a tab left before the page could consume the intent resumes the
+  // list: the sheet belongs to the arrival, not to the tab.
+  store.navigate({ kind: 'teams', open: 'join' });
+  store.navigateTab('files');
+  store.navigateTab('teams');
+  assert.deepEqual(store.getSnapshot().location, {
+    kind: 'teams',
+    store: undefined,
+  });
+});
+
+test('a Teams sheet opened on the canonical address survives a tab round trip', () => {
+  const store = new LocationStore({
+    ...INITIAL_STATE,
+    location: { kind: 'teams' },
+  });
+  store.setAccountStores([ACCOUNT_A]);
+  store.setSheetField('teams.sheet', { kind: 'create', store: ACCOUNT_A.id });
+  store.navigateTab('files');
+  store.navigateTab('teams');
+  assert.deepEqual(store.getSnapshot().sheet, {
+    'teams.sheet': { kind: 'create', store: ACCOUNT_A.id },
+  });
+});
+
+test('a search survives a move inside one rail tab and is dropped on leaving it', () => {
+  // Searching the Chat header and then opening a channel the search matched
+  // keeps the query: the reader is still in the results they typed for.
+  const opened = leafTransition(
+    { ...INITIAL_STATE, location: { kind: 'chat' }, query: 'deploys' },
+    {
+      type: 'navigate',
+      location: { kind: 'chat', ref: 'team', channel: 'c1' },
+    },
+  );
+  assert.equal(opened.query, 'deploys');
+  // The tab canonicalizes `{kind:'chat'}` into the conversation it stands for
+  // at mount; that move is inside the tab as well, so it keeps the query too.
+  const canonical = leafTransition(
+    { ...INITIAL_STATE, location: { kind: 'chat' }, query: 'deploys' },
+    { type: 'navigate', location: { kind: 'chat', ref: 'team' } },
+  );
+  assert.equal(canonical.query, 'deploys');
+  // Leaving the tab clears it: the next tab's field is its own.
+  const left = leafTransition(
+    {
+      ...INITIAL_STATE,
+      location: { kind: 'chat', ref: 'team' },
+      query: 'deploys',
+    },
+    { type: 'navigate', location: { kind: 'files' } },
+  );
+  assert.equal(left.query, '');
+  // And arriving on Chat from another tab starts empty.
+  const arrived = leafTransition(
+    { ...INITIAL_STATE, location: { kind: 'files' }, query: 'invoice' },
+    { type: 'navigate', location: { kind: 'chat', ref: 'team' } },
+  );
+  assert.equal(arrived.query, '');
+  // A move within Files keeps what was typed there, as it always has.
+  const within = leafTransition(
+    { ...INITIAL_STATE, location: { kind: 'files' }, query: 'invoice' },
+    { type: 'navigate', location: { kind: 'store', ref: 'live-team' } },
+  );
+  assert.equal(within.query, 'invoice');
+});
+
+test('Forward restores visits and page state; a new visit clears only the forward branch', () => {
+  const store = new LocationStore({
+    ...INITIAL_STATE,
+    location: { kind: 'files' },
+  });
+  store.setFolder('account-a|/one');
+  store.navigate({ kind: 'settings' });
+  store.search('saved query');
+  store.setSheetField('draft', 'not history');
+  store.back();
+  assert.equal(store.getSnapshot().folder, 'account-a|/one');
+  assert.equal(store.forwardTarget()?.kind, 'settings');
+  store.search('a different query'); // View edits are not new visits.
+  store.forward();
+  assert.equal(store.getSnapshot().query, 'saved query');
+  assert.equal(store.getSnapshot().sheet, undefined);
+  assert.equal(store.forwardTarget(), null);
+  store.back();
+  store.navigate({ kind: 'teams' });
+  assert.equal(store.forwardTarget(), null);
+  store.back();
+  assert.equal(store.getSnapshot().query, 'a different query');
+  store.clearTabMemory();
+  assert.equal(store.forwardTarget(), null);
+  assert.equal(store.backTarget(), null);
+});
+
+test('Forward respects refusal, cancellation, confirmation and superseded prompts', async () => {
+  const store = new LocationStore({
+    ...INITIAL_STATE,
+    location: { kind: 'files' },
+  });
+  store.navigate({ kind: 'settings' });
+  store.back();
+  let verdict: GuardVerdict = { verdict: 'refuse', reason: 'Saving' };
+  store.registerGuard(() => verdict);
+  let settle: (confirmed: boolean) => void = () => {};
+  store.setPrompter(
+    () =>
+      new Promise<boolean>((resolve) => {
+        settle = resolve;
+      }),
+  );
+  store.forward();
+  assert.equal(store.getSnapshot().location.kind, 'files');
+  assert.equal(store.forwardTarget()?.kind, 'settings');
+  verdict = PROMPT;
+  store.forward();
+  settle(false);
+  await Promise.resolve();
+  assert.equal(store.getSnapshot().location.kind, 'files');
+  store.forward();
+  settle(true);
+  await Promise.resolve();
+  assert.equal(store.getSnapshot().location.kind, 'settings');
+  store.back({ force: true });
+  store.forward();
+  store.navigate({ kind: 'teams' }, { force: true });
+  settle(true);
+  await Promise.resolve();
+  assert.equal(store.getSnapshot().location.kind, 'teams');
+  assert.equal(store.forwardTarget(), null);
+});
+
+test('replacement preserves Forward and first-run blocks both directions', () => {
+  const store = new LocationStore({
+    ...INITIAL_STATE,
+    location: { kind: 'files' },
+  });
+  store.navigate({ kind: 'settings' });
+  store.back();
+  store.navigate({ kind: 'all' }, { replace: true });
+  assert.equal(store.backTarget(), null);
+  assert.equal(store.forwardTarget()?.kind, 'settings');
+  store.navigate({ kind: 'first-run', step: 'address' });
+  store.forward({ force: true });
+  assert.equal(store.forwardTarget(), null);
+  assert.equal(store.getSnapshot().location.kind, 'first-run');
+});

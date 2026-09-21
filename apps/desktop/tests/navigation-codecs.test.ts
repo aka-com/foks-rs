@@ -99,9 +99,10 @@ const FIXTURE_SCENE_NAMES = [
 const PUBLIC_ALIASES: Record<string, Location> = {
   all: { kind: 'all' },
   alerts: { kind: 'settings', section: 'account' },
-  join: { kind: 'teams' },
+  // Both names promise a sheet over the Teams list, and open it.
+  join: { kind: 'teams', open: 'join' },
   groups: { kind: 'teams' },
-  create: { kind: 'teams' },
+  create: { kind: 'teams', open: 'create' },
   servers: { kind: 'settings', section: 'account' },
   settings: { kind: 'settings' },
   'servers-list': { kind: 'settings', section: 'account' },
@@ -261,6 +262,8 @@ test('canonical production routes round-trip opaque store references and explici
     { kind: 'group-settings', ref: TEAM, tab: 'requests' },
     { kind: 'settings', section: 'account', store: ACCOUNT },
     { kind: 'teams', store: ACCOUNT },
+    { kind: 'teams', store: ACCOUNT, open: 'create' },
+    { kind: 'teams', open: 'join' },
     { kind: 'chat' },
     { kind: 'chat', ref: TEAM, channel: CHANNEL },
     {
@@ -281,6 +284,23 @@ test('canonical production routes round-trip opaque store references and explici
     assert.deepEqual(decodeProductionLocation(query), location);
     assert.deepEqual(decodeLocation(query), location);
   }
+  // A sheet name the page does not own is not an address of its own: the
+  // list opens with no sheet rather than the address being refused.
+  assert.deepEqual(
+    decodeProductionLocation(search('teams', { open: 'nope' })),
+    {
+      kind: 'teams',
+    },
+  );
+  // And the parameter does not leak onto the next page.
+  assert.equal(
+    new URL(
+      locationHref('https://desktop.example/?state=teams&open=create', {
+        kind: 'files',
+      }),
+    ).searchParams.get('open'),
+    null,
+  );
   assert.deepEqual(
     decodeProductionLocation(
       search('team-chat', {
@@ -291,14 +311,20 @@ test('canonical production routes round-trip opaque store references and explici
     { kind: 'chat', ref: TEAM, channel: CHANNEL },
   );
   assert.equal(decodeProductionLocation('?state=team-chat'), null);
-  assert.equal(
+  assert.deepEqual(
     decodeProductionLocation(
       search('chat', {
         store: TEAM,
         channel: 'invalid',
       }),
     ),
-    null,
+    { kind: 'chat', ref: TEAM },
+  );
+  assert.deepEqual(
+    decodeProductionLocation(
+      search('team-chat', { store: TEAM, channel: 'invalid' }),
+    ),
+    { kind: 'chat', ref: TEAM },
   );
   assert.deepEqual(
     decodeProductionLocation(

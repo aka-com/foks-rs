@@ -173,6 +173,11 @@ export function MenuButton({
           if (disabled) return;
           setOpen((was) => !was);
         }}
+        onKeyDown={(event) => {
+          if (event.key !== 'ArrowDown' || disabled || open) return;
+          event.preventDefault();
+          setOpen(true);
+        }}
       >
         {label}
         {trailingIcon != null ? (

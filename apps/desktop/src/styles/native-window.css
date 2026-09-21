@@ -68,3 +68,29 @@ body {
   gap: 6px;
   align-items: center;
 }
+
+.history-swipe {
+  position: fixed;
+  top: 50%;
+  z-index: 30;
+  pointer-events: none;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--main-surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-menu);
+  font-size: 24px;
+}
+.history-swipe.back {
+  left: 12px;
+}
+.history-swipe.forward {
+  right: 12px;
+}
+
+.history-swipe[hidden] {
+  display: none;
+}

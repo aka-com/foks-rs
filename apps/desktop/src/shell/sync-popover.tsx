@@ -783,6 +783,8 @@ export function SyncPopover({
   onClose,
   onPointerEnter,
   onPointerLeave,
+  onFocusEnter,
+  onFocusLeave,
   onOpenServers,
   onRefresh,
   refreshDisabled = false,
@@ -795,6 +797,8 @@ export function SyncPopover({
   /** Keeps a hover-held popover up while the pointer is over it. */
   onPointerEnter?: () => void;
   onPointerLeave?: () => void;
+  onFocusEnter?: () => void;
+  onFocusLeave?: () => void;
   /** Opens one server under Settings › Account, when the shell can navigate. */
   onOpenServers?: (profile: string) => void;
   /** Runs the same manual refresh action as the top-bar button. */
@@ -883,7 +887,13 @@ export function SyncPopover({
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
     >
-      <div id={SYNC_STATUS_ID} role="group" aria-label="Refresh status">
+      <div
+        id={SYNC_STATUS_ID}
+        role="group"
+        aria-label="Refresh status"
+        onFocus={onFocusEnter}
+        onBlur={onFocusLeave}
+      >
         {single ? (
           // The job rows provide the status, so a lone server needs only a
           // heading above its always-visible details.

@@ -33,6 +33,7 @@ export class LocationStore {
   private hasInventory = false;
   private readonly tabs = new Map<RailTab, LocationState>();
   private readonly history: LocationState[] = [];
+  private readonly future: LocationState[] = [];
 
   backTarget(): Location | null {
     return this.current.location.kind === 'first-run'
@@ -40,14 +41,40 @@ export class LocationStore {
       : (this.history.at(-1)?.location ?? null);
   }
 
+  forwardTarget(): Location | null {
+    return this.current.location.kind === 'first-run'
+      ? null
+      : (this.future.at(-1)?.location ?? null);
+  }
+
   back(options: GuardedOptions = {}): void {
-    const target = this.history.at(-1);
+    this.travel(this.history, this.future, options);
+  }
+
+  forward(options: GuardedOptions = {}): void {
+    this.travel(this.future, this.history, options);
+  }
+
+  private travel(
+    from: LocationState[],
+    to: LocationState[],
+    options: GuardedOptions,
+  ): void {
+    const target = from.at(-1);
     if (!target || this.current.location.kind === 'first-run') return;
+    const origin = this.current;
     this.guarded(
       { kind: 'navigate', location: target.location },
       () => {
-        if (this.history.at(-1) !== target) return;
-        this.history.pop();
+        // A delayed confirmation cannot replay history after another move.
+        if (
+          from.at(-1) !== target ||
+          !sameLocation(this.current.location, origin.location) ||
+          this.current.folder !== origin.folder
+        )
+          return;
+        from.pop();
+        to.push({ ...this.current, sheet: undefined });
         this.accountLocation(target.location);
         this.publish({ ...target, sheet: undefined }, false);
       },
@@ -57,7 +84,9 @@ export class LocationStore {
 
   clearTabMemory(): void {
     this.history.length = 0;
-    this.clearSheet();
+    this.future.length = 0;
+    this.pendingPrompt = null;
+    this.publish({ ...this.current, sheet: undefined }, false);
     this.tabs.clear();
   }
 
@@ -98,6 +127,13 @@ export class LocationStore {
     };
     let saved = this.tabs.get(tab);
     let location = saved?.location ?? defaults[tab];
+    // A Teams sheet intent is spent where it was handed over. The tab resumes
+    // the list, never the sheet another screen once asked for.
+    if (location.kind === 'teams' && location.open)
+      location = {
+        kind: 'teams',
+        ...(location.store ? { store: location.store } : {}),
+      };
     const target = 'ref' in location ? location.ref : undefined;
     if (
       this.hasInventory &&
@@ -113,7 +149,10 @@ export class LocationStore {
       location.kind === 'settings'
     ) {
       const account = this.getAccount();
-      const changed = location.store !== account;
+      // A canonical tab address has no account of its own. Only an explicit
+      // address for another account invalidates saved sheet or detail state.
+      const changed =
+        location.store !== undefined && location.store !== account;
       if (changed && saved) saved = { ...saved, sheet: undefined };
       location = { ...location, store: account };
       if (changed && location.kind === 'devices') delete location.device;
@@ -194,6 +233,7 @@ export class LocationStore {
       this.current.location.kind !== 'first-run' &&
       next.location.kind !== 'first-run'
     ) {
+      this.future.length = 0;
       this.history.push({ ...this.current, sheet: undefined });
       if (this.history.length > 100) this.history.shift();
     }
@@ -253,9 +293,7 @@ export class LocationStore {
   }
 
   /**
-   * What the guards say about an intent, without acting on it. A caller that
-   * must stay inert rather than raise a prompt — the trackpad's back swipe —
-   * asks this first.
+   * What the guards say about an intent, without acting on it.
    */
   navigationVerdict(intent: NavigationIntent): GuardVerdict {
     // A refusal terminates validation immediately. Prompts remain provisional

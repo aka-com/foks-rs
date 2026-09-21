@@ -59,9 +59,11 @@ export const PUBLIC_LOCATION_ALIASES: Readonly<Record<string, Location>> = {
   all: { kind: 'all' },
   // The Alerts page is the top of Settings › Account now.
   alerts: ACCOUNT_SECTION,
-  join: { kind: 'teams' },
+  // Creating a team and pasting an invitation are sheets over the Teams list,
+  // so the names that promise them open that list with the sheet up.
+  join: { kind: 'teams', open: 'join' },
   groups: { kind: 'teams' },
-  create: { kind: 'teams' },
+  create: { kind: 'teams', open: 'create' },
   // Servers now lives at the bottom of Account. Every former name for that
   // page maps there, while a named profile still opens its server detail.
   servers: ACCOUNT_SECTION,
