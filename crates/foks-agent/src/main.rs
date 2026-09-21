@@ -2533,6 +2533,25 @@ fn paginate_catalog(
     // instead of failing later in the frame encoder.
     const RESPONSE_ENVELOPE_RESERVE: usize = 32 * 1024;
     let payload_budget = MAXIMUM_MESSAGE_BYTES - RESPONSE_ENVELOPE_RESERVE;
+    // Measuring an entry by serializing it into a buffer that is then thrown
+    // away costs one allocation per entry. A counting sink measures exactly
+    // the same bytes and allocates nothing.
+    struct CountingWriter(usize);
+
+    impl std::io::Write for CountingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_add(bytes.len())
+                .ok_or_else(|| std::io::Error::other("catalog entry size overflow"))?;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
     let mut encoded_entries = 2usize; // JSON array brackets.
     let mut entries = Vec::new();
     let mut end = offset;
@@ -2545,7 +2564,9 @@ fn paginate_catalog(
             read_role: catalog_role(entry.read_role),
             write_role: catalog_role(entry.write_role),
         };
-        let entry_bytes = serde_json::to_vec(&entry)?.len();
+        let mut measured = CountingWriter(0);
+        serde_json::to_writer(&mut measured, &entry)?;
+        let entry_bytes = measured.0;
         let next_size = encoded_entries
             .checked_add(entry_bytes)
             .and_then(|size| size.checked_add(usize::from(!entries.is_empty())))
@@ -2628,10 +2649,12 @@ fn validate_catalog_request(
     cursor: Option<&str>,
     limit: u32,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    const MAXIMUM_CATALOG_PAGE_ENTRIES: u32 = 500;
+    // The encoded-byte budget in `paginate_catalog` is the binding bound on a
+    // page; this only keeps a caller from asking for an unbounded row slice.
+    const MAXIMUM_CATALOG_PAGE_ENTRIES: u32 = 4096;
     if !(1..=MAXIMUM_CATALOG_PAGE_ENTRIES).contains(&limit) {
         return Err(Box::new(AgentRequestError(
-            "catalog page limit must be between 1 and 500",
+            "catalog page limit must be between 1 and 4096",
         )));
     }
     if let Some(cursor) = cursor {
@@ -8519,6 +8542,90 @@ mod tests {
         assert!(page.next_cursor.is_some());
         foks_agent_proto::encode(&Response::success(11, serde_json::to_value(page).unwrap()))
             .unwrap();
+    }
+
+    /// Walks a store larger than one page at the largest row limit this agent
+    /// accepts, and asserts the walk sees every entry once, in snapshot order.
+    #[test]
+    fn a_store_larger_than_one_page_paginates_through_every_entry() {
+        const LIMIT: u32 = 4096;
+        let store = catalog_store("personal");
+        let report = catalog_report(9, u64::from(LIMIT) + 404);
+        let digest = catalog_snapshot_identity(&report).unwrap().0;
+        let mut collected = Vec::new();
+        let mut cursor: Option<String> = None;
+        let mut pages = 0usize;
+        loop {
+            let page =
+                paginate_catalog(&report, store.clone(), digest, cursor.as_deref(), LIMIT).unwrap();
+            pages += 1;
+            assert_eq!(page.snapshot_version, report.snapshot_version);
+            assert!(!page.entries.is_empty());
+            if pages == 1 {
+                // The point of the raised cap: a page is bounded by its
+                // encoded size, not by a row count a caller cannot raise.
+                assert!(page.entries.len() > 500, "{} rows", page.entries.len());
+            }
+            collected.extend(page.entries.into_iter().map(|entry| entry.path));
+            match page.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        assert!(pages > 1);
+        assert_eq!(collected.len(), report.entries.len());
+        assert!(collected
+            .iter()
+            .zip(&report.entries)
+            .all(|(path, entry)| *path == entry.path));
+    }
+
+    /// Long authenticated paths make the encoded-byte budget bind before the
+    /// row limit does. The short page must still carry a cursor that resumes
+    /// at exactly the first entry it dropped.
+    #[test]
+    fn a_page_truncated_at_the_byte_budget_returns_a_usable_cursor() {
+        const LIMIT: u32 = 4096;
+        let store = catalog_store("wide");
+        let report = foks_client_app::KvCatalogReport {
+            snapshot_version: 12,
+            entries: (0..u64::from(LIMIT))
+                .map(|index| foks_client_app::KvCatalogEntry {
+                    path: format!("/{index}-{}", "p".repeat(2048)),
+                    node_type: "small-file".to_owned(),
+                    version: index + 1,
+                    size: None,
+                    read_role: foks_client_app::KvRoleSummary::Owner,
+                    write_role: foks_client_app::KvRoleSummary::Owner,
+                })
+                .collect(),
+        };
+        let digest = catalog_snapshot_identity(&report).unwrap().0;
+        let first = paginate_catalog(&report, store.clone(), digest, None, LIMIT).unwrap();
+        assert!(!first.entries.is_empty());
+        assert!(first.entries.len() < report.entries.len());
+        let cursor = first
+            .next_cursor
+            .clone()
+            .expect("a truncated page names where it stopped");
+        let kept = first.entries.len();
+        // A truncated page still has to fit the frame it is answered in.
+        let frame =
+            foks_agent_proto::encode(&Response::success(12, serde_json::to_value(first).unwrap()))
+                .unwrap();
+        assert!(frame.len() <= MAXIMUM_MESSAGE_BYTES);
+
+        let mut collected = kept;
+        let mut cursor = Some(cursor);
+        while let Some(next) = cursor {
+            let page =
+                paginate_catalog(&report, store.clone(), digest, Some(&next), LIMIT).unwrap();
+            assert!(!page.entries.is_empty());
+            assert_eq!(page.entries[0].path, report.entries[collected].path);
+            collected += page.entries.len();
+            cursor = page.next_cursor;
+        }
+        assert_eq!(collected, report.entries.len());
     }
 
     #[test]

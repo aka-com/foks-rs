@@ -1680,7 +1680,17 @@ fn load_store_pages_once(
     fresh: bool,
     token: &CatalogLoadToken,
 ) -> Result<Vec<KvEntryMetadata>, AgentError> {
-    const PAGE_LIMIT: u32 = 200;
+    // The agent truncates a page by encoded bytes against its frame budget
+    // and returns a cursor for exactly what it kept, so the byte budget is
+    // the real bound and this is only an upper limit on rows per round trip.
+    //
+    // It is held at the largest value every shipped agent already accepts,
+    // rather than at the larger one this agent now accepts. A desktop sending
+    // more than an older agent allows is refused as an invalid request, and
+    // the protocol version is what decides whether such an agent is replaced,
+    // so raising this belongs in a change that bumps that version. Until then
+    // this is the ceiling that costs nothing to adopt.
+    const PAGE_LIMIT: u32 = 500;
     const MAXIMUM_PAGES: usize = 4096;
     let mut cursor = None;
     let mut snapshot_version = None;
@@ -3421,6 +3431,50 @@ mod tests {
         assert_eq!(catalog.items[0].metadata.path, "/first");
         assert_eq!(catalog.items[1].metadata.path, "/second");
         assert!(catalog.failures.is_empty());
+    }
+
+    struct LimitRecordingTransport {
+        limits: Mutex<Vec<u32>>,
+    }
+
+    impl AgentTransport for LimitRecordingTransport {
+        fn call(&self, operation: Operation) -> Result<Value, AgentError> {
+            let Operation::ListKv { limit, .. } = operation else {
+                panic!("unexpected operation")
+            };
+            self.limits.lock().unwrap().push(limit);
+            Ok(serde_json::to_value(KvPage {
+                snapshot_version: 3,
+                entries: Vec::new(),
+                next_cursor: None,
+            })
+            .unwrap())
+        }
+    }
+
+    /// The agent bounds a page by encoded bytes and rejects a row limit above
+    /// its own maximum, so this asks for as many rows as it will serve. A
+    /// thousand-item store is then one round trip rather than five.
+    #[test]
+    fn a_catalog_page_asks_for_far_more_than_one_screen_of_rows() {
+        // A page an older agent refuses would fail every store load until
+        // that agent exits, so this pins the value rather than the intent.
+        let transport = LimitRecordingTransport {
+            limits: Mutex::new(Vec::new()),
+        };
+        load_store_pages(
+            &transport,
+            &CatalogStoreRef::Account(AccountStoreRef {
+                profile: "local".to_owned(),
+                account_alias: "personal".to_owned(),
+            }),
+            false,
+            &CatalogLoadToken::default(),
+        )
+        .unwrap();
+        // Not the agent's own maximum: this is the largest page an agent
+        // built before that maximum rose will still answer.
+        assert_eq!(*transport.limits.lock().unwrap(), vec![500]);
     }
 
     struct PagedCatalogTransport {
