@@ -3,7 +3,8 @@
 use crate::agent::AgentError;
 use crate::commands::context::AppState;
 use crate::commands::execution::{
-    ambiguous_mutation_response, apply_operation, apply_profile_operation_value, MutationKind,
+    ambiguous_mutation_response, apply_operation, apply_surveying_profile_operation_value,
+    MutationKind,
 };
 use crate::commands::preparation::{
     check_mutation_access, prepare_catalog_mutation, prepare_group_mutation, GroupMutationFacts,
@@ -661,6 +662,18 @@ pub(super) fn rerun_group_admission_operation(
     })
 }
 
+/// Discovery writes a local binding only for a group the vault did not
+/// already hold, and reports the aliases it wrote. An empty list proves it
+/// wrote none, so the catalog it was read against is still accurate. A reply
+/// without the field comes from an agent that does not report bindings, whose
+/// effect is therefore unknown.
+pub(super) fn group_discovery_changed_bindings(value: &serde_json::Value) -> bool {
+    match value.get("bound") {
+        Some(serde_json::Value::Array(bound)) => !bound.is_empty(),
+        _ => true,
+    }
+}
+
 #[tauri::command]
 pub async fn discover_groups(
     app: tauri::AppHandle,
@@ -680,8 +693,14 @@ pub async fn discover_groups(
         profile: profile.clone(),
         account_alias,
     };
-    let value =
-        apply_profile_operation_value(&state, profile, operation, MutationKind::Resume).await?;
+    let value = apply_surveying_profile_operation_value(
+        &state,
+        profile,
+        operation,
+        MutationKind::Resume,
+        group_discovery_changed_bindings,
+    )
+    .await?;
     require_nested_response_row_cap(&value, "teams", "discovered groups")
         .map_err(|error| ambiguous_mutation_response(&state, error.message))?;
     let response: GroupDiscoveryResponse = serde_json::from_value(value).map_err(|error| {

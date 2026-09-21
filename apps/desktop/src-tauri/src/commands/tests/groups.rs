@@ -1,15 +1,16 @@
-use crate::agent::AgentHandle;
+use crate::agent::{AgentError, AgentHandle};
 use crate::commands::accounts::AccountDto;
 use crate::commands::context::AppState;
+use crate::commands::execution::{apply_surveying_profile_operation_with_transport, MutationKind};
 use crate::commands::groups::{
     add_group_member_operation, admit_group_operation, create_group_operation,
-    demote_group_member_operation, federation_dtos, group_detail_result, party_dtos,
-    remove_group_member_operation, rerun_group_admission_operation, FederationEntryDto,
-    FederationResponse, GroupDetailResultDto, GroupKindInput, MemberResponse, MemberRole, PartyDto,
-    RoleInput,
+    demote_group_member_operation, federation_dtos, group_detail_result,
+    group_discovery_changed_bindings, party_dtos, remove_group_member_operation,
+    rerun_group_admission_operation, FederationEntryDto, FederationResponse, GroupDetailResultDto,
+    GroupKindInput, MemberResponse, MemberRole, PartyDto, RoleInput,
 };
 use crate::commands::tests::support::{
-    account_ref, phase_four_catalog, phase_four_state, team_ref,
+    account_ref, phase_four_catalog, phase_four_state, team_ref, test_profile_value,
 };
 use crate::commands::types::RoleDto;
 use crate::commands::validation::{
@@ -17,7 +18,10 @@ use crate::commands::validation::{
 };
 use crate::commands::vault::store_id;
 use foks_agent_proto::{FederationRole, KvRole, Operation, ResponseResult, TeamKind, TeamRole};
-use foks_desktop::{CatalogItem, CatalogSnapshot, CatalogStoreRef, CatalogStoreSummary};
+use foks_desktop::{
+    AgentError as DesktopAgentError, CatalogItem, CatalogSnapshot, CatalogStoreRef,
+    CatalogStoreSummary,
+};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -915,4 +919,144 @@ fn stale_group_reads_cannot_repopulate_authorization_caches() {
     state.invalidate_catalog();
     assert!(state.accounts.lock().unwrap().is_empty());
     assert!(state.federations.lock().unwrap().is_empty());
+}
+
+struct DiscoveryTransport {
+    profile: String,
+    reply: Result<serde_json::Value, DesktopAgentError>,
+}
+
+impl foks_desktop::AgentTransport for DiscoveryTransport {
+    fn call(&self, operation: Operation) -> Result<serde_json::Value, DesktopAgentError> {
+        match operation {
+            Operation::ListProfiles => Ok(serde_json::json!([test_profile_value(
+                self.profile.clone()
+            )])),
+            Operation::DiscoverTeams { .. } => match &self.reply {
+                Ok(value) => Ok(value.clone()),
+                Err(DesktopAgentError::Ambiguous(message)) => {
+                    Err(DesktopAgentError::Ambiguous(message.clone()))
+                }
+                Err(other) => panic!("unexpected discovery failure {other:?}"),
+            },
+            other => panic!("unexpected discovery operation {other:?}"),
+        }
+    }
+}
+
+fn discovery_reply(bound: Option<Vec<&str>>) -> serde_json::Value {
+    let mut reply = serde_json::json!({
+        "account_alias": "personal",
+        "teams": [{
+            "alias": "engineering",
+            "account_alias": "personal",
+            "team_id_hex": format!("03{}", "0a".repeat(32)),
+            "kind": "named",
+            "name": "Engineering",
+            "active": true
+        }]
+    });
+    if let Some(bound) = bound {
+        reply["bound"] = serde_json::json!(bound);
+    }
+    reply
+}
+
+/// Runs one discovery and reports the chat generation observed before it, so
+/// a caller can tell a retired catalog from an untouched one.
+fn run_discovery(
+    reply: Result<serde_json::Value, DesktopAgentError>,
+) -> (AppState, Result<serde_json::Value, AgentError>, u64) {
+    let state = phase_four_state(Vec::new());
+    let profile = state.for_profile("work.example").unwrap();
+    let before = profile.chat_generation.load(Ordering::Acquire);
+    let transport = Arc::new(DiscoveryTransport {
+        profile: "work.example".to_owned(),
+        reply,
+    });
+    let value = tauri::async_runtime::block_on(async {
+        let _mutation = profile.begin_mutation().unwrap();
+        apply_surveying_profile_operation_with_transport(
+            &profile,
+            "work.example".to_owned(),
+            Operation::DiscoverTeams {
+                profile: "work.example".to_owned(),
+                account_alias: "personal".to_owned(),
+            },
+            MutationKind::Resume,
+            group_discovery_changed_bindings,
+            transport,
+        )
+        .await
+    });
+    (profile, value, before)
+}
+
+fn work_example_stores(state: &AppState) -> usize {
+    state
+        .catalog
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|catalog| {
+            catalog
+                .stores
+                .iter()
+                .filter(|store| store.profile() == "work.example")
+                .count()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn group_discovery_reports_whether_it_wrote_a_binding() {
+    assert!(!group_discovery_changed_bindings(&discovery_reply(Some(
+        Vec::new()
+    ))));
+    assert!(group_discovery_changed_bindings(&discovery_reply(Some(
+        vec!["engineering"]
+    ))));
+    // An agent that does not report bindings leaves the effect unknown.
+    assert!(group_discovery_changed_bindings(&discovery_reply(None)));
+    assert!(group_discovery_changed_bindings(
+        &serde_json::json!({"bound": "engineering"})
+    ));
+}
+
+#[test]
+fn group_discovery_that_bound_nothing_keeps_the_catalog_and_chat_generation() {
+    let (state, value, before) = run_discovery(Ok(discovery_reply(Some(Vec::new()))));
+    assert_eq!(value.unwrap()["bound"], serde_json::json!([]));
+    // A retired catalog invalidates every chat store the renderer holds.
+    assert_eq!(state.chat_generation.load(Ordering::Acquire), before);
+    assert_eq!(work_example_stores(&state), 2);
+    assert!(state.begin_catalog_load_checked().is_ok());
+}
+
+#[test]
+fn group_discovery_that_bound_an_alias_retires_the_catalog() {
+    let (state, value, before) = run_discovery(Ok(discovery_reply(Some(vec!["engineering"]))));
+    assert_eq!(value.unwrap()["bound"], serde_json::json!(["engineering"]));
+    assert_ne!(state.chat_generation.load(Ordering::Acquire), before);
+    assert_eq!(work_example_stores(&state), 0);
+}
+
+#[test]
+fn group_discovery_without_reported_bindings_retires_the_catalog() {
+    let (state, value, before) = run_discovery(Ok(discovery_reply(None)));
+    assert!(value.unwrap().get("bound").is_none());
+    assert_ne!(state.chat_generation.load(Ordering::Acquire), before);
+    assert_eq!(work_example_stores(&state), 0);
+}
+
+#[test]
+fn failed_group_discovery_retires_the_catalog_and_requires_refresh() {
+    let (state, value, before) = run_discovery(Err(DesktopAgentError::Ambiguous(
+        "unknown remote outcome".into(),
+    )));
+    let error = value.unwrap_err();
+    assert!(error.ambiguous);
+    assert_ne!(state.chat_generation.load(Ordering::Acquire), before);
+    assert_eq!(work_example_stores(&state), 0);
+    assert!(state.mutation_requires_refresh.load(Ordering::Acquire));
 }

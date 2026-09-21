@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  accountHasBoundTeam,
   discoveryAccounts,
   reconcileTeamDiscovery,
 } from '../src/team-discovery';
@@ -66,6 +67,32 @@ test('recurring discovery includes accounts already bound to teams and does not 
     ),
   );
   assert.equal(discoveryAccounts(restricted, 100_001).length, 0);
+});
+
+test('an account is bound to a team only by a team store of its own', () => {
+  const snapshot = fixture();
+  const bound = snapshot.accounts.find((account) =>
+    accountHasBoundTeam(snapshot, account),
+  );
+  assert.ok(bound);
+  // The catalog holds no team for this account, so discovery has everything
+  // still to bind for it and keeps its own interval.
+  assert.equal(
+    accountHasBoundTeam(
+      { ...snapshot, stores: snapshot.stores.filter((s) => s.kind !== 'team') },
+      bound,
+    ),
+    false,
+  );
+  // Another account's teams, and another server's, are not this account's.
+  assert.equal(
+    accountHasBoundTeam(snapshot, { ...bound, alias: 'someone-else' }),
+    false,
+  );
+  assert.equal(
+    accountHasBoundTeam(snapshot, { ...bound, server: 'another.server' }),
+    false,
+  );
 });
 
 test('discovery reconciles after success or partial failure without replaying the mutation', async () => {

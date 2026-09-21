@@ -359,6 +359,72 @@ pub(super) async fn apply_profile_operation_value(
     }
 }
 
+/// Runs a profile operation whose catalog effect is only known from its
+/// reply, and retires the catalog only when the reply says a local record
+/// changed. An operation whose outcome the reply cannot describe, including
+/// every failure, retires the catalog as an unconditional mutation does.
+///
+/// Retiring the catalog for an operation that changed nothing costs every
+/// reader that depends on it: the store identifiers a renderer holds are
+/// rejected until it reloads, and long-running readers restart.
+pub(super) async fn apply_surveying_profile_operation_value(
+    state: &AppState,
+    profile: String,
+    operation: Operation,
+    kind: MutationKind,
+    changed: fn(&serde_json::Value) -> bool,
+) -> Result<serde_json::Value, AgentError> {
+    apply_surveying_profile_operation_with_transport(
+        state,
+        profile,
+        operation,
+        kind,
+        changed,
+        state.agent.transport(),
+    )
+    .await
+}
+
+pub(super) async fn apply_surveying_profile_operation_with_transport(
+    state: &AppState,
+    profile: String,
+    operation: Operation,
+    kind: MutationKind,
+    changed: fn(&serde_json::Value) -> bool,
+    transport: std::sync::Arc<dyn foks_desktop::AgentTransport>,
+) -> Result<serde_json::Value, AgentError> {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        execute_profile_operation(transport.as_ref(), &profile, operation, kind)
+    })
+    .await
+    .map_err(|error| {
+        state.invalidate_catalog();
+        ambiguous_worker_failure(
+            state,
+            format!("The setup operation stopped before reporting its outcome: {error}"),
+        )
+    })?;
+    match result {
+        Ok(value) => {
+            if changed(&value) {
+                state.invalidate_catalog();
+            }
+            Ok(value)
+        }
+        Err(error) => {
+            // A failure reports no effect, and a partially applied operation
+            // leaves records the catalog does not hold.
+            state.invalidate_catalog();
+            if error.ambiguous {
+                state
+                    .mutation_requires_refresh
+                    .store(true, Ordering::Release);
+            }
+            Err(error)
+        }
+    }
+}
+
 pub(super) async fn apply_profile_operation_with_profile(
     state: &AppState,
     profile: String,

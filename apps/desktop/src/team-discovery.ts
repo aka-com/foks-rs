@@ -28,6 +28,26 @@ export function discoveryAccounts(
   });
 }
 
+/**
+ * Whether the catalog already binds a team to this account.
+ *
+ * Binding is what discovery does, so an account the catalog holds no team
+ * for has everything still to discover, while one whose teams are all bound
+ * has only a team joined since the last run — which a sweep at a longer
+ * interval finds. See `DISCOVERY_SWEEP_RUNS` in `desktop-reconciliation`.
+ */
+export function accountHasBoundTeam(
+  snapshot: AgentSnapshot,
+  account: Account,
+): boolean {
+  return snapshot.stores.some(
+    (store) =>
+      store.kind === 'team' &&
+      store.server === account.server &&
+      store.account === account.alias,
+  );
+}
+
 export async function reconcileTeamDiscovery(
   bridge: Bridge,
   account: Account,
