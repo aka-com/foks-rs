@@ -371,11 +371,16 @@ pub(super) fn download_to_path(
         .map_err(AgentError::from_desktop)?;
     let mut read: KvReadResult = serde_json::from_value(value)
         .map_err(|error| AgentError::new("invalid-response", error.to_string(), false))?;
+    // The size is deliberately not bound. A catalog entry never carries one,
+    // because FOKS does not expose a plaintext size in node metadata, while a
+    // read always computes one, so comparing them refuses every download. The
+    // store, path, version, node type and both roles are what identify the
+    // entry; the size is derived by the same read rather than independent
+    // evidence about it, and the assembled length is checked against it below.
     let metadata_matches = read.store == store
         && read.path == item.metadata.path
         && read.version == item.metadata.version
         && read.node_type == item.metadata.node_type
-        && read.size == item.metadata.size
         && read.read_role == item.metadata.read_role
         && read.write_role == item.metadata.write_role;
     if !metadata_matches {

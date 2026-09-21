@@ -320,7 +320,9 @@ pub(super) fn download_item(total: u64) -> CatalogItem {
             path: "/large.bin".to_owned(),
             node_type: "file".to_owned(),
             version: 9,
-            size: Some(total),
+            // The catalog never carries a size; a fixture that does hides the
+            // binding defect this shape used to trigger.
+            size: None,
             read_role: KvRole::Owner,
             write_role: KvRole::Owner,
         },
@@ -338,7 +340,7 @@ fn read_text_issues_exactly_one_version_bound_read() {
             path: "/wifi/password".to_owned(),
             node_type: "small-file".to_owned(),
             version: 7,
-            size: Some(READ_VALUE.len() as u64),
+            size: None,
             read_role: KvRole::Owner,
             write_role: KvRole::Owner,
         },
