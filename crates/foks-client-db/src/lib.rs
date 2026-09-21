@@ -12,6 +12,7 @@ mod schema;
 mod soft;
 mod soft_schema;
 
+pub use repositories::jobs::with_single_profile_claims;
 pub use repositories::protected::{ProtectedOwnerCursor, ProtectedRecordOwner};
 
 pub use repositories::import_readiness::{
@@ -195,6 +196,35 @@ pub enum ScheduledJobKind {
 }
 
 impl ScheduledJobKind {
+    /// Every kind, so a caller deriving a rule from [`Self::reaches_other_profiles`]
+    /// cannot silently miss a kind added later.
+    pub const ALL: [Self; 5] = [
+        Self::UserRefresh,
+        Self::MutationReconcile,
+        Self::YubiManagementRefresh,
+        Self::FederationRefresh,
+        Self::TeamRefresh,
+    ];
+
+    /// Whether running this kind can reach a profile other than the one whose
+    /// durable state holds the job. A federation refresh converges every
+    /// active binding of a local team, and a binding names a remote profile
+    /// whose session the refresh opens. User refresh, team refresh, Yubi
+    /// management refresh and mutation reconciliation read and write only the
+    /// profile they are scheduled in.
+    ///
+    /// A caller that reserved one profile only must not run a kind this
+    /// returns `true` for; see [`with_single_profile_claims`].
+    pub const fn reaches_other_profiles(self) -> bool {
+        match self {
+            Self::FederationRefresh => true,
+            Self::UserRefresh
+            | Self::MutationReconcile
+            | Self::YubiManagementRefresh
+            | Self::TeamRefresh => false,
+        }
+    }
+
     fn from_sql(value: i64) -> Result<Self> {
         match value {
             1 => Ok(Self::UserRefresh),
@@ -2221,6 +2251,184 @@ mod tests {
             .metadata()
             .unwrap();
         assert_ne!(journaled.database_id, other.database_id);
+    }
+
+    /// A due job whose work can leave the profile, plus a later one whose
+    /// work cannot.
+    fn store_with_a_cross_profile_job() -> (tempfile::TempDir, HardStateStore) {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = HardStateStore::open(&directory.path().join("hard.db")).unwrap();
+        let host = snapshot();
+        store.accept_host_parts(host.parts()).unwrap();
+        for (job_id, kind, next_run_at) in [
+            ([1; 16], ScheduledJobKind::FederationRefresh, 100),
+            ([2; 16], ScheduledJobKind::UserRefresh, 110),
+        ] {
+            store
+                .register_scheduled_job(&ScheduledJob {
+                    job_id,
+                    kind,
+                    host_id: host.host_id.clone(),
+                    scope_id: vec![7; 33],
+                    interval_micros: 1_000,
+                    next_run_at,
+                    failure_count: 0,
+                    lease_until: None,
+                    last_completed_at: None,
+                    last_error: None,
+                    updated_at: 10,
+                })
+                .unwrap();
+        }
+        (directory, store)
+    }
+
+    #[test]
+    fn a_single_profile_claim_defers_a_cross_profile_job_without_failing_it() {
+        let (_directory, mut store) = store_with_a_cross_profile_job();
+        // The federation job is due first, so an unrestricted claim takes it.
+        let probed = store.next_due_scheduled_job(200).unwrap().unwrap();
+        assert_eq!(probed.job_id, [1; 16]);
+        assert!(probed.kind.reaches_other_profiles());
+
+        let (claimed, deferred) =
+            with_single_profile_claims(|| store.claim_due_scheduled_jobs(200, 300, 16).unwrap());
+        assert_eq!(
+            claimed.iter().map(|job| job.job_id).collect::<Vec<_>>(),
+            vec![[2; 16]],
+            "a claim restricted to one profile took a job that reaches another"
+        );
+        assert!(deferred, "the skipped job was not reported to the caller");
+
+        // The deferral is not a failure: the job keeps its due time, its empty
+        // lease and its failure count, so no backoff was applied to it.
+        let skipped = store.scheduled_job(&[1; 16]).unwrap().unwrap();
+        assert_eq!(skipped.next_run_at, 100);
+        assert_eq!(skipped.lease_until, None);
+        assert_eq!(skipped.failure_count, 0);
+        assert_eq!(skipped.last_error, None);
+
+        // The restriction ends with the call, so the wider re-run takes it.
+        let rerun = store.claim_due_scheduled_jobs(200, 300, 16).unwrap();
+        assert_eq!(
+            rerun.iter().map(|job| job.job_id).collect::<Vec<_>>(),
+            vec![[1; 16]]
+        );
+    }
+
+    #[test]
+    fn a_single_profile_claim_reports_no_deferral_when_nothing_wider_is_due() {
+        let (_directory, mut store) = store_with_a_cross_profile_job();
+        // Only the user refresh is due at this point.
+        let (claimed, deferred) =
+            with_single_profile_claims(|| store.claim_due_scheduled_jobs(99, 300, 16).unwrap());
+        assert!(claimed.is_empty());
+        assert!(!deferred);
+
+        // Once the federation job is due too, the same restricted claim takes
+        // only the narrow job and reports the one it left behind.
+        let (claimed, deferred) = with_single_profile_claims(|| {
+            store
+                .claim_due_scheduled_jobs(110, 300, 16)
+                .unwrap()
+                .into_iter()
+                .map(|job| job.job_id)
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(claimed, vec![[2; 16]]);
+        assert!(deferred, "the federation job was due and was skipped");
+    }
+
+    /// Thread scoping is an assumption about a caller this crate cannot see,
+    /// so it is checked rather than trusted. A claim issued from another
+    /// thread runs unrestricted, which under one profile's admission is the
+    /// deadlock the restriction exists to prevent, so the scope reports a
+    /// deferral and its caller re-runs the work under wider admission.
+    #[test]
+    fn a_claim_that_leaves_the_restricting_thread_is_reported_as_a_deferral() {
+        let (directory, mut store) = store_with_a_cross_profile_job();
+        let path = directory.path().join("hard.db");
+        drop(store);
+
+        // The restriction is set here, but the claim runs elsewhere, so
+        // nothing on this thread observed it.
+        let (claimed, deferred) = with_single_profile_claims(|| {
+            std::thread::scope(|scope| {
+                scope
+                    .spawn(|| {
+                        HardStateStore::open(&path)
+                            .unwrap()
+                            .claim_due_scheduled_jobs(200, 300, 1)
+                            .unwrap()
+                            .into_iter()
+                            .map(|job| job.job_id)
+                            .collect::<Vec<_>>()
+                    })
+                    .join()
+                    .unwrap()
+            })
+        });
+        // The claim was unrestricted, which is exactly why the scope may not
+        // report success: it took the job that reaches another profile.
+        assert_eq!(claimed, vec![[1; 16]]);
+        assert!(
+            deferred,
+            "a claim that never saw the restriction was reported as restricted"
+        );
+
+        // A claim on the restricting thread still reports honestly, so the
+        // check does not simply defer everything. The job the other thread
+        // took is leased past this claim time, so nothing wider is due.
+        let mut store = HardStateStore::open(&path).unwrap();
+        let (claimed, deferred) =
+            with_single_profile_claims(|| store.claim_due_scheduled_jobs(200, 300, 16).unwrap());
+        assert_eq!(
+            claimed.iter().map(|job| job.job_id).collect::<Vec<_>>(),
+            vec![[2; 16]]
+        );
+        assert!(!deferred, "nothing wider was left due");
+    }
+
+    #[test]
+    fn only_federation_refresh_is_classified_as_reaching_another_profile() {
+        // The claim predicate is derived from this classification, so a kind
+        // added without deciding this would silently become claimable under
+        // one profile's admission.
+        for kind in ScheduledJobKind::ALL {
+            assert_eq!(
+                kind.reaches_other_profiles(),
+                kind == ScheduledJobKind::FederationRefresh,
+                "{kind:?} is classified against the scopes the agent admits"
+            );
+        }
+    }
+
+    /// The exhaustive match in `reaches_other_profiles` forces a new kind to
+    /// be classified, but it does not force it into `ALL`, and `ALL` is what
+    /// the claim's SQL predicate is built from. A kind left out of `ALL` would
+    /// be classified correctly and still be claimable under one profile's
+    /// admission, so completeness is pinned here rather than assumed.
+    #[test]
+    fn every_scheduled_job_kind_appears_in_the_list_the_predicate_is_built_from() {
+        let listed = ScheduledJobKind::ALL
+            .iter()
+            .map(|kind| *kind as i64)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            listed.len(),
+            ScheduledJobKind::ALL.len(),
+            "a kind is listed twice, so another is missing"
+        );
+        // Every discriminant the store can read back is one the predicate
+        // considers, and nothing beyond them decodes at all.
+        let mut decodable = std::collections::BTreeSet::new();
+        for value in 0..64 {
+            if let Ok(kind) = ScheduledJobKind::from_sql(value) {
+                assert_eq!(kind as i64, value, "a kind decodes from a foreign value");
+                decodable.insert(value);
+            }
+        }
+        assert_eq!(decodable, listed);
     }
 
     #[test]

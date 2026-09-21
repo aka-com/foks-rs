@@ -5,7 +5,7 @@ pub(crate) mod chat;
 mod federation;
 mod host;
 pub(crate) mod import_readiness;
-mod jobs;
+pub(crate) mod jobs;
 mod journals;
 mod metadata;
 pub(crate) mod protected;

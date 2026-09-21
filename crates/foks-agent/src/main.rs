@@ -508,13 +508,16 @@ async fn run_scheduled_profiles(
         }
         let state = state_dir.clone();
         let scheduled = profile.clone();
+        let probed = hard_database.cloned();
+        let probed_profile = profile.clone();
         let result = run_scheduled_batches(
             &state_dir,
             timeout,
             cancellation.clone(),
             workers.clone(),
-            move |remaining, control| {
-                run_scheduled_profile(&state, &scheduled, now, remaining, control)
+            move || scheduled_slice_admission(probed.as_deref(), &probed_profile, now),
+            move |remaining, control, admitted| {
+                run_scheduled_profile(&state, &scheduled, now, remaining, control, admitted)
                     .map_err(|error| error.to_string())
             },
         )
@@ -561,6 +564,91 @@ fn scheduled_profile_is_due(next_run_at: Option<u64>, now: u64) -> bool {
     next_run_at.is_none_or(|due| due <= now)
 }
 
+/// What one scheduled slice reserved. A slice runs one job, so it reserves
+/// what that job needs rather than what any job might need.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum SliceAdmission {
+    /// The state root: the only scope under which a job whose work can reach
+    /// a second profile may run, because the profiles it reaches are known
+    /// only while it executes.
+    SecurityRoot,
+    /// This profile alone. Every other profile's work, including its shared
+    /// reads, runs beside the slice.
+    Profile(String),
+}
+
+impl SliceAdmission {
+    fn scope(&self) -> profile_work::Scope {
+        match self {
+            Self::SecurityRoot => profile_work::Scope::SecurityRoot,
+            Self::Profile(profile) => profile_work::Scope::profile(profile),
+        }
+    }
+    fn is_single_profile(&self) -> bool {
+        matches!(self, Self::Profile(_))
+    }
+}
+
+/// How one scheduled slice ended, as the batch loop needs it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ScheduledSlice {
+    /// A job was claimed and run.
+    Ran,
+    /// Nothing was due. The batch ends.
+    Idle,
+    /// A due job needs wider admission than the slice reserved, and was left
+    /// unclaimed. Nothing about that job changed, so this is not a failure:
+    /// it asks for one re-run under the wider scope.
+    Deferred,
+}
+
+/// The admission one scheduled slice should reserve, read from the durable
+/// job state alongside the due time the pass already reads there.
+///
+/// Only the kind of the job a claim would take decides this, and a job's kind
+/// is immutable for its identifier: `register_scheduled_job` and
+/// `register_scheduled_job_if_missing` both refuse a registration that would
+/// rebind an existing identifier to another kind, host or scope. The row can
+/// still change between this read and the claim, which is why the claim
+/// itself, not this probe, enforces what a single-profile slice may run.
+///
+/// Durable state that cannot be read at all takes the wide scope, as every
+/// slice did before this probe existed. A profile with no hard state yet, and
+/// one with nothing due, take the profile scope: the run registers a
+/// profile's default jobs, and those are single-profile kinds.
+fn scheduled_slice_admission(
+    hard_database: Option<&Path>,
+    profile: &str,
+    now: u64,
+) -> SliceAdmission {
+    let wide = match hard_database {
+        // Opening a store that does not exist would create one outside the
+        // profile's locks; a profile with no jobs has no wide job either.
+        Some(path) if !path.exists() => Some(false),
+        Some(path) => due_scheduled_job_reaches_other_profiles(path, now),
+        None => None,
+    };
+    match wide {
+        Some(false) => SliceAdmission::Profile(profile.to_owned()),
+        Some(true) | None => SliceAdmission::SecurityRoot,
+    }
+}
+
+/// Whether the job a claim would take next can reach a second profile.
+/// `None` when the durable state could not be read.
+///
+/// This read takes no profile admission and no profile lock, like the due-time
+/// read beside it.
+fn due_scheduled_job_reaches_other_profiles(hard_database: &Path, now: u64) -> Option<bool> {
+    Some(
+        foks_client_db::HardStateStore::open(hard_database)
+            .ok()?
+            .next_due_scheduled_job(now)
+            .ok()?
+            .is_some_and(|job| job.kind.reaches_other_profiles()),
+    )
+}
+
 fn earlier_run(earliest: Option<u64>, candidate: Option<u64>) -> Option<u64> {
     match (earliest, candidate) {
         (Some(earliest), Some(candidate)) => Some(earliest.min(candidate)),
@@ -576,13 +664,16 @@ fn scheduled_delay(earliest: Option<u64>, now: u64) -> Option<Duration> {
 
 const SCHEDULED_JOBS_PER_PROFILE: usize = 16;
 
-/// How long one scheduled job may spend on the network. The job runs under
-/// `SecurityRoot` admission, which every profile's foreground requests wait
-/// behind, and its remote calls each get the whole budget it is handed as
-/// their deadline. A federated server that accepts a connection and never
-/// answers would otherwise hold every profile for the request timeout, and
-/// the foreground requests queued behind it would expire at that same
-/// deadline without starting. The bound matches the identity check's
+/// How long one scheduled job may spend on the network. A job that can reach
+/// a second profile runs under `SecurityRoot` admission, which every profile's
+/// foreground requests wait behind, and its remote calls each get the whole
+/// budget it is handed as their deadline. A federated server that accepts a
+/// connection and never answers would otherwise hold every profile for the
+/// request timeout, and the foreground requests queued behind it would expire
+/// at that same deadline without starting. A single-profile job holds only its
+/// own profile, where the same bound keeps one slow host from holding that
+/// profile's foreground requests for the whole request timeout. The bound
+/// matches the identity check's
 /// (`connectivity::IDENTITY_NETWORK_BUDGET`) and the default request timeout
 /// a command-line agent already runs scheduled jobs under.
 const SCHEDULED_NETWORK_BUDGET: Duration = Duration::from_secs(20);
@@ -602,51 +693,83 @@ fn admission_budget(timeout: Duration) -> Duration {
 
 // Each worker runs one job through checkpoint publication. No protected state
 // or lock survives into the next reservation, and no unstarted job is leased.
+//
+// `slice_admission` is consulted once per slice rather than once per batch: a
+// slice runs one job, and the next due job may be of another kind.
 async fn run_scheduled_batches(
     state_dir: &Path,
     timeout: Duration,
     cancellation: CancellationToken,
     workers: Arc<Semaphore>,
-    run_one: impl Fn(Duration, CancellationToken) -> Result<bool, String> + Send + Sync + 'static,
+    slice_admission: impl Fn() -> SliceAdmission + Send + Sync + 'static,
+    run_one: impl Fn(Duration, CancellationToken, SliceAdmission) -> Result<ScheduledSlice, String>
+        + Send
+        + Sync
+        + 'static,
 ) -> Result<(), String> {
     let run_one = Arc::new(run_one);
-    for _ in 0..SCHEDULED_JOBS_PER_PROFILE {
+    'slices: for _ in 0..SCHEDULED_JOBS_PER_PROFILE {
         if cancellation.is_cancelled() {
             break;
         }
-        // Federation can discover additional profiles during execution. Keep
-        // root admission, but rejoin its fair queue after every completed job.
-        let started = Instant::now();
-        let admission = profile_work::coordinator()
-            .acquire(state_dir, profile_work::Scope::SecurityRoot, timeout)
+        let mut admitted = slice_admission();
+        let outcome = loop {
+            // Federation can discover additional profiles during execution, so
+            // a slice that may run one reserves the state root. Either way the
+            // fair queue is rejoined after every completed job.
+            let started = Instant::now();
+            let admission = profile_work::coordinator()
+                .acquire(state_dir, admitted.scope(), timeout)
+                .await
+                .map_err(|error| error.to_string())?;
+            let permit = tokio::time::timeout(
+                timeout.saturating_sub(started.elapsed()),
+                workers.clone().acquire_owned(),
+            )
             .await
+            .map_err(|_| "scheduled worker capacity timed out".to_owned())?
             .map_err(|error| error.to_string())?;
-        let permit = tokio::time::timeout(
-            timeout.saturating_sub(started.elapsed()),
-            workers.clone().acquire_owned(),
-        )
-        .await
-        .map_err(|_| "scheduled worker capacity timed out".to_owned())?
-        .map_err(|error| error.to_string())?;
-        if cancellation.is_cancelled() {
-            break;
-        }
-        let remaining = timeout.saturating_sub(started.elapsed());
-        if remaining.is_zero() {
-            break;
-        }
-        let control = cancellation.clone();
-        let run_one = run_one.clone();
-        let budget = scheduled_job_budget(remaining);
-        let ran_job = tokio::task::spawn_blocking(move || {
-            let _admission = admission;
-            let _permit = permit;
-            run_one(budget, control)
-        })
-        .await
-        .map_err(|error| error.to_string())??;
-        if !ran_job {
-            break;
+            if cancellation.is_cancelled() {
+                break 'slices;
+            }
+            let remaining = timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                break 'slices;
+            }
+            let control = cancellation.clone();
+            let run_one = run_one.clone();
+            let budget = scheduled_job_budget(remaining);
+            let reserved = admitted.clone();
+            let outcome = tokio::task::spawn_blocking(move || {
+                let _admission = admission;
+                let _permit = permit;
+                run_one(budget, control, reserved)
+            })
+            .await
+            .map_err(|error| error.to_string())??;
+            match outcome {
+                // A due job needed a wider scope than this slice reserved and
+                // was left untouched. Release what was reserved and rejoin the
+                // queue for the state root. The re-run takes that scope
+                // unconditionally, so it cannot defer in turn: a slice passes
+                // through admission at most twice, and the job it deferred is
+                // claimed by the re-run rather than by a later pass.
+                ScheduledSlice::Deferred if admitted.is_single_profile() => {
+                    admitted = SliceAdmission::SecurityRoot;
+                    // Requests that queued behind the deferral run before the
+                    // wider re-run reserves, which a re-run that rejoined the
+                    // queue without yielding could otherwise precede.
+                    tokio::task::yield_now().await;
+                }
+                outcome => break outcome,
+            }
+        };
+        match outcome {
+            ScheduledSlice::Ran => {}
+            // Nothing is due, or a slice already holding the state root has
+            // nothing wider to re-run under. Either way the pass is done with
+            // this profile; the next pass probes again from current state.
+            ScheduledSlice::Idle | ScheduledSlice::Deferred => break,
         }
         // Give ready requests a chance to enqueue before reserving again.
         tokio::task::yield_now().await;
@@ -654,13 +777,24 @@ async fn run_scheduled_batches(
     Ok(())
 }
 
+/// Runs one scheduled job for `profile` under the admission the slice
+/// reserved.
+///
+/// A slice that reserved the profile alone runs its claim restricted to jobs
+/// whose work cannot leave the profile. The restriction is what makes the
+/// narrow reservation sound: it holds for the claim itself, so a job
+/// registered after the slice's probe, or between the probe and the claim,
+/// still cannot run here. Such a job is left due, unleased and with its
+/// failure count untouched, and the slice reports a deferral for its caller to
+/// answer with one re-run under the state root.
 fn run_scheduled_profile(
     state_dir: &Path,
     profile: &str,
     now: u64,
     timeout: Duration,
     cancellation: CancellationToken,
-) -> Result<bool, Box<dyn std::error::Error>> {
+    admitted: SliceAdmission,
+) -> Result<ScheduledSlice, Box<dyn std::error::Error>> {
     let registry = ProfileRegistry::open(state_dir)?;
     let session =
         read_cache::open_profile_session(&registry, profile, timeout, cancellation.clone())?;
@@ -672,14 +806,28 @@ fn run_scheduled_profile(
                 &session.paths().credential_store,
                 derive_vault_key(&master),
             )?;
-            let report = session.run_next_due_job_with_federation(
-                now,
-                &mut AccountVault::new(&mut store),
-                &registry,
-                &credentials,
-                &master,
-            )?;
-            Ok(!report.runs.is_empty())
+            let mut run = || {
+                session.run_next_due_job_with_federation(
+                    now,
+                    &mut AccountVault::new(&mut store),
+                    &registry,
+                    &credentials,
+                    &master,
+                )
+            };
+            let (report, deferred) = if admitted.is_single_profile() {
+                foks_client_db::with_single_profile_claims(run)
+            } else {
+                (run(), false)
+            };
+            let report = report?;
+            Ok(if deferred {
+                ScheduledSlice::Deferred
+            } else if report.runs.is_empty() {
+                ScheduledSlice::Idle
+            } else {
+                ScheduledSlice::Ran
+            })
         })
     })
 }
@@ -7779,7 +7927,8 @@ mod tests {
                 Duration::from_secs(5),
                 CancellationToken::new(),
                 task_workers,
-                move |_, _| {
+                || SliceAdmission::SecurityRoot,
+                move |_, _, _| {
                     let n = counts.fetch_add(1, Ordering::SeqCst);
                     if n == 0 {
                         started_tx.send(()).unwrap();
@@ -7789,7 +7938,11 @@ mod tests {
                             .recv_timeout(Duration::from_secs(5))
                             .unwrap();
                     }
-                    Ok(n == 0)
+                    Ok(if n == 0 {
+                        ScheduledSlice::Ran
+                    } else {
+                        ScheduledSlice::Idle
+                    })
                 },
             )
             .await
@@ -7843,9 +7996,10 @@ mod tests {
             Duration::from_secs(60),
             CancellationToken::new(),
             Arc::new(Semaphore::new(1)),
-            move |remaining, _| {
+            || SliceAdmission::SecurityRoot,
+            move |remaining, _, _| {
                 seen.lock().unwrap().push(remaining);
-                Ok(false)
+                Ok(ScheduledSlice::Idle)
             },
         )
         .await
@@ -7857,6 +8011,245 @@ mod tests {
             "a job under a 60 s request budget got {:?}",
             budgets[0]
         );
+    }
+
+    /// A profile's durable job state holding exactly `jobs`, given as
+    /// `(kind, next_run_at)`. Identifiers ascend with the list, so the job a
+    /// claim would take is the earliest due one.
+    fn scheduled_job_state(path: &Path, jobs: &[(foks_client_db::ScheduledJobKind, u64)]) {
+        let host = foks_verify::verify_public_host("foks.app", SCHEDULER_PROBE).unwrap();
+        foks_client_db::HardStateStore::open(path)
+            .unwrap()
+            .accept_verified_host(&host.snapshot)
+            .unwrap();
+        let scheduler =
+            foks_client::FoksScheduler::new(path, foks_client::SchedulerConfig::default()).unwrap();
+        for (index, (kind, first_run_at)) in jobs.iter().enumerate() {
+            scheduler
+                .register(foks_client::ScheduledJobRegistration {
+                    job_id: [u8::try_from(index + 1).unwrap(); 16],
+                    kind: *kind,
+                    host_id: host.snapshot.host_id().to_vec(),
+                    scope_id: vec![9; 33],
+                    interval_micros: 1_000_000,
+                    first_run_at: *first_run_at,
+                    registered_at: 1,
+                })
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_single_profile_scheduled_job_admits_beside_another_profiles_read() {
+        use foks_client_db::ScheduledJobKind;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().to_path_buf();
+        let hard_database = root.join("hard.sqlite");
+        scheduled_job_state(&hard_database, &[(ScheduledJobKind::UserRefresh, 5_000)]);
+        assert_eq!(
+            scheduled_slice_admission(Some(&hard_database), "a", 10_000),
+            SliceAdmission::Profile("a".into())
+        );
+
+        let workers = Arc::new(Semaphore::new(1));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let started_tx = Mutex::new(Some(started_tx));
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        let task_root = root.clone();
+        let task_workers = workers.clone();
+        let probed = hard_database.clone();
+        let scheduled = tokio::spawn(async move {
+            run_scheduled_batches(
+                &task_root,
+                Duration::from_secs(5),
+                CancellationToken::new(),
+                task_workers,
+                move || scheduled_slice_admission(Some(&probed), "a", 10_000),
+                move |_, _, admitted| {
+                    assert_eq!(admitted, SliceAdmission::Profile("a".into()));
+                    started_tx.lock().unwrap().take().unwrap().send(()).unwrap();
+                    release_rx
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(5))
+                        .unwrap();
+                    Ok(ScheduledSlice::Idle)
+                },
+            )
+            .await
+        });
+        started_rx.await.unwrap();
+
+        // The read this job used to block: another profile's, which shares
+        // nothing with the job's profile.
+        let other = profile_work::coordinator()
+            .try_acquire(&root, profile_work::Scope::SharedProfile("b".into()))
+            .unwrap();
+        assert!(
+            other.is_some(),
+            "another profile's read waited behind a single-profile job"
+        );
+        // The job's own profile stays exclusive while it runs.
+        assert!(profile_work::coordinator()
+            .try_acquire(&root, profile_work::Scope::profile("a"))
+            .unwrap()
+            .is_none());
+        drop(other);
+        release_tx.send(()).unwrap();
+        scheduled.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_federation_refresh_job_still_takes_the_wide_scope() {
+        use foks_client_db::ScheduledJobKind;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().to_path_buf();
+        let hard_database = root.join("hard.sqlite");
+        scheduled_job_state(
+            &hard_database,
+            &[
+                (ScheduledJobKind::FederationRefresh, 5_000),
+                (ScheduledJobKind::UserRefresh, 6_000),
+            ],
+        );
+        assert_eq!(
+            scheduled_slice_admission(Some(&hard_database), "a", 10_000),
+            SliceAdmission::SecurityRoot
+        );
+        // Durable state that could not be read keeps the wide scope the pass
+        // took before the probe existed.
+        assert_eq!(
+            scheduled_slice_admission(None, "a", 10_000),
+            SliceAdmission::SecurityRoot
+        );
+        assert_eq!(
+            scheduled_slice_admission(Some(&hard_database), "a", 5_999),
+            SliceAdmission::SecurityRoot
+        );
+        // Only the job a claim would take decides the scope: a federation job
+        // that is not yet due leaves the slice reserving its own profile.
+        let later = root.join("later.sqlite");
+        scheduled_job_state(
+            &later,
+            &[
+                (ScheduledJobKind::UserRefresh, 5_000),
+                (ScheduledJobKind::FederationRefresh, 6_000),
+            ],
+        );
+        assert_eq!(
+            scheduled_slice_admission(Some(&later), "a", 5_999),
+            SliceAdmission::Profile("a".into())
+        );
+
+        let workers = Arc::new(Semaphore::new(1));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let started_tx = Mutex::new(Some(started_tx));
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        let task_root = root.clone();
+        let task_workers = workers.clone();
+        let probed = hard_database.clone();
+        let scheduled = tokio::spawn(async move {
+            run_scheduled_batches(
+                &task_root,
+                Duration::from_secs(5),
+                CancellationToken::new(),
+                task_workers,
+                move || scheduled_slice_admission(Some(&probed), "a", 10_000),
+                move |_, _, admitted| {
+                    assert_eq!(admitted, SliceAdmission::SecurityRoot);
+                    started_tx.lock().unwrap().take().unwrap().send(()).unwrap();
+                    release_rx
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(5))
+                        .unwrap();
+                    Ok(ScheduledSlice::Idle)
+                },
+            )
+            .await
+        });
+        started_rx.await.unwrap();
+        // A federation refresh can reach a second profile, so every other
+        // profile's work, including its reads, still waits behind it.
+        assert!(profile_work::coordinator()
+            .try_acquire(&root, profile_work::Scope::SharedProfile("b".into()))
+            .unwrap()
+            .is_none());
+        release_tx.send(()).unwrap();
+        scheduled.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_claim_race_defers_the_slice_and_re_runs_it_under_the_wide_scope() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().to_path_buf();
+        let admissions = Arc::new(Mutex::new(Vec::new()));
+        let seen = admissions.clone();
+        // The probe reads a single-profile job every time; the first claim
+        // lands on one that reaches another profile and leaves it unclaimed.
+        let result = run_scheduled_batches(
+            &root,
+            Duration::from_secs(5),
+            CancellationToken::new(),
+            Arc::new(Semaphore::new(1)),
+            || SliceAdmission::Profile("a".into()),
+            move |_, _, admitted| {
+                let mut seen = seen.lock().unwrap();
+                seen.push(admitted);
+                Ok(match seen.len() {
+                    1 => ScheduledSlice::Deferred,
+                    2 => ScheduledSlice::Ran,
+                    _ => ScheduledSlice::Idle,
+                })
+            },
+        )
+        .await;
+
+        assert!(result.is_ok(), "a deferral was reported as a failure");
+        let admissions = admissions.lock().unwrap();
+        assert_eq!(
+            *admissions,
+            vec![
+                SliceAdmission::Profile("a".into()),
+                // One re-run, under the scope the deferred job needs.
+                SliceAdmission::SecurityRoot,
+                // The re-run ran a job, so the pass continues from a fresh
+                // probe rather than ending on the deferral.
+                SliceAdmission::Profile("a".into()),
+            ]
+        );
+        assert!(profile_work::coordinator()
+            .try_acquire(&root, profile_work::Scope::Root)
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn a_deferral_under_the_wide_scope_ends_the_pass_instead_of_re_running() {
+        let temporary = tempfile::tempdir().unwrap();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counts = calls.clone();
+        // Nothing is wider than the state root, so a slice that reports a
+        // deferral while holding it must not re-run: the next pass probes
+        // again from current state.
+        run_scheduled_batches(
+            temporary.path(),
+            Duration::from_secs(5),
+            CancellationToken::new(),
+            Arc::new(Semaphore::new(1)),
+            || SliceAdmission::SecurityRoot,
+            move |_, _, _| {
+                counts.fetch_add(1, Ordering::SeqCst);
+                Ok(ScheduledSlice::Deferred)
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -7871,16 +8264,17 @@ mod tests {
                 Duration::from_secs(5),
                 CancellationToken::new(),
                 workers.clone(),
-                move |_, control| {
+                || SliceAdmission::SecurityRoot,
+                move |_, control, _| {
                     counts.fetch_add(1, Ordering::SeqCst);
                     match case {
-                        "empty" => Ok(false),
+                        "empty" => Ok(ScheduledSlice::Idle),
                         "error" => Err("storage failed".to_owned()),
                         "cancel" => {
                             control.cancel();
-                            Ok(true)
+                            Ok(ScheduledSlice::Ran)
                         }
-                        _ => Ok(true),
+                        _ => Ok(ScheduledSlice::Ran),
                     }
                 },
             )
@@ -7919,14 +8313,15 @@ mod tests {
                 Duration::from_secs(5),
                 CancellationToken::new(),
                 task_workers,
-                move |_, _| {
+                || SliceAdmission::SecurityRoot,
+                move |_, _, _| {
                     started_tx.lock().unwrap().take().unwrap().send(()).unwrap();
                     release_rx
                         .lock()
                         .unwrap()
                         .recv_timeout(Duration::from_secs(5))
                         .unwrap();
-                    Ok(true)
+                    Ok(ScheduledSlice::Ran)
                 },
             )
             .await
