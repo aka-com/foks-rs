@@ -74,6 +74,17 @@ impl CheckedProfileSession<'_> {
         read_report_from_fetched(&directories, path, version, fetched)
     }
 
+    /// Reads one range of one large file.
+    ///
+    /// A download issues this once per delivered chunk, and resolving the
+    /// path costs a request per directory on it every time. A session with a
+    /// node memo resolves the path once and then reads under the node it
+    /// remembered, submitting the version vector that walk cited so the
+    /// server refuses the read if anything on the path moved. That is one
+    /// request in place of the walk, not zero: a remembered `(path, version)`
+    /// pair is not by itself evidence about a node, because a dirent version
+    /// restarts at 1 after an unlink and a re-create on a fresh dirent
+    /// identifier.
     pub fn read_kv_chunk(
         &self,
         alias: &str,
@@ -84,12 +95,62 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
     ) -> Result<KvChunkReport> {
         self.profile.require(Capability::Kv)?;
-        let (loaded, authenticated, directories) = self.resolved_user_path(alias, path, vault)?;
+        let components = parent_components(path)?;
+        let loaded = vault.account(alias)?;
+        let host = self.pinned_host()?;
+        let authenticated = self.authenticated_user(&host, &loaded.credential)?;
+        let memo = self.kv_node_memo(
+            &host,
+            &loaded.credential,
+            &loaded.credential.uid,
+            path,
+            version,
+        )?;
+        if let Some((cache, key)) = &memo {
+            if let Some(remembered) = cache.get(key) {
+                match self.client.read_user_kv_chunk_if_current(
+                    &host,
+                    &loaded.credential,
+                    &authenticated.verified,
+                    &authenticated.puks,
+                    KvNodeId(remembered.node_id),
+                    offset,
+                    length,
+                    &remembered.versions,
+                ) {
+                    Ok(Some(chunk)) => {
+                        return Ok(KvChunkReport {
+                            path: path.to_owned(),
+                            version,
+                            offset,
+                            eof: chunk.eof,
+                            content: chunk.content,
+                        })
+                    }
+                    // The server refused the vector. The remembered node is
+                    // not the node at this path any more, or may not be;
+                    // either way the path is walked again below, which is
+                    // what decides whether this version still resolves.
+                    Ok(None) => cache.invalidate(key),
+                    Err(error) => {
+                        cache.invalidate(key);
+                        return Err(error.into());
+                    }
+                }
+            }
+        }
+        let directories = self.client.resolve_user_kv_path(
+            &host,
+            &loaded.credential,
+            &authenticated.verified,
+            &authenticated.puks,
+            &self.paths.soft_database,
+            &components,
+        )?;
         let entry = checked_entry(&directories, path, version)?;
         if KvNodeId(entry.node_id).node_type()? != KvNodeType::File {
             return Err(Error::InvalidAccount("KV chunk path is not a large file"));
         }
-        let host = self.pinned_host()?;
         let chunk = self.client.read_user_kv_chunk(
             &host,
             &loaded.credential,
@@ -99,6 +160,15 @@ impl CheckedProfileSession<'_> {
             offset,
             length,
         )?;
+        if let Some((cache, key)) = memo {
+            cache.put(
+                key,
+                crate::KvNodeMemoEntry {
+                    node_id: entry.node_id,
+                    versions: foks_client::kv_path_version_vector(&directories),
+                },
+            );
+        }
         Ok(KvChunkReport {
             path: path.to_owned(),
             version,
@@ -142,13 +212,57 @@ impl CheckedProfileSession<'_> {
         length: usize,
         vault: &mut AccountVault<'_>,
     ) -> Result<KvChunkReport> {
-        let (account, team, directories) =
-            self.resolved_team_path(account_alias, team_alias, team_id_hex, path, vault)?;
+        let components = parent_components(path)?;
+        let (account, team, host) =
+            self.authenticated_team_store(account_alias, team_alias, team_id_hex, vault)?;
+        let memo = self.kv_node_memo(
+            &host,
+            &account.credential,
+            team.verified.team(),
+            path,
+            version,
+        )?;
+        if let Some((cache, key)) = &memo {
+            if let Some(remembered) = cache.get(key) {
+                // As on [`Self::read_kv_chunk`]: the remembered node is used
+                // only if the server still accepts the walk's version vector.
+                match self.client.read_team_kv_chunk_if_current(
+                    &host,
+                    &account.credential,
+                    &team,
+                    KvNodeId(remembered.node_id),
+                    offset,
+                    length,
+                    &remembered.versions,
+                ) {
+                    Ok(Some(chunk)) => {
+                        return Ok(KvChunkReport {
+                            path: path.to_owned(),
+                            version,
+                            offset,
+                            eof: chunk.eof,
+                            content: chunk.content,
+                        })
+                    }
+                    Ok(None) => cache.invalidate(key),
+                    Err(error) => {
+                        cache.invalidate(key);
+                        return Err(error.into());
+                    }
+                }
+            }
+        }
+        let directories = self.client.resolve_team_kv_path(
+            &host,
+            &account.credential,
+            &team,
+            &self.paths.soft_database,
+            &components,
+        )?;
         let entry = checked_entry(&directories, path, version)?;
         if KvNodeId(entry.node_id).node_type()? != KvNodeType::File {
             return Err(Error::InvalidAccount("KV chunk path is not a large file"));
         }
-        let host = self.pinned_host()?;
         let chunk = self.client.read_team_kv_chunk(
             &host,
             &account.credential,
@@ -157,6 +271,15 @@ impl CheckedProfileSession<'_> {
             offset,
             length,
         )?;
+        if let Some((cache, key)) = memo {
+            cache.put(
+                key,
+                crate::KvNodeMemoEntry {
+                    node_id: entry.node_id,
+                    versions: foks_client::kv_path_version_vector(&directories),
+                },
+            );
+        }
         Ok(KvChunkReport {
             path: path.to_owned(),
             version,
@@ -988,6 +1111,10 @@ pub struct KvReadReport {
     pub size: Option<u64>,
     pub read_role: KvRoleSummary,
     pub write_role: KvRoleSummary,
+    /// Base64 on the wire, matching `foks_agent_proto::data::DataEntry`, which
+    /// is what the adapter reader parses this into. The two shapes share one
+    /// adapter so neither side can move without the other.
+    #[serde(with = "foks_agent_proto::base64_bytes::optional")]
     pub content: Option<Vec<u8>>,
     pub symlink_target: Option<String>,
 }
@@ -997,6 +1124,9 @@ pub struct KvChunkReport {
     pub path: String,
     pub version: u64,
     pub offset: u64,
+    /// As on [`KvReadReport::content`]; the reader is
+    /// `foks_agent_proto::data::DataChunk`.
+    #[serde(with = "foks_agent_proto::base64_bytes")]
     pub content: Vec<u8>,
     pub eof: bool,
 }
@@ -1119,8 +1249,12 @@ fn read_report_from_fetched(
             let size = Some(target.len() as u64);
             (None, Some(target), size, projected_read_role(entry)?)
         }
-        (KvNodeType::File, foks_client::KvFetchedNode::LargeFile { size }) => {
-            (None, None, Some(size), projected_read_role(entry)?)
+        // A large file reports no size. Measuring one means downloading and
+        // decrypting the whole file, which every caller of this report is
+        // about to do for itself; readers drive their chunk loop by the
+        // end-of-file flag each chunk carries instead.
+        (KvNodeType::File, foks_client::KvFetchedNode::LargeFile) => {
+            (None, None, None, projected_read_role(entry)?)
         }
         (KvNodeType::Directory, foks_client::KvFetchedNode::Directory { read_role }) => {
             (None, None, None, read_role)
@@ -1678,7 +1812,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_large_file_read_reports_the_selected_nodes_size() {
+    fn exact_large_file_read_reports_no_size_and_no_content() {
         let fixture = |name: &str| {
             std::fs::read(format!(
                 "../foks-snowpack/tests/fixtures/foks-v0.1.9/user/{name}"
@@ -1718,15 +1852,15 @@ mod tests {
                 large_file_size: None,
             }],
         }];
-        let size = fixture("kv-large-plaintext.bin").len() as u64;
         let report = read_report_from_fetched(
             &tree,
             "/archive.bin",
             4,
-            foks_client::KvFetchedNode::LargeFile { size },
+            foks_client::KvFetchedNode::LargeFile,
         )
         .unwrap();
-        assert_eq!(report.size, Some(size));
+        // No size and no content: both would cost the whole file on the wire.
+        assert_eq!(report.size, None);
         assert!(report.content.is_none());
     }
 }

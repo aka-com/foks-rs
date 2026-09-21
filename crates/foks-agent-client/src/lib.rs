@@ -17,7 +17,10 @@ pub mod secret_file;
 
 const DEVICE_PAIRING_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const CHAT_POLL_TIMEOUT: Duration = Duration::from_secs(60);
-const MAXIMUM_UPLOAD_FRAME_BYTES: usize = 128 * 1024;
+/// One upload frame's plaintext. Byte payloads are base64, so this is the
+/// protocol's own payload bound, which is sized against the frame ceiling
+/// with the envelope reserve held back.
+const MAXIMUM_UPLOAD_FRAME_BYTES: usize = foks_agent_proto::MAXIMUM_KV_PAYLOAD_BYTES;
 
 #[derive(Debug, Error)]
 pub enum Error {

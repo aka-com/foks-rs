@@ -197,13 +197,17 @@ fn with_file(mut arguments: Vec<OsString>, path: &Path) -> Vec<OsString> {
     arguments
 }
 
+/// Byte payloads cross the agent socket as base64, not as JSON integer
+/// arrays, so this decodes the wire form the real agent produced.
 fn content(value: &serde_json::Value) -> Vec<u8> {
-    value["content"]
-        .as_array()
-        .expect("read response content")
-        .iter()
-        .map(|byte| u8::try_from(byte.as_u64().expect("content byte")).expect("content byte range"))
-        .collect()
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(
+            value["content"]
+                .as_str()
+                .expect("read response content is a base64 string"),
+        )
+        .expect("read response content decodes")
 }
 
 fn unix_seconds() -> u64 {

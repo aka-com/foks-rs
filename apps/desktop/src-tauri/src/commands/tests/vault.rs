@@ -280,7 +280,10 @@ impl foks_desktop::AgentTransport for DownloadTransport {
                 path,
                 version,
                 node_type: "file".to_owned(),
-                size: Some(self.total),
+                // As the agent answers now: a large file has no size it can
+                // report without downloading itself, so the loop below is
+                // driven by the end-of-file flag alone.
+                size: None,
                 read_role: KvRole::Owner,
                 write_role: KvRole::Owner,
                 content: None,

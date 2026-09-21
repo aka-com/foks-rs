@@ -7,8 +7,9 @@ use foks_client_db::{KvDirectoryProjection, KvLargeFileStage, KvProjectedEntry, 
 use foks_crypto::{derive_subkey_id, open_kv_chunk, open_kv_dirent_name};
 use foks_proto::{
     KvDirectoryPair, KvDirectoryStatus, KvEncryptedChunk, KvListResponse, KvNode, KvNodeId,
-    KvNodeType, KvParty, KvRoot, KvSmallFilePlaintext, SecretSeed, MAXIMUM_KV_DIRECTORIES,
-    MAXIMUM_KV_DIRENTS, MAXIMUM_KV_LIST_PAGE_ENTRIES, MAXIMUM_KV_LIST_RESPONSE_BYTES,
+    KvNodeType, KvParty, KvPathVersionVector, KvRoot, KvSmallFilePlaintext, SecretSeed,
+    MAXIMUM_KV_DIRECTORIES, MAXIMUM_KV_DIRENTS, MAXIMUM_KV_LIST_PAGE_ENTRIES,
+    MAXIMUM_KV_LIST_RESPONSE_BYTES,
 };
 use foks_rpc::{KvAuth, KvListCursor};
 use foks_verify::VerifiedUserState;
@@ -16,7 +17,8 @@ use zeroize::{Zeroize as _, Zeroizing};
 
 use super::rpc::KvRequest;
 use super::support::{
-    kv_key, kv_version_vector, reachable_kv_tree, user_kv_keys, validate_kv_symlink,
+    is_kv_stale_cache, kv_key, kv_version_vector, kv_version_vector_from_tree, reachable_kv_tree,
+    user_kv_keys, validate_kv_symlink,
 };
 use super::{KvFetchedChunk, KvFetchedNode};
 use super::{KvPrivateKeyRef, KvWriteSession, OwnedKvAuth, MAX_KV_FILE_BYTES};
@@ -105,6 +107,96 @@ impl FoksClient {
             KvAuth::User,
             |auth, request| connection.call(auth, request),
         )
+    }
+
+    /// [`Self::read_user_kv_chunk`] guarded by a version vector.
+    ///
+    /// A caller that resolved this node's path earlier and kept the vector
+    /// that walk cited can read further chunks without walking the path
+    /// again. The vector is submitted as its own request, because a chunk
+    /// request carries no precondition field, and the server answers it
+    /// against the current directory and dirent heads.
+    ///
+    /// `Ok(None)` is that answer coming back stale or naming a cited object
+    /// the server no longer has. It means the caller's resolved path is no
+    /// longer evidence about this node — a peer may have unlinked the dirent
+    /// and created another one at the same name — so the caller must walk the
+    /// path again rather than read under the node it remembered. Every other
+    /// failure is the caller's to report.
+    #[allow(clippy::too_many_arguments)]
+    pub fn read_user_kv_chunk_if_current(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        user: &VerifiedUserState,
+        puks: &[UserPrivateKey],
+        node: KvNodeId,
+        offset: u64,
+        length: usize,
+        precondition: &KvPathVersionVector,
+    ) -> Result<Option<KvFetchedChunk>> {
+        if user.uid() != &credential.uid || user.host() != host.host_id() {
+            return Err(Error::UserBinding(
+                "KV user state does not match the credential and pinned host",
+            ));
+        }
+        let keys = user_kv_keys(user, puks)?;
+        let mut connection = self.kv_connection_with_material(
+            host,
+            &credential.seed,
+            &credential.certificate_chain,
+        )?;
+        if !kv_precondition_holds(&mut connection, KvAuth::User, precondition)? {
+            return Ok(None);
+        }
+        read_kv_chunk_with_fetch(
+            node,
+            offset,
+            length,
+            &keys,
+            KvAuth::User,
+            |auth, request| connection.call(auth, request),
+        )
+        .map(Some)
+    }
+
+    /// Team variant of [`Self::read_user_kv_chunk_if_current`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn read_team_kv_chunk_if_current(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        team: &AuthenticatedTeamOutcome,
+        node: KvNodeId,
+        offset: u64,
+        length: usize,
+        precondition: &KvPathVersionVector,
+    ) -> Result<Option<KvFetchedChunk>> {
+        if team.verified.host() != host.host_id() {
+            return Err(Error::TeamBinding("KV team state belongs to another host"));
+        }
+        let keys = team
+            .ptks
+            .iter()
+            .map(|key| KvPrivateKeyRef {
+                role: key.role,
+                generation: key.generation,
+                seed: &key.seed,
+            })
+            .collect::<Vec<_>>();
+        let mut connection = self.kv_connection_with_material(
+            host,
+            &credential.seed,
+            &credential.certificate_chain,
+        )?;
+        let auth = KvAuth::Team(&team.view_token);
+        if !kv_precondition_holds(&mut connection, auth, precondition)? {
+            return Ok(None);
+        }
+        read_kv_chunk_with_fetch(node, offset, length, &keys, auth, |auth, request| {
+            connection.call(auth, request)
+        })
+        .map(Some)
     }
 
     /// Fetches and decrypts exactly one node in a team KV namespace.
@@ -1242,6 +1334,43 @@ impl FoksClient {
     }
 }
 
+/// The version vector a resolved path cites: the root version, and every
+/// directory the walk used with every dirent it listed there.
+///
+/// This is what makes a remembered path checkable. A path and a dirent
+/// version alone are not: a dirent version restarts at 1 after an unlink and
+/// a re-create on a fresh dirent identifier, so the same pair can name
+/// different nodes at different times. The vector names the dirent
+/// identifiers themselves, and the server reports a cited dirent whose head
+/// has moved — which an unlink does, because the tombstone is a write to that
+/// dirent — as stale.
+pub fn kv_path_version_vector(tree: &[KvDirectoryProjection]) -> KvPathVersionVector {
+    kv_version_vector_from_tree(tree)
+}
+
+/// Submits a version vector as its own request and reports whether the server
+/// still considers it current. A stale answer, or a cited object the server
+/// no longer holds, is `false`; anything else is the caller's error.
+fn kv_precondition_holds(
+    connection: &mut super::rpc::KvConnection,
+    auth: KvAuth<'_>,
+    precondition: &KvPathVersionVector,
+) -> Result<bool> {
+    match connection.call(auth, &KvRequest::CacheCheck(precondition.clone())) {
+        Ok(_) => Ok(true),
+        Err(error) if is_kv_stale_cache(&error) => Ok(false),
+        // The server answers a vector citing an object it no longer has with
+        // not-found. That is the same statement as stale for this purpose:
+        // the remembered path is not evidence about the node any more.
+        Err(Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1049, .. })) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// Returns cached node ciphertext only when it decodes and the caller has the
+/// required private key. Missing keys and invalid cached bytes fall back to a
+/// server fetch so authorization and cache corruption are handled by the normal
+/// request path.
 fn cached_kv_node(
     cached: &BTreeMap<[u8; 17], Vec<u8>>,
     node: KvNodeId,
@@ -1314,21 +1443,14 @@ where
         }
         (KvNodeType::File, KvNode::File(metadata)) => {
             let keys = kv_key(private_keys, metadata.key.role, metadata.key.generation)?;
-            let file_seed = keys.open_file_seed(node, &metadata)?;
-            let mut offset = 0u64;
-            for _ in 0..4096 {
-                let chunk_bytes = fetch(auth, &KvRequest::Chunk { file: node, offset })?;
-                let chunk = KvEncryptedChunk::decode(&chunk_bytes)?;
-                let clear = Zeroizing::new(open_kv_chunk(&file_seed, node, offset, &chunk)?);
-                if clear.is_empty() && !chunk.final_chunk {
-                    return Err(Error::KvResponse("empty non-final file chunk"));
-                }
-                offset = validate_large_file_append(offset, clear.len())?;
-                if chunk.final_chunk {
-                    return Ok(KvFetchedNode::LargeFile { size: offset });
-                }
-            }
-            Err(Error::KvResponse("file chunk limit exceeded"))
+            // Opening the file seed under the node ID is what proves this
+            // caller holds the node's key and that the metadata is bound to
+            // the ID that was asked for. The chunk chain is authenticated as
+            // it is streamed; walking it here would fetch and decrypt the
+            // entire file to report a length the caller is about to read
+            // anyway, so the node read stops at its metadata.
+            let _ = keys.open_file_seed(node, &metadata)?;
+            Ok(KvFetchedNode::LargeFile)
         }
         _ => Err(Error::KvResponse("KV node response type mismatch")),
     }

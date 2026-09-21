@@ -1890,6 +1890,11 @@ impl ProfileSession {
         self
     }
 
+    pub fn with_kv_node_memo(mut self, memo: std::sync::Arc<dyn crate::KvNodeMemo>) -> Self {
+        self.read_caches.kv_nodes = Some(memo);
+        self
+    }
+
     /// Inject both clocks together; retention never reads wall time directly.
     pub fn with_adapter_clock(mut self, clock: std::sync::Arc<dyn crate::AdapterClock>) -> Self {
         self.adapter_clock = clock;

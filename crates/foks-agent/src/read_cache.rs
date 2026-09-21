@@ -26,8 +26,9 @@ use std::time::{Duration, Instant};
 use foks_agent_proto::Operation;
 use foks_client::{AuthenticatedUserOutcome, TeamViewGrant};
 use foks_client_app::{
-    AuthCacheKey, AuthenticatedUserCache, CancellationToken, ProfileRegistry, ProfileSession,
-    ReadCaches, TeamViewCacheKey, TeamViewTokenCache,
+    AuthCacheKey, AuthenticatedUserCache, CancellationToken, KvNodeMemo, KvNodeMemoEntry,
+    KvNodeMemoKey, ProfileRegistry, ProfileSession, ReadCaches, TeamViewCacheKey,
+    TeamViewTokenCache,
 };
 
 /// At or below the desktop's 30-second catalog cadence, so a catalog pass and
@@ -41,6 +42,16 @@ const MAXIMUM_CACHED_AUTHENTICATED_USERS: usize = 64;
 const TEAM_VIEW_TOKEN_CACHE_LIFETIME: Duration = Duration::from_secs(5 * 60 * 60);
 /// One entry per (profile, actor, team).
 const MAXIMUM_CACHED_TEAM_VIEWS: usize = 64;
+/// A remembered KV path is re-checked against the server on every hit, so its
+/// lifetime bounds memory rather than staleness. It matches the catalog
+/// cadence for the same reason as the authenticated-user cache: one download
+/// and the reads around it share an entry, and the next pass does not.
+const KV_NODE_MEMO_LIFETIME: Duration = Duration::from_secs(30);
+/// One entry per (profile, actor, party, path, version). Each holds the
+/// version vector of the directories on one path, which is proportional to
+/// the number of dirents in them, so this is deliberately smaller than the
+/// caches above: a desktop has a handful of downloads in flight at once.
+const MAXIMUM_CACHED_KV_NODES: usize = 32;
 /// One base transport per (state root, profile). A desktop holds a handful of
 /// profiles; the bound only prevents unbounded growth on a state root that is
 /// reconfigured many times within one agent lifetime.
@@ -106,6 +117,7 @@ impl<K: PartialEq, V: Clone> Expiring<K, V> {
 struct CacheState {
     users: Expiring<AuthCacheKey, Arc<AuthenticatedUserOutcome>>,
     team_views: Expiring<TeamViewCacheKey, TeamViewGrant>,
+    kv_nodes: Expiring<KvNodeMemoKey, KvNodeMemoEntry>,
 }
 
 impl Default for CacheState {
@@ -116,6 +128,7 @@ impl Default for CacheState {
                 MAXIMUM_CACHED_AUTHENTICATED_USERS,
             ),
             team_views: Expiring::new(TEAM_VIEW_TOKEN_CACHE_LIFETIME, MAXIMUM_CACHED_TEAM_VIEWS),
+            kv_nodes: Expiring::new(KV_NODE_MEMO_LIFETIME, MAXIMUM_CACHED_KV_NODES),
         }
     }
 }
@@ -136,6 +149,7 @@ fn caches() -> ReadCaches {
     ReadCaches {
         authenticated_users: Some(caches.clone()),
         team_view_tokens: Some(caches.clone()),
+        kv_nodes: Some(caches.clone()),
     }
 }
 
@@ -196,23 +210,57 @@ impl TeamViewTokenCache for AgentReadCaches {
     }
 }
 
-/// Drops every retained outcome and view for one profile.
+impl KvNodeMemo for AgentReadCaches {
+    // A hit is not an answer. It is a candidate node the caller still has to
+    // put to the server as a version vector, so this deliberately does not
+    // mark the operation as served from retained material: nothing here can
+    // make a read succeed that would otherwise have failed.
+    fn get(&self, key: &KvNodeMemoKey) -> Option<KvNodeMemoEntry> {
+        cache_state()
+            .lock()
+            .ok()?
+            .kv_nodes
+            .get_at(key, Instant::now())
+    }
+
+    fn put(&self, key: KvNodeMemoKey, entry: KvNodeMemoEntry) {
+        if let Ok(mut state) = cache_state().lock() {
+            state.kv_nodes.put_at(key, entry, Instant::now());
+        }
+    }
+
+    fn invalidate(&self, key: &KvNodeMemoKey) {
+        if let Ok(mut state) = cache_state().lock() {
+            state.kv_nodes.retain(|stored| stored != key);
+        }
+    }
+
+    fn invalidate_profile(&self, state_root: &Path, profile: &str) {
+        if let Ok(mut state) = cache_state().lock() {
+            state
+                .kv_nodes
+                .retain(|key| key.state_root != state_root || key.profile != profile);
+        }
+    }
+}
+
+/// Drops every retained outcome, view and resolved path for one profile.
 pub(crate) fn invalidate_profile(state_root: &Path, profile: &str) {
     AuthenticatedUserCache::invalidate_profile(&AgentReadCaches, state_root, profile);
     TeamViewTokenCache::invalidate_profile(&AgentReadCaches, state_root, profile);
+    KvNodeMemo::invalidate_profile(&AgentReadCaches, state_root, profile);
 }
 
-/// Drops every retained outcome and view. This is the epilogue of every
-/// operation that is not a read: an operation's effective profile set is not
-/// always knowable here (a federation cascade reaches profiles it selects
-/// while running), and dropping a still-valid entry only costs one
-/// authentication on the next read.
+/// Clears all retained outcomes, views, and resolved paths after an operation
+/// that may mutate. The affected profile set may be unknown for cross-profile
+/// operations, so invalidation applies to every profile.
 pub(crate) fn invalidate_all() {
     let Ok(mut state) = cache_state().lock() else {
         return;
     };
     state.users.clear();
     state.team_views.clear();
+    state.kv_nodes.clear();
 }
 
 /// Per-operation state. `dispatch_result` installs one for the duration of a

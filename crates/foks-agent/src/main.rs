@@ -78,11 +78,19 @@ const DEVICE_PAIRING_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// client's relay waits end before the agent cancels the operation, which
 /// would report a pairing that is merely slow as an ambiguous deadline error.
 const PAIRING_COMPLETION_MARGIN: Duration = Duration::from_secs(45);
-// Byte vectors are JSON integer arrays on local protocol v2. Keep enough
-// headroom for their worst-case textual expansion inside the 1 MiB frame.
-const MAXIMUM_LOCAL_KV_CHUNK_BYTES: usize = 128 * 1024;
-const MAXIMUM_INLINE_KV_BYTES: usize = 128 * 1024;
+// Byte payloads are base64 on the wire, so the frame cost of a chunk is
+// `ceil(n/3)*4` and the bound that keeps it inside the 1 MiB frame, with the
+// envelope reserve held back, is the protocol's own. Both limits are that
+// bound: a longer chunk request or a larger inline put is refused as an
+// invalid request, never answered with a shortened payload.
+const MAXIMUM_LOCAL_KV_CHUNK_BYTES: usize = foks_agent_proto::MAXIMUM_KV_PAYLOAD_BYTES;
+const MAXIMUM_INLINE_KV_BYTES: usize = foks_agent_proto::MAXIMUM_KV_PAYLOAD_BYTES;
 const MAXIMUM_STREAM_KV_BYTES: u64 = 1024 * 1024 * 1024;
+/// A ceiling on frames, not on bytes. The declared total length and the
+/// running offset check are what bound an upload's size; this only stops a
+/// peer from holding the connection open with an unbounded frame count. It is
+/// deliberately not derived from the chunk bound, because a sender is free to
+/// send frames smaller than that bound and must not be cut off for it.
 const MAXIMUM_STREAM_FRAMES: usize = 8193;
 /// Bounds the retained catalog reports. The desktop walks four profiles at a
 /// time and each profile holds several stores, so a bound near the old four
@@ -9058,6 +9066,57 @@ mod tests {
         assert!(page.next_cursor.is_some());
         foks_agent_proto::encode(&Response::success(11, serde_json::to_value(page).unwrap()))
             .unwrap();
+    }
+
+    /// The KV payload bound is a refusal, not a truncation.
+    ///
+    /// Both bounds are checked before the request reaches a profile, so this
+    /// runs against an empty registry: a request at the bound gets as far as
+    /// the profile lookup, and one byte past it is refused for its size.
+    #[test]
+    fn a_kv_payload_one_byte_past_the_bound_is_refused_for_its_size() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = directory.path().join("state");
+        ProfileRegistry::open(&state).unwrap();
+        let store = KvStoreRef::Account(AccountStoreRef {
+            profile: "local".to_owned(),
+            account_alias: "personal".to_owned(),
+        });
+        let dispatch = |operation| {
+            dispatch_result(
+                &state,
+                operation,
+                Duration::from_secs(5),
+                CancellationToken::new(),
+                true,
+            )
+            .err()
+            .expect("no profile is configured, so nothing here can succeed")
+            .to_string()
+        };
+        let chunk = |length: u32| Operation::ReadKvChunk {
+            store: store.clone(),
+            path: "/large".to_owned(),
+            version: 1,
+            offset: 0,
+            length,
+        };
+        let bound = u32::try_from(MAXIMUM_LOCAL_KV_CHUNK_BYTES).unwrap();
+        assert!(!dispatch(chunk(bound)).contains("outside supported bounds"));
+        assert!(dispatch(chunk(bound + 1)).contains("outside supported bounds"));
+        assert!(dispatch(chunk(0)).contains("outside supported bounds"));
+
+        let put = |length: usize| Operation::PutKv {
+            store: store.clone(),
+            path: "/inline".to_owned(),
+            content: vec![0x5a; length],
+            read_role: foks_agent_proto::KvRole::Owner,
+            write_role: foks_agent_proto::KvRole::Owner,
+            precondition: foks_agent_proto::KvPrecondition::Create,
+            mkdir_p: false,
+        };
+        assert!(!dispatch(put(MAXIMUM_INLINE_KV_BYTES)).contains("exceeds its local protocol"));
+        assert!(dispatch(put(MAXIMUM_INLINE_KV_BYTES + 1)).contains("exceeds its local protocol"));
     }
 
     /// Walks a store larger than one page at the largest row limit this agent

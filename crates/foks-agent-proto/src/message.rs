@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 27;
+pub const PROTOCOL_VERSION: u32 = 28;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -351,7 +351,11 @@ pub struct KvReadResult {
     pub size: Option<u64>,
     pub read_role: KvRole,
     pub write_role: KvRole,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::base64_bytes::optional"
+    )]
     pub content: Option<Vec<u8>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub symlink_target: Option<String>,
@@ -363,6 +367,7 @@ pub struct KvChunkResult {
     pub path: String,
     pub version: u64,
     pub offset: u64,
+    #[serde(with = "crate::base64_bytes")]
     pub content: Vec<u8>,
     pub eof: bool,
 }
@@ -393,7 +398,11 @@ pub struct KvUploadFrame {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "frame", rename_all = "kebab-case")]
 pub enum KvUploadPayload {
-    Chunk { offset: u64, content: Vec<u8> },
+    Chunk {
+        offset: u64,
+        #[serde(with = "crate::base64_bytes")]
+        content: Vec<u8>,
+    },
     Commit,
 }
 
@@ -900,6 +909,7 @@ pub enum Operation {
     PutKv {
         store: KvStoreRef,
         path: String,
+        #[serde(with = "crate::base64_bytes")]
         content: Vec<u8>,
         read_role: KvRole,
         write_role: KvRole,

@@ -22,10 +22,15 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use zeroize::{Zeroize as _, Zeroizing};
 
-// Local protocol v2 encodes byte vectors as JSON integer arrays; these bounds
-// keep worst-case payloads comfortably below its 1 MiB frame ceiling.
+// The size above which an edit is uploaded as a stream rather than inline.
+// The agent now accepts a larger inline put than this, so this is a choice
+// about where streaming starts, not a frame bound; it stays where it was.
 pub const MAXIMUM_INLINE_KV_BYTES: usize = 128 * 1024;
-const KV_READ_CHUNK_BYTES: u32 = 128 * 1024;
+// Byte payloads are base64 on the local protocol, so a payload's frame cost
+// is `ceil(n/3)*4` and the protocol's own bound is what fits the frame. The
+// agent refuses a longer chunk request as invalid, so asking for exactly its
+// bound is the fewest round trips a download can take.
+const KV_READ_CHUNK_BYTES: u32 = foks_agent_proto::MAXIMUM_KV_PAYLOAD_BYTES as u32;
 const MAXIMUM_DESKTOP_REVEAL_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Typed desktop-side classification of local-agent failures.
@@ -1314,23 +1319,16 @@ pub fn read_catalog_item(
                     "agent mixed inline content into a large-file response".to_owned(),
                 ));
             }
-            let total = read.size.ok_or_else(|| {
-                AgentError::Transport("missing file size in large-file response".to_owned())
-            })?;
-            if total > MAXIMUM_DESKTOP_REVEAL_BYTES {
-                return Err(AgentError::Transport(format!(
-                    "File size of {total} bytes exceeds maximum in-memory preview limit of {MAXIMUM_DESKTOP_REVEAL_BYTES} bytes"
-                )));
-            }
-            let capacity = usize::try_from(total).map_err(|_| {
-                AgentError::Transport("file size exceeds system memory address space".to_owned())
-            })?;
-            let mut content = Zeroizing::new(Vec::with_capacity(capacity));
+            // A large file reports no size: the agent would have to download
+            // and decrypt the whole file to measure one, doubling the bytes
+            // this loop is about to move. The loop ends on the end-of-file
+            // flag the chunk response carries, which this side already
+            // validates against what it received, and the reveal cap becomes
+            // a cap on what has accumulated rather than a pre-check.
+            let mut content = Zeroizing::new(Vec::new());
             let mut offset = 0u64;
-            while offset < total {
-                let remaining = total - offset;
-                let length = u32::try_from(remaining.min(u64::from(KV_READ_CHUNK_BYTES)))
-                    .expect("chunk bound fits in u32");
+            loop {
+                let length = KV_READ_CHUNK_BYTES;
                 let mut chunk: KvChunkResult =
                     decode_agent_value(transport.call(Operation::ReadKvChunk {
                         store: store.clone(),
@@ -1356,14 +1354,18 @@ pub fn read_catalog_item(
                     .ok_or_else(|| {
                         AgentError::Transport("chunk offset overflow while reading file".to_owned())
                     })?;
-                if offset > total || chunk.eof != (offset == total) {
+                if offset > MAXIMUM_DESKTOP_REVEAL_BYTES {
                     chunk.content.zeroize();
-                    return Err(AgentError::Transport(
-                        "inconsistent end-of-file indicator in chunk response".to_owned(),
-                    ));
+                    return Err(AgentError::Transport(format!(
+                        "File exceeds maximum in-memory preview limit of {MAXIMUM_DESKTOP_REVEAL_BYTES} bytes"
+                    )));
                 }
                 content.extend_from_slice(&chunk.content);
+                let eof = chunk.eof;
                 chunk.content.zeroize();
+                if eof {
+                    break;
+                }
             }
             KvItemValue::File(content)
         }
@@ -1684,13 +1686,15 @@ fn load_store_pages_once(
     // and returns a cursor for exactly what it kept, so the byte budget is
     // the real bound and this is only an upper limit on rows per round trip.
     //
-    // It is held at the largest value every shipped agent already accepts,
-    // rather than at the larger one this agent now accepts. A desktop sending
-    // more than an older agent allows is refused as an invalid request, and
-    // the protocol version is what decides whether such an agent is replaced,
-    // so raising this belongs in a change that bumps that version. Until then
-    // this is the ceiling that costs nothing to adopt.
-    const PAGE_LIMIT: u32 = 500;
+    // It is the agent's own maximum. A desktop asking for more than an agent
+    // allows is refused as an invalid request, so the value may only be the
+    // maximum of the agents this desktop can actually reach. The protocol
+    // version decides that set: an agent built before this maximum rose also
+    // predates the base64 wire change, so it rejects the frame at its version
+    // check before it ever parses this field, and the desktop answers that by
+    // replacing it. No agent that would refuse this value can serve a request
+    // carrying it.
+    const PAGE_LIMIT: u32 = 4096;
     const MAXIMUM_PAGES: usize = 4096;
     let mut cursor = None;
     let mut snapshot_version = None;
@@ -3457,8 +3461,8 @@ mod tests {
     /// thousand-item store is then one round trip rather than five.
     #[test]
     fn a_catalog_page_asks_for_far_more_than_one_screen_of_rows() {
-        // A page an older agent refuses would fail every store load until
-        // that agent exits, so this pins the value rather than the intent.
+        // A page an agent refuses would fail every store load until that
+        // agent exits, so this pins the value rather than the intent.
         let transport = LimitRecordingTransport {
             limits: Mutex::new(Vec::new()),
         };
@@ -3472,9 +3476,9 @@ mod tests {
             &CatalogLoadToken::default(),
         )
         .unwrap();
-        // Not the agent's own maximum: this is the largest page an agent
-        // built before that maximum rose will still answer.
-        assert_eq!(*transport.limits.lock().unwrap(), vec![500]);
+        // The agent's own maximum, which the version-mismatch takeover makes
+        // safe to ask for: every agent this desktop can reach accepts it.
+        assert_eq!(*transport.limits.lock().unwrap(), vec![4096]);
     }
 
     struct PagedCatalogTransport {
@@ -3803,7 +3807,9 @@ mod tests {
                         path,
                         version,
                         node_type: "file".to_owned(),
-                        size: Some(self.total),
+                        // As the agent answers now: a large file has no size
+                        // it can report without downloading itself.
+                        size: None,
                         read_role: KvRole::Member { visibility: 2 },
                         write_role: KvRole::Admin,
                         content: None,
@@ -3872,6 +3878,73 @@ mod tests {
             (KV_READ_CHUNK_BYTES as usize % 251) as u8
         );
         assert_eq!(transport.operations.lock().unwrap().len(), 3);
+    }
+
+    fn large_file_item() -> CatalogItem {
+        CatalogItem {
+            store: CatalogStoreRef::Account(AccountStoreRef {
+                profile: "local".to_owned(),
+                account_alias: "personal".to_owned(),
+            }),
+            metadata: KvEntryMetadata {
+                path: "/large".to_owned(),
+                node_type: "file".to_owned(),
+                version: 9,
+                size: None,
+                read_role: KvRole::Member { visibility: 2 },
+                write_role: KvRole::Admin,
+            },
+        }
+    }
+
+    fn large_read_transport(total: u64) -> LargeReadTransport {
+        LargeReadTransport {
+            store: KvStoreRef::Account(AccountStoreRef {
+                profile: "local".to_owned(),
+                account_alias: "personal".to_owned(),
+            }),
+            total,
+            operations: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// With no size reported, the end-of-file flag is the only thing that
+    /// ends the loop. The file here is an exact multiple of the chunk size,
+    /// so the final chunk is full and is distinguishable from a non-final one
+    /// by nothing but that flag.
+    #[test]
+    fn a_large_read_ends_on_the_end_of_file_flag_when_no_size_is_reported() {
+        let total = 2 * u64::from(KV_READ_CHUNK_BYTES);
+        let transport = large_read_transport(total);
+        let read = read_catalog_item(&transport, &large_file_item()).unwrap();
+        let KvItemValue::File(content) = read.value else {
+            panic!("large file did not return file content")
+        };
+        assert_eq!(content.len() as u64, total);
+        let operations = transport.operations.lock().unwrap();
+        // One node read and exactly two chunk reads: no size probe, and no
+        // further request once the flag arrived.
+        assert_eq!(operations.len(), 3);
+        assert!(matches!(operations[0], Operation::ReadKv { .. }));
+        assert!(operations[1..]
+            .iter()
+            .all(|operation| matches!(operation, Operation::ReadKvChunk { .. })));
+    }
+
+    /// The reveal cap is now a cap on what has accumulated. A file past it is
+    /// refused part-way through rather than before the first chunk, and the
+    /// loop cannot be run forever by an agent that never sets the flag.
+    #[test]
+    fn a_large_read_stops_at_the_reveal_cap_while_it_accumulates() {
+        let transport = large_read_transport(MAXIMUM_DESKTOP_REVEAL_BYTES + 1);
+        let error = read_catalog_item(&transport, &large_file_item()).unwrap_err();
+        assert!(
+            matches!(&error, AgentError::Transport(message) if message.contains("preview limit")),
+            "{error:?}"
+        );
+        let requested = u64::from(KV_READ_CHUNK_BYTES)
+            * (transport.operations.lock().unwrap().len() as u64 - 1);
+        assert!(requested <= MAXIMUM_DESKTOP_REVEAL_BYTES + u64::from(KV_READ_CHUNK_BYTES));
     }
 
     #[test]

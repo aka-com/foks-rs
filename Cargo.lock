@@ -1779,6 +1779,7 @@ dependencies = [
 name = "foks-agent-proto"
 version = "0.3.0"
 dependencies = [
+ "base64 0.23.1",
  "foks-proto",
  "serde",
  "serde_json",
@@ -1840,6 +1841,7 @@ name = "foks-client-app"
 version = "0.3.0"
 dependencies = [
  "base64 0.23.1",
+ "foks-agent-proto",
  "foks-client",
  "foks-client-db",
  "foks-compat-artifact",

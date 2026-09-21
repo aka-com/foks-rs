@@ -359,3 +359,285 @@ fn interrupted_upload_is_hidden_across_restart_and_a_fresh_retry_succeeds() {
     drop(client);
     restarted.shutdown().unwrap();
 }
+
+fn write_options() -> KvWriteOptions {
+    KvWriteOptions {
+        read_role: Role::OWNER,
+        write_role: Role::OWNER,
+        overwrite: false,
+        expected_version: None,
+    }
+}
+
+/// Counts the server requests one delivered chunk costs, with the path walked
+/// for that chunk and with the path remembered from an earlier walk.
+///
+/// A download issues one chunk read per delivered chunk, and walking the path
+/// for each of them is what made a large read cost a request per directory
+/// per chunk. A remembered path replaces the walk with one version-vector
+/// check, which is what keeps the conflict semantics the walk provided.
+#[test]
+fn a_remembered_path_reads_a_chunk_in_fewer_requests_than_a_walk() {
+    const STORED_CHUNK: usize = 4 * 1024 * 1024;
+    let fixture = Fixture::start("kv-read-cost-client");
+    let created = fixture
+        .client
+        .create_account(fixture.host(), &TestAccountSpec::new("kvreadcost", 0x51))
+        .unwrap();
+    let root = created.kv_projection[0].root_directory_id;
+    let mut protected = fixture.client.open_protected_store().unwrap();
+    let mut session = fixture
+        .client
+        .foks()
+        .user_kv_write_session(
+            fixture.host(),
+            &created.credential,
+            &created.authenticated.verified,
+            &created.authenticated.puks,
+            fixture.client.soft_state_path(),
+            &mut protected,
+        )
+        .unwrap();
+    session.resolve_path(&[]).unwrap();
+    let alpha = session
+        .mkdir(root, "alpha", write_options())
+        .unwrap()
+        .node_id
+        .object_id();
+    session.resolve_path(&[b"alpha".to_vec()]).unwrap();
+    let beta = session
+        .mkdir(alpha, "beta", write_options())
+        .unwrap()
+        .node_id
+        .object_id();
+    let components = vec![b"alpha".to_vec(), b"beta".to_vec()];
+    session.resolve_path(&components).unwrap();
+    session
+        .put_file(
+            beta,
+            "large.bin",
+            &mut PatternReader::new(3 * STORED_CHUNK, 0x51),
+            write_options(),
+        )
+        .unwrap();
+    drop(session);
+    drop(protected);
+
+    let resolve = || {
+        fixture
+            .client
+            .foks()
+            .resolve_user_kv_path(
+                fixture.host(),
+                &created.credential,
+                &created.authenticated.verified,
+                &created.authenticated.puks,
+                fixture.client.soft_state_path(),
+                &components,
+            )
+            .unwrap()
+    };
+    let directories = resolve();
+    let entry = directories
+        .last()
+        .unwrap()
+        .entries
+        .iter()
+        .find(|entry| entry.name == b"large.bin")
+        .unwrap();
+    let node = foks_proto::KvNodeId(entry.node_id);
+    let versions = foks_client::kv_path_version_vector(&directories);
+
+    // The shape every chunk had: resolve the path, then read under the node
+    // that walk named.
+    let before = fixture.server.metrics().requests_started;
+    let walked = resolve();
+    assert!(!walked.is_empty());
+    let walked_chunk = fixture
+        .client
+        .foks()
+        .read_user_kv_chunk(
+            fixture.host(),
+            &created.credential,
+            &created.authenticated.verified,
+            &created.authenticated.puks,
+            node,
+            STORED_CHUNK as u64,
+            STORED_CHUNK,
+        )
+        .unwrap();
+    let with_walk = fixture.server.metrics().requests_started - before;
+
+    // The shape with the path remembered: one version-vector check in place
+    // of the walk.
+    let before = fixture.server.metrics().requests_started;
+    let remembered_chunk = fixture
+        .client
+        .foks()
+        .read_user_kv_chunk_if_current(
+            fixture.host(),
+            &created.credential,
+            &created.authenticated.verified,
+            &created.authenticated.puks,
+            node,
+            STORED_CHUNK as u64,
+            STORED_CHUNK,
+            &versions,
+        )
+        .unwrap()
+        .expect("the walk's version vector is still current");
+    let with_memo = fixture.server.metrics().requests_started - before;
+
+    assert_eq!(remembered_chunk.content, walked_chunk.content);
+    assert_eq!(remembered_chunk.content.len(), STORED_CHUNK);
+    println!("KV chunk requests: walked={with_walk} remembered={with_memo}");
+    assert_eq!(
+        with_memo, 3,
+        "one cache check, one node read and one chunk read"
+    );
+    assert!(
+        with_walk >= 3 * with_memo,
+        "walked={with_walk} remembered={with_memo}"
+    );
+}
+
+/// The property the obvious memo key would break.
+///
+/// A dirent version restarts at 1 after an unlink and a re-create, on a fresh
+/// random dirent identifier, so the same `(path, version)` pair names a
+/// different node before and after. A memo keyed on that pair alone would
+/// serve the node it first resolved. The walk's version vector is what
+/// refuses it: the unlink writes a tombstone to the dirent the vector cites,
+/// which moves that dirent's head, and the server answers the vector stale.
+#[test]
+fn a_replaced_entry_refuses_a_remembered_path() {
+    let fixture = Fixture::start("kv-read-replace-client");
+    let created = fixture
+        .client
+        .create_account(fixture.host(), &TestAccountSpec::new("kvreadreplace", 0x53))
+        .unwrap();
+    let root = created.kv_projection[0].root_directory_id;
+    let mut protected = fixture.client.open_protected_store().unwrap();
+    let mut session = fixture
+        .client
+        .foks()
+        .user_kv_write_session(
+            fixture.host(),
+            &created.credential,
+            &created.authenticated.verified,
+            &created.authenticated.puks,
+            fixture.client.soft_state_path(),
+            &mut protected,
+        )
+        .unwrap();
+    session.resolve_path(&[]).unwrap();
+    session
+        .put_file(
+            root,
+            "large.bin",
+            &mut PatternReader::new(3000, 0x61),
+            write_options(),
+        )
+        .unwrap();
+    drop(session);
+    drop(protected);
+
+    let resolve = || {
+        fixture
+            .client
+            .foks()
+            .resolve_user_kv_path(
+                fixture.host(),
+                &created.credential,
+                &created.authenticated.verified,
+                &created.authenticated.puks,
+                fixture.client.soft_state_path(),
+                &[],
+            )
+            .unwrap()
+    };
+    let directories = resolve();
+    let first = directories[0]
+        .entries
+        .iter()
+        .find(|entry| entry.name == b"large.bin")
+        .unwrap()
+        .clone();
+    assert_eq!(first.version, 1);
+    let versions = foks_client::kv_path_version_vector(&directories);
+    // The remembered node answers while the path is untouched.
+    assert!(fixture
+        .client
+        .foks()
+        .read_user_kv_chunk_if_current(
+            fixture.host(),
+            &created.credential,
+            &created.authenticated.verified,
+            &created.authenticated.puks,
+            foks_proto::KvNodeId(first.node_id),
+            0,
+            3000,
+            &versions,
+        )
+        .unwrap()
+        .is_some());
+
+    // A peer unlinks the entry and writes another file at the same name.
+    let mut protected = fixture.client.open_protected_store().unwrap();
+    let mut peer = fixture
+        .client
+        .foks()
+        .user_kv_write_session(
+            fixture.host(),
+            &created.credential,
+            &created.authenticated.verified,
+            &created.authenticated.puks,
+            fixture.client.soft_state_path(),
+            &mut protected,
+        )
+        .unwrap();
+    peer.resolve_path(&[]).unwrap();
+    peer.unlink(root, "large.bin", None, Role::OWNER, false)
+        .unwrap();
+    peer.resolve_path(&[]).unwrap();
+    peer.put_file(
+        root,
+        "large.bin",
+        &mut PatternReader::new(3000, 0x62),
+        write_options(),
+    )
+    .unwrap();
+    drop(peer);
+    drop(protected);
+
+    let second = resolve()[0]
+        .entries
+        .iter()
+        .find(|entry| entry.name == b"large.bin")
+        .unwrap()
+        .clone();
+    // This is the hazard, stated: the path and the version are identical,
+    // and they name a different dirent and a different node.
+    assert_eq!(second.version, first.version);
+    assert_ne!(second.dirent_id, first.dirent_id);
+    assert_ne!(second.node_id, first.node_id);
+
+    assert!(
+        fixture
+            .client
+            .foks()
+            .read_user_kv_chunk_if_current(
+                fixture.host(),
+                &created.credential,
+                &created.authenticated.verified,
+                &created.authenticated.puks,
+                foks_proto::KvNodeId(first.node_id),
+                0,
+                3000,
+                &versions,
+            )
+            .unwrap()
+            .is_none(),
+        "the superseded path was served rather than refused"
+    );
+}

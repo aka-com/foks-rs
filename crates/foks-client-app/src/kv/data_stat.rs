@@ -5,8 +5,13 @@ use super::*;
 pub struct DataStatReport {
     pub path: String,
     pub version: Option<u64>,
+    /// Base64 on the wire; the reader is `foks_agent_proto::data::DataStat`,
+    /// which uses the same adapter.
+    #[serde(with = "foks_agent_proto::base64_bytes::optional")]
     pub dirent: Option<Vec<u8>>,
+    #[serde(with = "foks_agent_proto::base64_bytes::optional")]
     pub directory: Option<Vec<u8>>,
+    #[serde(with = "foks_agent_proto::base64_bytes::optional")]
     pub node: Option<Vec<u8>>,
     pub size: Option<u64>,
     pub target: Option<String>,

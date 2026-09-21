@@ -396,7 +396,17 @@ pub(super) fn invalid_response(message: impl Into<String>) -> AgentError {
     AgentError::new("invalid-response", message, false)
 }
 
-pub(super) const DOWNLOAD_CHUNK_BYTES: u32 = 128 * 1024;
+/// One download chunk's plaintext. Byte payloads are base64 on the local
+/// protocol, so the agent's own payload bound is what fits its frame, and a
+/// longer request is refused as invalid; asking for exactly that bound is the
+/// fewest round trips a download can take.
+pub(super) const DOWNLOAD_CHUNK_BYTES: u32 = foks_agent_proto::MAXIMUM_KV_PAYLOAD_BYTES as u32;
+
+/// The most a download will assemble before it gives up. A large file reports
+/// no size, so the end-of-file flag is what ends the loop; this bounds the
+/// loop against an agent that never sets it. It is the protocol's own
+/// large-file ceiling, so it refuses nothing a real file can reach.
+pub(super) const MAXIMUM_DOWNLOAD_BYTES: u64 = 1024 * 1024 * 1024;
 
 pub(super) fn invalid_request(message: impl Into<String>) -> AgentError {
     AgentError::new("invalid-request", message, false)

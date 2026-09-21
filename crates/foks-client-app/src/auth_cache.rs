@@ -98,6 +98,79 @@ impl TeamViewCacheKey {
     }
 }
 
+/// Identifies one resolved KV path inside one namespace.
+///
+/// The scope is the same as [`TeamViewCacheKey`]: the state root, the
+/// profile, the host, the acting party and the credential `binding`, so two
+/// actors, two credentials or two profiles never share an entry. `party` is
+/// the namespace the path lives in, which separates a personal path from the
+/// same path in a team.
+///
+/// **The key is not on its own sufficient evidence.** A dirent version
+/// restarts at 1 after an unlink and a re-create on a fresh random dirent
+/// identifier, so one `(path, version)` pair names different nodes at
+/// different times. An entry stored under this key is therefore only usable
+/// together with the version vector in [`KvNodeMemoEntry`], which the server
+/// checks against its current directory and dirent heads.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct KvNodeMemoKey {
+    pub state_root: PathBuf,
+    pub profile: String,
+    pub host_id: Vec<u8>,
+    pub actor: Vec<u8>,
+    pub party: Vec<u8>,
+    pub binding: [u8; 32],
+    pub path: String,
+    pub version: u64,
+}
+
+impl KvNodeMemoKey {
+    /// `party` is the namespace owner: the acting user for a personal path,
+    /// the team for a team path.
+    pub fn new(user: &AuthCacheKey, party: &EntityId, path: &str, version: u64) -> Self {
+        Self {
+            state_root: user.state_root.clone(),
+            profile: user.profile.clone(),
+            host_id: user.host_id.clone(),
+            actor: user.uid.clone(),
+            party: party.as_bytes().to_vec(),
+            binding: user.binding,
+            path: path.to_owned(),
+            version,
+        }
+    }
+}
+
+/// One resolved KV path: the node the walk found, and the version vector that
+/// walk cited.
+///
+/// The vector is what makes a hit checkable. It names the root version, every
+/// directory the walk used and every dirent listed in those directories, so
+/// the server reports as stale any change to the path — including the
+/// tombstone an unlink writes to the dirent the entry was resolved through.
+/// A hit must be validated with one request before the node is used; a hit
+/// used without that check would serve bytes from a node that no longer
+/// occupies the path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KvNodeMemoEntry {
+    pub node_id: [u8; 17],
+    pub versions: foks_proto::KvPathVersionVector,
+}
+
+/// A bounded, expiring store of resolved KV paths.
+///
+/// Implementations must bound both the entry count and the entry lifetime.
+/// Entries hold no key material; they hold namespace structure, so they are
+/// still dropped whenever the profile's material is invalidated.
+pub trait KvNodeMemo: Send + Sync {
+    fn get(&self, key: &KvNodeMemoKey) -> Option<KvNodeMemoEntry>;
+    fn put(&self, key: KvNodeMemoKey, entry: KvNodeMemoEntry);
+    /// Drops one entry. Callers invalidate as soon as the server refuses the
+    /// entry's version vector, so a superseded path is not rechecked.
+    fn invalidate(&self, key: &KvNodeMemoKey);
+    fn invalidate_profile(&self, state_root: &Path, profile: &str);
+}
+
 /// A bounded, expiring store of authenticated user outcomes.
 ///
 /// Implementations must bound both the entry count and the entry lifetime, and
@@ -121,11 +194,12 @@ pub trait TeamViewTokenCache: Send + Sync {
     fn invalidate_profile(&self, state_root: &Path, profile: &str);
 }
 
-/// The caches a session may consult. Both are absent by default.
+/// The caches a session may consult. All are absent by default.
 #[derive(Clone, Default)]
 pub struct ReadCaches {
     pub authenticated_users: Option<Arc<dyn AuthenticatedUserCache>>,
     pub team_view_tokens: Option<Arc<dyn TeamViewTokenCache>>,
+    pub kv_nodes: Option<Arc<dyn KvNodeMemo>>,
 }
 
 impl std::fmt::Debug for ReadCaches {
@@ -134,6 +208,7 @@ impl std::fmt::Debug for ReadCaches {
             .debug_struct("ReadCaches")
             .field("authenticated_users", &self.authenticated_users.is_some())
             .field("team_view_tokens", &self.team_view_tokens.is_some())
+            .field("kv_nodes", &self.kv_nodes.is_some())
             .finish()
     }
 }
@@ -195,6 +270,35 @@ impl crate::CheckedProfileSession<'_> {
         let outcome = Arc::new(self.client.authenticate_and_pin(host, credential)?);
         cache.put(key, Arc::clone(&outcome));
         Ok(outcome)
+    }
+
+    /// The memo of resolved KV paths, with the key for one path, when this
+    /// session was given one.
+    ///
+    /// The key alone never authorizes a hit: the caller must submit the
+    /// entry's version vector to the server and act on that answer. See
+    /// [`KvNodeMemoKey`].
+    pub(crate) fn kv_node_memo(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        party: &EntityId,
+        path: &str,
+        version: u64,
+    ) -> Result<Option<(Arc<dyn KvNodeMemo>, KvNodeMemoKey)>> {
+        let Some(cache) = self.session.read_caches.kv_nodes.as_ref() else {
+            return Ok(None);
+        };
+        let user = AuthCacheKey::new(
+            self.session.lease.root(),
+            &self.session.profile.name,
+            host.host_id(),
+            credential,
+        )?;
+        Ok(Some((
+            Arc::clone(cache),
+            KvNodeMemoKey::new(&user, party, path, version),
+        )))
     }
 
     /// Loads a team for a read operation, reusing an activated view when one

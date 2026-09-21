@@ -119,6 +119,55 @@ fn a_retained_team_view_is_reused_until_its_profile_is_invalidated() {
     assert!(TeamViewTokenCache::get(&caches, &team_key("other", 2)).is_none());
 }
 
+fn memo_key(profile: &str, path: &str, version: u64) -> KvNodeMemoKey {
+    KvNodeMemoKey::new(&user_key(profile, 7), &entity(2), path, version)
+}
+
+fn memo_entry(node: u8) -> KvNodeMemoEntry {
+    let mut node_id = [node; 17];
+    node_id[0] = foks_proto::KvNodeType::File as u8;
+    KvNodeMemoEntry {
+        node_id,
+        versions: foks_proto::KvPathVersionVector {
+            root_version: 3,
+            directories: Vec::new(),
+        },
+    }
+}
+
+/// A remembered path is scoped exactly like a retained view, and is dropped
+/// by the same profile invalidation. It is never scoped by path alone: two
+/// paths, two versions and two parties are separate entries.
+#[test]
+fn a_remembered_kv_path_is_scoped_and_dropped_with_its_profile() {
+    let _serialized = shared_cache_guard();
+    invalidate_all();
+    let caches = AgentReadCaches;
+    KvNodeMemo::put(&caches, memo_key("local", "/a/large.bin", 4), memo_entry(1));
+    KvNodeMemo::put(&caches, memo_key("other", "/a/large.bin", 4), memo_entry(2));
+    assert_eq!(
+        KvNodeMemo::get(&caches, &memo_key("local", "/a/large.bin", 4)),
+        Some(memo_entry(1))
+    );
+    // A different version of the same path is a different entry, and so is
+    // the same path in another profile.
+    assert!(KvNodeMemo::get(&caches, &memo_key("local", "/a/large.bin", 5)).is_none());
+    assert!(KvNodeMemo::get(&caches, &memo_key("local", "/a/other.bin", 4)).is_none());
+
+    KvNodeMemo::invalidate(&caches, &memo_key("local", "/a/large.bin", 4));
+    assert!(KvNodeMemo::get(&caches, &memo_key("local", "/a/large.bin", 4)).is_none());
+
+    KvNodeMemo::put(&caches, memo_key("local", "/a/large.bin", 4), memo_entry(1));
+    KvNodeMemo::invalidate_profile(&caches, Path::new("/state"), "local");
+    assert!(KvNodeMemo::get(&caches, &memo_key("local", "/a/large.bin", 4)).is_none());
+    assert_eq!(
+        KvNodeMemo::get(&caches, &memo_key("other", "/a/large.bin", 4)),
+        Some(memo_entry(2))
+    );
+    invalidate_all();
+    assert!(KvNodeMemo::get(&caches, &memo_key("other", "/a/large.bin", 4)).is_none());
+}
+
 #[test]
 fn a_refused_team_view_is_dropped_on_its_own() {
     let _serialized = shared_cache_guard();

@@ -9,7 +9,7 @@ use crate::commands::preparation::{check_mutation_access, prepare_catalog_mutati
 use crate::commands::types::{CommandAck, MutationDto, RoleDto};
 use crate::commands::validation::{
     invalid_request, require_main_window, serialize_secret, DOWNLOAD_CHUNK_BYTES,
-    MAXIMUM_CLIPBOARD_TEXT_BYTES, MAXIMUM_TEXT_ITEM_BYTES,
+    MAXIMUM_CLIPBOARD_TEXT_BYTES, MAXIMUM_DOWNLOAD_BYTES, MAXIMUM_TEXT_ITEM_BYTES,
 };
 use foks_agent_proto::{
     KvChunkResult, KvReadResult, KvRole, KvStoreRef, KvUploadHeader, Operation,
@@ -372,11 +372,11 @@ pub(super) fn download_to_path(
     let mut read: KvReadResult = serde_json::from_value(value)
         .map_err(|error| AgentError::new("invalid-response", error.to_string(), false))?;
     // The size is deliberately not bound. A catalog entry never carries one,
-    // because FOKS does not expose a plaintext size in node metadata, while a
-    // read always computes one, so comparing them refuses every download. The
-    // store, path, version, node type and both roles are what identify the
-    // entry; the size is derived by the same read rather than independent
-    // evidence about it, and the assembled length is checked against it below.
+    // because FOKS does not expose a plaintext size in node metadata, and a
+    // large-file read no longer reports one either, so comparing them refuses
+    // every download. The store, path, version, node type and both roles are
+    // what identify the entry; a small file's assembled length is still
+    // checked against the size that read reports for it.
     let metadata_matches = read.store == store
         && read.path == item.metadata.path
         && read.version == item.metadata.version
@@ -453,17 +453,14 @@ pub(super) fn download_to_path(
                     false,
                 ));
             }
-            let total = read.size.ok_or_else(|| {
-                AgentError::new(
-                    "invalid-response",
-                    "The agent response is missing the file size.",
-                    false,
-                )
-            })?;
+            // A large file reports no size: the agent would have to download
+            // and decrypt the whole file to measure one, doubling the bytes
+            // this loop is about to move. The end-of-file flag ends the loop,
+            // and `MAXIMUM_DOWNLOAD_BYTES` bounds it against an agent that
+            // never sets that flag.
             let mut offset = 0u64;
-            while offset < total {
-                let length = u32::try_from((total - offset).min(u64::from(DOWNLOAD_CHUNK_BYTES)))
-                    .expect("the download chunk bound fits u32");
+            loop {
+                let length = DOWNLOAD_CHUNK_BYTES;
                 let value = transport
                     .call(Operation::ReadKvChunk {
                         store: store.clone(),
@@ -491,8 +488,7 @@ pub(super) fn download_to_path(
                     && chunk.offset == offset
                     && !chunk.content.is_empty()
                     && chunk.content.len() <= length as usize
-                    && next <= total
-                    && chunk.eof == (next == total);
+                    && next <= MAXIMUM_DOWNLOAD_BYTES;
                 if !valid {
                     zeroize::Zeroize::zeroize(&mut chunk.content);
                     return Err(AgentError::new(
@@ -501,6 +497,7 @@ pub(super) fn download_to_path(
                         true,
                     ));
                 }
+                let eof = chunk.eof;
                 let write = temporary.write_all(&chunk.content);
                 zeroize::Zeroize::zeroize(&mut chunk.content);
                 write.map_err(|error| {
@@ -511,6 +508,9 @@ pub(super) fn download_to_path(
                     )
                 })?;
                 offset = next;
+                if eof {
+                    break;
+                }
             }
         }
         _ => {

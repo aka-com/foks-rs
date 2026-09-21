@@ -103,6 +103,7 @@ pub struct DataEntry {
     pub size: Option<u64>,
     pub read_role: super::KvRole,
     pub write_role: super::KvRole,
+    #[serde(with = "crate::base64_bytes::optional")]
     pub content: Option<Vec<u8>>,
     pub symlink_target: Option<String>,
 }
@@ -113,6 +114,7 @@ pub struct DataChunk {
     pub path: String,
     pub version: u64,
     pub offset: u64,
+    #[serde(with = "crate::base64_bytes")]
     pub content: Vec<u8>,
     pub eof: bool,
 }
@@ -187,8 +189,11 @@ pub struct DataSubmission {
 pub struct DataStat {
     pub path: String,
     pub version: Option<u64>,
+    #[serde(with = "crate::base64_bytes::optional")]
     pub dirent: Option<Vec<u8>>,
+    #[serde(with = "crate::base64_bytes::optional")]
     pub directory: Option<Vec<u8>>,
+    #[serde(with = "crate::base64_bytes::optional")]
     pub node: Option<Vec<u8>>,
     pub size: Option<u64>,
     pub target: Option<String>,

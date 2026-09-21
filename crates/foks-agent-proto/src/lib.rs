@@ -4,6 +4,7 @@
 
 pub mod account;
 pub mod admin;
+pub mod base64_bytes;
 pub mod bot;
 pub mod chat;
 pub mod data;
@@ -14,7 +15,7 @@ pub mod sso;
 
 pub use frame::{
     decode_request, decode_response, decode_upload_frame, encode, request_id, Error, Result,
-    MAXIMUM_MESSAGE_BYTES,
+    FRAME_ENVELOPE_RESERVE_BYTES, MAXIMUM_KV_PAYLOAD_BYTES, MAXIMUM_MESSAGE_BYTES,
 };
 pub use message::{
     AccountStoreRef, AccountSummary, AgentStatus, BackupEnrollmentSummary, CompatibilityFailure,
@@ -129,6 +130,188 @@ mod tests {
             operation,
             Operation::PutKv { ref content, .. } if content.iter().all(|byte| *byte == 0)
         ));
+    }
+
+    /// Every byte-payload field on this protocol, through encode and decode,
+    /// on bytes that stress the encoding: all 256 values, each of the three
+    /// input lengths modulo the base64 group, and an empty payload.
+    ///
+    /// The point of each assertion is byte equality, and that the wire form
+    /// is one JSON string rather than an array of integers — the encoding the
+    /// payload bounds are sized against.
+    #[test]
+    fn every_byte_payload_field_round_trips_as_base64() {
+        let every_byte: Vec<u8> = (0u16..=255).map(|byte| byte as u8).collect();
+        let store = KvStoreRef::Account(AccountStoreRef {
+            profile: "local".to_owned(),
+            account_alias: "personal".to_owned(),
+        });
+        for length in [
+            0,
+            every_byte.len() - 2,
+            every_byte.len() - 1,
+            every_byte.len(),
+        ] {
+            let payload = every_byte[..length].to_vec();
+
+            let read = KvReadResult {
+                store: store.clone(),
+                path: "/secret".to_owned(),
+                version: 4,
+                node_type: "small-file".to_owned(),
+                size: Some(length as u64),
+                read_role: KvRole::Owner,
+                write_role: KvRole::Owner,
+                content: Some(payload.clone()),
+                symlink_target: None,
+            };
+            let encoded = serde_json::to_value(&read).unwrap();
+            assert!(encoded["content"].is_string(), "{encoded}");
+            assert_eq!(
+                serde_json::from_value::<KvReadResult>(encoded).unwrap(),
+                read
+            );
+
+            let chunk = KvChunkResult {
+                store: store.clone(),
+                path: "/secret".to_owned(),
+                version: 4,
+                offset: 9,
+                content: payload.clone(),
+                eof: true,
+            };
+            let encoded = serde_json::to_value(&chunk).unwrap();
+            assert!(encoded["content"].is_string(), "{encoded}");
+            assert_eq!(
+                serde_json::from_value::<KvChunkResult>(encoded).unwrap(),
+                chunk
+            );
+
+            let upload = KvUploadFrame {
+                version: PROTOCOL_VERSION,
+                id: 11,
+                payload: KvUploadPayload::Chunk {
+                    offset: 0,
+                    content: payload.clone(),
+                },
+            };
+            let frame = encode(&upload).unwrap();
+            assert_eq!(decode_upload_frame(&frame).unwrap(), upload);
+
+            let request = Request::new(
+                12,
+                Operation::PutKv {
+                    store: store.clone(),
+                    path: "/secret".to_owned(),
+                    content: payload.clone(),
+                    read_role: KvRole::Owner,
+                    write_role: KvRole::Owner,
+                    precondition: KvPrecondition::Create,
+                    mkdir_p: true,
+                },
+            );
+            let encoded = serde_json::to_value(&request).unwrap();
+            assert!(encoded["operation"]["content"].is_string(), "{encoded}");
+            assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
+
+            // The data adapter reads the same payloads through its own types,
+            // which the agent answers from `foks-client-app`; both sides use
+            // this adapter, so they cannot drift apart.
+            let entry = data::DataEntry {
+                path: "/secret".to_owned(),
+                version: 4,
+                node_type: "small-file".to_owned(),
+                size: Some(length as u64),
+                read_role: KvRole::Owner,
+                write_role: KvRole::Owner,
+                content: Some(payload.clone()),
+                symlink_target: None,
+            };
+            let encoded = serde_json::to_value(&entry).unwrap();
+            assert!(encoded["content"].is_string(), "{encoded}");
+            assert_eq!(
+                serde_json::from_value::<data::DataEntry>(encoded)
+                    .unwrap()
+                    .content
+                    .as_deref(),
+                Some(payload.as_slice())
+            );
+
+            let data_chunk = data::DataChunk {
+                path: "/secret".to_owned(),
+                version: 4,
+                offset: 9,
+                content: payload.clone(),
+                eof: false,
+            };
+            let encoded = serde_json::to_value(&data_chunk).unwrap();
+            assert!(encoded["content"].is_string(), "{encoded}");
+            assert_eq!(
+                serde_json::from_value::<data::DataChunk>(encoded)
+                    .unwrap()
+                    .content,
+                payload
+            );
+
+            let stat = data::DataStat {
+                path: "/secret".to_owned(),
+                version: Some(4),
+                dirent: Some(payload.clone()),
+                directory: Some(payload.clone()),
+                node: None,
+                size: None,
+                target: None,
+            };
+            let encoded = serde_json::to_value(&stat).unwrap();
+            assert!(encoded["dirent"].is_string(), "{encoded}");
+            assert!(encoded["node"].is_null(), "{encoded}");
+            let decoded = serde_json::from_value::<data::DataStat>(encoded).unwrap();
+            assert_eq!(decoded.dirent.as_deref(), Some(payload.as_slice()));
+            assert_eq!(decoded.directory.as_deref(), Some(payload.as_slice()));
+            assert_eq!(decoded.node, None);
+        }
+    }
+
+    /// The measured cost of the encoding, which is why the payload bounds are
+    /// where they are. A JSON integer array of uniformly distributed bytes
+    /// costs 3.5703 frame bytes per content byte; base64 costs 1.3334 plus
+    /// two quotes.
+    #[test]
+    fn a_chunk_costs_a_third_of_what_an_integer_array_cost() {
+        let content: Vec<u8> = (0..64 * 1024).map(|index| (index % 256) as u8).collect();
+        let chunk = KvChunkResult {
+            store: KvStoreRef::Account(AccountStoreRef {
+                profile: "local".to_owned(),
+                account_alias: "personal".to_owned(),
+            }),
+            path: "/large".to_owned(),
+            version: 4,
+            offset: 0,
+            content: content.clone(),
+            eof: false,
+        };
+        let base64_frame = encode(&Response::success(1, serde_json::to_value(&chunk).unwrap()))
+            .unwrap()
+            .len();
+        // The previous wire form of the same payload.
+        let array_frame = encode(&Response::success(
+            1,
+            serde_json::json!({
+                "store": chunk.store,
+                "path": chunk.path,
+                "version": chunk.version,
+                "offset": chunk.offset,
+                "content": content,
+                "eof": chunk.eof,
+            }),
+        ))
+        .unwrap()
+        .len();
+        println!("64 KiB chunk frame: base64={base64_frame} integer-array={array_frame}");
+        assert!(
+            array_frame > base64_frame * 2,
+            "base64={base64_frame} array={array_frame}"
+        );
     }
 
     #[test]
@@ -434,8 +617,8 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_is_a_local_v27_mutation_with_no_initial_trust_inputs() {
-        assert_eq!(PROTOCOL_VERSION, 27);
+    fn reconcile_is_a_local_v28_mutation_with_no_initial_trust_inputs() {
+        assert_eq!(PROTOCOL_VERSION, 28);
         let operation = Operation::ReconcileProfile {
             profile: "saved".into(),
         };
@@ -443,7 +626,7 @@ mod tests {
         let request = Request::new(19, operation);
         assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
         let mut previous = serde_json::to_value(&request).unwrap();
-        previous["version"] = serde_json::json!(26);
+        previous["version"] = serde_json::json!(27);
         assert!(matches!(
             decode_request(&encode(&previous).unwrap()),
             Err(Error::Version)
@@ -451,8 +634,8 @@ mod tests {
     }
 
     #[test]
-    fn submit_message_is_a_local_v27_mutation() {
-        assert_eq!(PROTOCOL_VERSION, 27);
+    fn submit_message_is_a_local_v28_mutation() {
+        assert_eq!(PROTOCOL_VERSION, 28);
         let request = Request::new(
             20,
             Operation::Chat {
@@ -473,7 +656,7 @@ mod tests {
         assert!(!format!("{request:?}").contains("private message"));
         assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
         let mut previous = serde_json::to_value(&request).unwrap();
-        previous["version"] = serde_json::json!(26);
+        previous["version"] = serde_json::json!(27);
         assert!(matches!(
             decode_request(&encode(&previous).unwrap()),
             Err(Error::Version)

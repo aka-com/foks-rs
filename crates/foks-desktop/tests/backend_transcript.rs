@@ -480,8 +480,20 @@ fn eighty_four_megabyte_file_uses_bounded_stream_frames_without_inline_content()
     ));
     assert_eq!(transcript.total, 84 * 1024 * 1024);
     assert!(transcript.chunks > 1);
-    assert!(transcript.maximum_chunk <= 128 * 1024);
+    // Upload frames carry the protocol's payload bound, and the frame that
+    // results from base64-encoding one is still inside the ceiling.
+    assert_eq!(
+        transcript.maximum_chunk,
+        foks_agent_proto::MAXIMUM_KV_PAYLOAD_BYTES
+    );
     assert!(transcript.maximum_frame <= foks_agent_proto::MAXIMUM_MESSAGE_BYTES);
+    assert!(
+        transcript.maximum_frame
+            <= foks_agent_proto::MAXIMUM_MESSAGE_BYTES
+                - foks_agent_proto::FRAME_ENVELOPE_RESERVE_BYTES,
+        "an upload frame at the payload bound left no envelope reserve: {}",
+        transcript.maximum_frame
+    );
 }
 
 #[test]

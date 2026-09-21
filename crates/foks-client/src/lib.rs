@@ -1148,16 +1148,12 @@ mod tests {
             .value;
         let large_node = fixture("kv-large-node.snowp");
         let large_chunk = fixture("kv-large-chunk.snowp");
-        let mut inspect_requests = VecDeque::from([
-            (KvRequest::Node(large_id), large_node.clone()),
-            (
-                KvRequest::Chunk {
-                    file: large_id,
-                    offset: 0,
-                },
-                large_chunk.clone(),
-            ),
-        ]);
+        // Reading a large-file node costs exactly one request. It reports no
+        // size, so it does not walk the chunk chain to measure one, which is
+        // what made a read of an N-byte file cost N bytes before the caller's
+        // own read had started.
+        let mut inspect_requests =
+            VecDeque::from([(KvRequest::Node(large_id), large_node.clone())]);
         let inspected = read_kv_node_with_fetch(
             large_id,
             &private_keys,
@@ -1172,12 +1168,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(
-            inspected,
-            KvFetchedNode::LargeFile {
-                size: fixture("kv-large-plaintext.bin").len() as u64
-            }
-        );
+        assert_eq!(inspected, KvFetchedNode::LargeFile);
         assert!(inspect_requests.is_empty());
 
         let mut requests = VecDeque::from([

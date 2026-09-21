@@ -22,6 +22,8 @@ mod write;
 pub(crate) const MAX_KV_FILE_BYTES: u64 = 1024 * 1024 * 1024;
 pub(crate) const MAX_KV_UPLOAD_CHUNK: usize = 4 * 1024 * 1024;
 
+pub use sync::kv_path_version_vector;
+
 #[cfg(test)]
 pub(crate) use rpc::KvRequest;
 #[cfg(test)]
@@ -112,12 +114,18 @@ pub struct KvWriteResult {
 /// [`KvFetchedChunk`] and avoid materializing the complete file. A directory
 /// carries the read role of its active generation, which a path-scoped read
 /// cannot take from the parent projection that named it.
+///
+/// A large file carries no size. Its plaintext length is not in its metadata,
+/// so the only way to report one is to fetch and decrypt every chunk — which
+/// is the whole file, on the wire, before the caller's own read begins.
+/// Callers stream the file with [`KvFetchedChunk`] and stop on the
+/// end-of-file flag each chunk carries.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum KvFetchedNode {
     Directory { read_role: Role },
     SmallFile(Vec<u8>),
     Symlink(Vec<u8>),
-    LargeFile { size: u64 },
+    LargeFile,
 }
 
 /// One requested range of a large KV file. The plaintext is caller-owned and

@@ -14,7 +14,8 @@ mod adapter_maintenance;
 pub use adapter_maintenance::{AdapterMaintenanceCursor, AdapterMaintenanceReport};
 mod auth_cache;
 pub use auth_cache::{
-    AuthCacheKey, AuthenticatedUserCache, ReadCaches, TeamViewCacheKey, TeamViewTokenCache,
+    AuthCacheKey, AuthenticatedUserCache, KvNodeMemo, KvNodeMemoEntry, KvNodeMemoKey, ReadCaches,
+    TeamViewCacheKey, TeamViewTokenCache,
 };
 mod adapter_clock;
 pub use adapter_clock::{
