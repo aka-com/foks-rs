@@ -61,8 +61,7 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
     ) -> Result<KvReadReport> {
         self.profile.require(Capability::Kv)?;
-        let (loaded, authenticated, directories) =
-            self.authenticated_metadata_tree(alias, vault)?;
+        let (loaded, authenticated, directories) = self.resolved_user_path(alias, path, vault)?;
         let entry = checked_entry(&directories, path, version)?;
         let host = self.pinned_host()?;
         let fetched = self.client.read_user_kv_node(
@@ -85,8 +84,7 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
     ) -> Result<KvChunkReport> {
         self.profile.require(Capability::Kv)?;
-        let (loaded, authenticated, directories) =
-            self.authenticated_metadata_tree(alias, vault)?;
+        let (loaded, authenticated, directories) = self.resolved_user_path(alias, path, vault)?;
         let entry = checked_entry(&directories, path, version)?;
         if KvNodeId(entry.node_id).node_type()? != KvNodeType::File {
             return Err(Error::InvalidAccount("KV chunk path is not a large file"));
@@ -120,7 +118,7 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
     ) -> Result<KvReadReport> {
         let (account, team, directories) =
-            self.authenticated_team_metadata(account_alias, team_alias, team_id_hex, vault)?;
+            self.resolved_team_path(account_alias, team_alias, team_id_hex, path, vault)?;
         let entry = checked_entry(&directories, path, version)?;
         let host = self.pinned_host()?;
         let fetched = self.client.read_team_kv_node(
@@ -145,7 +143,7 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
     ) -> Result<KvChunkReport> {
         let (account, team, directories) =
-            self.authenticated_team_metadata(account_alias, team_alias, team_id_hex, vault)?;
+            self.resolved_team_path(account_alias, team_alias, team_id_hex, path, vault)?;
         let entry = checked_entry(&directories, path, version)?;
         if KvNodeId(entry.node_id).node_type()? != KvNodeType::File {
             return Err(Error::InvalidAccount("KV chunk path is not a large file"));
@@ -168,7 +166,7 @@ impl CheckedProfileSession<'_> {
         })
     }
 
-    fn authenticated_team_metadata(
+    fn authenticated_team_store(
         &self,
         account_alias: &str,
         team_alias: &str,
@@ -177,7 +175,7 @@ impl CheckedProfileSession<'_> {
     ) -> Result<(
         LoadedAccount,
         AuthenticatedTeamOutcome,
-        Vec<KvDirectoryProjection>,
+        foks_client::PinnedHost,
     )> {
         self.profile.require(Capability::Teams)?;
         self.profile.require(Capability::Kv)?;
@@ -195,13 +193,7 @@ impl CheckedProfileSession<'_> {
         let user = self.authenticated_user(&host, &account.credential)?;
         let team_id = EntityId::from_bytes(stored.team_id.clone())?;
         let team = self.load_team_for_read(&host, &account.credential, &user, &team_id)?;
-        let directories = self.client.list_team_kv_metadata(
-            &host,
-            &account.credential,
-            &team,
-            &self.paths.soft_database,
-        )?;
-        Ok((account, team, directories))
+        Ok((account, team, host))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -353,17 +345,14 @@ impl CheckedProfileSession<'_> {
             &self.paths.soft_database,
             &mut mutations,
         )?;
-        let tree = match precondition {
-            KvMutationPrecondition::Create => session.ensure_root(Role::OWNER, Role::OWNER)?,
-            KvMutationPrecondition::ExactVersion(_) => session.sync()?,
-        };
         let (parent, tree) = resolve_write_parent(
             &mut session,
-            tree,
             &parent_path,
             mkdir_p,
             read_role,
             write_role,
+            matches!(precondition, KvMutationPrecondition::Create)
+                .then_some((Role::OWNER, Role::OWNER)),
         )?;
         verify_precondition(&tree, path, precondition)?;
         let result = put(
@@ -378,10 +367,10 @@ impl CheckedProfileSession<'_> {
             },
         )
         .map_err(checked_write_error)?;
-        Ok(KvWriteReport::from_tree(
+        Ok(KvWriteReport::from_path(
             path,
             result.dirent_version,
-            &result.tree,
+            &result.path,
         ))
     }
 
@@ -413,14 +402,13 @@ impl CheckedProfileSession<'_> {
             vault,
             master_key,
             |session| {
-                let tree = session.sync()?;
                 let (parent, tree) = resolve_write_parent(
                     session,
-                    tree,
                     &parent_path,
                     mkdir_p,
                     read_role,
                     write_role,
+                    None,
                 )?;
                 verify_precondition(&tree, path, precondition)?;
                 let result = put(
@@ -435,10 +423,10 @@ impl CheckedProfileSession<'_> {
                     },
                 )
                 .map_err(checked_write_error)?;
-                Ok(KvWriteReport::from_tree(
+                Ok(KvWriteReport::from_path(
                     path,
                     result.dirent_version,
-                    &result.tree,
+                    &result.path,
                 ))
             },
         )
@@ -502,8 +490,7 @@ impl CheckedProfileSession<'_> {
         writer: &mut W,
     ) -> Result<u64> {
         self.profile.require(Capability::Kv)?;
-        let (loaded, authenticated, directories) =
-            self.authenticated_metadata_tree(alias, vault)?;
+        let (loaded, authenticated, directories) = self.resolved_user_path(alias, path, vault)?;
         let entry = resolve_entry(&directories, path)?;
         match KvNodeId(entry.node_id).node_type()? {
             KvNodeType::SmallFile => {
@@ -582,14 +569,13 @@ impl CheckedProfileSession<'_> {
             &self.paths.soft_database,
             &mut mutations,
         )?;
-        let tree = session.ensure_root(Role::OWNER, Role::OWNER)?;
         let (parent, _tree) = resolve_write_parent(
             &mut session,
-            tree,
             &parent_path,
             mkdir_p,
             KvRoleSummary::Owner,
             KvRoleSummary::Owner,
+            Some((Role::OWNER, Role::OWNER)),
         )?;
         let result = session.put_file(
             parent,
@@ -602,10 +588,10 @@ impl CheckedProfileSession<'_> {
                 expected_version: None,
             },
         )?;
-        Ok(KvWriteReport::from_tree(
+        Ok(KvWriteReport::from_path(
             path,
             result.dirent_version,
-            &result.tree,
+            &result.path,
         ))
     }
 
@@ -636,14 +622,13 @@ impl CheckedProfileSession<'_> {
             &self.paths.soft_database,
             &mut mutations,
         )?;
-        let tree = session.ensure_root(Role::OWNER, Role::OWNER)?;
         let (parent, _tree) = resolve_write_parent(
             &mut session,
-            tree,
             &parent_path,
             mkdir_p,
             KvRoleSummary::Owner,
             KvRoleSummary::Owner,
+            Some((Role::OWNER, Role::OWNER)),
         )?;
         let result = session.mkdir(
             parent,
@@ -655,10 +640,10 @@ impl CheckedProfileSession<'_> {
                 expected_version: None,
             },
         )?;
-        Ok(KvWriteReport::from_tree(
+        Ok(KvWriteReport::from_path(
             path,
             result.dirent_version,
-            &result.tree,
+            &result.path,
         ))
     }
 
@@ -753,7 +738,7 @@ impl CheckedProfileSession<'_> {
             &self.paths.soft_database,
             &mut mutations,
         )?;
-        let tree = session.sync()?;
+        let tree = session.resolve_path(&path_components(&parent_path)?)?;
         let parent = resolve_directory(&tree, &parent_path)?;
         let existing = resolve_entry(&tree, path)?;
         let version = existing
@@ -769,7 +754,7 @@ impl CheckedProfileSession<'_> {
                 recursive,
             )
             .map_err(checked_write_error)?;
-        Ok(KvWriteReport::from_tree(path, version, &tree))
+        Ok(KvWriteReport::from_path(path, version, &tree))
     }
 
     pub fn remove_kv_checked(
@@ -800,7 +785,7 @@ impl CheckedProfileSession<'_> {
             &self.paths.soft_database,
             &mut mutations,
         )?;
-        let tree = session.sync()?;
+        let tree = session.resolve_path(&path_components(&parent_path)?)?;
         let parent = resolve_directory(&tree, &parent_path)?;
         let existing = checked_entry(&tree, path, expected_version)?;
         let write_role = projected_write_role(existing)?;
@@ -810,7 +795,7 @@ impl CheckedProfileSession<'_> {
         let tree = session
             .unlink(parent, &name, Some(expected_version), write_role, recursive)
             .map_err(checked_write_error)?;
-        Ok(KvWriteReport::from_tree(path, next_version, &tree))
+        Ok(KvWriteReport::from_path(path, next_version, &tree))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -833,7 +818,7 @@ impl CheckedProfileSession<'_> {
             vault,
             master_key,
             |session| {
-                let tree = session.sync()?;
+                let tree = session.resolve_path(&path_components(&parent_path)?)?;
                 let parent = resolve_directory(&tree, &parent_path)?;
                 let existing = checked_entry(&tree, path, expected_version)?;
                 let write_role = projected_write_role(existing)?;
@@ -843,7 +828,7 @@ impl CheckedProfileSession<'_> {
                 let tree = session
                     .unlink(parent, &name, Some(expected_version), write_role, recursive)
                     .map_err(checked_write_error)?;
-                Ok(KvWriteReport::from_tree(path, next_version, &tree))
+                Ok(KvWriteReport::from_path(path, next_version, &tree))
             },
         )
     }
@@ -870,26 +855,61 @@ impl CheckedProfileSession<'_> {
         Ok((loaded, authenticated, directories))
     }
 
-    fn authenticated_metadata_tree(
+    /// Authenticates only the directories `path` walks through, instead of
+    /// every directory in the store. The projections it returns read exactly
+    /// like a complete traversal restricted to that path, so the ordinary
+    /// path helpers report the same absent, unreadable and conflicting
+    /// outcomes they report against a whole-namespace projection.
+    fn resolved_user_path(
         &self,
         alias: &str,
+        path: &str,
         vault: &mut AccountVault<'_>,
     ) -> Result<(
         LoadedAccount,
         std::sync::Arc<foks_client::AuthenticatedUserOutcome>,
         Vec<KvDirectoryProjection>,
     )> {
+        self.profile.require(Capability::Kv)?;
+        let components = parent_components(path)?;
         let loaded = vault.account(alias)?;
         let host = self.pinned_host()?;
         let authenticated = self.authenticated_user(&host, &loaded.credential)?;
-        let directories = self.client.list_user_kv_metadata(
+        let directories = self.client.resolve_user_kv_path(
             &host,
             &loaded.credential,
             &authenticated.verified,
             &authenticated.puks,
             &self.paths.soft_database,
+            &components,
         )?;
         Ok((loaded, authenticated, directories))
+    }
+
+    /// Team variant of [`Self::resolved_user_path`].
+    fn resolved_team_path(
+        &self,
+        account_alias: &str,
+        team_alias: &str,
+        team_id_hex: &str,
+        path: &str,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<(
+        LoadedAccount,
+        AuthenticatedTeamOutcome,
+        Vec<KvDirectoryProjection>,
+    )> {
+        let components = parent_components(path)?;
+        let (account, team, host) =
+            self.authenticated_team_store(account_alias, team_alias, team_id_hex, vault)?;
+        let directories = self.client.resolve_team_kv_path(
+            &host,
+            &account.credential,
+            &team,
+            &self.paths.soft_database,
+            &components,
+        )?;
+        Ok((account, team, directories))
     }
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -906,12 +926,14 @@ pub struct KvListReport {
     pub entries: Vec<KvEntrySummary>,
 }
 
+/// The outcome of one KV mutation. A write reads only the directories along
+/// its own path, so the counts describe that path and not the whole store.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct KvWriteReport {
     pub path: String,
     pub version: u64,
-    pub directories: usize,
-    pub entries: usize,
+    pub path_directories: usize,
+    pub path_entries: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1007,12 +1029,15 @@ impl KvCatalogReport {
 }
 
 impl KvWriteReport {
-    fn from_tree(path: &str, version: u64, tree: &[KvDirectoryProjection]) -> Self {
+    fn from_path(path: &str, version: u64, directories: &[KvDirectoryProjection]) -> Self {
         Self {
             path: path.to_owned(),
             version,
-            directories: tree.len(),
-            entries: tree.iter().map(|directory| directory.entries.len()).sum(),
+            path_directories: directories.len(),
+            path_entries: directories
+                .iter()
+                .map(|directory| directory.entries.len())
+                .sum(),
         }
     }
 }
@@ -1070,6 +1095,9 @@ fn projected_write_role(entry: &foks_client_db::KvProjectedEntry) -> Result<Role
     }
 }
 
+/// Builds the report for one entry from the directories along its path. A
+/// directory's own read role is not in its parent's projection, so it comes
+/// from the node the read already fetched and authenticated.
 fn read_report_from_fetched(
     tree: &[KvDirectoryProjection],
     path: &str,
@@ -1077,41 +1105,79 @@ fn read_report_from_fetched(
     fetched: foks_client::KvFetchedNode,
 ) -> Result<KvReadReport> {
     let entry = checked_entry(tree, path, version)?;
-    let catalog = flatten_catalog_tree(tree)?
-        .into_iter()
-        .find(|entry| entry.path == path)
-        .ok_or(Error::InvalidKvPath("KV entry does not exist"))?;
     let node_type = KvNodeId(entry.node_id).node_type()?;
-    let (content, symlink_target, size) = match (node_type, fetched) {
+    let write_role = projected_write_role(entry)?;
+    let (content, symlink_target, size, read_role) = match (node_type, fetched) {
         (KvNodeType::SmallFile, foks_client::KvFetchedNode::SmallFile(content)) => {
             let size = Some(content.len() as u64);
-            (Some(content), None, size)
+            (Some(content), None, size, projected_read_role(entry)?)
         }
         (KvNodeType::Symlink, foks_client::KvFetchedNode::Symlink(target)) => {
             let target = std::str::from_utf8(&target)
                 .map_err(|_| Error::InvalidAccount("symlink target is not UTF-8"))?
                 .to_owned();
             let size = Some(target.len() as u64);
-            (None, Some(target), size)
+            (None, Some(target), size, projected_read_role(entry)?)
         }
         (KvNodeType::File, foks_client::KvFetchedNode::LargeFile { size }) => {
-            (None, None, Some(size))
+            (None, None, Some(size), projected_read_role(entry)?)
         }
-        (KvNodeType::Directory, foks_client::KvFetchedNode::Directory) => (None, None, None),
+        (KvNodeType::Directory, foks_client::KvFetchedNode::Directory { read_role }) => {
+            (None, None, None, read_role)
+        }
         (KvNodeType::None, _) => return Err(Error::InvalidAccount("KV entry is a tombstone")),
         _ => return Err(Error::InvalidAccount("KV node type changed during read")),
     };
     Ok(KvReadReport {
         path: path.to_owned(),
-        node_type: catalog.node_type,
+        node_type: node_type_name(node_type)?,
         version,
         size,
-        read_role: catalog.read_role,
-        write_role: catalog.write_role,
+        read_role: KvRoleSummary::from_role(read_role)?,
+        write_role: KvRoleSummary::from_role(write_role)?,
         content,
         symlink_target,
     })
 }
+
+fn node_type_name(node_type: KvNodeType) -> Result<String> {
+    Ok(match node_type {
+        KvNodeType::None => return Err(Error::InvalidAccount("KV entry is a tombstone")),
+        KvNodeType::Directory => "directory",
+        KvNodeType::File => "file",
+        KvNodeType::SmallFile => "small-file",
+        KvNodeType::Symlink => "symlink",
+    }
+    .to_owned())
+}
+
+/// The read role of one non-directory entry, taken from the authenticated
+/// node metadata its traversal retained. A directory keeps its read role in
+/// its own generation, not in the dirent that names it.
+fn projected_read_role(entry: &foks_client_db::KvProjectedEntry) -> Result<Role> {
+    let encoded = entry
+        .node_bytes
+        .as_deref()
+        .ok_or(Error::InvalidAccount("catalog node metadata is absent"))?;
+    match (
+        KvNodeId(entry.node_id).node_type()?,
+        foks_proto::KvNode::decode(encoded)?,
+    ) {
+        (KvNodeType::File, foks_proto::KvNode::File(metadata)) => Ok(metadata.key.role),
+        (KvNodeType::SmallFile, foks_proto::KvNode::SmallFile(boxed))
+        | (KvNodeType::Symlink, foks_proto::KvNode::Symlink(boxed)) => Ok(boxed.key.role),
+        _ => Err(Error::InvalidAccount("catalog file type changed")),
+    }
+}
+/// The directory components a path walks through, excluding the final name.
+/// Resolving them reads every directory a lookup of `path` needs and no
+/// others.
+fn parent_components(path: &str) -> Result<Vec<Vec<u8>>> {
+    let mut components = path_components(path)?;
+    components.pop();
+    Ok(components)
+}
+
 fn path_components(path: &str) -> Result<Vec<Vec<u8>>> {
     if !path.starts_with('/') || path.len() > 4096 {
         return Err(Error::InvalidKvPath(
@@ -1203,11 +1269,72 @@ fn resolve_directory(tree: &[KvDirectoryProjection], path: &str) -> Result<[u8; 
 /// Resolves the parent directory for a KV write path, creating intermediate
 /// directories if `mkdir_p` is enabled.
 ///
-/// KV writes require an existing parent directory. When `mkdir_p` is true,
-/// missing parent directories are created within the current write session,
-/// inheriting the item's read and write roles to ensure consistent access control
-/// across the directory hierarchy.
+/// Only the directories the path walks through are fetched, and the session
+/// retains them as the precondition scope for the write that follows. When
+/// `create_root` names a pair of roles, a store that has never been written
+/// to has its root created first. When `mkdir_p` is true, missing parent
+/// directories are created within the current write session, inheriting the
+/// item's read and write roles to ensure consistent access control across the
+/// directory hierarchy.
 fn resolve_write_parent(
+    session: &mut foks_client::KvWriteSession<'_>,
+    path: &str,
+    mkdir_p: bool,
+    read_role: KvRoleSummary,
+    write_role: KvRoleSummary,
+    create_root: Option<(Role, Role)>,
+) -> Result<([u8; 16], Vec<KvDirectoryProjection>)> {
+    let components = path_components(path)?;
+    let mut tree = session.resolve_path(&components)?;
+    if tree.is_empty() {
+        if let Some((root_read_role, root_write_role)) = create_root {
+            session.initialize_root(root_read_role, root_write_role)?;
+            tree = session.resolve_path(&components)?;
+        }
+    }
+    if !mkdir_p {
+        let parent = resolve_directory(&tree, path)?;
+        return Ok((parent, tree));
+    }
+    let mut current = root_directory(&tree)?;
+    let mut creating = false;
+    for (depth, component) in components.iter().enumerate() {
+        if !creating {
+            if let Some(child) = directory_child(&tree, current, component)? {
+                current = child;
+                continue;
+            }
+        }
+        let name = String::from_utf8(component.clone()).map_err(|_| {
+            Error::InvalidKvPath("a missing parent directory name is not UTF-8 and cannot be created through this API")
+        })?;
+        // Each new directory is created under the prefix that names it, so
+        // the mkdir cites the path it walked rather than an unrelated one.
+        session.resolve_path(&components[..depth])?;
+        let result = session.mkdir(
+            current,
+            &name,
+            KvWriteOptions {
+                read_role: read_role.to_role(),
+                write_role: write_role.to_role(),
+                overwrite: false,
+                expected_version: None,
+            },
+        )?;
+        current = result.node_id.object_id();
+        creating = true;
+    }
+    if creating {
+        tree = session.resolve_path(&components)?;
+        current = resolve_directory(&tree, path)?;
+    }
+    Ok((current, tree))
+}
+
+/// Adapter variant of [`resolve_write_parent`] that walks a complete
+/// projection the caller already fetched, because the adapter also enforces a
+/// whole-namespace entry limit and resolves symlinks anywhere in the store.
+fn resolve_write_parent_in_tree(
     session: &mut foks_client::KvWriteSession<'_>,
     tree: Vec<KvDirectoryProjection>,
     path: &str,
@@ -1222,12 +1349,15 @@ fn resolve_write_parent(
     let components = path_components(path)?;
     let mut tree = tree;
     let mut current = root_directory(&tree)?;
-    for component in components {
-        if let Some(child) = directory_child(&tree, current, &component)? {
-            current = child;
-            continue;
+    let mut creating = false;
+    for component in &components {
+        if !creating {
+            if let Some(child) = directory_child(&tree, current, component)? {
+                current = child;
+                continue;
+            }
         }
-        let name = String::from_utf8(component).map_err(|_| {
+        let name = String::from_utf8(component.clone()).map_err(|_| {
             Error::InvalidKvPath("a missing parent directory name is not UTF-8 and cannot be created through this API")
         })?;
         let result = session.mkdir(
@@ -1240,10 +1370,12 @@ fn resolve_write_parent(
                 expected_version: None,
             },
         )?;
-        tree = result.tree;
-        current = directory_child(&tree, current, name.as_bytes())?.ok_or(Error::InvalidKvPath(
-            "the created parent directory is absent from the projection",
-        ))?;
+        current = result.node_id.object_id();
+        creating = true;
+    }
+    if creating {
+        tree = session.sync()?;
+        current = resolve_directory(&tree, path)?;
     }
     Ok((current, tree))
 }
@@ -1433,54 +1565,15 @@ fn flatten_catalog_tree(tree: &[KvDirectoryProjection]) -> Result<Vec<KvCatalogE
                         .key
                         .role
                 }
-                KvNodeType::File => match foks_proto::KvNode::decode(
-                    entry
-                        .node_bytes
-                        .as_deref()
-                        .ok_or(Error::InvalidAccount("catalog file metadata is absent"))?,
-                )? {
-                    foks_proto::KvNode::File(metadata) => metadata.key.role,
-                    _ => return Err(Error::InvalidAccount("catalog file type changed")),
-                },
-                KvNodeType::SmallFile => {
-                    match foks_proto::KvNode::decode(entry.node_bytes.as_deref().ok_or(
-                        Error::InvalidAccount("catalog small-file metadata is absent"),
-                    )?)? {
-                        foks_proto::KvNode::SmallFile(boxed) => boxed.key.role,
-                        _ => return Err(Error::InvalidAccount("catalog file type changed")),
-                    }
-                }
-                KvNodeType::Symlink => match foks_proto::KvNode::decode(
-                    entry
-                        .node_bytes
-                        .as_deref()
-                        .ok_or(Error::InvalidAccount("catalog symlink metadata is absent"))?,
-                )? {
-                    foks_proto::KvNode::Symlink(boxed) => boxed.key.role,
-                    _ => return Err(Error::InvalidAccount("catalog file type changed")),
-                },
                 KvNodeType::None => {
                     return Err(Error::InvalidAccount("catalog contains a tombstone"));
                 }
+                _ => projected_read_role(entry)?,
             };
-            let write_role = match (entry.write_role_type, entry.write_role_visibility) {
-                (1, visibility) => Role::member(i16::try_from(visibility).map_err(|_| {
-                    Error::InvalidAccount("KV write-role visibility is out of range")
-                })?),
-                (2, 0) => Role::ADMIN,
-                (3, 0) => Role::OWNER,
-                _ => return Err(Error::InvalidAccount("KV write role is invalid")),
-            };
+            let write_role = projected_write_role(entry)?;
             output.push(KvCatalogEntry {
                 path: path.clone(),
-                node_type: match node_type {
-                    KvNodeType::None => unreachable!("rejected above"),
-                    KvNodeType::Directory => "directory",
-                    KvNodeType::File => "file",
-                    KvNodeType::SmallFile => "small-file",
-                    KvNodeType::Symlink => "symlink",
-                }
-                .to_owned(),
+                node_type: node_type_name(node_type)?,
                 version: entry.version,
                 // FOKS does not expose plaintext size in node metadata. The
                 // catalog leaves it absent instead of downloading content.

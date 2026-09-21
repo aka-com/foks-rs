@@ -245,6 +245,87 @@ impl FoksClient {
             &keys,
             soft_database_path,
             KvSyncMode::Metadata,
+            KvTraversalPlan::Complete,
+            |auth, request| connection.call(auth, request),
+        )
+    }
+
+    /// Authenticates only the directories along `components` in the personal
+    /// KV namespace instead of traversing every directory in the store. The
+    /// result is the root's projection followed by one projection per
+    /// resolved component, and it stops where a component is absent or
+    /// unreadable, so the ordinary path helpers report the same outcome they
+    /// would against a complete traversal.
+    pub fn resolve_user_kv_path(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        user: &VerifiedUserState,
+        puks: &[UserPrivateKey],
+        soft_database_path: &Path,
+        components: &[Vec<u8>],
+    ) -> Result<Vec<KvDirectoryProjection>> {
+        if user.uid() != &credential.uid || user.host() != host.host_id() {
+            return Err(Error::UserBinding(
+                "KV user state does not match the credential and pinned host",
+            ));
+        }
+        let keys = user_kv_keys(user, puks)?;
+        let mut connection = self.kv_connection_with_material(
+            host,
+            &credential.seed,
+            &credential.certificate_chain,
+        )?;
+        self.resolve_kv_path_with_fetch(
+            host,
+            KvParty {
+                party: credential.uid.clone(),
+                host: host.host_id.clone(),
+            },
+            KvAuth::User,
+            &keys,
+            soft_database_path,
+            components,
+            |auth, request| connection.call(auth, request),
+        )
+    }
+
+    /// Team variant of [`Self::resolve_user_kv_path`].
+    pub fn resolve_team_kv_path(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        team: &AuthenticatedTeamOutcome,
+        soft_database_path: &Path,
+        components: &[Vec<u8>],
+    ) -> Result<Vec<KvDirectoryProjection>> {
+        if team.verified.host() != host.host_id() {
+            return Err(Error::TeamBinding("KV team state belongs to another host"));
+        }
+        let keys = team
+            .ptks
+            .iter()
+            .map(|key| KvPrivateKeyRef {
+                role: key.role,
+                generation: key.generation,
+                seed: &key.seed,
+            })
+            .collect::<Vec<_>>();
+        let mut connection = self.kv_connection_with_material(
+            host,
+            &credential.seed,
+            &credential.certificate_chain,
+        )?;
+        self.resolve_kv_path_with_fetch(
+            host,
+            KvParty {
+                party: team.verified.team().clone(),
+                host: host.host_id.clone(),
+            },
+            KvAuth::Team(&team.view_token),
+            &keys,
+            soft_database_path,
+            components,
             |auth, request| connection.call(auth, request),
         )
     }
@@ -366,6 +447,7 @@ impl FoksClient {
             &keys,
             soft_database_path,
             KvSyncMode::Metadata,
+            KvTraversalPlan::Complete,
             |auth, request| connection.call(auth, request),
         )
     }
@@ -440,6 +522,7 @@ impl FoksClient {
             protected_store,
             adapter_parent: None,
             adapter_completion: false,
+            scope: None,
             soft_database_path: soft_database_path.to_owned(),
             connection,
         })
@@ -485,6 +568,7 @@ impl FoksClient {
             protected_store,
             adapter_parent: None,
             adapter_completion: false,
+            scope: None,
             soft_database_path: soft_database_path.to_owned(),
             connection,
         })
@@ -559,6 +643,7 @@ impl FoksClient {
             protected_store,
             adapter_parent: None,
             adapter_completion: false,
+            scope: None,
             soft_database_path: soft_database_path.to_owned(),
             connection,
         })
@@ -584,6 +669,7 @@ impl FoksClient {
             private_keys,
             soft_database_path,
             KvSyncMode::Content,
+            KvTraversalPlan::Complete,
             fetch,
         )
     }
@@ -607,6 +693,40 @@ impl FoksClient {
             private_keys,
             soft_database_path,
             KvSyncMode::Metadata,
+            KvTraversalPlan::Complete,
+            fetch,
+        )
+    }
+
+    /// Fetches, authenticates and projects only the directories named by
+    /// `components`, starting at the root. Every directory it uses passes the
+    /// same root verification, seed opening, identity, pagination, dirent and
+    /// node checks as [`Self::sync_kv_with_fetch`], and the closing cache
+    /// check cites exactly the directories the walk used. The result is the
+    /// path's projections, root first, and stops early where a component is
+    /// absent or unreadable, exactly as a complete traversal would leave it.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn resolve_kv_path_with_fetch<F>(
+        &self,
+        host: &PinnedHost,
+        party: KvParty,
+        auth: KvAuth<'_>,
+        private_keys: &[KvPrivateKeyRef<'_>],
+        soft_database_path: &Path,
+        components: &[Vec<u8>],
+        fetch: F,
+    ) -> Result<Vec<KvDirectoryProjection>>
+    where
+        F: FnMut(KvAuth<'_>, &KvRequest) -> Result<Vec<u8>>,
+    {
+        self.sync_kv_with_fetch_mode(
+            host,
+            party,
+            auth,
+            private_keys,
+            soft_database_path,
+            KvSyncMode::Metadata,
+            KvTraversalPlan::Path(components),
             fetch,
         )
     }
@@ -620,6 +740,7 @@ impl FoksClient {
         private_keys: &[KvPrivateKeyRef<'_>],
         soft_database_path: &Path,
         mode: KvSyncMode,
+        plan: KvTraversalPlan<'_>,
         mut fetch: F,
     ) -> Result<Vec<KvDirectoryProjection>>
     where
@@ -669,6 +790,9 @@ impl FoksClient {
                 // Large files stream directly into SQLite and therefore do
                 // not consume this in-memory plaintext budget.
                 let mut total_inline_content_bytes = 0usize;
+                // A path walk consumes one component per directory it visits,
+                // in order, so the number already visited names the next one.
+                let mut depth = 0usize;
                 while let Some(directory_id) = queue.pop_front() {
                     if !visited.insert(directory_id) {
                         continue;
@@ -711,6 +835,7 @@ impl FoksClient {
 
                     let mut cursor = KvListCursor::None;
                     let mut entries = Vec::new();
+                    let mut children: Vec<[u8; 16]> = Vec::new();
                     let mut entry_ids = BTreeSet::new();
                     let mut names = BTreeSet::new();
                     let mut final_page = false;
@@ -808,7 +933,7 @@ impl FoksClient {
                             match entry.value.node_type()? {
                                 KvNodeType::Directory => {
                                     let child = entry.value.object_id();
-                                    queue.push_back(child);
+                                    children.push(child);
                                 }
                                 KvNodeType::SmallFile => {
                                     let (boxed, exact) = match extended.remove(&position) {
@@ -1008,6 +1133,25 @@ impl FoksClient {
                             .cmp(&right.name)
                             .then(left.dirent_id.cmp(&right.dirent_id))
                     });
+                    match plan {
+                        KvTraversalPlan::Complete => queue.extend(children),
+                        KvTraversalPlan::Path(components) => {
+                            // Only the component named at this depth is worth
+                            // another round trip; a missing or non-directory
+                            // component leaves the walk exactly as short as a
+                            // complete traversal would leave this path.
+                            if let Some(component) = components.get(depth) {
+                                if let Some(entry) = entries
+                                    .iter()
+                                    .find(|entry| entry.name == *component)
+                                    .filter(|entry| entry.node_id[0] == KvNodeType::Directory as u8)
+                                {
+                                    queue.push_back(KvNodeId(entry.node_id).object_id());
+                                }
+                            }
+                            depth += 1;
+                        }
+                    }
                     let projection = KvDirectoryProjection {
                         host_id: host.host_id.as_bytes().to_vec(),
                         party_id: party.party.as_bytes().to_vec(),
@@ -1034,9 +1178,22 @@ impl FoksClient {
                     }
                     combined.insert(projection.directory_id, projection.clone());
                 }
-                let combined = reachable_kv_tree(root.root, combined)?;
+                // A path walk cites only the directories it used, which is
+                // exactly what its precondition may assert: the server checks
+                // every cited directory, and an uncited one is not asserted.
+                let combined = match plan {
+                    KvTraversalPlan::Complete => reachable_kv_tree(root.root, combined)?,
+                    KvTraversalPlan::Path(_) => combined,
+                };
                 let final_versions = kv_version_vector(root.version, &combined);
                 fetch(auth, &KvRequest::CacheCheck(final_versions))?;
+                if let KvTraversalPlan::Path(_) = plan {
+                    // The rest of the namespace was not observed, so the
+                    // projection keeps its rollback anchors without claiming
+                    // that the persisted tree is still complete.
+                    store.project_path_metadata(&projections)?;
+                    return Ok(projections);
+                }
                 if mode == KvSyncMode::Metadata {
                     store.project_reachable_metadata(&projections)?;
                     return Ok(projections);
@@ -1105,7 +1262,9 @@ where
                 let keys = kv_key(private_keys, generation.key.role, generation.key.generation)?;
                 let _ = keys.open_directory_seed(generation)?;
             }
-            Ok(KvFetchedNode::Directory)
+            Ok(KvFetchedNode::Directory {
+                read_role: directory.active.key.role,
+            })
         }
         (KvNodeType::File, KvNode::File(metadata)) => {
             let keys = kv_key(private_keys, metadata.key.role, metadata.key.generation)?;
@@ -1241,6 +1400,17 @@ where
 enum KvSyncMode {
     Content,
     Metadata,
+}
+
+/// Which directories one traversal visits. Both plans apply the same checks
+/// to every directory they use; they differ only in what they descend into
+/// and therefore in what their closing cache check may cite.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum KvTraversalPlan<'a> {
+    /// Every directory reachable from the root.
+    Complete,
+    /// The root, then one directory per named component, in order.
+    Path(&'a [Vec<u8>]),
 }
 
 fn validate_large_file_append(current_size: u64, chunk_size: usize) -> Result<u64> {

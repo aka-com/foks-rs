@@ -9,6 +9,8 @@ use foks_rpc::KvAuth;
 use self::rpc::KvConnection;
 use crate::{FoksClient, PinnedHost, ProtectedMutationStore};
 
+#[cfg(test)]
+mod path_tests;
 mod rpc;
 mod support;
 mod sync;
@@ -69,22 +71,50 @@ pub struct KvWriteSession<'a> {
     connection: KvConnection,
     adapter_parent: Option<[u8; 16]>,
     adapter_completion: bool,
+    scope: Option<KvPathScope>,
+}
+
+/// One path this session resolved and the directories that named it, root
+/// first. A mutation addressing the path's final directory cites exactly
+/// these directories, so a peer's change to any of them is what the server's
+/// precondition check rejects.
+struct KvPathScope {
+    components: Vec<Vec<u8>>,
+    directories: Vec<KvDirectoryProjection>,
+}
+
+impl KvPathScope {
+    /// The directory this path names, or `None` where the walk stopped short
+    /// of the last component.
+    fn parent(&self) -> Option<[u8; 16]> {
+        if self.directories.len() != self.components.len() + 1 {
+            return None;
+        }
+        self.directories
+            .last()
+            .map(|directory| directory.directory_id)
+    }
 }
 
 #[derive(Debug)]
 pub struct KvWriteResult {
     pub node_id: KvNodeId,
     pub dirent_version: u64,
-    pub tree: Vec<KvDirectoryProjection>,
+    /// The directories along the mutated path, root first, as they were
+    /// projected after the mutation. A path-scoped write never traverses the
+    /// directories outside its path, so this is not the whole namespace.
+    pub path: Vec<KvDirectoryProjection>,
 }
 
 /// Plaintext returned by an authenticated read of exactly one KV node.
 ///
 /// Large files are represented separately so callers can use
-/// [`KvFetchedChunk`] and avoid materializing the complete file.
+/// [`KvFetchedChunk`] and avoid materializing the complete file. A directory
+/// carries the read role of its active generation, which a path-scoped read
+/// cannot take from the parent projection that named it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum KvFetchedNode {
-    Directory,
+    Directory { read_role: Role },
     SmallFile(Vec<u8>),
     Symlink(Vec<u8>),
     LargeFile { size: u64 },

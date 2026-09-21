@@ -893,6 +893,17 @@ impl SoftStateStore {
         self.project_tree_impl(snapshots, &[], true, true)
     }
 
+    /// Records an authenticated traversal of the directories along one path
+    /// under the same rollback and fork checks as a complete metadata
+    /// traversal. Directories the walk did not visit are neither refreshed
+    /// nor pruned, so the party's cache is left marked incomplete.
+    pub fn project_path_metadata(
+        &mut self,
+        snapshots: &[KvDirectoryProjection],
+    ) -> Result<Acceptance> {
+        self.project_tree_impl(snapshots, &[], false, true)
+    }
+
     fn project_tree_impl(
         &mut self,
         snapshots: &[KvDirectoryProjection],

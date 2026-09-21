@@ -21,7 +21,7 @@ use super::support::{
     random_kv_node_id, read_kv_upload_chunk, read_kv_upload_chunk_with_carry,
     validate_kv_component, validate_kv_symlink,
 };
-use super::{KvWriteOptions, KvWriteResult, KvWriteSession};
+use super::{KvPathScope, KvWriteOptions, KvWriteResult, KvWriteSession};
 use crate::{now_microseconds, random_bytes, Error, MutationCoordinator, MutationDraft, Result};
 
 const KV_NAMESPACE_REQUEST_HASH_TYPE_ID: u64 = 0x4303_44d4_219a_8b1e;
@@ -97,6 +97,7 @@ impl KvWriteSession<'_> {
     }
 
     pub fn sync(&mut self) -> Result<Vec<KvDirectoryProjection>> {
+        self.scope = None;
         let auth = self.auth.borrowed();
         let connection = &mut self.connection;
         self.client.list_kv_metadata_with_fetch(
@@ -107,6 +108,70 @@ impl KvWriteSession<'_> {
             &self.soft_database_path,
             |auth, request| connection.call(auth, request),
         )
+    }
+
+    /// Authenticates only the directories named by `components`, starting at
+    /// the root, and scopes later mutations in the directory they name to
+    /// that path. The returned projections are the root's followed by one per
+    /// resolved component, so the ordinary path helpers read them exactly as
+    /// they read a complete traversal.
+    pub fn resolve_path(&mut self, components: &[Vec<u8>]) -> Result<Vec<KvDirectoryProjection>> {
+        let directories = {
+            let auth = self.auth.borrowed();
+            let connection = &mut self.connection;
+            self.client.resolve_kv_path_with_fetch(
+                &self.host,
+                self.party.clone(),
+                auth,
+                &self.private_keys,
+                &self.soft_database_path,
+                components,
+                |auth, request| connection.call(auth, request),
+            )?
+        };
+        self.scope = Some(KvPathScope {
+            components: components.to_vec(),
+            directories: directories.clone(),
+        });
+        Ok(directories)
+    }
+
+    /// The directories a mutation in `parent` may cite. A path this session
+    /// already resolved is reused rather than re-fetched: the request carries
+    /// those same versions as its precondition, so the server rejects the
+    /// reuse if a peer has changed any of them. A session that has not
+    /// resolved a path naming `parent` falls back to the complete traversal.
+    fn scoped_tree(&mut self, parent: [u8; 16]) -> Result<Vec<KvDirectoryProjection>> {
+        if let Some(scope) = &self.scope {
+            if scope.parent() == Some(parent) {
+                return Ok(scope.directories.clone());
+            }
+        }
+        self.sync()
+    }
+
+    /// Re-reads the scoped path after a rejected precondition or an accepted
+    /// mutation. A path that no longer names `parent`, and a session without
+    /// one, fall back to the complete traversal.
+    fn refresh_scope(&mut self, parent: [u8; 16]) -> Result<Vec<KvDirectoryProjection>> {
+        let Some(components) = self.scope.as_ref().map(|scope| scope.components.clone()) else {
+            return self.sync();
+        };
+        let directories = self.resolve_path(&components)?;
+        if self.scope.as_ref().and_then(KvPathScope::parent) == Some(parent) {
+            return Ok(directories);
+        }
+        self.sync()
+    }
+
+    fn refresh_or_sync(
+        &mut self,
+        scope_parent: Option<[u8; 16]>,
+    ) -> Result<Vec<KvDirectoryProjection>> {
+        match scope_parent {
+            Some(parent) => self.refresh_scope(parent),
+            None => self.sync(),
+        }
     }
 
     /// Open a bounded symlink box from an authenticated metadata projection.
@@ -180,7 +245,7 @@ impl KvWriteSession<'_> {
         options: KvWriteOptions,
     ) -> Result<KvWriteResult> {
         validate_kv_component(name.as_bytes())?;
-        let tree = self.sync()?;
+        let tree = self.scoped_tree(parent)?;
         let (first, mut carry, first_is_final) = read_kv_upload_chunk(reader)?;
         let first_len = first.len();
         let node_type = if first_is_final && first.len() <= Self::SMALL_FILE_BYTES {
@@ -287,7 +352,7 @@ impl KvWriteSession<'_> {
     ) -> Result<KvWriteResult> {
         validate_kv_component(name.as_bytes())?;
         validate_kv_symlink(target.as_bytes())?;
-        let tree = self.sync()?;
+        let tree = self.scoped_tree(parent)?;
         self.validate_dirent_precondition(
             &tree,
             parent,
@@ -314,7 +379,7 @@ impl KvWriteSession<'_> {
         options: KvWriteOptions,
     ) -> Result<KvWriteResult> {
         validate_kv_component(name.as_bytes())?;
-        let tree = self.sync()?;
+        let tree = self.scoped_tree(parent)?;
         self.validate_dirent_precondition(
             &tree,
             parent,
@@ -344,7 +409,7 @@ impl KvWriteSession<'_> {
                 Err(error)
                     if is_kv_stale_cache(&error) && attempt + 1 < Self::MAX_NAMESPACE_ATTEMPTS =>
                 {
-                    current_tree = self.sync()?;
+                    current_tree = self.refresh_scope(parent)?;
                 }
                 Err(error) => return Err(error),
             }
@@ -370,7 +435,7 @@ impl KvWriteSession<'_> {
         recursive: bool,
     ) -> Result<Vec<KvDirectoryProjection>> {
         validate_kv_component(name.as_bytes())?;
-        let tree = self.sync()?;
+        let tree = self.scoped_tree(parent)?;
         let projection = tree
             .iter()
             .find(|directory| directory.directory_id == parent)
@@ -393,7 +458,7 @@ impl KvWriteSession<'_> {
             overwrite: true,
             expected_version,
         };
-        let (_, tree) = self.mutate_namespace(tree, |session, tree| {
+        let (_, tree) = self.mutate_namespace(tree, Some(parent), |session, tree| {
             Ok(vec![session.prepare_dirent(
                 tree,
                 parent,
@@ -440,8 +505,10 @@ impl KvWriteSession<'_> {
         if source_parent == destination_parent && source_name == destination_name {
             return Err(Error::KvRequest("source and destination are identical"));
         }
+        // A move reads the whole source subtree to reject a cycle, so it
+        // keeps the complete traversal rather than a path walk.
         let tree = self.sync()?;
-        let (dirents, tree) = self.mutate_namespace(tree, |session, tree| {
+        let (dirents, tree) = self.mutate_namespace(tree, None, |session, tree| {
             let source_directory = tree
                 .iter()
                 .find(|directory| directory.directory_id == source_parent)
@@ -490,7 +557,7 @@ impl KvWriteSession<'_> {
         Ok(KvWriteResult {
             node_id: destination.value,
             dirent_version: destination.version,
-            tree,
+            path: tree,
         })
     }
 
@@ -534,7 +601,7 @@ impl KvWriteSession<'_> {
         node_id: KvNodeId,
         options: KvWriteOptions,
     ) -> Result<KvWriteResult> {
-        let (dirents, tree) = self.mutate_namespace(tree, |session, tree| {
+        let (dirents, tree) = self.mutate_namespace(tree, Some(parent), |session, tree| {
             Ok(vec![session.prepare_dirent(
                 tree, parent, name, node_id, options, false,
             )?])
@@ -542,13 +609,18 @@ impl KvWriteSession<'_> {
         Ok(KvWriteResult {
             node_id,
             dirent_version: dirents[0].version,
-            tree,
+            path: tree,
         })
     }
 
+    /// `scope_parent` names the one directory every prepared dirent belongs
+    /// to, so a rejected precondition and the post-acceptance projection can
+    /// re-read that path instead of the whole namespace. A mutation spanning
+    /// two directories passes `None` and keeps the complete traversal.
     fn mutate_namespace<F>(
         &mut self,
         mut tree: Vec<KvDirectoryProjection>,
+        scope_parent: Option<[u8; 16]>,
         prepare: F,
     ) -> Result<(Vec<KvDirent>, Vec<KvDirectoryProjection>)>
     where
@@ -569,7 +641,7 @@ impl KvWriteSession<'_> {
                     MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
                         .rejected(&operation.operation_id)?;
                     if attempt + 1 < Self::MAX_NAMESPACE_ATTEMPTS {
-                        tree = self.sync()?;
+                        tree = self.refresh_or_sync(scope_parent)?;
                         continue;
                     }
                     return Err(error);
@@ -581,12 +653,18 @@ impl KvWriteSession<'_> {
                 }
                 MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
                     .submission_unknown(&operation.operation_id)?;
-                return match self.reconcile_namespace_mutation(&operation, &dirents, false) {
+                return match self.reconcile_namespace_mutation(
+                    &operation,
+                    &dirents,
+                    false,
+                    scope_parent,
+                ) {
                     Ok(tree) => Ok((dirents, tree)),
                     Err(_) => Err(error),
                 };
             }
-            let projected = self.reconcile_namespace_mutation(&operation, &dirents, true)?;
+            let projected =
+                self.reconcile_namespace_mutation(&operation, &dirents, true, scope_parent)?;
             return Ok((dirents, projected));
         }
         Err(Error::KvResponse("KV namespace retry limit exhausted"))
@@ -651,7 +729,7 @@ impl KvWriteSession<'_> {
                 return Err(Error::OperationBinding("KV namespace mutation is terminal"));
             }
         }
-        self.reconcile_namespace_mutation(&operation, &dirents, false)
+        self.reconcile_namespace_mutation(&operation, &dirents, false, None)
     }
 
     /// Recovers creation of a party's first root. As with namespace writes,
@@ -746,7 +824,9 @@ impl KvWriteSession<'_> {
         operation: &MutationOperation,
         root: &KvRoot,
     ) -> Result<Vec<KvDirectoryProjection>> {
-        let tree = self.sync()?;
+        // Only the root's own binding is at stake here, and a namespace whose
+        // root was just created has nothing else to traverse.
+        let tree = self.resolve_path(&[])?;
         let projected = tree.first().ok_or(Error::TransitionNotObserved(
             "KV root was not reflected by synchronization",
         ))?;
@@ -807,11 +887,15 @@ impl KvWriteSession<'_> {
             )
     }
 
+    /// Re-reads the mutated path, or the whole namespace where the mutation
+    /// spans more than one directory, and refuses to finalize until the
+    /// authenticated projection carries every prepared dirent.
     fn reconcile_namespace_mutation(
         &mut self,
         operation: &MutationOperation,
         dirents: &[KvDirent],
         acknowledged: bool,
+        scope_parent: Option<[u8; 16]>,
     ) -> Result<Vec<KvDirectoryProjection>> {
         if !acknowledged
             && dirents.iter().all(|entry| {
@@ -836,7 +920,7 @@ impl KvWriteSession<'_> {
             self.party.party.as_bytes(),
             &affected,
         )?;
-        let tree = self.sync()?;
+        let tree = self.refresh_or_sync(scope_parent)?;
         for expected in dirents {
             let projected = tree
                 .iter()

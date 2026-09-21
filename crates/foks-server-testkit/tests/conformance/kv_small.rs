@@ -405,3 +405,250 @@ fn directory_listing_crosses_the_v019_page_boundary() {
     assert!(names.contains(b"entry-000".as_slice()));
     assert!(names.contains(b"entry-100".as_slice()));
 }
+
+/// The server accepts a precondition that names only the directories one path
+/// walked. A peer's change to a directory outside that path is therefore not
+/// asserted by the write and does not reject it, while the write still sees
+/// its own parent at the version it read.
+#[test]
+pub(crate) fn a_path_scoped_write_cites_only_the_directories_its_path_walked() {
+    let fixture = Fixture::start("kv-path-scope");
+    let created = fixture
+        .client
+        .create_account(fixture.host(), &TestAccountSpec::new("kvpathuser", 0x3a))
+        .unwrap();
+    let root = created.kv_projection[0].root_directory_id;
+    let mut protected = fixture.client.open_protected_store().unwrap();
+    let mut session = fixture
+        .client
+        .foks()
+        .user_kv_write_session(
+            fixture.host(),
+            &created.credential,
+            &created.authenticated.verified,
+            &created.authenticated.puks,
+            fixture.client.soft_state_path(),
+            &mut protected,
+        )
+        .unwrap();
+    let alpha = session
+        .mkdir(root, "alpha", options())
+        .unwrap()
+        .node_id
+        .object_id();
+    let beta = session
+        .mkdir(alpha, "beta", options())
+        .unwrap()
+        .node_id
+        .object_id();
+    let bystander = session
+        .mkdir(root, "bystander", options())
+        .unwrap()
+        .node_id
+        .object_id();
+    session
+        .put_file(
+            bystander,
+            "moving.txt",
+            &mut Cursor::new(b"first"),
+            options(),
+        )
+        .unwrap();
+
+    let resolved = session
+        .resolve_path(&[b"alpha".to_vec(), b"beta".to_vec()])
+        .unwrap();
+    assert_eq!(resolved.len(), 3, "only the path's directories are read");
+    assert_eq!(resolved[0].directory_id, root);
+    assert_eq!(resolved[1].directory_id, alpha);
+    assert_eq!(resolved[2].directory_id, beta);
+
+    // A second device changes a dirent the complete traversal would have
+    // cited, in a directory this path never walked.
+    let peer =
+        foks_server_testkit::TestClient::new(&fixture.environment, "kv-path-scope-peer").unwrap();
+    let peer_probe = peer.probe_and_pin().unwrap();
+    let peer_authenticated = peer
+        .foks()
+        .authenticate_and_pin(&peer_probe.pinned, &created.credential)
+        .unwrap();
+    let mut peer_protected = peer.open_protected_store().unwrap();
+    let mut peer_session = peer
+        .foks()
+        .user_kv_write_session(
+            &peer_probe.pinned,
+            &created.credential,
+            &peer_authenticated.verified,
+            &peer_authenticated.puks,
+            peer.soft_state_path(),
+            &mut peer_protected,
+        )
+        .unwrap();
+    peer_session
+        .put_file(
+            bystander,
+            "moving.txt",
+            &mut Cursor::new(b"second"),
+            KvWriteOptions {
+                overwrite: true,
+                expected_version: Some(1),
+                ..options()
+            },
+        )
+        .unwrap();
+
+    let written = session
+        .put_file(beta, "scoped.txt", &mut Cursor::new(b"scoped"), options())
+        .unwrap();
+    assert_eq!(written.dirent_version, 1);
+    assert_eq!(
+        written.path.len(),
+        3,
+        "the mutation projected its own path and not the namespace"
+    );
+    let entry = written
+        .path
+        .last()
+        .unwrap()
+        .entries
+        .iter()
+        .find(|entry| entry.name == b"scoped.txt")
+        .expect("the written entry is projected in its parent");
+    assert_eq!(entry.node_id, written.node_id.0);
+
+    // The write is durable and the bystander kept the peer's value.
+    let tree = session.sync().unwrap();
+    let names = |directory: [u8; 16]| {
+        tree.iter()
+            .find(|projection| projection.directory_id == directory)
+            .unwrap()
+            .entries
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    assert!(names(beta).contains(b"scoped.txt".as_slice()));
+    assert!(names(bystander).contains(b"moving.txt".as_slice()));
+    let moved = tree
+        .iter()
+        .find(|projection| projection.directory_id == bystander)
+        .unwrap()
+        .entries
+        .iter()
+        .find(|entry| entry.name == b"moving.txt")
+        .unwrap();
+    assert_eq!(moved.version, 2, "the peer's change was applied");
+}
+
+/// Counts the KV requests a write costs in a fifty-directory store, with and
+/// without a resolved path. An unscoped session keeps the complete traversal,
+/// so one run measures both shapes against the same server.
+#[test]
+pub(crate) fn a_resolved_path_costs_a_fraction_of_a_complete_traversal() {
+    const WIDTH: usize = 50;
+    let fixture = Fixture::start("kv-path-cost");
+    let created = fixture
+        .client
+        .create_account(fixture.host(), &TestAccountSpec::new("kvcostuser", 0x3b))
+        .unwrap();
+    let root = created.kv_projection[0].root_directory_id;
+    let mut protected = fixture.client.open_protected_store().unwrap();
+    let mut session = fixture
+        .client
+        .foks()
+        .user_kv_write_session(
+            fixture.host(),
+            &created.credential,
+            &created.authenticated.verified,
+            &created.authenticated.puks,
+            fixture.client.soft_state_path(),
+            &mut protected,
+        )
+        .unwrap();
+    // Scope the setup too: fifty complete traversals of a growing store would
+    // exhaust the connection's request budget before the measurement starts.
+    for index in 0..WIDTH {
+        session.resolve_path(&[]).unwrap();
+        session
+            .mkdir(root, &format!("dir-{index:03}"), options())
+            .unwrap();
+    }
+    session.resolve_path(&[]).unwrap();
+    let alpha = session
+        .mkdir(root, "alpha", options())
+        .unwrap()
+        .node_id
+        .object_id();
+    session.resolve_path(&[b"alpha".to_vec()]).unwrap();
+    let beta = session
+        .mkdir(alpha, "beta", options())
+        .unwrap()
+        .node_id
+        .object_id();
+
+    // A session with no resolved path keeps the complete traversal, so this
+    // measures the shape every write had before paths were resolved.
+    session.sync().unwrap();
+    let before_unscoped = fixture.server.metrics().requests_started;
+    session
+        .put_file(
+            beta,
+            "unscoped.txt",
+            &mut Cursor::new(b"unscoped"),
+            options(),
+        )
+        .unwrap();
+    let unscoped = fixture.server.metrics().requests_started - before_unscoped;
+
+    let before_scoped = fixture.server.metrics().requests_started;
+    session
+        .resolve_path(&[b"alpha".to_vec(), b"beta".to_vec()])
+        .unwrap();
+    session
+        .put_file(beta, "scoped.txt", &mut Cursor::new(b"scoped"), options())
+        .unwrap();
+    let scoped = fixture.server.metrics().requests_started - before_scoped;
+
+    // The sequence a mkdir-p write follows: resolve the prefix that names
+    // each missing directory, create it, then resolve the finished path.
+    let before_created = fixture.server.metrics().requests_started;
+    session.resolve_path(&[]).unwrap();
+    let gamma = session
+        .mkdir(root, "gamma", options())
+        .unwrap()
+        .node_id
+        .object_id();
+    session.resolve_path(&[b"gamma".to_vec()]).unwrap();
+    let delta = session
+        .mkdir(gamma, "delta", options())
+        .unwrap()
+        .node_id
+        .object_id();
+    session
+        .resolve_path(&[b"gamma".to_vec(), b"delta".to_vec()])
+        .unwrap();
+    session
+        .put_file(
+            delta,
+            "created.txt",
+            &mut Cursor::new(b"created"),
+            options(),
+        )
+        .unwrap();
+    let created = fixture.server.metrics().requests_started - before_created;
+
+    println!(
+        "KV requests: scoped-write={scoped} unscoped-write={unscoped} \
+         two-parents-created={created}"
+    );
+    assert!(
+        scoped * 4 < unscoped,
+        "a path-scoped write should cost a fraction of a complete traversal: \
+         scoped={scoped} unscoped={unscoped}"
+    );
+    assert!(
+        created < unscoped * 2,
+        "creating two parents and writing should stay near one complete traversal: \
+         created={created} unscoped={unscoped}"
+    );
+}

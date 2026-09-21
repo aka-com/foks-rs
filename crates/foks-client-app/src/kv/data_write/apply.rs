@@ -47,7 +47,7 @@ pub(super) fn apply_write<R: Read>(
         }
         *remote_possible = true;
     }
-    let (parent, tree) = resolve_write_parent(
+    let (parent, tree) = resolve_write_parent_in_tree(
         session,
         tree,
         &parent_path,
