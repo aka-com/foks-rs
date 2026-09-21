@@ -234,7 +234,11 @@ function failureSentence(
   lastSuccessAt: number | undefined,
   paused: boolean,
 ): string {
-  const cause = messages.join('; ').replace(/\.+$/, '');
+  const causes = messages
+    .flatMap((message) => message.split(/;\s+/))
+    .map((message) => message.trim().replace(/\.+$/, ''))
+    .filter(Boolean)
+    .map((message) => `${message}.`);
   const shown =
     lastSuccessAt === undefined
       ? 'No successful refresh yet.'
@@ -242,7 +246,13 @@ function failureSentence(
   const next = paused
     ? 'Automatic refresh is paused; use Refresh to retry.'
     : 'Retrying automatically.';
-  return `${cause}. ${shown} ${next}`;
+  const last = causes.pop() ?? '';
+  return [...causes, `${last} ${shown} ${next}`.trim()].join('\n');
+}
+
+/** Keep dense device rows to the actionable first sentence of an error. */
+function firstSentence(message: string): string {
+  return message.trim().match(/^.*?[.!?](?=\s|$)/)?.[0] ?? message.trim();
 }
 
 /** Format one catalog observation for copied diagnostics. */
@@ -332,7 +342,7 @@ export function summarizeSync(
       const detail = device.refreshing
         ? `Loading device lists (${device.ready} of ${device.total})`
         : device.failed
-          ? `${device.error ?? 'Some device lists are unavailable'}${device.lastSuccessAt === undefined ? '' : ` · Last updated ${clockTime(device.lastSuccessAt)}`}`
+          ? `${device.error ? firstSentence(device.error) : 'Some device lists are unavailable'}${device.lastSuccessAt === undefined ? '' : ` · Last updated ${clockTime(device.lastSuccessAt)}`}`
           : device.unavailable
             ? `Device access unavailable for ${device.unavailable} of ${device.total} accounts`
             : device.total

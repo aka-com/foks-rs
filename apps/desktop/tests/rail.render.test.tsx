@@ -172,6 +172,7 @@ test('Chat displays total unread and the avatar displays an attention indicator'
     settingsDot.getAttribute('aria-label'),
     '3 notices need attention',
   );
+  assert.equal(settingsDot.textContent, '');
   assert.equal(
     document.querySelectorAll('.rail-tabs .rail-tail.dot').length,
     1,
@@ -390,10 +391,7 @@ test('setup omits Restart until leaving the first step', async () => {
       onCancel: () => {},
     }),
   );
-  assert.equal(
-    view.queryByRole('button', { name: 'Restart setup' }),
-    null,
-  );
+  assert.equal(view.queryByRole('button', { name: 'Restart setup' }), null);
   view.rerender(
     createElement(SetupSidebar, {
       checkpoint: initialFirstRun('own', 'address'),

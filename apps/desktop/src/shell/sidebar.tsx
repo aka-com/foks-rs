@@ -7,8 +7,8 @@
  * There is no title bar above the strip. The rail does not enumerate stores;
  * Files and Teams list them on their own pages. Control-Tab cycles through the
  * five tabs. Every tab's indicator sits in one trailing slot: Chat and Teams
- * carry a count pill, Devices and Settings an alert dot beside whatever number
- * is known, while Chat loading appears in the header Refresh control.
+ * carry a count pill, while Devices and Settings use plain alert dots. Chat
+ * loading appears in the header Refresh control.
  * The rail defaults to 150px open and 56px collapsed. Its expanded width is
  * resizable and persisted; it never expands on hover or focus.
  */
@@ -475,7 +475,7 @@ export function AccountHeader({
                                   });
                                 }}
                               >
-                                {checkIn ? 'Check in' : 'Server settings'}
+                                {checkIn ? 'Check in' : 'Settings'}
                               </button>
                             </span>
                           </div>
@@ -699,11 +699,7 @@ export function Sidebar({
           : undefined,
       ].filter((reason): reason is string => Boolean(reason));
       return reasons.length ? (
-        <RailTail kind="dot warn" description={reasons.join('; ')}>
-          {/* The dot's own number, where one exists: the notices the Account
-              section lists. A server's lapsed check-in has none. */}
-          {attention > 0 ? <span className="num">{attention}</span> : undefined}
-        </RailTail>
+        <RailTail kind="dot warn" description={reasons.join('; ')} />
       ) : undefined;
     }
     return undefined;

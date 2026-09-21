@@ -2077,8 +2077,15 @@ test('loading and failed channel lists do not claim No channels', async () => {
     });
     assert.match(failure.textContent ?? '', /Channels could not be loaded/);
     assert.equal(failure.getAttribute('title'), 'Channel list failed');
+    assert.equal(failure.querySelector('.ic'), null);
+    const retry = ui
+      .within(failure as HTMLElement)
+      .getByRole('button', { name: 'Retry' });
+    ui.fireEvent.click(retry);
     assert.ok(
-      ui.within(failure as HTMLElement).getByRole('button', { name: 'Retry' }),
+      ui.screen.queryByRole('button', { name: 'Retrying…' }) ||
+        /Loading channels/.test(head('Household').textContent ?? ''),
+      'Retry immediately reports that another channel load started',
     );
     assert.ok(head('Household').querySelector('.chat-team-warn'));
     assert.equal(head('Household').querySelector('.chat-unread'), null);
@@ -2274,12 +2281,12 @@ test('sidebar context menus distinguish background, teams, and channels', async 
   assert.equal(ui.screen.queryByRole('menu'), null);
   assert.equal(journal.at(-1)?.kind, 'chat');
   ui.fireEvent.contextMenu(channel, { clientX: 40, clientY: 50 });
-  ui.fireEvent.click(
-    ui.screen.getByRole('menuitem', { name: 'Channel info' }),
-  );
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Channel info' }));
   assert.equal(ui.screen.queryByRole('menu'), null);
   assert.equal(journal.at(-1)?.kind, 'chat');
-  assert.ok(await ui.screen.findByRole('complementary', { name: 'Channel info' }));
+  assert.ok(
+    await ui.screen.findByRole('complementary', { name: 'Channel info' }),
+  );
   ui.fireEvent.contextMenu(document.querySelector('.chat-inbox-scroll')!);
   assert.ok(ui.screen.getByRole('menuitem', { name: 'Create channel' }));
   ui.fireEvent.keyDown(document, { key: 'Escape' });

@@ -14,7 +14,7 @@
  * from the window header.
  */
 
-import { useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Icon, MenuItem, SectionLabel } from '../components';
 import { ContextMenu, Menu } from '/kit/overlay-primitives';
@@ -672,6 +672,17 @@ function TeamHeading({
   /** Reloads the channel list for this team. */
   onRetry: () => void;
 }): ReactNode {
+  const [retrying, setRetrying] = useState(false);
+  const retryFeedback = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  useEffect(
+    () => () => {
+      if (retryFeedback.current !== undefined)
+        clearTimeout(retryFeedback.current);
+    },
+    [],
+  );
   // A heading's own count is normally the sum of the counts already drawn
   // beside its channels, so only what the channels cannot say is drawn here:
   // that the team cannot be reached, that its count is degraded, that it is
@@ -803,7 +814,6 @@ function TeamHeading({
                   : row.status
               }
             >
-              <Icon name="alert" size={14} />
               {/* The same sentence the row's warning glyph is labelled
                   with, so the two do not name the failure differently. */}
               <span className="n">
@@ -818,9 +828,20 @@ function TeamHeading({
                 <button
                   type="button"
                   className="chat-channel-retry"
-                  onClick={onRetry}
+                  disabled={retrying}
+                  aria-live="polite"
+                  onClick={() => {
+                    setRetrying(true);
+                    onRetry();
+                    if (retryFeedback.current !== undefined)
+                      clearTimeout(retryFeedback.current);
+                    retryFeedback.current = setTimeout(
+                      () => setRetrying(false),
+                      1_000,
+                    );
+                  }}
                 >
-                  Retry
+                  {retrying ? 'Retrying…' : 'Retry'}
                 </button>
               )}
             </div>

@@ -242,6 +242,38 @@ test('the refresh summary does not call a failed observation a successful refres
   reconciliation.dispose();
 });
 
+test('independent refresh failures are displayed on separate lines', () => {
+  const profile = FIXTURE.servers[0].id;
+  const snapshot = {
+    ...FIXTURE,
+    catalogFreshness: {
+      stores: {},
+      profiles: {
+        [profile]: {
+          refreshing: false,
+          lastAttemptAt: 20,
+          lastSuccessAt: 10,
+          error: {
+            ...FAILURE,
+            message:
+              'Could not reach the server. Check the address and port, and that the server is running.; Profile admission deadline exceeded; operation did not start.',
+          },
+        },
+      },
+    },
+  };
+  const reconciliation = service(snapshot);
+  const message = summarizeSync(snapshot, reconciliation).servers.find(
+    (server) => server.id === profile,
+  )?.message;
+  assert.deepEqual(message?.split('\n'), [
+    'Could not reach the server. Check the address and port, and that the server is running.',
+    'Profile admission deadline exceeded.',
+    `operation did not start. Showing data from ${new Date(10_000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. Retrying automatically.`,
+  ]);
+  reconciliation.dispose();
+});
+
 test('whole-catalog failures have one root observation without marking healthy servers failed', () => {
   const previous = {
     ...FIXTURE,

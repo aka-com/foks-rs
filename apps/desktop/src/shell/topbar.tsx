@@ -394,7 +394,9 @@ function SyncControls({
         {face.label === 'Synced' ? (
           <span className="dot ok" aria-hidden="true" />
         ) : null}
-        <span className="t">{face.label}</span>
+        {face.label === 'Refresh failed' ? null : (
+          <span className="t">{face.label}</span>
+        )}
       </button>
       {open ? (
         <SyncPopover
@@ -621,11 +623,7 @@ export function Topbar({
         />
       ) : null}
       {tab === 'files' && onNew ? (
-        <NewItemButton
-          onNew={onNew}
-          reason={newBlocked}
-          disabled={blocked}
-        />
+        <NewItemButton onNew={onNew} reason={newBlocked} disabled={blocked} />
       ) : noChatTeams ? (
         // Chat starts in a team: with none, the header's own action is the
         // team, created on the Teams page where that sheet lives.

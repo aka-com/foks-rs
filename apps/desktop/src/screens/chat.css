@@ -178,7 +178,7 @@
 .chat-team-warn {
   flex: none;
   display: inline-flex;
-  color: var(--danger-ink);
+  color: var(--danger-text);
 }
 .chat-nochat-label {
   border-top: 1px solid var(--line-soft);
@@ -292,7 +292,7 @@
   height: auto;
   min-height: 30px;
   gap: 6px;
-  padding: 5px 8px 5px 36px;
+  padding: 5px 8px;
   color: var(--danger-text);
   cursor: default;
 }
@@ -318,6 +318,11 @@
 }
 .chat-channel-retry:hover {
   text-decoration: underline;
+}
+.chat-channel-retry[disabled] {
+  opacity: 0.65;
+  cursor: default;
+  text-decoration: none;
 }
 /* Same unread color used everywhere. */
 .chat-unread {

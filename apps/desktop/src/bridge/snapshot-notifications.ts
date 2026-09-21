@@ -98,5 +98,20 @@ export function notificationsOf(
       action: failure.error.retryable ? 'Retry' : 'Inspect',
     });
   }
-  return notes;
+  // One failed store operation can surface through several catalog scopes.
+  // Collapse only exact duplicate notices; distinct causes and recovery
+  // actions remain visible independently.
+  const seen = new Set<string>();
+  return notes.filter((note) => {
+    const key = JSON.stringify([
+      note.profile,
+      note.severity,
+      note.title,
+      note.detail,
+      note.action,
+    ]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
