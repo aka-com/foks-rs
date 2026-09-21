@@ -17,6 +17,13 @@ export const tauriBridge: Bridge = {
   ...serverCommands,
   ...vaultCommands,
   ...yubiCommands,
+  // This method owns its profile admission: it is the one bridge method that
+  // queues itself, because its callers issue several invitation reads at
+  // once and the agent admits one per profile. A caller must not queue it
+  // again: the outer entry would hold the profile's slot while awaiting an
+  // entry that cannot start until the slot is released, and the inner one
+  // would expire at the admission deadline instead of running. The test
+  // `profile-queue-ownership.test.ts` holds this contract.
   invitation: (profile, accountAlias, action, pin) =>
     enqueueProfileWork(tauriBridge, profile, () =>
       ([
