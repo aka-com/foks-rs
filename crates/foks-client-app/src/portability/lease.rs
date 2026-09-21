@@ -129,6 +129,11 @@ pub struct ClientStateMaintenanceGuard {
     _reservations: Vec<File>,
     namespace: Option<(String, File)>,
     local_locks: Vec<File>,
+    /// Digests of files already hashed under this guard. The guard's exclusive
+    /// path reservation and local lock files are what make reuse meaningful:
+    /// they hold for the guard's whole lifetime, so no cooperating writer can
+    /// touch the reserved state while an entry is held.
+    pub(super) artifacts: super::files::ArtifactCache,
     pub(super) relocation_nonce: Option<[u8; 32]>,
     pub(super) import_nonce: Option<[u8; 32]>,
     pub(super) import_marker_digest: Option<[u8; 32]>,
@@ -158,6 +163,7 @@ impl ClientStateMaintenanceGuard {
             _reservations: reservations,
             namespace: None,
             local_locks: Vec::new(),
+            artifacts: super::files::ArtifactCache::default(),
             relocation_nonce: None,
             import_nonce: None,
             import_marker_digest: None,

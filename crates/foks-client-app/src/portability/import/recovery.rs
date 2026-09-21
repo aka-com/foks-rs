@@ -145,6 +145,14 @@ pub(super) fn finish(
         hook("after-import-rename")?;
     }
     verify_installed(&identity)?;
+    // Same reasoning as the relocation rename: the destination is proven to be
+    // the staging directory's own inode and the staging path is gone, so the
+    // digests already taken under the staging paths describe the files now at
+    // the destination paths. They stay keyed on the content identity each was
+    // hashed at, so any file that did move is still re-read.
+    guard
+        .artifacts
+        .rebase(&identity.staging, &identity.destination);
     sync_parent(&identity, hook)?;
     if intent.marker.phase == Phase::Prepared {
         transition(guard, &mut intent, Phase::FilesInstalled, hook)?;

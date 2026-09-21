@@ -46,9 +46,16 @@ impl super::inventory::StateSnapshot {
         guard: &mut super::ClientStateMaintenanceGuard,
     ) -> Result<Self> {
         guard.require_path(&self.root)?;
+        // Re-verification goes through the guard's digest cache, so a file
+        // whose content identity has not moved since the snapshot hashed it is
+        // re-checked from its recorded metadata instead of re-read in full. A
+        // file that did move is hashed again and fails this comparison.
         for expected in &self.artifacts {
-            if super::files::artifact(&self.root, &self.root.join(&expected.path), expected.soft)?
-                != *expected
+            if guard.artifacts.artifact(
+                &self.root,
+                &self.root.join(&expected.path),
+                expected.soft,
+            )? != *expected
             {
                 return Err(Error::StatePathChanged);
             }

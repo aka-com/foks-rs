@@ -459,6 +459,15 @@ fn finish(
         hook("after-rename")?;
     }
     verify_destination_identity(&intent)?;
+    // The destination is now proven to be the same directory inode that was
+    // inspected at the source, with nothing left at the source path. Carry the
+    // digests over to the new paths. Each entry keeps the content identity it
+    // was hashed at, so the inspection below still stats every file and still
+    // re-reads any whose identity moved; what it skips is re-hashing a
+    // same-filesystem rename that did not touch one byte.
+    guard
+        .artifacts
+        .rebase(&intent.identity.source, &intent.identity.destination);
     for path in [&intent.identity.source, &intent.identity.destination] {
         hook("before-parent-sync")?;
         File::open(parent(path)?)?.sync_all()?;

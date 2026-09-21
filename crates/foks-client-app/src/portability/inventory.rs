@@ -12,6 +12,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
+/// How many inspected hard-state databases the reservation pass keeps open for
+/// the inspection pass to reuse. Each retained handle is one more descriptor
+/// held alongside the two or three lock files the same loop already reserves
+/// per profile, and a snapshot admits up to 256 profiles, so the reuse is
+/// capped well below any process descriptor limit; past the cap the inspection
+/// pass simply reopens.
+const REUSED_DATABASE_HANDLES: usize = 16;
+
 pub(super) struct ProfileSnapshot {
     pub profile: Profile,
     pub trust_digest: Option<String>,
@@ -132,6 +140,8 @@ impl ClientStateMaintenanceGuard {
             return Err(Error::InvalidConfig("snapshot profile limit exceeded"));
         }
         // Reserve every initialized profile before reading the native manifest.
+        let mut reserved_hard: BTreeMap<String, (files::ContentIdentity, HardStateStore)> =
+            BTreeMap::new();
         for name in configured.keys() {
             let directory = root.join("profiles").join(name);
             if directory.exists() {
@@ -140,9 +150,9 @@ impl ClientStateMaintenanceGuard {
                 self.reserve_local_lock(&directory.join(".scheduler-run.lock"))?;
                 let hard = directory.join("hard.sqlite3");
                 if hard.exists() {
-                    let id = HardStateStore::inspect_existing(&hard)?
-                        .metadata()?
-                        .database_id;
+                    let identity = files::ContentIdentity::of(&files::regular(&hard)?);
+                    let store = HardStateStore::inspect_existing(&hard)?;
+                    let id = store.metadata()?.database_id;
                     let locks = root.join(".database-operation-locks");
                     if locks.exists() {
                         files::private_directory(&locks)?;
@@ -150,6 +160,9 @@ impl ClientStateMaintenanceGuard {
                         crate::prepare_private_directory(&locks)?;
                     }
                     self.reserve_local_lock(&locks.join(format!("{}.lock", crate::hex(&id))))?;
+                    if reserved_hard.len() < REUSED_DATABASE_HANDLES {
+                        reserved_hard.insert(name.clone(), (identity, store));
+                    }
                 }
             }
         }
@@ -208,11 +221,24 @@ impl ClientStateMaintenanceGuard {
                 blockers: Vec::new(),
             };
             if paths.hard_database.exists() {
-                snapshot.validated_files.insert(
-                    paths.hard_database.clone(),
-                    files::regular(&paths.hard_database)?,
-                );
-                let hard = HardStateStore::inspect_existing(&paths.hard_database)?;
+                let metadata = files::regular(&paths.hard_database)?;
+                // The reservation pass above already opened and verified this
+                // database, to learn which operation lock to reserve. Reuse that
+                // connection rather than repeating its integrity, foreign-key
+                // and schema verification, but only while the file's content
+                // identity is the one it was opened at; otherwise reopen, which
+                // re-runs every check against the file as it is now.
+                let hard = match reserved_hard.remove(&name) {
+                    Some((identity, store))
+                        if identity == files::ContentIdentity::of(&metadata) =>
+                    {
+                        store
+                    }
+                    _ => HardStateStore::inspect_existing(&paths.hard_database)?,
+                };
+                snapshot
+                    .validated_files
+                    .insert(paths.hard_database.clone(), metadata);
                 let checkpoint = crate::registry::checkpoint_for_store(&p.profile, &hard)?;
                 if let Some(key) = super::readiness::validate(
                     &name,
@@ -359,7 +385,7 @@ impl ClientStateMaintenanceGuard {
                     .insert(path.clone(), files::regular(&path)?);
             }
         }
-        snapshot.walk()?;
+        snapshot.walk(&mut self.artifacts)?;
         if DirectoryIdentity::read(root)? != snapshot.identity {
             return Err(Error::StatePathChanged);
         }
@@ -367,7 +393,7 @@ impl ClientStateMaintenanceGuard {
     }
 }
 impl StateSnapshot {
-    fn add(&mut self, path: &Path, soft: bool) -> Result<()> {
+    fn add(&mut self, cache: &mut files::ArtifactCache, path: &Path, soft: bool) -> Result<()> {
         if self.artifacts.len() >= files::MAX_ENTRIES {
             return Err(Error::InvalidConfig("snapshot entry limit exceeded"));
         }
@@ -378,7 +404,7 @@ impl StateSnapshot {
         } else if path.parent() != Some(self.root.join("trust").as_path()) {
             return Err(Error::StatePathChanged);
         }
-        let artifact = files::artifact(&self.root, path, soft)?;
+        let artifact = cache.artifact(&self.root, path, soft)?;
         let total = self
             .artifacts
             .iter()
@@ -390,17 +416,17 @@ impl StateSnapshot {
         self.artifacts.push(artifact);
         Ok(())
     }
-    fn walk(&mut self) -> Result<()> {
+    fn walk(&mut self, cache: &mut files::ArtifactCache) -> Result<()> {
         for (name, path) in files::entries(&self.root)? {
             match name.as_str() {
-                "client-state.toml" | "profiles.toml" => self.add(&path, false)?,
-                "profiles" => self.walk_profiles(&path)?,
+                "client-state.toml" | "profiles.toml" => self.add(cache, &path, false)?,
+                "profiles" => self.walk_profiles(cache, &path)?,
                 "chat-intents" => {
                     for (name, path) in files::entries(&path)? {
                         if name != "state.fks" {
                             return Err(Error::StatePathChanged);
                         }
-                        self.add(&path, false)?;
+                        self.add(cache, &path, false)?;
                     }
                 }
                 ".chat-intents.lock" => {
@@ -408,7 +434,7 @@ impl StateSnapshot {
                 }
                 ".state-import-v1" => {
                     if self.allowed_import_marker
-                        != Some(files::artifact(&self.root, &path, false)?.sha256)
+                        != Some(cache.artifact(&self.root, &path, false)?.sha256)
                     {
                         return Err(Error::StateRecoveryRequired);
                     }
@@ -430,7 +456,7 @@ impl StateSnapshot {
                         // profile removal or an interrupted normalization. They
                         // grant no authority until a profile references them.
                         self.trust.insert(digest.into(), certificate);
-                        self.add(&path, false)?;
+                        self.add(cache, &path, false)?;
                     }
                 }
                 ".database-operation-locks" => {
@@ -470,7 +496,7 @@ impl StateSnapshot {
         self.artifacts.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(())
     }
-    fn walk_profiles(&mut self, directory: &Path) -> Result<()> {
+    fn walk_profiles(&mut self, cache: &mut files::ArtifactCache, directory: &Path) -> Result<()> {
         for (name, path) in files::entries(directory)? {
             let p = self.profiles.get(&name).ok_or(Error::InvalidConfig(
                 "unpublished or unknown profile blocks portability",
@@ -483,8 +509,8 @@ impl StateSnapshot {
                     ".profile-operation.lock" | ".scheduler-run.lock" => {
                         files::regular(&path)?;
                     }
-                    "hard.sqlite3" if initialized => self.add(&path, false)?,
-                    "soft.sqlite3" if initialized => self.add(&path, true)?,
+                    "hard.sqlite3" if initialized => self.add(cache, &path, false)?,
+                    "soft.sqlite3" if initialized => self.add(cache, &path, true)?,
                     "hard.sqlite3-wal"
                     | "hard.sqlite3-journal"
                     | "soft.sqlite3-wal"
@@ -512,7 +538,7 @@ impl StateSnapshot {
                             if !allowed.contains(&name) {
                                 return Err(Error::InvalidConfig("unattributed record blocks portability; complete owning retention cleanup"));
                             }
-                            self.add(&path, false)?;
+                            self.add(cache, &path, false)?;
                         }
                     }
                     _ => {
