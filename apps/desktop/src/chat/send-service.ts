@@ -97,6 +97,14 @@ interface Team {
   clears: Map<string, Promise<void>>;
   refresh?: Promise<void>;
   due: number;
+  /**
+   * Whether a recovery has completed for this identity. Only the agent's
+   * pending list can say whether it holds operations from an earlier
+   * session, so a team that has not run one yet always has work.
+   */
+  recovered: boolean;
+  /** Whether the last recovery still had jobs to run when it stopped. */
+  jobs: boolean;
   cleanupError: string;
 }
 const localActions = new Set([
@@ -116,6 +124,18 @@ const phaseOf = (op: ChatOperation): SendPhase =>
       : op.state === 'cancelled'
         ? 'cancelled'
         : 'not-sent';
+/**
+ * How long the tick waits while a team has work in hand. The tick itself
+ * issues nothing; it lets each team's own two-second gate through.
+ */
+const ACTIVE_TICK = 1000;
+/**
+ * How long it waits when no team has anything for it to do. The recovery it
+ * would run issues `Chat/Pending` and `Chat/CleanupPending` for every team,
+ * so an idle tick is pure cost; at this cadence the service still notices
+ * operations another session left behind.
+ */
+const IDLE_TICK = 30_000;
 const problem = (message: string) => ({
   code: 'chat-limit',
   message,
@@ -133,6 +153,8 @@ export class ChatSendService {
   private active = false;
   private stopInbox?: () => void;
   private timer: unknown;
+  /** When the armed tick is due, so a re-arm can only bring it forward. */
+  private timerDue = Infinity;
   private cursor = 0;
   private recoveryProfiles = new Set<string>();
   private synchronizing = false;
@@ -182,6 +204,10 @@ export class ChatSendService {
   getSnapshot = () => this.revision;
   private publish() {
     this.revision++;
+    // A send, a recovery or a failure changes what the tick has to do, and
+    // each of them publishes; re-arming here brings the tick forward as soon
+    // as there is work, without any of them having to ask.
+    this.arm();
     for (const listener of this.listeners) listener();
   }
   start() {
@@ -189,12 +215,13 @@ export class ChatSendService {
     this.active = true;
     this.stopInbox = this.inbox.subscribe(() => this.synchronize());
     this.synchronize();
-    this.arm();
+    this.arm(true);
   }
   stop() {
     this.active = false;
     this.stopInbox?.();
     this.clock.cancel(this.timer);
+    this.timerDue = Infinity;
     for (const team of this.teams.values()) {
       team.epoch++;
       team.client.dispose();
@@ -239,6 +266,8 @@ export class ChatSendService {
       requests: new Map(),
       clears: new Map(),
       due: 0,
+      recovered: false,
+      jobs: false,
       cleanupError: '',
     };
     this.teams.set(storeId, team);
@@ -307,6 +336,8 @@ export class ChatSendService {
           for (const message of team.messages) message.text = undefined;
           team.messages = [];
           team.operations = [];
+          team.recovered = false;
+          team.jobs = false;
           team.blocked = true;
           if (replaced && !rejected)
             this.inbox.block(
@@ -1170,6 +1201,9 @@ export class ChatSendService {
           });
         }
       }
+      // What the tick still has to come back for. A job whose check is not
+      // due yet is work in hand, not an idle team.
+      team.jobs = jobs.length > 0;
       const eligible = jobs
         .filter(
           (job) =>
@@ -1192,14 +1226,65 @@ export class ChatSendService {
     ]);
     for (const key of team.checks.keys())
       if (!live.has(key.slice(key.indexOf(':') + 1))) team.checks.delete(key);
-    if (this.current(team, epoch)) this.publish();
+    if (this.current(team, epoch)) {
+      team.recovered = true;
+      this.publish();
+    }
   }
-  private arm() {
+  /**
+   * Whether the tick would do anything for this team: a recovery never run
+   * or in flight, jobs the last recovery left, work this session started
+   * since it, or a readable channel not opened yet. An operation the
+   * recovery has nothing left to do about is not work.
+   */
+  private outstanding(team: Team): boolean {
+    if (!this.current(team)) return false;
+    if (
+      !team.recovered ||
+      team.refresh !== undefined ||
+      team.jobs ||
+      team.messages.some(
+        (m) =>
+          m.running || m.intentPending || (m.automatic && m.phase === 'paused'),
+      ) ||
+      team.operations.some((op) => op.statusUnknown || op.state === 'uncertain')
+    )
+      return true;
+    return (
+      this.available(team) &&
+      (this.inbox.getSnapshot().get(team.storeId)?.data?.channels ?? []).some(
+        (c) => c.readable && !team.loaded.has(c.id),
+      )
+    );
+  }
+  /** When the next tick could act: each team's own gate, or the idle wait. */
+  private nextTickDelay(): number {
+    const now = this.clock.now();
+    let soonest = Infinity;
+    for (const team of this.teams.values())
+      if (this.outstanding(team))
+        soonest = Math.min(soonest, Math.max(0, team.due - now));
+    return Math.min(IDLE_TICK, Math.max(ACTIVE_TICK, soonest));
+  }
+  /**
+   * Arms the tick. A re-arm can only bring it forward, so a burst of
+   * publications cannot push it out indefinitely; the tick itself resets it.
+   */
+  private arm(reset = false) {
+    if (!this.active) {
+      this.clock.cancel(this.timer);
+      this.timerDue = Infinity;
+      return;
+    }
+    const delay = this.nextTickDelay();
+    const due = this.clock.now() + delay;
+    if (!reset && due >= this.timerDue) return;
     this.clock.cancel(this.timer);
-    if (this.active)
-      this.timer = this.clock.later(() => {
-        void this.tick();
-      }, 1000);
+    this.timerDue = due;
+    this.timer = this.clock.later(() => {
+      this.timerDue = Infinity;
+      void this.tick();
+    }, delay);
   }
   private tick() {
     if (!this.active) return;
@@ -1236,9 +1321,14 @@ export class ChatSendService {
           team.due = this.clock.now() + 5000;
         }
       })()
-        .finally(() => profiles.delete(team.profile))
+        .finally(() => {
+          profiles.delete(team.profile);
+          // The recovery is what settles whether the team still has work, so
+          // its end is where the next tick's distance is decided.
+          this.arm(true);
+        })
         .catch(() => {});
     }
-    this.arm();
+    this.arm(true);
   }
 }

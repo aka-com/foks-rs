@@ -233,29 +233,38 @@ pub fn agent_operation(
     if let Some(timing) = timing {
         let number = |value: u32| TimingValue::Number(f64::from(value));
         attrs.insert("queue", number(timing.queue_ms));
-        attrs.insert("lock", number(timing.lock_ms));
-        attrs.insert("body", number(timing.body_ms));
-        if timing.pool_ms > 0 {
-            attrs.insert("pool", number(timing.pool_ms));
-        }
-        if timing.start_ms > 0 {
-            attrs.insert("start", number(timing.start_ms));
-        }
-        if timing.session_ms > 0 {
-            attrs.insert("session", number(timing.session_ms));
-        }
-        if timing.lock_retries > 0 {
-            attrs.insert("lock_retries", number(u32::from(timing.lock_retries)));
-        }
-        attrs.insert("auth", TimingValue::Bool(timing.auth_cached));
-        attrs.insert("report", TimingValue::Bool(timing.report_cached));
-        if let Some(behind) = &timing.waited_behind {
-            attrs.insert("waited", TimingValue::Text(behind.clone()));
-        }
-        if timing.wait_ms > 0 || timing.prepare_ms > 0 {
+        // A poll is run by its own worker, which fills its phases and none of
+        // the request path's. The log keeps eight attributes per record, so
+        // printing the zeros the request path left behind would crowd out the
+        // phases that say where the poll's time went.
+        let polled = timing.prepare_ms > 0 || timing.wait_ms > 0 || timing.rescope_ms > 0;
+        if polled {
             attrs.insert("prepare", number(timing.prepare_ms));
             attrs.insert("wait", number(timing.wait_ms));
             attrs.insert("rescope", number(timing.rescope_ms));
+            if timing.session_ms > 0 {
+                attrs.insert("session", number(timing.session_ms));
+            }
+        } else {
+            attrs.insert("lock", number(timing.lock_ms));
+            attrs.insert("body", number(timing.body_ms));
+            if timing.pool_ms > 0 {
+                attrs.insert("pool", number(timing.pool_ms));
+            }
+            if timing.start_ms > 0 {
+                attrs.insert("start", number(timing.start_ms));
+            }
+            if timing.session_ms > 0 {
+                attrs.insert("session", number(timing.session_ms));
+            }
+            if timing.lock_retries > 0 {
+                attrs.insert("lock_retries", number(u32::from(timing.lock_retries)));
+            }
+            attrs.insert("auth", TimingValue::Bool(timing.auth_cached));
+            attrs.insert("report", TimingValue::Bool(timing.report_cached));
+        }
+        if let Some(behind) = &timing.waited_behind {
+            attrs.insert("waited", TimingValue::Text(behind.clone()));
         }
         // The steps an operation measured inside itself go in one attribute
         // rather than one each: a record's attributes are few and short. A
@@ -561,5 +570,78 @@ mod tests {
             Some(&ResponseTiming::default()),
         );
         assert!(!outside.attrs.contains_key("phases"));
+    }
+    #[test]
+    fn a_poll_records_its_own_phases_within_the_log_s_attribute_cap() {
+        let label = Label {
+            command: "chat_request",
+            scope: Some("personal".to_owned()),
+        };
+        let poll = agent_operation(
+            Some(&label),
+            "Chat/PollInbox",
+            Duration::from_millis(25_010),
+            outcome_of(Ok(&ResponseResult::Success {
+                value: serde_json::Value::Null,
+            })),
+            Some(&ResponseTiming {
+                queue_ms: 412,
+                session_ms: 96,
+                prepare_ms: 34,
+                wait_ms: 24_400,
+                rescope_ms: 21,
+                waited_behind: Some("profile".to_owned()),
+                ..ResponseTiming::default()
+            }),
+        );
+        // The poll's worker fills none of the request path's phases, so the
+        // zeros they would print never displace the phases below. Eight is
+        // the log's attribute cap.
+        assert_eq!(
+            serde_json::to_value(&poll).unwrap()["attrs"],
+            serde_json::json!({
+                "command": "chat_request",
+                "op": "Chat/PollInbox",
+                "prepare": 34.0,
+                "queue": 412.0,
+                "rescope": 21.0,
+                "session": 96.0,
+                "wait": 24_400.0,
+                "waited": "profile",
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&poll).unwrap()["attrs"]
+                .as_object()
+                .unwrap()
+                .len(),
+            8
+        );
+        // A poll that failed in admission reports the request path's shape,
+        // because it never entered a phase of its own.
+        let refused = agent_operation(
+            Some(&label),
+            "Chat/PollInbox",
+            Duration::from_millis(58_000),
+            outcome_of(Ok(&ResponseResult::Success {
+                value: serde_json::Value::Null,
+            })),
+            Some(&ResponseTiming {
+                queue_ms: 58_000,
+                ..ResponseTiming::default()
+            }),
+        );
+        assert_eq!(
+            serde_json::to_value(&refused).unwrap()["attrs"],
+            serde_json::json!({
+                "auth": false,
+                "body": 0.0,
+                "command": "chat_request",
+                "lock": 0.0,
+                "op": "Chat/PollInbox",
+                "queue": 58_000.0,
+                "report": false,
+            })
+        );
     }
 }

@@ -1,4 +1,4 @@
-import { scheduleProfileWork } from '../scheduling/profile-work';
+import { scheduleProfileWork, type WorkLane } from '../scheduling/profile-work';
 import type { Bridge } from './contract';
 import type { ServerStatusSnapshot } from './servers';
 
@@ -17,8 +17,9 @@ export function enqueueProfileWork<T>(
   work: () => Promise<T>,
   /** An operation name for the timings; never an argument or a result. */
   label?: string,
+  lane?: WorkLane,
 ): Promise<T> {
-  return scheduleProfileWork(bridge, profile, work, undefined, label);
+  return scheduleProfileWork(bridge, profile, work, undefined, label, lane);
 }
 
 export function sharedServerStatus(

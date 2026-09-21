@@ -114,14 +114,26 @@ test('poll bypasses queued work and only bounded notification history may reques
   client.dispose();
 });
 
-test('foreground history overtakes queued inbox and recovery work without overlapping active work', async () => {
+test('chat work runs while other profile work is active, and foreground history overtakes queued chat work', async () => {
   const { scheduleProfileWork } =
     await import('../src/scheduling/profile-work');
   const order: string[] = [];
   let release!: () => void;
+  let releaseFirst!: () => void;
+  let firstStarted!: () => void;
+  const first = new Promise<void>((resolve) => {
+    firstStarted = resolve;
+  });
+  let calls = 0;
   const bridge = {
     chat: async (_store: string, action: { action: string }) => {
       order.push(action.action);
+      if (++calls === 1) {
+        firstStarted();
+        await new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+      }
       return {
         scope: reply.scope,
         result: {
@@ -141,6 +153,10 @@ test('foreground history overtakes queued inbox and recovery work without overla
   );
   await new Promise((resolve) => setImmediate(resolve));
   const client = chatClient(bridge, 'p', 't');
+  const channels = client.request({ action: 'channels' });
+  // The chat lane admits its work although the profile's other lane is busy.
+  await first;
+  assert.deepEqual(order, ['channels']);
   const inbox = client.request({ action: 'sync-inbox', blocked_channels: [] });
   const recovery = client.request(
     { action: 'pending' },
@@ -154,13 +170,15 @@ test('foreground history overtakes queued inbox and recovery work without overla
     before: null,
   });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(order, []);
+  // One chat request at a time: the rest wait for the active one to settle.
+  assert.deepEqual(order, ['channels']);
+  releaseFirst();
   release();
-  await Promise.all([active, inbox, recovery, history]);
-  assert.equal(order[0], 'history');
+  await Promise.all([active, channels, inbox, recovery, history]);
+  assert.equal(order[1], 'history');
   assert.deepEqual(
     new Set(order),
-    new Set(['history', 'sync-inbox', 'pending']),
+    new Set(['channels', 'history', 'sync-inbox', 'pending']),
   );
   client.dispose();
 });

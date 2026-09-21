@@ -185,8 +185,13 @@ pub(super) async fn handle_chat_poll(
     Ok(close)
 }
 
-/// The poll's three phases are timed into `timing` as each ends, so a poll
-/// that fails in its last phase still reports the first two.
+/// Admission, session opens and work are timed into `timing` separately as
+/// each ends, before propagating errors, so a failed poll reports both the
+/// failing phase and the earlier ones. A poll that waited behind other work
+/// for the profile does not report that wait as its own cost. The spans are disjoint and
+/// together account for the worker's time: admission into `queue_ms`,
+/// opening the profile's registry and session into `session_ms`, then
+/// `prepare_ms`, the network `wait_ms` that holds nothing, and `rescope_ms`.
 fn run_chat_poll(
     state_dir: &Path,
     store: TeamStoreRef,
@@ -196,54 +201,87 @@ fn run_chat_poll(
     cancellation: CancellationToken,
     timing: &mut ResponseTiming,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    let phase = std::time::Instant::now();
+    let mut admission = Duration::ZERO;
+    let mut sessions = Duration::ZERO;
     let context = {
-        let _admission = profile_work::coordinator().acquire_blocking(
+        let phase = std::time::Instant::now();
+        let permit = profile_work::coordinator().acquire_blocking(
             state_dir,
             profile_work::Scope::profile(&store.profile),
             timeout,
             &cancellation,
-        )?;
-        let registry = ProfileRegistry::open(state_dir)?;
-        let session = ProfileSession::open_with_control(
-            &registry,
-            &store.profile,
-            timeout,
-            cancellation.clone(),
-        )?;
-        profile_work::with_control(timeout, cancellation.clone(), || {
+        );
+        admission += phase.elapsed();
+        timing.queue_ms = ResponseTiming::millis(admission);
+        let permit = permit?;
+        if timing.waited_behind.is_none() {
+            timing.waited_behind = permit.waited_behind.map(str::to_owned);
+        }
+        let phase = std::time::Instant::now();
+        let session = (|| -> Result<_, Box<dyn std::error::Error>> {
+            let registry = ProfileRegistry::open(state_dir)?;
+            let session = ProfileSession::open_with_control(
+                &registry,
+                &store.profile,
+                timeout,
+                cancellation.clone(),
+            )?;
+            Ok((registry, session))
+        })();
+        sessions += phase.elapsed();
+        timing.session_ms = ResponseTiming::millis(sessions);
+        let (_registry, session) = session?;
+        let phase = std::time::Instant::now();
+        let context = profile_work::with_control(timeout, cancellation.clone(), || {
             with_vault(state_dir, &session, |session, vault| {
                 chat::prepare_poll(session, vault, &store)
             })
-        })?
+        });
+        timing.prepare_ms = ResponseTiming::millis(phase.elapsed());
+        context?
     };
-    timing.prepare_ms = ResponseTiming::millis(phase.elapsed());
     let phase = std::time::Instant::now();
     // A long network poll owns no profile admission or checked-session lock.
-    let reply = chat::poll(context, since, timeout_milliseconds)?;
+    let reply = chat::poll(context, since, timeout_milliseconds);
     timing.wait_ms = ResponseTiming::millis(phase.elapsed());
-    let phase = std::time::Instant::now();
+    let reply = reply?;
     let (_, current_scope) = {
-        let _admission = profile_work::coordinator().acquire_blocking(
+        let phase = std::time::Instant::now();
+        let permit = profile_work::coordinator().acquire_blocking(
             state_dir,
             profile_work::Scope::profile(&store.profile),
             timeout,
             &cancellation,
-        )?;
-        let registry = ProfileRegistry::open(state_dir)?;
-        let session = ProfileSession::open_with_control(
-            &registry,
-            &store.profile,
-            timeout,
-            cancellation.clone(),
-        )?;
-        profile_work::with_control(timeout, cancellation, || {
+        );
+        admission += phase.elapsed();
+        timing.queue_ms = ResponseTiming::millis(admission);
+        let permit = permit?;
+        if timing.waited_behind.is_none() {
+            timing.waited_behind = permit.waited_behind.map(str::to_owned);
+        }
+        let phase = std::time::Instant::now();
+        let session = (|| -> Result<_, Box<dyn std::error::Error>> {
+            let registry = ProfileRegistry::open(state_dir)?;
+            let session = ProfileSession::open_with_control(
+                &registry,
+                &store.profile,
+                timeout,
+                cancellation.clone(),
+            )?;
+            Ok((registry, session))
+        })();
+        sessions += phase.elapsed();
+        timing.session_ms = ResponseTiming::millis(sessions);
+        let (_registry, session) = session?;
+        let phase = std::time::Instant::now();
+        let scope = profile_work::with_control(timeout, cancellation, || {
             with_vault(state_dir, &session, |session, vault| {
                 chat::resolve_scope(session, vault, &store)
             })
-        })?
+        });
+        timing.rescope_ms = ResponseTiming::millis(phase.elapsed());
+        scope?
     };
-    timing.rescope_ms = ResponseTiming::millis(phase.elapsed());
     if current_scope != reply.scope {
         return Err(foks_client::Error::ChatIntegrity("chat poll scope changed").into());
     }
@@ -307,5 +345,51 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// A poll that waits for the profile must not report that wait as the
+    /// cost of preparing itself.
+    #[test]
+    fn a_poll_reports_its_admission_wait_apart_from_its_own_work() {
+        let root = tempfile::tempdir().unwrap();
+        let held = profile_work::coordinator()
+            .acquire_blocking(
+                root.path(),
+                profile_work::Scope::profile("test"),
+                Duration::from_secs(10),
+                &CancellationToken::new(),
+            )
+            .unwrap();
+        let state_dir = root.path().to_owned();
+        let worker = std::thread::spawn(move || {
+            let mut timing = ResponseTiming::default();
+            let result = run_chat_poll(
+                &state_dir,
+                TeamStoreRef {
+                    profile: "test".into(),
+                    account_alias: "me".into(),
+                    team_alias: "team".into(),
+                    team_id: format!("03{}", "ab".repeat(32)),
+                },
+                0,
+                1,
+                Duration::from_secs(10),
+                CancellationToken::new(),
+                &mut timing,
+            );
+            (result.is_err(), timing)
+        });
+        std::thread::sleep(Duration::from_millis(80));
+        drop(held);
+        let (failed, timing) = worker.join().unwrap();
+        // There is no profile to open under this root, so the poll fails as
+        // soon as it is admitted and never enters a phase of its own.
+        assert!(failed);
+        assert!(timing.queue_ms >= 50, "admission {}ms", timing.queue_ms);
+        assert_eq!(timing.waited_behind.as_deref(), Some("profile"));
+        assert_eq!(timing.prepare_ms, 0);
+        assert_eq!(timing.session_ms, 0);
+        assert_eq!(timing.wait_ms, 0);
+        assert_eq!(timing.rescope_ms, 0);
     }
 }

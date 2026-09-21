@@ -366,3 +366,136 @@ test('work queued behind a request that uses its whole budget runs once the queu
   await queued;
   assert.equal(ran, true);
 });
+
+test('the chat lane is admitted while the default lane is busy, and stays serialized', async () => {
+  const owner = {},
+    gate = deferred(),
+    chatGate = deferred(),
+    order: string[] = [];
+  let concurrent = 0,
+    peak = 0;
+  const active = scheduleProfileWork(owner, 'p', async () => {
+    order.push('default');
+    await gate.promise;
+  });
+  await flush();
+  const chat = scheduleProfileWork(
+    owner,
+    'p',
+    async () => {
+      order.push('chat-1');
+      peak = Math.max(peak, ++concurrent);
+      await chatGate.promise;
+      concurrent--;
+    },
+    undefined,
+    'chat:history',
+    'chat',
+  );
+  const queued = scheduleProfileWork(
+    owner,
+    'p',
+    async () => {
+      order.push('chat-2');
+      peak = Math.max(peak, ++concurrent);
+      concurrent--;
+    },
+    undefined,
+    'chat:channels',
+    'chat',
+  );
+  await flush();
+  // The chat request did not wait for the default lane's work to settle.
+  assert.deepEqual(order, ['default', 'chat-1']);
+  chatGate.resolve();
+  await queued;
+  assert.deepEqual(order, ['default', 'chat-1', 'chat-2']);
+  // Chat work is still one request at a time.
+  assert.equal(peak, 1);
+  gate.resolve();
+  await Promise.all([active, chat]);
+});
+
+test('a chat lane timing reports its lane and its own wait', async () => {
+  const owner = {},
+    gate = deferred(),
+    chatGate = deferred(),
+    events: WorkTiming[] = [];
+  const off = observeProfileWork(owner, (event) => {
+    events.push(event);
+  });
+  const active = scheduleProfileWork(owner, 'p', () => gate.promise);
+  await flush();
+  const first = scheduleProfileWork(
+    owner,
+    'p',
+    () => chatGate.promise,
+    undefined,
+    'chat:history',
+    'chat',
+  );
+  const second = scheduleProfileWork(
+    owner,
+    'p',
+    async () => undefined,
+    undefined,
+    'chat:pending',
+    'chat',
+  );
+  await flush();
+  chatGate.resolve();
+  await Promise.all([first, second]);
+  gate.resolve();
+  await active;
+  off();
+  assert.deepEqual(
+    events.map((event) => [event.profile, event.key, event.priority]),
+    [
+      ['p', 'chat:history', 'chat'],
+      ['p', 'chat:pending', 'chat'],
+      ['p', undefined, 'foreground'],
+    ],
+  );
+  // The first chat request was admitted at once; the second waited for it.
+  assert.equal(events[0].queueMilliseconds < events[1].queueMilliseconds, true);
+});
+
+test('each lane bounds its own capacity and the profile outlives one lane draining', async () => {
+  const owner = {},
+    gate = deferred(),
+    chatGate = deferred();
+  const active = scheduleProfileWork(owner, 'p', () => gate.promise);
+  const chat = scheduleProfileWork(
+    owner,
+    'p',
+    () => chatGate.promise,
+    undefined,
+    'chat:history',
+    'chat',
+  );
+  await flush();
+  const waiting = Array.from({ length: 256 }, (_, i) =>
+    scheduleProfileWork(owner, 'p', async () => i),
+  );
+  // A full default lane does not refuse chat work.
+  const admitted = scheduleProfileWork(
+    owner,
+    'p',
+    async () => 'chat',
+    undefined,
+    'chat:channels',
+    'chat',
+  );
+  await assert.rejects(
+    scheduleProfileWork(owner, 'p', async () =>
+      assert.fail('excess request ran'),
+    ),
+    { code: 'profile-busy', ambiguous: false },
+  );
+  chatGate.resolve();
+  assert.equal(await admitted, 'chat');
+  // The chat lane drained first; the default lane's queue survived it.
+  gate.resolve();
+  await Promise.all([active, chat]);
+  assert.equal((await Promise.all(waiting)).length, 256);
+});

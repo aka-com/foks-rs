@@ -426,6 +426,17 @@ impl Drop for MaintenanceAdmission<'_> {
     }
 }
 
+/// Clears the drain signal once the reservation is taken or given up on. The
+/// exclusive reservation keeps later calls out by itself, so the signal only
+/// has to last as long as the wait for it.
+struct MaintenanceDrain<'a>(&'a ObservedTransport);
+
+impl Drop for MaintenanceDrain<'_> {
+    fn drop(&mut self) {
+        self.0.maintenance_pending.store(false, Ordering::Release);
+    }
+}
+
 pub enum MaintenanceCompletion {
     Cancelled,
     Continue,
@@ -476,9 +487,20 @@ impl MaintenanceWorker<'_> {
     }
 }
 
+/// How long a maintenance command waits for the transport to fall idle before
+/// it reports that other requests hold it. Read-only calls are asked to cancel
+/// as soon as the wait starts, so this budget covers the mutations and uploads
+/// that have to run to completion rather than the parked reads.
+const MAINTENANCE_RESERVATION_WAIT: Duration = Duration::from_secs(5);
+
 struct ObservedTransport {
     client: AgentClient,
     maintenance: RwLock<()>,
+    /// Set while a maintenance command waits for its exclusive reservation.
+    /// Calls that are safe to abandon observe it and cancel, and no further
+    /// call starts, so the reservation is not held off indefinitely by reads
+    /// that park on the agent: a chat inbox poll alone waits 55 seconds.
+    maintenance_pending: AtomicBool,
     disposition: Mutex<TransportDisposition>,
     connection_failure: Arc<Mutex<Option<String>>>,
     /// Every operation this transport issues, timed, for Copy diagnostics.
@@ -488,11 +510,47 @@ struct ObservedTransport {
 impl ObservedTransport {
     #[allow(clippy::result_large_err)] // Uses the existing transport trait error without allocating on success.
     fn reserve_use(&self) -> Result<std::sync::RwLockReadGuard<'_, ()>, DesktopAgentError> {
+        if self.maintenance_pending.load(Ordering::Acquire) {
+            return Err(DesktopAgentError::Local(
+                foks_desktop::LocalAgentCondition::Maintenance,
+            ));
+        }
         let guard = self.maintenance.try_read().map_err(|_| {
             DesktopAgentError::Local(foks_desktop::LocalAgentCondition::Maintenance)
         })?;
         self.require_current()?;
         Ok(guard)
+    }
+
+    /// True once a maintenance command is waiting and this call may be
+    /// abandoned. A mutation is never abandoned: its outcome would become
+    /// ambiguous, which is worse than making maintenance wait for it.
+    fn preempted(&self, preemptible: bool) -> bool {
+        preemptible && self.maintenance_pending.load(Ordering::Acquire)
+    }
+
+    /// Takes the exclusive reservation that maintenance runs under, asking
+    /// in-flight preemptible calls to stop first. Returns `None` if calls were
+    /// still outstanding when the wait ran out.
+    fn reserve_for_maintenance(
+        &self,
+        wait: Duration,
+    ) -> Option<std::sync::RwLockWriteGuard<'_, ()>> {
+        self.maintenance_pending.store(true, Ordering::Release);
+        let _drain = MaintenanceDrain(self);
+        let deadline = std::time::Instant::now() + wait;
+        loop {
+            match self.maintenance.try_write() {
+                Ok(guard) => return Some(guard),
+                Err(std::sync::TryLockError::Poisoned(error)) => return Some(error.into_inner()),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    if std::time::Instant::now() >= deadline {
+                        return None;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+        }
     }
 
     #[allow(clippy::result_large_err)]
@@ -566,10 +624,11 @@ impl ObservedTransport {
     ) -> Result<Value, DesktopAgentError> {
         let _use = self.reserve_use()?;
         let name = operation.name();
+        let preemptible = !operation.is_mutation();
         let started = Instant::now();
         let response = self
             .client
-            .call_cancellable(operation, cancelled)
+            .call_cancellable(operation, &|| cancelled() || self.preempted(preemptible))
             .map_err(client_to_desktop);
         self.observe(label, name, started, &response);
         let result = response.and_then(|response| response_result(response.result));
@@ -706,6 +765,7 @@ impl AgentHandle {
             transport: Arc::new(ObservedTransport {
                 client,
                 maintenance: RwLock::new(()),
+                maintenance_pending: AtomicBool::new(false),
                 disposition: Mutex::new(TransportDisposition::Current),
                 connection_failure: Arc::clone(&connection_failure),
                 timings: Arc::default(),
@@ -785,13 +845,16 @@ impl AgentHandle {
                 ))
             })?;
         let _admission = MaintenanceAdmission(&self.maintenance_in_flight);
-        let _reservation = self.transport.maintenance.try_write().map_err(|_| {
-            AgentError::new(
-                "agent-busy",
-                "Outstanding agent requests are still settling.",
-                true,
-            )
-        })?;
+        let _reservation = self
+            .transport
+            .reserve_for_maintenance(MAINTENANCE_RESERVATION_WAIT)
+            .ok_or_else(|| {
+                AgentError::new(
+                    "agent-busy",
+                    "Outstanding agent requests are still settling.",
+                    true,
+                )
+            })?;
         self.transport
             .require_current()
             .map_err(AgentError::from_desktop)?;
@@ -1021,11 +1084,12 @@ impl AgentHandle {
             .reserve_use()
             .map_err(AgentError::from_desktop)?;
         let name = operation.name();
+        let preemptible = !operation.is_mutation();
         let started = Instant::now();
         let result = self
             .transport
             .client
-            .call(operation)
+            .call_cancellable(operation, &|| self.transport.preempted(preemptible))
             .map_err(client_to_desktop);
         self.transport.observe(None, name, started, &result);
         self.transport.record(&result);
@@ -1345,31 +1409,16 @@ impl AgentHandle {
         // after the first worker stopped the socket still receives the typed
         // state-busy outcome, rather than a misleading agent-lost result.
         self.maintenance_process.preflight(self)?;
-        let _reservation = {
-            let mut acquired = None;
-            for _ in 0..50 {
-                match self.transport.maintenance.try_write() {
-                    Ok(guard) => {
-                        acquired = Some(guard);
-                        break;
-                    }
-                    Err(std::sync::TryLockError::WouldBlock) => {
-                        std::thread::sleep(Duration::from_millis(20));
-                    }
-                    Err(std::sync::TryLockError::Poisoned(error)) => {
-                        acquired = Some(error.into_inner());
-                        break;
-                    }
-                }
-            }
-            acquired.ok_or_else(|| {
+        let _reservation = self
+            .transport
+            .reserve_for_maintenance(MAINTENANCE_RESERVATION_WAIT)
+            .ok_or_else(|| {
                 AgentError::new(
                     "state-busy",
                     "Cannot process this right now because of other active requests.",
                     true,
                 )
-            })?
-        };
+            })?;
         match *self
             .transport
             .disposition
@@ -3294,6 +3343,57 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn maintenance_reservation_drains_preemptible_calls_and_releases_the_signal() {
+        let dir = tempfile::tempdir().unwrap();
+        let handle = AgentHandle::new(dir.path().join(DEFAULT_SOCKET_NAME));
+        let transport = Arc::clone(&handle.transport);
+
+        // A call that parks on the agent, as a chat inbox poll does for its
+        // full 55 seconds, releases its reservation once maintenance asks.
+        let started = Arc::new((Mutex::new(false), Condvar::new()));
+        let poll_started = Arc::clone(&started);
+        let polling = Arc::clone(&transport);
+        let poll = std::thread::spawn(move || {
+            let _use = polling.reserve_use().unwrap();
+            let (held, ready) = &*poll_started;
+            *held.lock().unwrap() = true;
+            ready.notify_all();
+            while !polling.preempted(true) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(!polling.preempted(false), "a mutation is never preempted");
+        });
+        let (held, ready) = &*started;
+        let mut waiting = held.lock().unwrap();
+        while !*waiting {
+            waiting = ready.wait(waiting).unwrap();
+        }
+        drop(waiting);
+        let reservation = transport
+            .reserve_for_maintenance(MAINTENANCE_RESERVATION_WAIT)
+            .expect("a preemptible call gives the reservation up");
+        poll.join().unwrap();
+        // The reservation keeps later calls out on its own, so the drain
+        // signal is not left set behind it.
+        assert!(!transport.maintenance_pending.load(Ordering::Acquire));
+        assert_eq!(
+            transport.reserve_use().unwrap_err(),
+            DesktopAgentError::Local(foks_desktop::LocalAgentCondition::Maintenance)
+        );
+        drop(reservation);
+
+        // A call that will not give it up costs the wait, and leaves the
+        // transport usable rather than refusing every later call.
+        let retained = transport.reserve_use().unwrap();
+        assert!(transport
+            .reserve_for_maintenance(Duration::from_millis(60))
+            .is_none());
+        assert!(!transport.maintenance_pending.load(Ordering::Acquire));
+        drop(retained);
+        assert!(transport.reserve_use().is_ok());
     }
 
     #[test]

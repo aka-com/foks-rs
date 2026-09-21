@@ -198,7 +198,15 @@ test('automatic recovery yields queued profile work to an explicit history reque
   const { chatClient } = await import('../src/chat/client');
   const h = await setup();
   const gate = deferred();
-  const hold = enqueueProfileWork(h.bridge, 'acme', () => gate.promise);
+  // Chat is admitted in its own lane, so occupying that lane is what makes a
+  // chat request queue.
+  const hold = enqueueProfileWork(
+    h.bridge,
+    'acme',
+    () => gate.promise,
+    'test-hold',
+    'chat',
+  );
   const client = chatClient(h.bridge, 'acme', STORE);
   try {
     await settle();
@@ -416,7 +424,13 @@ for (const boundary of [
   test(`queued submit rechecks ${boundary} eligibility before dispatch`, async () => {
     const h = await setup();
     const gate = deferred();
-    const hold = enqueueProfileWork(h.bridge, 'acme', () => gate.promise);
+    const hold = enqueueProfileWork(
+      h.bridge,
+      'acme',
+      () => gate.promise,
+      'test-hold',
+      'chat',
+    );
     let sending: Promise<void> | undefined;
     try {
       await settle();

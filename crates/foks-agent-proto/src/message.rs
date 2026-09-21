@@ -2113,7 +2113,8 @@ impl std::fmt::Debug for Operation {
 /// request's fields.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct ResponseTiming {
-    /// Waiting for profile admission behind conflicting work.
+    /// Waiting for profile admission behind conflicting work. A chat poll
+    /// takes admission twice from inside its own worker and reports the sum.
     #[serde(default)]
     pub queue_ms: u32,
     /// Waiting for a worker permit.
@@ -2142,8 +2143,10 @@ pub struct ResponseTiming {
     /// The scope of the work admission waited behind, when it waited.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waited_behind: Option<String>,
-    /// A chat poll's three phases: prepare under admission, the network
-    /// wait holding nothing, and the scope check after it.
+    /// A chat poll's work, each measured after the admission and the session
+    /// open it needed, which are reported in `queue_ms` and `session_ms`:
+    /// preparing the poll, the network wait that holds nothing, and the
+    /// scope check after it.
     #[serde(default)]
     pub prepare_ms: u32,
     #[serde(default)]

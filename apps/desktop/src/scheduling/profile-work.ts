@@ -8,7 +8,8 @@ export interface WorkTiming {
    * queue cannot say what a later request was waiting behind.
    */
   key?: string;
-  priority: 'foreground' | 'background';
+  /** The lane that admitted the work: chat work reports its lane, not its rank. */
+  priority: 'foreground' | 'background' | 'chat';
   queueMilliseconds: number;
   executionMilliseconds: number;
   outcome: 'success' | 'error' | 'cancelled';
@@ -31,13 +32,29 @@ type Work = {
   run(): Promise<void>;
   cancel(this: void): void;
 };
-type Queue = {
+type Lane = {
   active?: Work;
   foreground: Work[];
   background: Work[];
   last?: string;
   draining: boolean;
 };
+/**
+ * Lanes are admitted independently of each other. Chat has its own because
+ * the agent already admits a chat request against its store and admits one
+ * inbox poll per account: waiting here behind a catalog walk or an
+ * invitation read for the same profile is a second wait that buys nothing.
+ * Work within a lane stays serialized.
+ */
+export type WorkLane = 'default' | 'chat';
+type Queue = Record<WorkLane, Lane>;
+const newLane = (): Lane => ({
+  foreground: [],
+  background: [],
+  draining: false,
+});
+const idle = (entries: Lane): boolean =>
+  !entries.draining && !entries.foreground.length && !entries.background.length;
 /**
  * The agent answers a request within its own budget: the managed agent is
  * started with a sixty-second request timeout (`--request-timeout-seconds`
@@ -89,6 +106,7 @@ export function scheduleProfileWork<T>(
   background?: BackgroundHistoryWork,
   /** An operation name for the timings; never an argument or a result. */
   label?: string,
+  lane: WorkLane = 'default',
 ): Promise<T> {
   if (background && (background.signal.aborted || !background.current()))
     return Promise.reject(cancellation());
@@ -96,12 +114,10 @@ export function scheduleProfileWork<T>(
   if (!profiles) owners.set(owner, (profiles = new Map<string, Queue>()));
   let queue = profiles.get(profile);
   if (!queue)
-    profiles.set(
-      profile,
-      (queue = { foreground: [], background: [], draining: false }),
-    );
+    profiles.set(profile, (queue = { default: newLane(), chat: newLane() }));
+  const track = queue[lane];
   if (background) {
-    const duplicate = queue.background.find(
+    const duplicate = track.background.find(
       (w) =>
         w.background?.key === background.key &&
         w.background.owner === background.owner &&
@@ -110,7 +126,7 @@ export function scheduleProfileWork<T>(
     );
     // Only the same request owner may share its result and cancellation lifetime.
     if (duplicate) return duplicate.promise as Promise<T>;
-    if (queue.background.length >= 64)
+    if (track.background.length >= 64)
       return Promise.reject(
         Object.assign(new Error('Background queue full.'), {
           code: 'profile-busy',
@@ -120,7 +136,7 @@ export function scheduleProfileWork<T>(
         }),
       );
   }
-  if (queue.foreground.length + queue.background.length >= MAX_QUEUED)
+  if (track.foreground.length + track.background.length >= MAX_QUEUED)
     return Promise.reject(
       queueBusy('Profile queue full; request did not start.'),
     );
@@ -145,10 +161,11 @@ export function scheduleProfileWork<T>(
         : label !== undefined
           ? { key: label }
           : {}),
-      priority: background ? 'background' : 'foreground',
+      priority:
+        lane === 'chat' ? 'chat' : background ? 'background' : 'foreground',
       queueMilliseconds: started - queued,
       executionMilliseconds:
-        outcome === 'cancelled' && queue.active !== entry
+        outcome === 'cancelled' && track.active !== entry
           ? 0
           : performance.now() - started,
       outcome,
@@ -173,15 +190,15 @@ export function scheduleProfileWork<T>(
     cancel() {
       if (settled || cancelled) return;
       cancelled = true;
-      if (queue.active === entry) {
+      if (track.active === entry) {
         try {
           background?.cancel();
         } catch {
           /* await actual settlement regardless */
         }
       } else {
-        const index = queue.background.indexOf(entry);
-        if (index >= 0) queue.background.splice(index, 1);
+        const index = track.background.indexOf(entry);
+        if (index >= 0) track.background.splice(index, 1);
         finish();
         reject(cancellation());
         report(performance.now(), 'cancelled');
@@ -216,10 +233,10 @@ export function scheduleProfileWork<T>(
       }
     },
   };
-  (background ? queue.background : queue.foreground).push(entry);
+  (background ? track.background : track.foreground).push(entry);
   const admissionTimer = setTimeout(() => {
-    if (settled || queue.active === entry) return;
-    const waiting = background ? queue.background : queue.foreground;
+    if (settled || track.active === entry) return;
+    const waiting = background ? track.background : track.foreground;
     const index = waiting.indexOf(entry);
     if (index >= 0) waiting.splice(index, 1);
     finish();
@@ -230,25 +247,31 @@ export function scheduleProfileWork<T>(
   }, MAX_QUEUE_WAIT);
   background?.signal.addEventListener('abort', entry.cancel, { once: true });
   const drain = async () => {
-    if (queue.draining) return;
-    queue.draining = true;
+    if (track.draining) return;
+    track.draining = true;
     try {
-      while (queue.foreground.length || queue.background.length) {
-        let next = queue.foreground.shift();
+      while (track.foreground.length || track.background.length) {
+        let next = track.foreground.shift();
         if (!next) {
-          const index = queue.background.findIndex(
-            (w) => w.background!.key !== queue.last,
+          const index = track.background.findIndex(
+            (w) => w.background!.key !== track.last,
           );
-          next = queue.background.splice(Math.max(0, index), 1)[0];
-          queue.last = next.background!.key;
+          next = track.background.splice(Math.max(0, index), 1)[0];
+          track.last = next.background!.key;
         }
-        queue.active = next;
+        track.active = next;
         await next.run();
-        queue.active = undefined;
+        track.active = undefined;
       }
     } finally {
-      queue.draining = false;
-      if (profiles.get(profile) === queue) profiles.delete(profile);
+      track.draining = false;
+      // The queue is shared by both lanes; the other may still be draining.
+      if (
+        profiles.get(profile) === queue &&
+        idle(queue.default) &&
+        idle(queue.chat)
+      )
+        profiles.delete(profile);
       if (!profiles.size && owners.get(owner) === profiles)
         owners.delete(owner);
     }

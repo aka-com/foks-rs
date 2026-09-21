@@ -152,6 +152,16 @@ test('the scheduler and the profile queue report into the log with their scope',
     undefined,
     'profile-catalog',
   );
+  await scheduleProfileWork(
+    owner,
+    'srv',
+    async () => {
+      clock.tick(3);
+    },
+    undefined,
+    'chat:history',
+    'chat',
+  );
   stop();
   const names = log
     .events()
@@ -160,8 +170,9 @@ test('the scheduler and the profile queue report into the log with their scope',
     'job.catalog:started',
     'job.catalog:success',
     'queue:',
+    'queue:',
   ]);
-  const [started, success, queue] = log.events();
+  const [started, success, queue, chat] = log.events();
   assert.equal(started.scope, 'srv');
   assert.equal(started.attrs?.trigger, 'periodic');
   assert.equal(success.ms, 40);
@@ -171,6 +182,9 @@ test('the scheduler and the profile queue report into the log with their scope',
   // Foreground work has no key of its own, so the caller's label is what
   // names it in the log.
   assert.equal(queue.attrs?.key, 'profile-catalog');
+  // The chat lane reports itself, so its waits read apart from the rest.
+  assert.equal(chat.attrs?.priority, 'chat');
+  assert.equal(chat.attrs?.key, 'chat:history');
   // Nothing listens after stop.
   let seen = 0;
   const off = observeProfileWork(owner, () => {
@@ -179,7 +193,7 @@ test('the scheduler and the profile queue report into the log with their scope',
   await scheduleProfileWork(owner, 'srv', async () => undefined);
   off();
   assert.equal(seen, 1);
-  assert.equal(log.length, 3);
+  assert.equal(log.length, 4);
   scheduler.dispose();
 });
 
@@ -410,6 +424,44 @@ const sample: TimingEvent[] = [
     outcome: 'ok',
   },
   {
+    at: AT + 8_005,
+    layer: 'backend',
+    name: 'agent.op',
+    scope: 'work',
+    ms: 25_003,
+    outcome: 'ok',
+    // The backend sends its attributes in name order, and the log keeps the
+    // first eight: a poll fills exactly these.
+    attrs: {
+      command: 'chat_request',
+      op: 'Chat/PollInbox',
+      prepare: 34,
+      queue: 412,
+      rescope: 21,
+      session: 96,
+      wait: 24_400,
+      waited: 'profile',
+    },
+  },
+  {
+    at: AT + 8_006,
+    layer: 'renderer',
+    name: 'queue',
+    scope: 'work',
+    ms: 24,
+    outcome: 'ok',
+    attrs: { priority: 'chat', wait: 3, key: 'chat:history' },
+  },
+  {
+    at: AT + 8_007,
+    layer: 'renderer',
+    name: 'queue',
+    scope: 'work',
+    ms: 1146,
+    outcome: 'ok',
+    attrs: { priority: 'foreground', wait: 2_140, key: 'profile-catalog' },
+  },
+  {
     at: AT - 60 * 60_000,
     layer: 'renderer',
     name: 'invoke',
@@ -427,7 +479,7 @@ test('the formatter prints the timeline and the summaries as fixed text', () => 
   assert.equal(
     text,
     [
-      '--- timing (last 15 min, 13 events, renderer 9 · backend 3 · agent-timed 4, times UTC) ---',
+      '--- timing (last 15 min, 16 events, renderer 11 · backend 4 · agent-timed 5, times UTC) ---',
       'agent ready · 2 servers · 6 teams · window visible',
       '',
       '12:00:33.104  job.catalog        work                     started trigger=periodic retry=0 late=12ms',
@@ -443,15 +495,23 @@ test('the formatter prints the timeline and the summaries as fixed text', () => 
       '12:00:41.106  chat.sync          team#2c                  388ms changed=true conversations=14',
       '12:00:41.107  chat.arrival       team#2c                  391ms',
       '12:00:41.108  chat.send          team#2c · m1             prepared 620ms',
+      // A poll is run by its own worker: the wait it is there to make, the
+      // admission it took twice, and the work around them.
+      '12:00:41.109    agent.op         work                     25.00s command=chat_request op=Chat/PollInbox prepare=34ms queue=412ms rescope=21ms session=96ms wait=24.40s waited=profile',
+      '12:00:41.110  queue              work                     24ms priority=chat wait=3ms key=chat:history',
+      '12:00:41.111  queue              work                     1.15s priority=foreground wait=2.14s key=profile-catalog',
       '',
       '--- jobs ---',
       'kind     scope  runs  ok  fail  p50    p95    max    last',
       'catalog  work   1     1   0     1.23s  1.23s  1.23s  1.23s',
       '',
       '--- steps ---',
-      'step             scope      n  ok  fail  p50    p95    max',
-      'catalog.project  work       1  1   0     71ms   71ms   71ms',
-      'agent.timer      scheduler  1  1   0     1.24s  1.24s  1.24s',
+      'step              scope      n  ok  fail  p50    p95    max',
+      'catalog.project   work       1  1   0     71ms   71ms   71ms',
+      'agent.timer       scheduler  1  1   0     1.24s  1.24s  1.24s',
+      // Each queue lane is admitted on its own, so their waits are separate.
+      'queue.chat        work       1  1   0     24ms   24ms   24ms',
+      'queue.foreground  work       1  1   0     1.15s  1.15s  1.15s',
       '',
       '--- commands (renderer → backend, poll-inbox excluded) ---',
       'command               n  ok  fail  p50    p95    max',

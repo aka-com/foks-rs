@@ -1,4 +1,4 @@
-import { enqueueProfileWork, normalizeMutationError } from '../bridge';
+import { normalizeMutationError } from '../bridge';
 import { chatActionMutates } from '../chat-contract';
 import {
   scheduleProfileWork,
@@ -95,11 +95,19 @@ export function chatClient(bridge: Bridge, profile: string, storeId: string) {
             preemptible: false as const,
           }
         : undefined);
+    // The chat lane, so a request does not wait behind a catalog walk or an
+    // invitation read for the same profile. Chat requests still serialize
+    // against each other here, and against everything else in the agent.
     return action.action === 'poll-inbox'
       ? work()
-      : scheduling
-        ? scheduleProfileWork(bridge, profile, work, scheduling)
-        : enqueueProfileWork(bridge, profile, work);
+      : scheduleProfileWork(
+          bridge,
+          profile,
+          work,
+          scheduling,
+          `chat:${action.action}`,
+          'chat',
+        );
   };
   return {
     request,

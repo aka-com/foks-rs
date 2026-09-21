@@ -196,8 +196,12 @@ export function formatTimings(
   const counts = { renderer: 0, backend: 0, agent: 0 };
   for (const event of recent) {
     counts[event.layer]++;
-    // The agent's phases ride inside the backend's operation events.
-    if (event.name === 'agent.op' && attr(event, 'body') !== undefined)
+    // The agent's phases ride inside the backend's operation events. A poll
+    // is run by its own worker, which reports its own phases instead.
+    if (
+      event.name === 'agent.op' &&
+      (attr(event, 'body') !== undefined || attr(event, 'wait') !== undefined)
+    )
       counts.agent++;
   }
   const quieted = recent.filter(quiet).length;
@@ -231,6 +235,14 @@ export function formatTimings(
       // The long-poll's wait is its purpose, not its cost.
       if (op !== 'Chat/PollInbox') add(ops, op, event);
     } else if (event.name.startsWith('chat.')) add(chat, event.name, event);
+    // Each queue lane is admitted on its own, so their waits do not belong in
+    // one row.
+    else if (event.name === 'queue')
+      add(
+        steps,
+        `queue.${String(attr(event, 'priority') ?? '?')}\t${event.scope ?? '—'}`,
+        event,
+      );
     else add(steps, `${event.name}\t${event.scope ?? '—'}`, event);
   }
   const summaries: string[] = [
