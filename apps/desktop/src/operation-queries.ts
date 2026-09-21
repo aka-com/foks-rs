@@ -99,13 +99,16 @@ export function teamRequestCountQuery(
 ) {
   const { server, account, alias } = store;
   return repository.query<number>(teamRequestCountKey(store), async () => {
-    const reply = await enqueueProfileWork(bridge, server, () =>
-      bridge.invitation(
-        server,
-        account,
-        { action: 'inbox', team_alias: alias },
-        null,
-      ),
+    // `invitation` owns its own profile admission: the native bridge queues
+    // the request itself. Queuing here as well would hold the profile's
+    // slot while awaiting a request that cannot start until the slot is
+    // released, and the inner request would expire at the admission
+    // deadline instead of running.
+    const reply = await bridge.invitation(
+      server,
+      account,
+      { action: 'inbox', team_alias: alias },
+      null,
     );
     return Array.isArray(reply) ? reply.length : (reply.rows?.length ?? 0);
   });

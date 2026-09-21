@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import type { AppInfo, Bridge } from '../src/bridge';
+import { enqueueProfileWork } from '../src/bridge';
 import type { TeamStore } from '../src/model';
 import {
   MetadataRepository,
@@ -17,6 +18,7 @@ import { appInfoKey, appInfoQuery } from '../src/resources/application';
 import {
   invitationRecoveryQuery,
   pendingOperationsQuery,
+  teamRequestCountQuery,
 } from '../src/operation-queries';
 
 function deferred<T>() {
@@ -205,5 +207,51 @@ test('invitation resources publish counts without tokens, phrases, PINs, or repl
         (key) => key === 'kind' || key === 'milliseconds',
       ),
     );
+  }
+});
+
+test('team request count does not re-enter a bridge that owns its own profile admission', async () => {
+  // The native bridge queues `invitation` on the profile itself. A query that
+  // queued the call again would hold the profile's slot while awaiting a
+  // request that cannot start until the slot is released, and the inner
+  // request would only settle at the admission deadline. Timers are mocked
+  // so a regression fails here instead of after a real minute.
+  mock.timers.enable({ apis: ['setTimeout'] });
+  let dispatched = 0;
+  const bridge = {} as Bridge;
+  Object.assign(bridge, {
+    invitation: (profile: string) =>
+      enqueueProfileWork(bridge, profile, async () => {
+        dispatched++;
+        return { rows: [{ request_id: 'a' }, { request_id: 'b' }] };
+      }),
+  });
+  const store: TeamStore = {
+    id: 'store',
+    kind: 'team',
+    name: 'Team',
+    server: 'profile',
+    account: 'account',
+    alias: 'team',
+    team_id_hex: 'team',
+    active: true,
+    team_kind: 'named',
+  };
+  const repository = new MetadataRepository(() => 0);
+  const pending = teamRequestCountQuery(repository, bridge, store).load();
+  let settled: 'pending' | 'resolved' | 'rejected' = 'pending';
+  void pending.then(
+    () => (settled = 'resolved'),
+    () => (settled = 'rejected'),
+  );
+  try {
+    for (let round = 0; round < 8; round++) await tick();
+    assert.equal(dispatched, 1);
+    assert.equal(settled, 'resolved');
+    assert.equal(await pending, 2);
+  } finally {
+    // Unwind any admission timer a regression left behind before restoring.
+    mock.timers.tick(60_000);
+    mock.timers.reset();
   }
 });
