@@ -2045,10 +2045,26 @@ impl CheckedProfileSession<'_> {
     ) -> Result<JobRunReport> {
         self.profile.require(Capability::UserSync)?;
         let _scheduler_lock = super::runtime::ProfileLock::scheduler(&self.paths)?;
+        // A federation job is registered per link, but the refresh it runs is
+        // alias-wide: it collects every active binding of the local team and
+        // converges all of them. Running it once per link would repeat the
+        // identical alias-wide pass F times for a team with F federated
+        // members. This map records each alias already refreshed in this
+        // batch, together with the outcome that refresh produced, so a later
+        // job naming the same alias reports that outcome and advances its own
+        // schedule without re-running the pass. It lives only for the duration
+        // of the `run_due_jobs_locked_with` call below, which is exactly one
+        // scheduler batch; nothing is carried across calls. Errors are
+        // deliberately not recorded, so a failing alias still gives every job
+        // its own attempt and its own backoff.
+        let mut refreshed_aliases = std::collections::BTreeMap::<String, Option<String>>::new();
         self.run_due_jobs_locked_with(now, local_vault, master_key, config, |job, local_vault| {
             let binding = self
                 .protected_job_binding(job, local_vault)
                 .map_err(|error| error.to_string())?;
+            if let Some(outcome) = refreshed_aliases.get(&binding.local_team_alias) {
+                return Ok(outcome.clone());
+            }
             match self.refresh_federated_team_security(
                 &binding.local_team_alias,
                 unlocked,
@@ -2057,8 +2073,14 @@ impl CheckedProfileSession<'_> {
                 credentials,
                 master_key,
             ) {
-                Ok(()) => Ok(None),
-                Err(Error::YubiUnlockRequired(reason)) => Ok(Some(reason)),
+                Ok(()) => {
+                    refreshed_aliases.insert(binding.local_team_alias, None);
+                    Ok(None)
+                }
+                Err(Error::YubiUnlockRequired(reason)) => {
+                    refreshed_aliases.insert(binding.local_team_alias, Some(reason.clone()));
+                    Ok(Some(reason))
+                }
                 Err(error) => Err(error.to_string()),
             }
         })
