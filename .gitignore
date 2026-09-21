@@ -9,6 +9,10 @@ dist/
 .env
 .DS_Store
 .claude/*
+# The session-start hook and the settings that register it are shared; a
+# developer's own overrides stay local.
+!.claude/hooks/
+!.claude/settings.json
 .claude/settings.local.json
 .codex/
 .grok/
