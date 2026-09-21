@@ -247,6 +247,7 @@ function SyncControls({
           onPointerEnter={track('pointer', true)}
           onPointerLeave={track('pointer', false)}
           onOpenServers={onOpenServers}
+          onRefresh={blocked ? undefined : onRefresh}
         />
       ) : null}
     </span>

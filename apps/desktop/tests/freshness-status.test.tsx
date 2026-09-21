@@ -459,13 +459,12 @@ test('each row lists its jobs: when they ran, when they run next, and what faile
     ]),
   );
   const row = summary.servers.find((server) => server.id === profile);
-  // The catalog is listed before the jobs that keep it, whatever order the
-  // scheduler holds them in.
+  // Jobs use a fixed display order regardless of scheduler order.
   assert.deepEqual(
     row?.jobs.map((job) => [job.label, job.state]),
     [
       ['Catalog', 'ok'],
-      ['Connectivity reconciliation', 'refreshing'],
+      ['Connectivity', 'refreshing'],
     ],
   );
   assert.match(row?.jobs[0].detail ?? '', /^Succeeded .+\. Next at .+\.$/);
@@ -475,7 +474,10 @@ test('each row lists its jobs: when they ran, when they run next, and what faile
     local?.jobs.map((job) => [job.label, job.state]),
     [['Account metadata', 'failed']],
   );
-  assert.match(local?.jobs[0].detail ?? '', /^Metadata read failed\. Next at .+\.$/);
+  assert.match(
+    local?.jobs[0].detail ?? '',
+    /^Metadata read failed\. Next at .+\.$/,
+  );
   // A parked job says so instead of naming a next time.
   const parked = summarizeSync(
     FIXTURE,

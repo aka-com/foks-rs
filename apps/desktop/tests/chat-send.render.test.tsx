@@ -147,7 +147,13 @@ test('optimistic submission survives conversation unmount during preparation and
   await ui.screen.findByText('first message');
   assert.equal(field.disabled, false);
   assert.equal(field.value, '');
-  assert.ok(document.querySelector('.chat-outgoing:not(.sent)'));
+  const sending = document.querySelector<HTMLElement>(
+    '.chat-outgoing:not(.sent)',
+  );
+  assert.ok(sending);
+  assert.ok(ui.within(sending).getByRole('status', { name: 'Sending' }));
+  assert.equal(sending.querySelector('time'), null);
+  assert.equal(ui.within(sending).queryByText('Details'), null);
   ui.fireEvent.change(field, { target: { value: 'next draft' } });
   assert.equal(
     ui.screen.getByRole<HTMLButtonElement>('button', { name: 'Send' }).disabled,
@@ -298,7 +304,7 @@ test('optimistic rows follow the bottom without pulling a reader away from older
   }
 });
 
-test('confirmation becomes Sent independently of a stalled history refresh', async () => {
+test('confirmation replaces the spinner with a timestamp independently of a stalled history refresh', async () => {
   const gate = deferred();
   let sent = false;
   await setup((base) => ({
@@ -325,8 +331,18 @@ test('confirmation becomes Sent independently of a stalled history refresh', asy
     ui.fireEvent.click(
       ui.screen.getByRole<HTMLButtonElement>('button', { name: 'Send' }),
     );
-    await ui.screen.findByText('Sent');
-    assert.ok(document.querySelector('.chat-outgoing.sent'));
+    const confirmed = await ui.waitFor(() => {
+      const row = document.querySelector<HTMLElement>('.chat-outgoing.sent');
+      assert.ok(row);
+      return row;
+    });
+    assert.ok(confirmed.querySelector('time'));
+    assert.equal(
+      ui.within(confirmed).queryByRole('status', { name: 'Sending' }),
+      null,
+    );
+    assert.equal(ui.within(confirmed).queryByText('Sent'), null);
+    assert.equal(ui.within(confirmed).queryByText('Details'), null);
     assert.equal(
       ui.screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message' })
         .disabled,

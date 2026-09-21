@@ -6,13 +6,9 @@ import { MessageText } from './message-text';
 import { failure } from './actions';
 import { messageTime, relativeMessageTime } from './presentation';
 
-const labels = {
-  saving: 'Sending…',
-  preparing: 'Sending…',
-  sending: 'Sending…',
+const statusLabels: Partial<Record<OutgoingMessage['phase'], string>> = {
   'not-sent': 'Not sent',
   unconfirmed: 'Delivery unconfirmed',
-  sent: 'Sent',
   paused: 'Waiting for access',
   cancelled: 'Cancelled',
 };
@@ -39,6 +35,7 @@ export function OutgoingRow({
   };
   const sent = message.phase === 'sent';
   const sending = ['saving', 'preparing', 'sending'].includes(message.phase);
+  const statusLabel = statusLabels[message.phase];
   const retryable =
     ['not-sent', 'unconfirmed', 'paused'].includes(message.phase) &&
     !['rejected', 'cancelled'].includes(message.operation?.state ?? '');
@@ -56,20 +53,30 @@ export function OutgoingRow({
       <div className="chat-outgoing-content">
         <header>
           <span className="chat-sender you">You</span>
-          <time
-            dateTime={new Date(message.createdAt).toISOString()}
-            title={messageTime(String(message.createdAt))}
-          >
-            {relativeMessageTime(String(message.createdAt))}
-          </time>
+          {sending ? (
+            <span
+              className="chat-send-spinner"
+              role="status"
+              aria-label="Sending"
+            />
+          ) : (
+            <time
+              dateTime={new Date(message.createdAt).toISOString()}
+              title={messageTime(String(message.createdAt))}
+            >
+              {relativeMessageTime(String(message.createdAt))}
+            </time>
+          )}
         </header>
         {message.text !== undefined && (
           <MessageText text={message.text} actions={bridge} />
         )}
       </div>
-      {!sending ? (
+      {!sending &&
+      (statusLabel || message.error || message.cleanupError || error) ? (
         <div className="chat-send-status">
-          <span role="status">{labels[message.phase]}</span>
+          {statusLabel && <span role="status">{statusLabel}</span>}
+          {message.error && <span>{message.error}</span>}
           {retryable && (
             <Button
               size="sm"
@@ -85,21 +92,10 @@ export function OutgoingRow({
             </Button>
           )}
           {message.cleanupError && (
-            <span role="status">
-              Local message storage needs attention. {message.cleanupError}
-            </span>
-          )}
-          {error && <span role="alert">{error}</span>}
-          <details>
-            <summary>Details</summary>
-            {message.submission && <div>Submission: {message.submission}</div>}
-            {message.operation && (
-              <div>
-                Operation: {message.operation.id} · {message.operation.state}
-              </div>
-            )}
-            {message.error && <div>{message.error}</div>}
-            {message.cleanupError && (
+            <>
+              <span role="status">
+                Local message storage needs attention. {message.cleanupError}
+              </span>
               <Button
                 size="sm"
                 disabled={message.running}
@@ -107,8 +103,9 @@ export function OutgoingRow({
               >
                 Retry local cleanup
               </Button>
-            )}
-          </details>
+            </>
+          )}
+          {error && <span role="alert">{error}</span>}
         </div>
       ) : null}
     </article>

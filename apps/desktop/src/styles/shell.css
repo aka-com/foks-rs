@@ -202,23 +202,38 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 /* While refreshing, the spinner stands where the icon was: the same ring the popover's rows spin, at the icon's size. */
 .global-refresh .spin{box-sizing:border-box;width:15px;height:15px;border:1.6px solid var(--line-mid);border-top-color:var(--accent);border-right-color:var(--line-mid);animation:btn-spin .9s linear infinite}
 @media (prefers-reduced-motion:reduce){.global-refresh .spin{animation:none}}
-.sync-popover{padding:10px 12px;font-size:12.5px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto;background:var(--main-surface);border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-menu)}
-.sync-row{display:flex;align-items:flex-start;gap:8px;padding:4px 0}
-.sync-row+.sync-row{border-top:1px solid var(--line-soft);margin-top:4px;padding-top:8px}
-.sync-dot{flex:none;width:8px;height:8px;margin-top:5px;border-radius:50%;background:var(--faint)}
+.sync-popover{padding:6px 0 0;font-size:12.5px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto;background:var(--main-surface);border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-menu)}
+.sync-row{padding:0 8px}
+.sync-popover.multi .sync-row+.sync-row{margin-top:2px;padding-top:2px;border-top:1px solid var(--line-soft)}
+/* The header: a plain line for a lone server, a disclosure button among several. */
+.sync-head{display:flex;align-items:center;gap:8px;width:100%;height:32px;padding:0 6px;border:0;border-radius:var(--radius-sm);background:none;color:inherit;font:inherit;text-align:left}
+button.sync-head{cursor:pointer}
+button.sync-head:hover{background:var(--hover)}
+button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-offset:-2px}
+.sync-head b{flex:none;font-weight:600;font-size:13px;color:var(--ink)}
+.sync-status{flex:1;min-width:0;text-align:right;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.sync-status.failed{color:var(--amber-ink);font-weight:500}
+.sync-chev{flex:none;font-size:12px;color:var(--faint);transform:rotate(-90deg);transition:transform .15s ease}
+.sync-row.open .sync-chev{transform:none}
+.sync-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--faint)}
 .sync-dot.ok{background:var(--ok-solid)}
 .sync-dot.failed{background:var(--warning-dot)}
 .sync-dot.refreshing{box-sizing:border-box;background:none;border:1.5px solid var(--line-mid);border-top-color:var(--accent);animation:btn-spin .9s linear infinite}
-.sync-body{flex:1;min-width:0}
-.sync-body b{display:block;font-weight:600;color:var(--ink)}
-.sync-body p{margin:2px 0 0;color:var(--muted);line-height:1.45}
-.sync-jobs{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:3px}
-.sync-jobs li{display:flex;align-items:baseline;gap:6px;font-size:12px;line-height:1.4;color:var(--muted)}
-.sync-jobs .sync-dot{width:6px;height:6px;margin-top:0;align-self:center}
-.sync-jobs b{display:inline;flex:none;font-weight:500;color:var(--ink-3)}
+.sync-dot.unknown{box-sizing:border-box;background:none;border:1.5px solid var(--faint)}
+.sync-body{padding:2px 6px 10px 28px}
+.sync-popover:not(.multi) .sync-body{padding-left:6px}
+.sync-cause{margin:2px 0 8px;padding:7px 9px;border-radius:8px;background:var(--amber-wash);color:var(--ink);line-height:1.45}
+.sync-jobs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.sync-jobs li{display:grid;grid-template-columns:6px 1fr auto;align-items:center;gap:8px;min-height:24px;padding:2px 0;font-size:12px;color:var(--muted)}
+.sync-jobs li+li{border-top:1px solid var(--line-soft)}
+.sync-jobs .sync-dot{width:6px;height:6px}
+.sync-jobs b{font-weight:500;color:var(--ink-3)}
+.sync-when{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.sync-when.failed{color:var(--amber-ink)}
+.sync-next{color:var(--faint);margin-left:10px}
 .sync-actions{display:flex;align-items:center;gap:8px;margin-top:8px}
-.sync-empty{color:var(--muted)}
-.sync-foot{display:flex;justify-content:flex-end;margin-top:8px;padding-top:8px;border-top:1px solid var(--line-soft)}
+.sync-empty{margin:0;padding:8px 14px 14px;color:var(--muted)}
+.sync-foot{display:flex;justify-content:flex-end;align-items:center;gap:12px;margin-top:6px;padding:8px 14px;border-top:1px solid var(--line-soft);background:var(--hover)}
 /* Topbar */
 .topbar{height:var(--topbar-h);flex:none;display:flex;align-items:center;gap:8px;padding:0 20px 0 16px;border-bottom:1px solid var(--line-soft);user-select:none}
 .topbar .back{width:28px;height:28px;flex:none;border-radius:var(--radius-sm);display:grid;place-items:center;color:var(--muted);font-size:17px}
