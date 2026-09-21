@@ -1,18 +1,29 @@
 import { focusedWindow } from './visibility';
 import { useEffect, useRef, useState } from 'react';
 import type { ChatMessage } from '../chat-contract';
+import { normalizeCommandError } from '../bridge';
 
-/** Read intent comes from a focused timeline, never from a filtered thread pane. */
+/**
+ * Read intent comes from a focused timeline, never from a filtered thread
+ * pane. Returns where the new messages begin and, when a read mark failed in
+ * a way a retry cannot clear, what the server said: the native side stages
+ * the read before it asks, and the next synchronization notes that the mark
+ * will retry, so a failure a retry can clear, or a conversation that closed
+ * meanwhile, is not the thread's to announce.
+ */
 export function useChatReadIntent(
   channelId: string,
   messages: readonly ChatMessage[],
   atBottom: boolean,
   readThrough: string | null,
   markRead: (channel: string, sequence: string) => Promise<void>,
-  setError: (cause: unknown) => void,
   enabled: boolean,
-) {
+): { newFrom: string | null; readError: string } {
   const [newFrom, setNewFrom] = useState<string | null>(null);
+  const [readFailure, setReadFailure] = useState<{
+    channel: string;
+    message: string;
+  } | null>(null);
   const readMark = readThrough ?? '0';
   const markedThrough = useRef(readMark);
   const markingThrough = useRef('0');
@@ -50,10 +61,15 @@ export function useChatReadIntent(
         markingThrough.current = latest;
         void markRead(channelId, latest)
           .then(() => {
-            if (!disposed) markedThrough.current = latest;
+            if (disposed) return;
+            markedThrough.current = latest;
+            setReadFailure(null);
           })
           .catch((cause) => {
-            if (!disposed) setError(cause);
+            if (disposed) return;
+            const typed = normalizeCommandError(cause);
+            if (typed.code === 'cancelled' || typed.retryable) return;
+            setReadFailure({ channel: channelId, message: typed.message });
           })
           .finally(() => {
             if (markingThrough.current === latest) markingThrough.current = '0';
@@ -71,6 +87,9 @@ export function useChatReadIntent(
       window.removeEventListener('blur', schedule);
       document.removeEventListener('visibilitychange', schedule);
     };
-  }, [atBottom, channelId, markRead, messages, setError, enabled]);
-  return newFrom;
+  }, [atBottom, channelId, markRead, messages, enabled]);
+  return {
+    newFrom,
+    readError: readFailure?.channel === channelId ? readFailure.message : '',
+  };
 }

@@ -349,6 +349,43 @@ test('read markers require focus and the newest displayed position', async () =>
   }
 });
 
+test('a read mark the server could not take for now is not the thread’s failure to announce', async () => {
+  Object.defineProperty(document, 'hasFocus', {
+    configurable: true,
+    value: () => true,
+  });
+  const marks: string[] = [];
+  try {
+    await setup((base) => ({
+      ...base,
+      chat: async (store, action, view) => {
+        if (action.action === 'mark-read') {
+          marks.push(action.sequence);
+          // The native side staged the read before asking; the next
+          // synchronization says it will retry.
+          throw {
+            code: 'io',
+            message: 'Connection lost.',
+            retryable: true,
+            fatal: false,
+            ambiguous: false,
+          };
+        }
+        return base.chat(store, action, view);
+      },
+    }));
+    await ui.waitFor(() => assert.equal(marks.length, 1));
+    await ui.act(async () => {});
+    assert.equal(ui.screen.queryByText('Connection lost.'), null);
+    assert.equal(ui.screen.queryByRole('button', { name: 'Retry' }), null);
+  } finally {
+    Object.defineProperty(document, 'hasFocus', {
+      configurable: true,
+      value: () => false,
+    });
+  }
+});
+
 test('lost submit reply recovers its submission without a second send', async () => {
   const submissions: string[] = [];
   let attempts = 0;

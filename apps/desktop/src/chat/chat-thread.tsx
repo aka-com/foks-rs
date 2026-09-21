@@ -109,7 +109,6 @@ export function ChatThread({
     missing,
     error,
     failure,
-    setError,
     busy,
     loaded,
     initialLoading,
@@ -128,13 +127,12 @@ export function ChatThread({
   );
   const hintId = useId();
   const waitingForSavedWork = !canSend && Boolean(draft.trim());
-  const newFrom = useChatReadIntent(
+  const { newFrom, readError } = useChatReadIntent(
     channel.id,
     messages,
     atBottom,
     readThrough,
     markRead,
-    setError,
     true,
   );
   const jumpToLatest = () => {
@@ -186,6 +184,9 @@ export function ChatThread({
           failureAlert(failure, teamName, [
             { label: 'Retry', disabled: busy, run: () => void load() },
           ]),
+          // A read mark the server refused for good: nothing to retry here,
+          // the next mark clears it.
+          { message: readError, severity: 'warn' },
           {
             message: missing
               ? 'Some earlier messages could not be checked. This history has incomplete verification.'
