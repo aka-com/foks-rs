@@ -548,6 +548,7 @@ test('a login edits in structured fields and serializes through the existing dra
   const password = await r.findByLabelText('Password');
   const username = r.getByLabelText('User name');
   assert.equal(password.getAttribute('type'), 'password');
+  assert.equal(password.getAttribute('placeholder'), 'password');
   assert.equal(r.queryByRole('textbox', { name: 'Contents' }), null);
 
   ui.fireEvent.click(r.getByRole('button', { name: 'Show' }));

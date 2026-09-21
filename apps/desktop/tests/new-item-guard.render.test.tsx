@@ -53,15 +53,14 @@ async function mount(overrides: Partial<Bridge> = {}) {
     ...INITIAL_STATE,
     location: { kind: 'store', ref: 'acct:personal' },
   });
-  const rendered = ui.render(
-    createElement(App, {
-      snapshot: FIXTURE,
-      bridge: { ...mockBridge(FIXTURE), ...overrides },
-      store,
-    }),
-  );
+  const appProps = {
+    snapshot: FIXTURE,
+    bridge: { ...mockBridge(FIXTURE), ...overrides },
+    store,
+  };
+  const rendered = ui.render(createElement(App, appProps));
   await ui.waitFor(() => assert.ok(rendered.getAllByText('Personal').length));
-  return { rendered, store };
+  return { rendered, store, App, appProps };
 }
 
 /** Opens the sheet for `kind` from the toolbar's New menu. */
@@ -198,7 +197,9 @@ test('a save already with the agent refuses the navigation', async () => {
 test('Escape on a sheet with something in it asks the same question', async () => {
   const { rendered } = await mount();
   await openSheet(rendered, 'Document');
-  ui.fireEvent.change(rendered.getByLabelText('Value'), {
+  const value = rendered.getByLabelText('Value') as HTMLInputElement;
+  assert.equal(value.classList.contains('mono'), false);
+  ui.fireEvent.change(value, {
     target: { value: '/ssh/id_ed25519' },
   });
 
@@ -237,6 +238,60 @@ test('Escape on a sheet with something in it asks the same question', async () =
     assert.equal(rendered.queryByText('New document'), null),
   );
 });
+
+test('Path expands below the vault selector and disappears when no vault is available', async () => {
+  const { rendered, App, appProps } = await mount();
+  await openSheet(rendered, 'Password');
+
+  const vault = rendered.getByRole('button', { name: 'Save in vault' });
+  assert.equal(rendered.queryByLabelText('Path'), null);
+  assert.equal(rendered.queryByRole('button', { name: 'Advanced' }), null);
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Path' }));
+
+  const path = rendered.getByLabelText('Path');
+  assert.equal(path.closest('.inset'), vault.closest('.inset'));
+  const hide = rendered.getByRole('button', { name: 'Hide Path' });
+  assert.equal(hide.getAttribute('aria-expanded'), 'true');
+  ui.fireEvent.click(hide);
+  assert.equal(rendered.queryByLabelText('Path'), null);
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Path' }));
+
+  appProps.snapshot = { ...appProps.snapshot, stores: [] };
+  rendered.rerender(createElement(App, appProps));
+  assert.equal(rendered.queryByRole('button', { name: 'Path' }), null);
+  assert.equal(rendered.queryByRole('button', { name: 'Hide Path' }), null);
+  assert.equal(rendered.queryByLabelText('Path'), null);
+});
+
+for (const kind of ['Password', 'Document']) {
+  test(`team permissions follow the ${kind.toLowerCase()} fields`, async () => {
+    const { rendered } = await mount();
+    await openSheet(rendered, kind);
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Save in vault' }));
+    ui.fireEvent.click(
+      await rendered.findByRole('option', { name: /^Household/ }),
+    );
+
+    const sheet = rendered.getByRole('dialog', {
+      name: `New ${kind.toLowerCase()}`,
+    });
+    const sections = [...sheet.querySelectorAll('.sec')].map((section) =>
+      section.textContent?.trim(),
+    );
+    const content = sections.findIndex((label) => label?.startsWith(kind));
+    const read = sections.findIndex((label) =>
+      label?.startsWith('Who can read'),
+    );
+    const change = sections.findIndex((label) =>
+      label?.startsWith('Who can change'),
+    );
+    assert.ok(content >= 0, `${kind} section is present`);
+    assert.ok(read > content, 'read permissions follow the item fields');
+    assert.ok(change > read, 'change permissions follow read permissions');
+    for (const summary of sheet.querySelectorAll('.sec .pv'))
+      assert.equal(summary.querySelector('b'), null);
+  });
+}
 
 test('a new item resumes its typed input after a rail tab switch', async () => {
   const { rendered, store } = await mount();

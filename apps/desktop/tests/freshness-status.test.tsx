@@ -18,6 +18,7 @@ import {
 let FreshnessCaption: typeof import('../src/components/metadata-status').FreshnessCaption;
 let summarizeSync: typeof import('../src/shell/sync-popover').summarizeSync;
 let JobTimes: typeof import('../src/shell/sync-popover').JobTimes;
+let syncStatusLabel: typeof import('../src/shell/sync-popover').syncStatusLabel;
 let vite: ViteDevServer;
 test.before(async () => {
   vite = await createServer({
@@ -28,9 +29,50 @@ test.before(async () => {
   ({ FreshnessCaption } = await vite.ssrLoadModule(
     '/src/components/metadata-status.tsx',
   ));
-  ({ summarizeSync, JobTimes } = await vite.ssrLoadModule(
+  ({ summarizeSync, JobTimes, syncStatusLabel } = await vite.ssrLoadModule(
     '/src/shell/sync-popover.tsx',
   ));
+});
+
+test('refresh rows use compact state labels', () => {
+  const base = {
+    id: null,
+    name: 'Catalog',
+    lastSuccessAt: undefined,
+    canReconnect: false,
+    reconnectDisabled: true,
+    reconnecting: false,
+    jobs: [],
+  };
+  assert.equal(
+    syncStatusLabel({
+      ...base,
+      state: 'failed',
+      message: 'The request was cancelled. Use Refresh to retry.',
+    }),
+    'Cancelled',
+  );
+  assert.equal(
+    syncStatusLabel({
+      ...base,
+      state: 'failed',
+      message: 'Server unavailable. Retrying automatically.',
+    }),
+    'Failed',
+  );
+  assert.equal(
+    syncStatusLabel({
+      ...base,
+      state: 'refreshing',
+      message: 'Refreshing…',
+      lastSuccessAt: 10,
+    }),
+    'Refreshing',
+  );
+  assert.equal(
+    syncStatusLabel({ ...base, state: 'unknown', message: '' }),
+    'Not refreshed',
+  );
 });
 test.after(async () => {
   await vite.close();
@@ -147,6 +189,14 @@ const FAILURE = {
   ambiguous: false,
 };
 
+const CANCELLED = {
+  code: 'cancelled',
+  message: 'The request was cancelled.',
+  retryable: false,
+  fatal: false,
+  ambiguous: false,
+};
+
 function service(snapshot: typeof FIXTURE) {
   return new DesktopReconciliation({
     snapshot: () => snapshot,
@@ -234,6 +284,25 @@ test('whole-catalog failures have one root observation without marking healthy s
     summary.diagnostics.filter((line) => line.includes(FAILURE.message)).length,
     1,
   );
+  reconciliation.dispose();
+});
+
+test('a cancelled catalog refresh uses concise recovery copy', () => {
+  const snapshot = failWholeCatalogRefresh(
+    markCatalogRefresh(FIXTURE, undefined, 20),
+    CANCELLED,
+    21,
+  );
+  const reconciliation = service(snapshot);
+  const catalog = summarizeSync(snapshot, reconciliation).servers.find(
+    (row) => row.id === null,
+  );
+  assert.equal(
+    catalog?.message,
+    'Request cancelled: The catalog refresh did not complete. Use Refresh to retry.',
+  );
+  assert.ok(catalog);
+  assert.equal(syncStatusLabel(catalog), 'Cancelled');
   reconciliation.dispose();
 });
 
@@ -486,7 +555,7 @@ test('each row lists its jobs: when they ran, when they run next, and what faile
   // own snapshot rather than from the timing log, which can be cleared.
   assert.match(
     row?.jobs[0].detail ?? '',
-    /^Succeeded .+ in 1\.20s\. Next at .+\.$/,
+    /^Succeeded .+ in 1\.20s\. Next .+\.$/,
   );
   assert.equal(row?.jobs[0].lastMilliseconds, 1_200);
   assert.equal(row?.jobs[1].detail, 'Running now.');
@@ -497,7 +566,7 @@ test('each row lists its jobs: when they ran, when they run next, and what faile
   );
   assert.match(
     local?.jobs[0].detail ?? '',
-    /^Metadata read failed\. Next at .+\.$/,
+    /^Metadata read failed\. Next .+\.$/,
   );
   // A parked job says so instead of naming a next time.
   const parked = summarizeSync(
@@ -530,7 +599,7 @@ test('each row lists its jobs: when they ran, when they run next, and what faile
 });
 
 test('Chat follows Devices in each server refresh group', () => {
-  const profile = FIXTURE.servers[0].profileName;
+  const profile = FIXTURE.servers[0].id;
   const reconciliation = service(FIXTURE);
   const summary = summarizeSync(FIXTURE, reconciliation, new Map(), [
     {
@@ -544,7 +613,7 @@ test('Chat follows Devices in each server refresh group', () => {
     },
   ]);
   const kinds = summary.servers
-    .find((server) => server.profileName === profile)
+    .find((server) => server.id === profile)
     ?.jobs.map((job) => job.kind);
   assert.ok(kinds);
   assert.equal(kinds.indexOf('chat'), kinds.indexOf('devices') + 1);
@@ -628,26 +697,30 @@ test('a job row states how long its last run took beside the time it ran', () =>
     detail: '',
     paused: false,
   };
+  const successful = row({
+    ...base,
+    state: 'ok',
+    lastSuccessAt: 20_000,
+    lastMilliseconds: 1_200,
+    nextAttemptAt: 50_000,
+  });
   assert.match(
-    row({
-      ...base,
-      state: 'ok',
-      lastSuccessAt: 20_000,
-      lastMilliseconds: 1_200,
-      nextAttemptAt: 50_000,
-    }),
-    / in 1\.20s/,
+    successful,
+    /sync-next[^>]*>Next .*<\/span><span>1\.20s<\/span><span>.+<\/span>/,
   );
+  assert.doesNotMatch(successful, /Next at/);
   // An attempt that has not yet succeeded states its duration too.
+  const attempted = row({
+    ...base,
+    state: 'unknown',
+    lastAttemptAt: 20_000,
+    lastMilliseconds: 340,
+  });
   assert.match(
-    row({
-      ...base,
-      state: 'unknown',
-      lastAttemptAt: 20_000,
-      lastMilliseconds: 340,
-    }),
-    /Attempted .+ in 340ms/,
+    attempted,
+    /sync-timing[^>]*><span>340ms<\/span><span>.+<\/span>/,
   );
+  assert.doesNotMatch(attempted, /Attempted| in /);
   // A job that has not run yet, or whose duration is unknown, states none.
   assert.doesNotMatch(
     row({ ...base, state: 'ok', lastSuccessAt: 20_000 }),

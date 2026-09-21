@@ -222,6 +222,14 @@ test('remaining work is visible beside healthy jobs and disappears when it settl
   const refreshNow = ui.screen.getByRole<HTMLButtonElement>('button', {
     name: 'Refresh now',
   });
+  const copy = ui.screen.getByRole<HTMLButtonElement>('button', {
+    name: 'Copy diagnostics',
+  });
+  const footerButtons = [...document.querySelectorAll('.sync-foot .btn')];
+  assert.deepEqual(footerButtons, [copy, refreshNow]);
+  assert.equal(refreshNow.textContent, '');
+  assert.equal(refreshNow.title, 'Refresh now');
+  assert.ok(refreshNow.querySelector('svg'));
   assert.equal(refreshNow.disabled, false);
   assert.equal(button.disabled, false);
   rendered.rerender(createElement(Harness, { service, refreshing: true }));

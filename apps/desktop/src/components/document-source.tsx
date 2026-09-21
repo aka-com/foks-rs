@@ -65,7 +65,6 @@ export function DocumentSourceRow({
         value={value}
         onChange={onValue}
         placeholder={placeholder}
-        mono
       />
     );
   }

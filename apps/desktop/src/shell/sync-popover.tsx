@@ -148,7 +148,7 @@ function jobSummary(
   const label = observationLabel(kind);
   const next =
     snapshot.nextAttemptAt !== undefined
-      ? `Next at ${clockTime(snapshot.nextAttemptAt)}.`
+      ? `Next ${clockTime(snapshot.nextAttemptAt)}.`
       : snapshot.paused
         ? 'Paused until Refresh.'
         : '';
@@ -392,8 +392,10 @@ export function summarizeSync(
               : 'No available chats',
         paused: false,
       };
+      const devicesIndex = jobs.findIndex((job) => job.kind === 'devices');
       const discovery = jobs.findIndex((job) => job.kind === 'discovery');
-      jobs.splice(discovery < 0 ? jobs.length : discovery + 1, 0, chat);
+      const after = devicesIndex >= 0 ? devicesIndex + 1 : discovery + 1;
+      jobs.splice(after > 0 ? after : jobs.length, 0, chat);
     }
     const refreshing = jobs.some((job) => job.state === 'refreshing');
     const failed = messages.length > 0;
@@ -457,12 +459,17 @@ export function summarizeSync(
         `${observationLabel(observation.kind)}: ${error.message}`,
       );
     }
+    const catalogCancelled =
+      catalogAttempt?.error !== undefined &&
+      normalizeCommandError(catalogAttempt.error).code === 'cancelled';
     servers.push({
       id: null,
       name: local.length ? 'This Mac' : 'Catalog',
       state: 'failed',
       message: catalogAttempt?.error
-        ? `${messages.join('; ').replace(/\.+$/, '')}. The catalog refresh did not complete.${snapshot.stores.length ? ' Previously loaded data is retained.' : ''} Use Refresh to retry.`
+        ? catalogCancelled
+          ? 'Request cancelled: The catalog refresh did not complete. Use Refresh to retry.'
+          : `${messages.join('; ').replace(/\.+$/, '')}. The catalog refresh did not complete.${snapshot.stores.length ? ' Previously loaded data is retained.' : ''} Use Refresh to retry.`
         : failureSentence(messages, undefined, paused).replace(
             ' No successful refresh yet.',
             '',
@@ -610,8 +617,8 @@ export function JobTimes({ job }: { job: SyncJobSummary }): ReactNode {
               : 'No available chats'}
       </span>
     );
-  // How long the last run took, beside the time it ran: a job that is slow
-  // and a job that is stale read the same on a row that states only a time.
+  // Scheduled time, duration, then last-run time. These compact values read
+  // left to right in the same order for successful and not-yet-successful jobs.
   const took = runDuration(job.lastMilliseconds);
   if (job.state === 'failed')
     return (
@@ -624,24 +631,34 @@ export function JobTimes({ job }: { job: SyncJobSummary }): ReactNode {
       </span>
     );
   if (job.state === 'refreshing')
-    return <span className="sync-when">{clockTime(job.lastSuccessAt)}</span>;
+    return (
+      <span className="sync-when sync-timing">
+        {took ? <span>{took}</span> : null}
+        {job.lastSuccessAt === undefined ? null : (
+          <span>{clockTime(job.lastSuccessAt)}</span>
+        )}
+      </span>
+    );
   if (job.state === 'unknown')
     return (
-      <span className="sync-when">
-        {job.lastAttemptAt !== undefined
-          ? `Attempted ${clockTime(job.lastAttemptAt)}${took ? ` in ${took}` : ''}`
-          : 'Not yet run'}
+      <span className="sync-when sync-timing">
+        {job.lastAttemptAt !== undefined ? (
+          <>
+            {took ? <span>{took}</span> : null}
+            <span>{clockTime(job.lastAttemptAt)}</span>
+          </>
+        ) : (
+          'Not yet run'
+        )}
       </span>
     );
   return (
-    <span className="sync-when">
-      {clockTime(job.lastSuccessAt)}
-      {took ? ` in ${took}` : ''}
+    <span className="sync-when sync-timing">
       {job.nextAttemptAt !== undefined ? (
-        <span className="sync-next">
-          Next at {clockTime(job.nextAttemptAt)}
-        </span>
+        <span className="sync-next">Next {clockTime(job.nextAttemptAt)}</span>
       ) : null}
+      {took ? <span>{took}</span> : null}
+      <span>{clockTime(job.lastSuccessAt)}</span>
     </span>
   );
 }
@@ -718,6 +735,15 @@ function ServerBody({
   );
 }
 
+/** Compact state at the right of a refresh row; the expanded body has detail. */
+export function syncStatusLabel(server: SyncServerSummary): string {
+  if (server.state === 'failed')
+    return /\bcancell?ed\b/i.test(server.message) ? 'Cancelled' : 'Failed';
+  if (server.state === 'refreshing') return 'Refreshing';
+  if (server.lastSuccessAt !== undefined) return timeOf(server.lastSuccessAt);
+  return 'Not refreshed';
+}
+
 /** Collapsible status row used when the popover contains several servers. */
 function ServerRow({
   server,
@@ -733,12 +759,7 @@ function ServerRow({
   onOpenServers?: (profile: string) => void;
 }): ReactNode {
   const bodyId = useId();
-  const status =
-    server.state === 'failed'
-      ? server.message.split('. ')[0].replace(/\.$/, '')
-      : server.lastSuccessAt !== undefined
-        ? timeOf(server.lastSuccessAt)
-        : 'Not yet refreshed';
+  const status = syncStatusLabel(server);
   return (
     <div className={`sync-row${open ? ' open' : ''}`}>
       <button
@@ -902,7 +923,7 @@ export function SyncPopover({
         ) : (
           <p className="sync-empty">
             {snapshot.servers.length
-              ? 'No refresh observation yet.'
+              ? 'Not refreshed.'
               : 'No servers configured.'}
           </p>
         )}
@@ -925,17 +946,6 @@ export function SyncPopover({
           </ul>
         ) : null}
         <div className="sync-foot">
-          {onRefresh ? (
-            <Button
-              size="sm"
-              variant="plain"
-              className="lnk"
-              disabled={refreshDisabled}
-              onClick={onRefresh}
-            >
-              Refresh now
-            </Button>
-          ) : null}
           <Button
             size="sm"
             variant="plain"
@@ -945,6 +955,17 @@ export function SyncPopover({
           >
             {copied ? 'Copied' : 'Copy diagnostics'}
           </Button>
+          {onRefresh ? (
+            <Button
+              size="sm"
+              variant="quiet"
+              icon="again"
+              aria-label="Refresh now"
+              title="Refresh now"
+              disabled={refreshDisabled}
+              onClick={onRefresh}
+            />
+          ) : null}
         </div>
       </div>
     </Popover>

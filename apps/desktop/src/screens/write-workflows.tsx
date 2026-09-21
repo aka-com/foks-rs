@@ -18,7 +18,6 @@ import {
   SectionLabel,
   Sheet,
   SheetDialog,
-  Toggle,
 } from '../components';
 import type { CardOption, DocumentSourceKind, FilterKind } from '../components';
 import {
@@ -35,6 +34,7 @@ import {
   readersOf,
   serverBlocked,
   serverLeaseUnavailable,
+  serverName,
   storeDescription,
   storeNavigationOrder,
   storeAvailability,
@@ -260,10 +260,14 @@ interface NewSheetProps {
  * Formats a store option for the "Save in vault" selector.
  */
 function storeOption(snapshot: AgentSnapshot, store: Store): CardOption {
+  const description = storeDescription(snapshot, store);
   return {
     id: store.id,
     title: store.name,
-    detail: `${store.kind === 'account' ? 'Personal vault' : 'Team vault'} · ${storeDescription(snapshot, store)}`,
+    detail:
+      store.kind === 'account'
+        ? `Personal vault · ${description}`
+        : `Team vault · ${description} · ${serverName(snapshot, store)}`,
     off: !canCreateInStore(snapshot, store.id),
   };
 }
@@ -369,10 +373,7 @@ function AccessBlock({
       <SectionLabel
         action={
           <span className="pv">
-            accessible to{' '}
-            <b>
-              {admitted.length} of {roster.length}
-            </b>
+            accessible to {admitted.length} of {roster.length}
           </span>
         }
       >
@@ -417,10 +418,7 @@ function AccessBlock({
       <SectionLabel>
         Who can change{' '}
         <span className="pv">
-          changeable by{' '}
-          <b>
-            {changers.length} of {roster.length}
-          </b>
+          changeable by {changers.length} of {roster.length}
         </span>
       </SectionLabel>
       <Inset>
@@ -482,6 +480,7 @@ function NewSheet({
           )
         : namedPath('', '/', workflow.initialFolder)),
   );
+  const [pathShown, setPathShown] = useState(false);
   const [username, setUsername] = useTabSheetState(
     'item.username',
     workflow.draft?.username ?? '',
@@ -725,7 +724,22 @@ function NewSheet({
       }
     >
       <>
-        <SectionLabel>Save in vault</SectionLabel>
+        <SectionLabel
+          action={
+            snapshot.stores.length ? (
+              <button
+                type="button"
+                className="path-toggle"
+                aria-expanded={pathShown}
+                onClick={() => setPathShown((shown) => !shown)}
+              >
+                {pathShown ? 'Hide Path' : 'Path'}
+              </button>
+            ) : undefined
+          }
+        >
+          Save in vault
+        </SectionLabel>
         <Inset>
           {snapshot.stores.length ? (
             <CardSelect
@@ -742,19 +756,12 @@ function NewSheet({
               <span className="dim">No vaults available to store items.</span>
             </InsetRow>
           )}
+          {snapshot.stores.length && pathShown
+            ? field('Path', path, setPath, PATH_HINT[itemKind])
+            : null}
         </Inset>
         {store && blocked ? (
           <Band live>{`${store.name}: ${blocked}`}</Band>
-        ) : null}
-        {store ? (
-          <AccessBlock
-            snapshot={snapshot}
-            store={store}
-            readRole={readRole}
-            writeRole={writeRole}
-            onReadRole={setReadRole}
-            onWriteRole={setWriteRole}
-          />
         ) : null}
         <SectionLabel
           action={
@@ -782,7 +789,14 @@ function NewSheet({
                 'e.g. github.com',
               )}
               {field('User name', username, setUsername, 'username')}
-              {field('Password', password, setPassword, '', false, 'password')}
+              {field(
+                'Password',
+                password,
+                setPassword,
+                'password',
+                false,
+                'password',
+              )}
               {field(
                 'Website',
                 website,
@@ -824,9 +838,16 @@ function NewSheet({
             {fileError}
           </p>
         ) : null}
-        <Toggle label="Advanced" className="sheet-advanced">
-          <Inset>{field('Path', path, setPath, PATH_HINT[itemKind])}</Inset>
-        </Toggle>
+        {store ? (
+          <AccessBlock
+            snapshot={snapshot}
+            store={store}
+            readRole={readRole}
+            writeRole={writeRole}
+            onReadRole={setReadRole}
+            onWriteRole={setWriteRole}
+          />
+        ) : null}
       </>
     </Sheet>
   );

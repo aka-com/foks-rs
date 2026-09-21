@@ -750,6 +750,7 @@ export function DetailsPanel({
               label={FIELD_LABELS[field ?? ''] ?? field ?? 'Value'}
               value={value}
               type={secret && !editPasswordShown ? 'password' : 'text'}
+              placeholder={secret ? 'password' : undefined}
               mono={secret}
               onChange={(next) => updateEditField(index, next)}
               action={

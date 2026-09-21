@@ -799,11 +799,12 @@ test('agent loss preserves a new password draft through retry', async () => {
   const username = rendered.getByLabelText('User name') as HTMLInputElement;
   const password = rendered.getByLabelText('Password') as HTMLInputElement;
   const website = rendered.getByLabelText('Website') as HTMLInputElement;
+  assert.equal(password.placeholder, 'password');
   ui.fireEvent.change(site, { target: { value: 'draft.example' } });
   ui.fireEvent.change(username, { target: { value: 'draft-user' } });
   ui.fireEvent.change(password, { target: { value: 'draft-password' } });
   ui.fireEvent.change(website, { target: { value: 'https://draft.example' } });
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Advanced' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Path' }));
   const path = rendered.getByLabelText('Path') as HTMLInputElement;
   ui.fireEvent.change(path, { target: { value: '/logins/preserved' } });
   site.focus();
