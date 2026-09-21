@@ -502,6 +502,11 @@ fn only_refusals_of_retained_material_request_a_retry() {
         foks_client::Error::CredentialBinding("stale"),
         foks_client::Error::UserBinding("stale"),
         foks_client::Error::TeamBinding("stale"),
+        // A chain anchored past the retained outcome's own Merkle position.
+        // `foks_client::retryable_chain_load_error` already treats this as
+        // recoverable staleness; the two lists answer different questions but
+        // must not disagree about what staleness means.
+        foks_client::Error::GenericChainRootChanged,
     ] {
         let error = foks_client_app::Error::Client(error);
         assert!(error_rejects_retained_material(&error), "{error}");

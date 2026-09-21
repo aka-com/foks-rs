@@ -653,6 +653,17 @@ fn client_error_rejects_material(error: &foks_client::Error) -> bool {
         | foks_client::Error::CredentialBinding(_)
         | foks_client::Error::UserBinding(_)
         | foks_client::Error::TeamBinding(_) => true,
+        // A generic chain arrived anchored at a Merkle root other than the one
+        // the outcome used to load it was verified at. Served from cache, that
+        // is precisely a stale retained outcome: the tree advanced after the
+        // outcome was retained, so the chain the server returns is anchored
+        // ahead of it. Re-authenticating advances the root and the load agrees.
+        //
+        // Without this the operation failed outright while every comparable
+        // staleness retried, because the retry is already gated on the read
+        // having been served retained material: a read that authenticated for
+        // itself cannot reach this and still gets the answer it was given.
+        foks_client::Error::GenericChainRootChanged => true,
         foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code, .. }) => {
             status_rejects_material(*code)
         }
