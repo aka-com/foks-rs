@@ -463,6 +463,25 @@ fn combined_group_detail_results_preserve_independent_errors() {
 }
 
 #[test]
+fn a_group_detail_the_desktop_cannot_decode_fails_that_part_not_the_read() {
+    let mapped = group_detail_result::<i64>(
+        ResponseResult::Success {
+            value: serde_json::json!(vec![serde_json::Value::Null; MAXIMUM_FIRST_RUN_ROWS + 1]),
+        },
+        |value| {
+            require_response_row_cap(&value, "group roster entries")?;
+            Ok(0)
+        },
+    )
+    .unwrap();
+    let GroupDetailResultDto::Error { error } = mapped else {
+        panic!("an undecodable part became success");
+    };
+    assert_eq!(error.code, "invalid-response");
+    assert!(!error.retryable);
+}
+
+#[test]
 fn strict_demotion_orders_member_visibility_below_admin_and_owner() {
     assert!(MemberRole::Member { visibility: -1 }
         .is_strictly_lower_than(MemberRole::Member { visibility: 0 }));

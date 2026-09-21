@@ -369,8 +369,12 @@ pub(super) fn group_detail_result<T>(
     decode: impl FnOnce(serde_json::Value) -> Result<T, AgentError>,
 ) -> Result<GroupDetailResultDto<T>, AgentError> {
     match result {
-        ResponseResult::Success { value } => Ok(GroupDetailResultDto::Success {
-            value: decode(value)?,
+        // A part the desktop cannot decode fails that part, as one the agent
+        // could not read does: the team fails closed on its own record, and
+        // the read goes on to the catalog's other teams.
+        ResponseResult::Success { value } => Ok(match decode(value) {
+            Ok(value) => GroupDetailResultDto::Success { value },
+            Err(error) => GroupDetailResultDto::Error { error },
         }),
         ResponseResult::Error {
             code,

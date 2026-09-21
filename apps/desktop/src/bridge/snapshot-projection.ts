@@ -53,6 +53,9 @@ function recoverableGroupDetailFailure(
       'profile-busy',
       'busy',
       'cancelled',
+      // A part the native side could not decode: the team fails closed on
+      // its own record, like one the agent could not read.
+      'invalid-response',
     ].includes(typed.code)
   ) {
     if (typed.code === 'invalid-command-error') {

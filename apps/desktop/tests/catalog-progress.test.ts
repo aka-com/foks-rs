@@ -541,6 +541,48 @@ test('refresh failures retain last success without changing authorization facts'
   assert.strictEqual(failed.servers, previous.servers);
 });
 
+test('a roster the native side could not decode degrades that team, not the whole catalog', async () => {
+  const base = mockBridge(FIXTURE);
+  const team = FIXTURE.stores.find(
+    (store): store is TeamStore => store.kind === 'team',
+  )!;
+  const bridge: Bridge = {
+    ...base,
+    listGroupDetails: async (storeId) => {
+      const details = await base.listGroupDetails(storeId);
+      if (storeId !== team.id) return details;
+      return {
+        ...details,
+        parties: {
+          status: 'error',
+          error: {
+            code: 'invalid-response',
+            message: 'group roster entries exceeded the response cap',
+            retryable: false,
+            fatal: false,
+            ambiguous: false,
+          },
+        },
+      };
+    },
+  };
+  const snapshot = await loadSnapshot(bridge, FIXTURE, 1);
+  const failure = snapshot.groupDetailFailures.find(
+    (entry) => entry.store === team.id,
+  );
+  assert.equal(failure?.source, 'roster');
+  assert.equal(failure?.code, 'invalid-response');
+  assert.ok(snapshot.stores.some((store) => store.id === team.id));
+  assert.ok(
+    snapshot.parties.every((party) => party.store !== team.id),
+    'no roster was kept for the team that failed',
+  );
+  assert.ok(
+    snapshot.parties.some((party) => party.store !== team.id),
+    'the other teams were read',
+  );
+});
+
 test('a roster the profile queue cannot admit degrades that team, not the whole catalog', async () => {
   const base = mockBridge(FIXTURE);
   const team = FIXTURE.stores.find(
