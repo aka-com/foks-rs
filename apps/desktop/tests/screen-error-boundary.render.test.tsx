@@ -107,17 +107,18 @@ test('changing location resets the screen error boundary', () => {
   assert.equal(rendered.queryByRole('alert'), null);
 });
 
-test('the key reads every field that identifies a page and nothing else', () => {
+test('the boundary key identifies screens and page identity includes route fields', () => {
   assert.equal(
     boundary.screenBoundaryKey({ kind: 'store', ref: 'acct:personal' }),
-    'store:acct:personal::::::',
+    'store:acct:personal:',
   );
   assert.equal(
     boundary.screenBoundaryKey({ kind: 'settings', section: 'servers' }),
-    'settings::servers:::::',
+    'settings::servers',
   );
-  assert.equal(boundary.screenBoundaryKey({ kind: 'all' }), 'all:::::::');
-  // The fields `sameLocation` distinguishes each make a different page.
+  assert.equal(boundary.screenBoundaryKey({ kind: 'all' }), 'all::');
+  // The fields `sameLocation` distinguishes each make a different page, on
+  // the same screen: the key is unchanged, the identity is not.
   const pairs: [Location, Location][] = [
     [
       { kind: 'chat', ref: 'team:eng', channel: 'a' },
@@ -146,30 +147,44 @@ test('the key reads every field that identifies a page and nothing else', () => 
   ];
   for (const [left, right] of pairs) {
     assert.equal(sameLocation(left, right), false);
-    assert.notEqual(
+    assert.equal(
       boundary.screenBoundaryKey(left),
       boundary.screenBoundaryKey(right),
+    );
+    assert.notEqual(
+      boundary.screenIdentity(left),
+      boundary.screenIdentity(right),
     );
   }
 });
 
-test('moving to another channel of the same team leaves a failed page behind', () => {
+test('moving to another channel of the same team clears a failure without remounting a healthy screen', () => {
   let setChannel!: (channel: string) => void;
+  let mounts = 0;
   function Page({ channel }: { channel: string }) {
+    const [mounted] = useState(() => ++mounts);
     if (channel === 'broken') throw new Error('Channel broken');
-    return createElement('p', null, `Channel ${channel}`);
+    return createElement('p', null, `Channel ${channel} (${mounted})`);
   }
   function Shell() {
     const [channel, update] = useState('broken');
     setChannel = update;
+    const location: Location = { kind: 'chat', ref: 'team:eng', channel };
     return createElement(boundary.ScreenErrorBoundary, {
-      key: boundary.screenBoundaryKey({ kind: 'chat', ref: 'team:eng', channel }),
+      key: boundary.screenBoundaryKey(location),
+      identity: boundary.screenIdentity(location),
       children: createElement(Page, { channel }),
     });
   }
   const { value: rendered } = quietly(() => ui.render(createElement(Shell)));
   assert.ok(rendered.getByRole('alert'));
+  // The failure clears for the next channel, which mounts.
   ui.act(() => setChannel('fine'));
-  assert.ok(rendered.getByText('Channel fine'));
+  assert.ok(rendered.getByText(/Channel fine/));
   assert.equal(rendered.queryByRole('alert'), null);
+  const drawn = mounts;
+  // A further channel of the same team keeps the healthy screen mounted.
+  ui.act(() => setChannel('other'));
+  assert.ok(rendered.getByText(`Channel other (${drawn})`));
+  assert.equal(mounts, drawn);
 });

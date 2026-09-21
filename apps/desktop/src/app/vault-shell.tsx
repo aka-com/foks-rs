@@ -75,6 +75,7 @@ import {
 import { ScreenRouter } from './screen-router';
 import {
   ScreenErrorBoundary,
+  screenIdentity,
   screenBoundaryKey,
 } from './screen-error-boundary';
 import {
@@ -520,7 +521,10 @@ export function VaultShell({
                 />
                 {/* Reset screen failures when the location changes while keeping
                     the rail and topbar outside the error boundary. */}
-                <ScreenErrorBoundary key={screenBoundaryKey(here)}>
+                <ScreenErrorBoundary
+                  key={screenBoundaryKey(here)}
+                  identity={screenIdentity(here)}
+                >
                   <ScreenRouter
                     shown={shown}
                     bridge={bridge}

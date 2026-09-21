@@ -1,11 +1,10 @@
 /**
  * Isolates screen render failures from the surrounding application shell.
  *
- * A throw during a page's render otherwise unmounts the whole shell, rail and
- * topbar included, leaving nothing to navigate away with. This catches it at
- * the page: the rail stays, the page becomes a band saying what failed, with
- * a way to draw it again, and navigating to another page starts that page
- * clean because the shell keys the boundary on the location.
+ * A failed screen is replaced with an error notice and retry action while the
+ * rail and topbar remain available. The shell keys the boundary by screen and
+ * clears failures when the full page identity changes without remounting a
+ * healthy screen.
  */
 
 import { Component, Fragment } from 'react';
@@ -15,17 +14,25 @@ import { Band, Button } from '../components';
 import type { Location } from '../location';
 
 /**
- * What identifies a page for the boundary's key: every field `sameLocation`
- * in `navigation/routes.ts` reads to tell one page from another, so moving
- * to another channel, tab, account, server or device leaves a failed page
- * behind rather than carrying its failure along; without the conceal
- * signal, on which the screens already remount.
+ * What identifies a page's screen for the boundary's key: the fields that
+ * pick which screen the router mounts, without the conceal signal, on which
+ * the screens already remount. A change here remounts the screen.
  */
 export function screenBoundaryKey(location: Location): string {
   return [
     location.kind,
     'ref' in location ? location.ref : '',
     'section' in location ? location.section : '',
+  ].join(':');
+}
+
+/**
+ * Returns the location fields used to clear a displayed screen failure when
+ * navigation changes the current page. Healthy screens retain their state.
+ */
+export function screenIdentity(location: Location): string {
+  return [
+    screenBoundaryKey(location),
     'store' in location ? location.store : '',
     'profile' in location ? location.profile : '',
     'device' in location ? location.device : '',
@@ -38,6 +45,8 @@ export function screenBoundaryKey(location: Location): string {
 
 interface ScreenErrorBoundaryProps {
   children: ReactNode;
+  /** The page's identity; a failure is cleared when it changes. */
+  identity?: string;
 }
 
 interface ScreenErrorBoundaryState {
@@ -57,6 +66,14 @@ export class ScreenErrorBoundary extends Component<
     error: unknown,
   ): Partial<ScreenErrorBoundaryState> {
     return { failure: { error } };
+  }
+
+  override componentDidUpdate(previous: ScreenErrorBoundaryProps): void {
+    if (this.state.failure && previous.identity !== this.props.identity)
+      this.setState((current) => ({
+        failure: null,
+        generation: current.generation + 1,
+      }));
   }
 
   override componentDidCatch(error: unknown, info: ErrorInfo): void {
