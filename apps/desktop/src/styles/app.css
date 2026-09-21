@@ -2009,11 +2009,6 @@
   margin: 4px 3px;
 }
 
-.device-notification-settings.chat-local-settings {
-  padding: 0;
-  border: 0;
-  font-size: 13px;
-}
 .inset.settings-checkboxes > label {
   display: flex;
   align-items: center;
@@ -2042,15 +2037,6 @@
   cursor: default;
   color: var(--muted);
 }
-.device-notification-settings.chat-local-settings > p {
-  margin: 8px 2px 0;
-  font-size: 12px;
-  line-height: 1.5;
-}
-.device-notification-settings.chat-local-settings > p[role='alert'] {
-  margin: 10px 2px 12px;
-}
-
 .cli-server-fields .fr .k {
   width: 112px;
 }

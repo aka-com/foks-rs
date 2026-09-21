@@ -1116,6 +1116,19 @@
 .chat-local-settings [role='alert'] {
   color: var(--danger-ink);
 }
+.device-notification-settings.chat-local-settings {
+  padding: 0;
+  border: 0;
+  font-size: 13px;
+}
+.device-notification-settings.chat-local-settings > p {
+  margin: 8px 2px 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.device-notification-settings.chat-local-settings > p[role='alert'] {
+  margin: 10px 2px 12px;
+}
 /* The settings pane, inline in the sentence that names it. */
 .chat-alert-link {
   display: inline;
