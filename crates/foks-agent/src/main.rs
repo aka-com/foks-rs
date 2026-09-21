@@ -7,6 +7,7 @@ mod connectivity;
 mod data;
 mod invitations;
 mod profile_work;
+mod read_cache;
 mod retention;
 mod sso;
 #[cfg(test)]
@@ -519,7 +520,7 @@ fn run_scheduled_profile(
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let registry = ProfileRegistry::open(state_dir)?;
     let session =
-        ProfileSession::open_with_control(&registry, profile, timeout, cancellation.clone())?;
+        read_cache::open_profile_session(&registry, profile, timeout, cancellation.clone())?;
     let credentials = ClientCredentials::open(state_dir)?;
     profile_work::with_control(timeout, cancellation, || {
         checked_session(&credentials, &session, |session| {
@@ -2297,12 +2298,8 @@ fn put_kv_reader<R: std::io::Read>(
     write_role: KvRole,
     mkdir_p: bool,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    let session = ProfileSession::open_with_control(
-        registry,
-        kv_store_profile(store),
-        timeout,
-        cancellation,
-    )?;
+    let session =
+        read_cache::open_profile_session(registry, kv_store_profile(store), timeout, cancellation)?;
     with_vault(state_dir, &session, |session, vault| {
         let credentials = ClientCredentials::open(state_dir)?;
         let master = credentials.master_key()?;
@@ -2537,6 +2534,8 @@ fn operation_is_noninteractive(operation: &Operation) -> bool {
     }
 }
 
+/// Runs an operation, invalidates retained read state around operations that may
+/// mutate, and retries eligible cached reads once with fresh authentication.
 fn dispatch_result(
     state_dir: &Path,
     operation: Operation,
@@ -2544,13 +2543,66 @@ fn dispatch_result(
     cancellation: CancellationToken,
     ready: bool,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let started = Instant::now();
     let noninteractive = operation_is_noninteractive(&operation);
-    let dispatch = || dispatch_result_inner(state_dir, operation, timeout, cancellation, ready);
-    if noninteractive {
-        foks_keystore::without_user_interaction(dispatch)
-    } else {
-        dispatch()
+    let reads = read_cache::operation_serves_reads(&operation);
+    let scope = profile_work::operation_scope(&operation);
+    let retry = reads.then(|| operation.clone());
+    let run = |operation, timeout| {
+        let dispatch =
+            || dispatch_result_inner(state_dir, operation, timeout, cancellation.clone(), ready);
+        if noninteractive {
+            foks_keystore::without_user_interaction(dispatch)
+        } else {
+            dispatch()
+        }
+    };
+    // Treat operations outside the read and noninvalidating lists as mutations
+    // and clear all retained read state.
+    let invalidates = !reads
+        && !read_cache::operation_leaves_retained_material(&operation)
+        && !matches!(
+            scope,
+            profile_work::Scope::None | profile_work::Scope::RegistryRead
+        );
+    // Invalidate before dispatch because a timed-out operation may still commit
+    // without reaching post-dispatch cleanup.
+    if invalidates {
+        read_cache::invalidate_all();
     }
+    let (result, trace) = read_cache::with_operation_scope(reads, || run(operation, timeout));
+    if !reads {
+        // Invalidate again after dispatch, including on failure, to remove entries
+        // cached concurrently while the mutation was running.
+        if invalidates {
+            read_cache::invalidate_all();
+        }
+        if matches!(scope, profile_work::Scope::Root) {
+            read_cache::invalidate_base_clients();
+        }
+        return result;
+    }
+    let Err(error) = result else {
+        return result;
+    };
+    if !read_cache::read_earns_a_retry(&trace, error.as_ref()) {
+        return Err(error);
+    }
+    for (state_root, profile) in &trace.profiles {
+        read_cache::invalidate_profile(state_root, profile);
+    }
+    let Some(operation) = retry else {
+        return Err(error);
+    };
+    // Limit the retry to the remaining request deadline. If no time remains,
+    // return the original error instead of producing a zero-timeout error or
+    // retaining profile admission after the caller has abandoned the request.
+    let remaining = timeout.saturating_sub(started.elapsed());
+    if remaining.is_zero() {
+        return Err(error);
+    }
+    // Retry once with fresh authentication and return the retry result.
+    read_cache::with_operation_scope(true, || run(operation, remaining)).0
 }
 
 fn dispatch_result_inner(
@@ -2841,7 +2893,7 @@ fn dispatch_result_inner(
         Operation::Probe { profile } => {
             let credentials = ClientCredentials::open(state_dir)?;
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             let report = checked_session(&credentials, &session, |session| {
                 session
                     .probe_and_pin()
@@ -2864,7 +2916,7 @@ fn dispatch_result_inner(
         }
         Operation::ListProfileOverview { profile } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             let credentials = ClientCredentials::open(state_dir)?;
             if credentials.requires_import_verification(&session)? {
                 let catalog =
@@ -2974,7 +3026,7 @@ fn dispatch_result_inner(
         }
         Operation::ListAccounts { profile } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             let credentials = ClientCredentials::open(state_dir)?;
             if credentials.requires_import_verification(&session)? {
                 let catalog =
@@ -3013,7 +3065,7 @@ fn dispatch_result_inner(
         }
         Operation::ListPendingOperations { profile } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |_session, vault| {
                 let pending = vault
                     .pending_operations()?
@@ -3028,7 +3080,7 @@ fn dispatch_result_inner(
             account_alias,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(
                     session.account_renames(&account_alias, vault)?,
@@ -3112,7 +3164,7 @@ fn dispatch_result_inner(
             passphrase,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             let credentials = ClientCredentials::open(state_dir)?;
             checked_session(&credentials, &session, |session| {
                 let master = credentials.master_key()?;
@@ -3139,7 +3191,7 @@ fn dispatch_result_inner(
         }
         Operation::ResumeAccount { profile, alias } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             let credentials = ClientCredentials::open(state_dir)?;
             checked_session(&credentials, &session, |session| {
                 let master = credentials.master_key()?;
@@ -3156,7 +3208,7 @@ fn dispatch_result_inner(
         }
         Operation::ListDevices { profile, alias } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 let devices = session
                     .list_devices(&alias, vault)?
@@ -3176,7 +3228,7 @@ fn dispatch_result_inner(
             account_alias,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |_session, vault| {
                 let summaries = vault
                     .backup_enrollments(&account_alias)?
@@ -3192,7 +3244,7 @@ fn dispatch_result_inner(
         }
         Operation::DescribeServerStatus { profile } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             let status = if session.has_hard_state_artifacts()? {
                 let credentials = ClientCredentials::open(state_dir)?;
                 checked_session(&credentials, &session, |session| {
@@ -3211,7 +3263,7 @@ fn dispatch_result_inner(
             device_id,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 let credentials = ClientCredentials::open(state_dir)?;
                 let master = credentials.master_key()?;
@@ -3231,7 +3283,7 @@ fn dispatch_result_inner(
             serial,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 Ok(serde_json::to_value(session.provision_owner_device(
                     &source_alias,
@@ -3248,7 +3300,7 @@ fn dispatch_result_inner(
             target_alias,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 Ok(serde_json::to_value(
                     session.resume_owner_device_provision(&target_alias, vault, master)?,
@@ -3261,7 +3313,7 @@ fn dispatch_result_inner(
             backup_alias,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 let phrase = session.prepare_owner_backup(&account_alias, &backup_alias, vault)?;
                 let phrase = phrase.expose_joined();
@@ -3278,7 +3330,7 @@ fn dispatch_result_inner(
             phrase,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(session.commit_owner_backup(
                     &account_alias,
@@ -3295,7 +3347,7 @@ fn dispatch_result_inner(
             backup_id,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 Ok(serde_json::to_value(session.revoke_owner_backup(
                     &account_alias,
@@ -3314,7 +3366,7 @@ fn dispatch_result_inner(
             serial,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(session.recover_owner_account(
                     &target_alias,
@@ -3332,7 +3384,7 @@ fn dispatch_result_inner(
             device_name,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(session.resume_owner_recovery(
                     &target_alias,
@@ -3348,7 +3400,7 @@ fn dispatch_result_inner(
             passphrase,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(session.set_passphrase(
                     &alias,
@@ -3363,7 +3415,7 @@ fn dispatch_result_inner(
             passphrase,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(session.change_passphrase(
                     &alias,
@@ -3378,7 +3430,7 @@ fn dispatch_result_inner(
             passphrase,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(session.verify_passphrase(
                     &alias,
@@ -3394,7 +3446,7 @@ fn dispatch_result_inner(
             passphrase,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 Ok(serde_json::to_value(session.set_yubi_passphrase(
                     &alias,
@@ -3413,7 +3465,7 @@ fn dispatch_result_inner(
             passphrase,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 Ok(serde_json::to_value(session.change_yubi_passphrase(
                     &alias,
@@ -3432,7 +3484,7 @@ fn dispatch_result_inner(
             passphrase,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 Ok(serde_json::to_value(session.verify_yubi_passphrase(
                     &alias,
@@ -3446,7 +3498,7 @@ fn dispatch_result_inner(
         }
         Operation::SyncAccount { profile, alias } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(session.sync_account(&alias, vault)?)?)
             })
@@ -3456,7 +3508,7 @@ fn dispatch_result_inner(
             account_alias,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(
                     session.start_owner_device_pairing(&account_alias, vault)?,
@@ -3468,7 +3520,7 @@ fn dispatch_result_inner(
             account_alias,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(
                     session.republish_owner_device_pairing(&account_alias, vault)?,
@@ -3480,7 +3532,7 @@ fn dispatch_result_inner(
             account_alias,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 Ok(serde_json::to_value(session.finish_owner_device_pairing(
                     &account_alias,
@@ -3497,7 +3549,7 @@ fn dispatch_result_inner(
             phrase,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(session.accept_owner_device_pairing(
                     KexAcceptanceInput {
@@ -3519,7 +3571,7 @@ fn dispatch_result_inner(
             phrase,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 let candidate = go_candidate_for_session(&candidate_id, session)?;
                 Ok(serde_json::to_value(
@@ -3542,7 +3594,7 @@ fn dispatch_result_inner(
             target_alias,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(
                     session.resume_owner_device_pairing_acceptance(&target_alias, vault)?,
@@ -3555,7 +3607,7 @@ fn dispatch_result_inner(
             target_alias,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(
                     session.resume_owner_device_pairing_acceptance_for_user(
@@ -3573,7 +3625,7 @@ fn dispatch_result_inner(
             target_alias,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 let candidate = go_candidate_for_session(&candidate_id, session)?;
                 if !candidate.summary.copyable {
@@ -3595,7 +3647,7 @@ fn dispatch_result_inner(
         }
         Operation::ListYubiCards { profile } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, _vault| {
                 Ok(serde_json::to_value(
                     session.list_yubi_cards(&HardwareYubiProvider::new())?,
@@ -3604,7 +3656,7 @@ fn dispatch_result_inner(
         }
         Operation::ListYubiAccounts { profile } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             let credentials = ClientCredentials::open(state_dir)?;
             if credentials.requires_import_verification(&session)? {
                 return Ok(serde_json::to_value(
@@ -3631,7 +3683,7 @@ fn dispatch_result_inner(
             retry_configuration,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 let provider = HardwareYubiProvider::new();
                 let card = yubi_card(&provider, card_serial)?;
@@ -3674,7 +3726,7 @@ fn dispatch_result_inner(
             pin,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 Ok(serde_json::to_value(session.resume_yubi_account(
                     &alias,
@@ -3698,7 +3750,7 @@ fn dispatch_result_inner(
             retry_configuration,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 let provider = HardwareYubiProvider::new();
                 let card = yubi_card(&provider, card_serial)?;
@@ -3736,7 +3788,7 @@ fn dispatch_result_inner(
             with_federation,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             if !with_federation {
                 return with_vault_and_master(state_dir, &session, |session, vault, master| {
                     Ok(serde_json::to_value(session.sync_yubi_account(
@@ -3770,7 +3822,7 @@ fn dispatch_result_inner(
         }
         Operation::YubiPinStatus { profile, alias } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(session.yubi_pin_status(
                     &alias,
@@ -3786,7 +3838,7 @@ fn dispatch_result_inner(
             new_pin,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(session.change_yubi_pin(
                     &alias,
@@ -3804,7 +3856,7 @@ fn dispatch_result_inner(
             new_puk,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 session.change_yubi_puk(
                     &alias,
@@ -3823,7 +3875,7 @@ fn dispatch_result_inner(
             new_pin,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(session.unblock_yubi_pin(
                     &alias,
@@ -3840,7 +3892,7 @@ fn dispatch_result_inner(
             pin,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 Ok(serde_json::to_value(session.rotate_yubi_management_key(
                     &alias,
@@ -3857,7 +3909,7 @@ fn dispatch_result_inner(
             pin,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 let pin = pin.as_ref().map(|pin| Pin::new(pin.expose())).transpose()?;
                 Ok(serde_json::to_value(session.resume_yubi_management_key(
@@ -3875,7 +3927,7 @@ fn dispatch_result_inner(
             software_alias,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(session.recover_yubi_management_key(
                     &yubi_alias,
@@ -3890,7 +3942,7 @@ fn dispatch_result_inner(
             pin,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 Ok(serde_json::to_value(session.recover_yubi_subkey(
                     &alias,
@@ -3907,7 +3959,7 @@ fn dispatch_result_inner(
             software_alias,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 Ok(serde_json::to_value(session.revoke_yubi_device(
                     &software_alias,
@@ -3931,12 +3983,8 @@ fn dispatch_result_inner(
                     return Ok(serde_json::to_value(page)?);
                 }
             }
-            let session = ProfileSession::open_with_control(
-                &registry,
-                &store.profile,
-                timeout,
-                cancellation,
-            )?;
+            let session =
+                read_cache::open_profile_session(&registry, &store.profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 let report = session.list_kv_metadata(&store.account_alias, vault)?;
                 Ok(serde_json::to_value(paginate_fresh_catalog(
@@ -3961,12 +4009,8 @@ fn dispatch_result_inner(
                     return Ok(serde_json::to_value(page)?);
                 }
             }
-            let session = ProfileSession::open_with_control(
-                &registry,
-                &store.profile,
-                timeout,
-                cancellation,
-            )?;
+            let session =
+                read_cache::open_profile_session(&registry, &store.profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 let report = session.list_team_kv_metadata(
                     &store.account_alias,
@@ -3989,7 +4033,7 @@ fn dispatch_result_inner(
         } => {
             let profile = kv_store_profile(&store).to_owned();
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 let report = match &store {
                     KvStoreRef::Account(store) => {
@@ -4033,7 +4077,7 @@ fn dispatch_result_inner(
             }
             let profile = kv_store_profile(&store).to_owned();
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 let report = match &store {
                     KvStoreRef::Account(store) => session.read_kv_chunk(
@@ -4107,7 +4151,7 @@ fn dispatch_result_inner(
             mkdir_p,
         } => {
             let target = Zeroizing::new(target);
-            let session = ProfileSession::open_with_control(
+            let session = read_cache::open_profile_session(
                 &registry,
                 kv_store_profile(&store),
                 timeout,
@@ -4153,7 +4197,7 @@ fn dispatch_result_inner(
             precondition,
             mkdir_p,
         } => {
-            let session = ProfileSession::open_with_control(
+            let session = read_cache::open_profile_session(
                 &registry,
                 kv_store_profile(&store),
                 timeout,
@@ -4200,7 +4244,7 @@ fn dispatch_result_inner(
                     "KV removal requires an exact-version precondition",
                 )));
             };
-            let session = ProfileSession::open_with_control(
+            let session = read_cache::open_profile_session(
                 &registry,
                 kv_store_profile(&store),
                 timeout,
@@ -4249,7 +4293,7 @@ fn dispatch_result_inner(
                 )));
             }
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 let report = match kind {
                     TeamKind::Named => session.create_named_team(
@@ -4276,7 +4320,7 @@ fn dispatch_result_inner(
                 )));
             }
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 Ok(serde_json::to_value(session.resume_team_creation(
                     &team_alias,
@@ -4295,7 +4339,7 @@ fn dispatch_result_inner(
                 )));
             }
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(
                     session.abandon_team_creation(&team_alias, vault)?,
@@ -4303,12 +4347,8 @@ fn dispatch_result_inner(
             })
         }
         Operation::Chat { store, action } => {
-            let session = ProfileSession::open_with_control(
-                &registry,
-                &store.profile,
-                timeout,
-                cancellation,
-            )?;
+            let session =
+                read_cache::open_profile_session(&registry, &store.profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 chat::dispatch(state_dir, session, vault, master, store, action)
                     .map_err(chat::contextual_error)
@@ -4316,7 +4356,7 @@ fn dispatch_result_inner(
         }
         Operation::ListTeams { profile } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 let teams = session.list_teams(vault)?;
                 let known = teams
@@ -4339,7 +4379,7 @@ fn dispatch_result_inner(
             account_alias,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(
                     session.discover_teams(&account_alias, vault)?,
@@ -4351,7 +4391,7 @@ fn dispatch_result_inner(
             team_alias,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(
                     session.sync_team(&team_alias, vault)?,
@@ -4363,7 +4403,7 @@ fn dispatch_result_inner(
             team_alias,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 let members = match session.list_team_members(&team_alias, vault) {
                     Ok(members) => ResponseResult::Success {
@@ -4388,7 +4428,7 @@ fn dispatch_result_inner(
             team_alias,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(
                     session.list_team_members(&team_alias, vault)?,
@@ -4404,7 +4444,7 @@ fn dispatch_result_inner(
         } => {
             let destination = team_destination(role, visibility)?;
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 Ok(serde_json::to_value(session.add_local_team_member(
                     &team_alias,
@@ -4421,7 +4461,7 @@ fn dispatch_result_inner(
             username,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 Ok(serde_json::to_value(
                     session.resume_local_team_member_addition(
@@ -4442,7 +4482,7 @@ fn dispatch_result_inner(
         } => {
             let destination = team_destination(role, visibility)?;
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 let credentials = ClientCredentials::open(state_dir)?;
                 Ok(serde_json::to_value(
@@ -4464,7 +4504,7 @@ fn dispatch_result_inner(
             party_id_hex,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 let credentials = ClientCredentials::open(state_dir)?;
                 Ok(serde_json::to_value(
@@ -4484,7 +4524,7 @@ fn dispatch_result_inner(
             team_alias,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 let credentials = ClientCredentials::open(state_dir)?;
                 Ok(serde_json::to_value(
@@ -4507,13 +4547,13 @@ fn dispatch_result_inner(
             visibility,
         } => {
             let destination = federation_destination(role, visibility)?;
-            let local = ProfileSession::open_with_control(
+            let local = read_cache::open_profile_session(
                 &registry,
                 &local_profile,
                 timeout,
                 cancellation.clone(),
             )?;
-            let remote = ProfileSession::open_with_control(
+            let remote = read_cache::open_profile_session(
                 &registry,
                 &remote_profile,
                 timeout,
@@ -4546,7 +4586,7 @@ fn dispatch_result_inner(
             team_alias,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(
                     session.list_federated_memberships(&team_alias, vault)?,
@@ -4560,7 +4600,7 @@ fn dispatch_result_inner(
             remote_team_id_hex,
         } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 let credentials = ClientCredentials::open(state_dir)?;
                 Ok(serde_json::to_value(session.expel_federated_team(
@@ -4584,7 +4624,7 @@ fn dispatch_result_inner(
             remote_pin,
             unlocks,
         } => {
-            let session = ProfileSession::open_with_control(
+            let session = read_cache::open_profile_session(
                 &registry,
                 &profile,
                 timeout,
@@ -4610,7 +4650,7 @@ fn dispatch_result_inner(
         }
         Operation::RunDueJobs { profile } => {
             let session =
-                ProfileSession::open_with_control(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             let credentials = ClientCredentials::open(state_dir)?;
             checked_session(&credentials, &session, |session| {
                 let master = credentials.master_key()?;
@@ -4747,7 +4787,7 @@ fn refresh_federated_security(
 
     let mut opened = Vec::new();
     for (unlock_profile, alias, pin) in requested {
-        let unlock_session = ProfileSession::open_with_control(
+        let unlock_session = read_cache::open_profile_session(
             registry,
             &unlock_profile,
             timeout,

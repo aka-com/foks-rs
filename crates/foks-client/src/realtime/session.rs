@@ -20,10 +20,28 @@ impl ChatTransport for RealtimeConnection {
         self.call(request)
     }
 }
+/// Read-path reuse supplied by an embedder that already holds an authenticated
+/// user for this profile. A chat read authenticates and loads the team on every
+/// refresh; an embedder that serves several reads from one authentication
+/// implements this so those round trips happen once.
+///
+/// `fresh` is set when the previous outcome lost a root race, which a retained
+/// outcome would repeat: the implementation must then authenticate against the
+/// server rather than return the same value again.
+pub trait ChatReadReuse {
+    fn authenticated_user(&self, fresh: bool) -> Result<Arc<crate::AuthenticatedUserOutcome>>;
+    fn load_team(
+        &self,
+        user: &crate::AuthenticatedUserOutcome,
+        team: &EntityId,
+    ) -> Result<AuthenticatedTeamOutcome>;
+}
+
 pub struct ChatSession<'a> {
     pub(super) client: &'a FoksClient,
     pub(super) host: &'a PinnedHost,
     pub(super) credential: &'a DeviceCredential,
+    reuse: Option<&'a dyn ChatReadReuse>,
     team: Option<AuthenticatedTeamOutcome>,
     pub(super) team_id: EntityId,
     pub(super) role: Role,
@@ -64,12 +82,21 @@ impl FoksClient {
             client: self,
             host,
             credential,
+            reuse: None,
             team_id: team.clone(),
             team: None,
             role: Role::NONE,
             history_byte_limit: ChatLimits::HISTORY_BYTES,
             derived: std::cell::RefCell::new(std::collections::BTreeMap::new()),
         })
+    }
+}
+impl<'a> ChatSession<'a> {
+    /// Serves this session's authentication and team load from an embedder's
+    /// read caches. It is set only for read operations; a chat session that
+    /// posts anything keeps authenticating inline.
+    pub fn set_read_reuse(&mut self, reuse: &'a dyn ChatReadReuse) {
+        self.reuse = Some(reuse);
     }
 }
 impl ChatSession<'_> {
@@ -94,17 +121,30 @@ impl ChatSession<'_> {
         self.team = None;
         self.role = Role::NONE;
         self.derived.borrow_mut().clear();
-        for _ in 0..ChatLimits::AUTHENTICATION_ATTEMPTS {
-            let user = self
-                .client
-                .authenticate_and_pin(self.host, self.credential)?;
-            let loaded = self.client.load_and_pin_team(
-                self.host,
-                self.credential,
-                &user.verified,
-                &user.puks,
-                &self.team_id,
-            )?;
+        for attempt in 0..ChatLimits::AUTHENTICATION_ATTEMPTS {
+            let (user, loaded) = match self.reuse {
+                // A retained outcome that lost the root race below is refused
+                // on the next attempt, so the loop still converges.
+                Some(reuse) => {
+                    let user = reuse.authenticated_user(attempt > 0)?;
+                    let loaded = reuse.load_team(&user, &self.team_id)?;
+                    (user, loaded)
+                }
+                None => {
+                    let user = Arc::new(
+                        self.client
+                            .authenticate_and_pin(self.host, self.credential)?,
+                    );
+                    let loaded = self.client.load_and_pin_team(
+                        self.host,
+                        self.credential,
+                        &user.verified,
+                        &user.puks,
+                        &self.team_id,
+                    )?;
+                    (user, loaded)
+                }
+            };
             if user.verified.tree_root() != loaded.verified.tree_root() {
                 continue;
             }

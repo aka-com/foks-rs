@@ -95,7 +95,7 @@ pub use inbox::{
     ChatPreviewKey, ChatSyncResult, NoChatPreviewCache,
 };
 pub use operations::normalize_chat_name;
-pub use session::{ChatChannel, ChatChannels, ChatSession, ChatTransport};
+pub use session::{ChatChannel, ChatChannels, ChatReadReuse, ChatSession, ChatTransport};
 
 mod policy;
 pub use policy::ChatLimits;

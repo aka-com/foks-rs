@@ -31,9 +31,7 @@ impl CheckedProfileSession<'_> {
         self.profile.require(Capability::Kv)?;
         let loaded = vault.account(alias)?;
         let host = self.pinned_host()?;
-        let authenticated = self
-            .client
-            .authenticate_and_pin(&host, &loaded.credential)?;
+        let authenticated = self.authenticated_user(&host, &loaded.credential)?;
         let directories = self.client.list_user_kv_metadata(
             &host,
             &loaded.credential,
@@ -194,17 +192,9 @@ impl CheckedProfileSession<'_> {
         }
         let account = vault.account(account_alias)?;
         let host = self.pinned_host()?;
-        let user = self
-            .client
-            .authenticate_and_pin(&host, &account.credential)?;
+        let user = self.authenticated_user(&host, &account.credential)?;
         let team_id = EntityId::from_bytes(stored.team_id.clone())?;
-        let team = self.client.load_and_pin_team(
-            &host,
-            &account.credential,
-            &user.verified,
-            &user.puks,
-            &team_id,
-        )?;
+        let team = self.load_team_for_read(&host, &account.credential, &user, &team_id)?;
         let directories = self.client.list_team_kv_metadata(
             &host,
             &account.credential,
@@ -864,14 +854,12 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
     ) -> Result<(
         LoadedAccount,
-        foks_client::AuthenticatedUserOutcome,
+        std::sync::Arc<foks_client::AuthenticatedUserOutcome>,
         Vec<KvDirectoryProjection>,
     )> {
         let loaded = vault.account(alias)?;
         let host = self.pinned_host()?;
-        let authenticated = self
-            .client
-            .authenticate_and_pin(&host, &loaded.credential)?;
+        let authenticated = self.authenticated_user(&host, &loaded.credential)?;
         let directories = self.client.sync_user_kv(
             &host,
             &loaded.credential,
@@ -888,14 +876,12 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
     ) -> Result<(
         LoadedAccount,
-        foks_client::AuthenticatedUserOutcome,
+        std::sync::Arc<foks_client::AuthenticatedUserOutcome>,
         Vec<KvDirectoryProjection>,
     )> {
         let loaded = vault.account(alias)?;
         let host = self.pinned_host()?;
-        let authenticated = self
-            .client
-            .authenticate_and_pin(&host, &loaded.credential)?;
+        let authenticated = self.authenticated_user(&host, &loaded.credential)?;
         let directories = self.client.list_user_kv_metadata(
             &host,
             &loaded.credential,

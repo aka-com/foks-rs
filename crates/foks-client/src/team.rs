@@ -73,6 +73,47 @@ pub struct AuthenticatedTeamOutcome {
     pub view_token: [u8; 16],
 }
 
+/// An activated team view token together with the acting user PUK role and
+/// generation it was issued for. The server binds an activation to that key
+/// and to the activating device, so a retained token is only usable with the
+/// same PUK over the same credential's transport.
+#[derive(Clone, Eq, PartialEq)]
+pub struct TeamViewGrant {
+    source_role: Role,
+    generation: u64,
+    token: [u8; 16],
+}
+
+impl TeamViewGrant {
+    pub fn new(source_role: Role, generation: u64, token: [u8; 16]) -> Self {
+        Self {
+            source_role,
+            generation,
+            token,
+        }
+    }
+
+    pub fn source_role(&self) -> Role {
+        self.source_role
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+/// The token is a bearer capability, so it is kept out of every rendering of
+/// this value.
+impl std::fmt::Debug for TeamViewGrant {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TeamViewGrant")
+            .field("source_role", &self.source_role)
+            .field("generation", &self.generation)
+            .finish_non_exhaustive()
+    }
+}
+
 impl AuthenticatedTeamOutcome {
     /// Converts this locally loaded current-head team into a recursively
     /// freshness-checked PTK recipient witness.
@@ -1892,6 +1933,22 @@ impl FoksClient {
         puks: &[UserPrivateKey],
         team: &EntityId,
     ) -> Result<AuthenticatedTeamOutcome> {
+        Ok(self
+            .load_and_pin_team_recording_view(host, credential, user, puks, team)?
+            .0)
+    }
+
+    /// [`Self::load_and_pin_team`] that also returns the activated view, so a
+    /// caller that performs several reads inside the server's view lifetime
+    /// can skip the challenge and activation round trips on the later ones.
+    pub fn load_and_pin_team_recording_view(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        user: &VerifiedUserState,
+        puks: &[UserPrivateKey],
+        team: &EntityId,
+    ) -> Result<(AuthenticatedTeamOutcome, TeamViewGrant)> {
         let mut last_error = None;
         let prior = self.prior_team_for_reload(host, team)?;
         let mut candidates = puks.iter().rev().collect::<Vec<_>>();
@@ -1901,9 +1958,10 @@ impl FoksClient {
                 .is_some_and(|prior| user_puk_matches_team_roster(user, puk, prior, host.host_id()))
         });
         for puk in candidates {
-            if user_key_history_for_seed(user, &puk.seed).is_err() {
+            let Ok(source) = user_key_history_for_seed(user, &puk.seed) else {
                 continue;
-            }
+            };
+            let (source_role, generation) = (source.role, source.generation);
             match self.load_and_pin_team_with_material(
                 host,
                 &credential.uid,
@@ -1913,13 +1971,52 @@ impl FoksClient {
                 &puk.seed,
                 team,
             ) {
-                Ok(authenticated) => return Ok(authenticated),
+                Ok(authenticated) => {
+                    let grant =
+                        TeamViewGrant::new(source_role, generation, authenticated.view_token);
+                    return Ok((authenticated, grant));
+                }
                 Err(error) => last_error = Some(error),
             }
         }
         Err(last_error.unwrap_or(Error::KeyBinding(
             "no authenticated user private key can open the team",
         )))
+    }
+
+    /// Loads a team with a view this client activated earlier. The grant names
+    /// the PUK generation the server bound the token to, so exactly that key is
+    /// used; a caller that gets an error here must fall back to
+    /// [`Self::load_and_pin_team`], which activates a fresh view.
+    pub fn load_and_pin_team_with_grant(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        user: &VerifiedUserState,
+        puks: &[UserPrivateKey],
+        team: &EntityId,
+        grant: &TeamViewGrant,
+    ) -> Result<AuthenticatedTeamOutcome> {
+        let puk = puks
+            .iter()
+            .find(|puk| {
+                user_key_history_for_seed(user, &puk.seed).is_ok_and(|source| {
+                    source.role == grant.source_role && source.generation == grant.generation
+                })
+            })
+            .ok_or(Error::KeyBinding(
+                "retained team view names a PUK generation this user no longer holds",
+            ))?;
+        self.load_and_pin_team_with_view_token(
+            host,
+            &credential.uid,
+            &credential.seed,
+            &credential.certificate_chain,
+            user,
+            &puk.seed,
+            team,
+            &grant.token,
+        )
     }
 
     /// Yubi variant of [`Self::load_and_pin_team`]. The delegated software
@@ -3277,6 +3374,28 @@ fn team_parcel_sender_hepk<'a>(
     matched.ok_or(Error::TeamBinding(
         "team PTK parcel sender HEPK is unavailable",
     ))
+}
+
+#[cfg(test)]
+mod team_view_grant_tests {
+    use super::TeamViewGrant;
+    use foks_proto::Role;
+
+    #[test]
+    fn a_grant_never_renders_its_bearer_token() {
+        let grant = TeamViewGrant::new(Role::OWNER, 4, [0xab; 16]);
+        let rendered = format!("{grant:?}");
+        assert!(rendered.contains("generation: 4"), "{rendered}");
+        assert!(!rendered.contains("ab"), "{rendered}");
+        assert!(!rendered.contains("171"), "{rendered}");
+    }
+
+    #[test]
+    fn a_grant_keeps_the_key_its_view_was_activated_for() {
+        let grant = TeamViewGrant::new(Role::ADMIN, 7, [1; 16]);
+        assert_eq!(grant.source_role(), Role::ADMIN);
+        assert_eq!(grant.generation(), 7);
+    }
 }
 
 #[cfg(test)]

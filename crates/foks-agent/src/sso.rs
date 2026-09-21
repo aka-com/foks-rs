@@ -12,7 +12,8 @@ pub(super) fn handle(
     if !action.validate() {
         return Err(Box::new(AgentRequestError("invalid authentication action")));
     }
-    let session = ProfileSession::open_with_control(registry, profile, timeout, cancellation)?;
+    let session =
+        crate::read_cache::open_profile_session(registry, profile, timeout, cancellation)?;
     let credentials = ClientCredentials::open(state_dir)?;
     let http = foks_oidc::ProviderHttp::new(foks_oidc::NetworkPolicy::default())?;
     if credentials.requires_import_verification(&session)? {

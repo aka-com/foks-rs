@@ -10,6 +10,10 @@ mod chat_intent;
 pub use chat_intent::{LocalChatIntent, LocalChatIntentStore};
 mod adapter_maintenance;
 pub use adapter_maintenance::{AdapterMaintenanceCursor, AdapterMaintenanceReport};
+mod auth_cache;
+pub use auth_cache::{
+    AuthCacheKey, AuthenticatedUserCache, ReadCaches, TeamViewCacheKey, TeamViewTokenCache,
+};
 mod adapter_clock;
 pub use adapter_clock::{
     AdapterClock, AdapterClockPreview, AdapterClockRepair, SystemAdapterClock,
@@ -344,6 +348,42 @@ fn random_array<const N: usize>() -> Result<[u8; N]> {
     let mut bytes = [0u8; N];
     getrandom::fill(&mut bytes).map_err(|_| Error::Randomness)?;
     Ok(bytes)
+}
+
+const TRANSPORT_FINGERPRINT_TYPE_ID: u64 = 0x2b9f_4d17_a60c_7e35;
+
+/// Builds a client for a profile's trust configuration together with a digest
+/// of that configuration. An embedder that retains one base client per profile
+/// compares the digest before reusing it, so a changed or replaced certificate
+/// cannot be served from an already-built transport.
+pub fn base_client_for_profile(
+    registry: &ProfileRegistry,
+    name: &str,
+) -> Result<(FoksClient, [u8; 32])> {
+    let profile = registry.profile(name)?;
+    let fingerprint = trust_fingerprint(&profile.trust, registry.root())?;
+    Ok((
+        client_for_trust(&profile.trust, registry.root())?,
+        fingerprint,
+    ))
+}
+
+/// The digest [`base_client_for_profile`] returns, without building a client.
+pub fn profile_transport_fingerprint(registry: &ProfileRegistry, name: &str) -> Result<[u8; 32]> {
+    let profile = registry.profile(name)?;
+    trust_fingerprint(&profile.trust, registry.root())
+}
+
+fn trust_fingerprint(trust: &TrustRoot, root: &Path) -> Result<[u8; 32]> {
+    let mut input = Vec::new();
+    match portability::trust::read_certificate(root, trust)? {
+        Some(certificate) => {
+            input.push(1);
+            input.extend_from_slice(&certificate);
+        }
+        None => input.push(0),
+    }
+    Ok(prefixed_hash(TRANSPORT_FINGERPRINT_TYPE_ID, &input))
 }
 
 fn client_for_trust(trust: &TrustRoot, root: &Path) -> Result<FoksClient> {

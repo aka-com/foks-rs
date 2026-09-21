@@ -13,7 +13,8 @@ pub(super) fn rename(
     if !action.validate() {
         return Err(Box::new(AgentRequestError("invalid rename action")));
     }
-    let session = ProfileSession::open_with_control(registry, profile, timeout, cancellation)?;
+    let session =
+        crate::read_cache::open_profile_session(registry, profile, timeout, cancellation)?;
     let credentials = ClientCredentials::open(state_dir)?;
     checked_session(&credentials, &session, |session| {
         let master = credentials.master_key()?;
@@ -76,7 +77,8 @@ pub(super) fn web_admin(
     if !action.validate() {
         return Err(Box::new(AgentRequestError("invalid admin handoff")));
     }
-    let session = ProfileSession::open_with_control(registry, profile, timeout, cancellation)?;
+    let session =
+        crate::read_cache::open_profile_session(registry, profile, timeout, cancellation)?;
     with_vault(state_dir, &session, |session, vault| match action {
         AdminAction::Policy => {
             let (host_id, uid, destination) = session.web_admin_policy(alias, vault)?;

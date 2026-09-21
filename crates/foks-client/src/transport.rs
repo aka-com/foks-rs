@@ -455,6 +455,12 @@ impl FoksClient {
         client
     }
 
+    /// Returns whether two clients share the same connection pool. Clones share
+    /// their source pool; isolated clients use separate pools.
+    pub fn shares_connection_pool_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.connection_pool, &other.connection_pool)
+    }
+
     pub fn set_connection_pool_limits(
         &self,
         maximum_per_endpoint: usize,

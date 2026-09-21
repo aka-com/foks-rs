@@ -582,6 +582,12 @@ impl CheckedProfileSession<'_> {
         credential: FederationCredential<'_, '_>,
         team: &EntityId,
     ) -> Result<foks_client::AuthenticatedTeamOutcome> {
+        // Only the software arm has read caches; a hardware credential
+        // authenticates on the card every time.
+        if let FederationCredential::Software(software) = credential {
+            let user = self.authenticated_user(host, software)?;
+            return self.load_team_for_read(host, software, &user, team);
+        }
         let user = self
             .client
             .authenticate_credential_and_pin(host, credential)?;

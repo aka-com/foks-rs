@@ -92,9 +92,7 @@ impl CheckedProfileSession<'_> {
         self.profile.require(Capability::Teams)?;
         let account = vault.account(alias)?;
         let host = self.pinned_host()?;
-        let user = self
-            .client
-            .authenticate_and_pin(&host, &account.credential)?;
+        let user = self.authenticated_user(&host, &account.credential)?;
         let memberships = self.client.authenticated_user_team_memberships(
             &host,
             &account.credential,
@@ -178,9 +176,7 @@ impl CheckedProfileSession<'_> {
     ) -> Result<(String, String)> {
         let account = vault.account(alias)?;
         let host = self.pinned_host()?;
-        let user = self
-            .client
-            .authenticate_and_pin(&host, &account.credential)?;
+        let user = self.authenticated_user(&host, &account.credential)?;
         Ok((
             hex(host.host_id().as_bytes()),
             hex(user.verified.uid().as_bytes()),
@@ -217,9 +213,7 @@ impl CheckedProfileSession<'_> {
         }
         let account = vault.account(alias)?;
         let host = self.pinned_host()?;
-        let user = self
-            .client
-            .authenticate_and_pin(&host, &account.credential)?;
+        let user = self.authenticated_user(&host, &account.credential)?;
         let graph = self.client.discover_local_team_graph(
             &host,
             &account.credential,
@@ -256,14 +250,12 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
     ) -> Result<(
         LoadedAccount,
-        AuthenticatedUserOutcome,
+        std::sync::Arc<AuthenticatedUserOutcome>,
         Option<AuthenticatedTeamOutcome>,
     )> {
         let account = vault.account(alias)?;
         let host = self.pinned_host()?;
-        let user = self
-            .client
-            .authenticate_and_pin(&host, &account.credential)?;
+        let user = self.authenticated_user(&host, &account.credential)?;
         let team = if let Some(id) = team_id {
             self.profile.require(Capability::Teams)?;
             let graph = self.client.discover_local_team_graph(

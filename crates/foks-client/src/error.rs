@@ -107,6 +107,10 @@ pub enum Error {
     TeamRequest(&'static str),
     #[error("FOKS scheduler error: {0}")]
     Scheduler(&'static str),
+    /// An embedder's read-path reuse hook failed. The inner error belongs to
+    /// the embedder, so it is carried rather than reclassified.
+    #[error("FOKS read reuse failed: {0}")]
+    ReadReuse(Box<dyn std::error::Error + Send + Sync>),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

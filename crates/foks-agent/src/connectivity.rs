@@ -409,7 +409,11 @@ async fn identity(
                         let registry = read_registry_snapshot(started, timeout, || {
                             ProfileRegistry::try_open(&root)
                         })?;
-                        let session = ProfileSession::open_with_control(
+                        // The shared base client's pool validates an idle
+                        // connection at checkout by peeking the socket, so a
+                        // peer that has gone away is discarded rather than
+                        // reported here as a reachable server.
+                        let session = crate::read_cache::open_profile_session(
                             &registry,
                             &profile,
                             timeout.saturating_sub(started.elapsed()),

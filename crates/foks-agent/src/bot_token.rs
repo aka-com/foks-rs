@@ -68,7 +68,8 @@ pub(super) fn handle(
     if !action.validate() {
         return Err(Box::new(AgentRequestError("invalid bot action")));
     }
-    let session = ProfileSession::open_with_control(registry, profile, timeout, cancellation)?;
+    let session =
+        crate::read_cache::open_profile_session(registry, profile, timeout, cancellation)?;
     with_vault_and_master(state_dir, &session, |session, vault, master| {
         let key = (session.paths().credential_store.clone(), alias.to_owned());
         match &action {

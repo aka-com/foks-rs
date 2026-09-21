@@ -276,9 +276,7 @@ impl CheckedProfileSession<'_> {
         self.profile.require(Capability::Teams)?;
         let account = vault.account(account_alias)?;
         let host = self.pinned_host()?;
-        let user = self
-            .client
-            .authenticate_and_pin(&host, &account.credential)?;
+        let user = self.authenticated_user(&host, &account.credential)?;
         let graph = self.client.discover_local_team_graph(
             &host,
             &account.credential,
@@ -446,17 +444,9 @@ impl CheckedProfileSession<'_> {
         }
         let account = vault.account(account_alias)?;
         let host = self.pinned_host()?;
-        let user = self
-            .client
-            .authenticate_and_pin(&host, &account.credential)?;
+        let user = self.authenticated_user(&host, &account.credential)?;
         let team_id = EntityId::from_bytes(stored.team_id.clone())?;
-        let team = self.client.load_and_pin_team(
-            &host,
-            &account.credential,
-            &user.verified,
-            &user.puks,
-            &team_id,
-        )?;
+        let team = self.load_team_for_read(&host, &account.credential, &user, &team_id)?;
         let tree = self.client.list_team_kv_metadata(
             &host,
             &account.credential,
@@ -472,7 +462,7 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
     ) -> Result<Vec<TeamMemberSummary>> {
         self.profile.require(Capability::Teams)?;
-        let context = self.load_local_team_context(team_alias, vault)?;
+        let context = self.load_local_team_context_for_read(team_alias, vault)?;
         context
             .team
             .verified
@@ -1105,10 +1095,32 @@ impl CheckedProfileSession<'_> {
         ))
     }
 
+    /// The context a team mutation acts on. It authenticates and activates a
+    /// team view against the server every time; retained read material is
+    /// never consulted here.
     pub(super) fn load_local_team_context(
         &self,
         team_alias: &str,
         vault: &mut AccountVault<'_>,
+    ) -> Result<LocalTeamContext> {
+        self.load_local_team_context_with_reuse(team_alias, vault, false)
+    }
+
+    /// The same context for a read, which may be served from this session's
+    /// read caches when the embedder attached them.
+    pub(super) fn load_local_team_context_for_read(
+        &self,
+        team_alias: &str,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<LocalTeamContext> {
+        self.load_local_team_context_with_reuse(team_alias, vault, true)
+    }
+
+    fn load_local_team_context_with_reuse(
+        &self,
+        team_alias: &str,
+        vault: &mut AccountVault<'_>,
+        reuse: bool,
     ) -> Result<LocalTeamContext> {
         let stored = vault.team(team_alias)?;
         if !stored.active {
@@ -1117,18 +1129,30 @@ impl CheckedProfileSession<'_> {
         let team_id = EntityId::from_bytes(stored.team_id.clone())?;
         let host = self.pinned_host()?;
         let mut last_race = None;
-        for _ in 0..3 {
+        for attempt in 0..3 {
             let account = vault.account(&stored.account_alias)?;
-            let actor = self
-                .client
-                .authenticate_and_pin(&host, &account.credential)?;
-            let team = self.client.load_and_pin_team(
-                &host,
-                &account.credential,
-                &actor.verified,
-                &actor.puks,
-                &team_id,
-            )?;
+            // A retained outcome that lost the root race below would repeat
+            // it, so a later attempt authenticates against the server and
+            // replaces what was retained.
+            let actor = match (reuse, attempt) {
+                (true, 0) => self.authenticated_user(&host, &account.credential)?,
+                (true, _) => self.authenticated_user_fresh(&host, &account.credential)?,
+                (false, _) => std::sync::Arc::new(
+                    self.client
+                        .authenticate_and_pin(&host, &account.credential)?,
+                ),
+            };
+            let team = if reuse && attempt == 0 {
+                self.load_team_for_read(&host, &account.credential, &actor, &team_id)?
+            } else {
+                self.client.load_and_pin_team(
+                    &host,
+                    &account.credential,
+                    &actor.verified,
+                    &actor.puks,
+                    &team_id,
+                )?
+            };
             let mut users = std::collections::BTreeMap::new();
             users.insert(
                 actor.verified.uid().as_bytes().to_vec(),
@@ -1198,7 +1222,7 @@ impl CheckedProfileSession<'_> {
 pub(super) struct LocalTeamContext {
     pub(super) host: foks_client::PinnedHost,
     pub(super) account: LoadedAccount,
-    pub(super) actor: AuthenticatedUserOutcome,
+    pub(super) actor: std::sync::Arc<AuthenticatedUserOutcome>,
     pub(super) team_id: EntityId,
     pub(super) team: AuthenticatedTeamOutcome,
     pub(super) users: std::collections::BTreeMap<Vec<u8>, foks_verify::VerifiedUserState>,

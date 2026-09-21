@@ -18,10 +18,11 @@ pub(super) fn run(
         return Err(Box::new(AgentRequestError("invalid invitation action")));
     }
     let session =
-        ProfileSession::open_with_control(registry, profile, timeout, cancellation.clone())?;
+        crate::read_cache::open_profile_session(registry, profile, timeout, cancellation.clone())?;
     let credentials = ClientCredentials::open(state_dir)?;
     if let Some(name) = action.remote_profile() {
-        let remote = ProfileSession::open_with_control(registry, name, timeout, cancellation)?;
+        let remote =
+            crate::read_cache::open_profile_session(registry, name, timeout, cancellation)?;
         return checked_sessions(&credentials, &session, &remote, |session, remote| {
             let master = credentials.master_key()?;
             let mut store = EncryptedFileSecretStore::open(

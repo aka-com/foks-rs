@@ -578,6 +578,10 @@ impl ProfileRegistry {
         })
     }
 
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub fn profiles(&self) -> impl ExactSizeIterator<Item = &Profile> {
         self.profiles.values()
     }
@@ -703,6 +707,7 @@ impl ProfileRegistry {
                 paths,
                 client,
                 adapter_clock: std::sync::Arc::new(crate::SystemAdapterClock),
+                read_caches: crate::ReadCaches::default(),
             };
             let probe = session.probe_and_pin_unchecked()?;
             if expected_host.is_some_and(|host| probe.host_id_hex != hex(host)) {
@@ -1357,6 +1362,9 @@ pub struct ProfileSession {
     pub(super) paths: ProfilePaths,
     pub(super) client: FoksClient,
     pub(super) adapter_clock: std::sync::Arc<dyn crate::AdapterClock>,
+    /// Empty unless an embedder attached caches for a read operation. See
+    /// [`crate::auth_cache`].
+    pub(super) read_caches: crate::ReadCaches,
 }
 
 impl ProfileSession {
@@ -1370,7 +1378,62 @@ impl ProfileSession {
             paths,
             client,
             adapter_clock: std::sync::Arc::new(crate::SystemAdapterClock),
+            read_caches: crate::ReadCaches::default(),
         })
+    }
+
+    /// Opens a profile over a transport an embedder already holds, so several
+    /// operations against one profile share a connection pool instead of
+    /// paying a TLS handshake each. The base client must have been built for
+    /// exactly this profile's trust configuration; see
+    /// [`base_client_for_profile`].
+    pub fn open_with_control_and_client(
+        registry: &ProfileRegistry,
+        name: &str,
+        timeout: Duration,
+        cancellation: CancellationToken,
+        base: &FoksClient,
+    ) -> Result<Self> {
+        if timeout.is_zero() {
+            return Err(Error::InvalidConfig("zero profile operation timeout"));
+        }
+        let profile = registry.profile(name)?.clone();
+        let paths = registry.prepare_profile_directory(name)?;
+        let mut client = base.clone();
+        client.set_timeout(timeout);
+        let client = client.with_cancellation_token(cancellation);
+        Ok(Self {
+            lease: registry.lease.clone(),
+            profile,
+            paths,
+            client,
+            adapter_clock: std::sync::Arc::new(crate::SystemAdapterClock),
+            read_caches: crate::ReadCaches::default(),
+        })
+    }
+
+    /// Attaches read caches. Callers attach them only for operations that do
+    /// not mutate, so a mutating operation always authenticates against the
+    /// current server state.
+    pub fn with_read_caches(mut self, caches: crate::ReadCaches) -> Self {
+        self.read_caches = caches;
+        self
+    }
+
+    pub fn with_authenticated_user_cache(
+        mut self,
+        cache: std::sync::Arc<dyn crate::AuthenticatedUserCache>,
+    ) -> Self {
+        self.read_caches.authenticated_users = Some(cache);
+        self
+    }
+
+    pub fn with_team_view_token_cache(
+        mut self,
+        cache: std::sync::Arc<dyn crate::TeamViewTokenCache>,
+    ) -> Self {
+        self.read_caches.team_view_tokens = Some(cache);
+        self
     }
 
     /// Inject both clocks together; retention never reads wall time directly.
@@ -1398,6 +1461,13 @@ impl ProfileSession {
         &self.profile
     }
 
+    /// Whether this session may consult read caches. A session opened for a
+    /// mutating operation never can.
+    pub fn serves_reads_from_cache(&self) -> bool {
+        self.read_caches.authenticated_users.is_some()
+            || self.read_caches.team_view_tokens.is_some()
+    }
+
     pub fn paths(&self) -> &ProfilePaths {
         &self.paths
     }
@@ -1416,6 +1486,9 @@ impl ProfileSession {
             paths,
             client,
             adapter_clock: std::sync::Arc::clone(&self.adapter_clock),
+            // A related profile is only opened by cross-profile mutations, so
+            // it never inherits read caches.
+            read_caches: crate::ReadCaches::default(),
         })
     }
 
@@ -1872,6 +1945,33 @@ mod tests {
             last_artifact: None,
         };
         profile
+    }
+
+    #[test]
+    fn a_session_opened_without_caches_never_consults_one() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        registry
+            .add(Profile {
+                name: "local".to_owned(),
+                label: None,
+                probe: "127.0.0.1:1".to_owned(),
+                protocol: ProtocolPolicy::V019,
+                trust: TrustRoot::WebPki,
+            })
+            .unwrap();
+
+        let session = ProfileSession::open(&registry, "local").unwrap();
+        assert!(!session.serves_reads_from_cache());
+        assert!(!ProfileSession::open_with_control(
+            &registry,
+            "local",
+            Duration::from_secs(5),
+            CancellationToken::new(),
+        )
+        .unwrap()
+        .serves_reads_from_cache());
     }
 
     #[test]

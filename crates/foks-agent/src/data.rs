@@ -26,7 +26,7 @@ pub(super) fn write_control(
         )));
     }
     let profile =
-        ProfileSession::open_with_control(registry, &scope.profile, timeout, cancellation)?;
+        crate::read_cache::open_profile_session(registry, &scope.profile, timeout, cancellation)?;
     with_vault(state_dir, &profile, |session, vault| {
         session.check_data_identity(&scope.account_alias, &scope.host_id, &scope.user_id, vault)?;
         let credentials = ClientCredentials::open(state_dir)?;
@@ -109,7 +109,7 @@ pub(super) fn upload<R: std::io::Read>(
         )));
     }
     let profile =
-        ProfileSession::open_with_control(registry, &scope.profile, timeout, cancellation)?;
+        crate::read_cache::open_profile_session(registry, &scope.profile, timeout, cancellation)?;
     with_vault(state_dir, &profile, |session, vault| {
         session.check_data_identity(&scope.account_alias, &scope.host_id, &scope.user_id, vault)?;
         let credentials = ClientCredentials::open(state_dir)?;
@@ -131,7 +131,8 @@ pub(super) fn bind_account(
     timeout: Duration,
     cancellation: CancellationToken,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    let session = ProfileSession::open_with_control(registry, &profile, timeout, cancellation)?;
+    let session =
+        crate::read_cache::open_profile_session(registry, &profile, timeout, cancellation)?;
     with_vault(state_dir, &session, |session, vault| {
         let (host_id, user_id) = session.data_identity(&account_alias, vault)?;
         Ok(serde_json::to_value(DataScope {
@@ -153,7 +154,7 @@ pub(super) fn read(
     cancellation: CancellationToken,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let session =
-        ProfileSession::open_with_control(registry, &scope.profile, timeout, cancellation)?;
+        crate::read_cache::open_profile_session(registry, &scope.profile, timeout, cancellation)?;
     with_vault(state_dir, &session, |session, vault| {
         session.check_data_identity(&scope.account_alias, &scope.host_id, &scope.user_id, vault)?;
         let value = match query {

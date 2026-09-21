@@ -42,7 +42,7 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<Option<zeroize::Zeroizing<String>>> {
-        self.with_chat(team_alias, vault, |chat| {
+        self.with_chat_read(team_alias, vault, |chat| {
             let mut protected = EncryptedFileMutationStore::open(
                 &self.paths.protected_mutations,
                 derive_mutation_key(master_key),
@@ -121,6 +121,36 @@ impl CheckedProfileSession<'_> {
         )?;
         operation(&mut chat)
     }
+
+    /// [`Self::with_chat`] for an operation that only reads. Its refresh is
+    /// served from this session's read caches when the embedder attached them;
+    /// without them it authenticates and loads the team exactly as before.
+    fn with_chat_read<T>(
+        &self,
+        team_alias: &str,
+        vault: &mut AccountVault<'_>,
+        operation: impl FnOnce(&mut ChatSession<'_>) -> Result<T>,
+    ) -> Result<T> {
+        self.profile.require(Capability::Chat)?;
+        let stored = vault.team(team_alias)?;
+        if !stored.active {
+            return Err(Error::InvalidAccount("team creation is pending"));
+        }
+        let account = vault.account(&stored.account_alias)?;
+        let host = self.pinned_host()?;
+        let reuse = SessionChatReadReuse {
+            session: self,
+            host: &host,
+            credential: &account.credential,
+        };
+        let mut chat = self.client.chat_session(
+            &host,
+            &account.credential,
+            &EntityId::from_bytes(stored.team_id.clone())?,
+        )?;
+        chat.set_read_reuse(&reuse);
+        operation(&mut chat)
+    }
     pub fn chat_poll_connection(
         &self,
         team_alias: &str,
@@ -133,7 +163,7 @@ impl CheckedProfileSession<'_> {
         team_alias: &str,
         vault: &mut AccountVault<'_>,
     ) -> Result<ChatChannels> {
-        self.with_chat(team_alias, vault, |chat| {
+        self.with_chat_read(team_alias, vault, |chat| {
             Ok(chat.list_channels(&mut chat.connection()?)?)
         })
     }
@@ -167,7 +197,7 @@ impl CheckedProfileSession<'_> {
         blocked: &[RtChannelId],
         previews: &mut dyn foks_client::ChatPreviewCache,
     ) -> Result<ChatSyncResult> {
-        self.with_chat(team_alias, vault, |chat| {
+        self.with_chat_read(team_alias, vault, |chat| {
             let mut soft = SoftStateStore::open(&self.paths.soft_database)?;
             let mut connection = chat.connection()?;
             Ok(chat.sync_inbox_with_preview_cache(&mut connection, &mut soft, blocked, previews)?)
@@ -199,7 +229,7 @@ impl CheckedProfileSession<'_> {
         limit: u64,
         vault: &mut AccountVault<'_>,
     ) -> Result<ChatHistory> {
-        self.with_chat(team_alias, vault, |chat| {
+        self.with_chat_read(team_alias, vault, |chat| {
             Ok(chat.read_recent(&mut chat.connection()?, channel, limit)?)
         })
     }
@@ -217,7 +247,7 @@ impl CheckedProfileSession<'_> {
                 "notification history width must be 1 to 50",
             ));
         }
-        self.with_chat(team_alias, vault, |chat| {
+        self.with_chat_read(team_alias, vault, |chat| {
             chat.limit_history_bytes(512 * 1024)?;
             let mut connection = chat.connection()?;
             Ok(if let Some(end) = end {
@@ -240,7 +270,7 @@ impl CheckedProfileSession<'_> {
         end: u64,
         vault: &mut AccountVault<'_>,
     ) -> Result<ChatHistory> {
-        self.with_chat(team_alias, vault, |chat| {
+        self.with_chat_read(team_alias, vault, |chat| {
             Ok(chat.read_thread(&mut chat.connection()?, channel, start, end)?)
         })
     }
@@ -451,6 +481,46 @@ impl CheckedProfileSession<'_> {
                 &stored.team_id,
             )?,
         )
+    }
+}
+
+/// Serves a chat session's refresh from a checked session's read caches.
+struct SessionChatReadReuse<'a> {
+    session: &'a CheckedProfileSession<'a>,
+    host: &'a foks_client::PinnedHost,
+    credential: &'a foks_client::DeviceCredential,
+}
+
+impl foks_client::ChatReadReuse for SessionChatReadReuse<'_> {
+    fn authenticated_user(
+        &self,
+        fresh: bool,
+    ) -> foks_client::Result<std::sync::Arc<foks_client::AuthenticatedUserOutcome>> {
+        if fresh {
+            self.session
+                .authenticated_user_fresh(self.host, self.credential)
+        } else {
+            self.session.authenticated_user(self.host, self.credential)
+        }
+        .map_err(reuse_error)
+    }
+
+    fn load_team(
+        &self,
+        user: &foks_client::AuthenticatedUserOutcome,
+        team: &EntityId,
+    ) -> foks_client::Result<foks_client::AuthenticatedTeamOutcome> {
+        self.session
+            .load_team_for_read(self.host, self.credential, user, team)
+            .map_err(reuse_error)
+    }
+}
+
+/// Keeps a client error itself rather than nesting it inside a reuse error.
+fn reuse_error(error: Error) -> foks_client::Error {
+    match error {
+        Error::Client(error) => error,
+        other => foks_client::Error::ReadReuse(Box::new(other)),
     }
 }
 
