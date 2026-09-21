@@ -40,6 +40,12 @@ export interface ReconciliationSnapshot {
    * The UI uses this value instead of inferring retry behavior from the error.
    */
   paused?: boolean;
+  /**
+   * When the job will next run on its own, while it is idle and scheduled.
+   * Read off the entry as the snapshot is taken: the due time moves with
+   * every request, retry and completion, so it is never stored in one.
+   */
+  nextAttemptAt?: number;
 }
 export interface ReconciliationDiagnostic {
   kind: ReconciliationKind;
@@ -85,7 +91,13 @@ export class ReconciliationScheduler {
   };
   getSnapshot = (): number => this.revision;
   snapshot(key: string): Readonly<ReconciliationSnapshot> | undefined {
-    return this.entries.get(key)?.snapshot;
+    const entry = this.entries.get(key);
+    return entry && this.view(entry);
+  }
+  private view(entry: Entry): Readonly<ReconciliationSnapshot> {
+    return entry.active || !Number.isFinite(entry.due)
+      ? entry.snapshot
+      : Object.freeze({ ...entry.snapshot, nextAttemptAt: entry.due });
   }
   observations(): readonly {
     key: string;
@@ -97,7 +109,7 @@ export class ReconciliationScheduler {
       key: entry.job.key,
       scope: entry.job.scope,
       kind: entry.job.kind,
-      snapshot: entry.snapshot,
+      snapshot: this.view(entry),
     }));
   }
   observe(

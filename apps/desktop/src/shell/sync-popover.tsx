@@ -6,8 +6,10 @@
  * account metadata). One root cause — a missing keystore record, an
  * unreachable host — fails all of them with the same message, so the
  * observations are grouped by server and deduplicated by message before they
- * are shown: one row per server, one sentence, one action. The raw
- * per-observation lines remain available through Copy diagnostics.
+ * are shown: one row per server, one sentence, one action. Under the
+ * sentence, one line per job says when it last succeeded, when it runs next
+ * or what failed. The raw per-observation lines remain available through
+ * Copy diagnostics.
  */
 
 import { useSyncExternalStore } from 'react';
@@ -16,6 +18,10 @@ import { Popover } from '/kit/overlay-primitives';
 import type { AgentSnapshot, CatalogFreshnessEntry, Server } from '../model';
 import { serverDisplayName } from '../model';
 import type { DesktopReconciliation } from '../desktop-reconciliation';
+import type {
+  ReconciliationKind,
+  ReconciliationSnapshot,
+} from '../scheduling/reconciliation';
 import {
   profileRefreshKey,
   profileConnectivityKey,
@@ -25,6 +31,15 @@ import { connectionSecurityFailure } from '../profile-connectivity';
 import { normalizeCommandError } from '../bridge';
 
 export type SyncState = 'ok' | 'refreshing' | 'failed' | 'unknown';
+
+/** One of the scheduler's jobs on a server or on this Mac, as a line. */
+export interface SyncJobSummary {
+  kind: ReconciliationKind;
+  label: string;
+  state: SyncState;
+  /** When it last succeeded, when it runs next, or what failed. */
+  detail: string;
+}
 
 export interface SyncServerSummary {
   /** The server id, or `null` for the observations that belong to this Mac. */
@@ -38,6 +53,8 @@ export interface SyncServerSummary {
   canReconnect: boolean;
   reconnectDisabled: boolean;
   reconnecting: boolean;
+  /** The jobs behind the row, in a fixed order, one line each. */
+  jobs: SyncJobSummary[];
 }
 
 export interface SyncSummary {
@@ -67,6 +84,86 @@ function observationLabel(kind: string): string {
         : kind === 'registry'
           ? 'Profile inventory'
           : 'Catalog';
+}
+
+/** The order the jobs are listed in: what is shown first, then how it is kept. */
+const JOB_ORDER: readonly ReconciliationKind[] = [
+  'catalog',
+  'connectivity',
+  'discovery',
+  'registry',
+  'metadata',
+];
+
+/** A scheduler clock time, in milliseconds, as a clock time. */
+function clockTime(milliseconds: number | undefined): string {
+  return milliseconds === undefined ? '' : timeOf(milliseconds / 1_000);
+}
+
+function jobSummary(
+  kind: ReconciliationKind,
+  snapshot: Readonly<ReconciliationSnapshot>,
+): SyncJobSummary {
+  const label = observationLabel(kind);
+  const next =
+    snapshot.nextAttemptAt !== undefined
+      ? `Next at ${clockTime(snapshot.nextAttemptAt)}.`
+      : snapshot.paused
+        ? 'Paused until Refresh.'
+        : '';
+  const succeeded =
+    snapshot.lastSuccessAt !== undefined
+      ? `Last succeeded ${clockTime(snapshot.lastSuccessAt)}.`
+      : '';
+  const line = (parts: readonly string[]) => parts.filter(Boolean).join(' ');
+  if (snapshot.error) {
+    const cause = normalizeCommandError(snapshot.error).message.replace(
+      /\.+$/,
+      '',
+    );
+    return {
+      kind,
+      label,
+      state: 'failed',
+      detail: line([`${cause}.`, succeeded, next]),
+    };
+  }
+  if (snapshot.refreshing)
+    return {
+      kind,
+      label,
+      state: 'refreshing',
+      detail: line(['Running now.', succeeded]),
+    };
+  if (snapshot.lastSuccessAt !== undefined)
+    return {
+      kind,
+      label,
+      state: 'ok',
+      detail: line([`Succeeded ${clockTime(snapshot.lastSuccessAt)}.`, next]),
+    };
+  return {
+    kind,
+    label,
+    state: 'unknown',
+    detail: line([
+      snapshot.lastAttemptAt !== undefined
+        ? `Attempted ${clockTime(snapshot.lastAttemptAt)}, not yet successful.`
+        : 'Not yet run.',
+      next,
+    ]),
+  };
+}
+
+function jobSummaries(
+  observations: readonly {
+    kind: ReconciliationKind;
+    snapshot: Readonly<ReconciliationSnapshot>;
+  }[],
+): SyncJobSummary[] {
+  return [...observations]
+    .sort((a, b) => JOB_ORDER.indexOf(a.kind) - JOB_ORDER.indexOf(b.kind))
+    .map((observation) => jobSummary(observation.kind, observation.snapshot));
 }
 
 function failureSentence(
@@ -183,6 +280,7 @@ export function summarizeSync(
       canReconnect,
       reconnectDisabled: reconnectDisabledFor(server),
       reconnecting: Boolean(connectivity?.refreshing),
+      jobs: jobSummaries(own),
     };
   });
   // The registry and metadata jobs belong to no server. They are listed only
@@ -190,6 +288,9 @@ export function summarizeSync(
   const local = observations.filter(
     (observation) =>
       observation.scope === null && observation.snapshot.error !== undefined,
+  );
+  const localJobs = observations.filter(
+    (observation) => observation.scope === null,
   );
   if (local.length || catalogAttempt?.error) {
     const messages: string[] = catalogAttempt?.error
@@ -217,6 +318,7 @@ export function summarizeSync(
       canReconnect: false,
       reconnectDisabled: true,
       reconnecting: false,
+      jobs: jobSummaries(localJobs),
     });
   }
   return {
@@ -291,6 +393,20 @@ export function SyncPopover({
                   {server.state === 'failed' ? ' could not be refreshed' : ''}
                 </b>
                 <p>{server.message}</p>
+                {server.jobs.length ? (
+                  <ul className="sync-jobs" aria-label={`${server.name} jobs`}>
+                    {server.jobs.map((job) => (
+                      <li key={job.kind}>
+                        <span
+                          className={`sync-dot ${job.state}`}
+                          aria-hidden="true"
+                        />
+                        <b>{job.label}</b>
+                        <span>{job.detail}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
                 {server.state === 'failed' && server.id ? (
                   <div className="sync-actions">
                     {server.canReconnect ? (

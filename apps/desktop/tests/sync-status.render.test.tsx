@@ -69,8 +69,10 @@ function reconciliation(): InstanceType<typeof DesktopReconciliation> {
 
 function Harness({
   service,
+  refreshing = false,
 }: {
   service: InstanceType<typeof DesktopReconciliation>;
+  refreshing?: boolean;
 }) {
   const background = useRef<HTMLElement>(null);
   return createElement(
@@ -84,6 +86,7 @@ function Harness({
         location: { kind: 'files' },
         onNavigate: () => {},
         collapsed: false,
+        refreshing,
         onRefresh: () => {},
         syncService: service,
       }),
@@ -171,4 +174,23 @@ test('leaving the button without reaching the popover closes it', async () => {
   });
   await settle();
   assert.equal(document.querySelector('.sync-popover'), null);
+});
+
+test('while refreshing, the spinner takes the icon’s place rather than sitting over it', async () => {
+  const rendered = ui.render(
+    createElement(Harness, { service: reconciliation(), refreshing: true }),
+  );
+  const button = document.querySelector<HTMLButtonElement>('.global-refresh');
+  assert.ok(button);
+  assert.equal(button.getAttribute('aria-busy'), 'true');
+  assert.equal(button.getAttribute('aria-label'), 'Refreshing vaults and teams');
+  assert.ok(button.querySelector('.spin'));
+  assert.equal(button.querySelector('svg.ic'), null);
+  assert.equal(document.querySelector('.sync-badge'), null);
+  rendered.rerender(
+    createElement(Harness, { service: reconciliation(), refreshing: false }),
+  );
+  assert.equal(button.getAttribute('aria-busy'), null);
+  assert.equal(button.querySelector('.spin'), null);
+  assert.ok(button.querySelector('svg.ic'));
 });

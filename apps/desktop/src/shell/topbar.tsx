@@ -151,10 +151,11 @@ const SYNC_HOVER_CLOSE_MS = 180;
 
 /**
  * The refresh button with its status: one square button that refreshes on
- * click, a spinner badge while any server is refreshing and an amber dot when
- * one could not be refreshed. Pointing at the button — or reaching it with the
- * keyboard — opens the per-server popover; there is no separate trigger for
- * it. The badge is decorative; the button carries the accessible name.
+ * click, a spinner in the icon's place while any server is refreshing and an
+ * amber dot when one could not be refreshed. Pointing at the button — or
+ * reaching it with the keyboard — opens the per-server popover; there is no
+ * separate trigger for it. The spinner and the dot are decorative; the button
+ * carries the accessible name.
  *
  * The popover is portaled, so it is not a descendant of the button's wrapper:
  * the pointer and the focus are tracked on both, and the popover only closes
@@ -212,11 +213,8 @@ function SyncControls({
     on.current = { pointer: false, focus: false };
     setOpen(false);
   };
-  const badge = summary.failed
-    ? 'failed'
-    : summary.refreshing || refreshing
-      ? 'refreshing'
-      : null;
+  const spinning = summary.refreshing || refreshing;
+  const badge = summary.failed ? 'failed' : null;
   return (
     <span
       className="global-refresh-wrap"
@@ -229,8 +227,9 @@ function SyncControls({
       <Button
         variant="quiet"
         className="global-refresh"
-        icon="again"
-        aria-label={refreshing ? 'Refreshing vaults and teams' : 'Refresh'}
+        icon={spinning ? undefined : 'again'}
+        busy={spinning}
+        aria-label={spinning ? 'Refreshing vaults and teams' : 'Refresh'}
         aria-describedby={open ? SYNC_STATUS_ID : undefined}
         disabled={refreshing || blocked}
         onClick={onRefresh}
@@ -363,7 +362,8 @@ export function Topbar({
         <Button
           variant="quiet"
           className="global-refresh"
-          icon="again"
+          icon={refreshing ? undefined : 'again'}
+          busy={refreshing}
           aria-label={refreshing ? 'Refreshing vaults and teams' : 'Refresh'}
           title={
             refreshing

@@ -323,3 +323,46 @@ test('desktop scheduling discovers already-bound accounts repeatedly without run
   );
   service.dispose();
 });
+
+test('a snapshot names the next attempt while the job is idle, and none while it runs or is parked', async () => {
+  const clock = new Clock(),
+    gate = deferred();
+  let failing = false;
+  const scheduler = new ReconciliationScheduler(clock);
+  scheduler.update([
+    {
+      ...job('p', async () => {
+        if (failing)
+          throw {
+            code: 'response-binding',
+            message: 'The reply did not match.',
+            fatal: true,
+            retryable: false,
+            ambiguous: false,
+          };
+        await gate.promise;
+      }),
+      initialDelay: 5_000,
+    },
+  ]);
+  scheduler.setEnabled(true);
+  assert.equal(scheduler.snapshot('p')?.nextAttemptAt, 5_000);
+  await clock.advance(5_000);
+  assert.equal(scheduler.snapshot('p')?.refreshing, true);
+  assert.equal(scheduler.snapshot('p')?.nextAttemptAt, undefined);
+  gate.resolve();
+  await flush();
+  assert.equal(scheduler.snapshot('p')?.refreshing, false);
+  assert.equal(scheduler.snapshot('p')?.nextAttemptAt, 5_000 + 30_000);
+  assert.equal(
+    scheduler.observations().find((entry) => entry.key === 'p')?.snapshot
+      .nextAttemptAt,
+    5_000 + 30_000,
+  );
+  // A fatal failure parks the job: it is paused and has no next attempt.
+  failing = true;
+  scheduler.request('p', 'manual');
+  await clock.advance(1_000);
+  assert.equal(scheduler.snapshot('p')?.paused, true);
+  assert.equal(scheduler.snapshot('p')?.nextAttemptAt, undefined);
+});

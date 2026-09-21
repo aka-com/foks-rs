@@ -6,6 +6,7 @@ import { createServer, type ViteDevServer } from 'vite';
 import { metadataFreshness } from '../src/device-cache';
 import {
   DesktopReconciliation,
+  profileConnectivityKey,
   profileRefreshKey,
 } from '../src/desktop-reconciliation';
 import { FIXTURE } from '../src/fixture';
@@ -389,5 +390,118 @@ test('observations that share one root cause on one server collapse to one row a
       /Keystore record is missing/.test(line),
     ).length,
     4,
+  );
+});
+
+test('each row lists its jobs: when they ran, when they run next, and what failed', () => {
+  const profile = FIXTURE.servers[0].id;
+  const scheduler = (
+    observations: {
+      key: string;
+      scope: string | null;
+      kind: 'catalog' | 'connectivity' | 'metadata';
+      snapshot: {
+        refreshing: boolean;
+        lastAttemptAt?: number;
+        lastSuccessAt?: number;
+        error?: unknown;
+        paused?: boolean;
+        nextAttemptAt?: number;
+      };
+    }[],
+  ) =>
+    ({
+      supportsConnectivity: true,
+      scheduler: {
+        observations: () => observations,
+        snapshot: (key: string) =>
+          observations.find((observation) => observation.key === key)?.snapshot,
+      },
+    }) as unknown as DesktopReconciliation;
+  const summary = summarizeSync(
+    FIXTURE,
+    scheduler([
+      {
+        key: profileConnectivityKey(FIXTURE, profile),
+        scope: profile,
+        kind: 'connectivity',
+        snapshot: { refreshing: true, lastAttemptAt: 21_000 },
+      },
+      {
+        key: profileRefreshKey(FIXTURE, profile),
+        scope: profile,
+        kind: 'catalog',
+        snapshot: {
+          refreshing: false,
+          lastAttemptAt: 20_000,
+          lastSuccessAt: 20_000,
+          nextAttemptAt: 50_000,
+        },
+      },
+      {
+        key: 'metadata',
+        scope: null,
+        kind: 'metadata',
+        snapshot: {
+          refreshing: false,
+          lastAttemptAt: 20_000,
+          error: {
+            code: 'io',
+            message: 'Metadata read failed.',
+            retryable: true,
+            fatal: false,
+            ambiguous: false,
+          },
+          paused: false,
+          nextAttemptAt: 30_000,
+        },
+      },
+    ]),
+  );
+  const row = summary.servers.find((server) => server.id === profile);
+  // The catalog is listed before the jobs that keep it, whatever order the
+  // scheduler holds them in.
+  assert.deepEqual(
+    row?.jobs.map((job) => [job.label, job.state]),
+    [
+      ['Catalog', 'ok'],
+      ['Connectivity reconciliation', 'refreshing'],
+    ],
+  );
+  assert.match(row?.jobs[0].detail ?? '', /^Succeeded .+\. Next at .+\.$/);
+  assert.equal(row?.jobs[1].detail, 'Running now.');
+  const local = summary.servers.find((server) => server.id === null);
+  assert.deepEqual(
+    local?.jobs.map((job) => [job.label, job.state]),
+    [['Account metadata', 'failed']],
+  );
+  assert.match(local?.jobs[0].detail ?? '', /^Metadata read failed\. Next at .+\.$/);
+  // A parked job says so instead of naming a next time.
+  const parked = summarizeSync(
+    FIXTURE,
+    scheduler([
+      {
+        key: profileRefreshKey(FIXTURE, profile),
+        scope: profile,
+        kind: 'catalog',
+        snapshot: {
+          refreshing: false,
+          lastAttemptAt: 20_000,
+          lastSuccessAt: 10_000,
+          error: {
+            code: 'response-binding',
+            message: 'The reply did not match.',
+            retryable: false,
+            fatal: true,
+            ambiguous: false,
+          },
+          paused: true,
+        },
+      },
+    ]),
+  );
+  assert.equal(
+    parked.servers.find((server) => server.id === profile)?.jobs[0].detail,
+    `The reply did not match. Last succeeded ${new Date(10_000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. Paused until Refresh.`,
   );
 });

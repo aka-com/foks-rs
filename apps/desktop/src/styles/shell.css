@@ -199,8 +199,9 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .global-refresh-wrap{position:relative;display:inline-flex;align-items:center;flex:none}
 .sync-badge{position:absolute;top:3px;left:21px;width:8px;height:8px;border-radius:50%;box-shadow:0 0 0 2px #fff;pointer-events:none}
 .sync-badge.failed{background:var(--warning-dot)}
-.sync-badge.refreshing{box-sizing:border-box;border:1.5px solid var(--line-mid);border-top-color:var(--accent);background:#fff;animation:btn-spin .9s linear infinite}
-@media (prefers-reduced-motion:reduce){.sync-badge.refreshing{animation:none}}
+/* While refreshing, the spinner stands where the icon was: the same ring the popover's rows spin, at the icon's size. */
+.global-refresh .spin{box-sizing:border-box;width:15px;height:15px;border:1.6px solid var(--line-mid);border-top-color:var(--accent);border-right-color:var(--line-mid);animation:btn-spin .9s linear infinite}
+@media (prefers-reduced-motion:reduce){.global-refresh .spin{animation:none}}
 .sync-popover{padding:10px 12px;font-size:12.5px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto;background:var(--main-surface);border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-menu)}
 .sync-row{display:flex;align-items:flex-start;gap:8px;padding:4px 0}
 .sync-row+.sync-row{border-top:1px solid var(--line-soft);margin-top:4px;padding-top:8px}
@@ -211,6 +212,10 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .sync-body{flex:1;min-width:0}
 .sync-body b{display:block;font-weight:600;color:var(--ink)}
 .sync-body p{margin:2px 0 0;color:var(--muted);line-height:1.45}
+.sync-jobs{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:3px}
+.sync-jobs li{display:flex;align-items:baseline;gap:6px;font-size:12px;line-height:1.4;color:var(--muted)}
+.sync-jobs .sync-dot{width:6px;height:6px;margin-top:0;align-self:center}
+.sync-jobs b{display:inline;flex:none;font-weight:500;color:var(--ink-3)}
 .sync-actions{display:flex;align-items:center;gap:8px;margin-top:8px}
 .sync-empty{color:var(--muted)}
 .sync-foot{display:flex;justify-content:flex-end;margin-top:8px;padding-top:8px;border-top:1px solid var(--line-soft)}
