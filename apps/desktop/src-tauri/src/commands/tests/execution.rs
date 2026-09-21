@@ -25,6 +25,64 @@ fn malformed_post_mutation_success_is_ambiguous_fatal_and_requires_refresh() {
     assert_eq!(blocked.code, "ambiguous");
 }
 
+/// Every KV write names the store it lands in, inline or streamed, so the
+/// catalog discards that store's items and no others. An operation that is
+/// not a KV write names none, and the caller retires the whole catalog.
+#[test]
+fn a_kv_write_names_the_store_it_lands_in() {
+    use crate::commands::execution::kv_mutation_store;
+    use crate::commands::tests::support::{account_ref, team_ref};
+    use foks_agent_proto::{
+        KvEntryMetadata, KvPrecondition, KvRole, KvStoreRef, KvUploadHeader, Operation,
+    };
+    use foks_desktop::{CatalogItem, CatalogStoreRef, KvAccountMutation};
+
+    let account = account_ref("work.example", "personal");
+    let inline = foks_desktop::edit_kv_file_mutation(
+        &CatalogItem {
+            store: CatalogStoreRef::Account(account.clone()),
+            metadata: KvEntryMetadata {
+                path: "/note".into(),
+                version: 7,
+                node_type: "small-file".into(),
+                size: Some(1),
+                read_role: KvRole::Owner,
+                write_role: KvRole::Owner,
+            },
+        },
+        b"changed".to_vec(),
+    )
+    .unwrap();
+    assert_eq!(
+        kv_mutation_store(&inline),
+        Some(CatalogStoreRef::Account(account))
+    );
+
+    let team = team_ref("work.example", "personal", "engineering");
+    let streamed = KvAccountMutation::Stream {
+        header: KvUploadHeader {
+            adapter: None,
+            store: KvStoreRef::Team(team.clone()),
+            path: "/upload".into(),
+            total_length: 1,
+            read_role: KvRole::Owner,
+            write_role: KvRole::Owner,
+            precondition: KvPrecondition::Create,
+            mkdir_p: false,
+        },
+        content: vec![b'x'].into(),
+    };
+    assert_eq!(
+        kv_mutation_store(&streamed),
+        Some(CatalogStoreRef::Team(team))
+    );
+
+    assert_eq!(
+        kv_mutation_store(&KvAccountMutation::Inline(Operation::Ping)),
+        None
+    );
+}
+
 #[test]
 fn guarded_worker_in_one_profile_does_not_block_another_or_local_aliases() {
     use crate::commands::execution::apply_kv_mutation_with_transport;

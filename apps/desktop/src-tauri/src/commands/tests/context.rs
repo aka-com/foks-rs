@@ -75,6 +75,7 @@ fn kv_refresh_and_content_invalidation_preserve_chat_access_revision() {
     let chat = state.for_profile("chat").unwrap();
     let mut catalog = chat_catalog();
     let id = store_id(&catalog.stores[0].store_ref());
+    let written = catalog.items[0].store.clone();
     let (load, _) = chat.begin_catalog_load_checked().unwrap();
     assert!(chat.publish_catalog(load, catalog.clone(), |_| {}));
     let (revision, _) = chat.selected_chat(&id).unwrap();
@@ -84,7 +85,7 @@ fn kv_refresh_and_content_invalidation_preserve_chat_access_revision() {
     assert!(chat.publish_catalog(load, catalog, |_| {}));
     assert_eq!(chat.selected_chat(&id).unwrap().0, revision);
     assert_ne!(chat.catalog_at(None).unwrap().0, item_generation);
-    chat.invalidate_catalog_items();
+    chat.invalidate_catalog_items(&written);
     assert_eq!(chat.selected_chat(&id).unwrap().0, revision);
     chat.invalidate_catalog();
     assert_ne!(chat.chat_generation.load(Ordering::Acquire), revision);
@@ -329,6 +330,61 @@ fn successful_empty_store_read_replaces_previous_items() {
     );
 }
 
+/// A write lands in one store. The other stores' items are still what their
+/// own reads published, so only the written store's items and read state are
+/// discarded; the profile's full-item claim goes with them, because the
+/// profile as a whole is no longer read whole.
+#[test]
+fn a_write_discards_only_the_items_of_the_store_it_landed_in() {
+    let state = phase_four_state(vec![]).for_profile("chat").unwrap();
+    let mut catalog = chat_catalog();
+    let written = catalog.items[0].store.clone();
+    let untouched = CatalogStoreRef::Account(account_ref("chat", "owner"));
+    catalog.items.push(foks_desktop::CatalogItem {
+        store: untouched.clone(),
+        metadata: foks_agent_proto::KvEntryMetadata {
+            path: "/other".into(),
+            node_type: "small-file".into(),
+            version: 3,
+            size: Some(2),
+            read_role: foks_agent_proto::KvRole::Owner,
+            write_role: foks_agent_proto::KvRole::Owner,
+        },
+    });
+    catalog.store_reads.push(foks_desktop::CatalogStoreRead {
+        store: untouched.clone(),
+        state: foks_desktop::CatalogStoreReadState::Complete,
+    });
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.publish_catalog(load, catalog, |_| {}));
+
+    state.invalidate_catalog_items(&written);
+
+    let catalog = state.catalog.lock().unwrap();
+    let catalog = catalog.as_ref().unwrap();
+    assert_eq!(
+        catalog
+            .items
+            .iter()
+            .map(|item| item.store.clone())
+            .collect::<Vec<_>>(),
+        vec![untouched.clone()],
+    );
+    for read in &catalog.store_reads {
+        assert_eq!(
+            read.state,
+            if read.store == written {
+                foks_desktop::CatalogStoreReadState::NotLoaded
+            } else {
+                foks_desktop::CatalogStoreReadState::Complete
+            },
+            "{:?}",
+            read.store
+        );
+    }
+    assert_eq!(catalog.full_item_reads, Some(vec![]));
+}
+
 #[test]
 fn kv_denial_does_not_revoke_account_or_chat_target_bindings() {
     let state = phase_four_state(vec![]);
@@ -389,7 +445,10 @@ fn a_catalog_listing_after_a_local_write_is_read_fresh() {
     assert_eq!(state.catalog_read_freshness(true), (true, 0));
 
     let profile = state.for_profile("work.example").unwrap();
-    profile.invalidate_catalog_items();
+    profile.invalidate_catalog_items(&CatalogStoreRef::Account(account_ref(
+        "work.example",
+        "personal",
+    )));
     let (fresh, epoch) = state.catalog_read_freshness(false);
     assert!(fresh);
     assert_eq!(epoch, 1);

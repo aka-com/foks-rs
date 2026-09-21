@@ -886,7 +886,14 @@ impl AppState {
         self.chat_generation.store(generation, Ordering::Release);
     }
 
-    pub(super) fn invalidate_catalog_items(&self) {
+    /// Discards the cached items of the one store a write lands in. Every
+    /// other store's items are still exactly what its own last read
+    /// published, so a write to one vault does not make the renderer read
+    /// every other vault of the profile again.
+    ///
+    /// The profile's full-item claim goes with them: with one store's items
+    /// discarded, the profile has no longer been read whole.
+    pub(super) fn invalidate_catalog_items(&self, store: &CatalogStoreRef) {
         let _coordination = self
             .catalog_coordination
             .lock()
@@ -898,18 +905,14 @@ impl AppState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(catalog) = catalog.as_mut() {
-            let affected = |profile: &str| {
-                self.mutation_profile()
-                    .is_none_or(|selected| selected == profile)
-            };
-            catalog.items.retain(|item| !affected(item.store.profile()));
+            catalog.items.retain(|item| &item.store != store);
             for read in &mut catalog.store_reads {
-                if affected(read.store.profile()) {
+                if &read.store == store {
                     read.state = foks_desktop::CatalogStoreReadState::NotLoaded;
                 }
             }
             if let Some(profiles) = &mut catalog.full_item_reads {
-                profiles.retain(|profile| !affected(profile));
+                profiles.retain(|profile| profile != store.profile());
             }
         }
         let generation = self.next_generation();

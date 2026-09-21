@@ -6,8 +6,8 @@ use crate::commands::enrollment::{pending_operations, validated_pending_dtos};
 use crate::commands::servers::{require_transport_profile, transport_profile, ProfileSummary};
 use crate::commands::types::MutationDto;
 use crate::commands::validation::invalid_response;
-use foks_agent_proto::{Operation, PendingOperationKind, PendingOperationSummary};
-use foks_desktop::KvAccountMutation;
+use foks_agent_proto::{KvStoreRef, Operation, PendingOperationKind, PendingOperationSummary};
+use foks_desktop::{CatalogStoreRef, KvAccountMutation};
 use std::sync::atomic::Ordering;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -121,13 +121,41 @@ pub(super) async fn apply_kv_mutation(
     apply_kv_mutation_with_transport(state, mutation, kind, state.agent.transport()).await
 }
 
+/// The store a KV write lands in. Every KV mutation names one; an operation
+/// that names none is not a KV write and has no store's items to discard.
+pub(super) fn kv_mutation_store(mutation: &KvAccountMutation) -> Option<CatalogStoreRef> {
+    let store = match mutation {
+        KvAccountMutation::Inline(
+            Operation::PutKv { store, .. }
+            | Operation::PutKvSymlink { store, .. }
+            | Operation::MkdirKv { store, .. }
+            | Operation::RemoveKv { store, .. },
+        ) => store,
+        KvAccountMutation::Inline(_) => return None,
+        KvAccountMutation::Stream { header, .. } => &header.store,
+    };
+    Some(catalog_store(store))
+}
+
+pub(super) fn catalog_store(store: &KvStoreRef) -> CatalogStoreRef {
+    match store {
+        KvStoreRef::Account(store) => CatalogStoreRef::Account(store.clone()),
+        KvStoreRef::Team(store) => CatalogStoreRef::Team(store.clone()),
+    }
+}
+
 pub(super) async fn apply_kv_mutation_with_transport(
     state: &AppState,
     mutation: KvAccountMutation,
     kind: MutationKind,
     transport: std::sync::Arc<dyn foks_desktop::AgentTransport>,
 ) -> Result<MutationDto, AgentError> {
-    state.invalidate_catalog_items();
+    match kv_mutation_store(&mutation) {
+        Some(store) => state.invalidate_catalog_items(&store),
+        // Not a KV write, so which items it changed is unknown. Retire the
+        // whole catalog rather than leave any of it stale.
+        None => state.invalidate_catalog(),
+    }
     let result = tauri::async_runtime::spawn_blocking(move || {
         execute_kv_mutation(transport.as_ref(), mutation, kind)
     })

@@ -808,7 +808,7 @@ async fn apply_file_upload(
     source: PathBuf,
     kind: MutationKind,
 ) -> Result<MutationDto, AgentError> {
-    state.invalidate_catalog_items();
+    state.invalidate_catalog_items(&super::execution::catalog_store(&header.store));
     let transport = state.agent.transport();
     let result = tauri::async_runtime::spawn_blocking(move || {
         upload_file(transport.as_ref(), header, &source, kind)
