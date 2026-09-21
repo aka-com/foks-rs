@@ -597,10 +597,13 @@ mod tests {
             assert!(session.list_chat_channels("chat-team",&mut vault)?.channels.is_empty());
             let created=session.attempt_chat_operation(&credentials,"chat-team",&op.id,&mut vault,&master)?;
             assert_eq!(created.state,foks_client_db::ChatOperationState::Confirmed);
+            // Prime an empty inbox, then read a sent message before the next drain.
+            session.sync_chat_inbox("chat-team", &mut vault)?;
             let send=session.prepare_chat_send("chat-team",RtChannelId(op.scope.channel),"hello from the app",&mut vault,&master)?;
             session.attempt_chat_operation(&credentials,"chat-team",&send.id,&mut vault,&master)?;
             let recent=session.read_recent_chat("chat-team",RtChannelId(op.scope.channel),10,&mut vault)?;
             assert!(matches!(&recent.messages[0].content,foks_client::ChatContent::Text(text) if text.as_str()=="hello from the app"));
+            session.mark_chat_read("chat-team",RtChannelId(op.scope.channel),recent.messages[0].message.sequence,&mut vault)?;
             let inbox=session.sync_chat_inbox("chat-team",&mut vault)?;
             assert_eq!(inbox.inbox.conversations.len(),1);
             assert_eq!(inbox.inbox.conversations[0].unread,0);

@@ -440,13 +440,17 @@ impl SoftStateStore {
         Ok(())
     }
 
+    /// Stage a read against freshly authenticated channel metadata. Inbox rows
+    /// may lag history reads; do not use their cached message head as a bound.
+    /// The caller must verify access to this channel in the supplied scope.
     pub fn stage_chat_read(
         &mut self,
         scope: &ChatInboxScope,
-        channel: RtChannelId,
+        observed: &RtChannelMetadata,
         sequence: u64,
     ) -> Result<()> {
         validate_chat_inbox_scope(scope)?;
+        let channel = observed.id;
         if sequence == 0 {
             return Err(Error::InvalidChatInbox("invalid read pointer"));
         }
@@ -467,7 +471,10 @@ impl SoftStateStore {
             .ok_or(Error::ChatNotFound("inbox channel"))?;
         let metadata = RtChannelMetadata::decode(&metadata)
             .map_err(|_| Error::InvalidChatInbox("stored channel metadata"))?;
-        if metadata
+        if observed.app != scope.app || observed.team != metadata.team {
+            return Err(Error::InvalidChatInbox("read channel scope changed"));
+        }
+        if observed
             .last_message
             .as_ref()
             .is_none_or(|last| sequence > last.sequence)
@@ -1921,12 +1928,33 @@ mod tests {
                 .len(),
             1
         );
-        store.stage_chat_read(&scope, metadata.id, 1).unwrap();
+        store.stage_chat_read(&scope, &metadata, 1).unwrap();
         assert_eq!(
             store.pending_chat_reads(&scope).unwrap(),
             vec![(metadata.id, 1)]
         );
         store.confirm_chat_read(&scope, metadata.id, 1).unwrap();
+        assert!(store.pending_chat_reads(&scope).unwrap().is_empty());
+        // History can advance while the account inbox drain is gated. Stage
+        // that read without rewriting the inbox's versioned metadata/cursor.
+        let mut observed = metadata.clone();
+        observed.last_message.as_mut().unwrap().sequence = 2;
+        assert!(store.stage_chat_read(&scope, &observed, 3).is_err());
+        let mut wrong_scope = observed.clone();
+        wrong_scope.app = RtAppId::Crdt;
+        assert!(store.stage_chat_read(&scope, &wrong_scope, 2).is_err());
+        store.stage_chat_read(&scope, &observed, 2).unwrap();
+        assert_eq!(
+            store.pending_chat_reads(&scope).unwrap(),
+            vec![(metadata.id, 2)]
+        );
+        let entries = store
+            .chat_inbox_entries(&scope, metadata.team.entity().as_bytes())
+            .unwrap();
+        assert_eq!(entries[0].metadata, metadata);
+        assert_eq!(entries[0].inbox_version, 1);
+        assert_eq!(store.chat_inbox_state(&scope).unwrap().cursor, 1);
+        store.confirm_chat_read(&scope, metadata.id, 2).unwrap();
         assert!(store.pending_chat_reads(&scope).unwrap().is_empty());
         let mut second_metadata = metadata.clone();
         second_metadata.id = RtChannelId([2; 16]);

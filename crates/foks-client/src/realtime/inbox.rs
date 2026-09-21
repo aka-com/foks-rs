@@ -407,7 +407,7 @@ impl ChatSession<'_> {
             ));
         }
         let scope = self.inbox_scope();
-        store.stage_chat_read(&scope, channel, sequence)?;
+        store.stage_chat_read(&scope, &metadata, sequence)?;
         let response = rpc.request(&RealtimeRequest::ReadThrough(RtReadThroughArgument {
             read: RtReadThrough { channel, sequence },
         }));
