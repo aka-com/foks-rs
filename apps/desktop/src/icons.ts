@@ -7,8 +7,10 @@
  */
 
 import type { IconNode } from 'lucide';
+import Bell from 'lucide/dist/esm/icons/bell.mjs';
 import Check from 'lucide/dist/esm/icons/check.mjs';
 import ChevronDown from 'lucide/dist/esm/icons/chevron-down.mjs';
+import ChevronRight from 'lucide/dist/esm/icons/chevron-right.mjs';
 import CircleAlert from 'lucide/dist/esm/icons/circle-alert.mjs';
 import CircleCheck from 'lucide/dist/esm/icons/circle-check.mjs';
 import Copy from 'lucide/dist/esm/icons/copy.mjs';
@@ -21,6 +23,8 @@ import EyeOff from 'lucide/dist/esm/icons/eye-off.mjs';
 import File from 'lucide/dist/esm/icons/file.mjs';
 import Flag from 'lucide/dist/esm/icons/flag.mjs';
 import Folder from 'lucide/dist/esm/icons/folder.mjs';
+import Globe from 'lucide/dist/esm/icons/globe.mjs';
+import Hash from 'lucide/dist/esm/icons/hash.mjs';
 import Info from 'lucide/dist/esm/icons/info.mjs';
 import KeyRound from 'lucide/dist/esm/icons/key-round.mjs';
 import Laptop from 'lucide/dist/esm/icons/laptop.mjs';
@@ -59,6 +63,7 @@ export const FOKS_ICONS = {
   search: Search,
   grid: LayoutGrid,
   chevronDown: ChevronDown,
+  chevronRight: ChevronRight,
   info: Info,
   download: Download,
   upload: Upload,
@@ -69,6 +74,8 @@ export const FOKS_ICONS = {
   eyeOff: EyeOff,
   plus: Plus,
   folder: Folder,
+  globe: Globe,
+  hash: Hash,
   close: X,
   settings: Settings,
   server: Server,
@@ -83,6 +90,7 @@ export const FOKS_ICONS = {
   flag: Flag,
   door: DoorOpen,
   chat: MessageSquare,
+  bell: Bell,
   send: Send,
   panelLeftClose: PanelLeftClose,
   panelLeftOpen: PanelLeftOpen,

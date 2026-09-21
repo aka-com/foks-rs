@@ -1,33 +1,23 @@
-/**
- * The channel info panel.
- *
- * What the model already holds about the open channel: its description, its
- * visibility, the team roster with FOKS roles, and the per-device alert
- * settings that used to sit in a strip above every thread. Leaving, muting,
- * deleting and editing the description have no `ChatAction` yet, so this panel
- * does not draw them.
- */
+/** Channel identity, visibility, membership links, and notification settings. */
 
 import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
-import { Button } from '../components';
+import { Button, Icon } from '../components';
 import { NotificationSettings } from '../chat/notification-provider';
+import { channelLabel } from '../chat/presentation';
 import {
   groupDetailFailure,
-  parseRole,
+  hue,
+  isMachine,
   partiesOf,
   partyName,
-  roleName,
   roleRank,
 } from '../model';
-import type { AgentSnapshot, Party, TeamStore } from '../model';
+import type { AgentSnapshot, TeamStore } from '../model';
 import type { ChatChannel, ChatScope } from '../chat-contract';
 import type { Location } from '../location';
 
-/** "Owner", "Admin", "Member" — the shell's role name, never the band. */
-function roleLabel(party: Party): string {
-  const role = parseRole(party.destination_role);
-  return role ? roleName(role) : 'Role unavailable';
-}
+/** Maximum number of member avatars. */
+const MARKS = 3;
 
 export function ChannelInfoPanel({
   snapshot,
@@ -76,6 +66,9 @@ export function ChannelInfoPanel({
     (left, right) =>
       roleRank(right.destination_role) - roleRank(left.destination_role),
   );
+  const people = (): void => {
+    onNavigate({ kind: 'group-settings', ref: store.id, tab: 'people' });
+  };
   return (
     <aside
       ref={panel}
@@ -100,82 +93,111 @@ export function ChannelInfoPanel({
           onClick={() => onClose()}
         />
       </div>
-      <section>
-        <h3>Description</h3>
-        {/* A team switch keeps the panel open while the new team's inbox
-            arrives: what is known about the team is drawn meanwhile. */}
-        <p>
-          {channel
-            ? channel.description || 'No description.'
-            : loading
-              ? 'Loading channel…'
-              : 'No channel is open.'}
-        </p>
-      </section>
-      {channel && (
-        <section>
-          <h3>Visibility</h3>
-          <p className="chat-visibility-title">
-            <b>
-              {channel.admin ? 'Admins and owners' : 'Everyone on the team'}
-            </b>
-          </p>
-          <p className="chat-quiet">
-            {channel.admin
-              ? 'Hidden from members. Only admins and owners can read or write.'
-              : 'Members and administrators can view and post messages.'}
-          </p>
-        </section>
-      )}
-      <section>
-        {/* The conversation header already carries the channel's access line. */}
-        <h3>{rosterFailure ? 'Members' : `Members · ${parties.length}`}</h3>
-        {rosterFailure ? (
-          <p role="alert">{rosterFailure.message}</p>
+      {/* Keep team information visible while channel data loads. */}
+      <div className="chat-info-identity">
+        {channel ? (
+          <>
+            <span className="chat-info-glyph" aria-hidden="true">
+              <Icon name="hash" size={22} />
+            </span>
+            <b className="chat-info-name">{channelLabel(channel)}</b>
+            <p>in {store.name}</p>
+            <p className="chat-info-about">
+              {channel.description || 'No description.'}
+            </p>
+          </>
         ) : (
-          <div className="chat-info-members">
-            {parties.map((party) => (
-              <div className="chat-info-member" key={party.party_id_hex}>
-                <span className="t">
-                  {partyName(party)}
-                  {party.label === 'you' && <small>You</small>}
-                </span>
-                <span className="chip">{roleLabel(party)}</span>
-              </div>
-            ))}
+          <p>{loading ? 'Loading channel…' : 'No channel is open.'}</p>
+        )}
+      </div>
+      <div className="chat-info-rows">
+        {channel && (
+          <div
+            className="chat-info-row"
+            title={
+              channel.admin
+                ? 'Hidden from members. Only admins and owners can read or write.'
+                : 'Members and administrators can view and post messages.'
+            }
+          >
+            <Icon name="globe" className="chat-info-row-icon" />
+            <span className="k">Visibility</span>
+            <span className="v">
+              {channel.admin ? 'Admins and owners' : 'Everyone on the team'}
+            </span>
           </div>
         )}
+        <button
+          type="button"
+          className="chat-info-row chat-info-people"
+          // Exclude decorative avatars from the accessible button name.
+          title="Manage membership and access to team files and chat"
+          onClick={people}
+        >
+          <Icon name="users" className="chat-info-row-icon" />
+          <span className="k">Members</span>
+          {!rosterFailure && (
+            <span className="v">
+              <span className="chat-info-marks" aria-hidden="true">
+                {parties.slice(0, MARKS).map((party) => {
+                  // Match the avatars in the team member list.
+                  const machine = isMachine(party);
+                  const name = partyName(party);
+                  return (
+                    <span
+                      className="chat-info-mark"
+                      key={party.party_id_hex}
+                      style={{
+                        background: machine ? 'var(--c-none)' : hue(name),
+                      }}
+                    >
+                      {machine ? (
+                        <Icon name="terminal" />
+                      ) : (
+                        name.slice(0, 1).toUpperCase()
+                      )}
+                    </span>
+                  );
+                })}
+              </span>
+              {parties.length}
+            </span>
+          )}
+          <Icon name="chevronRight" className="chat-info-go" />
+        </button>
+        {channel && (
+          <div className="chat-info-row chat-info-alerts">
+            <Icon name="bell" className="chat-info-row-icon" />
+            <NotificationSettings
+              storeId={store.id}
+              scope={scope}
+              channel={channel.id}
+              noteIcon="alert"
+            />
+          </div>
+        )}
+      </div>
+      {rosterFailure && (
+        <p className="chat-info-note" role="alert">
+          {rosterFailure.message}
+        </p>
+      )}
+      <div className="chat-info-foot">
         <Button
           icon="users"
           title="Manage membership and access to team files and chat"
-          onClick={() =>
-            onNavigate({
-              kind: 'group-settings',
-              ref: store.id,
-              tab: 'people',
-            })
-          }
+          onClick={people}
         >
           Manage in Teams
         </Button>
-      </section>
-      {channel && (
-        <section>
-          <h3>Channel alerts</h3>
-          <NotificationSettings
-            storeId={store.id}
-            scope={scope}
-            channel={channel.id}
-          />
-          <Button
-            onClick={() =>
-              onNavigate({ kind: 'settings', section: 'preferences' })
-            }
-          >
-            Device notification settings
-          </Button>
-        </section>
-      )}
+        <Button
+          onClick={() =>
+            onNavigate({ kind: 'settings', section: 'preferences' })
+          }
+        >
+          Device notification settings
+        </Button>
+      </div>
     </aside>
   );
 }

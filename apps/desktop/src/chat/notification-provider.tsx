@@ -1,4 +1,4 @@
-import { CardSelect, Inset, InsetRow } from '../components';
+import { CardSelect, Icon, Inset, InsetRow } from '../components';
 import { chatClient, sameScope } from './client';
 import { failure } from './actions';
 import { normalizeCommandError } from '../bridge';
@@ -14,6 +14,7 @@ import {
 import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
 import type { ChatScope } from '../chat-contract';
+import type { FoksIconName } from '../icons';
 import type { ChatInboxService } from './inbox-service';
 import type { LocalAction, LocalSession } from './local-contract';
 import { NotificationConsumer } from './notification-consumer';
@@ -224,10 +225,13 @@ export function NotificationSettings({
   storeId,
   scope,
   channel,
+  noteIcon,
 }: {
   storeId?: string;
   scope?: ChatScope;
   channel?: string;
+  /** Optional icon for the unavailable-notifications message. */
+  noteIcon?: FoksIconName;
 }) {
   const context = useContext(Context);
   const [key, setKey] = useState('');
@@ -309,7 +313,10 @@ export function NotificationSettings({
         </Inset>
       )}
       {session && !session.available ? (
-        <p role="alert">Desktop alerts are unavailable in this build.</p>
+        <p role="alert">
+          {noteIcon ? <Icon name={noteIcon} /> : null}
+          Desktop alerts are unavailable in this build.
+        </p>
       ) : null}
       {error &&
         // The agent states the refusal; the shell says it again with the
