@@ -29,7 +29,7 @@ test('queued foreground work expires without running or releasing active work', 
     code: 'profile-busy',
     ambiguous: false,
   });
-  t.mock.timers.tick(60_001);
+  t.mock.timers.tick(75_001);
   await rejected;
   let started = false;
   const next = scheduleProfileWork(owner, 'p', async () => {
@@ -314,4 +314,22 @@ test('background rotation serves other identities before a repeatedly resubmitte
   gate.resolve();
   await Promise.all([first, again, failed]);
   assert.deepEqual(order, ['b', 'a']);
+});
+
+test('work queued behind a request that uses its whole budget runs once the queue frees', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const owner = {},
+    gate = deferred();
+  const active = scheduleProfileWork(owner, 'p', () => gate.promise);
+  await flush();
+  let ran = false;
+  const queued = scheduleProfileWork(owner, 'p', async () => {
+    ran = true;
+  });
+  // The agent's own request budget: the active request settles as it ends.
+  t.mock.timers.tick(60_000);
+  gate.resolve();
+  await active;
+  await queued;
+  assert.equal(ran, true);
 });

@@ -30,7 +30,19 @@ type Queue = {
   last?: string;
   draining: boolean;
 };
-const MAX_QUEUE_WAIT = 60_000;
+/**
+ * The agent answers a request within its own budget: the managed agent is
+ * started with a sixty-second request timeout (`--request-timeout-seconds`
+ * in `src-tauri/src/agent.rs`).
+ */
+const NATIVE_REQUEST_TIMEOUT = 60_000;
+/**
+ * How long queued work waits for admission. Work queued behind a request
+ * that uses its whole budget has to outlast that budget plus the scheduling
+ * and IPC slack around it; a wait equal to the budget expired such work at
+ * the moment the queue freed.
+ */
+const MAX_QUEUE_WAIT = NATIVE_REQUEST_TIMEOUT + 15_000;
 const MAX_QUEUED = 256;
 const queueBusy = (message: string) =>
   Object.assign(new Error(message), {
@@ -170,10 +182,6 @@ export function scheduleProfileWork<T>(
           (background && (background.signal.aborted || !background.current()))
         )
           throw cancellation();
-        if (started - queued >= MAX_QUEUE_WAIT)
-          throw queueBusy(
-            'Profile queue deadline exceeded; request did not start.',
-          );
         const value = await work();
         if (
           cancelled ||
