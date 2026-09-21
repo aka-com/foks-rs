@@ -65,6 +65,12 @@ pub struct DiscoveredGroupDto {
 pub struct GroupDiscoveryDto {
     pub account_alias: String,
     pub groups: Vec<DiscoveredGroupDto>,
+    /// The aliases whose local binding this discovery wrote. Absent from an
+    /// older agent's reply, and absent here in turn, so the renderer reads
+    /// it as "unknown" and refreshes as it always did rather than as
+    /// "nothing changed".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bound: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -72,6 +78,8 @@ pub struct GroupDiscoveryDto {
 pub(super) struct GroupDiscoveryResponse {
     pub(super) account_alias: String,
     pub(super) teams: Vec<DiscoveredGroupResponse>,
+    #[serde(default)]
+    pub(super) bound: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -87,6 +95,11 @@ pub(super) struct DiscoveredGroupResponse {
     // carry no creation intent. Accept this optional summary field explicitly.
     #[serde(default, rename = "creation_phase")]
     pub(super) _creation_phase: Option<String>,
+    // A discovered summary carries no pinned chain sequence, but the field is
+    // part of the team summary shape. Accept it explicitly rather than let
+    // `deny_unknown_fields` reject a reply that carries it.
+    #[serde(default, rename = "chain_seqno")]
+    pub(super) _chain_seqno: Option<u64>,
 }
 
 impl GroupDiscoveryDto {
@@ -144,9 +157,20 @@ impl GroupDiscoveryDto {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        if response.bound.as_ref().is_some_and(|bound| {
+            bound.len() > MAXIMUM_FIRST_RUN_ROWS
+                || bound
+                    .iter()
+                    .any(|alias| !valid_local_name(alias) || !aliases.contains(alias))
+        }) {
+            return Err(invalid_response(
+                "Discovered group results do not match the selected account.",
+            ));
+        }
         Ok(Self {
             account_alias: response.account_alias,
             groups,
+            bound: response.bound,
         })
     }
 }

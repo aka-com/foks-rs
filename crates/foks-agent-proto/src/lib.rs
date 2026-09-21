@@ -338,6 +338,54 @@ mod tests {
     }
 
     #[test]
+    fn team_summary_chain_sequence_is_additive_and_optional() {
+        // An older agent's reply carries no chain sequence. It must decode,
+        // and report the sequence as unknown rather than as unchanged.
+        let older = serde_json::json!({
+            "alias": "engineering",
+            "account_alias": "owner",
+            "team_id_hex": format!("03{}", "ab".repeat(32)),
+            "kind": "named",
+            "name": "Engineering",
+            "active": true,
+        });
+        let decoded: TeamSummary = serde_json::from_value(older.clone()).unwrap();
+        assert_eq!(decoded.chain_seqno, None);
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), older);
+        let pinned = TeamSummary {
+            chain_seqno: Some(7),
+            ..decoded
+        };
+        let encoded = serde_json::to_value(&pinned).unwrap();
+        assert_eq!(encoded["chain_seqno"], 7);
+        assert_eq!(
+            serde_json::from_value::<TeamSummary>(encoded).unwrap(),
+            pinned
+        );
+    }
+
+    #[test]
+    fn inbox_count_is_a_read_only_invitation_action() {
+        use invitations::InvitationAction;
+        let action = InvitationAction::InboxCount {
+            team_alias: "engineering".to_owned(),
+        };
+        assert!(action.validate());
+        assert!(!action.changes_catalog());
+        assert_eq!(action.remote_profile(), None);
+        let encoded = serde_json::to_value(&action).unwrap();
+        assert_eq!(encoded["action"], "inbox-count");
+        assert_eq!(
+            serde_json::from_value::<InvitationAction>(encoded).unwrap(),
+            action
+        );
+        assert!(!InvitationAction::InboxCount {
+            team_alias: String::new()
+        }
+        .validate());
+    }
+
+    #[test]
     fn credentials_required_is_a_distinct_local_wire_error() {
         let response = Response::error(
             19,

@@ -83,6 +83,9 @@ pub enum InvitationAction {
     Inbox {
         team_alias: String,
     },
+    InboxCount {
+        team_alias: String,
+    },
     Approve {
         team_alias: String,
         request_id: String,
@@ -354,41 +357,26 @@ impl CheckedProfileSession<'_> {
                 vault.store.remove(&receipt_key(&id))?;
                 Ok(serde_json::json!({"operation_id":operation_id,"state":"cancelled"}))
             }
+            InvitationAction::InboxCount { team_alias } => {
+                let team = self.invitation_inbox_team(&team_alias, alias, vault)?;
+                let destination = self.invitation_inbox_destination(&host, credential, &team)?;
+                let (rows, possibly_truncated) =
+                    self.invitation_inbox_rows(&host, credential, &team, &destination)?;
+                // The count is a badge. It expands no row, so it loads no
+                // joiner, writes no handle blob and touches nothing in the
+                // vault beyond resolving the team.
+                Ok(serde_json::json!({"count":rows.len(),"possibly_truncated":possibly_truncated}))
+            }
             InvitationAction::Inbox { team_alias } => {
-                let t = vault.team(&team_alias)?;
-                if t.account_alias != alias {
-                    return Err(Error::InvalidAccount("team belongs to another account"));
-                }
-                let team = EntityId::from_bytes(t.team_id.clone())?;
-                let mut rows = self.client.team_invitation_inbox(
-                    &host,
-                    credential,
-                    &team,
-                    Some(InboxPagination {
-                        start: 0,
-                        end: 0,
-                        limit: 100,
-                    }),
-                )?;
-                // Go limits each request kind separately. Escalate a full first
-                // page once; never skip an unrepresentable equal-timestamp group.
-                if rows.iter().filter(|r| r.receipt.is_remote()).count() >= 100
-                    || rows.iter().filter(|r| !r.receipt.is_remote()).count() >= 100
-                {
-                    rows = self.client.team_invitation_inbox(
-                        &host,
-                        credential,
-                        &team,
-                        Some(InboxPagination {
-                            start: 0,
-                            end: 0,
-                            limit: 1000,
-                        }),
-                    )?;
-                }
-                let possibly_truncated = rows.iter().filter(|r| r.receipt.is_remote()).count()
-                    >= 1000
-                    || rows.iter().filter(|r| !r.receipt.is_remote()).count() >= 1000;
+                let team = self.invitation_inbox_team(&team_alias, alias, vault)?;
+                // Every request this action makes is against the same
+                // destination team, so authenticate this account and load
+                // that team once here: the page read, its escalation and
+                // every row are resolved against one authenticated view
+                // instead of one per page and one per row.
+                let destination = self.invitation_inbox_destination(&host, credential, &team)?;
+                let (rows, possibly_truncated) =
+                    self.invitation_inbox_rows(&host, credential, &team, &destination)?;
                 let mut handles = Vec::new();
                 let mut reports = Vec::new();
                 for row in rows {
@@ -398,7 +386,13 @@ impl CheckedProfileSession<'_> {
                             if joiner.entity_type() != foks_proto::ENTITY_USER =>
                         {
                             self.client
-                                .load_local_invitation_team(&host, credential, &team, &row)
+                                .load_local_invitation_team_with_team(
+                                    &host,
+                                    credential,
+                                    &team,
+                                    &destination,
+                                    &row,
+                                )
                                 .map(|t| {
                                     (
                                         t.verified().team().clone(),
@@ -410,7 +404,13 @@ impl CheckedProfileSession<'_> {
                         }
                         _ => self
                             .client
-                            .load_local_invitation_joiner(&host, credential, &team, &row)
+                            .load_local_invitation_joiner_with_team(
+                                &host,
+                                credential,
+                                &team,
+                                &destination,
+                                &row,
+                            )
                             .map(|u| {
                                 (
                                     u.uid().clone(),
@@ -557,6 +557,77 @@ impl CheckedProfileSession<'_> {
             }
         }
         Ok(result)
+    }
+
+    /// Resolves an inbox action's destination team without any network call,
+    /// refusing a team this account does not own.
+    fn invitation_inbox_team(
+        &self,
+        team_alias: &str,
+        alias: &str,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<EntityId> {
+        let team = vault.team(team_alias)?;
+        if team.account_alias != alias {
+            return Err(Error::InvalidAccount("team belongs to another account"));
+        }
+        Ok(EntityId::from_bytes(team.team_id.clone())?)
+    }
+
+    /// Authenticates this account and loads an inbox action's destination
+    /// team once, for every request that action then makes.
+    fn invitation_inbox_destination(
+        &self,
+        host: &foks_client::PinnedHost,
+        credential: FederationCredential<'_, '_>,
+        team: &EntityId,
+    ) -> Result<foks_client::AuthenticatedTeamOutcome> {
+        let user = self
+            .client
+            .authenticate_credential_and_pin(host, credential)?;
+        Ok(self.client.load_and_pin_team_with_credential(
+            host,
+            credential,
+            &user.verified,
+            &user.puks,
+            team,
+        )?)
+    }
+
+    /// The team's pending inbox rows and whether the server may have held
+    /// more back. Go limits each request kind separately, so a full first
+    /// page is escalated once; an unrepresentable equal-timestamp group is
+    /// never skipped. Both inbox actions read their rows here, so the page
+    /// they see and the truncation they report are one fact.
+    fn invitation_inbox_rows(
+        &self,
+        host: &foks_client::PinnedHost,
+        credential: FederationCredential<'_, '_>,
+        team: &EntityId,
+        destination: &foks_client::AuthenticatedTeamOutcome,
+    ) -> Result<(Vec<RawInboxRow>, bool)> {
+        let page = |limit| {
+            self.client.team_invitation_inbox_with_team(
+                host,
+                credential,
+                team,
+                destination,
+                Some(InboxPagination {
+                    start: 0,
+                    end: 0,
+                    limit,
+                }),
+            )
+        };
+        let mut rows = page(100)?;
+        if rows.iter().filter(|r| r.receipt.is_remote()).count() >= 100
+            || rows.iter().filter(|r| !r.receipt.is_remote()).count() >= 100
+        {
+            rows = page(1000)?;
+        }
+        let possibly_truncated = rows.iter().filter(|r| r.receipt.is_remote()).count() >= 1000
+            || rows.iter().filter(|r| !r.receipt.is_remote()).count() >= 1000;
+        Ok((rows, possibly_truncated))
     }
 
     fn invitation_inbox_handle(

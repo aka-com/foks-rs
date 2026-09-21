@@ -44,6 +44,10 @@ pub struct StoreDto {
     pub team_id_hex: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub creation_phase: Option<String>,
+    /// The agent's pinned team chain sequence, when it reported one. The
+    /// renderer reuses a cached roster while this is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chain_seqno: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -231,6 +235,7 @@ fn store_dto(store: &CatalogStoreSummary) -> Result<StoreDto, AgentError> {
             team_kind: None,
             team_id_hex: None,
             creation_phase: None,
+            chain_seqno: None,
         },
         CatalogStoreSummary::Team {
             store,
@@ -238,6 +243,7 @@ fn store_dto(store: &CatalogStoreSummary) -> Result<StoreDto, AgentError> {
             name,
             active,
             creation_phase,
+            chain_seqno,
         } => {
             let team_kind = match kind.as_str() {
                 "named" => "named",
@@ -261,6 +267,7 @@ fn store_dto(store: &CatalogStoreSummary) -> Result<StoreDto, AgentError> {
                 team_kind: Some(team_kind.to_owned()),
                 team_id_hex: Some(store.team_id.clone()),
                 creation_phase: creation_phase.clone(),
+                chain_seqno: *chain_seqno,
             }
         }
     })

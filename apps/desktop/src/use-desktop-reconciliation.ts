@@ -189,6 +189,9 @@ export function useDesktopReconciliation(
             cancel: () => undefined,
             preemptible: false,
           },
+          // A read back of a write, or a refresh the user asked for, reads
+          // this profile's rosters even when no team chain has moved.
+          context.trigger === 'mutation' || context.trigger === 'manual',
         );
         if (!context.isCurrent()) {
           settle(profile);

@@ -19,6 +19,7 @@ fn chat_catalog() -> CatalogSnapshot {
         name: Some("Team".into()),
         active: true,
         creation_phase: None,
+        chain_seqno: None,
     });
     catalog.known_stores = catalog.stores.clone();
     catalog.store_reads.push(foks_desktop::CatalogStoreRead {

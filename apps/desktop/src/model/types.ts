@@ -61,6 +61,12 @@ export interface TeamStore {
   team_kind: 'named' | 'adhoc';
   /** 66 hex characters. */
   team_id_hex: string;
+  /**
+   * The team chain sequence the agent has pinned locally. A roster read is
+   * skipped while this is unchanged; absent means unknown, which always
+   * reads the roster.
+   */
+  chain_seqno?: number;
 }
 
 export type Store = AccountStore | TeamStore;

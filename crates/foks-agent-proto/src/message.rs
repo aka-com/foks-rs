@@ -120,6 +120,12 @@ pub struct TeamSummary {
     pub active: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub creation_phase: Option<String>,
+    /// The verified team chain sequence pinned in local hard state. Absent
+    /// from an older agent's reply and from a team this device has never
+    /// pinned; a reader that compares it to an earlier value must treat an
+    /// absent sequence as "unknown", never as "unchanged".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain_seqno: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -2331,6 +2337,7 @@ mod tests {
             }],
             token: SecretString::new("opaque"),
             expires_in_seconds: 60,
+            credentials_unavailable: None,
         };
         assert!(!format!("{preview:?}").contains("opaque"));
         assert_eq!(

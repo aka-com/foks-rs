@@ -36,6 +36,9 @@ export async function reconcileTeamDiscovery(
   reconcile: () => Promise<void>,
 ): Promise<void> {
   let dispatched = false;
+  // An older agent reports no bound list. That is unknown, not "nothing
+  // changed", so the catalog read keeps happening as it always did.
+  let wroteBinding = true;
   let failure: unknown;
   try {
     await scheduleProfileWork(
@@ -68,6 +71,7 @@ export async function reconcileTeamDiscovery(
             },
           );
         }
+        if (result.bound !== undefined) wroteBinding = result.bound.length > 0;
       },
       {
         key: `team-discovery:${account.store}`,
@@ -82,7 +86,10 @@ export async function reconcileTeamDiscovery(
   } catch (error) {
     failure = error;
   }
-  if (dispatched && context.isCurrent()) {
+  // The periodic job runs for every account, because it is how being added
+  // to a team is noticed. The catalog walk that follows it is only worth its
+  // cost when discovery actually wrote a binding.
+  if (dispatched && wroteBinding && context.isCurrent()) {
     try {
       await reconcile();
     } catch (error) {

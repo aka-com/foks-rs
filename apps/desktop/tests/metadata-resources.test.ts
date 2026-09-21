@@ -225,7 +225,7 @@ test('team request count does not re-enter a bridge that owns its own profile ad
     invitation: (profile: string) =>
       enqueueProfileWork(bridge, profile, async () => {
         dispatched++;
-        return { rows: [{ request_id: 'a' }, { request_id: 'b' }] };
+        return { count: 2 };
       }),
   });
   const store: TeamStore = {
@@ -286,7 +286,7 @@ test('team request counts are quiet about servers that are away and stay current
   const bridge = {
     invitation: async () => {
       calls++;
-      return { rows: [] };
+      return { count: 0 };
     },
   } as unknown as Bridge;
   const store: TeamStore = {
@@ -308,4 +308,124 @@ test('team request counts are quiet about servers that are away and stay current
   now = TEAM_REQUEST_FRESHNESS + 1;
   await query.load();
   assert.equal(calls, 2);
+});
+
+test('the request badge asks only for a count, falling back per read on an older agent', async () => {
+  const store: TeamStore = {
+    id: 'store',
+    kind: 'team',
+    name: 'Team',
+    server: 'profile',
+    account: 'account',
+    alias: 'team',
+    team_id_hex: 'team',
+    active: true,
+    team_kind: 'named',
+  };
+  // The badge needs a number, so it asks for one and expands no row.
+  const asked: string[] = [];
+  const counting = {
+    invitation: async (
+      _profile: string,
+      _account: string,
+      action: { action: string },
+    ) => {
+      asked.push(action.action);
+      return { count: 3 };
+    },
+  } as unknown as Bridge;
+  assert.equal(
+    await teamRequestCountQuery(
+      new MetadataRepository(() => 0),
+      counting,
+      store,
+    ).load(),
+    3,
+  );
+  assert.deepEqual(asked, ['inbox-count']);
+
+  // An agent that cannot decode the action refuses it as an invalid request,
+  // and the whole inbox answers instead. The refusal is not remembered:
+  // `invalid-request` also stands for argument validation and an interrupted
+  // worker, so a later read asks for the count again.
+  const refused = Object.assign(new Error('unknown action'), {
+    code: 'invalid-request',
+    retryable: false,
+    fatal: false,
+    ambiguous: false,
+  });
+  const older: string[] = [];
+  let refuse = true;
+  const legacy = {
+    invitation: async (
+      _profile: string,
+      _account: string,
+      action: { action: string },
+    ) => {
+      older.push(action.action);
+      if (action.action === 'inbox-count') {
+        if (refuse) throw refused;
+        return { count: 1 };
+      }
+      return { rows: [{ request_id: 'a' }, { request_id: 'b' }] };
+    },
+  } as unknown as Bridge;
+  const repository = new MetadataRepository(() => 0);
+  assert.equal(await teamRequestCountQuery(repository, legacy, store).load(), 2);
+  assert.deepEqual(older, ['inbox-count', 'inbox']);
+  // A one-off refusal, such as an interrupted worker, does not send this
+  // badge to the whole inbox for the rest of the session.
+  refuse = false;
+  repository.invalidate(['team-requests']);
+  assert.equal(await teamRequestCountQuery(repository, legacy, store).load(), 1);
+  assert.deepEqual(older, ['inbox-count', 'inbox', 'inbox-count']);
+
+  // Any other refusal is the query's failure, not a reason to read rows.
+  const unavailable = Object.assign(new Error('away'), {
+    code: 'server-unavailable',
+    retryable: true,
+    fatal: false,
+    ambiguous: false,
+  });
+  const away: string[] = [];
+  const offline = {
+    invitation: async (
+      _profile: string,
+      _account: string,
+      action: { action: string },
+    ) => {
+      away.push(action.action);
+      throw unavailable;
+    },
+  } as unknown as Bridge;
+  await assert.rejects(
+    teamRequestCountQuery(new MetadataRepository(() => 0), offline, store).load(),
+    (error: { code: string }) => error.code === 'server-unavailable',
+  );
+  assert.deepEqual(away, ['inbox-count']);
+});
+
+test('a count reply without a count is not read as an empty inbox', async () => {
+  const store: TeamStore = {
+    id: 'store',
+    kind: 'team',
+    name: 'Team',
+    server: 'profile',
+    account: 'account',
+    alias: 'team',
+    team_id_hex: 'team',
+    active: true,
+    team_kind: 'named',
+  };
+  const bridge = {
+    invitation: async () => ({ state: 'complete' }),
+  } as unknown as Bridge;
+  await assert.rejects(
+    teamRequestCountQuery(
+      new MetadataRepository(() => 0),
+      bridge,
+      store,
+    ).load(),
+    /without a count/,
+  );
 });

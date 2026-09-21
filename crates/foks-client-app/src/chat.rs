@@ -150,10 +150,27 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
         blocked: &[RtChannelId],
     ) -> Result<ChatSyncResult> {
+        self.sync_chat_inbox_with_preview_cache(
+            team_alias,
+            vault,
+            blocked,
+            &mut foks_client::NoChatPreviewCache,
+        )
+    }
+    /// [`Self::sync_chat_inbox_excluding_previews`] served by a cache the
+    /// caller owns, so a conversation whose last message and key are
+    /// unchanged costs no preview round trip.
+    pub fn sync_chat_inbox_with_preview_cache(
+        &self,
+        team_alias: &str,
+        vault: &mut AccountVault<'_>,
+        blocked: &[RtChannelId],
+        previews: &mut dyn foks_client::ChatPreviewCache,
+    ) -> Result<ChatSyncResult> {
         self.with_chat(team_alias, vault, |chat| {
             let mut soft = SoftStateStore::open(&self.paths.soft_database)?;
             let mut connection = chat.connection()?;
-            Ok(chat.sync_inbox_excluding_previews(&mut connection, &mut soft, blocked)?)
+            Ok(chat.sync_inbox_with_preview_cache(&mut connection, &mut soft, blocked, previews)?)
         })
     }
     pub fn list_chat_inbox(

@@ -312,6 +312,7 @@ fn catalog_dto_rejects_unknown_kinds_and_preserves_unknown_sizes() {
         name: Some("Group".to_owned()),
         active: true,
         creation_phase: None,
+        chain_seqno: None,
     }];
     assert_eq!(
         CatalogDto::from_snapshot(&snapshot).unwrap_err().code,
@@ -809,6 +810,7 @@ fn catalog_preserves_incomplete_creation_phase() {
             name: Some("Group".to_owned()),
             active: false,
             creation_phase: Some("preparing".to_owned()),
+            chain_seqno: None,
         }],
         ..CatalogSnapshot::default()
     };

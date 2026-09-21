@@ -552,6 +552,10 @@ pub enum CatalogStoreSummary {
         name: Option<String>,
         active: bool,
         creation_phase: Option<String>,
+        /// The team chain sequence the agent has pinned locally, when it
+        /// reported one. A reader uses it only to notice that a team has not
+        /// changed; `None` means unknown, never unchanged.
+        chain_seqno: Option<u64>,
     },
 }
 
@@ -1029,6 +1033,7 @@ fn load_profile_catalog_progress(
                                 name: team.name,
                                 active: team.active,
                                 creation_phase: team.creation_phase,
+                                chain_seqno: team.chain_seqno,
                             }
                         }));
                     }
@@ -1595,6 +1600,9 @@ fn known_catalog_store(profile: &str, store: KnownStoreSummary) -> CatalogStoreS
             name,
             active,
             creation_phase: None,
+            // A remembered store is a fallback for a profile whose overview
+            // could not be read, so it carries no pinned chain sequence.
+            chain_seqno: None,
         },
     }
 }

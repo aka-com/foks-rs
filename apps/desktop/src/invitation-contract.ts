@@ -20,7 +20,10 @@ export type InvitationAction =
       source_team_alias: string;
       source_role: InvitationRole;
     }
-  | { action: 'create' | 'inbox' | 'pending-approvals'; team_alias: string }
+  | {
+      action: 'create' | 'inbox' | 'inbox-count' | 'pending-approvals';
+      team_alias: string;
+    }
   | { action: 'range'; team_alias: string; raise: boolean }
   | { action: 'attempt' | 'status' | 'cancel'; operation_id: string }
   | {
@@ -75,6 +78,8 @@ export interface InvitationRow {
   time?: number;
   team_sequence?: number;
   key_generations?: number;
+  /** The number of pending rows, from the count-only inbox action. */
+  count?: number;
   verified?: boolean;
   membership?: boolean;
   membership_verified?: boolean;
@@ -101,7 +106,12 @@ export function decodeInvitationReply(value: unknown): InvitationReply {
     'remote_profile',
     'source_profile',
   ]);
-  const numbers = new Set(['time', 'team_sequence', 'key_generations']);
+  const numbers = new Set([
+    'time',
+    'team_sequence',
+    'key_generations',
+    'count',
+  ]);
   const booleans = new Set([
     'verified',
     'membership',

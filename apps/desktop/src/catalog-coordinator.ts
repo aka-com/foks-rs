@@ -53,6 +53,8 @@ export class CatalogCoordinator<T> {
     private readonly read: (
       onPartial: (value: T) => void,
       isCurrent: () => boolean,
+      /** The read answers a request that asked for fresh facts. */
+      forced: boolean,
     ) => Promise<T>,
     private readonly publish: (value: T, forced: boolean) => void,
   ) {}
@@ -98,9 +100,13 @@ export class CatalogCoordinator<T> {
             // Publish intermediate results as non-forced updates. Marking each
             // partial as forced would make consumers rebuild caches once per
             // profile and again for the completed catalog.
-            value = await this.read((partial) => {
-              if (isCurrent()) this.publish(partial, false);
-            }, isCurrent);
+            value = await this.read(
+              (partial) => {
+                if (isCurrent()) this.publish(partial, false);
+              },
+              isCurrent,
+              forced,
+            );
           } catch (error) {
             // A failed read does not publish a forced result, so dependent caches
             // remain unchanged until a later successful refresh.

@@ -4,6 +4,9 @@ use foks_client_db::{AdHocTeamOperationState, TeamMutationState};
 #[cfg(test)]
 mod creation_tests;
 
+#[cfg(test)]
+mod discovery_tests;
+
 pub(super) const BACKGROUND_TEAM_ALIAS_PREFIX: &str = "bg_";
 
 pub(super) fn is_background_team_alias(alias: &str) -> bool {
@@ -240,6 +243,10 @@ impl CheckedProfileSession<'_> {
 
     pub fn list_local_teams(&self, vault: &mut AccountVault<'_>) -> Result<Vec<TeamSummary>> {
         let journal = HardStateStore::open(&self.paths.hard_database)?;
+        // The pinned host is what the team projections are stored under. A
+        // profile whose host is not pinned yet has no projection to read, and
+        // every summary then reports an unknown chain sequence.
+        let host = self.pinned_host().ok();
         vault
             .team_aliases()?
             .into_iter()
@@ -247,6 +254,11 @@ impl CheckedProfileSession<'_> {
                 let team = vault.team(&alias)?;
                 let mut summary = TeamSummary::from_stored(alias, &team);
                 summary.creation_phase = team.creation_phase(&journal)?.map(str::to_owned);
+                summary.chain_seqno = match &host {
+                    Some(host) => journal
+                        .team_chain_seqno_for_host(host.host_id().as_bytes(), &team.team_id)?,
+                    None => None,
+                };
                 Ok(summary)
             })
             .collect()
@@ -275,7 +287,7 @@ impl CheckedProfileSession<'_> {
         )?;
 
         let mut discovered = std::collections::BTreeMap::<Vec<u8>, StoredTeam>::new();
-        for authenticated in graph.teams {
+        for authenticated in graph.teams.iter() {
             if authenticated.verified.host() != host.host_id() {
                 return Err(foks_client::Error::TeamBinding(
                     "team discovery response changed the authenticated host",
@@ -294,13 +306,30 @@ impl CheckedProfileSession<'_> {
             {
                 continue;
             }
-            let direct = self.client.load_and_pin_team(
-                &host,
-                &account.credential,
-                &user.verified,
-                &user.puks,
-                authenticated.verified.team(),
-            )?;
+            // The binding must rest on an outcome this account's own device
+            // credential opened, not on one reached through a parent team's
+            // actor path. The graph already made that load for a node it
+            // recorded as `Direct`, with the same call and the same
+            // credential, so reuse it; a node reached only through an actor
+            // path is still loaded directly here. The reused outcome is from
+            // earlier in this same call, so a team renamed between the graph
+            // walk and this loop binds under its previous name until the next
+            // discovery, as it would have if the walk had run a moment later.
+            let reused = graph.load_path(authenticated.verified.team())
+                == Some(foks_client::TeamGraphLoadPath::Direct);
+            let loaded;
+            let direct = if reused {
+                authenticated
+            } else {
+                loaded = self.client.load_and_pin_team(
+                    &host,
+                    &account.credential,
+                    &user.verified,
+                    &user.puks,
+                    authenticated.verified.team(),
+                )?;
+                &loaded
+            };
             if direct.verified.team() != authenticated.verified.team()
                 || direct.verified.host() != authenticated.verified.host()
             {
@@ -309,7 +338,7 @@ impl CheckedProfileSession<'_> {
                 )
                 .into());
             }
-            let identity = StoredTeam::discovered(account_alias, &direct)?;
+            let identity = StoredTeam::discovered(account_alias, direct)?;
             let key = identity.team_id.clone();
             if let Some(prior) = discovered.get(&key) {
                 if prior.kind != identity.kind || prior.name != identity.name {
@@ -324,6 +353,7 @@ impl CheckedProfileSession<'_> {
         }
 
         let mut teams = Vec::with_capacity(discovered.len());
+        let mut bound = Vec::new();
         for identity in discovered.into_values() {
             let alias = discovery_alias(vault, &identity)?;
             let stored = match vault.team(&alias) {
@@ -337,6 +367,7 @@ impl CheckedProfileSession<'_> {
                     let mut identity = identity;
                     identity.alias = alias.clone();
                     vault.put_team(&identity)?;
+                    bound.push(alias.clone());
                     identity
                 }
                 Err(error) => return Err(error),
@@ -351,9 +382,11 @@ impl CheckedProfileSession<'_> {
             }
         }
         teams.sort_by(|left, right| left.alias.cmp(&right.alias));
+        bound.sort();
         Ok(TeamDiscoveryReport {
             account_alias: account_alias.to_owned(),
             teams,
+            bound,
         })
     }
 
@@ -1445,6 +1478,12 @@ pub struct TeamSummary {
     pub active: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub creation_phase: Option<String>,
+    /// The pinned team chain sequence this device has verified, read from
+    /// hard state without any network call. `None` when the team has never
+    /// been pinned: creation is still in progress, or the record was bound
+    /// locally and not yet loaded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chain_seqno: Option<u64>,
 }
 
 impl TeamSummary {
@@ -1461,6 +1500,7 @@ impl TeamSummary {
             name: team.name.clone(),
             active: team.active,
             creation_phase: None,
+            chain_seqno: None,
         }
     }
 }
@@ -1469,6 +1509,10 @@ impl TeamSummary {
 pub struct TeamDiscoveryReport {
     pub account_alias: String,
     pub teams: Vec<TeamSummary>,
+    /// The aliases whose vault binding this call wrote. A team that already
+    /// had a binding contributes nothing, so an empty list means discovery
+    /// changed no local record and a caller need not re-read the catalog.
+    pub bound: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

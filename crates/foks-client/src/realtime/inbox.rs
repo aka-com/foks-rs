@@ -34,6 +34,39 @@ pub struct ChatPreview {
     pub content: ChatPreviewContent,
 }
 
+/// Identifies one cached inbox preview. The key names the reader, the
+/// channel and the exact message the preview renders, together with the role
+/// and key generation the reader currently holds for that channel, so a
+/// preview is never served to another reader, for another message, or across
+/// a key rotation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChatPreviewKey {
+    pub host: Vec<u8>,
+    pub actor: Vec<u8>,
+    pub team: Vec<u8>,
+    pub channel: [u8; 16],
+    pub sequence: u64,
+    pub role: foks_proto::Role,
+    pub generation: u64,
+}
+
+/// A preview store the caller owns. `foks-client` keeps no process-global
+/// state, so a process that wants previews to survive one sync supplies this.
+pub trait ChatPreviewCache {
+    fn get(&mut self, key: &ChatPreviewKey) -> Option<ChatPreview>;
+    fn put(&mut self, key: ChatPreviewKey, preview: ChatPreview);
+}
+
+/// The cache that keeps nothing, for a caller that wants today's behavior.
+pub struct NoChatPreviewCache;
+
+impl ChatPreviewCache for NoChatPreviewCache {
+    fn get(&mut self, _key: &ChatPreviewKey) -> Option<ChatPreview> {
+        None
+    }
+    fn put(&mut self, _key: ChatPreviewKey, _preview: ChatPreview) {}
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChatConversation {
     pub channel: ChatChannel,
@@ -109,6 +142,21 @@ impl ChatSession<'_> {
         rpc: &mut impl ChatTransport,
         store: &mut SoftStateStore,
         blocked: &[RtChannelId],
+    ) -> Result<ChatSyncResult> {
+        self.sync_inbox_with_preview_cache(rpc, store, blocked, &mut NoChatPreviewCache)
+    }
+
+    /// [`Self::sync_inbox_excluding_previews`] served by a caller-owned
+    /// preview cache. A conversation whose last message is already cached
+    /// under the reader's current key costs no preview round trip; every
+    /// other check of the sync is unchanged, and access is re-derived from
+    /// the freshly authenticated team on every call.
+    pub fn sync_inbox_with_preview_cache(
+        &mut self,
+        rpc: &mut impl ChatTransport,
+        store: &mut SoftStateStore,
+        blocked: &[RtChannelId],
+        previews: &mut dyn ChatPreviewCache,
     ) -> Result<ChatSyncResult> {
         if blocked.len() > ChatLimits::CHANNELS {
             return Err(Error::ChatInvalidInput("too many blocked channels"));
@@ -200,11 +248,30 @@ impl ChatSession<'_> {
             Err(error) if optional_network_failure(&error) => true,
             Err(error) => return Err(error),
         };
-        let mut inbox = self.inbox_from_store(store)?;
+        let mut inbox = self.inbox_from_store_with_channels(store, &available.channels)?;
         inbox.channels = available.channels;
         inbox.read_retry_pending = read_retry_pending;
-        self.hydrate_previews(rpc, &mut inbox, blocked)?;
+        self.hydrate_previews(rpc, &mut inbox, blocked, previews)?;
         Ok(ChatSyncResult { inbox, applied })
+    }
+
+    /// The key a preview of `channel`'s last message is cached under, or
+    /// `None` when the channel has no last message or the reader holds no
+    /// current key for its read role. A channel with no current key is never
+    /// cached, so a reader that has lost the role cannot be served one.
+    fn preview_key(&self, channel: &ChatChannel) -> Option<ChatPreviewKey> {
+        let last = channel.metadata.last_message.as_ref()?;
+        let role = channel.metadata.roles.read;
+        let generation = self.team().ok()?.verified.shared_key(role)?.generation;
+        Some(ChatPreviewKey {
+            host: self.host.host_id().as_bytes().to_vec(),
+            actor: self.credential.uid.as_bytes().to_vec(),
+            team: self.team_id.as_bytes().to_vec(),
+            channel: channel.metadata.id.0,
+            sequence: last.sequence,
+            role,
+            generation,
+        })
     }
 
     fn hydrate_previews(
@@ -212,6 +279,7 @@ impl ChatSession<'_> {
         rpc: &mut impl ChatTransport,
         inbox: &mut ChatInbox,
         blocked: &[RtChannelId],
+        previews: &mut dyn ChatPreviewCache,
     ) -> Result<()> {
         inbox.blocked_channels = inbox
             .channels
@@ -230,8 +298,18 @@ impl ChatSession<'_> {
             {
                 continue;
             }
+            let key = self.preview_key(&conversation.channel);
+            if let Some(cached) = key.as_ref().and_then(|key| previews.get(key)) {
+                conversation.preview = Some(cached);
+                continue;
+            }
             match self.preview(rpc, &conversation.channel) {
-                Ok(preview) => conversation.preview = preview,
+                Ok(preview) => {
+                    if let (Some(key), Some(preview)) = (key, preview.as_ref()) {
+                        previews.put(key, preview.clone());
+                    }
+                    conversation.preview = preview;
+                }
                 Err(Error::ChatChannelIntegrity(_)) => {
                     // Keep independently verified channel/inbox facts, never publish bad content.
                     inbox
@@ -278,12 +356,36 @@ impl ChatSession<'_> {
     }
 
     pub fn inbox_from_store(&self, store: &SoftStateStore) -> Result<ChatInbox> {
+        self.inbox_from_store_with_channels(store, &[])
+    }
+
+    /// [`Self::inbox_from_store`] given channels this sync already opened.
+    /// A stored entry whose metadata is exactly what the listing opened
+    /// reuses that channel instead of decrypting its name and description a
+    /// second time; any other entry is opened as before.
+    pub fn inbox_from_store_with_channels(
+        &self,
+        store: &SoftStateStore,
+        opened: &[ChatChannel],
+    ) -> Result<ChatInbox> {
         self.team()?;
         let scope = self.inbox_scope();
         let state = store.chat_inbox_state(&scope)?;
         let mut conversations = Vec::new();
         for entry in store.chat_inbox_entries(&scope, self.team_id.as_bytes())? {
-            let channel = self.open_channel(entry.metadata)?;
+            let reusable = opened
+                .iter()
+                .find(|channel| channel.metadata == entry.metadata);
+            let channel = match reusable {
+                // The identity and policy checks still run against this
+                // session's own role; only the name and description are
+                // taken as already decrypted.
+                Some(channel) => {
+                    self.validate_channel(&channel.metadata)?;
+                    channel.clone()
+                }
+                None => self.open_channel(entry.metadata)?,
+            };
             if channel.metadata.unreadable || self.role < channel.metadata.roles.read {
                 continue;
             }

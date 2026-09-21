@@ -213,14 +213,9 @@ impl FoksClient {
         destination: &EntityId,
         row: &foks_proto::RawInboxRow,
     ) -> Result<super::VerifiedTeamRecipient> {
-        let foks_proto::RawInboxRequest::Local {
-            joiner,
-            source_role,
-            ..
-        } = &row.request
-        else {
-            return Err(Error::TeamBinding("expected local team request"));
-        };
+        // Reject a row this destination can never resolve before paying for
+        // the authentication it would need, as this loader always has.
+        local_team_joiner(row)?;
         let user = self.authenticate_credential_and_pin(host, credential)?;
         let parent = self.load_and_pin_team_with_credential(
             host,
@@ -229,23 +224,40 @@ impl FoksClient {
             &user.puks,
             destination,
         )?;
+        self.load_local_invitation_team_with_team(host, credential, destination, &parent, row)
+    }
+
+    /// [`Self::load_local_invitation_team`] against a destination team the
+    /// caller has already authenticated with the same credential, so an
+    /// inbox resolves its rows against one destination load rather than one
+    /// per row.
+    pub fn load_local_invitation_team_with_team(
+        &self,
+        host: &PinnedHost,
+        credential: FederationCredential<'_, '_>,
+        destination: &EntityId,
+        parent: &crate::AuthenticatedTeamOutcome,
+        row: &foks_proto::RawInboxRow,
+    ) -> Result<super::VerifiedTeamRecipient> {
+        super::invitations::require_invitation_destination(host, destination, parent)?;
+        let (joiner, source_role) = local_team_joiner(row)?;
         let (seed, certs) = credential.transport();
         let child = self.load_local_child_team_recipient_with_material(
             host,
             credential.uid(),
             seed,
             certs,
-            &parent,
+            parent,
             joiner,
             false,
         )?;
-        if child.verified().shared_key(*source_role).is_none()
+        if child.verified().shared_key(source_role).is_none()
             || !foks_verify::rational_range_strictly_before(
                 child.verified().index_range(),
                 parent.verified.index_range(),
             )?
             || parent.verified.members().iter().any(|m| {
-                m.party == *joiner && m.scoped_host.is_none() && m.source_role == *source_role
+                m.party == *joiner && m.scoped_host.is_none() && m.source_role == source_role
             })
         {
             return Err(Error::TeamBinding(
@@ -279,4 +291,18 @@ impl FoksClient {
         }
         Ok(team)
     }
+}
+
+/// The team joiner an inbox row names, when the row is the local team request
+/// the team-recipient loader resolves.
+fn local_team_joiner(row: &foks_proto::RawInboxRow) -> Result<(&EntityId, Role)> {
+    let foks_proto::RawInboxRequest::Local {
+        joiner,
+        source_role,
+        ..
+    } = &row.request
+    else {
+        return Err(Error::TeamBinding("expected local team request"));
+    };
+    Ok((joiner, *source_role))
 }

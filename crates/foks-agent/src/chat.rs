@@ -241,6 +241,100 @@ fn submission_input(action: &ChatAction) -> Result<Zeroizing<Vec<u8>>> {
     Ok(Zeroizing::new(serde_json::to_vec(action)?))
 }
 
+/// How many decrypted inbox previews the agent keeps. Each entry holds the
+/// rendered snippet rather than the whole message body, so the cache is
+/// bounded by entries times [`CHAT_SNIPPET_BYTES`] rather than by whatever
+/// the longest cached message happens to be. The key pins the reader, the
+/// message and the key generation, so a stale entry is never served: it is
+/// only re-fetched.
+const PREVIEW_CACHE_ENTRIES: usize = 4096;
+
+/// Decrypted inbox snippets held for the life of the agent process, so an
+/// idle team's repeated sync fetches no preview it already has. The agent
+/// already holds decrypted catalog listings and loaded bot material in
+/// process memory; concealing plaintext while the desktop is locked is not
+/// something this process does today. Nothing here is ever persisted, and
+/// the whole cache is bounded and dropped with the process.
+#[derive(Default)]
+struct PreviewCache {
+    entries: std::collections::VecDeque<(foks_client::ChatPreviewKey, foks_client::ChatPreview)>,
+}
+
+/// The preview as the reply would render it. Truncating on the way in keeps
+/// a long message body out of the cache; [`preview_text`] is idempotent, so
+/// rendering a cached entry produces exactly what rendering the fetched one
+/// would have.
+fn bounded_preview(preview: foks_client::ChatPreview) -> foks_client::ChatPreview {
+    match preview.content {
+        foks_client::ChatPreviewContent::Text(text) => foks_client::ChatPreview {
+            content: foks_client::ChatPreviewContent::Text(Zeroizing::new(preview_text(&text))),
+            ..preview
+        },
+        foks_client::ChatPreviewContent::Unsupported(_) => preview,
+    }
+}
+
+impl PreviewCache {
+    fn get(&mut self, key: &foks_client::ChatPreviewKey) -> Option<foks_client::ChatPreview> {
+        self.entries
+            .iter()
+            .find(|(candidate, _)| candidate == key)
+            .map(|(_, preview)| preview.clone())
+    }
+
+    fn put(&mut self, key: foks_client::ChatPreviewKey, preview: foks_client::ChatPreview) {
+        let preview = bounded_preview(preview);
+        if let Some(entry) = self
+            .entries
+            .iter_mut()
+            .find(|(candidate, _)| *candidate == key)
+        {
+            entry.1 = preview;
+            return;
+        }
+        // Oldest first: a key names one message under one key generation, so
+        // an evicted entry is simply fetched again.
+        while self.entries.len() >= PREVIEW_CACHE_ENTRIES {
+            self.entries.pop_front();
+        }
+        self.entries.push_back((key, preview));
+    }
+}
+
+fn preview_cache() -> &'static std::sync::Mutex<PreviewCache> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<PreviewCache>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(PreviewCache::default()))
+}
+
+/// The process cache as one sync sees it. The lock is taken for each lookup
+/// and each insertion, never across the sync's network work, so two
+/// profiles syncing at once do not wait on each other. A poisoned lock is
+/// not a reason to refuse a sync: it caches nothing.
+struct SharedPreviewCache;
+
+impl foks_client::ChatPreviewCache for SharedPreviewCache {
+    fn get(&mut self, key: &foks_client::ChatPreviewKey) -> Option<foks_client::ChatPreview> {
+        preview_cache().lock().ok()?.get(key)
+    }
+
+    fn put(&mut self, key: foks_client::ChatPreviewKey, preview: foks_client::ChatPreview) {
+        if let Ok(mut cache) = preview_cache().lock() {
+            cache.put(key, preview);
+        }
+    }
+}
+
+fn synced_inbox(
+    session: &CheckedProfileSession<'_>,
+    team: &str,
+    vault: &mut AccountVault<'_>,
+    blocked: &[RtChannelId],
+) -> Result<foks_client::ChatInbox> {
+    Ok(session
+        .sync_chat_inbox_with_preview_cache(team, vault, blocked, &mut SharedPreviewCache)?
+        .inbox)
+}
+
 pub(super) fn dispatch(
     state_dir: &Path,
     session: &CheckedProfileSession<'_>,
@@ -306,18 +400,13 @@ pub(super) fn dispatch(
                 channels: channels.channels.into_iter().map(channel).collect(),
             }
         }
-        ChatAction::Inbox => inbox(session.sync_chat_inbox(team, vault)?.inbox, &resolved)?,
+        ChatAction::Inbox => inbox(synced_inbox(session, team, vault, &[])?, &resolved)?,
         ChatAction::SyncInbox { blocked_channels } => {
             let blocked = blocked_channels
                 .iter()
                 .map(|channel| id(channel).map(RtChannelId))
                 .collect::<Result<Vec<_>>>()?;
-            inbox(
-                session
-                    .sync_chat_inbox_excluding_previews(team, vault, &blocked)?
-                    .inbox,
-                &resolved,
-            )?
+            inbox(synced_inbox(session, team, vault, &blocked)?, &resolved)?
         }
         ChatAction::MarkRead { channel, sequence } => {
             let sequence = chat_sequence(&sequence)
@@ -674,5 +763,78 @@ mod tests {
         let preview = preview_text(&"💬".repeat(200));
         assert!(preview.len() <= CHAT_SNIPPET_BYTES);
         assert!(preview.ends_with('…'));
+    }
+
+    fn preview_key(
+        actor: u8,
+        channel: u8,
+        sequence: u64,
+        generation: u64,
+    ) -> foks_client::ChatPreviewKey {
+        foks_client::ChatPreviewKey {
+            host: vec![1; 33],
+            actor: vec![actor; 33],
+            team: vec![3; 33],
+            channel: [channel; 16],
+            sequence,
+            role: foks_proto::Role::ADMIN,
+            generation,
+        }
+    }
+
+    fn preview(text: &str) -> foks_client::ChatPreview {
+        foks_client::ChatPreview {
+            sender: None,
+            send_time: 1,
+            insert_time: 1,
+            content: foks_client::ChatPreviewContent::Text(Zeroizing::new(text.to_owned())),
+        }
+    }
+
+    #[test]
+    fn cached_previews_are_bound_to_reader_message_and_key_generation() {
+        let mut cache = PreviewCache::default();
+        let key = preview_key(2, 9, 5, 1);
+        cache.put(key.clone(), preview("hello"));
+        assert_eq!(cache.get(&key), Some(preview("hello")));
+        // Another reader, another channel, the next message and the next key
+        // generation are all different entries, never this one.
+        for other in [
+            preview_key(0x22, 9, 5, 1),
+            preview_key(2, 0x99, 5, 1),
+            preview_key(2, 9, 6, 1),
+            preview_key(2, 9, 5, 2),
+        ] {
+            assert_eq!(cache.get(&other), None);
+        }
+        // The same key re-read replaces rather than duplicates.
+        cache.put(key.clone(), preview("edited"));
+        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(cache.get(&key), Some(preview("edited")));
+    }
+
+    #[test]
+    fn the_preview_cache_is_bounded_and_evicts_its_oldest_entry() {
+        let mut cache = PreviewCache::default();
+        for sequence in 0..(PREVIEW_CACHE_ENTRIES as u64 + 2) {
+            cache.put(preview_key(2, 9, sequence, 1), preview("bounded"));
+        }
+        assert_eq!(cache.entries.len(), PREVIEW_CACHE_ENTRIES);
+        // Every entry holds a rendered snippet, so the whole cache is bounded
+        // by its entry count times the snippet size, whatever was sent.
+        cache.put(preview_key(2, 9, 1_000_000, 1), preview(&"💬".repeat(4000)));
+        let stored = cache.get(&preview_key(2, 9, 1_000_000, 1)).unwrap();
+        let foks_client::ChatPreviewContent::Text(text) = stored.content else {
+            panic!("expected text")
+        };
+        assert!(text.len() <= CHAT_SNIPPET_BYTES);
+        assert!(text.ends_with('…'));
+        // Rendering a cached entry gives what rendering the fetched one gave.
+        assert_eq!(preview_text(&text), *text);
+        assert_eq!(cache.get(&preview_key(2, 9, 0, 1)), None);
+        assert_eq!(cache.get(&preview_key(2, 9, 1, 1)), None);
+        assert!(cache
+            .get(&preview_key(2, 9, PREVIEW_CACHE_ENTRIES as u64 + 1, 1))
+            .is_some());
     }
 }

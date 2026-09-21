@@ -418,9 +418,24 @@ impl FoksClient {
             &user.puks,
             team,
         )?;
+        self.team_invitation_inbox_with_team(host, credential, team, &loaded, pagination)
+    }
+
+    /// [`Self::team_invitation_inbox`] against a destination team the caller
+    /// has already authenticated with the same credential, so a caller that
+    /// reads a page and then escalates it authenticates and loads the team
+    /// once rather than once per page.
+    pub fn team_invitation_inbox_with_team(
+        &self,
+        host: &PinnedHost,
+        credential: FederationCredential<'_, '_>,
+        team: &EntityId,
+        loaded: &crate::AuthenticatedTeamOutcome,
+        pagination: Option<foks_proto::InboxPagination>,
+    ) -> Result<Vec<foks_proto::RawInboxRow>> {
+        require_invitation_destination(host, team, loaded)?;
         let (seed, certs) = credential.transport();
-        let token =
-            self.activate_team_admin_bearer(host, credential.uid(), seed, certs, &loaded)?;
+        let token = self.activate_team_admin_bearer(host, credential.uid(), seed, certs, loaded)?;
         let response = self.call_with_material(
             host,
             &host.user,
@@ -465,17 +480,9 @@ impl FoksClient {
         team: &EntityId,
         row: &foks_proto::RawInboxRow,
     ) -> Result<foks_verify::VerifiedUserState> {
-        let foks_proto::RawInboxRequest::Local {
-            joiner,
-            source_role,
-            ..
-        } = &row.request
-        else {
-            return Err(Error::TeamRequest("expected local request"));
-        };
-        if joiner.entity_type() != foks_proto::ENTITY_USER || *source_role != Role::OWNER {
-            return Err(Error::TeamRequest("expected owner-role user joiner"));
-        }
+        // Reject a row this destination can never resolve before paying for
+        // the authentication it would need, as this loader always has.
+        local_user_joiner(row)?;
         let user = self.authenticate_credential_and_pin(host, credential)?;
         let loaded = self.load_and_pin_team_with_credential(
             host,
@@ -484,11 +491,29 @@ impl FoksClient {
             &user.puks,
             team,
         )?;
+        self.load_local_invitation_joiner_with_team(host, credential, team, &loaded, row)
+    }
+
+    /// [`Self::load_local_invitation_joiner`] against a destination team the
+    /// caller has already authenticated with the same credential. A caller
+    /// that resolves several rows of one inbox authenticates and loads the
+    /// destination once instead of once per row; the row-specific work is
+    /// unchanged.
+    pub fn load_local_invitation_joiner_with_team(
+        &self,
+        host: &PinnedHost,
+        credential: FederationCredential<'_, '_>,
+        team: &EntityId,
+        loaded: &crate::AuthenticatedTeamOutcome,
+        row: &foks_proto::RawInboxRow,
+    ) -> Result<foks_verify::VerifiedUserState> {
+        require_invitation_destination(host, team, loaded)?;
+        let (joiner, source_role) = local_user_joiner(row)?;
         if loaded
             .verified
             .members()
             .iter()
-            .any(|m| m.party == *joiner && m.source_role == *source_role)
+            .any(|m| m.party == *joiner && m.source_role == source_role)
         {
             return Err(Error::TeamRequest("requester already belongs to team"));
         }
@@ -501,4 +526,36 @@ impl FoksClient {
             }
         }
     }
+}
+
+/// The user joiner an inbox row names, when the row is the local owner-role
+/// user request the joiner loader resolves.
+fn local_user_joiner(row: &foks_proto::RawInboxRow) -> Result<(&EntityId, Role)> {
+    let foks_proto::RawInboxRequest::Local {
+        joiner,
+        source_role,
+        ..
+    } = &row.request
+    else {
+        return Err(Error::TeamRequest("expected local request"));
+    };
+    if joiner.entity_type() != foks_proto::ENTITY_USER || *source_role != Role::OWNER {
+        return Err(Error::TeamRequest("expected owner-role user joiner"));
+    }
+    Ok((joiner, *source_role))
+}
+
+/// Rejects a pre-loaded destination team that is not the team the caller
+/// named, so a hoisted load can never resolve a row against another team.
+pub(crate) fn require_invitation_destination(
+    host: &PinnedHost,
+    team: &EntityId,
+    loaded: &crate::AuthenticatedTeamOutcome,
+) -> Result<()> {
+    if loaded.verified.team() != team || loaded.verified.host() != host.host_id() {
+        return Err(Error::TeamBinding(
+            "invitation destination team does not match the loaded team",
+        ));
+    }
+    Ok(())
 }

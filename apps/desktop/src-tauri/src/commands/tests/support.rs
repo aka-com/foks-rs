@@ -51,6 +51,7 @@ pub(super) fn phase_four_catalog(blocked_profiles: Vec<String>) -> CatalogSnapsh
                 name: Some("Engineering".to_owned()),
                 active: true,
                 creation_phase: None,
+                chain_seqno: None,
             },
             CatalogStoreSummary::Team {
                 store: team_ref("home.example", "home", "homelab"),
@@ -58,6 +59,7 @@ pub(super) fn phase_four_catalog(blocked_profiles: Vec<String>) -> CatalogSnapsh
                 name: Some("Homelab".to_owned()),
                 active: true,
                 creation_phase: None,
+                chain_seqno: None,
             },
         ],
         blocked_profiles,

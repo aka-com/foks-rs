@@ -9,6 +9,7 @@ use foks_proto::{
     RtTeamId, RtText, RtUserId, ENTITY_NAMED_TEAM,
 };
 use foks_rpc::{RealtimeRequest, RealtimeResponse};
+use std::sync::Arc;
 
 /// Transport seam for fault injection and the real pinned RT connection.
 pub trait ChatTransport {
@@ -27,6 +28,11 @@ pub struct ChatSession<'a> {
     pub(super) team_id: EntityId,
     pub(super) role: Role,
     pub(super) history_byte_limit: usize,
+    /// App keys already derived from this session's authenticated PTKs. One
+    /// sync opens every channel name and description and every previewed
+    /// message, which repeats the same few derivations; the cache is dropped
+    /// with the PTKs it was derived from on every refresh.
+    derived: std::cell::RefCell<std::collections::BTreeMap<(Role, u64), Arc<RealtimeKeys>>>,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChatChannel {
@@ -62,6 +68,7 @@ impl FoksClient {
             team: None,
             role: Role::NONE,
             history_byte_limit: ChatLimits::HISTORY_BYTES,
+            derived: std::cell::RefCell::new(std::collections::BTreeMap::new()),
         })
     }
 }
@@ -86,6 +93,7 @@ impl ChatSession<'_> {
         // Drop prior private keys before refreshing, including on failure.
         self.team = None;
         self.role = Role::NONE;
+        self.derived.borrow_mut().clear();
         for _ in 0..ChatLimits::AUTHENTICATION_ATTEMPTS {
             let user = self
                 .client
@@ -138,7 +146,10 @@ impl ChatSession<'_> {
             channel: channel.0,
         }
     }
-    pub(super) fn keys(&self, key: RoleAndGeneration) -> Result<RealtimeKeys> {
+    pub(super) fn keys(&self, key: RoleAndGeneration) -> Result<Arc<RealtimeKeys>> {
+        if let Some(keys) = self.derived.borrow().get(&(key.role, key.generation)) {
+            return Ok(keys.clone());
+        }
         let ptk = self
             .team()?
             .ptks
@@ -147,7 +158,11 @@ impl ChatSession<'_> {
             .ok_or(Error::ChatKeyUnavailable(
                 "verified historical chat key unavailable",
             ))?;
-        Ok(derive_realtime_keys(&ptk.seed, RtAppId::Chat)?)
+        let keys = Arc::new(derive_realtime_keys(&ptk.seed, RtAppId::Chat)?);
+        self.derived
+            .borrow_mut()
+            .insert((key.role, key.generation), keys.clone());
+        Ok(keys)
     }
     pub(super) fn current(&self, role: Role) -> Result<RoleAndGeneration> {
         let generation = self

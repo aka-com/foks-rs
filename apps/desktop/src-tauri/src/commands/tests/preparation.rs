@@ -415,7 +415,8 @@ fn member_preparation_loads_native_facts_and_preserves_other_profile_accounts() 
                     kind: "named".into(),
                     name: Some("Engineering".into()),
                     active: true,
-                    creation_phase: None
+                    creation_phase: None,
+                    chain_seqno: None,
                 }
             ],
             ..Default::default()
@@ -551,7 +552,7 @@ fn group_state() -> (AppState, String) {
         profiles: vec!["work.example".into()],
         stores: vec![
             CatalogStoreSummary::Account { store: account_ref("work.example", "personal") },
-            CatalogStoreSummary::Team { store: team, kind: "named".into(), name: Some("Engineering".into()), active:true, creation_phase:None },
+            CatalogStoreSummary::Team { store: team, kind: "named".into(), name: Some("Engineering".into()), active:true, creation_phase:None, chain_seqno: None, },
         ],
         profile_overviews: vec![ProfileOverview {
             profile: "work.example".into(),

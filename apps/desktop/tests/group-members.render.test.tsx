@@ -182,6 +182,7 @@ test('Members exposes invitation creation, requests and approval recovery for th
   const r = await group(snapshot, {
     invitation: async (profile, account, action) => {
       calls.push({ profile, account, action });
+      if (action.action === 'inbox-count') return { count: 1 };
       return action.action === 'inbox'
         ? {
             rows: [
@@ -230,13 +231,13 @@ test('Members exposes invitation creation, requests and approval recovery for th
       'approve',
       'list',
       'pending-approvals',
-      'inbox',
+      'inbox-count',
       'reject',
       'list',
       'pending-approvals',
-      'inbox',
+      'inbox-count',
       'create',
-      'inbox',
+      'inbox-count',
       // These explicit read-only actions do not invalidate either again.
       'inbox',
       'pending-approvals',
@@ -301,7 +302,11 @@ test('the Requests tab count matches what the panel lists, and none when nothing
 
   const empty = await group(await fixture(), {
     invitation: async (_profile, _account, action) =>
-      action.action === 'inbox' ? { rows: [] } : { state: 'complete' },
+      action.action === 'inbox-count'
+        ? { count: 0 }
+        : action.action === 'inbox'
+          ? { rows: [] }
+          : { state: 'complete' },
   });
   const emptyTab = [
     ...empty.container.querySelectorAll<HTMLElement>('[role="tab"]'),
@@ -758,7 +763,9 @@ test('Members invite action opens the group invitation workflow', async () => {
   const r = await group(await fixture(), {
     invitation: async (_profile, _account, action) => {
       calls.push(action);
-      return { state: 'complete' };
+      return action.action === 'inbox-count'
+        ? { count: 0 }
+        : { state: 'complete' };
     },
   });
   await ui.act(async () => {});
@@ -774,7 +781,7 @@ test('Members invite action opens the group invitation workflow', async () => {
   // for what it may have changed.
   assert.deepEqual(calls, [
     { action: 'create', team_alias: 'engineering' },
-    { action: 'inbox', team_alias: 'engineering' },
+    { action: 'inbox-count', team_alias: 'engineering' },
   ]);
 });
 

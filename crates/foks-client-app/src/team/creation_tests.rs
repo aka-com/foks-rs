@@ -364,3 +364,54 @@ fn preparing_intent_rejects_changed_actor_before_submission() {
         })
         .unwrap();
 }
+
+#[test]
+fn team_summaries_report_the_pinned_chain_sequence_and_nothing_for_an_unpinned_team() {
+    let fixture = Fixture::start();
+    // Interrupted before the team exists remotely: the record is bound
+    // locally, so there is no pinned projection and no sequence to report.
+    INTERRUPT.with(|point| point.set(Some(Boundary::IntentStored)));
+    assert!(fixture
+        .run(|s, v, k| s.create_named_team("owner", "unpinned", "unpinned", v, k))
+        .is_err());
+    fixture
+        .run(|s, v, k| s.create_named_team("owner", "pinned", "pinned", v, k))
+        .unwrap();
+    let pinned = fixture
+        .run(|s, v, _| {
+            let teams = s.list_teams(v)?;
+            let unpinned = teams.iter().find(|team| team.alias == "unpinned").unwrap();
+            assert_eq!(unpinned.chain_seqno, None);
+            let pinned = teams.iter().find(|team| team.alias == "pinned").unwrap();
+            let seqno = pinned.chain_seqno.unwrap();
+            // The sequence is the one hard state holds for this team, read
+            // without any network call.
+            let stored = v.team("pinned")?;
+            let journal = HardStateStore::open(&s.paths.hard_database)?;
+            assert_eq!(
+                journal.team_chain_seqno_for_host(
+                    s.pinned_host()?.host_id().as_bytes(),
+                    &stored.team_id,
+                )?,
+                Some(seqno)
+            );
+            Ok(seqno)
+        })
+        .unwrap();
+    // A listing that changes nothing reports the same sequence, which is what
+    // lets a reader skip a roster read.
+    fixture
+        .run(|s, v, _| {
+            let teams = s.list_teams(v)?;
+            assert_eq!(
+                teams
+                    .iter()
+                    .find(|team| team.alias == "pinned")
+                    .unwrap()
+                    .chain_seqno,
+                Some(pinned)
+            );
+            Ok(())
+        })
+        .unwrap();
+}

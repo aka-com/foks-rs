@@ -87,6 +87,12 @@ pub enum InvitationAction {
     Inbox {
         team_alias: String,
     },
+    /// How many rows the inbox holds, without expanding any of them. An
+    /// agent that predates this variant refuses the request as invalid, and
+    /// the caller falls back to `Inbox`.
+    InboxCount {
+        team_alias: String,
+    },
     Approve {
         team_alias: String,
         request_id: String,
@@ -113,6 +119,7 @@ impl InvitationAction {
             | Self::PreviewRemote { .. }
             | Self::InspectRemote { .. }
             | Self::Inbox { .. }
+            | Self::InboxCount { .. }
             | Self::Range { raise: false, .. } => false,
             Self::AcceptTeam { .. }
             | Self::AcceptTeamRemote { .. }
@@ -201,7 +208,9 @@ impl InvitationAction {
                     && invite.len() <= 256
                     && invite.bytes().all(|c| c.is_ascii_alphanumeric())
             }
-            Self::Create { team_alias } | Self::Inbox { team_alias } => name(team_alias),
+            Self::Create { team_alias }
+            | Self::Inbox { team_alias }
+            | Self::InboxCount { team_alias } => name(team_alias),
             Self::Attempt { operation_id }
             | Self::Status { operation_id }
             | Self::Cancel { operation_id } => id(operation_id),

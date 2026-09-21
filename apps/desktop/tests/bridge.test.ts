@@ -868,6 +868,46 @@ test('first-run response decoders validate profile checks, pending operations, a
       }),
     /canonical 03 entity id/,
   );
+  // An absent binding list means "unknown", so it must not decode to an
+  // empty list, which a caller reads as "this discovery changed nothing".
+  const discovered = {
+    alias: 'ops',
+    accountAlias: 'personal',
+    teamIdHex: `03${'1'.repeat(64)}`,
+    kind: 'named',
+    name: 'Ops',
+    active: true,
+  };
+  assert.equal(
+    decodeGroupDiscovery({ accountAlias: 'personal', groups: [discovered] })
+      .bound,
+    undefined,
+  );
+  assert.deepEqual(
+    decodeGroupDiscovery({
+      accountAlias: 'personal',
+      groups: [discovered],
+      bound: [],
+    }).bound,
+    [],
+  );
+  assert.deepEqual(
+    decodeGroupDiscovery({
+      accountAlias: 'personal',
+      groups: [discovered],
+      bound: ['ops'],
+    }).bound,
+    ['ops'],
+  );
+  assert.throws(
+    () =>
+      decodeGroupDiscovery({
+        accountAlias: 'personal',
+        groups: [discovered],
+        bound: ['never-returned'],
+      }),
+    /bound an alias it did not return/,
+  );
 });
 
 test('decodeCatalog preserves structured failure objects and typed error details', () => {

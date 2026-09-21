@@ -271,4 +271,22 @@ impl HardStateStore {
     ) -> Result<Option<StoredTeamSnapshot>> {
         load_team_snapshot(&self.connection, host_id, team_id)
     }
+
+    /// The chain sequence of a pinned team projection, without loading the
+    /// projection's members, keys or evidence. It reports only how far the
+    /// verified chain has advanced locally, so a caller can tell that a team
+    /// has not changed since an earlier read.
+    pub fn team_chain_seqno_for_host(&self, host_id: &[u8], team_id: &[u8]) -> Result<Option<u64>> {
+        let seqno = self
+            .connection
+            .query_row(
+                "SELECT chain_seqno FROM teams WHERE host_id = ?1 AND team_id = ?2",
+                params![host_id, team_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        seqno
+            .map(|seqno| stored_unsigned("team chain sequence", seqno))
+            .transpose()
+    }
 }

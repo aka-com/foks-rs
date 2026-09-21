@@ -5,6 +5,7 @@ import {
   sameStoreIdentity,
 } from '../catalog-state';
 import { itemKey, serverDisplayName, serverFactAvailability } from '../model';
+import { consumeProfileRosterStaleness } from '../roster-staleness';
 import type {
   AgentSnapshot,
   AgentStatus,
@@ -90,6 +91,11 @@ export async function projectCatalog(
   partial: boolean,
   profileScope?: string,
   background?: BackgroundHistoryWork,
+  /**
+   * Read every team's roster even when its chain has not moved: a refresh
+   * the user asked for, or a read back of a profile a write changed.
+   */
+  forceRosters = false,
 ): Promise<AgentSnapshot> {
   const embeddedMetadata =
     partial || (bridge.native && profileScope !== undefined);
@@ -513,8 +519,65 @@ export async function projectCatalog(
           ).available,
       ),
   );
+  // An invitation decision moves the team chain, but the panel that made it
+  // knows before the agent's next catalog read carries the new sequence.
+  const staleRosterProfiles = new Set(
+    [...new Set(teams.map((store) => store.server))].filter(
+      consumeProfileRosterStaleness,
+    ),
+  );
+  /**
+   * The roster this snapshot's base already holds for a team whose chain has
+   * not moved, or `undefined` when the roster must be read: no base roster,
+   * an unknown or changed chain sequence, a store read that did not succeed
+   * this cycle, a base whose store identity differs, or a base roster that
+   * recorded a failure.
+   *
+   * Accepted staleness: a member's username or device change does not move
+   * the team chain, so a reused roster shows the previous one until the
+   * chain moves, the profile is refreshed after a write, or the user presses
+   * Refresh. Rosters here are display and target-selection facts; every
+   * roster-changing native operation reloads the team itself before it acts.
+   */
+  const cachedRoster = (
+    store: Store,
+  ): { parties: Party[]; federation: FederationEntry[] } | undefined => {
+    if (forceRosters || staleRosterProfiles.has(store.server)) return undefined;
+    if (store.kind !== 'team' || store.chain_seqno === undefined)
+      return undefined;
+    // The sequence only moves when a team load succeeds. A team whose store
+    // read did not succeed this cycle would otherwise hold its sequence, and
+    // its last roster, for as long as the read keeps failing, with no
+    // failure band to say so. Read it and let the read report.
+    if (!catalogStoreComplete(response, store, partial)) return undefined;
+    const previous = base?.stores.find((entry) => entry.id === store.id);
+    if (
+      !previous ||
+      previous.kind !== 'team' ||
+      !sameStoreIdentity(previous, store) ||
+      previous.chain_seqno !== store.chain_seqno
+    )
+      return undefined;
+    if (base?.groupDetailFailures.some((entry) => entry.store === store.id))
+      return undefined;
+    const parties = (base?.parties ?? []).filter(
+      (party) => party.store === store.id,
+    );
+    // A roster a read produced always names at least the reader, so no party
+    // at all means this snapshot holds no roster for the team, not an empty
+    // one. Federation entries are legitimately absent.
+    if (parties.length === 0) return undefined;
+    return {
+      parties,
+      federation: (base?.federation ?? []).filter(
+        (entry) => entry.store === store.id,
+      ),
+    };
+  };
   const rosters = await Promise.all(
     teams.map(async (store) => {
+      const cached = cachedRoster(store);
+      if (cached) return { ...cached, failures: [] as GroupDetailFailure[] };
       const { parties, federation, failures } = await scheduleProfileWork(
         bridge,
         store.server,

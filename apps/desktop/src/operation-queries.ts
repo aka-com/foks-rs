@@ -106,18 +106,44 @@ export function teamRequestCountQuery(
   return repository.query<number>(
     teamRequestCountKey(store),
     async () => {
-    // `invitation` owns its own profile admission: the native bridge queues
-    // the request itself. Queuing here as well would hold the profile's
-    // slot while awaiting a request that cannot start until the slot is
-    // released, and the inner request would expire at the admission
-    // deadline instead of running.
-      const reply = await bridge.invitation(
-        server,
-        account,
-        { action: 'inbox', team_alias: alias },
-        null,
-      );
-      return Array.isArray(reply) ? reply.length : (reply.rows?.length ?? 0);
+      // `invitation` owns its own profile admission: the native bridge queues
+      // the request itself. Queuing here as well would hold the profile's
+      // slot while awaiting a request that cannot start until the slot is
+      // released, and the inner request would expire at the admission
+      // deadline instead of running.
+      const fullInbox = async (): Promise<number> => {
+        const reply = await bridge.invitation(
+          server,
+          account,
+          { action: 'inbox', team_alias: alias },
+          null,
+        );
+        return Array.isArray(reply) ? reply.length : (reply.rows?.length ?? 0);
+      };
+      let reply;
+      try {
+        reply = await bridge.invitation(
+          server,
+          account,
+          { action: 'inbox-count', team_alias: alias },
+          null,
+        );
+      } catch (error) {
+        // An agent that predates the count-only action cannot decode it and
+        // refuses the request. `invalid-request` also stands for argument
+        // validation and an interrupted worker, and the refusal carries no
+        // stable marker saying which it was, so this falls back for this
+        // read only. A newer agent costs nothing; an older one costs one
+        // refused request per badge read rather than a badge that silently
+        // reads whole inboxes for the rest of the session.
+        if (normalizeCommandError(error).code !== 'invalid-request') throw error;
+        return fullInbox();
+      }
+      const count = Array.isArray(reply) ? undefined : reply.count;
+      if (count === undefined) {
+        throw new Error('The agent answered a request count without a count.');
+      }
+      return count;
     },
     // A badge, read for every manageable team at unlock: invitation activity
     // invalidates it, so it need not be re-read on the metadata cadence.

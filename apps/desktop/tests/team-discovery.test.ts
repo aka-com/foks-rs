@@ -130,3 +130,50 @@ test('retired or denied discovery never dispatches or modifies known team state'
   );
   assert.deepEqual(snapshot.stores, FIXTURE.stores);
 });
+
+test('only a discovery that wrote a binding is followed by a catalog read', async () => {
+  const account = discoveryAccounts(fixture())[0];
+  const group = {
+    alias: 'discovered',
+    accountAlias: account.alias,
+    teamIdHex: `03${'ab'.repeat(32)}`,
+    kind: 'named' as const,
+    name: 'Discovered',
+    active: true,
+  };
+  const reads = async (
+    reply: Awaited<ReturnType<Bridge['discoverGroups']>>,
+  ): Promise<number> => {
+    let count = 0;
+    await reconcileTeamDiscovery(
+      { discoverGroups: async () => reply } as unknown as Bridge,
+      account,
+      context(),
+      () => true,
+      async () => {
+        count++;
+      },
+    );
+    return count;
+  };
+  // Nothing was written locally, so nothing changed for the catalog to show.
+  assert.equal(
+    await reads({ accountAlias: account.alias, groups: [group], bound: [] }),
+    0,
+  );
+  // A binding was written: the profile is read back so the team appears.
+  assert.equal(
+    await reads({
+      accountAlias: account.alias,
+      groups: [group],
+      bound: [group.alias],
+    }),
+    1,
+  );
+  // An agent that reports no bound list says nothing about what it wrote,
+  // which keeps the read it always made.
+  assert.equal(
+    await reads({ accountAlias: account.alias, groups: [group] }),
+    1,
+  );
+});

@@ -78,6 +78,12 @@ export interface DiscoveredGroup {
 export interface GroupDiscoveryResponse {
   accountAlias: string;
   groups: DiscoveredGroup[];
+  /**
+   * The aliases whose local binding this discovery wrote. Empty when it
+   * changed nothing, and empty from an agent that predates the field, which
+   * a caller must read as "unknown", not as "nothing changed".
+   */
+  bound?: string[];
 }
 
 export function decodeRole(value: unknown, at: string): RoleDto {
@@ -238,7 +244,16 @@ export function decodeGroupDiscovery(value: unknown): GroupDiscoveryResponse {
   if (groups.some((group) => group.accountAlias !== accountAlias)) {
     throw new Error('discover_groups returned a group for a different account');
   }
-  return { accountAlias, groups };
+  const bound =
+    item.bound === undefined
+      ? undefined
+      : array(item.bound, 'discover_groups.bound', (value, at) =>
+          string(value, at),
+        );
+  if (bound?.some((alias) => !groups.some((group) => group.alias === alias))) {
+    throw new Error('discover_groups bound an alias it did not return');
+  }
+  return { accountAlias, groups, ...(bound ? { bound } : {}) };
 }
 
 /** Converts model roles to the command DTO role format. */

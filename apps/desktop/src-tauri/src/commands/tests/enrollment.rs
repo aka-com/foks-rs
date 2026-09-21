@@ -128,7 +128,9 @@ fn first_run_response_projection_fails_closed() {
             name: Some("Engineering".to_owned()),
             active: true,
             _creation_phase: None,
+            _chain_seqno: None,
         }],
+        bound: None,
     };
     assert_eq!(
         GroupDiscoveryDto::from_response("personal", discovery)
@@ -148,6 +150,7 @@ fn first_run_response_projection_fails_closed() {
                 name: Some("Engineering".to_owned()),
                 active: true,
                 _creation_phase: None,
+                _chain_seqno: None,
             },
             DiscoveredGroupResponse {
                 alias: "engineering".to_owned(),
@@ -157,8 +160,10 @@ fn first_run_response_projection_fails_closed() {
                 name: Some("Other".to_owned()),
                 active: true,
                 _creation_phase: None,
+                _chain_seqno: None,
             },
         ],
+        bound: None,
     };
     assert_eq!(
         GroupDiscoveryDto::from_response("personal", duplicate_alias)
@@ -178,8 +183,10 @@ fn first_run_response_projection_fails_closed() {
                 name: Some(alias.to_owned()),
                 active: true,
                 _creation_phase: None,
+                _chain_seqno: None,
             })
             .collect(),
+        bound: None,
     };
     assert_eq!(
         GroupDiscoveryDto::from_response("personal", duplicate_id)
@@ -197,7 +204,9 @@ fn first_run_response_projection_fails_closed() {
             name: Some("Engineering".to_owned()),
             active: true,
             _creation_phase: None,
+            _chain_seqno: None,
         }],
+        bound: None,
     };
     assert_eq!(
         GroupDiscoveryDto::from_response("personal", invalid_local_alias)
@@ -220,7 +229,9 @@ fn first_run_response_projection_fails_closed() {
                 name,
                 active: true,
                 _creation_phase: None,
+                _chain_seqno: None,
             }],
+            bound: None,
         };
         assert_eq!(
             GroupDiscoveryDto::from_response("personal", wrong_type)
@@ -240,6 +251,7 @@ fn first_run_response_projection_fails_closed() {
                 name: Some("Engineering".to_owned()),
                 active: true,
                 _creation_phase: None,
+                _chain_seqno: None,
             },
             DiscoveredGroupResponse {
                 alias: "friends".to_owned(),
@@ -249,8 +261,10 @@ fn first_run_response_projection_fails_closed() {
                 name: None,
                 active: true,
                 _creation_phase: None,
+                _chain_seqno: None,
             },
         ],
+        bound: None,
     };
     assert_eq!(
         GroupDiscoveryDto::from_response("personal", valid_typed_groups)
@@ -307,6 +321,54 @@ fn first_run_response_projection_fails_closed() {
         )
         .unwrap_err()
         .code,
+        "invalid-response"
+    );
+}
+
+#[test]
+fn discovery_bindings_stay_absent_rather_than_empty_across_the_boundary() {
+    let reply = |bound: Option<serde_json::Value>| {
+        let mut value = serde_json::json!({
+            "account_alias": "personal",
+            "teams": [{
+                "alias": "engineering",
+                "account_alias": "personal",
+                "team_id_hex": "03".repeat(33),
+                "kind": "named",
+                "name": "Engineering",
+                "active": true,
+            }],
+        });
+        if let Some(bound) = bound {
+            value["bound"] = bound;
+        }
+        let response: GroupDiscoveryResponse = serde_json::from_value(value).unwrap();
+        serde_json::to_value(GroupDiscoveryDto::from_response("personal", response).unwrap())
+            .unwrap()
+    };
+    // An older agent reports no bindings at all. That must reach the renderer
+    // as "unknown", so the key is absent rather than an empty list, which
+    // would read as "this discovery changed nothing".
+    assert!(reply(None).get("bound").is_none());
+    assert_eq!(
+        reply(Some(serde_json::json!([])))["bound"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        reply(Some(serde_json::json!(["engineering"])))["bound"],
+        serde_json::json!(["engineering"])
+    );
+    // A binding this discovery did not return is still refused.
+    let response: GroupDiscoveryResponse = serde_json::from_value(serde_json::json!({
+        "account_alias": "personal",
+        "teams": [],
+        "bound": ["engineering"],
+    }))
+    .unwrap();
+    assert_eq!(
+        GroupDiscoveryDto::from_response("personal", response)
+            .unwrap_err()
+            .code,
         "invalid-response"
     );
 }

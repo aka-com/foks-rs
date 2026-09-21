@@ -1578,3 +1578,171 @@ pub(crate) fn client_chat_multi_team_refresh_budget() {
         3
     );
 }
+
+#[test]
+pub(crate) fn client_chat_inbox_previews_are_cached_by_message_and_key() {
+    struct CountThreads<'a> {
+        connection: &'a mut RealtimeConnection,
+        threads: usize,
+    }
+    impl ChatTransport for CountThreads<'_> {
+        fn request(&mut self, request: &Request) -> foks_client::Result<Response> {
+            if matches!(request, Request::GetThread(_)) {
+                self.threads += 1;
+            }
+            self.connection.call(request)
+        }
+    }
+    #[derive(Default)]
+    struct Cache {
+        entries: Vec<(foks_client::ChatPreviewKey, foks_client::ChatPreview)>,
+    }
+    impl foks_client::ChatPreviewCache for Cache {
+        fn get(&mut self, key: &foks_client::ChatPreviewKey) -> Option<foks_client::ChatPreview> {
+            self.entries
+                .iter()
+                .find(|(candidate, _)| candidate == key)
+                .map(|(_, preview)| preview.clone())
+        }
+        fn put(&mut self, key: foks_client::ChatPreviewKey, preview: foks_client::ChatPreview) {
+            self.entries.push((key, preview));
+        }
+    }
+
+    let fixture = Fixture::start("chat-preview-cache");
+    let account = fixture
+        .client
+        .create_account(fixture.host(), &TestAccountSpec::new("cacheowner", 0x3b))
+        .unwrap();
+    let mut protected = fixture.client.open_protected_store().unwrap();
+    let soft_path = fixture
+        .environment
+        .client_path("chat-preview-cache", "inbox.sqlite3")
+        .unwrap();
+    let mut soft = foks_client_db::SoftStateStore::open(&soft_path).unwrap();
+    let team = fixture
+        .client
+        .foks()
+        .create_single_owner_named_team(
+            fixture.host(),
+            &account.credential,
+            "cacheteam",
+            &NamedTeamSecrets {
+                member_min: SecretSeed::new([0x52; 32]),
+                member: SecretSeed::new([0x62; 32]),
+                admin: SecretSeed::new([0x72; 32]),
+                owner: SecretSeed::new([0x82; 32]),
+                removal_key: SecretSeed::new([0x92; 32]),
+                team_name_commitment_key: [0xa2; 16],
+            },
+        )
+        .unwrap();
+    let mut chat = fixture
+        .client
+        .foks()
+        .chat_session(fixture.host(), &account.credential, &team.team)
+        .unwrap();
+    let mut connection = chat.connection().unwrap();
+    let mut channels = Vec::new();
+    for index in 0..2 {
+        let prepared = chat
+            .prepare_channel(
+                &mut connection,
+                &mut protected,
+                &format!("cached{index}"),
+                "",
+                RtChannelTier::Bottom,
+            )
+            .unwrap();
+        let channel = RtChannelId(prepared.scope.channel);
+        chat.attempt_operation(&mut connection, &mut protected, &prepared.id)
+            .unwrap();
+        let message = chat
+            .prepare_send(&mut connection, &mut protected, channel, "first")
+            .unwrap();
+        chat.attempt_operation(&mut connection, &mut protected, &message.id)
+            .unwrap();
+        channels.push(channel);
+    }
+
+    let mut cache = Cache::default();
+    let mut counted = CountThreads {
+        connection: &mut connection,
+        threads: 0,
+    };
+    let first = chat
+        .sync_inbox_with_preview_cache(&mut counted, &mut soft, &[], &mut cache)
+        .unwrap()
+        .inbox;
+    assert_eq!(counted.threads, 2);
+    assert_eq!(
+        first
+            .conversations
+            .iter()
+            .filter(|c| c.preview.is_some())
+            .count(),
+        2
+    );
+    assert_eq!(cache.entries.len(), 2);
+
+    // Nothing moved: every preview is served from the cache, and the inbox
+    // is the one the reads produced.
+    counted.threads = 0;
+    let repeated = chat
+        .sync_inbox_with_preview_cache(&mut counted, &mut soft, &[], &mut cache)
+        .unwrap()
+        .inbox;
+    assert_eq!(counted.threads, 0);
+    assert_eq!(repeated.conversations, first.conversations);
+
+    // One channel receives another message. Only that channel's preview is
+    // fetched again; the other is still served from the cache.
+    let message = chat
+        .prepare_send(counted.connection, &mut protected, channels[0], "second")
+        .unwrap();
+    chat.attempt_operation(counted.connection, &mut protected, &message.id)
+        .unwrap();
+    counted.threads = 0;
+    let moved = chat
+        .sync_inbox_with_preview_cache(&mut counted, &mut soft, &[], &mut cache)
+        .unwrap()
+        .inbox;
+    assert_eq!(counted.threads, 1);
+    assert_eq!(cache.entries.len(), 3);
+    assert_eq!(
+        moved
+            .conversations
+            .iter()
+            .filter(|c| c.preview.is_some())
+            .count(),
+        2
+    );
+
+    // A channel the caller blocks is never previewed, so nothing about it is
+    // ever cached.
+    let mut blocked_cache = Cache::default();
+    let blocked = chat
+        .sync_inbox_with_preview_cache(&mut counted, &mut soft, &[channels[0]], &mut blocked_cache)
+        .unwrap()
+        .inbox;
+    assert_eq!(blocked.blocked_channels, vec![channels[0]]);
+    assert!(blocked_cache
+        .entries
+        .iter()
+        .all(|(key, _)| key.channel != channels[0].0));
+    assert!(blocked
+        .conversations
+        .iter()
+        .find(|c| c.channel.metadata.id == channels[0])
+        .unwrap()
+        .preview
+        .is_none());
+
+    // The channels the sync already opened describe the same conversations
+    // as reopening each one from stored metadata does.
+    let listed = chat.list_channels(counted.connection).unwrap().channels;
+    assert_eq!(
+        chat.inbox_from_store_with_channels(&soft, &listed).unwrap(),
+        chat.inbox_from_store(&soft).unwrap()
+    );
+}

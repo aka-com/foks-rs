@@ -90,6 +90,8 @@ export async function loadSnapshot(
   nowSeconds: number = Math.floor(Date.now() / 1000),
   onPartial?: (snapshot: AgentSnapshot) => void,
   isCurrent: () => boolean = () => true,
+  /** Read every roster, for a refresh the user asked for. */
+  forceRosters = false,
 ): Promise<AgentSnapshot> {
   try {
     return await loadSnapshotOnce(
@@ -98,6 +100,7 @@ export async function loadSnapshot(
       nowSeconds,
       onPartial,
       isCurrent,
+      forceRosters,
     );
   } catch (error) {
     if (
@@ -105,7 +108,14 @@ export async function loadSnapshot(
       normalizeCommandError(error).code !== 'catalog-required'
     )
       throw error;
-    return loadSnapshotOnce(bridge, base, nowSeconds, onPartial, isCurrent);
+    return loadSnapshotOnce(
+      bridge,
+      base,
+      nowSeconds,
+      onPartial,
+      isCurrent,
+      forceRosters,
+    );
   }
 }
 
@@ -115,6 +125,7 @@ async function loadSnapshotOnce(
   nowSeconds: number,
   onPartial: ((snapshot: AgentSnapshot) => void) | undefined,
   isCurrent: () => boolean,
+  forceRosters: boolean,
 ): Promise<AgentSnapshot> {
   if (!isCurrent()) throw new CatalogReadRetiredError();
   const agent = await bridge.agentStatus();
@@ -182,6 +193,9 @@ async function loadSnapshotOnce(
       nowSeconds,
       agent,
       false,
+      undefined,
+      undefined,
+      forceRosters,
     );
     if (!isCurrent()) throw new CatalogReadRetiredError();
     return snapshot;
@@ -197,6 +211,8 @@ export async function loadProfileSnapshot(
   nowSeconds: number = Math.floor(Date.now() / 1000),
   isCurrent: () => boolean = () => true,
   background?: BackgroundHistoryWork,
+  /** Read this profile's rosters, for a read back of a write it made. */
+  forceRosters = false,
 ): Promise<AgentSnapshot> {
   if (!isCurrent()) throw new CatalogReadRetiredError();
   const response = await scheduleProfileWork(
@@ -236,6 +252,7 @@ export async function loadProfileSnapshot(
     false,
     profile,
     background,
+    forceRosters,
   );
   if (!isCurrent()) throw new CatalogReadRetiredError();
   return mergeProfileSnapshot(base, projected, profile);

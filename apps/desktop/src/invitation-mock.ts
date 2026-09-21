@@ -51,6 +51,7 @@ export function mockInvitations(
             .map((op) => ({ ...op.row })),
         };
       case 'inbox':
+      case 'inbox-count':
         if (!requests.has(key))
           requests.set(key, [
             {
@@ -64,7 +65,9 @@ export function mockInvitations(
               verified: true,
             },
           ]);
-        return { rows: requests.get(key)!.map((row) => ({ ...row })) };
+        return action.action === 'inbox-count'
+          ? { count: requests.get(key)!.length }
+          : { rows: requests.get(key)!.map((row) => ({ ...row })) };
       case 'approve':
       case 'reject':
         requests.set(

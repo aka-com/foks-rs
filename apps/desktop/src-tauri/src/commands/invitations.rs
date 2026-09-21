@@ -66,6 +66,10 @@ struct Row {
     remote: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     possibly_truncated: Option<bool>,
+    /// The number of pending inbox rows, from the count-only action. Bounded
+    /// by the same page the full inbox reads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     rows: Option<Vec<Row>>,
 }
@@ -99,6 +103,7 @@ fn decode(value: serde_json::Value) -> Result<serde_json::Value, AgentError> {
             && r.invite
                 .as_ref()
                 .is_none_or(|s| s.len() <= 256 && s.bytes().all(|b| b.is_ascii_alphanumeric()))
+            && r.count.is_none_or(|count| count <= 2000)
             && r.rows
                 .as_ref()
                 .is_none_or(|rows| rows.len() <= 2000 && rows.iter().all(|r| valid(r, depth + 1)))

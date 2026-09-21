@@ -555,6 +555,7 @@ mod tests {
                 name: Some("team".into()),
                 active: true,
                 creation_phase: None,
+                chain_seqno: None,
             }],
             ..Default::default()
         });

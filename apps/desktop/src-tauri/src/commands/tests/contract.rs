@@ -663,6 +663,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
         creation_phase: None,
         team_kind: None,
         team_id_hex: None,
+        chain_seqno: None,
     };
     let catalog = CatalogDto {
         profiles: vec!["foks.example".to_owned()],
@@ -740,6 +741,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
             name: Some("Engineering".to_owned()),
             active: true,
         }],
+        bound: Some(vec!["engineering".to_owned()]),
     };
     assert_eq!(
         serde_json::to_value(discovery).unwrap(),

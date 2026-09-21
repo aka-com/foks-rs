@@ -8,6 +8,7 @@ import {
   integer,
   nullableInteger,
   nullableString,
+  optionalInteger,
   record,
   string,
 } from './validation';
@@ -24,6 +25,8 @@ export interface StoreDto {
   creation_phase?: TeamCreationPhase;
   team_kind?: 'named' | 'adhoc';
   team_id_hex?: string;
+  /** The agent's pinned team chain sequence, absent when it reported none. */
+  chain_seqno?: number;
 }
 
 export interface ItemDto {
@@ -202,6 +205,7 @@ function decodeStore(value: unknown, at: string): StoreDto {
     ),
     team_kind: teamKind,
     team_id_hex: string(item.team_id_hex, `${at}.team_id_hex`),
+    chain_seqno: optionalInteger(item.chain_seqno, `${at}.chain_seqno`),
   };
 }
 

@@ -97,7 +97,7 @@ export function useCatalogRuntime({
   const catalogCoordinator = useMemo(
     () =>
       new CatalogCoordinator<AgentSnapshot>(
-        (onPartial, catalogCurrent) => {
+        (onPartial, catalogCurrent, forced) => {
           const ticket = lifetime.capture();
           const isCurrent = () => ticket.isCurrent() && catalogCurrent();
           return catalogGate.exclusive(async () => {
@@ -112,6 +112,9 @@ export function useCatalogRuntime({
                 undefined,
                 onPartial,
                 isCurrent,
+                // A refresh the user asked for reads every roster, whether
+                // or not the team's chain has moved.
+                forced,
               );
             } catch (error) {
               if (isCurrent()) {

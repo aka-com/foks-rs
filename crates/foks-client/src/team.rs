@@ -203,6 +203,8 @@ impl AuthenticatedTeamMembershipChain {
 
 pub struct AuthenticatedLocalTeamGraph {
     pub teams: Vec<AuthenticatedTeamOutcome>,
+    /// How each entry of `teams` was authenticated, in the same order.
+    pub load_paths: Vec<TeamGraphLoadPath>,
     /// Team IDs ordered so a member team is refreshed before every parent
     /// team that depends on its PTKs.
     pub child_first: Vec<EntityId>,
@@ -210,11 +212,33 @@ pub struct AuthenticatedLocalTeamGraph {
     pub edges: Vec<(EntityId, EntityId)>,
 }
 
+/// Which credential opened the outcome a graph node retained. A node can be
+/// reachable both ways; the path recorded is the one that produced the
+/// outcome the graph kept, because that is the only outcome a caller can
+/// reuse in place of its own load.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TeamGraphLoadPath {
+    /// Opened with the user's own device credential, exactly as
+    /// [`FoksClient::load_and_pin_team`] would open it.
+    Direct,
+    /// Opened through a parent team's actor path, which proves membership of
+    /// that parent, not that the user's own credential opens this team.
+    LocalTeamActor,
+}
+
 impl AuthenticatedLocalTeamGraph {
     pub fn team(&self, team: &EntityId) -> Option<&AuthenticatedTeamOutcome> {
         self.teams
             .iter()
             .find(|candidate| candidate.verified.team() == team)
+    }
+
+    /// The path that opened the outcome retained for `team`.
+    pub fn load_path(&self, team: &EntityId) -> Option<TeamGraphLoadPath> {
+        self.teams
+            .iter()
+            .position(|candidate| candidate.verified.team() == team)
+            .and_then(|index| self.load_paths.get(index).copied())
     }
 }
 
@@ -666,6 +690,7 @@ impl FoksClient {
             }
         }
         let mut teams = Vec::<AuthenticatedTeamOutcome>::new();
+        let mut load_paths = Vec::<TeamGraphLoadPath>::new();
         let mut indexes = std::collections::BTreeMap::<Vec<u8>, usize>::new();
         let mut edges = std::collections::BTreeSet::<(Vec<u8>, Vec<u8>)>::new();
         let mut explored = std::collections::BTreeSet::<Vec<u8>>::new();
@@ -756,12 +781,18 @@ impl FoksClient {
                     }
                     Err(error) => return Err(error),
                 };
+                let candidate_path = if actor_id.is_none() {
+                    TeamGraphLoadPath::Direct
+                } else {
+                    TeamGraphLoadPath::LocalTeamActor
+                };
                 let (target_index, newly_loaded) = if let Some(index) = existing {
                     (index, false)
                 } else {
                     let index = teams.len();
                     indexes.insert(target_key.clone(), index);
                     teams.push(candidate.take().expect("new target has a loaded view"));
+                    load_paths.push(candidate_path);
                     (index, true)
                 };
                 let owner = actor_id.as_ref().unwrap_or(user.uid());
@@ -782,6 +813,7 @@ impl FoksClient {
                 if !active {
                     if newly_loaded {
                         indexes.remove(&target_key);
+                        load_paths.pop();
                         let removed = teams
                             .pop()
                             .ok_or(Error::TeamBinding("membership graph lost a stale target"))?;
@@ -800,6 +832,7 @@ impl FoksClient {
                     };
                     if private_scope(&candidate) > private_scope(&teams[target_index]) {
                         teams[target_index] = candidate;
+                        load_paths[target_index] = candidate_path;
                     }
                 }
                 if let Some(actor_id) = actor_id {
@@ -845,6 +878,7 @@ impl FoksClient {
             .collect::<Result<Vec<_>>>()?;
         Ok(AuthenticatedLocalTeamGraph {
             teams,
+            load_paths,
             child_first,
             edges,
         })

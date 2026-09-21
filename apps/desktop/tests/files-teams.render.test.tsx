@@ -209,7 +209,7 @@ test('a Teams row says how many requests are waiting on it without its page havi
     patchBridge: (base) => ({
       ...base,
       invitation: async (profile, account, action, secret) => {
-        if (action.action === 'inbox') asked.push(action.team_alias);
+        if (action.action === 'inbox-count') asked.push(action.team_alias);
         return base.invitation(profile, account, action, secret);
       },
     }),

@@ -40,6 +40,7 @@ fn catalog_activity_and_profile_health_gate_group_writes() {
             name: Some("Engineering".to_owned()),
             active: false,
             creation_phase: None,
+            chain_seqno: None,
         }],
         items: vec![CatalogItem {
             store: CatalogStoreRef::Team(team.clone()),
@@ -72,6 +73,7 @@ fn catalog_activity_and_profile_health_gate_group_writes() {
             name: Some("Engineering".to_owned()),
             active: true,
             creation_phase: None,
+            chain_seqno: None,
         }],
         items: vec![CatalogItem {
             store: CatalogStoreRef::Team(team.clone()),
@@ -724,6 +726,7 @@ fn blocked_profiles_stop_group_reads_and_mutations_before_transport() {
             name: None,
             active: true,
             creation_phase: None,
+            chain_seqno: None,
         });
     assert_eq!(
         state

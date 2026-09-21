@@ -1009,6 +1009,9 @@
         "name": "Engineering",
         "active": true
       }
+    ],
+    "bound": [
+      "engineering"
     ]
   },
   "goProfileDiscovery": {

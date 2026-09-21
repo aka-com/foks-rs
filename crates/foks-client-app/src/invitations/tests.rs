@@ -397,3 +397,175 @@ fn remote_invitation_reopens_both_profiles_and_admits_with_verified_keys() {
     assert!(sync["key_generations"].as_u64().unwrap() > 0);
     assert!(!inspection.to_string().contains("permission"));
 }
+
+#[test]
+fn inbox_count_reports_the_inbox_size_without_expanding_or_storing_rows() {
+    let f = Fixture::start();
+    f.run(|s, v, k| s.create_account("owner", "countowner", "laptop", "", "", None, v, k));
+    f.run(|s, v, k| s.create_account("joiner", "countjoiner", "laptop", "", "", None, v, k));
+    f.run(|s, v, k| s.create_named_team("owner", "project", "project", v, k));
+    let prepared = action(
+        &f,
+        "owner",
+        InvitationAction::Create {
+            team_alias: "project".into(),
+        },
+    );
+    let published = action(
+        &f,
+        "owner",
+        InvitationAction::Attempt {
+            operation_id: operation(&prepared),
+        },
+    );
+    let invite = published["invite"].as_str().unwrap().to_owned();
+    let accepted = action(&f, "joiner", InvitationAction::Accept { invite });
+    action(
+        &f,
+        "joiner",
+        InvitationAction::Attempt {
+            operation_id: operation(&accepted),
+        },
+    );
+    let key = f.run(|s, v, _| {
+        let host = s.pinned_host()?;
+        let account = v.account("owner")?;
+        let team = EntityId::from_bytes(v.team("project")?.team_id.clone())?;
+        Ok(inbox_key(&host, &account.credential.uid, &team))
+    });
+    // Counting expands no row, so it writes no handle blob and hands back no
+    // rows at all: only how many are waiting.
+    let counted = action(
+        &f,
+        "owner",
+        InvitationAction::InboxCount {
+            team_alias: "project".into(),
+        },
+    );
+    assert_eq!(counted["count"], 1);
+    assert_eq!(counted["possibly_truncated"], false);
+    assert!(counted.get("rows").is_none());
+    f.run(|_, v, _| {
+        assert!(v.store.get(&key).is_err());
+        Ok(())
+    });
+    // The full inbox reports the same number, still verifies each row, and
+    // writes the handles the decisions need.
+    let inbox = action(
+        &f,
+        "owner",
+        InvitationAction::Inbox {
+            team_alias: "project".into(),
+        },
+    );
+    assert_eq!(inbox["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(inbox["rows"][0]["verified"], true);
+    assert_eq!(inbox["rows"][0]["joiner_kind"], "user");
+    assert_eq!(inbox["rows"][0]["username"], "countjoiner");
+    assert_eq!(inbox["possibly_truncated"], counted["possibly_truncated"]);
+    f.run(|_, v, _| {
+        assert!(v.store.get(&key).is_ok());
+        Ok(())
+    });
+    // An alias this account does not own is refused before any request.
+    f.run(|s, v, k| {
+        assert!(matches!(
+            s.invitation_action(
+                "joiner",
+                InvitationAction::InboxCount {
+                    team_alias: "project".into()
+                },
+                None,
+                v,
+                k
+            ),
+            Err(Error::InvalidAccount("team belongs to another account"))
+        ));
+        Ok(())
+    });
+}
+
+#[test]
+fn a_hoisted_destination_team_must_be_the_team_the_row_names() {
+    let f = Fixture::start();
+    f.run(|s, v, k| s.create_account("owner", "hoistowner", "laptop", "", "", None, v, k));
+    f.run(|s, v, k| s.create_account("joiner", "hoistjoiner", "laptop", "", "", None, v, k));
+    f.run(|s, v, k| s.create_named_team("owner", "project", "project", v, k));
+    f.run(|s, v, k| s.create_named_team("owner", "other", "other", v, k));
+    let prepared = action(
+        &f,
+        "owner",
+        InvitationAction::Create {
+            team_alias: "project".into(),
+        },
+    );
+    let published = action(
+        &f,
+        "owner",
+        InvitationAction::Attempt {
+            operation_id: operation(&prepared),
+        },
+    );
+    let invite = published["invite"].as_str().unwrap().to_owned();
+    let accepted = action(&f, "joiner", InvitationAction::Accept { invite });
+    action(
+        &f,
+        "joiner",
+        InvitationAction::Attempt {
+            operation_id: operation(&accepted),
+        },
+    );
+    f.run(|s, v, _| {
+        let host = s.pinned_host()?;
+        let account = v.account("owner")?;
+        let credential = FederationCredential::Software(&account.credential);
+        let project = EntityId::from_bytes(v.team("project")?.team_id.clone())?;
+        let other = EntityId::from_bytes(v.team("other")?.team_id.clone())?;
+        let rows = s
+            .client
+            .team_invitation_inbox(&host, credential, &project, None)?;
+        assert_eq!(rows.len(), 1);
+        let user = s
+            .client
+            .authenticate_credential_and_pin(&host, credential)?;
+        let loaded = |team| {
+            s.client.load_and_pin_team_with_credential(
+                &host,
+                credential,
+                &user.verified,
+                &user.puks,
+                team,
+            )
+        };
+        // The destination the caller loaded once is the one every row is
+        // resolved against, so a mismatch is refused rather than resolved
+        // against whatever the caller happened to pass.
+        assert!(matches!(
+            s.client.load_local_invitation_joiner_with_team(
+                &host,
+                credential,
+                &project,
+                &loaded(&other)?,
+                &rows[0],
+            ),
+            Err(foks_client::Error::TeamBinding(
+                "invitation destination team does not match the loaded team"
+            ))
+        ));
+        // Loaded correctly, the hoisted loader resolves the row exactly as
+        // the per-row loader does.
+        let hoisted = s.client.load_local_invitation_joiner_with_team(
+            &host,
+            credential,
+            &project,
+            &loaded(&project)?,
+            &rows[0],
+        )?;
+        let per_row = s
+            .client
+            .load_local_invitation_joiner(&host, credential, &project, &rows[0])?;
+        assert_eq!(hoisted.uid(), per_row.uid());
+        assert_eq!(hoisted.username_utf8(), per_row.username_utf8());
+        Ok(())
+    });
+}

@@ -91,7 +91,8 @@ pub(crate) use operations::validate_inventory_material;
 mod session;
 pub use history::{ChatContent, ChatHistory, ChatMessage};
 pub use inbox::{
-    ChatConversation, ChatInbox, ChatPollResult, ChatPreview, ChatPreviewContent, ChatSyncResult,
+    ChatConversation, ChatInbox, ChatPollResult, ChatPreview, ChatPreviewCache, ChatPreviewContent,
+    ChatPreviewKey, ChatSyncResult, NoChatPreviewCache,
 };
 pub use operations::normalize_chat_name;
 pub use session::{ChatChannel, ChatChannels, ChatSession, ChatTransport};
