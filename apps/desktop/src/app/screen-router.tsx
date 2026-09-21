@@ -2,8 +2,10 @@ import type { Dispatch, ReactNode, SetStateAction } from 'react';
 import type { AgentLifecycle } from '../agent-lifecycle';
 import type { Bridge } from '../bridge';
 import type { Location, LocationStore, NavigateOptions } from '../location';
+import { storeOf } from '../model';
 import type { AgentSnapshot, DeviceLabel } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
+import { markProfileRostersStale } from '../roster-staleness';
 import { ChatTab } from '../screens/chat-tab';
 import { DevicesScreen } from '../screens/devices-screen';
 import { GroupSettingsScreen } from '../screens/groups-screen';
@@ -53,7 +55,7 @@ export function ScreenRouter({
   setRevealRequest: (request: string) => void;
   workflow: WriteWorkflow;
   setWorkflow: Dispatch<SetStateAction<WriteWorkflow>>;
-  refresh: (message: string) => Promise<void>;
+  refresh: (message: string, profile?: string) => Promise<void>;
   refreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>;
   commandError: CommandErrorHandler;
   mutationError: MutationFailureHandler;
@@ -93,8 +95,13 @@ export function ScreenRouter({
       }
       onResume={async (storeId) => {
         try {
+          // Resuming creation moves the team's chain, so its profile reads
+          // the roster again even if the agent's catalog still reports the
+          // sequence this write has just moved.
+          const profile = storeOf(shown, storeId)?.server;
+          if (profile) markProfileRostersStale(profile);
           await bridge.resumeGroupCreation(storeId);
-          await refresh('Team creation resumed');
+          await refresh('Team creation resumed', profile);
         } catch (error) {
           await mutationError(error);
         }

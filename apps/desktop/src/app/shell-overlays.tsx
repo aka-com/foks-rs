@@ -44,7 +44,7 @@ export function useDroppedUpload({
 }: {
   bridge: Bridge;
   shown: AgentSnapshot;
-  refresh: (message: string) => Promise<void>;
+  refresh: (message: string, profile?: string) => Promise<void>;
   mutationError: MutationFailureHandler;
   setWorkflow: Dispatch<SetStateAction<WriteWorkflow>>;
 }) {
@@ -67,6 +67,7 @@ export function useDroppedUpload({
         });
         await refresh(
           `Uploaded ${nameOf(path)}${target ? ` to ${target.name}` : ''}`,
+          target?.server,
         );
       } catch (error) {
         if (normalizeCommandError(error).code === 'already-exists') {
@@ -111,7 +112,7 @@ export function ShellOverlays({
   accessNow: () => number;
   workflow: WriteWorkflow;
   setWorkflow: Dispatch<SetStateAction<WriteWorkflow>>;
-  refresh: (message: string) => Promise<void>;
+  refresh: (message: string, profile?: string) => Promise<void>;
   commandError: CommandErrorHandler;
   mutationError: MutationFailureHandler;
   refreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>;

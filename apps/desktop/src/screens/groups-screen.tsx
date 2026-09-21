@@ -79,6 +79,7 @@ import { GROUP_SETTINGS_TABS } from '../location';
 import type { GroupSettingsTab, Location, NavigateOptions } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { useSheetGuard } from '../navigation-guard';
+import { markProfileRostersStale } from '../roster-staleness';
 import { PageHeader } from '../shell/page-header';
 import { NewChatSheet } from './chat-new';
 import {
@@ -845,12 +846,17 @@ function FederationRemovalSheet({
     try {
       const result = await attemptMutation(
         { kind: 'resumable', operation: 'remove-admission' },
-        () =>
-          bridge.removeFederatedGroup({
+        () => {
+          // Removing an admission rekeys the team, which moves its chain. The
+          // read back must not reuse the roster it holds even if the agent's
+          // catalog has not yet caught up with that sequence.
+          markProfileRostersStale(store.server);
+          return bridge.removeFederatedGroup({
             storeId: store.id,
             remoteHostIdHex: entry.remote_host_id_hex,
             remoteTeamIdHex: entry.remote_team_id_hex,
-          }),
+          });
+        },
         () =>
           onApplied(`${entry.remote_team_alias} removed and team keys rotated`),
       );
@@ -1210,7 +1216,11 @@ export function AbandonGroupSheet({
               setBusy(true);
               void attemptMutation(
                 { kind: 'mutation' },
-                () => bridge.abandonGroupCreation(store.id),
+                () => {
+                  // The team and its roster leave this profile's catalog.
+                  markProfileRostersStale(store.server);
+                  return bridge.abandonGroupCreation(store.id);
+                },
                 onRemoved,
               )
                 .then((result) =>
@@ -1274,7 +1284,15 @@ export function GroupSheet({
   onInvite?: () => void;
   onApplied: (
     message: string,
-    created?: { accountStoreId: StoreRef; teamAlias: string },
+    options?: {
+      created?: { accountStoreId: StoreRef; teamAlias: string };
+      /**
+       * The one profile the read back after this write needs, or absent when
+       * the whole catalog must be read — a federation admission binds a team
+       * on another server, so both profiles move.
+       */
+      profile?: string;
+    },
   ) => Promise<void>;
   onMutationError: MutationFailureHandler;
 }): ReactNode {
@@ -1434,45 +1452,55 @@ export function GroupSheet({
     if (sheet === 'add' && existing) return;
     setBusy(true);
     setRefused('');
-    const complete = async (created?: {
-      accountStoreId: StoreRef;
-      teamAlias: string;
+    const complete = async (options?: {
+      created?: { accountStoreId: StoreRef; teamAlias: string };
+      profile?: string;
     }): Promise<void> => {
       const result = await synchronizeApplied(() =>
-        created
-          ? onApplied(`${title} completed`, created)
-          : onApplied(`${title} completed`),
+        onApplied(`${title} completed`, options),
       );
       if (result.synchronization === 'pending')
         toasts.show(`${title} completed. Refresh pending.`);
       onClose();
     };
     try {
-      if (sheet === 'add')
+      if (sheet === 'add') {
+        // Every branch below moves a roster, so the profile that holds it is
+        // marked before the write: the read back must read the roster again
+        // even where the agent's catalog still reports the chain sequence the
+        // write has just moved. Marked before rather than after, because an
+        // ambiguous refusal can leave the write applied.
+        markProfileRostersStale(store.server);
         await bridge.addGroupMember({
           storeId: store.id,
           username: username.trim(),
           destination: role.role === 'Member' ? { ...role, visibility } : role,
         });
-      else if (
+      } else if (
         sheet === 'demote' &&
         target &&
         canTarget(snapshot, target) &&
         demotion
-      )
+      ) {
+        markProfileRostersStale(store.server);
         await bridge.demoteGroupMember({
           storeId: store.id,
           username: target.username!,
           destination: demotion,
         });
-      else if (sheet === 'remove' && target && canTarget(snapshot, target))
+      } else if (sheet === 'remove' && target && canTarget(snapshot, target)) {
+        markProfileRostersStale(store.server);
         await bridge.removeGroupMember({
           storeId: store.id,
           username: target.username!,
         });
-      else if (sheet === 'admit' && remote) {
+      } else if (sheet === 'admit' && remote) {
         if (admissionReason) throw new Error(admissionReason);
         requireWorkflow(snapshot, 'federate', federationTarget);
+        // Both sides of an admission move: the team admitting and the remote
+        // team it admits, which lives on another server.
+        markProfileRostersStale(store.server);
+        markProfileRostersStale(remote.server);
         await bridge.admitGroup({
           storeId: store.id,
           remoteStoreId: remote.id,
@@ -1487,16 +1515,23 @@ export function GroupSheet({
         );
         if (!account)
           throw new Error('No account store is available for team creation.');
+        markProfileRostersStale(account.server);
         await bridge.createGroup({
           accountStoreId: account.id,
           teamAlias,
           name: createKind === 'named' ? name : '',
           kind: createKind,
         });
-        await complete({ accountStoreId: account.id, teamAlias });
+        await complete({
+          created: { accountStoreId: account.id, teamAlias },
+          profile: account.server,
+        });
         return;
       } else return;
-      await complete();
+      // An admission's other half is a team on another server, so its read
+      // back stays the whole catalog; every other branch changes only the
+      // profile this team is on.
+      await complete(sheet === 'admit' ? undefined : { profile: store.server });
     } catch (error) {
       // The sheet stays open on a refusal and states it where the field is,
       // in the agent's own words, while the shell reconciles as it always has.
@@ -1971,7 +2006,7 @@ export function GroupSettingsScreen({
    * shell records in place of the last rather than behind it.
    */
   onNavigate: (location: Location, options?: NavigateOptions) => void;
-  onApplied: (message: string) => Promise<void>;
+  onApplied: (message: string, profile?: string) => Promise<void>;
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
 }): ReactNode {
@@ -2221,7 +2256,7 @@ export function GroupSettingsScreen({
           setRecoverInvitations(false);
         },
       }}
-      onComplete={() => onApplied('Team requests updated')}
+      onComplete={() => onApplied('Team requests updated', store.server)}
     />
   ) : null;
   return (
@@ -2571,7 +2606,9 @@ export function GroupSettingsScreen({
                     account={store.account}
                     teamAlias={store.alias}
                     requestsOnly
-                    onComplete={() => onApplied('Team requests updated')}
+                    onComplete={() =>
+                      onApplied('Team requests updated', store.server)
+                    }
                   />
                 </div>
               ) : null}
@@ -2623,7 +2660,9 @@ export function GroupSettingsScreen({
                     }
                   : undefined
               }
-              onApplied={onApplied}
+              onApplied={(message, options) =>
+                onApplied(message, options?.profile)
+              }
               onMutationError={onMutationError}
             />
           ) : null}
@@ -2669,7 +2708,7 @@ export function GroupSettingsScreen({
             // The page's own store is gone, so the list it came from is the
             // only place left to stand.
             onNavigate({ kind: 'teams' });
-            await onApplied(`${store.name} removed`);
+            await onApplied(`${store.name} removed`, store.server);
           }}
           onMutationError={onMutationError}
         />

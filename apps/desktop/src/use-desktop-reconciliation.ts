@@ -197,9 +197,12 @@ export function useDesktopReconciliation(
             cancel: () => undefined,
             preemptible: false,
           },
-          // A read back of a write, or a refresh the user asked for, reads
-          // this profile's rosters even when no team chain has moved.
-          context.trigger === 'mutation' || context.trigger === 'manual',
+          // A refresh the user asked for reads this profile's rosters even
+          // when no team chain has moved. A read back of a write does not: a
+          // write to an account store cannot move a team chain, and the
+          // writes that do move one mark the profile stale themselves, which
+          // the projection consumes on the very next read.
+          context.trigger === 'manual',
         );
         if (!context.isCurrent()) {
           settle(profile);

@@ -47,6 +47,7 @@ import type {
 import type { Bridge } from '../bridge';
 import type { Location } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
+import { markProfileRostersStale } from '../roster-staleness';
 import { PageHeader } from '../shell/page-header';
 import { useToast } from '/kit/toasts';
 import { GroupMark } from './group-mark';
@@ -66,7 +67,7 @@ export interface TeamsScreenProps {
   location: Extract<Location, { kind: 'teams' }>;
   scene: string;
   onNavigate: (location: Location) => void;
-  onRefresh: (message: string) => Promise<void>;
+  onRefresh: (message: string, profile?: string) => Promise<void>;
   onRefreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>;
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
@@ -395,9 +396,12 @@ export function TeamsScreen({
   };
 
   const finishSetup = (store: TeamStore): void => {
+    // Resuming creation moves the team's chain, so the read back must read
+    // its roster again rather than reuse the one it holds.
+    markProfileRostersStale(store.server);
     void bridge
       .resumeGroupCreation(store.id)
-      .then(() => onRefresh('Team creation resumed'))
+      .then(() => onRefresh('Team creation resumed', store.server))
       .catch((error: unknown) => onMutationError(error));
   };
 
@@ -653,7 +657,11 @@ export function TeamsScreen({
           onSwitch={(next) => {
             if (next) setSheet({ kind: next, store: sheet.store });
           }}
-          onApplied={async (message, created) => {
+          onApplied={async (message, options) => {
+            // The list navigates to the team a creation just made, which it
+            // can only find in the whole catalog, so this completion keeps
+            // the whole-catalog read rather than the profile read.
+            const created = options?.created;
             const result = await synchronizeApplied(() =>
               onRefreshSnapshot(true),
             );
@@ -697,7 +705,9 @@ export function TeamsScreen({
             title: 'Join a team',
             onClose: () => setJoining(null),
           }}
-          onComplete={() => onRefresh('Team membership refreshed')}
+          onComplete={() =>
+            onRefresh('Team membership refreshed', joining.server)
+          }
         />
       ) : null}
       {abandoning ? (
@@ -707,9 +717,9 @@ export function TeamsScreen({
           store={abandoning}
           onClose={() => setAbandoning(null)}
           onRemoved={async () => {
-            const name = abandoning.name;
+            const { name, server } = abandoning;
             setAbandoning(null);
-            await onRefresh(`${name} removed`);
+            await onRefresh(`${name} removed`, server);
           }}
           onMutationError={onMutationError}
         />

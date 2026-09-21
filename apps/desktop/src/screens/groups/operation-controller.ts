@@ -3,6 +3,7 @@ import type { Bridge, PendingOperation } from '../../bridge';
 import type { TeamStore } from '../../model';
 import type { MutationFailureHandler } from '../../mutation-recovery';
 import { usePendingGroupOperations } from '../../operation-queries';
+import { markProfileRostersStale } from '../../roster-staleness';
 import {
   attemptMutation,
   reportMutationOutcome,
@@ -41,7 +42,7 @@ export function useGroupOperationController({
   bridge: Bridge;
   store: TeamStore | null;
   enabled: boolean;
-  onSnapshotApplied: (message: string) => Promise<void>;
+  onSnapshotApplied: (message: string, profile?: string) => Promise<void>;
   onSnapshotMutationError: MutationFailureHandler;
   /** Reports failure to refresh the catalog after a successful mutation. */
   onRefreshError: (error: unknown) => void;
@@ -55,10 +56,10 @@ export function useGroupOperationController({
     onReadError,
   );
   const onApplied = useCallback(
-    async (message: string): Promise<void> => {
+    async (message: string, profile?: string): Promise<void> => {
       const observed = generation();
       try {
-        await onSnapshotApplied(message);
+        await onSnapshotApplied(message, profile);
       } finally {
         await refresh(observed);
       }
@@ -76,35 +77,60 @@ export function useGroupOperationController({
     },
     [refresh, generation, onSnapshotMutationError],
   );
+  /**
+   * Runs a resumable group write and reads back what it changed.
+   *
+   * `profile` names the one profile the read back needs; left out, the whole
+   * catalog is read, which is what an admission touching a remote team on
+   * another server still needs. Every write here moves the team's roster, so
+   * the profile holding it is marked stale before the write rather than after:
+   * an ambiguous refusal can still leave the write applied, and the mark is
+   * what stops the read back reusing the roster it already holds.
+   */
   const mutate = async (
     action: () => Promise<unknown>,
     message: string,
+    profile?: string,
   ): Promise<void> => {
     const result = await attemptMutation(
       { kind: 'resumable', operation: 'group-membership-or-admission' },
       action,
-      () => onApplied(message),
+      () => onApplied(message, profile),
     );
     await reportMutationOutcome(result, onMutationError, onRefreshError);
   };
   const resumeMembership = (operation: PendingOperation): void => {
     if (!store) return;
     const resume = membershipResume(bridge, store, operation);
-    if (resume) void mutate(resume.run, resume.message);
+    if (resume)
+      void mutate(
+        () => {
+          markProfileRostersStale(store.server);
+          return resume.run();
+        },
+        resume.message,
+        store.server,
+      );
   };
   const resumeCreation = (): void => {
     if (store)
       void mutate(
-        () => bridge.resumeGroupCreation(store.id),
+        () => {
+          markProfileRostersStale(store.server);
+          return bridge.resumeGroupCreation(store.id);
+        },
         'Team creation resumed',
+        store.server,
       );
   };
   const resumeAdmission = (operationId: string): void => {
     if (store)
-      void mutate(
-        () => bridge.rerunGroupAdmission(store.id, operationId),
-        'Team access restored',
-      );
+      // An admission binds a remote team on another server, whose profile this
+      // page does not know, so the read back stays the whole catalog.
+      void mutate(() => {
+        markProfileRostersStale(store.server);
+        return bridge.rerunGroupAdmission(store.id, operationId);
+      }, 'Team access restored');
   };
   return {
     operations,
