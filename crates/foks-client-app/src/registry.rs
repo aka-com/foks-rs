@@ -708,6 +708,7 @@ impl ProfileRegistry {
                 client,
                 adapter_clock: std::sync::Arc::new(crate::SystemAdapterClock),
                 read_caches: crate::ReadCaches::default(),
+                pairing_budget: None,
             };
             let probe = session.probe_and_pin_unchecked()?;
             if expected_host.is_some_and(|host| probe.host_id_hex != hex(host)) {
@@ -1365,6 +1366,11 @@ pub struct ProfileSession {
     /// Empty unless an embedder attached caches for a read operation. See
     /// [`crate::auth_cache`].
     pub(super) read_caches: crate::ReadCaches,
+    /// Total relay wait interactive pairing may spend. Unset means the
+    /// client's own default; an embedder that cancels pairing at a cap of its
+    /// own sets this below that cap so it never cancels a wait the client
+    /// would have kept.
+    pub(super) pairing_budget: Option<Duration>,
 }
 
 impl ProfileSession {
@@ -1379,6 +1385,7 @@ impl ProfileSession {
             client,
             adapter_clock: std::sync::Arc::new(crate::SystemAdapterClock),
             read_caches: crate::ReadCaches::default(),
+            pairing_budget: None,
         })
     }
 
@@ -1409,7 +1416,24 @@ impl ProfileSession {
             client,
             adapter_clock: std::sync::Arc::new(crate::SystemAdapterClock),
             read_caches: crate::ReadCaches::default(),
+            pairing_budget: None,
         })
+    }
+
+    /// Bounds the total relay wait of an interactive pairing operation. The
+    /// budget must be under the caller's own cancellation cap, so a pairing
+    /// the client is still waiting on is never reported as an ambiguous
+    /// deadline error by the caller instead.
+    pub fn with_pairing_budget(mut self, budget: Duration) -> Self {
+        self.pairing_budget = Some(budget);
+        self
+    }
+
+    /// The pairing budget for this session, or the client default when the
+    /// caller stated none.
+    pub fn pairing_budget(&self) -> Duration {
+        self.pairing_budget
+            .unwrap_or(foks_client::DEFAULT_KEX_PAIRING_BUDGET)
     }
 
     /// Attaches read caches. Callers attach them only for operations that do
@@ -1489,6 +1513,7 @@ impl ProfileSession {
             // A related profile is only opened by cross-profile mutations, so
             // it never inherits read caches.
             read_caches: crate::ReadCaches::default(),
+            pairing_budget: self.pairing_budget,
         })
     }
 
@@ -1972,6 +1997,36 @@ mod tests {
         )
         .unwrap()
         .serves_reads_from_cache());
+    }
+
+    #[test]
+    fn a_session_spends_the_default_pairing_budget_until_a_caller_states_its_own() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        registry
+            .add(Profile {
+                name: "local".to_owned(),
+                label: None,
+                probe: "127.0.0.1:1".to_owned(),
+                protocol: ProtocolPolicy::V019,
+                trust: TrustRoot::WebPki,
+            })
+            .unwrap();
+
+        // The CLI states no budget, so pairing keeps its five-minute total.
+        let session = ProfileSession::open(&registry, "local").unwrap();
+        assert_eq!(
+            session.pairing_budget(),
+            foks_client::DEFAULT_KEX_PAIRING_BUDGET
+        );
+        assert_eq!(session.pairing_budget(), Duration::from_secs(5 * 60));
+        // A caller that cancels pairing at a cap of its own states a budget
+        // under that cap instead.
+        let bounded = ProfileSession::open(&registry, "local")
+            .unwrap()
+            .with_pairing_budget(Duration::from_secs(255));
+        assert_eq!(bounded.pairing_budget(), Duration::from_secs(255));
     }
 
     #[test]

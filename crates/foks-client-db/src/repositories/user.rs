@@ -509,4 +509,67 @@ impl HardStateStore {
     pub fn user_for_host(&self, host_id: &[u8], uid: &[u8]) -> Result<Option<StoredUserSnapshot>> {
         load_user_snapshot(&self.connection, host_id, uid)
     }
+
+    /// The generic chain pinned for this user, if one was accepted before.
+    ///
+    /// The row is the tail a later incremental load resumes from, so it is
+    /// keyed by the exact host and uid the caller names: a row written for
+    /// another identity is not reachable through this lookup, and a caller
+    /// that cannot match the returned owner bindings must reload the chain in
+    /// full rather than resume on it.
+    pub fn user_generic_chain(
+        &self,
+        host_id: &[u8],
+        uid: &[u8],
+        chain_type: u64,
+    ) -> Result<Option<StoredUserGenericChain>> {
+        if host_id.len() != 33 || uid.len() != 33 {
+            return Err(Error::InvalidUser("invalid generic-chain lookup"));
+        }
+        let chain_type_column = sqlite_integer("generic-chain type", chain_type)?;
+        let row: Option<StoredGenericChain> = self
+            .connection
+            .query_row(
+                "SELECT seqno, tail_hash, chain_bytes, merkle_epoch, merkle_root_hash
+                 FROM user_generic_chains
+                 WHERE host_id = ?1 AND uid = ?2 AND chain_type = ?3",
+                params![host_id, uid, chain_type_column],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((sequence, tail_hash, chain_bytes, merkle_epoch, merkle_root_hash)) = row else {
+            return Ok(None);
+        };
+        let sequence = stored_unsigned("generic-chain sequence", sequence)?;
+        let tail_hash = tail_hash
+            .map(|hash| {
+                <[u8; 32]>::try_from(hash.as_slice())
+                    .map_err(|_| Error::InvalidUser("stored generic-chain tail hash is invalid"))
+            })
+            .transpose()?;
+        if tail_hash.is_some() != (sequence > 0) {
+            return Err(Error::InvalidUser(
+                "stored generic-chain tail does not match its sequence",
+            ));
+        }
+        Ok(Some(StoredUserGenericChain {
+            host_id: host_id.to_vec(),
+            uid: uid.to_vec(),
+            chain_type,
+            sequence,
+            tail_hash,
+            chain_bytes,
+            merkle_epoch: stored_unsigned("generic-chain Merkle epoch", merkle_epoch)?,
+            merkle_root_hash: <[u8; 32]>::try_from(merkle_root_hash.as_slice())
+                .map_err(|_| Error::InvalidUser("stored generic-chain root hash is invalid"))?,
+        }))
+    }
 }

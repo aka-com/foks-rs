@@ -20,6 +20,8 @@ mod kv_large;
 mod kv_locks;
 #[path = "conformance/kv_small.rs"]
 mod kv_small;
+#[path = "conformance/membership_increment.rs"]
+mod membership_increment;
 #[path = "conformance/passphrases.rs"]
 mod passphrases;
 #[path = "conformance/peripheral.rs"]

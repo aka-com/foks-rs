@@ -337,30 +337,12 @@ impl FoksClient {
             return Ok(verified.link_hashes.contains(&hash));
         }
         let (seed, certs) = credential.transport();
-        let response = self.call_with_material(
+        let verified = self.authenticated_membership_chain(
             home,
-            &home.user,
-            &foks_rpc::encode_load_generic_chain_request(
-                credential.uid(),
-                foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP,
-                1,
-            )?,
+            credential.uid(),
             seed,
             certs,
-        )?;
-        let verified = super::verify_user_generic_chain(
-            &response,
-            credential.uid(),
-            home.host_id(),
             &user.verified,
-            foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP,
-        )?;
-        self.verify_generic_chain_roots(home, &user.verified.tree_root(), &verified)?;
-        self.pin_user_generic_chain(
-            home,
-            &user.verified,
-            foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP,
-            &verified,
         )?;
         let hash =
             foks_crypto::prefixed_hash(foks_proto::LINK_OUTER_TYPE_ID, &link.link.encoded()?);

@@ -71,6 +71,12 @@ const MAXIMUM_CONCURRENT_READS: usize = 4;
 const MAXIMUM_CONCURRENT_CHAT_POLLS: usize = 32;
 const CHAT_POLL_TIMEOUT: Duration = Duration::from_secs(60);
 const DEVICE_PAIRING_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+/// Work an interactive pairing still has to do after its last relay receive:
+/// the authenticated chain load, the identity mutation and the wait for the
+/// user chain to carry the new device. Reserved out of the pairing cap so the
+/// client's relay waits end before the agent cancels the operation, which
+/// would report a pairing that is merely slow as an ambiguous deadline error.
+const PAIRING_COMPLETION_MARGIN: Duration = Duration::from_secs(45);
 // Byte vectors are JSON integer arrays on local protocol v2. Keep enough
 // headroom for their worst-case textual expansion inside the 1 MiB frame.
 const MAXIMUM_LOCAL_KV_CHUNK_BYTES: usize = 128 * 1024;
@@ -927,6 +933,16 @@ async fn handle_connection(
         }
     }
     Ok(())
+}
+
+/// The relay budget a pairing operation may spend under `operation_timeout`.
+fn pairing_relay_budget(operation_timeout: Duration) -> Duration {
+    match operation_timeout.checked_sub(PAIRING_COMPLETION_MARGIN) {
+        Some(budget) if !budget.is_zero() => budget,
+        // A cap at or below the margin leaves nothing to reserve. Halving it
+        // still ends the relay waits before the cap does.
+        _ => operation_timeout / 2,
+    }
 }
 
 enum UploadMessage {
@@ -3532,7 +3548,8 @@ fn dispatch_result_inner(
             account_alias,
         } => {
             let session =
-                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?
+                    .with_pairing_budget(pairing_relay_budget(timeout));
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 Ok(serde_json::to_value(session.finish_owner_device_pairing(
                     &account_alias,
@@ -3549,7 +3566,8 @@ fn dispatch_result_inner(
             phrase,
         } => {
             let session =
-                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?
+                    .with_pairing_budget(pairing_relay_budget(timeout));
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(session.accept_owner_device_pairing(
                     KexAcceptanceInput {
@@ -3571,7 +3589,8 @@ fn dispatch_result_inner(
             phrase,
         } => {
             let session =
-                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?
+                    .with_pairing_budget(pairing_relay_budget(timeout));
             with_vault(state_dir, &session, |session, vault| {
                 let candidate = go_candidate_for_session(&candidate_id, session)?;
                 Ok(serde_json::to_value(
@@ -3594,7 +3613,8 @@ fn dispatch_result_inner(
             target_alias,
         } => {
             let session =
-                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?
+                    .with_pairing_budget(pairing_relay_budget(timeout));
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(
                     session.resume_owner_device_pairing_acceptance(&target_alias, vault)?,
@@ -3607,7 +3627,8 @@ fn dispatch_result_inner(
             target_alias,
         } => {
             let session =
-                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?
+                    .with_pairing_budget(pairing_relay_budget(timeout));
             with_vault(state_dir, &session, |session, vault| {
                 Ok(serde_json::to_value(
                     session.resume_owner_device_pairing_acceptance_for_user(
@@ -5331,6 +5352,45 @@ impl Drop for SocketGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pairing_relay_budget_ends_before_the_agent_cancels_the_operation() {
+        let budget = pairing_relay_budget(DEVICE_PAIRING_TIMEOUT);
+        assert!(budget < DEVICE_PAIRING_TIMEOUT);
+        assert_eq!(budget + PAIRING_COMPLETION_MARGIN, DEVICE_PAIRING_TIMEOUT);
+        // A peer that answers just inside the budget still leaves the agent
+        // the margin it needs to finish, so the caller sees the pairing's own
+        // result instead of the cancellation's deadline error.
+        assert!(budget > DEVICE_PAIRING_TIMEOUT / 2);
+    }
+
+    #[test]
+    fn pairing_relay_budget_stays_inside_a_cap_shorter_than_the_margin() {
+        for cap in [
+            Duration::from_secs(1),
+            PAIRING_COMPLETION_MARGIN,
+            PAIRING_COMPLETION_MARGIN + Duration::from_secs(1),
+            Duration::from_secs(60 * 60),
+        ] {
+            let budget = pairing_relay_budget(cap);
+            assert!(budget < cap, "budget {budget:?} did not fit cap {cap:?}");
+            assert!(!budget.is_zero(), "cap {cap:?} left no relay budget");
+        }
+    }
+
+    #[test]
+    fn every_pairing_wait_operation_runs_under_the_pairing_cap() {
+        // The relay budget is derived from the operation timeout the agent
+        // applies, so the two must be driven by the same classification.
+        let operation = foks_agent_proto::Operation::FinishDevicePairing {
+            profile: "local".to_owned(),
+            account_alias: "owner".to_owned(),
+        };
+        assert!(operation.is_device_pairing_wait());
+        let timeout = Duration::from_secs(30).max(DEVICE_PAIRING_TIMEOUT);
+        assert_eq!(timeout, DEVICE_PAIRING_TIMEOUT);
+        assert!(pairing_relay_budget(timeout) < timeout);
+    }
 
     #[test]
     fn unsupported_soft_schema_recovery_survives_agent_error_mapping() {

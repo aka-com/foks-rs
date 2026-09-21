@@ -106,7 +106,7 @@ pub enum Error {
     Hostname,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct StatusDetail(Option<String>);
 
 /// A plain phrase for the FOKS status codes a person can provoke, so the

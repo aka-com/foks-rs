@@ -116,6 +116,22 @@ pub struct StoredUserSnapshot {
     pub shared_keys: Vec<foks_verify::VerifiedUserSharedKey>,
 }
 
+/// A generic chain already accepted for this user, as the verified tail a
+/// later incremental load resumes from.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredUserGenericChain {
+    pub host_id: Vec<u8>,
+    pub uid: Vec<u8>,
+    pub chain_type: u64,
+    /// Number of links accepted, so the next link is `sequence + 1`.
+    pub sequence: u64,
+    /// Hash of link `sequence`; absent only for an empty chain.
+    pub tail_hash: Option<[u8; 32]>,
+    pub chain_bytes: Vec<u8>,
+    pub merkle_epoch: u64,
+    pub merkle_root_hash: [u8; 32],
+}
+
 pub struct VerifiedUserGenericChainSnapshot<'a> {
     pub host_id: &'a [u8],
     pub uid: &'a [u8],
@@ -3653,6 +3669,101 @@ mod tests {
             }),
             Err(Error::UserGenericFork { seqno: 1, .. })
         ));
+    }
+
+    #[test]
+    fn pinned_user_generic_chain_round_trips_and_is_keyed_by_owner_and_type() {
+        let (_directory, mut store) = store();
+        store.accept_host_parts(snapshot().parts()).unwrap();
+        let user = user_snapshot();
+        store.accept_user_parts(user.parts()).unwrap();
+        let chain_bytes = encode(&Value::Array(vec![
+            Value::Unsigned(foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP),
+            Value::Unsigned(0x41),
+            Value::Unsigned(0x42),
+        ]))
+        .unwrap();
+        assert_eq!(
+            store
+                .user_generic_chain(
+                    &user.host_id,
+                    &user.uid,
+                    foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP
+                )
+                .unwrap(),
+            None
+        );
+        store
+            .accept_verified_user_generic_chain(&VerifiedUserGenericChainSnapshot {
+                host_id: &user.host_id,
+                uid: &user.uid,
+                chain_type: foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP,
+                sequence: 2,
+                tail_hash: Some([0x51; 32]),
+                chain_bytes: &chain_bytes,
+                merkle_epoch: user.merkle_epoch,
+                merkle_root_hash: user.merkle_root_hash,
+            })
+            .unwrap();
+        let pinned = store
+            .user_generic_chain(
+                &user.host_id,
+                &user.uid,
+                foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP,
+            )
+            .unwrap()
+            .expect("accepted membership chain is pinned");
+        assert_eq!(pinned.sequence, 2);
+        assert_eq!(pinned.tail_hash, Some([0x51; 32]));
+        assert_eq!(pinned.chain_bytes, chain_bytes);
+        assert_eq!(pinned.merkle_epoch, user.merkle_epoch);
+        assert_eq!(pinned.merkle_root_hash, user.merkle_root_hash);
+        assert_eq!(pinned.uid, user.uid);
+        assert_eq!(pinned.host_id, user.host_id);
+
+        // A membership pin is never returned for the settings chain, for
+        // another uid, or for another host.
+        assert_eq!(
+            store
+                .user_generic_chain(
+                    &user.host_id,
+                    &user.uid,
+                    foks_proto::CHAIN_TYPE_USER_SETTINGS
+                )
+                .unwrap(),
+            None
+        );
+        let mut other_uid = user.uid.clone();
+        other_uid[32] ^= 0xff;
+        assert_eq!(
+            store
+                .user_generic_chain(
+                    &user.host_id,
+                    &other_uid,
+                    foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP
+                )
+                .unwrap(),
+            None
+        );
+        let mut other_host = user.host_id.clone();
+        other_host[32] ^= 0xff;
+        assert_eq!(
+            store
+                .user_generic_chain(
+                    &other_host,
+                    &user.uid,
+                    foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP
+                )
+                .unwrap(),
+            None
+        );
+        assert!(store
+            .user_generic_chain(
+                &[0x01; 8],
+                &user.uid,
+                foks_proto::CHAIN_TYPE_TEAM_MEMBERSHIP
+            )
+            .is_err());
     }
 
     #[test]

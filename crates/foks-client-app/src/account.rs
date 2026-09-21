@@ -610,11 +610,12 @@ impl CheckedProfileSession<'_> {
             &self.paths.protected_mutations,
             derive_mutation_key(master_key),
         )?;
-        let report = self.client.finish_kex_provisioning(
+        let report = self.client.finish_kex_provisioning_within(
             &host,
             &account.credential,
             &offer,
             &mut mutations,
+            self.pairing_budget(),
         )?;
         if let Some(operation_id) = report.operation_id {
             MutationCoordinator::new(&self.paths.hard_database, &mut mutations)
@@ -743,13 +744,14 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
     ) -> Result<DeviceProvisionReport> {
         let host = self.pinned_host()?;
-        let provisioned = self.client.accept_kex_provisioning_for_user(
+        let provisioned = self.client.accept_kex_provisioning_for_user_within(
             &host,
             &pending.phrase,
             &pending.device_name,
             pending.serial,
             SecretSeed::new(pending.device_seed),
             expected_user,
+            self.pairing_budget(),
         )?;
         if expected_user.is_some_and(|user| provisioned.credential.uid.as_bytes() != user) {
             return Err(Error::InvalidAccount(

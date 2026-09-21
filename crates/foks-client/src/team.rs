@@ -206,7 +206,7 @@ struct HistoricalMembershipSigner {
     bookends: UserDeviceSigningBookends,
 }
 
-struct VerifiedUserGenericChain {
+pub(super) struct VerifiedUserGenericChain {
     tail: MembershipChainTail,
     payloads: Vec<GenericLinkPayload>,
     link_hashes: Vec<[u8; 32]>,
@@ -560,22 +560,8 @@ impl FoksClient {
                 "membership-chain user does not match the transport principal",
             ));
         }
-        let response = self.call_with_material(
-            host,
-            &host.user,
-            &encode_load_generic_chain_request(uid, CHAIN_TYPE_TEAM_MEMBERSHIP, 1)?,
-            auth_seed,
-            certificate_chain,
-        )?;
-        let verified = verify_user_generic_chain(
-            &response,
-            uid,
-            host.host_id(),
-            user,
-            CHAIN_TYPE_TEAM_MEMBERSHIP,
-        )?;
-        self.verify_generic_chain_roots(host, &user.tree_root(), &verified)?;
-        self.pin_user_generic_chain(host, user, CHAIN_TYPE_TEAM_MEMBERSHIP, &verified)?;
+        let verified =
+            self.authenticated_membership_chain(host, uid, auth_seed, certificate_chain, user)?;
         let mut projection = membership_projection(uid, host.host_id(), &verified)?;
         let server_trust = foks_proto::decode_local_team_list(&self.call_with_material(
             host,
@@ -1127,19 +1113,88 @@ impl FoksClient {
         certificate_chain: &[Vec<u8>],
         user: &VerifiedUserState,
     ) -> Result<MembershipChainTail> {
+        let verified =
+            self.authenticated_membership_chain(host, uid, auth_seed, certificate_chain, user)?;
+        Ok(verified.tail)
+    }
+
+    /// Loads and verifies a user's team-membership chain, resuming from the
+    /// pinned tail when one replays.
+    ///
+    /// Any failure the resumed load can be blamed for — a tail the server's
+    /// chain no longer contains, a hash discontinuity, missing evidence, or a
+    /// server chain shorter than the pin — repeats the load in full from the
+    /// eldest link. The full load consults no pinned state, so a stale or
+    /// forged pin cannot influence what it accepts; the pin is rewritten only
+    /// after verification succeeds.
+    pub(super) fn authenticated_membership_chain(
+        &self,
+        host: &PinnedHost,
+        uid: &EntityId,
+        auth_seed: &SecretSeed,
+        certificate_chain: &[Vec<u8>],
+        user: &VerifiedUserState,
+    ) -> Result<VerifiedUserGenericChain> {
+        let prior = self.pinned_membership_chain(host, uid, user)?;
+        let verified = match prior {
+            Some(prior) => match self.load_and_verify_membership_chain(
+                host,
+                uid,
+                auth_seed,
+                certificate_chain,
+                user,
+                Some(&prior),
+            ) {
+                Ok(verified) => verified,
+                Err(error) if generic_chain_increment_is_unusable(&error) => self
+                    .load_and_verify_membership_chain(
+                        host,
+                        uid,
+                        auth_seed,
+                        certificate_chain,
+                        user,
+                        None,
+                    )?,
+                Err(error) => return Err(error),
+            },
+            None => self.load_and_verify_membership_chain(
+                host,
+                uid,
+                auth_seed,
+                certificate_chain,
+                user,
+                None,
+            )?,
+        };
+        self.verify_generic_chain_roots(host, &user.tree_root(), &verified)?;
+        self.pin_user_generic_chain(host, user, CHAIN_TYPE_TEAM_MEMBERSHIP, &verified)?;
+        Ok(verified)
+    }
+
+    fn load_and_verify_membership_chain(
+        &self,
+        host: &PinnedHost,
+        uid: &EntityId,
+        auth_seed: &SecretSeed,
+        certificate_chain: &[Vec<u8>],
+        user: &VerifiedUserState,
+        prior: Option<&PinnedGenericChain>,
+    ) -> Result<VerifiedUserGenericChain> {
+        let start = generic_chain_start(prior)?;
         let response = self.call_with_material(
             host,
             &host.user,
-            &encode_load_generic_chain_request(uid, CHAIN_TYPE_TEAM_MEMBERSHIP, 1)?,
+            &encode_load_generic_chain_request(uid, CHAIN_TYPE_TEAM_MEMBERSHIP, start)?,
             auth_seed,
             certificate_chain,
         )?;
-        let verified = verify_user_generic_chain(
+        let verified = verify_user_generic_chain_from(
             &response,
             uid,
             host.host_id(),
             user,
             CHAIN_TYPE_TEAM_MEMBERSHIP,
+            prior,
         )?;
         if verified
             .payloads
@@ -1150,9 +1205,36 @@ impl FoksClient {
                 "membership chain contains a settings payload",
             ));
         }
-        self.verify_generic_chain_roots(host, &user.tree_root(), &verified)?;
-        self.pin_user_generic_chain(host, user, CHAIN_TYPE_TEAM_MEMBERSHIP, &verified)?;
-        Ok(verified.tail)
+        Ok(verified)
+    }
+
+    /// The pinned membership tail, or nothing when no row replays into one.
+    ///
+    /// A row that cannot be restored is not an error: the caller simply loads
+    /// the chain in full instead of resuming on state it cannot trust.
+    fn pinned_membership_chain(
+        &self,
+        host: &PinnedHost,
+        uid: &EntityId,
+        user: &VerifiedUserState,
+    ) -> Result<Option<PinnedGenericChain>> {
+        if user.uid() != uid || user.host() != host.host_id() {
+            return Err(Error::UserBinding(
+                "membership-chain user does not match its authenticated owner",
+            ));
+        }
+        let Some(stored) = HardStateStore::open(&host.database_path)?.user_generic_chain(
+            host.host_id().as_bytes(),
+            uid.as_bytes(),
+            CHAIN_TYPE_TEAM_MEMBERSHIP,
+        )?
+        else {
+            return Ok(None);
+        };
+        Ok(
+            restore_pinned_generic_chain(&stored, uid, host.host_id(), CHAIN_TYPE_TEAM_MEMBERSHIP)
+                .unwrap_or(None),
+        )
     }
 
     fn pin_user_generic_chain(
@@ -1349,6 +1431,162 @@ impl GenericChainOwner<'_> {
     }
 }
 
+/// A generic chain already verified and pinned in hard state, restored as the
+/// head a later load resumes from.
+///
+/// Only the links' own transcript is restored here. Their Merkle paths and
+/// cited roots are not re-checked: they were verified before the row was
+/// written, exactly as an accepted user chain's were.
+struct PinnedGenericChain {
+    /// Number of pinned links, so the next link is `sequence + 1`.
+    sequence: u64,
+    tail_hash: [u8; 32],
+    /// The tail link's disclosure commitment for the next tree location. A
+    /// resumed response must open it with the location it starts at.
+    next_location_commitment: [u8; 32],
+    link_values: Vec<foks_snowpack::Value>,
+    link_hashes: Vec<[u8; 32]>,
+    payloads: Vec<GenericLinkPayload>,
+}
+
+/// The sequence number a generic-chain load starts at, mirroring
+/// [`crate::auth::user_chain_cursor`]: one past the pinned tail, or the eldest
+/// link when nothing is pinned.
+fn generic_chain_start(prior: Option<&PinnedGenericChain>) -> Result<u64> {
+    match prior {
+        Some(prior) => prior
+            .sequence
+            .checked_add(1)
+            .ok_or(Error::TeamBinding("membership chain sequence overflow")),
+        None => Ok(1),
+    }
+}
+
+fn location_commitment(location: &[u8; 32]) -> Result<[u8; 32]> {
+    let wire = foks_snowpack::encode(&foks_snowpack::Value::Binary(location.to_vec()))?;
+    Ok(foks_crypto::prefixed_hash_signable(
+        TREE_LOCATION_TYPE_ID,
+        &wire,
+    )?)
+}
+
+/// Restores the pinned tail of a team-membership chain.
+///
+/// The stored transcript is re-parsed and re-checked for its own continuity,
+/// owner binding, payload type and link signatures, so a row that does not
+/// replay cannot serve as a resume point. Settings chains are never resumed:
+/// their verification carries passphrase state across links that this tail
+/// does not record.
+fn restore_pinned_generic_chain(
+    stored: &foks_client_db::StoredUserGenericChain,
+    owner_entity: &EntityId,
+    owner_host: &EntityId,
+    chain_type: u64,
+) -> Result<Option<PinnedGenericChain>> {
+    if stored.chain_type != chain_type
+        || chain_type != CHAIN_TYPE_TEAM_MEMBERSHIP
+        || stored.uid != owner_entity.as_bytes()
+        || stored.host_id != owner_host.as_bytes()
+    {
+        return Ok(None);
+    }
+    let (Some(tail_hash), true) = (stored.tail_hash, stored.sequence > 0) else {
+        // An empty pinned chain discloses no starting location, so there is
+        // nothing to resume from.
+        return Ok(None);
+    };
+    let foks_snowpack::Value::Array(values) = foks_snowpack::decode(&stored.chain_bytes)? else {
+        return Err(Error::TeamBinding("pinned generic chain is not an array"));
+    };
+    let Some((foks_snowpack::Value::Unsigned(encoded_type), link_values)) = values.split_first()
+    else {
+        return Err(Error::TeamBinding("pinned generic chain omitted its type"));
+    };
+    let pinned_links = u64::try_from(link_values.len())
+        .map_err(|_| Error::TeamBinding("pinned generic chain length overflow"))?;
+    if *encoded_type != chain_type || pinned_links != stored.sequence {
+        return Err(Error::TeamBinding(
+            "pinned generic chain does not match its sequence",
+        ));
+    }
+    let mut previous = None;
+    let mut link_hashes = Vec::with_capacity(link_values.len());
+    let mut payloads = Vec::with_capacity(link_values.len());
+    let mut next_location_commitment = [0_u8; 32];
+    for (index, value) in link_values.iter().enumerate() {
+        let exact = foks_snowpack::encode(value)?;
+        let link = UserLink::decode(&exact)?;
+        let decoded = link.decode_generic()?;
+        let sequence = u64::try_from(index)
+            .ok()
+            .and_then(|value| value.checked_add(1))
+            .ok_or(Error::TeamBinding("pinned chain sequence overflow"))?;
+        if decoded.entity != *owner_entity
+            || decoded.host != *owner_host
+            || decoded.sequence != sequence
+            || decoded.previous != previous
+            || !matches!(decoded.payload, GenericLinkPayload::TeamMembership(_))
+            || link.signatures().len() != 1
+            || foks_crypto::verify_typed(
+                &decoded.signer,
+                &link.signatures()[0],
+                LINK_OUTER_V1_TYPE_ID,
+                &link.signing_bytes(0)?,
+            )
+            .is_err()
+        {
+            return Err(Error::TeamBinding(
+                "pinned generic chain does not replay as a continuous transcript",
+            ));
+        }
+        let link_hash = foks_crypto::prefixed_hash_signable(LINK_OUTER_TYPE_ID, &exact)?;
+        next_location_commitment = decoded.next_location_commitment;
+        previous = Some(link_hash);
+        link_hashes.push(link_hash);
+        payloads.push(decoded.payload);
+    }
+    if previous != Some(tail_hash) {
+        return Err(Error::TeamBinding(
+            "pinned generic chain does not end at its recorded tail",
+        ));
+    }
+    Ok(Some(PinnedGenericChain {
+        sequence: stored.sequence,
+        tail_hash,
+        next_location_commitment,
+        link_values: link_values.to_vec(),
+        link_hashes,
+        payloads,
+    }))
+}
+
+/// Whether a resumed load failed in a way a full reload from the eldest link
+/// recovers from.
+///
+/// Continuity and evidence failures do: the pinned tail no longer describes
+/// the server's chain, or the server refused the resumed start because its
+/// chain is shorter than the pin. Transport and authorization failures do not,
+/// and a Merkle root race is left to the caller's chain-load retry rather than
+/// being turned into a full reload.
+fn generic_chain_increment_is_unusable(error: &Error) -> bool {
+    if crate::auth::retryable_chain_load_error(error) {
+        return false;
+    }
+    match error {
+        Error::TeamBinding(_)
+        | Error::UserBinding(_)
+        | Error::Protocol(_)
+        | Error::Snowpack(_)
+        | Error::Crypto(_)
+        | Error::Verify(_)
+        | Error::Database(_) => true,
+        Error::Rpc(foks_rpc::Error::RemoteStatus { code, .. }) => {
+            *code == foks_rpc::STATUS_BAD_ARGS_ERROR
+        }
+        _ => false,
+    }
+}
+
 fn verify_user_generic_chain(
     response: &[u8],
     uid: &EntityId,
@@ -1356,12 +1594,23 @@ fn verify_user_generic_chain(
     user: &VerifiedUserState,
     chain_type: u64,
 ) -> Result<VerifiedUserGenericChain> {
+    verify_user_generic_chain_from(response, uid, host, user, chain_type, None)
+}
+
+fn verify_user_generic_chain_from(
+    response: &[u8],
+    uid: &EntityId,
+    host: &EntityId,
+    user: &VerifiedUserState,
+    chain_type: u64,
+    prior: Option<&PinnedGenericChain>,
+) -> Result<VerifiedUserGenericChain> {
     if user.uid() != uid || user.host() != host {
         return Err(Error::UserBinding(
             "generic-chain user does not match its authenticated owner",
         ));
     }
-    verify_generic_chain(response, GenericChainOwner::User(user), chain_type)
+    verify_generic_chain(response, GenericChainOwner::User(user), chain_type, prior)
 }
 
 fn verify_team_generic_chain(
@@ -1369,24 +1618,48 @@ fn verify_team_generic_chain(
     team: &VerifiedTeamState,
     chain_type: u64,
 ) -> Result<VerifiedUserGenericChain> {
-    verify_generic_chain(response, GenericChainOwner::Team(team), chain_type)
+    verify_generic_chain(response, GenericChainOwner::Team(team), chain_type, None)
 }
 
+/// Verifies a generic chain response, either complete from its eldest link or
+/// as the increment that follows `prior`.
+///
+/// An increment is verified exactly as the same links would be inside a full
+/// response: only the chain's own head is taken from `prior`, so the resulting
+/// payloads, link hashes and persisted transcript are identical to a full
+/// load's. `cited_roots` and `historical_signers` describe the links this
+/// response carried, since the roots and signing bookends of the links `prior`
+/// already covers were authenticated before that tail was pinned.
 fn verify_generic_chain(
     response: &[u8],
     owner: GenericChainOwner<'_>,
     chain_type: u64,
+    prior: Option<&PinnedGenericChain>,
 ) -> Result<VerifiedUserGenericChain> {
     let chain = GenericChain::decode(response)?;
-    if chain.locations.len() != chain.links.len()
+    // A resumed response leads with the location of its first link, which the
+    // pinned tail committed to; a complete response derives that location from
+    // the disclosed seed instead.
+    let location_offset = usize::from(prior.is_some());
+    if chain.locations.len() != chain.links.len().saturating_add(location_offset)
         || chain.merkle.paths().len() != chain.links.len().saturating_add(1)
     {
         return Err(Error::TeamBinding(
             "generic chain proof and location counts are invalid",
         ));
     }
-    let mut persisted_links = Vec::with_capacity(chain.links.len().saturating_add(1));
+    let prior_links = prior
+        .map(|prior| prior.link_values.as_slice())
+        .unwrap_or(&[]);
+    let mut persisted_links = Vec::with_capacity(
+        chain
+            .links
+            .len()
+            .saturating_add(prior_links.len())
+            .saturating_add(1),
+    );
     persisted_links.push(foks_snowpack::Value::Unsigned(chain_type));
+    persisted_links.extend(prior_links.iter().cloned());
     persisted_links.extend(
         chain
             .links
@@ -1395,9 +1668,6 @@ fn verify_generic_chain(
             .collect::<Result<Vec<_>>>()?,
     );
     let chain_bytes = foks_snowpack::encode(&foks_snowpack::Value::Array(persisted_links))?;
-    let seed = chain.location_seed.ok_or(Error::TeamBinding(
-        "membership chain omitted its location seed",
-    ))?;
     let root_bytes = chain.merkle.encoded_root()?;
     let response_root = foks_proto::TreeRoot {
         epoch: chain.merkle.root().epoch,
@@ -1406,32 +1676,55 @@ fn verify_generic_chain(
     if response_root != owner.tree_root() {
         return Err(Error::GenericChainRootChanged);
     }
-    let seed_wire = foks_snowpack::encode(&foks_snowpack::Value::Binary(seed.to_vec()))?;
-    let seed_commitment = foks_crypto::prefixed_hash_signable(TREE_LOCATION_TYPE_ID, &seed_wire)?;
-    if owner.subchain_location_commitment()? != seed_commitment {
-        return Err(Error::TeamBinding(
-            "membership chain seed is not committed by its owner eldest",
-        ));
-    }
     let owner_entity = owner.entity();
     let owner_host = owner.host();
-    let mut location = foks_crypto::subchain_tree_location(&seed, chain_type)?;
-    let mut previous = None;
+    let mut location = match prior {
+        // Go's loader resumes on the pinned tail's location commitment and
+        // ignores the seed, which a resumed response need not carry.
+        Some(prior) => {
+            let start = *chain.locations.first().ok_or(Error::TeamBinding(
+                "resumed generic chain omitted its start",
+            ))?;
+            if location_commitment(&start)? != prior.next_location_commitment {
+                return Err(Error::TeamBinding(
+                    "resumed generic chain starts at an undisclosed location",
+                ));
+            }
+            start
+        }
+        None => {
+            let seed = chain.location_seed.ok_or(Error::TeamBinding(
+                "membership chain omitted its location seed",
+            ))?;
+            if owner.subchain_location_commitment()? != location_commitment(&seed)? {
+                return Err(Error::TeamBinding(
+                    "membership chain seed is not committed by its owner eldest",
+                ));
+            }
+            foks_crypto::subchain_tree_location(&seed, chain_type)?
+        }
+    };
+    let start_sequence = generic_chain_start(prior)?;
+    let mut previous = prior.map(|prior| prior.tail_hash);
     let mut historical_signers = Vec::new();
-    let mut payloads = Vec::with_capacity(chain.links.len());
-    let mut link_hashes = Vec::with_capacity(chain.links.len());
+    let mut payloads = prior
+        .map(|prior| prior.payloads.clone())
+        .unwrap_or_else(|| Vec::with_capacity(chain.links.len()));
+    let mut link_hashes = prior
+        .map(|prior| prior.link_hashes.clone())
+        .unwrap_or_else(|| Vec::with_capacity(chain.links.len()));
     let mut cited_roots = Vec::with_capacity(chain.links.len());
     let mut previous_settings = None::<PassphraseInfo>;
     for (index, ((link, next_location), path)) in chain
         .links
         .iter()
-        .zip(&chain.locations)
+        .zip(&chain.locations[location_offset..])
         .zip(&chain.merkle.paths()[..chain.links.len()])
         .enumerate()
     {
         let sequence = u64::try_from(index)
             .ok()
-            .and_then(|value| value.checked_add(1))
+            .and_then(|value| value.checked_add(start_sequence))
             .ok_or(Error::TeamBinding("membership chain sequence overflow"))?;
         let decoded = link.decode_generic()?;
         if decoded.entity != *owner_entity
@@ -1461,11 +1754,7 @@ fn verify_generic_chain(
                 "generic chain continuity, payload, or signer is invalid",
             ));
         }
-        let next_wire =
-            foks_snowpack::encode(&foks_snowpack::Value::Binary(next_location.to_vec()))?;
-        if foks_crypto::prefixed_hash_signable(TREE_LOCATION_TYPE_ID, &next_wire)?
-            != decoded.next_location_commitment
-        {
+        if location_commitment(next_location)? != decoded.next_location_commitment {
             return Err(Error::TeamBinding(
                 "generic chain location disclosure is invalid",
             ));
@@ -1512,7 +1801,7 @@ fn verify_generic_chain(
     }
     let sequence = u64::try_from(chain.links.len())
         .ok()
-        .and_then(|value| value.checked_add(1))
+        .and_then(|value| value.checked_add(start_sequence))
         .ok_or(Error::TeamBinding("membership chain sequence overflow"))?;
     let key = foks_merkle_store::chain_key(chain_type, owner_entity, sequence, Some(&location))
         .map_err(|_| Error::TeamBinding("generic bookend key is invalid"))?;
@@ -3628,4 +3917,238 @@ pub(crate) fn validate_inventory_request(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod pinned_generic_chain_tests {
+    use super::{
+        generic_chain_increment_is_unusable, location_commitment, restore_pinned_generic_chain,
+        Error,
+    };
+    use foks_client_db::StoredUserGenericChain;
+    use foks_proto::{
+        EntityId, GenericLinkPayload, UserLink, CHAIN_TYPE_TEAM_MEMBERSHIP,
+        CHAIN_TYPE_USER_SETTINGS, LINK_OUTER_TYPE_ID,
+    };
+    use foks_snowpack::{decode, encode, Value};
+
+    const MUTATION_DIR: &str = "../foks-snowpack/tests/fixtures/foks-v0.1.9/user-mutations";
+
+    fn fixture(name: &str) -> Vec<u8> {
+        std::fs::read(format!("{MUTATION_DIR}/{name}")).unwrap()
+    }
+
+    fn membership_link() -> UserLink {
+        UserLink::decode(&fixture("named-membership-link.snowp")).unwrap()
+    }
+
+    fn pinned_transcript(link: &UserLink) -> Vec<u8> {
+        encode(&Value::Array(vec![
+            Value::Unsigned(CHAIN_TYPE_TEAM_MEMBERSHIP),
+            decode(&link.encoded().unwrap()).unwrap(),
+        ]))
+        .unwrap()
+    }
+
+    fn stored(link: &UserLink, owner: &EntityId, host: &EntityId) -> StoredUserGenericChain {
+        StoredUserGenericChain {
+            host_id: host.as_bytes().to_vec(),
+            uid: owner.as_bytes().to_vec(),
+            chain_type: CHAIN_TYPE_TEAM_MEMBERSHIP,
+            sequence: 1,
+            tail_hash: Some(
+                foks_crypto::prefixed_hash_signable(LINK_OUTER_TYPE_ID, &link.encoded().unwrap())
+                    .unwrap(),
+            ),
+            chain_bytes: pinned_transcript(link),
+            merkle_epoch: 7,
+            merkle_root_hash: [0x31; 32],
+        }
+    }
+
+    #[test]
+    fn pinned_membership_tail_restores_its_transcript_and_location_commitment() {
+        let link = membership_link();
+        let decoded = link.decode_generic().unwrap();
+        let row = stored(&link, &decoded.entity, &decoded.host);
+        let restored = restore_pinned_generic_chain(
+            &row,
+            &decoded.entity,
+            &decoded.host,
+            CHAIN_TYPE_TEAM_MEMBERSHIP,
+        )
+        .unwrap()
+        .expect("a pinned membership tail restores");
+        assert_eq!(restored.sequence, 1);
+        assert_eq!(Some(restored.tail_hash), row.tail_hash);
+        assert_eq!(restored.link_hashes, vec![restored.tail_hash]);
+        assert_eq!(restored.payloads.len(), 1);
+        assert!(matches!(
+            restored.payloads[0],
+            GenericLinkPayload::TeamMembership(_)
+        ));
+        // The disclosed next location of the fixture opens the restored
+        // commitment, which is what a resumed response must start at.
+        let next: [u8; 32] = fixture("named-membership-next-tree-location.bin")
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            location_commitment(&next).unwrap(),
+            restored.next_location_commitment
+        );
+    }
+
+    #[test]
+    fn pinned_tail_is_refused_for_another_owner_host_or_chain_type() {
+        let link = membership_link();
+        let decoded = link.decode_generic().unwrap();
+        let row = stored(&link, &decoded.entity, &decoded.host);
+
+        let mut other_uid_bytes = decoded.entity.as_bytes().to_vec();
+        other_uid_bytes[32] ^= 0xff;
+        let other_uid = EntityId::from_bytes(other_uid_bytes).unwrap();
+        // The row names one identity and the caller another: no resume point.
+        assert!(restore_pinned_generic_chain(
+            &row,
+            &other_uid,
+            &decoded.host,
+            CHAIN_TYPE_TEAM_MEMBERSHIP
+        )
+        .unwrap()
+        .is_none());
+
+        let mut other_host_bytes = decoded.host.as_bytes().to_vec();
+        other_host_bytes[32] ^= 0xff;
+        let other_host = EntityId::from_bytes(other_host_bytes).unwrap();
+        assert!(restore_pinned_generic_chain(
+            &row,
+            &decoded.entity,
+            &other_host,
+            CHAIN_TYPE_TEAM_MEMBERSHIP
+        )
+        .unwrap()
+        .is_none());
+
+        // Settings chains carry passphrase state across links that this tail
+        // does not record, so they are never resumed.
+        assert!(restore_pinned_generic_chain(
+            &row,
+            &decoded.entity,
+            &decoded.host,
+            CHAIN_TYPE_USER_SETTINGS
+        )
+        .unwrap()
+        .is_none());
+
+        let mut empty = row.clone();
+        empty.sequence = 0;
+        empty.tail_hash = None;
+        assert!(restore_pinned_generic_chain(
+            &empty,
+            &decoded.entity,
+            &decoded.host,
+            CHAIN_TYPE_TEAM_MEMBERSHIP
+        )
+        .unwrap()
+        .is_none());
+    }
+
+    #[test]
+    fn pinned_tail_that_does_not_replay_is_rejected() {
+        let link = membership_link();
+        let decoded = link.decode_generic().unwrap();
+
+        let mut wrong_tail = stored(&link, &decoded.entity, &decoded.host);
+        wrong_tail.tail_hash = Some([0x77; 32]);
+        assert!(restore_pinned_generic_chain(
+            &wrong_tail,
+            &decoded.entity,
+            &decoded.host,
+            CHAIN_TYPE_TEAM_MEMBERSHIP
+        )
+        .is_err());
+
+        let mut wrong_length = stored(&link, &decoded.entity, &decoded.host);
+        wrong_length.sequence = 2;
+        assert!(restore_pinned_generic_chain(
+            &wrong_length,
+            &decoded.entity,
+            &decoded.host,
+            CHAIN_TYPE_TEAM_MEMBERSHIP
+        )
+        .is_err());
+
+        let mut wrong_type_header = stored(&link, &decoded.entity, &decoded.host);
+        wrong_type_header.chain_bytes = encode(&Value::Array(vec![
+            Value::Unsigned(CHAIN_TYPE_USER_SETTINGS),
+            decode(&link.encoded().unwrap()).unwrap(),
+        ]))
+        .unwrap();
+        assert!(restore_pinned_generic_chain(
+            &wrong_type_header,
+            &decoded.entity,
+            &decoded.host,
+            CHAIN_TYPE_TEAM_MEMBERSHIP
+        )
+        .is_err());
+
+        let mut not_an_array = stored(&link, &decoded.entity, &decoded.host);
+        not_an_array.chain_bytes = encode(&Value::Unsigned(4)).unwrap();
+        assert!(restore_pinned_generic_chain(
+            &not_an_array,
+            &decoded.entity,
+            &decoded.host,
+            CHAIN_TYPE_TEAM_MEMBERSHIP
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn a_pinned_tail_moves_the_load_start_past_it() {
+        let link = membership_link();
+        let decoded = link.decode_generic().unwrap();
+        let row = stored(&link, &decoded.entity, &decoded.host);
+        let restored = restore_pinned_generic_chain(
+            &row,
+            &decoded.entity,
+            &decoded.host,
+            CHAIN_TYPE_TEAM_MEMBERSHIP,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(super::generic_chain_start(Some(&restored)).unwrap(), 2);
+        assert_eq!(super::generic_chain_start(None).unwrap(), 1);
+    }
+
+    #[test]
+    fn only_continuity_and_evidence_failures_fall_back_to_a_full_load() {
+        assert!(generic_chain_increment_is_unusable(&Error::TeamBinding(
+            "resumed generic chain starts at an undisclosed location"
+        )));
+        assert!(generic_chain_increment_is_unusable(&Error::UserBinding(
+            "generic link cites the wrong current Merkle root"
+        )));
+        // A server whose chain is shorter than the pin refuses the resumed
+        // start as malformed.
+        assert!(generic_chain_increment_is_unusable(&Error::Rpc(
+            foks_rpc::Error::RemoteStatus {
+                code: foks_rpc::STATUS_BAD_ARGS_ERROR,
+                detail: foks_rpc::StatusDetail::default(),
+            }
+        )));
+        // A root race is retried against a freshly pinned host instead.
+        assert!(!generic_chain_increment_is_unusable(
+            &Error::GenericChainRootChanged
+        ));
+        assert!(!generic_chain_increment_is_unusable(&Error::Rpc(
+            foks_rpc::Error::RemoteStatus {
+                code: foks_rpc::STATUS_PERMISSION_ERROR,
+                detail: foks_rpc::StatusDetail::default(),
+            }
+        )));
+        assert!(!generic_chain_increment_is_unusable(
+            &Error::DeadlineExceeded
+        ));
+        assert!(!generic_chain_increment_is_unusable(&Error::Cancelled));
+    }
 }

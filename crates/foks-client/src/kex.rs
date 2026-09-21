@@ -25,8 +25,21 @@ use crate::{
     PinnedHost, ProtectedMutationStore, ProvisionedSoftwareDevice, Result,
 };
 
-const KEX_POLL_MILLISECONDS: u64 = 5 * 60 * 1_000;
-const KEX_SERVER_POLL_SLICE: Duration = Duration::from_secs(5);
+/// Total wait a pairing side spends on the KEX relay when the caller states
+/// no budget of its own. The two blocking receives share it, so an embedder
+/// that cancels pairing after five minutes never cancels a receive this
+/// client would still have been waiting on.
+pub const DEFAULT_KEX_PAIRING_BUDGET: Duration = Duration::from_secs(5 * 60);
+/// Blocking wait asked of the relay per receive RPC.
+///
+/// A host that honours the request answers within this slice, so raising it
+/// cuts a five-minute receive from sixty round trips to ten. Go's relay waits
+/// five seconds whatever is requested and then answers TX_RETRY, so against a
+/// Go host the slice changes nothing but is still handled by the retry loop
+/// below. A receive abandoned by a lost connection outlives that connection by
+/// at most one slice, and only on a host that does not notice the socket
+/// closing first.
+const KEX_SERVER_POLL_SLICE: Duration = Duration::from_secs(30);
 const KEX_TRANSPORT_SLACK: Duration = Duration::from_secs(15);
 
 pub struct KexProvisionOffer {
@@ -82,6 +95,39 @@ pub struct KexProvisioningReport {
     pub device: DevicePublicMaterial,
 }
 
+/// The pairing budget the blocking receives of one pairing half share.
+///
+/// Each receive asks the relay for whatever is left rather than a fresh full
+/// window, so a pairing's total relay wait stays inside the budget its caller
+/// granted. An embedder that cancels pairing at its own cap therefore never
+/// cancels a receive this client would still have been waiting on, which
+/// would report a live pairing as an ambiguous deadline error.
+#[derive(Clone, Copy)]
+struct KexBudget {
+    deadline: Instant,
+}
+
+impl KexBudget {
+    fn starting_now(budget: Duration) -> Result<Self> {
+        Ok(Self {
+            deadline: Instant::now()
+                .checked_add(budget)
+                .ok_or(Error::Kex("KEX pairing budget overflows"))?,
+        })
+    }
+
+    /// The wait the next receive may ask for. A budget spent down to nothing
+    /// is a deadline error: a zero wait is the relay's non-blocking probe,
+    /// which answers an unfinished pairing as a bad secret.
+    fn remaining(&self) -> Result<Duration> {
+        let remaining = self.deadline.saturating_duration_since(Instant::now());
+        if remaining < Duration::from_millis(1) {
+            return Err(Error::DeadlineExceeded);
+        }
+        Ok(remaining)
+    }
+}
+
 impl FoksClient {
     /// Creates a one-use pairing offer and publishes the KEX `Start` packet.
     /// Persist the returned secret in protected storage before displaying its
@@ -111,13 +157,35 @@ impl FoksClient {
         offer: &KexProvisionOffer,
         protected_store: &mut impl ProtectedMutationStore,
     ) -> Result<KexProvisioningReport> {
+        self.finish_kex_provisioning_within(
+            host,
+            existing,
+            offer,
+            protected_store,
+            DEFAULT_KEX_PAIRING_BUDGET,
+        )
+    }
+
+    /// [`Self::finish_kex_provisioning`] bounded by the caller's own remaining
+    /// budget. Both relay receives draw from `budget`, so a caller that
+    /// abandons the operation at its cap never abandons a receive still inside
+    /// this client's wait.
+    pub fn finish_kex_provisioning_within(
+        &self,
+        host: &PinnedHost,
+        existing: &DeviceCredential,
+        offer: &KexProvisionOffer,
+        protected_store: &mut impl ProtectedMutationStore,
+        budget: Duration,
+    ) -> Result<KexProvisioningReport> {
+        let budget = KexBudget::starting_now(budget)?;
         let hello = match self.kex_receive(
             host,
             &existing.seed,
             &offer.secret,
             0,
             KexActorType::Provisioner,
-            KEX_POLL_MILLISECONDS,
+            budget.remaining()?,
         )? {
             KexMessage::Hello(hello) => hello,
             KexMessage::Error(_) => return Err(Error::Kex("peer aborted pairing")),
@@ -301,7 +369,7 @@ impl FoksClient {
             &offer.secret,
             1,
             KexActorType::Provisioner,
-            KEX_POLL_MILLISECONDS,
+            budget.remaining()?,
         )? {
             KexMessage::OkSigned(signature) => material.link.with_appended_signature(signature)?,
             KexMessage::Error(_) => return Err(Error::Kex("peer aborted pairing")),
@@ -414,6 +482,31 @@ impl FoksClient {
         device_seed: SecretSeed,
         expected_user: Option<&[u8; 33]>,
     ) -> Result<ProvisionedSoftwareDevice> {
+        self.accept_kex_provisioning_for_user_within(
+            host,
+            phrase,
+            device_name,
+            serial,
+            device_seed,
+            expected_user,
+            DEFAULT_KEX_PAIRING_BUDGET,
+        )
+    }
+
+    /// [`Self::accept_kex_provisioning_for_user`] bounded by the caller's own
+    /// remaining budget; see [`Self::finish_kex_provisioning_within`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn accept_kex_provisioning_for_user_within(
+        &self,
+        host: &PinnedHost,
+        phrase: &str,
+        device_name: &str,
+        serial: u64,
+        device_seed: SecretSeed,
+        expected_user: Option<&[u8; 33]>,
+        budget: Duration,
+    ) -> Result<ProvisionedSoftwareDevice> {
+        let budget = KexBudget::starting_now(budget)?;
         if serial == 0 {
             return Err(Error::Kex("device serial is zero"));
         }
@@ -422,7 +515,16 @@ impl FoksClient {
         let normalized_name = crate::normalize_device_name(display_name.as_bytes())
             .ok_or(Error::Kex("device name is invalid"))?;
         let public = derive_device_public(&device_seed)?;
-        match self.kex_receive(host, &device_seed, &secret, 0, KexActorType::Provisionee, 0)? {
+        // The Start packet is already queued when the phrase is typed, so this
+        // probe never blocks and never draws on the pairing budget.
+        match self.kex_receive(
+            host,
+            &device_seed,
+            &secret,
+            0,
+            KexActorType::Provisionee,
+            Duration::ZERO,
+        )? {
             KexMessage::Start => {}
             _ => return Err(Error::Kex("pairing phrase has no Start packet")),
         }
@@ -452,7 +554,7 @@ impl FoksClient {
             &secret,
             1,
             KexActorType::Provisionee,
-            KEX_POLL_MILLISECONDS,
+            budget.remaining()?,
         )? {
             KexMessage::PleaseSign(request) => request,
             KexMessage::Error(_) => return Err(Error::Kex("peer aborted pairing")),
@@ -487,7 +589,7 @@ impl FoksClient {
             &secret,
             2,
             KexActorType::Provisionee,
-            KEX_POLL_MILLISECONDS,
+            budget.remaining()?,
         )? {
             KexMessage::Done => {}
             KexMessage::Error(_) => return Err(Error::Kex("peer rejected pairing")),
@@ -563,15 +665,14 @@ impl FoksClient {
         secret: &KexSecret,
         sequence: u64,
         actor: KexActorType,
-        poll_wait_milliseconds: u64,
+        requested_wait: Duration,
     ) -> Result<KexMessage> {
         let keys = secret.keys()?;
         let receiver = derive_device_public(seed)?.id;
-        // Go's server checks its durable relay in five-second slices. Use the
-        // same bounded waits and retry TX_RETRY until the caller's complete
-        // pairing deadline, so a lost connection never leaves one long RPC
-        // occupying server resources for the whole five minutes.
-        let requested_wait = Duration::from_millis(poll_wait_milliseconds);
+        // The relay answers a blocking receive in bounded slices and TX_RETRY
+        // when a slice expires, so a lost connection leaves at most one slice
+        // occupying server resources instead of the whole pairing wait. Retry
+        // those slices until the caller's remaining pairing budget is spent.
         let deadline = Instant::now()
             .checked_add(requested_wait)
             .ok_or(Error::Kex("KEX poll deadline overflows"))?;
@@ -657,5 +758,35 @@ mod tests {
             KEX_SERVER_POLL_SLICE + KEX_TRANSPORT_SLACK
         );
         assert!(kex_poll_transport_timeout(KEX_SERVER_POLL_SLICE) > Duration::from_secs(15));
+    }
+
+    #[test]
+    fn kex_poll_slice_bounds_the_round_trips_of_a_full_budget() {
+        assert_eq!(KEX_SERVER_POLL_SLICE, Duration::from_secs(30));
+        let slices = DEFAULT_KEX_PAIRING_BUDGET.as_secs() / KEX_SERVER_POLL_SLICE.as_secs();
+        assert_eq!(slices, 10);
+    }
+
+    #[test]
+    fn kex_budget_is_shared_by_successive_receives() {
+        let budget = KexBudget::starting_now(DEFAULT_KEX_PAIRING_BUDGET).unwrap();
+        let first = budget.remaining().unwrap();
+        let second = budget.remaining().unwrap();
+        assert!(first <= DEFAULT_KEX_PAIRING_BUDGET);
+        assert!(second <= first);
+        // Two receives out of one budget can never exceed it, unlike two
+        // independent full poll windows.
+        assert!(first.saturating_sub(second) < DEFAULT_KEX_PAIRING_BUDGET);
+    }
+
+    #[test]
+    fn spent_kex_budget_reports_a_deadline_rather_than_a_probe() {
+        let budget = KexBudget::starting_now(Duration::ZERO).unwrap();
+        assert!(matches!(budget.remaining(), Err(Error::DeadlineExceeded)));
+    }
+
+    #[test]
+    fn default_kex_pairing_budget_is_five_minutes_in_total() {
+        assert_eq!(DEFAULT_KEX_PAIRING_BUDGET, Duration::from_secs(5 * 60));
     }
 }
