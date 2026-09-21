@@ -874,6 +874,7 @@ fn backend_call_for_command(command: Command) -> Result<BackendCall, Box<dyn std
             },
             cursor: None,
             limit: 100,
+            fresh: false,
         },
         Command::KvRead {
             store,

@@ -12,7 +12,11 @@ import {
   CatalogReadRetiredError,
 } from '../catalog-coordinator';
 import { CatalogReadGate } from '../catalog-read-gate';
-import { failWholeCatalogRefresh, markCatalogRefresh } from '../catalog-state';
+import {
+  changedCatalogProfiles,
+  failWholeCatalogRefresh,
+  markCatalogRefresh,
+} from '../catalog-state';
 import { storeOf, type AgentSnapshot, type Item } from '../model';
 import {
   reconcileMutationFailure,
@@ -68,7 +72,14 @@ export function useCatalogRuntime({
   latestRef.current = latest;
   const [agentCatalogReady, setAgentCatalogReady] = useState(true);
   const [refreshingSnapshot, setRefreshingSnapshot] = useState(false);
-  const metadataInvalidation = useRef<() => void>(() => undefined);
+  /**
+   * Discards the metadata read beside the catalog. The argument names the
+   * profiles whose catalog changed; `undefined` means the comparison could
+   * not be made and every profile's metadata is discarded.
+   */
+  const metadataInvalidation = useRef<(profiles?: readonly string[]) => void>(
+    () => undefined,
+  );
   /**
    * Starts a profile-scoped post-mutation refresh through the reconciliation
    * service. Returns `null` when scoped refresh is unavailable so the caller
@@ -129,9 +140,14 @@ export function useCatalogRuntime({
           });
         },
         (next, forced) => {
+          // The comparison is made against the snapshot this publication
+          // replaces, so it must run before the new one is installed.
+          const changed = forced
+            ? changedCatalogProfiles(latestRef.current, next)
+            : undefined;
           publishSnapshot(next);
           if (forced) {
-            metadataInvalidation.current();
+            metadataInvalidation.current(changed);
             setHardwareRefresh((generation) => generation + 1);
           }
         },
@@ -199,6 +215,12 @@ export function useCatalogRuntime({
     setRefreshingSnapshot(true);
     void refreshSnapshot(true)
       .then((next) => {
+        // The Refresh the user asked for is a request for current data, not
+        // only for what the catalog says changed: device lists, enrollments
+        // and invitation counts are server state the catalog does not
+        // describe, so every row is discarded before the reconciliation that
+        // reads the visible ones again.
+        metadataInvalidation.current();
         reconcile();
         const incomplete = Object.values(
           next.catalogFreshness?.profiles ?? {},

@@ -721,34 +721,54 @@ impl CatalogLoadToken {
 /// because native checkpoint/session access is exclusive; up to four distinct
 /// profiles are processed concurrently.
 pub fn load_catalog(transport: Arc<dyn AgentTransport>) -> Result<CatalogSnapshot, AgentError> {
-    load_catalog_with_token(transport, true, CatalogLoadToken::default())
+    load_catalog_with_token(transport, true, false, CatalogLoadToken::default())
 }
 
 /// Loads account and team discovery without walking any KV tree.
 pub fn load_stores(transport: Arc<dyn AgentTransport>) -> Result<CatalogSnapshot, AgentError> {
-    load_catalog_with_token(transport, false, CatalogLoadToken::default())
+    load_catalog_with_token(transport, false, false, CatalogLoadToken::default())
 }
 
 pub fn load_catalog_cancellable(
     transport: Arc<dyn AgentTransport>,
     token: CatalogLoadToken,
+    fresh: bool,
 ) -> Result<CatalogSnapshot, AgentError> {
-    load_catalog_with_token(transport, true, token)
+    load_catalog_with_token(transport, true, fresh, token)
 }
 
 pub fn load_profile_catalog_cancellable(
     transport: Arc<dyn AgentTransport>,
     profile: String,
     token: CatalogLoadToken,
+    fresh: bool,
 ) -> Result<CatalogSnapshot, AgentError> {
     token.check()?;
     let profiles: Vec<ProfileSummary> = decode_agent_value(
         transport.call_cancellable(Operation::ListProfiles, &|| token.is_cancelled())?,
     )?;
+    let profiles = profiles
+        .into_iter()
+        .map(|profile| profile.name)
+        .collect::<Vec<_>>();
+    load_profile_catalog_with_profiles(transport, profile, &profiles, token, fresh)
+}
+
+/// One profile's catalog, for a caller that has already listed the configured
+/// profiles. The desktop backend decodes that listing into its own richer
+/// summary for the same publish, so taking it here keeps one `ListProfiles`
+/// per catalog read instead of two.
+pub fn load_profile_catalog_with_profiles(
+    transport: Arc<dyn AgentTransport>,
+    profile: String,
+    profiles: &[String],
+    token: CatalogLoadToken,
+    fresh: bool,
+) -> Result<CatalogSnapshot, AgentError> {
     token.check()?;
     if profiles
         .iter()
-        .filter(|candidate| candidate.name == profile)
+        .filter(|candidate| **candidate == profile)
         .count()
         != 1
     {
@@ -756,7 +776,8 @@ pub fn load_profile_catalog_cancellable(
             "profile is missing or duplicated in the configured profiles".to_owned(),
         ));
     }
-    let mut snapshot = load_profile_catalog(transport.as_ref(), profile.clone(), true, token)?;
+    let mut snapshot =
+        load_profile_catalog(transport.as_ref(), profile.clone(), true, fresh, token)?;
     snapshot.profiles.push(profile);
     Ok(snapshot)
 }
@@ -765,12 +786,13 @@ pub fn load_stores_cancellable(
     transport: Arc<dyn AgentTransport>,
     token: CatalogLoadToken,
 ) -> Result<CatalogSnapshot, AgentError> {
-    load_catalog_with_token(transport, false, token)
+    load_catalog_with_token(transport, false, false, token)
 }
 
 fn load_catalog_with_token(
     transport: Arc<dyn AgentTransport>,
     include_items: bool,
+    fresh: bool,
     token: CatalogLoadToken,
 ) -> Result<CatalogSnapshot, AgentError> {
     token.check()?;
@@ -781,31 +803,45 @@ fn load_catalog_with_token(
         .into_iter()
         .map(|profile| profile.name)
         .collect::<Vec<_>>();
-    load_catalog_profiles(transport, profiles, include_items, token, &|_| {})
+    load_catalog_profiles(transport, profiles, include_items, fresh, token, &|_| {})
 }
 
 pub fn load_catalog_progressive_cancellable(
     transport: Arc<dyn AgentTransport>,
     token: CatalogLoadToken,
+    fresh: bool,
     publish: impl Fn(&CatalogSnapshot) + Sync,
 ) -> Result<CatalogSnapshot, AgentError> {
     token.check()?;
     let profiles: Vec<ProfileSummary> = decode_agent_value(
         transport.call_cancellable(Operation::ListProfiles, &|| token.check().is_err())?,
     )?;
-    load_catalog_profiles(
+    load_catalog_progressive_with_profiles(
         transport,
         profiles.into_iter().map(|profile| profile.name).collect(),
-        true,
         token,
-        &publish,
+        fresh,
+        publish,
     )
+}
+
+/// As [`load_catalog_progressive_cancellable`], for a caller that has already
+/// listed the configured profiles.
+pub fn load_catalog_progressive_with_profiles(
+    transport: Arc<dyn AgentTransport>,
+    profiles: Vec<String>,
+    token: CatalogLoadToken,
+    fresh: bool,
+    publish: impl Fn(&CatalogSnapshot) + Sync,
+) -> Result<CatalogSnapshot, AgentError> {
+    load_catalog_profiles(transport, profiles, true, fresh, token, &publish)
 }
 
 fn load_catalog_profiles(
     transport: Arc<dyn AgentTransport>,
     profiles: Vec<String>,
     include_items: bool,
+    fresh: bool,
     token: CatalogLoadToken,
     publish: &(impl Fn(&CatalogSnapshot) + Sync),
 ) -> Result<CatalogSnapshot, AgentError> {
@@ -869,6 +905,7 @@ fn load_catalog_profiles(
             transport.as_ref(),
             profile.clone(),
             include_items,
+            fresh,
             token.clone(),
             &|snapshot| update(&profile, snapshot),
         )?;
@@ -915,15 +952,17 @@ fn load_profile_catalog(
     transport: &dyn AgentTransport,
     profile: String,
     include_items: bool,
+    fresh: bool,
     token: CatalogLoadToken,
 ) -> Result<CatalogSnapshot, AgentError> {
-    load_profile_catalog_progress(transport, profile, include_items, token, &|_| {})
+    load_profile_catalog_progress(transport, profile, include_items, fresh, token, &|_| {})
 }
 
 fn load_profile_catalog_progress(
     transport: &dyn AgentTransport,
     profile: String,
     include_items: bool,
+    fresh: bool,
     token: CatalogLoadToken,
     publish_local: &dyn Fn(&CatalogSnapshot),
 ) -> Result<CatalogSnapshot, AgentError> {
@@ -1154,7 +1193,7 @@ fn load_profile_catalog_progress(
         .collect::<Vec<_>>();
     for store in stores {
         token.check()?;
-        let result = load_store_pages(transport, &store, &token);
+        let result = load_store_pages(transport, &store, fresh, &token);
         if let Some(read) = snapshot
             .store_reads
             .iter_mut()
@@ -1610,12 +1649,13 @@ fn known_catalog_store(profile: &str, store: KnownStoreSummary) -> CatalogStoreS
 fn load_store_pages(
     transport: &dyn AgentTransport,
     store: &CatalogStoreRef,
+    fresh: bool,
     token: &CatalogLoadToken,
 ) -> Result<Vec<KvEntryMetadata>, AgentError> {
-    match load_store_pages_once(transport, store, token) {
+    match load_store_pages_once(transport, store, fresh, token) {
         Err(error) if catalog_cursor_snapshot_changed(&error) => {
             token.check()?;
-            load_store_pages_once(transport, store, token)
+            load_store_pages_once(transport, store, fresh, token)
         }
         result => result,
     }
@@ -1624,6 +1664,7 @@ fn load_store_pages(
 fn load_store_pages_once(
     transport: &dyn AgentTransport,
     store: &CatalogStoreRef,
+    fresh: bool,
     token: &CatalogLoadToken,
 ) -> Result<Vec<KvEntryMetadata>, AgentError> {
     const PAGE_LIMIT: u32 = 200;
@@ -1633,16 +1674,22 @@ fn load_store_pages_once(
     let mut entries = Vec::new();
     for _ in 0..MAXIMUM_PAGES {
         token.check()?;
+        // Freshness applies to the first page only: every later page must
+        // come from the snapshot its cursor names, and a listing made for the
+        // later request would be a different one.
+        let fresh = fresh && cursor.is_none();
         let operation = match store {
             CatalogStoreRef::Account(store) => Operation::ListKv {
                 store: store.clone(),
                 cursor: cursor.clone(),
                 limit: PAGE_LIMIT,
+                fresh,
             },
             CatalogStoreRef::Team(store) => Operation::ListTeamKv {
                 store: store.clone(),
                 cursor: cursor.clone(),
                 limit: PAGE_LIMIT,
+                fresh,
             },
         };
         let page: KvPage =
@@ -3050,6 +3097,7 @@ mod tests {
                 load_catalog_progressive_cancellable(
                     Arc::new(ProgressiveTransport(entered, Mutex::new(gate))),
                     worker_token,
+                    false,
                     |snapshot| {
                         publish.send(snapshot.clone()).unwrap();
                     },
@@ -3145,6 +3193,7 @@ mod tests {
             transport.clone(),
             "local".into(),
             CatalogLoadToken::default(),
+            false,
         )
         .unwrap();
         assert_eq!(catalog.profiles, ["local"]);
@@ -3154,7 +3203,8 @@ mod tests {
         assert!(load_profile_catalog_cancellable(
             transport.clone(),
             "missing".into(),
-            CatalogLoadToken::default()
+            CatalogLoadToken::default(),
+            false,
         )
         .is_err());
         assert!(matches!(
@@ -3165,10 +3215,55 @@ mod tests {
         let token = CatalogLoadToken::default();
         token.cancel();
         assert!(matches!(
-            load_profile_catalog_cancellable(transport.clone(), "local".into(), token),
+            load_profile_catalog_cancellable(transport.clone(), "local".into(), token, false),
             Err(AgentError::Cancelled)
         ));
         assert!(transport.0.lock().unwrap().is_empty());
+
+        // A caller that has already listed the configured profiles hands them
+        // over instead of making the agent list them again.
+        transport.0.lock().unwrap().clear();
+        let profiles = vec!["local".to_owned(), "unavailable".to_owned()];
+        let catalog = load_profile_catalog_with_profiles(
+            transport.clone(),
+            "local".into(),
+            &profiles,
+            CatalogLoadToken::default(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(catalog.profiles, ["local"]);
+        assert!(!transport
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|call| matches!(call, Operation::ListProfiles)));
+        assert!(load_profile_catalog_with_profiles(
+            transport.clone(),
+            "missing".into(),
+            &profiles,
+            CatalogLoadToken::default(),
+            false,
+        )
+        .is_err());
+
+        transport.0.lock().unwrap().clear();
+        let progressive = load_catalog_progressive_with_profiles(
+            transport.clone(),
+            vec!["local".to_owned()],
+            CatalogLoadToken::default(),
+            false,
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(progressive.profiles, ["local"]);
+        assert!(!transport
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|call| matches!(call, Operation::ListProfiles)));
     }
 
     #[test]
@@ -3315,6 +3410,62 @@ mod tests {
         assert!(catalog.failures.is_empty());
     }
 
+    struct PagedCatalogTransport {
+        calls: Mutex<Vec<(Option<String>, bool)>>,
+    }
+
+    impl AgentTransport for PagedCatalogTransport {
+        fn call(&self, operation: Operation) -> Result<Value, AgentError> {
+            let Operation::ListKv { cursor, fresh, .. } = operation else {
+                panic!("unexpected operation")
+            };
+            let mut calls = self.calls.lock().unwrap();
+            calls.push((cursor.clone(), fresh));
+            let page = calls.len();
+            Ok(serde_json::to_value(KvPage {
+                snapshot_version: 7,
+                entries: vec![KvEntryMetadata {
+                    path: format!("/{page}"),
+                    node_type: "small-file".to_owned(),
+                    version: 1,
+                    size: None,
+                    read_role: KvRole::Owner,
+                    write_role: KvRole::Owner,
+                }],
+                next_cursor: (page < 3).then(|| format!("cursor-{page}")),
+            })
+            .unwrap())
+        }
+    }
+
+    #[test]
+    fn a_fresh_store_walk_asks_for_the_first_page_only() {
+        for fresh in [false, true] {
+            let transport = PagedCatalogTransport {
+                calls: Mutex::new(Vec::new()),
+            };
+            let entries = load_store_pages(
+                &transport,
+                &CatalogStoreRef::Account(AccountStoreRef {
+                    profile: "local".to_owned(),
+                    account_alias: "personal".to_owned(),
+                }),
+                fresh,
+                &CatalogLoadToken::default(),
+            )
+            .unwrap();
+            assert_eq!(entries.len(), 3);
+            assert_eq!(
+                *transport.calls.lock().unwrap(),
+                vec![
+                    (None, fresh),
+                    (Some("cursor-1".to_owned()), false),
+                    (Some("cursor-2".to_owned()), false),
+                ]
+            );
+        }
+    }
+
     struct ChangedCatalogTransport {
         cursors: Mutex<Vec<Option<String>>>,
     }
@@ -3388,6 +3539,7 @@ mod tests {
                 profile: "local".to_owned(),
                 account_alias: "personal".to_owned(),
             }),
+            false,
             &CatalogLoadToken::default(),
         )
         .unwrap();
@@ -3453,6 +3605,7 @@ mod tests {
             Arc::new(EmptyCatalogTransport(true)),
             "local".into(),
             CatalogLoadToken::default(),
+            false,
         )
         .unwrap();
         assert_eq!(profile.full_item_reads, Some(vec!["local".into()]));
@@ -3552,8 +3705,11 @@ mod tests {
     #[test]
     fn canceled_catalog_stops_before_its_next_profile_call() {
         let token = CatalogLoadToken::default();
-        let result =
-            load_catalog_cancellable(Arc::new(CancellingCatalogTransport(token.clone())), token);
+        let result = load_catalog_cancellable(
+            Arc::new(CancellingCatalogTransport(token.clone())),
+            token,
+            false,
+        );
         assert_eq!(result.unwrap_err(), AgentError::Cancelled);
     }
 

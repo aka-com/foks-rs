@@ -16,12 +16,16 @@ import {
 } from '../src/query-hooks';
 import { appInfoKey, appInfoQuery } from '../src/resources/application';
 import {
+  invitationRecoveryKey,
   invitationRecoveryQuery,
+  pendingOperationKey,
   pendingOperationsQuery,
   reportableTeamRequestError,
+  teamRequestCountKey,
   teamRequestCountQuery,
   TEAM_REQUEST_FRESHNESS,
 } from '../src/operation-queries';
+import { accountDeviceKey, profileEnrollmentKey } from '../src/device-cache';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -371,13 +375,19 @@ test('the request badge asks only for a count, falling back per read on an older
     },
   } as unknown as Bridge;
   const repository = new MetadataRepository(() => 0);
-  assert.equal(await teamRequestCountQuery(repository, legacy, store).load(), 2);
+  assert.equal(
+    await teamRequestCountQuery(repository, legacy, store).load(),
+    2,
+  );
   assert.deepEqual(older, ['inbox-count', 'inbox']);
   // A one-off refusal, such as an interrupted worker, does not send this
   // badge to the whole inbox for the rest of the session.
   refuse = false;
   repository.invalidate(['team-requests']);
-  assert.equal(await teamRequestCountQuery(repository, legacy, store).load(), 1);
+  assert.equal(
+    await teamRequestCountQuery(repository, legacy, store).load(),
+    1,
+  );
   assert.deepEqual(older, ['inbox-count', 'inbox', 'inbox-count']);
 
   // Any other refusal is the query's failure, not a reason to read rows.
@@ -399,7 +409,11 @@ test('the request badge asks only for a count, falling back per read on an older
     },
   } as unknown as Bridge;
   await assert.rejects(
-    teamRequestCountQuery(new MetadataRepository(() => 0), offline, store).load(),
+    teamRequestCountQuery(
+      new MetadataRepository(() => 0),
+      offline,
+      store,
+    ).load(),
     (error: { code: string }) => error.code === 'server-unavailable',
   );
   assert.deepEqual(away, ['inbox-count']);
@@ -428,4 +442,65 @@ test('a count reply without a count is not read as an empty inbox', async () => 
     ).load(),
     /without a count/,
   );
+});
+
+test('a per-profile invalidation reaches every kind of that profile’s metadata and no other profile’s', async () => {
+  const repository = new MetadataRepository(() => 0);
+  const team = (server: string): TeamStore => ({
+    id: `store:${server}`,
+    kind: 'team',
+    name: 'Team',
+    server,
+    account: 'account',
+    alias: 'team',
+    team_id_hex: 'team',
+    active: true,
+    team_kind: 'named',
+  });
+  const rows = ['alpha', 'beta'].flatMap((profile) =>
+    [
+      accountDeviceKey(profile, `acct:${profile}`),
+      profileEnrollmentKey(profile),
+      pendingOperationKey(profile),
+      invitationRecoveryKey(team(profile)),
+      teamRequestCountKey(team(profile)),
+    ].map((key) => ({ profile, key })),
+  );
+  // One prefixed invalidation per kind depends on the profile naming itself
+  // immediately after the kind in every one of these keys.
+  for (const { profile, key } of rows) assert.equal(key[1], profile);
+
+  const reads = new Map<string, number>();
+  const read = () => {
+    for (const { key } of rows) {
+      const name = JSON.stringify(key);
+      void repository
+        .query<number>(key, async () => {
+          const value = (reads.get(name) ?? 0) + 1;
+          reads.set(name, value);
+          return value;
+        })
+        .load();
+    }
+  };
+  read();
+  await tick();
+  assert.deepEqual([...new Set(reads.values())], [1]);
+
+  for (const kind of [
+    'account-devices',
+    'profile-enrollments',
+    'pending-operations',
+    'invitation-recovery',
+    'team-requests',
+  ])
+    repository.invalidate([kind, 'alpha']);
+  read();
+  await tick();
+  for (const { profile, key } of rows)
+    assert.equal(
+      reads.get(JSON.stringify(key)),
+      profile === 'alpha' ? 2 : 1,
+      JSON.stringify(key),
+    );
 });

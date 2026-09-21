@@ -33,8 +33,8 @@ export const vaultCommands: Pick<
   | 'replaceDroppedFile'
   | 'pickAndReplaceFile'
 > = {
-  listCatalog: async (onPartial) => {
-    if (!onPartial) return checked('list_catalog', undefined, decodeCatalog);
+  listCatalog: async (onPartial, fresh = false) => {
+    if (!onPartial) return checked('list_catalog', { fresh }, decodeCatalog);
     const channel = new Channel<unknown>();
     let failure: CommandError | undefined;
     channel.onmessage = (value) => {
@@ -49,7 +49,7 @@ export const vaultCommands: Pick<
     try {
       const catalog = await checked(
         'list_catalog_progressive',
-        { onPartial: channel },
+        { onPartial: channel, fresh },
         decodeCatalog,
       );
       if (failure) throw failure;

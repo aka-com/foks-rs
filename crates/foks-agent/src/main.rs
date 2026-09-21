@@ -83,7 +83,10 @@ const MAXIMUM_LOCAL_KV_CHUNK_BYTES: usize = 128 * 1024;
 const MAXIMUM_INLINE_KV_BYTES: usize = 128 * 1024;
 const MAXIMUM_STREAM_KV_BYTES: u64 = 1024 * 1024 * 1024;
 const MAXIMUM_STREAM_FRAMES: usize = 8193;
-const MAXIMUM_CACHED_CATALOGS: usize = 4;
+/// Bounds the retained catalog reports. The desktop walks four profiles at a
+/// time and each profile holds several stores, so a bound near the old four
+/// evicted one profile's entries while another profile was still paginating.
+const MAXIMUM_CACHED_CATALOGS: usize = 32;
 const MAXIMUM_CACHED_CATALOG_BYTES: usize = 128 * 1024 * 1024;
 const MAXIMUM_SINGLE_CATALOG_BYTES: usize = 64 * 1024 * 1024;
 const CATALOG_CACHE_LIFETIME: Duration = Duration::from_secs(60);
@@ -1898,13 +1901,88 @@ struct CachedCatalog {
     digest: [u8; 32],
     report: foks_client_app::KvCatalogReport,
     encoded_bytes: usize,
-    expires_at: Instant,
+    stored_at: Instant,
 }
 
+/// One bounded, expiring store of catalog reports, in the shape of
+/// [`read_cache::Expiring`]: the current time is passed in, every entry
+/// expires, and the bounds evict the oldest entry first. It differs only in
+/// carrying the encoded size of each report, because a catalog is bounded by
+/// bytes as well as by count.
+///
+/// The lifetime is the whole freshness bound: a hit is served without any
+/// server round trip, and nothing here validates an entry against the server.
+/// It therefore bounds staleness against writes made elsewhere only. A write
+/// made through this agent drops every entry ([`invalidate_cached_catalogs`]),
+/// and the desktop additionally asks for the first page with `fresh` set
+/// after a mutation and on a refresh the user started.
 #[derive(Default)]
 struct CatalogCache {
     entries: VecDeque<CachedCatalog>,
     encoded_bytes: usize,
+}
+
+impl CatalogCache {
+    /// The entry for a store, optionally pinned to the snapshot a cursor
+    /// names. A request with no cursor takes whatever snapshot is retained;
+    /// a request with one is answered only from the snapshot it holds, so a
+    /// later page can never come from a different listing than its cursor.
+    fn get_at(
+        &mut self,
+        store: &CatalogStoreBinding,
+        snapshot: Option<(u64, [u8; 32])>,
+        now: Instant,
+    ) -> Option<&CachedCatalog> {
+        self.expire(now);
+        self.entries.iter().find(|entry| {
+            entry.store == *store
+                && snapshot.is_none_or(|(version, digest)| {
+                    entry.digest == digest && entry.report.snapshot_version == version
+                })
+        })
+    }
+
+    fn put_at(&mut self, entry: CachedCatalog, now: Instant) {
+        self.expire(now);
+        let store = entry.store.clone();
+        self.remove(|candidate| candidate.store == store);
+        while self.entries.len() >= MAXIMUM_CACHED_CATALOGS
+            || self
+                .encoded_bytes
+                .checked_add(entry.encoded_bytes)
+                .is_none_or(|total| total > MAXIMUM_CACHED_CATALOG_BYTES)
+        {
+            let Some(evicted) = self.entries.pop_front() else {
+                break;
+            };
+            self.encoded_bytes = self.encoded_bytes.saturating_sub(evicted.encoded_bytes);
+        }
+        self.encoded_bytes += entry.encoded_bytes;
+        self.entries.push_back(entry);
+    }
+
+    fn expire(&mut self, now: Instant) {
+        self.remove(|entry| now.duration_since(entry.stored_at) >= CATALOG_CACHE_LIFETIME);
+    }
+
+    /// Drops the entries the predicate selects, keeping the byte total and
+    /// the insertion order (so the front stays the oldest entry) correct.
+    fn remove(&mut self, drop: impl Fn(&CachedCatalog) -> bool) {
+        let mut freed = 0usize;
+        self.entries.retain(|entry| {
+            if drop(entry) {
+                freed += entry.encoded_bytes;
+                return false;
+            }
+            true
+        });
+        self.encoded_bytes = self.encoded_bytes.saturating_sub(freed);
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 fn catalog_cache() -> &'static Mutex<CatalogCache> {
@@ -1912,86 +1990,77 @@ fn catalog_cache() -> &'static Mutex<CatalogCache> {
     CACHE.get_or_init(|| Mutex::new(CatalogCache::default()))
 }
 
+/// Drops every retained catalog. This runs with the read caches' own
+/// invalidation around any operation that may have written, so the lifetime
+/// bounds staleness against writes made elsewhere only: a write made through
+/// this agent, by any client, is never followed by a page served from a
+/// snapshot that predates it. Dropping other stores' entries too costs one
+/// listing each and removes the need to know which stores an operation
+/// reached while it ran.
+fn invalidate_cached_catalogs() {
+    if let Ok(mut cache) = catalog_cache().lock() {
+        cache.remove(|_| true);
+    }
+}
+
+/// Whether a request may be answered from a retained report. `fresh` is
+/// honored on the first page only: a request that carries a cursor is pinned
+/// to the snapshot that cursor names, and re-listing for it would answer from
+/// a snapshot the cursor does not describe.
+fn may_serve_cached_catalog(cursor: Option<&str>, fresh: bool) -> bool {
+    cursor.is_some() || !fresh
+}
+
 fn paginate_cached_catalog(
     store: &CatalogStoreBinding,
-    cursor: &str,
+    cursor: Option<&str>,
     limit: u32,
 ) -> Result<Option<KvPage>, Box<dyn std::error::Error>> {
-    validate_catalog_request(store, Some(cursor), limit)?;
-    let requested = decode_catalog_cursor(cursor)?;
-    let now = Instant::now();
+    validate_catalog_request(store, cursor, limit)?;
+    let snapshot = cursor
+        .map(decode_catalog_cursor)
+        .transpose()?
+        .map(|cursor| (cursor.snapshot_version, cursor.snapshot_digest));
     let mut cache = catalog_cache()
         .lock()
         .map_err(|_| AgentRequestError("catalog cache is unavailable"))?;
-    while cache
-        .entries
-        .front()
-        .is_some_and(|entry| entry.expires_at <= now)
-    {
-        if let Some(expired) = cache.entries.pop_front() {
-            cache.encoded_bytes = cache.encoded_bytes.saturating_sub(expired.encoded_bytes);
-        }
-    }
-    let Some(index) = cache.entries.iter().position(|entry| {
-        entry.store == *store
-            && entry.digest == requested.snapshot_digest
-            && entry.report.snapshot_version == requested.snapshot_version
-    }) else {
+    let Some(entry) = cache.get_at(store, snapshot, Instant::now()) else {
         return Ok(None);
     };
-    let page = paginate_catalog(
-        &cache.entries[index].report,
+    // The digest was computed when the report was listed; a page never
+    // re-serializes and re-hashes the snapshot to rediscover it.
+    Ok(Some(paginate_catalog(
+        &entry.report,
         store.clone(),
-        Some(cursor),
+        entry.digest,
+        cursor,
         limit,
-    )?;
-    if page.next_cursor.is_none() {
-        let completed = cache
-            .entries
-            .remove(index)
-            .expect("located catalog cache entry is present");
-        cache.encoded_bytes = cache.encoded_bytes.saturating_sub(completed.encoded_bytes);
-    }
-    Ok(Some(page))
+    )?))
 }
 
 fn cache_catalog(
     store: CatalogStoreBinding,
     report: &foks_client_app::KvCatalogReport,
+    digest: [u8; 32],
+    encoded_bytes: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (digest, encoded_bytes) = catalog_snapshot_identity(report)?;
     if encoded_bytes > MAXIMUM_SINGLE_CATALOG_BYTES {
         return Ok(());
     }
-    let mut cache = catalog_cache()
+    let now = Instant::now();
+    catalog_cache()
         .lock()
-        .map_err(|_| AgentRequestError("catalog cache is unavailable"))?;
-    if let Some(index) = cache.entries.iter().position(|entry| entry.store == store) {
-        let previous = cache
-            .entries
-            .remove(index)
-            .expect("located catalog cache entry is present");
-        cache.encoded_bytes = cache.encoded_bytes.saturating_sub(previous.encoded_bytes);
-    }
-    while cache.entries.len() >= MAXIMUM_CACHED_CATALOGS
-        || cache
-            .encoded_bytes
-            .checked_add(encoded_bytes)
-            .is_none_or(|total| total > MAXIMUM_CACHED_CATALOG_BYTES)
-    {
-        let Some(evicted) = cache.entries.pop_front() else {
-            break;
-        };
-        cache.encoded_bytes = cache.encoded_bytes.saturating_sub(evicted.encoded_bytes);
-    }
-    cache.encoded_bytes += encoded_bytes;
-    cache.entries.push_back(CachedCatalog {
-        store,
-        digest,
-        report: report.clone(),
-        encoded_bytes,
-        expires_at: Instant::now() + CATALOG_CACHE_LIFETIME,
-    });
+        .map_err(|_| AgentRequestError("catalog cache is unavailable"))?
+        .put_at(
+            CachedCatalog {
+                store,
+                digest,
+                report: report.clone(),
+                encoded_bytes,
+                stored_at: now,
+            },
+            now,
+        );
     Ok(())
 }
 
@@ -2001,21 +2070,25 @@ fn paginate_fresh_catalog(
     cursor: Option<&str>,
     limit: u32,
 ) -> Result<KvPage, Box<dyn std::error::Error>> {
-    let page = paginate_catalog(&report, store.clone(), cursor, limit)?;
-    if page.next_cursor.is_some() {
-        cache_catalog(store, &report)?;
-    }
+    // Once per fresh report, for both the cache key and the cursors of every
+    // page served from it.
+    let (digest, encoded_bytes) = catalog_snapshot_identity(&report)?;
+    let page = paginate_catalog(&report, store.clone(), digest, cursor, limit)?;
+    // A single-page store is retained too: the desktop re-reads every store
+    // on its catalog pass, and the pass after this one is inside the
+    // lifetime.
+    cache_catalog(store, &report, digest, encoded_bytes)?;
     Ok(page)
 }
 
 fn paginate_catalog(
     report: &foks_client_app::KvCatalogReport,
     store: CatalogStoreBinding,
+    snapshot_digest: [u8; 32],
     cursor: Option<&str>,
     limit: u32,
 ) -> Result<KvPage, Box<dyn std::error::Error>> {
     validate_catalog_request(&store, cursor, limit)?;
-    let (snapshot_digest, _) = catalog_snapshot_identity(report)?;
     let offset = if let Some(cursor) = cursor {
         let cursor = decode_catalog_cursor(cursor)?;
         if cursor.snapshot_version != report.snapshot_version
@@ -2086,11 +2159,20 @@ fn paginate_catalog(
     })
 }
 
+/// Counts the serializations this function performs, so a test can assert
+/// that one fresh report is serialized and hashed once, not once per page.
+#[cfg(test)]
+static CATALOG_IDENTITY_COMPUTATIONS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 fn catalog_snapshot_identity(
     report: &foks_client_app::KvCatalogReport,
 ) -> Result<([u8; 32], usize), serde_json::Error> {
     use sha2::Digest as _;
     use std::io::Write as _;
+
+    #[cfg(test)]
+    CATALOG_IDENTITY_COMPUTATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     struct DigestWriter {
         digest: sha2::Sha256,
@@ -2585,6 +2667,7 @@ fn dispatch_result(
     // without reaching post-dispatch cleanup.
     if invalidates {
         read_cache::invalidate_all();
+        invalidate_cached_catalogs();
     }
     let (result, trace) = read_cache::with_operation_scope(reads, || run(operation, timeout));
     if !reads {
@@ -2592,6 +2675,7 @@ fn dispatch_result(
         // cached concurrently while the mutation was running.
         if invalidates {
             read_cache::invalidate_all();
+            invalidate_cached_catalogs();
         }
         if matches!(scope, profile_work::Scope::Root) {
             read_cache::invalidate_base_clients();
@@ -3994,13 +4078,14 @@ fn dispatch_result_inner(
             store,
             cursor,
             limit,
+            fresh,
         } => {
             let binding = CatalogStoreBinding::Account {
                 value: store.clone(),
             };
             validate_catalog_request(&binding, cursor.as_deref(), limit)?;
-            if let Some(cursor) = cursor.as_deref() {
-                if let Some(page) = paginate_cached_catalog(&binding, cursor, limit)? {
+            if may_serve_cached_catalog(cursor.as_deref(), fresh) {
+                if let Some(page) = paginate_cached_catalog(&binding, cursor.as_deref(), limit)? {
                     return Ok(serde_json::to_value(page)?);
                 }
             }
@@ -4020,13 +4105,14 @@ fn dispatch_result_inner(
             store,
             cursor,
             limit,
+            fresh,
         } => {
             let binding = CatalogStoreBinding::Team {
                 value: store.clone(),
             };
             validate_catalog_request(&binding, cursor.as_deref(), limit)?;
-            if let Some(cursor) = cursor.as_deref() {
-                if let Some(page) = paginate_cached_catalog(&binding, cursor, limit)? {
+            if may_serve_cached_catalog(cursor.as_deref(), fresh) {
+                if let Some(page) = paginate_cached_catalog(&binding, cursor.as_deref(), limit)? {
                     return Ok(serde_json::to_value(page)?);
                 }
             }
@@ -6464,6 +6550,7 @@ mod tests {
                 store: account.clone(),
                 cursor: None,
                 limit: 10,
+                fresh: false,
             },
             Operation::ReadKv {
                 store: KvStoreRef::Account(account.clone()),
@@ -6501,6 +6588,7 @@ mod tests {
                 },
                 cursor: None,
                 limit: 10,
+                fresh: false,
             },
         ] {
             assert!(operation_is_noninteractive(&operation), "{operation:?}");
@@ -7396,20 +7484,212 @@ mod tests {
         }
     }
 
+    /// The catalog cache is process-wide, so the tests that reach it run one
+    /// at a time and start from an empty cache.
+    fn catalog_cache_guard() -> std::sync::MutexGuard<'static, ()> {
+        static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+        let guard = GUARD
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        catalog_cache()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(|_| true);
+        guard
+    }
+
+    fn catalog_store(alias: &str) -> CatalogStoreBinding {
+        CatalogStoreBinding::Account {
+            value: AccountStoreRef {
+                profile: "local".to_owned(),
+                account_alias: alias.to_owned(),
+            },
+        }
+    }
+
+    fn catalog_report(snapshot_version: u64, entries: u64) -> foks_client_app::KvCatalogReport {
+        foks_client_app::KvCatalogReport {
+            snapshot_version,
+            entries: (0..entries)
+                .map(|index| foks_client_app::KvCatalogEntry {
+                    path: format!("/{index}"),
+                    node_type: "small-file".to_owned(),
+                    version: index + 1,
+                    size: None,
+                    read_role: foks_client_app::KvRoleSummary::Owner,
+                    write_role: foks_client_app::KvRoleSummary::Owner,
+                })
+                .collect(),
+        }
+    }
+
+    fn cache_entry(store: &CatalogStoreBinding, version: u64, stored_at: Instant) -> CachedCatalog {
+        let report = catalog_report(version, 1);
+        let (digest, encoded_bytes) = catalog_snapshot_identity(&report).unwrap();
+        CachedCatalog {
+            store: store.clone(),
+            digest,
+            report,
+            encoded_bytes,
+            stored_at,
+        }
+    }
+
+    #[test]
+    fn a_first_page_is_served_from_the_retained_report_until_it_expires() {
+        let store = catalog_store("personal");
+        let mut cache = CatalogCache::default();
+        let start = Instant::now();
+        cache.put_at(cache_entry(&store, 7, start), start);
+        assert!(cache
+            .get_at(
+                &store,
+                None,
+                start + CATALOG_CACHE_LIFETIME - Duration::from_secs(1)
+            )
+            .is_some());
+        assert!(cache
+            .get_at(&store, None, start + CATALOG_CACHE_LIFETIME)
+            .is_none());
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.encoded_bytes, 0);
+    }
+
+    #[test]
+    fn a_fresh_first_page_is_never_served_from_the_retained_report() {
+        // A request after a local write asks for the first page with `fresh`
+        // set, and only the first page: a later page is pinned by its cursor
+        // to the snapshot the walk started from.
+        assert!(!may_serve_cached_catalog(None, true));
+        assert!(may_serve_cached_catalog(None, false));
+        assert!(may_serve_cached_catalog(Some("v2.cursor"), true));
+        assert!(may_serve_cached_catalog(Some("v2.cursor"), false));
+    }
+
+    #[test]
+    fn a_later_page_is_served_only_from_the_snapshot_its_cursor_names() {
+        let _guard = catalog_cache_guard();
+        let store = catalog_store("personal");
+        let report = catalog_report(7, 3);
+        let first = paginate_fresh_catalog(report.clone(), store.clone(), None, 2).unwrap();
+        let cursor = first.next_cursor.clone().unwrap();
+        assert!(paginate_cached_catalog(&store, Some(&cursor), 2)
+            .unwrap()
+            .is_some());
+        // A write replaces the retained report. The cursor the desktop still
+        // holds names the previous snapshot, which is no longer retained, so
+        // it is not answered from the new one.
+        let rewritten = catalog_report(8, 3);
+        paginate_fresh_catalog(rewritten, store.clone(), None, 2).unwrap();
+        assert!(paginate_cached_catalog(&store, Some(&cursor), 2)
+            .unwrap()
+            .is_none());
+        assert!(paginate_cached_catalog(&store, None, 2)
+            .unwrap()
+            .is_some_and(|page| page.snapshot_version == 8));
+    }
+
+    #[test]
+    fn retained_catalogs_are_bounded_and_evicted_oldest_first() {
+        let mut cache = CatalogCache::default();
+        let start = Instant::now();
+        let stores = (0..MAXIMUM_CACHED_CATALOGS + 1)
+            .map(|index| catalog_store(&format!("store-{index}")))
+            .collect::<Vec<_>>();
+        for (index, store) in stores.iter().enumerate() {
+            // Distinct, increasing storage times: the entry evicted must be
+            // the oldest one, not whichever entry a sweep reached first.
+            cache.put_at(
+                cache_entry(store, 1, start + Duration::from_millis(index as u64)),
+                start + Duration::from_millis(index as u64),
+            );
+        }
+        assert_eq!(cache.len(), MAXIMUM_CACHED_CATALOGS);
+        assert!(cache.get_at(&stores[0], None, start).is_none());
+        for store in &stores[1..] {
+            assert!(cache.get_at(store, None, start).is_some());
+        }
+        assert_eq!(
+            cache.encoded_bytes,
+            cache
+                .entries
+                .iter()
+                .map(|entry| entry.encoded_bytes)
+                .sum::<usize>()
+        );
+    }
+
+    #[test]
+    fn storing_a_store_again_replaces_its_retained_report() {
+        let store = catalog_store("personal");
+        let mut cache = CatalogCache::default();
+        let start = Instant::now();
+        cache.put_at(cache_entry(&store, 1, start), start);
+        cache.put_at(cache_entry(&store, 2, start), start);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(
+            cache
+                .get_at(&store, None, start)
+                .unwrap()
+                .report
+                .snapshot_version,
+            2
+        );
+        assert_eq!(cache.encoded_bytes, cache.entries[0].encoded_bytes);
+    }
+
+    #[test]
+    fn a_fresh_report_is_serialized_and_hashed_once_for_every_page() {
+        let _guard = catalog_cache_guard();
+        let store = catalog_store("personal");
+        let report = catalog_report(7, 5);
+        let before = CATALOG_IDENTITY_COMPUTATIONS.load(std::sync::atomic::Ordering::Relaxed);
+        let mut page = paginate_fresh_catalog(report, store.clone(), None, 2).unwrap();
+        let mut pages = 1;
+        while let Some(cursor) = page.next_cursor.clone() {
+            page = paginate_cached_catalog(&store, Some(&cursor), 2)
+                .unwrap()
+                .expect("the retained report serves every later page");
+            pages += 1;
+        }
+        assert_eq!(pages, 3);
+        assert_eq!(
+            CATALOG_IDENTITY_COMPUTATIONS.load(std::sync::atomic::Ordering::Relaxed) - before,
+            1
+        );
+    }
+
+    #[test]
+    fn a_write_through_this_agent_drops_every_retained_catalog() {
+        let _guard = catalog_cache_guard();
+        let store = catalog_store("personal");
+        paginate_fresh_catalog(catalog_report(7, 3), store.clone(), None, 2).unwrap();
+        assert!(paginate_cached_catalog(&store, None, 2).unwrap().is_some());
+        // The lifetime bounds staleness against writes made on other devices.
+        // A write made through this agent, by any client and whether or not
+        // it asked for a fresh listing, is not one of those.
+        invalidate_cached_catalogs();
+        assert!(paginate_cached_catalog(&store, None, 2).unwrap().is_none());
+    }
+
     #[test]
     fn catalog_cursors_bind_store_snapshot_and_offset() {
+        let _guard = catalog_cache_guard();
         let store = CatalogStoreBinding::Account {
             value: AccountStoreRef {
                 profile: "local".to_owned(),
                 account_alias: "personal".to_owned(),
             },
         };
+        let empty_report = foks_client_app::KvCatalogReport {
+            snapshot_version: 0,
+            entries: Vec::new(),
+        };
         let empty = paginate_catalog(
-            &foks_client_app::KvCatalogReport {
-                snapshot_version: 0,
-                entries: Vec::new(),
-            },
+            &empty_report,
             store.clone(),
+            catalog_snapshot_identity(&empty_report).unwrap().0,
             None,
             2,
         )
@@ -7430,22 +7710,31 @@ mod tests {
                 })
                 .collect(),
         };
-        let first = paginate_catalog(&report, store.clone(), None, 2).unwrap();
+        let (digest, encoded_bytes) = catalog_snapshot_identity(&report).unwrap();
+        let first = paginate_catalog(&report, store.clone(), digest, None, 2).unwrap();
         assert_eq!(first.entries.len(), 2);
-        let second =
-            paginate_catalog(&report, store.clone(), first.next_cursor.as_deref(), 2).unwrap();
+        let second = paginate_catalog(
+            &report,
+            store.clone(),
+            digest,
+            first.next_cursor.as_deref(),
+            2,
+        )
+        .unwrap();
         assert_eq!(second.entries[0].path, "/2");
         assert!(second.next_cursor.is_none());
-        cache_catalog(store.clone(), &report).unwrap();
-        let cached = paginate_cached_catalog(&store, first.next_cursor.as_deref().unwrap(), 2)
+        cache_catalog(store.clone(), &report, digest, encoded_bytes).unwrap();
+        let cached = paginate_cached_catalog(&store, first.next_cursor.as_deref(), 2)
             .unwrap()
             .unwrap();
         assert_eq!(cached.entries[0].path, "/2");
         assert!(cached.next_cursor.is_none());
+        // A completed pagination no longer drops the entry: only expiry and
+        // eviction do, so the next pass over the same store is served from it.
         assert!(
-            paginate_cached_catalog(&store, first.next_cursor.as_deref().unwrap(), 2,)
+            paginate_cached_catalog(&store, first.next_cursor.as_deref(), 2)
                 .unwrap()
-                .is_none()
+                .is_some()
         );
 
         let another_store = CatalogStoreBinding::Account {
@@ -7454,17 +7743,34 @@ mod tests {
                 account_alias: "other".to_owned(),
             },
         };
-        assert!(
-            paginate_catalog(&report, another_store, first.next_cursor.as_deref(), 2,).is_err()
-        );
+        assert!(paginate_catalog(
+            &report,
+            another_store,
+            digest,
+            first.next_cursor.as_deref(),
+            2,
+        )
+        .is_err());
         let mut changed = report;
         changed.snapshot_version += 1;
-        assert!(
-            paginate_catalog(&changed, store.clone(), first.next_cursor.as_deref(), 2,).is_err()
-        );
+        assert!(paginate_catalog(
+            &changed,
+            store.clone(),
+            catalog_snapshot_identity(&changed).unwrap().0,
+            first.next_cursor.as_deref(),
+            2,
+        )
+        .is_err());
         changed.snapshot_version -= 1;
         changed.entries[0].path = "/same-version-different-branch".to_owned();
-        assert!(paginate_catalog(&changed, store, first.next_cursor.as_deref(), 2,).is_err());
+        assert!(paginate_catalog(
+            &changed,
+            store,
+            catalog_snapshot_identity(&changed).unwrap().0,
+            first.next_cursor.as_deref(),
+            2,
+        )
+        .is_err());
 
         let large_store = CatalogStoreBinding::Account {
             value: AccountStoreRef {
@@ -7485,7 +7791,14 @@ mod tests {
                 })
                 .collect(),
         };
-        let page = paginate_catalog(&large, large_store, None, 500).unwrap();
+        let page = paginate_catalog(
+            &large,
+            large_store,
+            catalog_snapshot_identity(&large).unwrap().0,
+            None,
+            500,
+        )
+        .unwrap();
         assert!(!page.entries.is_empty());
         assert!(page.entries.len() < 500);
         assert!(page.next_cursor.is_some());

@@ -164,6 +164,7 @@ fn only_the_enumerated_operations_serve_reads() {
             store: account.clone(),
             cursor: None,
             limit: 1,
+            fresh: false,
         },
         Operation::ReadKv {
             store: KvStoreRef::Account(account.clone()),

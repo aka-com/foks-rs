@@ -593,6 +593,7 @@ fn fresh_profile_catalog(socket: &Path, profile: &str) -> CatalogSnapshot {
         Arc::new(AgentClient::new(socket)),
         profile.to_owned(),
         CatalogLoadToken::default(),
+        true,
     )
     .expect("fresh native profile catalog");
     assert_eq!(snapshot.profiles, vec![profile]);
@@ -923,6 +924,7 @@ fn exercise_profile_failure_isolation(backend: &mut BackendRunner) {
             Arc::new(AgentClient::new(&backend.socket)),
             "work".to_owned(),
             cancelled,
+            true,
         ),
         Err(foks_desktop::AgentError::Cancelled)
     ));

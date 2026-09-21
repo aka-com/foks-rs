@@ -306,6 +306,38 @@ mod tests {
     }
 
     #[test]
+    fn a_catalog_listing_omitting_fresh_is_decoded_as_not_fresh() {
+        let request = Request::new(
+            32,
+            Operation::ListKv {
+                store: AccountStoreRef {
+                    profile: "local".to_owned(),
+                    account_alias: "personal".to_owned(),
+                },
+                cursor: None,
+                limit: 200,
+                fresh: true,
+            },
+        );
+        let mut encoded = serde_json::to_value(&request).unwrap();
+        assert_eq!(encoded["operation"]["operation"], "list-kv");
+        assert_eq!(encoded["operation"]["fresh"], serde_json::json!(true));
+        // The field is additive: a client built before it exists omits it and
+        // is answered as an ordinary listing, without a protocol bump.
+        assert_eq!(encoded["version"], serde_json::json!(PROTOCOL_VERSION));
+        encoded["operation"]
+            .as_object_mut()
+            .unwrap()
+            .remove("fresh");
+        assert!(matches!(
+            decode_request(&encode(&encoded).unwrap())
+                .unwrap()
+                .operation,
+            Operation::ListKv { fresh: false, .. }
+        ));
+    }
+
+    #[test]
     fn catalog_dtos_bind_store_cursor_and_native_roles() {
         let operation = Operation::ListTeamKv {
             store: TeamStoreRef {
@@ -316,6 +348,7 @@ mod tests {
             },
             cursor: Some("v2.cursor".to_owned()),
             limit: 200,
+            fresh: false,
         };
         let request = Request::new(31, operation.clone());
         assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);

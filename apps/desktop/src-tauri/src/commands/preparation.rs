@@ -30,12 +30,17 @@ pub(super) async fn ensure_catalog_for_mutation(
         return Ok(());
     };
     let profile = state.mutation_profile().map(str::to_owned);
+    // This repair validates the targets and versions of the write that
+    // follows it, so it reads fresh whenever a mutation has retired catalog
+    // state since the last fresh listing. It settles nothing: it covers one
+    // profile, or a catalog that was missing rather than stale.
+    let (fresh, _) = state.catalog_read_freshness(false);
     let snapshot = tauri::async_runtime::spawn_blocking(move || {
         match profile {
             Some(profile) => {
-                foks_desktop::load_profile_catalog_cancellable(transport, profile, token)
+                foks_desktop::load_profile_catalog_cancellable(transport, profile, token, fresh)
             }
-            None => foks_desktop::load_catalog_cancellable(transport, token),
+            None => foks_desktop::load_catalog_cancellable(transport, token, fresh),
         }
         .map_err(AgentError::from_desktop)
     })

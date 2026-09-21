@@ -147,8 +147,17 @@ export interface Bridge {
   agentStatus(): Promise<AgentStatus>;
   probeAgentStatus?(): Promise<AgentStatus>;
   appInfo(): Promise<AppInfo>;
-  /** Returns the full catalog including stores. Mutually exclusive with `listStores`. */
-  listCatalog(onPartial?: (catalog: CatalogDto) => void): Promise<CatalogDto>;
+  /**
+   * Returns the full catalog including stores. Mutually exclusive with
+   * `listStores`. `fresh` requires every store's first page to be listed for
+   * this read instead of being served from what the agent retained, which the
+   * renderer asks for on a refresh the user started and on a read back of a
+   * write.
+   */
+  listCatalog(
+    onPartial?: (catalog: CatalogDto) => void,
+    fresh?: boolean,
+  ): Promise<CatalogDto>;
   listProfileCatalog(profile: string): Promise<CatalogDto>;
   /** Returns store metadata only. Mutually exclusive with `listCatalog`. */
   listStores(): Promise<CatalogDto>;

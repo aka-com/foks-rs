@@ -378,6 +378,52 @@ fn kv_denial_does_not_revoke_account_or_chat_target_bindings() {
 }
 
 #[test]
+fn a_catalog_listing_after_a_local_write_is_read_fresh() {
+    let state = AppState::new(Arc::new(AgentHandle::new(
+        "/tmp/unused-foks-agent.sock".into(),
+    )));
+    // Nothing has been written through this desktop, so the agent's retained
+    // first pages are inside their own freshness bound.
+    assert_eq!(state.catalog_read_freshness(false), (false, 0));
+    // The user's own Refresh asks for a listing regardless.
+    assert_eq!(state.catalog_read_freshness(true), (true, 0));
+
+    let profile = state.for_profile("work.example").unwrap();
+    profile.invalidate_catalog_items();
+    let (fresh, epoch) = state.catalog_read_freshness(false);
+    assert!(fresh);
+    assert_eq!(epoch, 1);
+    // Every scope sees the write, including the one it was not made in: the
+    // retained pages the agent holds are process-wide.
+    assert_eq!(
+        state
+            .for_profile("other.example")
+            .unwrap()
+            .catalog_read_freshness(false),
+        (true, 1)
+    );
+
+    state.note_fresh_catalog_read(epoch);
+    assert_eq!(state.catalog_read_freshness(false), (false, 1));
+
+    // A write that lands while a fresh listing runs is not covered by it.
+    let (fresh, epoch) = state.catalog_read_freshness(false);
+    assert!(!fresh);
+    profile.invalidate_catalog();
+    state.note_fresh_catalog_read(epoch);
+    assert_eq!(state.catalog_read_freshness(false), (true, 2));
+
+    // An ambiguous write stays unreconciled until an authoritative catalog
+    // read accepts it, and every listing until then is read fresh.
+    state.note_fresh_catalog_read(2);
+    assert_eq!(state.catalog_read_freshness(false), (false, 2));
+    state
+        .mutation_requires_refresh
+        .store(true, Ordering::Release);
+    assert_eq!(state.catalog_read_freshness(false), (true, 2));
+}
+
+#[test]
 fn mutation_gate_refuses_a_second_write_until_the_first_finishes() {
     let state = AppState::new(Arc::new(AgentHandle::new(
         "/tmp/unused-foks-agent.sock".into(),
@@ -1095,11 +1141,13 @@ fn mutation_cancels_a_private_catalog_load_and_rejects_its_late_reply() {
     let transport = Arc::new(ProfileListTransport {
         value: serde_json::json!([]),
     });
-    assert!(foks_desktop::load_catalog_cancellable(transport.clone(), token.clone()).is_ok());
+    assert!(
+        foks_desktop::load_catalog_cancellable(transport.clone(), token.clone(), false).is_ok()
+    );
     let mutation = state.begin_catalog_action(true).unwrap().unwrap();
     // The same transport returned a valid response before invalidation.
     assert!(matches!(
-        foks_desktop::load_catalog_cancellable(transport, token),
+        foks_desktop::load_catalog_cancellable(transport, token, false),
         Err(foks_desktop::AgentError::Cancelled)
     ));
     let (invalidated, catalog_after_mutation) = state.catalog_at(None).unwrap();

@@ -50,6 +50,13 @@ pub struct AppState {
     pub(super) catalog_generation: Arc<AtomicU64>,
     pub(super) chat_generation: Arc<AtomicU64>,
     catalog_load_generation: Arc<AtomicU64>,
+    /// Counts the mutations that have retired catalog state. Compared against
+    /// `catalog_fresh_epoch` to decide whether the next catalog listing must
+    /// be read for this pass instead of being served from the agent's
+    /// retained snapshot, which is only as fresh as its own lifetime.
+    catalog_mutation_epoch: Arc<AtomicU64>,
+    /// The highest mutation epoch a completed fresh listing has covered.
+    catalog_fresh_epoch: Arc<AtomicU64>,
     pub(super) catalog: Arc<Mutex<Option<CatalogSnapshot>>>,
     mutation_in_flight: Arc<AtomicBool>,
     pub(super) mutation_requires_refresh: Arc<AtomicBool>,
@@ -77,6 +84,8 @@ impl AppState {
             catalog_generation: Arc::clone(&root.generation),
             chat_generation: Arc::clone(&root.chat_generation),
             catalog_load_generation: Arc::clone(&root.load_generation),
+            catalog_mutation_epoch: Arc::default(),
+            catalog_fresh_epoch: Arc::default(),
             catalog: Arc::default(),
             mutation_in_flight: Arc::clone(&root.in_flight),
             mutation_requires_refresh: Arc::clone(&root.requires_refresh),
@@ -784,6 +793,7 @@ impl AppState {
         if self.scope == MutationScope::LocalAliases {
             return;
         }
+        self.catalog_mutation_epoch.fetch_add(1, Ordering::AcqRel);
         if let Some(profile) = self.mutation_profile() {
             self.retire_catalog_load();
             if let Some(catalog) = self
@@ -881,6 +891,7 @@ impl AppState {
             .catalog_coordination
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.catalog_mutation_epoch.fetch_add(1, Ordering::AcqRel);
         self.retire_catalog_load();
         let mut catalog = self
             .catalog
@@ -904,6 +915,31 @@ impl AppState {
         let generation = self.next_generation();
         self.catalog_generation.store(generation, Ordering::Release);
         self.advance_root_generation(generation);
+    }
+
+    /// Whether the catalog listing that is about to run must read every
+    /// store's first page for itself, with the mutation epoch it will cover.
+    ///
+    /// A listing is read fresh when a mutation has retired catalog state
+    /// since the last fresh listing finished, while an ambiguous mutation is
+    /// still unreconciled, or when the caller asks for it (the user's own
+    /// Refresh). The epoch is cleared only by a fresh listing that publishes,
+    /// so a load that fails or is retired leaves the next one fresh as well.
+    /// A mutation that lands while a fresh listing runs raises the epoch past
+    /// the one that listing covers, so the listing after it is fresh again.
+    pub(super) fn catalog_read_freshness(&self, requested: bool) -> (bool, u64) {
+        let epoch = self.catalog_mutation_epoch.load(Ordering::Acquire);
+        (
+            requested
+                || self.mutation_requires_refresh.load(Ordering::Acquire)
+                || epoch != self.catalog_fresh_epoch.load(Ordering::Acquire),
+            epoch,
+        )
+    }
+
+    /// Records that a fresh listing covering `epoch` published its snapshot.
+    pub(super) fn note_fresh_catalog_read(&self, epoch: u64) {
+        self.catalog_fresh_epoch.fetch_max(epoch, Ordering::AcqRel);
     }
 
     pub(super) fn selected_chat(

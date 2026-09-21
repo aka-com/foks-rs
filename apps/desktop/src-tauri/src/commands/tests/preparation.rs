@@ -190,9 +190,10 @@ fn ambiguity_reconciliation_requires_full_item_reads_for_root_and_profile() {
                     transport.clone(),
                     "work.example".into(),
                     token,
+                    false,
                 )
             } else {
-                foks_desktop::load_catalog_cancellable(transport.clone(), token)
+                foks_desktop::load_catalog_cancellable(transport.clone(), token, false)
             }
             .unwrap();
             assert!(transport

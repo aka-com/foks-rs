@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  changedCatalogProfiles,
   failCatalogRefresh,
   failWholeCatalogRefresh,
   markCatalogRefresh,
@@ -8,6 +9,7 @@ import {
   projectCatalogFreshness,
 } from '../src/catalog-state';
 import { FIXTURE } from '../src/fixture';
+import type { AgentSnapshot } from '../src/model';
 import { mockBridge } from '../src/mock-bridge';
 
 test('concurrent profile publication merges only its own scope into the newest base', () => {
@@ -185,4 +187,118 @@ test('retained store content does not count as a newly completed read', async ()
     30,
   );
   assert.equal(complete.stores[store.id].lastSuccessAt, 30);
+});
+
+function withFreshness(
+  snapshot: AgentSnapshot,
+  lastSuccessAt = 1,
+): AgentSnapshot {
+  return {
+    ...snapshot,
+    catalogFreshness: {
+      profiles: Object.fromEntries(
+        snapshot.catalogProfiles.map((profile) => [
+          profile,
+          { refreshing: false, lastAttemptAt: lastSuccessAt, lastSuccessAt },
+        ]),
+      ),
+      stores: {},
+    },
+  };
+}
+
+test('a forced refresh with no comparable previous snapshot names no profiles', () => {
+  const next = withFreshness(FIXTURE);
+  assert.equal(changedCatalogProfiles(undefined, next), undefined);
+  assert.equal(changedCatalogProfiles(FIXTURE, next), undefined);
+  assert.equal(changedCatalogProfiles(next, FIXTURE), undefined);
+});
+
+test('only the profiles whose stores or accounts changed are named', () => {
+  const [a, b] = FIXTURE.catalogProfiles;
+  assert.ok(a && b);
+  const previous = withFreshness(FIXTURE, 1);
+  // A later read of the same catalog: every profile's attempt and success
+  // times move, and none of its content does.
+  assert.deepEqual(
+    changedCatalogProfiles(previous, withFreshness(FIXTURE, 2)),
+    [],
+  );
+  const dropped = {
+    ...FIXTURE,
+    stores: FIXTURE.stores.filter((store) => store.server !== a),
+  };
+  assert.deepEqual(
+    changedCatalogProfiles(previous, withFreshness(dropped, 2)),
+    [a],
+  );
+  const renamed = {
+    ...FIXTURE,
+    accounts: FIXTURE.accounts.map((account) =>
+      account.server === b ? { ...account, alias: 'other' } : account,
+    ),
+  };
+  assert.deepEqual(
+    changedCatalogProfiles(previous, withFreshness(renamed, 2)),
+    [b],
+  );
+  // A display label is not metadata anything is keyed on.
+  const relabelled = {
+    ...FIXTURE,
+    servers: FIXTURE.servers.map((server) =>
+      server.id === a ? { ...server, label: 'Renamed' } : server,
+    ),
+  };
+  assert.deepEqual(
+    changedCatalogProfiles(previous, withFreshness(relabelled, 2)),
+    [],
+  );
+});
+
+test('a profile whose freshness entry is missing counts as changed', () => {
+  const [a] = FIXTURE.catalogProfiles;
+  assert.ok(a);
+  const previous = withFreshness(FIXTURE);
+  const next = withFreshness(FIXTURE, 2);
+  const missing: AgentSnapshot = {
+    ...next,
+    catalogFreshness: {
+      ...next.catalogFreshness!,
+      profiles: Object.fromEntries(
+        Object.entries(next.catalogFreshness!.profiles).filter(
+          ([profile]) => profile !== a,
+        ),
+      ),
+    },
+  };
+  assert.deepEqual(changedCatalogProfiles(previous, missing), [a]);
+  assert.deepEqual(changedCatalogProfiles(missing, next), [a]);
+});
+
+test('a profile that started or stopped failing is named', () => {
+  const [a] = FIXTURE.catalogProfiles;
+  assert.ok(a);
+  const previous = withFreshness(FIXTURE);
+  const next = withFreshness(FIXTURE, 2);
+  const failed: AgentSnapshot = {
+    ...next,
+    catalogFreshness: {
+      ...next.catalogFreshness!,
+      profiles: {
+        ...next.catalogFreshness!.profiles,
+        [a]: {
+          ...next.catalogFreshness!.profiles[a],
+          error: {
+            code: 'server-unavailable',
+            message: 'away',
+            retryable: true,
+            fatal: false,
+            ambiguous: false,
+          },
+        },
+      },
+    },
+  };
+  assert.deepEqual(changedCatalogProfiles(previous, failed), [a]);
+  assert.deepEqual(changedCatalogProfiles(failed, next), [a]);
 });

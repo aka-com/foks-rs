@@ -893,9 +893,17 @@ async fn load_catalog(
     state: &AppState,
     app: &tauri::AppHandle,
     include_items: bool,
+    requested_fresh: bool,
     on_partial: Option<tauri::ipc::Channel<CatalogDto>>,
 ) -> Result<CatalogDto, AgentError> {
     let access = crate::applock::unlocked_generation(app)?;
+    // A store-only read walks no KV tree, so nothing it reads can be served
+    // from the agent's retained catalogs and it never settles the epoch.
+    let (fresh, epoch) = if include_items {
+        state.catalog_read_freshness(requested_fresh)
+    } else {
+        (false, 0)
+    };
     // Store-only discovery does not replace the accepted full catalog or
     // cancel a concurrent catalog refresh.
     let (generation, token) = if include_items {
@@ -918,14 +926,17 @@ async fn load_catalog(
             )
             .map_err(|error| super::validation::invalid_response(error.to_string()))?;
             let failure = std::sync::Mutex::new(None);
-            let snapshot = foks_desktop::load_catalog_progressive_cancellable(
+            let snapshot = foks_desktop::load_catalog_progressive_with_profiles(
                 transport,
+                profiles
+                    .iter()
+                    .map(|profile| profile.name.clone())
+                    .collect(),
                 token.clone(),
+                fresh,
                 |snapshot| {
                     let result = (|| {
                         crate::applock::require_unlocked_generation(&worker_app, access)?;
-                        CatalogDto::from_snapshot(snapshot)?;
-                        catalog_local_metadata(snapshot, &profiles)?;
                         let mut sent = Ok(());
                         if !worker_state.publish_catalog_snapshot(
                             generation,
@@ -967,7 +978,7 @@ async fn load_catalog(
             }
             snapshot
         } else if include_items {
-            foks_desktop::load_catalog_cancellable(transport, token)
+            foks_desktop::load_catalog_cancellable(transport, token, fresh)
                 .map_err(AgentError::from_desktop)
         } else {
             foks_desktop::load_stores_cancellable(transport, token)
@@ -993,6 +1004,9 @@ async fn load_catalog(
             return Err(super::context::catalog_changed_during_read());
         }
         dto = result?;
+        if fresh {
+            state.note_fresh_catalog_read(epoch);
+        }
     }
     crate::applock::require_unlocked_generation(app, access)?;
     Ok(dto)
@@ -1004,16 +1018,24 @@ pub async fn list_stores(
     state: State<'_, AppState>,
 ) -> Result<CatalogDto, AgentError> {
     require_main_window(&webview)?;
-    load_catalog(&state, webview.app_handle(), false, None).await
+    load_catalog(&state, webview.app_handle(), false, false, None).await
 }
 
 #[tauri::command]
 pub async fn list_catalog(
     webview: tauri::Webview,
     state: State<'_, AppState>,
+    fresh: Option<bool>,
 ) -> Result<CatalogDto, AgentError> {
     require_main_window(&webview)?;
-    load_catalog(&state, webview.app_handle(), true, None).await
+    load_catalog(
+        &state,
+        webview.app_handle(),
+        true,
+        fresh.unwrap_or(false),
+        None,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1027,23 +1049,31 @@ pub async fn list_profile_catalog(
     let access = crate::applock::unlocked_generation(app)?;
     let state = state.for_profile(&profile)?;
     let (generation, token) = state.begin_catalog_load_checked()?;
+    // A read of one profile never settles the mutation epoch: it says nothing
+    // about the other profiles, whose first pages the agent may still hold.
+    let (fresh, _) = state.catalog_read_freshness(false);
     let transport = state.agent.transport();
     let (snapshot, profiles) = tauri::async_runtime::spawn_blocking(move || {
+        // The catalog walk takes this listing rather than issuing its own.
         let mut profiles: Vec<super::servers::ProfileSummary> = serde_json::from_value(
             transport
                 .call_cancellable(Operation::ListProfiles, &|| token.is_cancelled())
                 .map_err(AgentError::from_desktop)?,
         )
         .map_err(|error| super::validation::invalid_response(error.to_string()))?;
+        let names = profiles
+            .iter()
+            .map(|candidate| candidate.name.clone())
+            .collect::<Vec<_>>();
         profiles.retain(|candidate| candidate.name == profile);
-        let snapshot = foks_desktop::load_profile_catalog_cancellable(transport, profile, token)
-            .map_err(AgentError::from_desktop)?;
+        let snapshot = foks_desktop::load_profile_catalog_with_profiles(
+            transport, profile, &names, token, fresh,
+        )
+        .map_err(AgentError::from_desktop)?;
         Ok::<_, AgentError>((snapshot, profiles))
     })
     .await
     .map_err(|error| AgentError::unknown(format!("Failed to load profile catalog: {error}")))??;
-    CatalogDto::from_snapshot(&snapshot)?;
-    catalog_local_metadata(&snapshot, &profiles)?;
     crate::applock::require_unlocked_generation(app, access)?;
     let mut result = Err(super::context::catalog_changed_during_read());
     if !state.publish_catalog_snapshot(generation, snapshot, |published, accepted| {
@@ -1064,9 +1094,17 @@ pub async fn list_catalog_progressive(
     webview: tauri::Webview,
     state: State<'_, AppState>,
     on_partial: tauri::ipc::Channel<CatalogDto>,
+    fresh: Option<bool>,
 ) -> Result<CatalogDto, AgentError> {
     require_main_window(&webview)?;
-    load_catalog(&state, webview.app_handle(), true, Some(on_partial)).await
+    load_catalog(
+        &state,
+        webview.app_handle(),
+        true,
+        fresh.unwrap_or(false),
+        Some(on_partial),
+    )
+    .await
 }
 
 #[tauri::command]

@@ -1079,3 +1079,74 @@ test('a forced whole-catalog refresh discards cached metadata once, after its la
   assert.equal(invalidations, 1);
   assert.equal(harness.runtime().catalog.hardwareRefresh, 1);
 });
+
+test('a forced refresh discards the metadata of the profiles whose catalog changed', async () => {
+  const base = mockBridge(FIXTURE);
+  let deactivate = false;
+  const bridge: Bridge = {
+    ...base,
+    listCatalog: async (publish) => {
+      const catalog = await base.listCatalog(publish);
+      return deactivate
+        ? {
+            ...catalog,
+            stores: catalog.stores.map((store) =>
+              store.id === 'team:eng' ? { ...store, active: false } : store,
+            ),
+          }
+        : catalog;
+    },
+  };
+  const lifetime = new AccessLifetime();
+  const toasts = new ToastController();
+  const retireBoot = () => {};
+  const currentBootSnapshot = () => true;
+  let runtime!: ReturnType<typeof useCatalogRuntime>;
+  function CatalogHarness() {
+    runtime = useCatalogRuntime({
+      lifetime,
+      bridge,
+      agentSnapshot: FIXTURE,
+      retireBoot,
+      currentBootSnapshot,
+      toasts,
+    });
+    return null;
+  }
+  ui.render(createElement(CatalogHarness));
+  const invalidations: (readonly string[] | undefined)[] = [];
+  runtime.metadataInvalidation.current = (profiles) => {
+    invalidations.push(profiles);
+  };
+  await ui.act(async () => {
+    await runtime.refreshSnapshot(true);
+  });
+  // The boot snapshot already carries this fixture's stores and accounts, so
+  // only the profile it has no freshness entry for is named.
+  assert.deepEqual(invalidations, [['partner']]);
+  await ui.act(async () => {
+    await runtime.refreshSnapshot(true);
+  });
+  // A second refresh that reads the same catalog names no profile: the
+  // attempt and success times moved, and nothing a metadata row is keyed on
+  // did.
+  assert.deepEqual(invalidations[1], []);
+  deactivate = true;
+  await ui.act(async () => {
+    await runtime.refreshSnapshot(true);
+  });
+  assert.deepEqual(invalidations[2], ['acme']);
+  assert.equal(runtime.hardwareRefresh, 3);
+
+  // The Refresh the user pressed asks for current data, including the server
+  // state the catalog does not describe, so it discards every row whether or
+  // not the catalog moved.
+  await ui.act(async () => {
+    runtime.refreshAll(
+      () => {},
+      () => {},
+    );
+    await new Promise((done) => setTimeout(done, 0));
+  });
+  assert.deepEqual(invalidations.slice(3), [[], undefined]);
+});

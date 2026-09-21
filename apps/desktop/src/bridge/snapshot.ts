@@ -181,6 +181,9 @@ async function loadSnapshotOnce(
             projections.add(projection);
           }
         : undefined,
+      // A refresh the user asked for, and a read back of a write, must not be
+      // answered from the first page the agent retained before it.
+      forceRosters,
     );
     accepting = false;
     await Promise.all(projections);

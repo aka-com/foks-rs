@@ -4,6 +4,22 @@ import type { Bridge } from '../bridge';
 import { DeviceCache } from '../device-cache';
 import { accountStopped, type AgentSnapshot } from '../model';
 import { readRecoveryFor } from '../query-read-recovery';
+import { serverStatusKey } from '../resources/servers';
+import { serverBinding } from '../screens/servers/server-workflow';
+
+/**
+ * The metadata query kinds whose key names the profile immediately after the
+ * kind, so one `invalidate([kind, profile])` reaches every row of that kind
+ * for that profile: account devices and paper keys, security-key
+ * enrollments, pending operations, and the two invitation counts.
+ */
+const PROFILE_METADATA_KINDS = [
+  'account-devices',
+  'profile-enrollments',
+  'pending-operations',
+  'invitation-recovery',
+  'team-requests',
+] as const;
 
 export function useMetadataRuntime({
   lifetime,
@@ -21,7 +37,7 @@ export function useMetadataRuntime({
   shown: AgentSnapshot;
   concealSignal: number;
   accessGenerations: ReadonlyMap<string, number>;
-  metadataInvalidation: RefObject<() => void>;
+  metadataInvalidation: RefObject<(profiles?: readonly string[]) => void>;
   metadataReconciliation: RefObject<() => Promise<void>>;
   foregroundRefreshAllowed: RefObject<boolean>;
   refreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>;
@@ -54,7 +70,27 @@ export function useMetadataRuntime({
   const deviceSnapshot = useRef(shown);
   deviceSnapshot.current = shown;
   deviceCache.snapshot = () => deviceSnapshot.current;
-  metadataInvalidation.current = () => deviceCache.repository.invalidate([]);
+  metadataInvalidation.current = (profiles) => {
+    // Without a list of changed profiles the comparison could not be made
+    // (boot, unlock, agent restart), and every row is discarded as before.
+    if (profiles === undefined) {
+      deviceCache.repository.invalidate([]);
+      return;
+    }
+    for (const profile of profiles) {
+      for (const kind of PROFILE_METADATA_KINDS)
+        deviceCache.repository.invalidate([kind, profile]);
+      // A server's signed status is keyed by its binding rather than by the
+      // profile name, so it is named through the server row it belongs to.
+      const server = deviceSnapshot.current.servers.find(
+        (candidate) => candidate.id === profile,
+      );
+      if (server)
+        deviceCache.repository.invalidate([
+          ...serverStatusKey(serverBinding(server)),
+        ]);
+    }
+  };
   metadataReconciliation.current = () =>
     deviceCache.repository.reconcileSubscribed(
       () => foregroundRefreshAllowed.current && !document.hidden,

@@ -810,12 +810,21 @@ pub enum Operation {
         #[serde(default)]
         cursor: Option<String>,
         limit: u32,
+        /// Requires the first page to come from a listing made for this
+        /// request rather than from a retained snapshot. A request that
+        /// carries a cursor is already pinned to the snapshot the cursor
+        /// names, so this applies to the first page only.
+        #[serde(default)]
+        fresh: bool,
     },
     ListTeamKv {
         store: TeamStoreRef,
         #[serde(default)]
         cursor: Option<String>,
         limit: u32,
+        /// As on [`Operation::ListKv`].
+        #[serde(default)]
+        fresh: bool,
     },
     ReadKv {
         store: KvStoreRef,
@@ -1636,21 +1645,25 @@ impl std::fmt::Debug for Operation {
                 store,
                 cursor,
                 limit,
+                fresh,
             } => formatter
                 .debug_struct("ListKv")
                 .field("store", store)
                 .field("cursor", cursor)
                 .field("limit", limit)
+                .field("fresh", fresh)
                 .finish(),
             Self::ListTeamKv {
                 store,
                 cursor,
                 limit,
+                fresh,
             } => formatter
                 .debug_struct("ListTeamKv")
                 .field("store", store)
                 .field("cursor", cursor)
                 .field("limit", limit)
+                .field("fresh", fresh)
                 .finish(),
             Self::ReadKv {
                 store,

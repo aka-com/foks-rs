@@ -18,6 +18,65 @@ export function sameStoreIdentity(a: Store, b: Store): boolean {
   );
 }
 
+/**
+ * What a profile's catalog holds, as far as its metadata queries depend on
+ * it: its stores, its accounts and whether the profile answered. Item
+ * contents are excluded — no device, enrollment or invitation row is derived
+ * from them.
+ */
+function catalogProfileState(snapshot: AgentSnapshot, profile: string): string {
+  return JSON.stringify([
+    snapshot.stores
+      .filter((store) => store.server === profile)
+      .map((store) => [
+        store.id,
+        store.kind,
+        store.account,
+        store.kind === 'team' ? store.team_id_hex : null,
+        store.kind === 'team' ? store.active : null,
+      ])
+      .sort(),
+    snapshot.accounts
+      .filter((account) => account.server === profile)
+      .map((account) => [account.store, account.alias])
+      .sort(),
+    snapshot.catalogFreshness?.profiles[profile]?.error?.code ?? null,
+  ]);
+}
+
+/**
+ * The profiles whose catalog changed between two snapshots. Used to scope the
+ * metadata a forced refresh discards: a profile whose stores, accounts and
+ * outcome are unchanged has no metadata to re-read.
+ *
+ * Answers `undefined` when the comparison cannot be made — no previous
+ * snapshot, or freshness missing on either side — and the caller then treats
+ * every profile as changed. A profile whose freshness entry is missing on one
+ * side counts as changed for the same reason: an absent entry states nothing
+ * about what was read for it.
+ */
+export function changedCatalogProfiles(
+  previous: AgentSnapshot | undefined,
+  next: AgentSnapshot,
+): readonly string[] | undefined {
+  const before = previous?.catalogFreshness?.profiles;
+  const after = next.catalogFreshness?.profiles;
+  if (!previous || !before || !after) return undefined;
+  const profiles = new Set([
+    ...Object.keys(before),
+    ...Object.keys(after),
+    ...previous.catalogProfiles,
+    ...next.catalogProfiles,
+  ]);
+  return [...profiles].filter(
+    (profile) =>
+      before[profile] === undefined ||
+      after[profile] === undefined ||
+      catalogProfileState(previous, profile) !==
+        catalogProfileState(next, profile),
+  );
+}
+
 export function catalogItemsComplete(
   response: CatalogDto,
   profile: string,
