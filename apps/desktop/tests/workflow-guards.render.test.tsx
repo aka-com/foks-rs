@@ -347,13 +347,14 @@ test('scanning and adding a CLI server both allow navigation', async () => {
   await ui.act(async () => {
     ui.fireEvent.click(candidate);
   });
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Continue' }));
   await ui.act(async () => {
     ui.fireEvent.click(
       rendered.getByRole('button', { name: 'Use official FOKS server' }),
     );
   });
   await ui.act(async () => {
-    ui.fireEvent.click(rendered.getByRole('button', { name: 'Add server' }));
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Import' }));
     await Promise.resolve();
   });
   assert.equal(h.verdict(store), null);

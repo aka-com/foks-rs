@@ -13,7 +13,7 @@ test('appearance persists, follows system changes only in System mode, and syncs
   let dark = true;
   const media = new window.EventTarget();
   Object.defineProperty(media, 'matches', { get: () => dark });
-  const original = window.matchMedia;
+  const original = window.matchMedia.bind(window);
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
     value: () => media,

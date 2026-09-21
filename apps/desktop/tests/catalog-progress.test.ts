@@ -755,7 +755,7 @@ test('initial and scoped catalog loads record elapsed duration', async (t) => {
   };
   const initial = await loadSnapshot(bridge, FIXTURE, 1);
   assert.equal(initial.catalogFreshness?.attempt?.lastMilliseconds, 125);
-  const successful = Object.entries(initial.catalogFreshness!.profiles).filter(
+  const successful = Object.entries(initial.catalogFreshness.profiles).filter(
     ([, value]) => value.lastSuccessAt === 1 && !value.error,
   );
   assert.ok(successful.length);

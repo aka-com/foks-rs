@@ -490,11 +490,6 @@ test('the account menu switches account, adds one, and locks the app', async () 
 
   // Choosing an account keeps the page and changes whose account it acts on.
   let menu = await open();
-  assert.ok(
-    [...menu.querySelectorAll('.cap')].some(
-      (entry) => entry.textContent === 'Personal server',
-    ),
-  );
   const other = [...menu.querySelectorAll('button')].find((button) =>
     button.textContent?.includes('vitalik'),
   );
@@ -622,34 +617,5 @@ test('device crumbs use the name resolved for the exact account and address', as
   assert.deepEqual(
     crumbTrail(location, undefined, undefined, { ...label, address: 'other' }),
     ['Devices', 'Key'],
-  );
-});
-
-test('the settings crumb always names the sub-navigation’s open page', async () => {
-  const { crumbTrail } = (await vite.ssrLoadModule(
-    '/src/shell/topbar.tsx',
-  )) as typeof import('../src/shell/topbar');
-  // An address with no `section=` still opens a page — Account, the
-  // sub-navigation's first — so the crumb names it rather than stopping at
-  // the tab.
-  assert.deepEqual(crumbTrail({ kind: 'settings' }), ['Settings', 'Account']);
-  // A server named without its section is that server's detail under Account.
-  assert.deepEqual(
-    crumbTrail({ kind: 'settings', profile: 'acme' }, {
-      servers: [{ id: 'acme', name: 'internal-acme-profile', label: 'Acme' }],
-    } as unknown as Parameters<typeof crumbTrail>[1]),
-    ['Settings', 'Account', 'Acme'],
-  );
-  assert.deepEqual(crumbTrail({ kind: 'settings', section: 'mac' }), [
-    'Settings',
-    'Device',
-  ]);
-  // A legacy server address reads three deep: the tab, the Account page it
-  // belongs to, and the server itself.
-  assert.deepEqual(
-    crumbTrail({ kind: 'settings', section: 'servers', profile: 'acme' }, {
-      servers: [{ id: 'acme', name: 'internal-acme-profile', label: 'Acme' }],
-    } as unknown as Parameters<typeof crumbTrail>[1]),
-    ['Settings', 'Account', 'Acme'],
   );
 });

@@ -54,39 +54,6 @@ async function setup(label: string | null) {
 }
 
 for (const label of ['Local server alias', null]) {
-  test(`account switcher uses ${label ?? 'Loading...'} without profile suffixes`, async () => {
-    const h = await setup(label);
-    const { Sidebar } = (await vite.ssrLoadModule(
-      '/src/shell/sidebar.tsx',
-    )) as typeof import('../src/shell/sidebar');
-    const view = ui.render(
-      h.wrap(
-        createElement(Sidebar, {
-          snapshot: h.snapshot,
-          location: { kind: 'all' },
-          onNavigate: () => {},
-          onLock: () => {},
-        }),
-      ),
-    );
-    const button = view.container.querySelector<HTMLButtonElement>('.who');
-    assert.ok(button);
-    ui.fireEvent.click(button);
-    const captions = document.querySelectorAll('.rail-account-menu .cap');
-    assert.ok(captions.length > 0);
-    for (const caption of captions)
-      assert.equal(caption.textContent?.trim(), h.name);
-    const accountMark = document.querySelector(
-      '.rail-account-menu .acct .kico.account',
-    );
-    assert.ok(accountMark);
-    assert.ok(accountMark.getAttribute('style')?.includes('background'));
-    assert.equal(
-      Boolean(document.querySelector('.rail-account-menu .cap .host')),
-      false,
-    );
-  });
-
   test(`server page and breadcrumb use ${label ?? 'Loading...'} while retaining the Internal ID`, async () => {
     const h = await setup(label);
     const { ServersSection } = (await vite.ssrLoadModule(

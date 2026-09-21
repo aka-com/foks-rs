@@ -2,14 +2,14 @@
 (() => {
   let theme = 'light';
   try {
-    const saved = localStorage.getItem('appearance');
+    const saved = globalThis.localStorage.getItem('appearance');
     if (['light', 'dark', 'system'].includes(saved)) theme = saved;
   } catch {
     /* Storage may be unavailable. */
   }
-  document.documentElement.dataset.theme =
+  globalThis.document.documentElement.dataset.theme =
     theme === 'system'
-      ? matchMedia('(prefers-color-scheme: dark)').matches
+      ? globalThis.matchMedia('(prefers-color-scheme: dark)').matches
         ? 'dark'
         : 'light'
       : theme;

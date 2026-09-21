@@ -94,29 +94,20 @@ for (const kind of ['Secret', 'File'] as const) {
       ),
     };
     rendered.rerender(p.draw());
-    // Copy is drawn twice — once in the actions row, once beside the value
-    // it copies — and both have to refuse the same way.
-    for (const name of kind === 'File'
-      ? ['Download', 'Edit', 'Delete']
-      : ['Show', 'Reveal', 'Copy', 'Edit', 'Delete']) {
-      const buttons = rendered.getAllByRole('button', {
-        name,
-      }) as HTMLButtonElement[];
-      assert.ok(buttons.length, name);
-      for (const button of buttons) {
-        assert.equal(button.disabled, true, name);
-        assert.match(button.title, /unavailable|could not be loaded/i);
-        const description = button.getAttribute('aria-describedby');
-        assert.ok(
-          description && document.getElementById(description)?.textContent,
-        );
-      }
+    const close = rendered.getByRole('button', { name: 'Close' });
+    const actions = rendered
+      .getAllByRole('button')
+      .filter((button) => button !== close) as HTMLButtonElement[];
+    assert.ok(actions.length > 0);
+    for (const button of actions) {
+      assert.equal(button.disabled, true);
+      assert.match(button.title, /unavailable|could not be loaded/i);
+      const description = button.getAttribute('aria-describedby');
+      assert.ok(
+        description && document.getElementById(description)?.textContent,
+      );
     }
-    assert.equal(
-      (rendered.getByRole('button', { name: 'Close' }) as HTMLButtonElement)
-        .disabled,
-      false,
-    );
+    assert.equal((close as HTMLButtonElement).disabled, false);
   });
 }
 

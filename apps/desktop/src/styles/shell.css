@@ -346,11 +346,11 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .seg button.on{background:var(--main-surface);color:var(--ink);box-shadow:0 1px 2px rgba(15,20,45,.12)}
 .seg.txt button{width:auto;height:28px;padding:0 10px;font-size:12.5px;font-weight:500}
 .menuwrap{position:relative}
-.menu{position:absolute;top:36px;left:0;min-width:210px;background:var(--main-surface);border:1px solid var(--line);border-radius:11px;box-shadow:var(--shadow-menu);padding:5px;z-index:5}
+.menu{position:absolute;top:36px;left:0;min-width:210px;background:var(--main-surface);border:1px solid var(--line);border-radius:11px;box-shadow:var(--shadow-menu);padding:4px;z-index:5}
 .menu.right{left:auto;right:0}
 .menu button{display:flex;align-items:center;gap:9px;width:100%;padding:6px 9px;border-radius:var(--radius-sm);text-align:left}.menu button:hover{background:var(--hover)}
 .menu button.kind-menu-item{padding-block:4px}
-.menu button .ic{font-size:16px;width:18px}.menu button kbd{margin-left:auto;font:12px var(--sans);color:var(--faint)}
+.menu button .ic{font-size:14px;width:18px}.menu button kbd{margin-left:auto;font:12px var(--sans);color:var(--faint)}
 .menu button .kic{width:24px;height:24px;font-size:14px}
 /* Icon column placeholder */
 .menu:not(.rail-account-menu):has(>button>.ic) button:not(:has(>.ic))::before{content:"";width:18px;flex:none}

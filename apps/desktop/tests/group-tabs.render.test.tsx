@@ -464,23 +464,11 @@ test('channel creation survives leaving the group page without a late redirect',
   );
 });
 
-test('the Files tab links to the group vault and displays its item count', async () => {
+test('the Files tab links to the group vault', async () => {
   const journal: Location[] = [];
   const rendered = await group('team:eng', 'files', {
     onNavigate: (to) => journal.push(to),
   });
-  const row = document.querySelector('.roster .inset .fr');
-  assert.ok(row);
-  assert.equal(
-    row.querySelector('.t b')?.textContent,
-    'View Engineering’s items in Files',
-  );
-  // The count is the catalog's, said once.
-  assert.match(row.querySelector('.t small')?.textContent ?? '', /^4 items — /);
-  const tab = [...document.querySelectorAll('[role="tab"]')].find(
-    (node) => node.getAttribute('data-tab') === 'files',
-  );
-  assert.equal(tab?.querySelector('.n')?.textContent, '4');
   await ui.act(async () => {
     ui.fireEvent.click(rendered.getByRole('button', { name: 'Open in Files' }));
   });

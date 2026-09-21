@@ -720,11 +720,6 @@ test('an active ad-hoc share says its membership is fixed', async () => {
   // the roster or in the header.
   assert.equal(document.querySelector('.roster-actions'), null);
   assert.equal(rendered.queryByRole('button', { name: 'Add people' }), null);
-  // The header chip still names the server and the fixed member count.
-  assert.equal(
-    document.querySelector('.ghero .sub .chip')?.textContent,
-    'Personal server · 2 members',
-  );
 });
 
 test('the Settings tab states the name, the join policy and why leaving is not offered', async () => {

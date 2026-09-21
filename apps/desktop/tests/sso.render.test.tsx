@@ -282,8 +282,5 @@ test('SSO login hides the PIN behind Hardware key and clears it when disabled', 
   ui.fireEvent.click(toggle);
   assert.equal(ui.screen.queryByLabelText(pinLabel), null);
   ui.fireEvent.click(toggle);
-  assert.equal(
-    (ui.screen.getByLabelText(pinLabel) as HTMLInputElement).value,
-    '',
-  );
+  assert.equal(ui.screen.getByLabelText<HTMLInputElement>(pinLabel).value, '');
 });

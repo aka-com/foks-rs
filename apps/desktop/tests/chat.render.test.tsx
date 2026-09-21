@@ -224,7 +224,8 @@ test('Option–Enter inserts a newline at the cursor without sending', async () 
   }));
   const composer = ui.screen.getByRole('textbox', {
     name: 'Message',
-  }) as HTMLTextAreaElement;
+  });
+  assert.ok(composer instanceof window.HTMLTextAreaElement);
   ui.fireEvent.change(composer, { target: { value: 'hello world' } });
   composer.setSelectionRange(5, 6);
   ui.fireEvent.keyDown(composer, { key: 'Enter', altKey: true });
@@ -1834,6 +1835,7 @@ test('reopening a conversation retains verified messages during a delayed or fai
 test('channel info keeps channel overrides and links to device notification settings', async (t) => {
   const destinations: unknown[] = [];
   await setup(undefined, true, (location) => destinations.push(location));
+  // eslint-disable-next-line @typescript-eslint/unbound-method
   const originalFocus = HTMLElement.prototype.focus;
   const panelFocus: (FocusOptions | undefined)[] = [];
   t.mock.method(
