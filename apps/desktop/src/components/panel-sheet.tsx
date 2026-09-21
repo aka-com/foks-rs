@@ -18,6 +18,13 @@ export interface PanelPresentation {
 
 export interface PanelSheetProps {
   presentation: PanelPresentation;
+  /**
+   * Overrides the workflow name in the header, for a panel whose later steps
+   * name what the reader is deciding rather than what they opened.
+   */
+  title?: ReactNode;
+  /** A progress line under the title, for a panel that runs in steps. */
+  step?: ReactNode;
   /** True while a bridge write is in flight; blocks dismissal. */
   busy?: boolean;
   /** The mark beside the title. The account panels' gear, by default. */
@@ -29,6 +36,8 @@ export interface PanelSheetProps {
 
 export function PanelSheet({
   presentation,
+  title,
+  step,
   busy = false,
   glyph,
   footer,
@@ -37,7 +46,8 @@ export function PanelSheet({
   return (
     <SheetDialog
       width="wide"
-      title={presentation.title}
+      title={title ?? presentation.title}
+      step={step}
       dismissible={!busy}
       onClose={presentation.onClose}
       footer={footer}

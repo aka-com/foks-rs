@@ -123,7 +123,7 @@ test('the invitation activity band stays quiet about a read the profile could no
   assert.equal(errors.length, 1);
 });
 
-test('preview precedes request preparation and unknown delivery is checked without replay', async () => {
+test('the join sheet confirms the resolved team before it prepares a request', async () => {
   const { InvitationPanel } = (await vite.ssrLoadModule(
     '/src/components/invitation-panel.tsx',
   )) as typeof import('../src/components/invitation-panel');
@@ -163,29 +163,102 @@ test('preview precedes request preparation and unknown delivery is checked witho
       }),
     ),
   );
-  assert.equal(
-    (r.getByText('Request membership') as HTMLButtonElement).disabled,
-    true,
-  );
+  // Step one commits to nothing: the request cannot be reached, and the step
+  // cannot be left, until an invitation is typed.
+  assert.equal(r.queryByText('Request membership'), null);
+  assert.equal(r.getByText('Step 1 of 2').textContent, 'Step 1 of 2');
+  assert.equal((r.getByText('Continue') as HTMLButtonElement).disabled, true);
   ui.fireEvent.change(r.getByLabelText('Invitation'), {
     target: { value: 'Invite123' },
   });
-  ui.fireEvent.click(r.getByText('Preview'));
-  await ui.waitFor(() =>
-    assert.equal(
-      (r.getByText('Request membership') as HTMLButtonElement).disabled,
-      false,
-    ),
+  assert.equal((r.getByText('Continue') as HTMLButtonElement).disabled, false);
+  ui.fireEvent.click(r.getByText('Continue'));
+  // The resolved team names itself on step two, and only there is the
+  // request reachable.
+  await ui.waitFor(() => assert.ok(r.getByText('Step 2 of 2')));
+  assert.ok(r.getByText('project'));
+  assert.ok(r.getByText('a'.repeat(66)));
+  assert.equal(
+    (r.getByText('Request membership') as HTMLButtonElement).disabled,
+    false,
   );
+  // Back returns to the invitation without sending anything.
+  ui.fireEvent.click(r.getByText('Back'));
+  assert.ok(r.getByText('Step 1 of 2'));
+  assert.deepEqual(actions, ['preview']);
+  ui.fireEvent.click(r.getByText('Continue'));
+  await ui.waitFor(() => assert.ok(r.getByText('Request membership')));
   ui.fireEvent.click(r.getByText('Request membership'));
   await ui.waitFor(() => assert.ok(r.getByText('Submit')));
-  assert.deepEqual(actions, ['preview', 'accept']);
+  assert.deepEqual(actions, ['preview', 'preview', 'accept']);
   ui.fireEvent.click(r.getByText('Submit'));
   await ui.waitFor(() => assert.ok(r.queryByText('Submit') === null));
   ui.fireEvent.click(r.getByText('Check status'));
   await ui.waitFor(() =>
-    assert.deepEqual(actions, ['preview', 'accept', 'attempt', 'status']),
+    assert.deepEqual(actions, [
+      'preview',
+      'preview',
+      'accept',
+      'attempt',
+      'status',
+    ]),
   );
+});
+test('the join sheet names a configured profile rather than asking for one', async () => {
+  const { InvitationPanel } = (await vite.ssrLoadModule(
+    '/src/components/invitation-panel.tsx',
+  )) as typeof import('../src/components/invitation-panel');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const seen: InvitationAction[] = [];
+  const bridge = {
+    ...mockBridge(FIXTURE),
+    invitation: async (
+      _p: string,
+      _a: string,
+      a: InvitationAction,
+    ): Promise<InvitationReply> => {
+      seen.push(a);
+      return { team_id: '3'.repeat(66), host_id: 'a'.repeat(66) };
+    },
+  };
+  const other = FIXTURE.servers.find((server) => server.name !== 'local');
+  assert.ok(other);
+  const r = ui.render(
+    await overlay(
+      createElement(InvitationPanel, {
+        bridge,
+        profile: 'local',
+        account: 'work',
+        servers: FIXTURE.servers,
+        presentation,
+        onComplete: () => {},
+      }),
+    ),
+  );
+  ui.fireEvent.change(r.getByLabelText('Invitation'), {
+    target: { value: 'Invite123' },
+  });
+  const picker = r.getByLabelText(
+    'Where is the team located?',
+  ) as HTMLSelectElement;
+  // The account's own profile is not a remote one, so it is never offered.
+  assert.ok(
+    ![...picker.options].some((option) => option.value === 'local'),
+    'the home profile is offered as a remote one',
+  );
+  ui.fireEvent.change(picker, { target: { value: other.name } });
+  ui.fireEvent.click(r.getByText('Continue'));
+  await ui.waitFor(() => assert.equal(seen.length, 1));
+  assert.deepEqual(seen[0], {
+    action: 'preview-remote',
+    remote_profile: other.name,
+    invite: 'Invite123',
+  });
 });
 test('local certificate operations stay local while a remote inbox profile is selected', async () => {
   const { InvitationPanel } = (await vite.ssrLoadModule(
@@ -229,4 +302,55 @@ test('local certificate operations stay local while a remote inbox profile is se
   await ui.waitFor(() =>
     assert.deepEqual(actions, ['inbox', 'create', 'attempt']),
   );
+});
+
+test('a resumed hardware-key request can receive its PIN on step one', async () => {
+  const { InvitationPanel } = (await vite.ssrLoadModule(
+    '/src/components/invitation-panel.tsx',
+  )) as typeof import('../src/components/invitation-panel');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const received: Array<string | null> = [];
+  const operation = { operation_id: 'a'.repeat(32), state: 'prepared' };
+  const bridge = {
+    ...mockBridge(FIXTURE),
+    invitation: async (
+      _p: string,
+      _a: string,
+      action: InvitationAction,
+      pin: string | null,
+    ) => {
+      if (action.action === 'list') return [operation];
+      received.push(pin);
+      return pin
+        ? { ...operation, state: 'complete' }
+        : { ...operation, hardware_required: true };
+    },
+  };
+  const r = ui.render(
+    await overlay(
+      createElement(InvitationPanel, {
+        bridge,
+        profile: 'local',
+        account: 'work',
+        presentation,
+        onComplete: () => {},
+      }),
+    ),
+  );
+  ui.fireEvent.click(r.getByText('Resume a request'));
+  await ui.waitFor(() => assert.ok(r.getByText('Submit')));
+  ui.fireEvent.click(r.getByText('Submit'));
+  await ui.waitFor(() => assert.equal(received.length, 1));
+  assert.equal(received[0], null);
+  ui.fireEvent.change(r.getByLabelText('Security key PIN'), {
+    target: { value: '123456' },
+  });
+  ui.fireEvent.click(r.getByText('Submit'));
+  await ui.waitFor(() => assert.deepEqual(received, [null, '123456']));
+  await ui.waitFor(() => assert.equal(r.queryByText('Submit'), null));
 });

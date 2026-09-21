@@ -79,6 +79,29 @@ export function mockInvitations(
         return { state: 'complete' };
       case 'pending-approvals':
         return { rows: [] };
+      // The join journey needs a team to confirm before it can prepare a
+      // request; the fixture resolves any invitation to the same one.
+      case 'preview':
+      case 'preview-remote':
+        return {
+          team_id: `01${'3f9c'.repeat(16)}`,
+          host_id: `01${'8e02'.repeat(16)}`,
+          name: 'Platform Engineering',
+          membership: false,
+        };
+      case 'accept':
+      case 'accept-remote':
+      case 'accept-team':
+      case 'accept-team-remote': {
+        const id = (++serial).toString(16).padStart(32, '0');
+        const row = {
+          operation_id: id,
+          state: 'prepared',
+          remote: action.action.endsWith('-remote'),
+        };
+        operations.set(id, { owner, row });
+        return { ...row };
+      }
       default:
         throw new Error(
           'This invitation operation requires a connected agent.',

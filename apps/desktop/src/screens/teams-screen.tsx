@@ -701,6 +701,7 @@ export function TeamsScreen({
           bridge={bridge}
           profile={joining.server}
           account={joining.account}
+          servers={snapshot.servers}
           presentation={{
             title: 'Join a team',
             onClose: () => setJoining(null),

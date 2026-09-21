@@ -22,6 +22,11 @@ export interface SheetProps {
   /** The tinted mark beside the title — a `KindIcon`, a server mark, a glyph. */
   glyph?: ReactNode;
   title: ReactNode;
+  /**
+   * A short progress line under the title, for a sheet that runs in steps.
+   * It names the position only — "Step 1 of 2" — and never restates the step.
+   */
+  step?: ReactNode;
   width?: SheetWidth;
   /** The controls along the bottom. Primary action last, as the design sets. */
   footer?: ReactNode;
@@ -36,6 +41,7 @@ export interface SheetProps {
 export function Sheet({
   glyph,
   title,
+  step,
   width = 'base',
   footer,
   titleId,
@@ -48,6 +54,7 @@ export function Sheet({
         {glyph}
         <span className="t">
           <h2 id={titleId}>{title}</h2>
+          {step === undefined ? null : <span className="step">{step}</span>}
         </span>
       </div>
       <div className="sb">{children}</div>
