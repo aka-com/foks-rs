@@ -11,6 +11,7 @@ crypto_secretbox = { workspace = true }
 foks-snowpack = { workspace = true }
 libc = { workspace = true }
 rustix = { workspace = true }
+rusqlite = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 zeroize = { workspace = true }

@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod hard_state;
+
 use std::collections::BTreeSet;
 use std::fs::OpenOptions;
 use std::io::Read as _;
@@ -67,6 +69,8 @@ impl StorageKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Candidate {
     pub id: String,
+    pub username: Option<String>,
+    pub server_hint: Option<String>,
     pub host_id_hex: String,
     pub user_id_hex: String,
     pub device_id_hex: String,
@@ -238,10 +242,15 @@ pub fn discover(root: &Path) -> Result<Installation> {
     }
     let bytes = read_private_file(&source)?;
     let records = decode_store(&bytes)?;
+    let mut candidates = records
+        .into_iter()
+        .map(|record| record.summary)
+        .collect::<Vec<_>>();
+    hard_state::enrich(root, &mut candidates);
     Ok(Installation {
         installed: true,
         root: root.to_owned(),
-        candidates: records.into_iter().map(|record| record.summary).collect(),
+        candidates,
     })
 }
 
@@ -419,6 +428,8 @@ fn decode_candidate(value: &Value, local_instance_id: [u8; 17]) -> Result<Resolv
     Ok(ResolvedCandidate {
         summary: Candidate {
             id,
+            username: None,
+            server_hint: None,
             host_id_hex: hex(&host_id),
             user_id_hex: hex(&user_id),
             device_id_hex: hex(&device_id),

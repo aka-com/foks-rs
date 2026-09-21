@@ -3390,8 +3390,8 @@ fn dispatch_result_inner(
                     .into_iter()
                     .map(|candidate| WireGoProfileCandidate {
                         candidate_id: candidate.id,
-                        username: None,
-                        server_hint: None,
+                        username: candidate.username,
+                        server_hint: candidate.server_hint,
                         host_id_hex: candidate.host_id_hex,
                         user_id_hex: candidate.user_id_hex,
                         device_id_hex: candidate.device_id_hex,

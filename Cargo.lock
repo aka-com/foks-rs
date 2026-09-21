@@ -1990,6 +1990,7 @@ dependencies = [
  "crypto_secretbox",
  "foks-snowpack",
  "libc",
+ "rusqlite",
  "rustix",
  "security-framework",
  "sha2 0.11.0",
