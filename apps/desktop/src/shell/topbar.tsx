@@ -178,8 +178,6 @@ export interface TopbarProps {
   onToggleCollapsed?: () => void;
   /** Files: opens the new-item sheet for one kind. */
   onNew?: (kind: Exclude<KindFilter, 'All'>) => void;
-  /** The store or folder New saves into, for the menu's header line. */
-  newDestination?: string;
   /** Why New cannot act here, as its tooltip; null when it can. */
   newBlocked?: string | null;
   /** Chat: opens the New chat sheet. */
@@ -524,7 +522,6 @@ export function Topbar({
   query,
   onQuery,
   onNew,
-  newDestination,
   newBlocked = null,
   onNewChat,
   chatTeamCount,
@@ -626,7 +623,6 @@ export function Topbar({
       {tab === 'files' && onNew ? (
         <NewItemButton
           onNew={onNew}
-          destination={newDestination}
           reason={newBlocked}
           disabled={blocked}
         />

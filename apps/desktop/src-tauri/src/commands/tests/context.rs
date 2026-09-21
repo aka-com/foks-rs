@@ -1036,7 +1036,7 @@ fn mutation_scope_bookkeeping_is_bounded_without_evicting_ambiguity() {
 }
 
 #[test]
-fn renderer_can_only_consume_paths_from_the_latest_native_drop_once() {
+fn renderer_can_reuse_the_latest_native_file_until_it_is_released() {
     let state = AppState::new(Arc::new(AgentHandle::new(
         "/tmp/unused-foks-agent.sock".into(),
     )));
@@ -1046,14 +1046,22 @@ fn renderer_can_only_consume_paths_from_the_latest_native_drop_once() {
         state.record_drop_paths(std::slice::from_ref(&first)),
         vec!["/tmp/first"]
     );
-    assert_eq!(state.take_drop_path("/tmp/first").unwrap(), first);
+    assert_eq!(state.upload_path("/tmp/first").unwrap(), first);
+    assert_eq!(state.upload_path("/tmp/first").unwrap(), first);
+    state.release_upload_path("/tmp/first");
     assert_eq!(
-        state.take_drop_path("/tmp/first").unwrap_err().code,
+        state.upload_path("/tmp/first").unwrap_err().code,
         "drop-not-authorized"
     );
+    let picked = PathBuf::from("/tmp/picked");
+    assert_eq!(
+        state.record_picked_path(picked.clone()).unwrap(),
+        "/tmp/picked"
+    );
+    assert_eq!(state.upload_path("/tmp/picked").unwrap(), picked);
     state.record_drop_paths(&[second]);
     assert_eq!(
-        state.take_drop_path("/tmp/first").unwrap_err().code,
+        state.upload_path("/tmp/first").unwrap_err().code,
         "drop-not-authorized"
     );
     let third = PathBuf::from("/tmp/third");
@@ -1064,7 +1072,7 @@ fn renderer_can_only_consume_paths_from_the_latest_native_drop_once() {
     );
     for path in ["/tmp/third", "/tmp/fourth"] {
         assert_eq!(
-            state.take_drop_path(path).unwrap_err().code,
+            state.upload_path(path).unwrap_err().code,
             "drop-not-authorized"
         );
     }

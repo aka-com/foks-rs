@@ -1354,7 +1354,7 @@ fn yubi_command(
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, _vault, _| {
                 let cards = session.list_yubi_cards(&provider)?;
-                output(json, &cards, &format!("{} YubiKey(s)", cards.len()))
+                output(json, &cards, &format!("{} hardware key(s)", cards.len()))
             })
         }
         YubiCommand::Create(arguments) => {
@@ -1398,7 +1398,11 @@ fn yubi_command(
                     vault,
                     master,
                 )?;
-                output(json, &report, "YubiKey account created and synchronized")
+                output(
+                    json,
+                    &report,
+                    "Hardware-key account created and synchronized",
+                )
             })
         }
         YubiCommand::ResumeAccount {
@@ -1410,7 +1414,7 @@ fn yubi_command(
             let pin = read_pin(&pin_file)?;
             with_vault(state_dir, &session, |session, vault, master| {
                 let report = session.resume_yubi_account(&alias, pin, &provider, vault, master)?;
-                output(json, &report, "YubiKey account creation reconciled")
+                output(json, &report, "Hardware-key account creation reconciled")
             })
         }
         YubiCommand::Provision(arguments) => {
@@ -1435,7 +1439,7 @@ fn yubi_command(
                     vault,
                     master,
                 )?;
-                output(json, &report, "YubiKey device provisioned")
+                output(json, &report, "Hardware key provisioned")
             })
         }
         YubiCommand::Sync {
@@ -1450,7 +1454,7 @@ fn yubi_command(
                 return with_vault(state_dir, &session, |session, vault, master| {
                     let report =
                         session.sync_yubi_account(&alias, pin, &provider, vault, master)?;
-                    output(json, &report, "YubiKey account synchronized")
+                    output(json, &report, "Hardware-key account synchronized")
                 });
             }
             let credentials = ClientCredentials::open(state_dir)?;
@@ -1473,7 +1477,7 @@ fn yubi_command(
                     json,
                     &report,
                     &format!(
-                        "YubiKey account synchronized; {} federated binding(s) processed",
+                        "Hardware-key account synchronized; {} federated binding(s) processed",
                         report.federation.len()
                     ),
                 )
@@ -1483,7 +1487,7 @@ fn yubi_command(
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, _| {
                 let status = session.yubi_pin_status(&alias, &provider, vault)?;
-                output(json, &status, "YubiKey PIN status read")
+                output(json, &status, "Hardware key PIN status read")
             })
         }
         YubiCommand::ChangePin {
@@ -1497,7 +1501,7 @@ fn yubi_command(
             let new_pin = read_pin(&new_pin_file)?;
             with_vault(state_dir, &session, |session, vault, _| {
                 let status = session.change_yubi_pin(&alias, old_pin, new_pin, &provider, vault)?;
-                output(json, &status, "YubiKey PIN changed")
+                output(json, &status, "Hardware key PIN changed")
             })
         }
         YubiCommand::ChangePuk {
@@ -1514,7 +1518,7 @@ fn yubi_command(
                 output(
                     json,
                     &serde_json::json!({ "alias": alias, "changed": true }),
-                    "YubiKey PUK changed",
+                    "Hardware key PUK changed",
                 )
             })
         }
@@ -1529,7 +1533,7 @@ fn yubi_command(
             let new_pin = read_pin(&new_pin_file)?;
             with_vault(state_dir, &session, |session, vault, _| {
                 let status = session.unblock_yubi_pin(&alias, puk, new_pin, &provider, vault)?;
-                output(json, &status, "YubiKey PIN unblocked")
+                output(json, &status, "Hardware key PIN unblocked")
             })
         }
         YubiCommand::RotateManagementKey {
@@ -1542,7 +1546,7 @@ fn yubi_command(
             with_vault(state_dir, &session, |session, vault, master| {
                 let report =
                     session.rotate_yubi_management_key(&alias, pin, &provider, vault, master)?;
-                output(json, &report, "YubiKey management key rotated")
+                output(json, &report, "Hardware key management key rotated")
             })
         }
         YubiCommand::ResumeManagementKey {
@@ -1555,7 +1559,11 @@ fn yubi_command(
             with_vault(state_dir, &session, |session, vault, master| {
                 let report =
                     session.resume_yubi_management_key(&alias, pin, &provider, vault, master)?;
-                output(json, &report, "YubiKey management-key rotation reconciled")
+                output(
+                    json,
+                    &report,
+                    "Hardware key management-key rotation reconciled",
+                )
             })
         }
         YubiCommand::RecoverManagementKey {
@@ -1567,7 +1575,7 @@ fn yubi_command(
             with_vault(state_dir, &session, |session, vault, _| {
                 let report =
                     session.recover_yubi_management_key(&yubi_alias, &software_alias, vault)?;
-                output(json, &report, "YubiKey management key recovered")
+                output(json, &report, "Hardware key management key recovered")
             })
         }
         YubiCommand::RecoverSubkey {
@@ -1579,7 +1587,7 @@ fn yubi_command(
             let pin = read_pin(&pin_file)?;
             with_vault(state_dir, &session, |session, vault, master| {
                 let report = session.recover_yubi_subkey(&alias, pin, &provider, vault, master)?;
-                output(json, &report, "YubiKey delegated subkey recovered")
+                output(json, &report, "Hardware key delegated subkey recovered")
             })
         }
         YubiCommand::Revoke {
@@ -1594,7 +1602,7 @@ fn yubi_command(
                 output(
                     json,
                     &report,
-                    "YubiKey device revoked and local credential removed",
+                    "Hardware key revoked and local credential removed",
                 )
             })
         }
@@ -1612,8 +1620,8 @@ fn yubi_card(
         .collect::<Vec<_>>();
     match matches.as_slice() {
         [card] => Ok(card.clone()),
-        [] => Err(format!("YubiKey serial {serial} is not connected").into()),
-        _ => Err(format!("YubiKey serial {serial} is ambiguous").into()),
+        [] => Err(format!("hardware key serial {serial} is not connected").into()),
+        _ => Err(format!("hardware key serial {serial} is ambiguous").into()),
     }
 }
 

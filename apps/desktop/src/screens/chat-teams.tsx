@@ -292,6 +292,8 @@ export interface ChatTeamColumnProps {
   /** The clock the tab decides availability on, so the column shares it. */
   accessOptions?: AvailabilityOptions;
   onOpen: (ref: StoreRef, channel?: string) => void;
+  /** Opens a channel and displays its information panel. */
+  onChannelInfo: (ref: StoreRef, channel: string) => void;
   onNewChat: () => void;
   /** Opens a team's page on the Teams tab, where its setup is finished. */
   onTeams: (ref: StoreRef) => void;
@@ -308,6 +310,7 @@ export function ChatTeamColumn({
   activeChannel,
   accessOptions = {},
   onOpen,
+  onChannelInfo,
   onNewChat,
   onTeams,
   query: search = '',
@@ -580,6 +583,20 @@ export function ChatTeamColumn({
                   reason="Deleting channels is not implemented."
                 >
                   Delete channel
+                </MenuItem>
+                <MenuItem
+                  icon="info"
+                  reason={
+                    contextChannel
+                      ? undefined
+                      : 'This channel is no longer available.'
+                  }
+                  onClick={() => {
+                    closeContext();
+                    onChannelInfo(context.team!, context.channel!);
+                  }}
+                >
+                  Channel info
                 </MenuItem>
               </>
             ) : context.team ? (

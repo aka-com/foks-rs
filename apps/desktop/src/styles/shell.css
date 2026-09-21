@@ -11,7 +11,7 @@ a{color:inherit;text-decoration:none}
 svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none}
 
 /* Window container */
-.window{position:relative;width:min(1180px,96vw);height:min(760px,88vh);background:var(--main-surface);border-radius:var(--radius-lg);border:1px solid var(--window-border);box-shadow:var(--shadow-window);overflow:hidden;display:flex;flex-direction:column;--topbar-h:48px;--side-w-open:208px;--side-w:var(--side-w-open)}
+.window{position:relative;width:min(1180px,96vw);height:min(760px,88vh);background:var(--main-surface);border-radius:var(--radius-lg);border:1px solid var(--window-border);box-shadow:var(--shadow-window);overflow:hidden;display:flex;flex-direction:column;--topbar-h:48px;--side-w-open:150px;--side-w:var(--side-w-open)}
 /* Shell grid */
 .app{flex:1;min-height:0;display:grid;position:relative;--side-track:auto;--side-pad:10px;--side-head-pad:10px;--side-open-content:calc(var(--side-w-open) - var(--side-pad) * 2);--details-w:300px;grid-template-columns:var(--side-track) minmax(0,1fr);transition:grid-template-columns .2s ease}
 .app.with-details{grid-template-columns:var(--side-track) minmax(0,1fr) var(--details-w)}
@@ -63,7 +63,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 }
 
 /* Navigation rail */
-.window:has(>.app>.side.rail){--side-w-open:208px}
+.window:has(>.app>.side.rail){--side-w-open:150px}
 .side.rail{background:var(--rail);border-right-color:rgba(0,0,0,.12);color:var(--rail-ink);padding:0;overflow-x:hidden;overflow-y:auto;user-select:none}
 /* Window drag strip */
 .traffic{flex:none;display:flex;align-items:center;min-height:32px;padding:14px 16px 10px}
@@ -71,7 +71,8 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .traffic .light{width:12px;height:12px;border-radius:50%;background:rgba(255,255,255,.35)}
 /* Product mark and wordmark */
 .side.rail .rail-brand{translate:0 -1px;flex:none;display:flex;align-items:center;gap:9px;padding:6px 16px 8px;color:#fff;font-size:13px;font-weight:700;letter-spacing:.02em;white-space:nowrap}
-.side.rail .rail-brand .mark{width:22px;height:22px;flex:none;display:grid;place-items:center;border-radius:6px;background:#fff;color:var(--rail);font-size:12px;font-weight:800;line-height:1}
+.side.rail .rail-brand .mark{width:22px;height:22px;flex:none;display:grid;place-items:center;border-radius:6px;background:var(--warning-dot);color:var(--ink-inverse);line-height:1}
+.side.rail .rail-brand .mark .ic{width:15px;height:15px;stroke-width:2.3;translate:-.5px -.5px}
 /* Sidebar tab styling with pill-shaped active state and no border indicator. */
 .side.rail .nav{position:relative;min-height:34px;width:calc(100% - 16px);margin:1px 8px;padding:4px 10px;border-left:0;border-radius:8px;gap:11px;font-size:13px;font-weight:500;color:var(--rail-ink)}
 .side.rail .nav:hover{background:rgba(255,255,255,.09);color:#fff}
@@ -120,9 +121,9 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side.rail .who:hover,.side.rail .who[aria-expanded="true"]{background:rgba(255,255,255,.08)}
 .side.rail .who .avatar{margin:0}
 .side.rail .who.who-empty .avatar{width:26px;height:26px;flex:none;border-radius:50%;background:rgba(255,255,255,.175)}
-.side.rail .who .t{flex:1;min-width:0;overflow:hidden}
-.side.rail .who .t b{display:block;margin-bottom:1px;color:#fff;font-weight:650;font-size:16px;line-height:1.15;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.side.rail .who .t small{display:block;font-size:13px;line-height:1.3;color:rgba(255,255,255,.7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.side.rail .who .t{flex:1;min-width:0;line-height:1.25;overflow:hidden}
+.side.rail .who .t b{display:block;color:#fff;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.side.rail .who .t small{display:block;font-size:12px;color:rgba(255,255,255,.7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .side.rail .who .chev{display:grid;place-items:center;opacity:.7;flex:none}
 .side.rail .attn{position:absolute;left:31px;top:8px;width:11px;height:11px;padding:0;border-radius:50%;background:var(--unread);border:2px solid var(--rail)}
 .side.rail .attn:hover{background:var(--unread)}
@@ -137,8 +138,12 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 /* Collapsed rail variants */
 .side.rail.is-narrow .traffic{padding:14px 6px 10px}
 .side.rail.is-narrow .traffic .lights{visibility:hidden;gap:5px}
-.side.rail.is-narrow .rail-brand{justify-content:center;padding-left:0;padding-right:0;gap:0}
+.side.rail.is-narrow .rail-brand{width:100%;justify-content:center;padding-left:0;padding-right:0;gap:0}
 .side.rail.is-narrow .rail-brand .lab{display:none}
+.side.rail.is-narrow button.rail-brand:focus-visible{outline:0}
+.side.rail.is-narrow button.rail-brand:hover:not(:disabled) .mark{box-shadow:0 0 0 3px rgba(255,255,255,.18)}
+.side.rail.is-narrow button.rail-brand:focus-visible .mark{outline:2px solid #fff;outline-offset:2px}
+.side.rail.is-narrow button.rail-brand:disabled{cursor:default;opacity:.45}
 .side.rail.is-narrow .nav{width:36px;min-height:34px;height:34px;margin:1px 10px;padding:0}
 .side.rail.is-narrow .nav>.rail-tail{position:absolute;top:6px;right:-1px;margin:0;gap:0}
 .side.rail.is-narrow .nav>.rail-tail .num{display:none}
@@ -257,11 +262,10 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 /* Store icon mark in breadcrumbs matching the Files tree badge color. */
 .topbar .crumbs .crumb-mark{flex:none;width:16px;height:16px;margin-right:4px;padding-bottom:1px;border-radius:4px;display:grid;place-items:center;color:#fff;font-size:var(--mark-type);font-weight:700;letter-spacing:-.04em}
 .topbar .grow{flex:1 1 20px;min-width:8px;align-self:stretch}
-/* The shell's one search field: a scope chip, the input, and the palette's key. */
+/* Topbar search field with text input and keyboard shortcut indicator. */
 .topbar .topsearch{position:relative;display:flex;align-items:center;gap:7px;flex:0 1 auto;width:min(320px,34%);min-width:140px;max-width:none;height:30px;padding:0 10px;border-radius:8px;border:1px solid var(--search-border);background:var(--btn-bg);color:var(--muted)}
 .topbar .topsearch:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-wash-2)}
 .topbar .topsearch:has(input[disabled]){opacity:.6}
-.topbar .topsearch>.scope{translate:-2px 0;display:inline-flex;align-items:center;flex:none;max-width:45%;height:20px;padding:0 6px;border-radius:5px;background:var(--chip-bg);color:var(--muted);font-size:12px;font-weight:500;letter-spacing:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .topbar .topsearch>.ic{position:static;flex:none;font-size:15px;color:var(--muted)}
 .topbar .topsearch input{display:block;flex:1;min-width:0;width:auto;height:auto;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;outline:0;color:var(--ink);font-size:13px}
 .topbar .topsearch input:focus{border:0;background:transparent;box-shadow:none}
@@ -275,7 +279,6 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .topbar :is(.newwrap .btn,.btn.new-chat):has(>.ic.chevron:last-child){padding-right:10px}
 .topbar .newwrap{flex:none;display:inline-flex}
 /* Destination header displayed at the top of the New item menu. */
-.menu .mh{padding:8px 10px 4px;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
 /* Modal dialog card for blocking / stopped shell states. */
 .tcard{width:min(440px,100%);padding:12px 22px 18px;border:1px solid var(--line-mid);border-radius:var(--radius-xl);background:var(--btn-bg);box-shadow:var(--shadow-sheet)}
 .tcard h2{margin:8px 0 6px;font-size:16px;font-weight:700;letter-spacing:-.01em}
@@ -572,7 +575,7 @@ details.dd li b{color:var(--ink-2)}
 .drop-area{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}
 .drop-veil{position:absolute;inset:0;z-index:4;display:grid;place-items:center;padding:20px;background:color-mix(in srgb,color-mix(in srgb,var(--main-surface) 84%,var(--accent)) 72%,transparent);border:2px dashed var(--accent-border);border-radius:var(--radius-lg);pointer-events:none}
 .drop-veil.off{background:color-mix(in srgb,color-mix(in srgb,var(--main-surface) 88%,var(--danger-ink)) 72%,transparent);border-color:var(--danger-ink)}
-.drop-card{display:grid;justify-items:center;gap:4px;text-align:center;max-width:420px;padding:16px 22px;border-radius:var(--radius-lg);background:var(--main-surface);box-shadow:var(--shadow-menu)}
+.drop-card{display:grid;justify-items:center;gap:4px;text-align:center;max-width:420px;padding:16px 22px;border-radius:var(--radius-lg);background:var(--main-surface);box-shadow:var(--shadow-upload)}
 .drop-card .glyph{width:40px;height:40px;border-radius:var(--radius-md);display:grid;place-items:center;font-size:20px;background:var(--accent-wash-2);color:var(--accent-ink)}
 .drop-veil.off .drop-card .glyph{background:var(--danger-wash);color:var(--danger-ink)}
 .drop-card b{font-size:14px;font-weight:650}
@@ -840,7 +843,7 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 .toasts{position:fixed;left:0;right:0;bottom:18px;z-index:20;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none}
 .toast{display:flex;align-items:center;gap:10px;max-width:min(90%,520px);padding:7px 10px 7px 14px;border-radius:var(--radius-pill);background:var(--ink);color:var(--main-surface);font-size:13px;line-height:1.4;box-shadow:var(--shadow-menu);opacity:0;transform:translateY(8px);transition:opacity .25s,transform .25s;pointer-events:auto}
 .toast.show{opacity:1;transform:none}
-.toast[data-toast-tone="warning"]{background:var(--danger-solid)}
+.toast[data-toast-tone="warning"]{background:var(--danger-solid);color:var(--ink-inverse)}
 .toast-message{min-width:0;overflow-wrap:anywhere}
 .toast-action,.toast-dismiss{border:0;background:none;color:inherit;font:inherit;cursor:pointer;flex:none}
 .toast-action{font-weight:650;padding:2px 4px}
@@ -856,7 +859,6 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 .traffic .side-collapse:focus-visible{outline:2px solid #fff;outline-offset:2px}
 .traffic .side-collapse:disabled{opacity:.45;cursor:default}
 .side.rail:not(.is-narrow) .traffic .side-collapse{top:calc(100% + 3px);z-index:1}
-.side.rail.is-narrow .traffic .side-collapse{right:14px;top:8px}
 
 .chat-migration { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 20px; font-size: 13px; flex-shrink: 0; }
 
@@ -885,7 +887,7 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 @media (prefers-reduced-motion:reduce){.exit-progress .spin{animation:none}}
 @media (max-width:760px){.exit-actions.three,.exit-actions.failure-actions{flex-wrap:wrap}.exit-actions.three .btn{flex:1 1 100%}.exit-actions.failure-actions .spacer{display:none}.exit-card-body{padding:20px}.exit-card>.action-error{margin-left:20px;margin-right:20px}}
 
-.side.rail.is-narrow .nav>.ic,.side.rail.is-narrow .side-collapse>.ic,.side.rail.is-narrow .rail-brand .mark{transform:translateX(1px)}
+.side.rail.is-narrow .nav>.ic,.side.rail.is-narrow .rail-brand .mark{transform:translateX(1px)}
 
 /* Center the drag target over the boundary, outside the scrolling rail. */
 .side.rail{position:relative}

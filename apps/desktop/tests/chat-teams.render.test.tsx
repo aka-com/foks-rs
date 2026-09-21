@@ -2260,7 +2260,7 @@ test('sidebar context menus distinguish background, teams, and channels', async 
       .within(menu)
       .getAllByRole('menuitem')
       .map((item) => item.textContent),
-    ['Open channel', 'Edit channel', 'Delete channel'],
+    ['Open channel', 'Edit channel', 'Delete channel', 'Channel info'],
   );
   for (const name of ['Edit channel', 'Delete channel']) {
     const item = ui.within(menu).getByRole('menuitem', { name });
@@ -2273,6 +2273,13 @@ test('sidebar context menus distinguish background, teams, and channels', async 
   );
   assert.equal(ui.screen.queryByRole('menu'), null);
   assert.equal(journal.at(-1)?.kind, 'chat');
+  ui.fireEvent.contextMenu(channel, { clientX: 40, clientY: 50 });
+  ui.fireEvent.click(
+    ui.screen.getByRole('menuitem', { name: 'Channel info' }),
+  );
+  assert.equal(ui.screen.queryByRole('menu'), null);
+  assert.equal(journal.at(-1)?.kind, 'chat');
+  assert.ok(await ui.screen.findByRole('complementary', { name: 'Channel info' }));
   ui.fireEvent.contextMenu(document.querySelector('.chat-inbox-scroll')!);
   assert.ok(ui.screen.getByRole('menuitem', { name: 'Create channel' }));
   ui.fireEvent.keyDown(document, { key: 'Escape' });

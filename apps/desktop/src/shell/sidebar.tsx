@@ -9,7 +9,7 @@
  * five tabs. Every tab's indicator sits in one trailing slot: Chat and Teams
  * carry a count pill, Devices and Settings an alert dot beside whatever number
  * is known, while Chat loading appears in the header Refresh control.
- * The rail defaults to 208px open and 56px collapsed. Its expanded width is
+ * The rail defaults to 150px open and 56px collapsed. Its expanded width is
  * resizable and persisted; it never expands on hover or focus.
  */
 
@@ -748,27 +748,44 @@ export function Sidebar({
     >
       {resize.handle}
       <TrafficStrip native={nativeChrome}>
-        {onToggleCollapsed ? (
+        {onToggleCollapsed && !collapsed ? (
           <button
             type="button"
             className="side-collapse"
-            aria-expanded={!collapsed}
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-expanded="true"
+            aria-label="Collapse sidebar"
+            title="Collapse sidebar"
             disabled={blocked}
             onClick={onToggleCollapsed}
           >
-            <Icon name={collapsed ? 'panelLeftOpen' : 'panelLeftClose'} />
+            <Icon name="panelLeftClose" />
           </button>
         ) : null}
       </TrafficStrip>
       <div className={blocked ? 'rail-body is-blocked' : 'rail-body'}>
-        <div className="rail-brand">
-          <span className="mark" aria-hidden="true">
-            F
-          </span>
-          <span className="lab">FOKS</span>
-        </div>
+        {collapsed && onToggleCollapsed ? (
+          <button
+            type="button"
+            className="rail-brand"
+            aria-expanded="false"
+            aria-label="Expand sidebar"
+            title="Expand sidebar"
+            disabled={blocked}
+            onClick={onToggleCollapsed}
+          >
+            <span className="mark" aria-hidden="true">
+              <Icon name="pawPrint" />
+            </span>
+            <span className="lab">foks-rs</span>
+          </button>
+        ) : (
+          <div className="rail-brand">
+            <span className="mark" aria-hidden="true">
+              <Icon name="pawPrint" />
+            </span>
+            <span className="lab">foks-rs</span>
+          </div>
+        )}
         <div className="rail-tabs">
           {RAIL_TABS.map((tab) => (
             <NavRow

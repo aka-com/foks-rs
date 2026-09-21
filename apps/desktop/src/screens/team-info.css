@@ -1,0 +1,96 @@
+.team-info {
+  position: absolute;
+  top: var(--topbar-h);
+  right: 0;
+  bottom: 0;
+  width: 320px;
+  max-width: calc(100% - var(--side-w));
+  z-index: 5;
+  min-height: 0;
+  overflow: auto;
+  border-left: 1px solid var(--line-soft);
+  background: var(--surface);
+  box-shadow: var(--shadow-menu);
+}
+.team-info-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.team-info-head b {
+  flex: 1;
+  font-size: 13px;
+}
+.team-info section {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.team-info h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.team-info h2 {
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+.team-info p,
+.team-info dl {
+  font-size: 12.5px;
+  margin-bottom: 8px;
+}
+.team-info dt {
+  color: var(--muted);
+  margin-top: 8px;
+}
+.team-info dd {
+  overflow-wrap: anywhere;
+}
+.team-info-identity {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.team-info-quiet,
+.team-info small {
+  color: var(--muted);
+}
+.team-info-member {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12.5px;
+}
+.team-info-member span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.team-info-member span small,
+.team-info-channel small {
+  display: block;
+}
+.team-info-member > small {
+  flex: none;
+}
+.team-info section .btn {
+  width: 100%;
+  justify-content: center;
+  margin-top: 8px;
+}
+.team-info-channel {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 0;
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+.team-info-channel:hover {
+  color: var(--accent-ink);
+}

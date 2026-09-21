@@ -1009,7 +1009,7 @@ test('personal recovery puts backup first and completes without creating a group
     ),
     ['Recovery phrase', 'Passphrase'],
   );
-  assert.ok(view.queryByText(/YubiKey/) === null);
+  assert.ok(view.queryByText(/hardware key/i) === null);
   assert.ok(view.queryByText('Create a group') === null);
   ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));
   await view.findByRole('button', { name: 'Continue to my vault' });

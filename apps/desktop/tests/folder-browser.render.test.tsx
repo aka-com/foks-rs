@@ -28,7 +28,10 @@ test.before(async () => {
     server: { middlewareMode: true, hmr: false, ws: false, watch: null },
   });
 });
-test.afterEach(() => ui.cleanup());
+test.afterEach(() => {
+  ui.cleanup();
+  window.localStorage.removeItem('filesView');
+});
 test.after(async () => vite.close());
 
 async function mount(
@@ -195,7 +198,7 @@ test('a store with nothing in it is still reachable from the tree', async () => 
   );
   assert.equal(
     document.querySelector('.lpane .empty p')?.textContent,
-    'Passwords and documents you add here are private to this vault.',
+    'Passwords and documents you add are private to this vault.',
   );
   // The tree itself survives showing an empty store: Personal is still there.
   assert.ok(treeRow('Personal'));
@@ -305,14 +308,84 @@ test('a row names its item, its folder, and the actions its kind allows', async 
   assert.deepEqual(actionsOf(fileDocument), ['Download']);
 });
 
-test('disables grid view button when grid view is not yet supported', async () => {
+test('grid view preserves browsing state, sorting, and selected details and persists across remounts', async () => {
+  const { store } = await mount(
+    { kind: 'all' },
+    {
+      query: 'github',
+      kind: 'Password',
+      sort: 'name',
+      sortDirection: 'desc',
+      selection: { store: 'acct:personal', path: '/logins/github.com' },
+    },
+  );
+  const before = store.getSnapshot();
+  assert.equal(
+    ui.screen
+      .getByRole('button', { name: 'List view' })
+      .getAttribute('aria-pressed'),
+    'true',
+  );
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Grid view' }));
+  assert.equal(store.getSnapshot(), before);
+  assert.equal(
+    ui.screen
+      .getByRole('button', { name: 'Grid view' })
+      .getAttribute('aria-pressed'),
+    'true',
+  );
+  assert.equal(document.querySelectorAll('.files-grid .row').length, 1);
+  assert.equal(
+    document.querySelector('.files-grid .row')?.getAttribute('aria-pressed'),
+    'true',
+  );
+  const sort = ui.screen.getByRole<HTMLSelectElement>('combobox', {
+    name: 'Sort items',
+  });
+  assert.equal(sort.value, 'name:desc');
+  assert.ok(sort.closest('.lt'));
+  assert.equal(
+    sort.closest('.files-sort-control')?.nextElementSibling?.className,
+    'seg',
+  );
+  ui.fireEvent.change(ui.screen.getByRole('combobox', { name: 'Sort items' }), {
+    target: { value: 'kind:asc' },
+  });
+  assert.equal(store.getSnapshot().sort, 'kind');
+  assert.equal(store.getSnapshot().sortDirection, 'asc');
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'List view' }));
+  assert.equal(document.querySelector('.files-grid'), null);
+  assert.equal(store.getSnapshot().query, 'github');
+  assert.deepEqual(store.getSnapshot().selection, before.selection);
+  assert.equal(store.getSnapshot().sort, 'kind');
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Grid view' }));
+  ui.cleanup();
   await mount({ kind: 'all' });
-  const view = document.querySelector('.lpane .lt [aria-label="View"]');
-  assert.ok(view);
-  const [list, grid] = [...view.querySelectorAll('button')];
-  assert.equal(list.className, 'on');
-  assert.equal(grid.getAttribute('aria-disabled'), 'true');
-  assert.equal(grid.getAttribute('title'), 'Grid view is not available yet');
+  assert.ok(document.querySelector('.files-grid'));
+  assert.equal(
+    ui.screen
+      .getByRole('button', { name: 'Grid view' })
+      .getAttribute('aria-pressed'),
+    'true',
+  );
+});
+
+test('grid folder cards navigate with the keyboard and retain the grid and kind filter', async () => {
+  const { store } = await mount(
+    { kind: 'store', ref: 'acct:personal' },
+    { kind: 'Password' },
+  );
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Grid view' }));
+  const folder = document.querySelector<HTMLElement>(
+    '.files-grid [data-folder-path="/logins"]',
+  );
+  assert.ok(folder);
+  assert.equal(folder.querySelector('.cell.kind')?.textContent, 'Folder');
+  ui.fireEvent.keyDown(folder, { key: 'Enter' });
+  assert.equal(store.getSnapshot().folder, '/logins');
+  assert.equal(store.getSnapshot().kind, 'Password');
+  assert.equal(currentTitle(), 'logins');
+  assert.ok(document.querySelector('.files-grid .row:not(.folder)'));
 });
 
 test('search scopes to the selected tree row', async () => {

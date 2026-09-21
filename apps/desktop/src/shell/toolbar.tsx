@@ -16,12 +16,6 @@ import type { KindFilter } from '../location';
 
 export interface NewItemButtonProps {
   onNew: (kind: Exclude<KindFilter, 'All'>) => void;
-  /**
-   * The store or folder the items screen would save into, named in a header
-   * line above the kinds. Omitted where the destination is not settled, in
-   * which case the menu is the kinds alone.
-   */
-  destination?: string;
   /** Tooltip message explaining why item creation is disabled, if applicable. */
   reason?: string | null;
   disabled?: boolean;
@@ -30,7 +24,6 @@ export interface NewItemButtonProps {
 /** Primary button that displays a dropdown menu of item kinds to create. */
 export function NewItemButton({
   onNew,
-  destination,
   reason = null,
   disabled = false,
 }: NewItemButtonProps): ReactNode {
@@ -47,7 +40,6 @@ export function NewItemButton({
     >
       {(close) => (
         <>
-          {destination ? <div className="mh">New in {destination}</div> : null}
           {KIND_LIST.map((name) => (
             <button
               key={name}

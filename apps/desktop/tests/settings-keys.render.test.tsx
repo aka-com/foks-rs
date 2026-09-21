@@ -220,7 +220,7 @@ test('one page lists every device, paper key and security key together', async (
   );
   assert.equal(
     rendered.queryByRole('button', {
-      name: 'Create an account on a YubiKey…',
+      name: 'Create an account on a hardware key…',
     }),
     null,
   );
@@ -267,7 +267,7 @@ test('the chooser offers each way to add, and leads into pairing', async () => {
       'Pair another device',
       'Pair this device with another account',
       'Create a new recovery paper key',
-      'Connect a new YubiKey',
+      'Connect a hardware key',
     ],
   );
   await ui.act(async () => {
@@ -462,7 +462,7 @@ test('a Devices address written before the page was one lands on the one list', 
   assert.ok(rendered.getByText('Travel Mac'));
 });
 
-test('the YubiKey scene still opens its sheet on Devices', async () => {
+test('the hardware-key scene still opens its sheet on Devices', async () => {
   const rendered = await renderDevices(await fixture(), {
     store: 'acct:personal',
     scene: 'settings-enrol',
@@ -472,7 +472,7 @@ test('the YubiKey scene still opens its sheet on Devices', async () => {
   const dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
   assert.equal(
     ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
-    'Create a YubiKey account',
+    'Create an account on a hardware key',
   );
   assert.ok(
     document.activeElement && dialog.contains(document.activeElement),
@@ -588,12 +588,12 @@ test('the chooser leads into the paper-key and provisioning sheets too', async (
     );
   });
 
-  const provision = await choose(rendered, 'Connect a new YubiKey');
+  const provision = await choose(rendered, 'Connect a hardware key');
   assert.equal(
     ui.within(provision).getByRole('heading', { level: 2 }).textContent,
-    'Connect a YubiKey',
+    'Connect a hardware key',
   );
-  assert.ok(ui.within(provision).getByText('YubiKey 20993145'));
+  assert.ok(ui.within(provision).getByText('Hardware key 20993145'));
 });
 
 test('the chooser offers both pairing directions, so a phrase can be entered', async () => {

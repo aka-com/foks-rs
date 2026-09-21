@@ -903,7 +903,6 @@
 }
 .chat-composer:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-wash-2);
 }
 .chat-composer .band {
   margin: 10px 10px 0;

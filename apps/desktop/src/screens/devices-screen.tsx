@@ -827,7 +827,7 @@ export function DevicesScreen({
           store={selected}
           card={cards[0]}
           onClose={() => setSheet(null)}
-          onDone={async () => applied('YubiKey account created successfully.')}
+          onDone={async () => applied('Hardware-key account created.')}
           onError={(error) => void onMutationError(error)}
         />
       ) : null}
@@ -837,7 +837,7 @@ export function DevicesScreen({
           store={selected}
           cards={cards}
           onClose={() => setSheet(null)}
-          onDone={async () => applied('YubiKey added to account successfully')}
+          onDone={async () => applied('Hardware key added to account.')}
           onError={(error) => void onMutationError(error)}
         />
       ) : null}
@@ -874,7 +874,7 @@ export function DevicesScreen({
             // The page this was started from is about a key that no longer
             // exists, so the list is where the reader is left.
             if (location.device) backToList();
-            await applied('YubiKey revoked successfully');
+            await applied('Hardware key revoked.');
           }}
           onError={(error) => void onMutationError(error)}
         />

@@ -21,9 +21,11 @@ import {
   InsetRow,
   KindIcon,
   SectionLabel,
+  SheetDialog,
 } from '../components';
 import type { FilterKind } from '../components';
 import {
+  displayPath,
   fmtSize,
   formatRole,
   initials,
@@ -227,7 +229,11 @@ export interface DetailsPanelProps {
   onRevealHandled?: () => void;
   onClose: () => void;
   onDelete: (item: Item) => void;
-  onConflict: (item: Item, draft: string) => void;
+  onConflict: (
+    item: Item,
+    draft: string,
+    operation?: 'edit' | 'replace',
+  ) => void;
   /** Pass the affected profile so post-mutation refresh can reload only that profile. */
   onApplied: (message: string, profile?: string) => Promise<void>;
   onCommandError: (error: unknown, item?: Item) => void;
@@ -385,8 +391,8 @@ export function DetailsPanel({
   );
 
   // Keep Show errors in the panel with its retry control. Route Copy, Download,
-  // and Edit errors to the shell because those actions have no persistent inline
-  // error state.
+  // and edit/replace errors to the shell because those actions have no
+  // persistent inline error state until their editor or dialog opens.
   const show = useCallback(async () => {
     if (!item || !request) return;
     const requestKey = key;
@@ -620,12 +626,14 @@ export function DetailsPanel({
       return {
         verdict: 'prompt',
         title: 'Discard changes?',
-        body: `Your edits to ${name} have not been saved.`,
+        body: selectedFileMode
+          ? `The replacement for ${name} has not been saved.`
+          : `Your edits to ${name} have not been saved.`,
         confirm: 'Discard',
         onConfirm: clearEdit,
       };
     },
-    [clearEdit],
+    [clearEdit, selectedFileMode],
   );
   useNavigationGuard(editGuard);
 
@@ -633,9 +641,7 @@ export function DetailsPanel({
     return (
       <aside ref={panelRef} className="details" aria-label="Details">
         <div className="dh">
-          <span className="t">
-            <h2>Details</h2>
-          </span>
+          <span className="t" />
           <button
             type="button"
             className="x"
@@ -663,6 +669,8 @@ export function DetailsPanel({
   // is a Secret, a file brought in from disk is a File.
   const kind = kindOf(item) as FilterKind;
   const fileMode = item.kind === 'File' || binaryFile;
+  const replacing = editing && fileMode;
+  const inlineEditing = editing && !fileMode;
   const displayKind: FilterKind = kind;
   const team = store?.kind === 'team';
   const saveProblem =
@@ -671,7 +679,9 @@ export function DetailsPanel({
     editScope.current === scopeIdentity &&
     editGeneration.current === accessGeneration
       ? undefined
-      : 'Access changed. Reopen the editor before saving.');
+      : fileMode
+        ? 'Access changed. Reopen Replace before continuing.'
+        : 'Access changed. Reopen the editor before saving.');
   const blockingReason = readProblem ?? (editing ? saveProblem : writeProblem);
   const readers = readersOf(snapshot, item);
   const parties = store ? partiesOf(snapshot, store.id) : [];
@@ -760,7 +770,11 @@ export function DetailsPanel({
       editScope.current !== scopeIdentity ||
       editGeneration.current !== accessGeneration
     ) {
-      setEditError('Access changed. Reopen the editor before saving.');
+      setEditError(
+        fileMode
+          ? 'Access changed. Reopen Replace before continuing.'
+          : 'Access changed. Reopen the editor before saving.',
+      );
       return;
     }
     setEditError(null);
@@ -784,13 +798,17 @@ export function DetailsPanel({
       }
       editBaseline.current = null;
       editTarget.current = null;
-      focusActionsOnClose.current = true;
+      if (!fileMode) focusActionsOnClose.current = true;
       setEditing(false);
-      await onApplied('Changes saved', storeOf(snapshot, target.store)?.server);
+      await onApplied(
+        fileMode ? 'File replaced' : 'Changes saved',
+        storeOf(snapshot, target.store)?.server,
+      );
     } catch (error) {
       const typed = normalizeCommandError(error);
       if (typed.code === 'conflict') {
-        onConflict(target, editValue);
+        if (fileMode) clearEdit();
+        onConflict(target, editValue, fileMode ? 'replace' : 'edit');
         await onMutationError(error, { report: false });
       } else {
         await onMutationError(error, { item: target });
@@ -813,19 +831,7 @@ export function DetailsPanel({
   };
 
   const preview =
-    editing && fileMode ? (
-      <Inset variant="preview" className={dropHover ? 'drop-hover' : undefined}>
-        <InsetRow label="Replace">
-          <span className={replacementPath ? 'mono' : 'dim'}>
-            {replacementPath
-              ? replacementPath.split(/[\\/]/).at(-1)
-              : dropHover
-                ? 'Release to replace file'
-                : 'Drop a file here, or choose a file when saving'}
-          </span>
-        </InsetRow>
-      </Inset>
-    ) : editing && isLogin(item) ? (
+    inlineEditing && isLogin(item) ? (
       <Inset className="edit">
         {editFields.map(([field, value], index) => {
           const secret = field?.toLowerCase() === 'password';
@@ -866,7 +872,7 @@ export function DetailsPanel({
           );
         })}
       </Inset>
-    ) : editing && editContentConcealed ? (
+    ) : inlineEditing && editContentConcealed ? (
       <Inset variant="preview">
         <InsetRow
           label="Contents"
@@ -886,7 +892,7 @@ export function DetailsPanel({
           {MASK}
         </InsetRow>
       </Inset>
-    ) : editing ? (
+    ) : inlineEditing ? (
       <Inset variant="preview">
         <textarea
           aria-label="Contents"
@@ -1054,7 +1060,11 @@ export function DetailsPanel({
           </span>
           <span className="t">
             <b>{nameOf(item.path)}</b>
-            <small>{fmtSize(item.size)} · encrypted at rest</small>
+            <small>
+              {item.size === null
+                ? 'Encrypted'
+                : `${fmtSize(item.size)} · encrypted at rest`}
+            </small>
           </span>
         </div>
       </Inset>
@@ -1075,169 +1085,238 @@ export function DetailsPanel({
   const where = [store?.name ?? item.store, ...folderTrail].join(' › ');
 
   return (
-    <aside
-      ref={panelRef}
-      className="details"
-      aria-label={`Details for ${nameOf(item.path)}`}
-    >
-      <div className="dh">
-        <KindIcon kind={displayKind} />
-        <span className="t">
-          <h2>{nameOf(item.path)}</h2>
-          <small title={item.path}>{where}</small>
-        </span>
-        <button
-          type="button"
-          className="x"
-          title="Close"
-          aria-label="Close"
-          onClick={onClose}
-        >
-          <Icon name="close" />
-        </button>
-      </div>
-      <div className="scroll" ref={editorRef}>
-        {blockingReason ? (
-          <p id={accessDescriptionId} className="action-error" role="status">
-            {blockingReason}
-          </p>
-        ) : null}
-        {/* Item actions; value controls live beside the value. */}
-        {editing ? null : (
-          <div className="detail-actions">
-            {fileMode ? (
-              <Button
-                icon="download"
-                disabled={Boolean(readProblem)}
-                title={readProblem ?? 'Save a copy to disk'}
-                aria-describedby={readProblem ? accessDescriptionId : undefined}
-                onClick={downloadFile}
-              >
-                Download
-              </Button>
-            ) : null}
-            <Button
-              icon="pencil"
-              disabled={Boolean(writeProblem) || saving}
-              title={writeProblem ?? 'Edit this item'}
-              aria-describedby={writeProblem ? accessDescriptionId : undefined}
-              onClick={() => {
-                focusEditorOnOpen.current = true;
-                void beginEdit();
-              }}
-            >
-              {saving ? 'Reading…' : 'Edit'}
-            </Button>
-            <Button
-              variant="danger"
-              icon="trash"
-              disabled={Boolean(writeProblem)}
-              title={writeProblem ?? 'Delete this item'}
-              aria-describedby={writeProblem ? accessDescriptionId : undefined}
-              onClick={() => {
-                if (requireAccess(true)) onDelete(item);
-              }}
-            >
-              Delete
-            </Button>
-          </div>
-        )}
-        {editing || displayKind === 'Password' ? (
-          <SectionLabel>{editing ? 'Edit' : 'Fields'}</SectionLabel>
-        ) : null}
-        {preview}
-        {editing ? (
-          <div className="pfn">
-            {`This item will save as version ${item.version + 1}. If it was modified elsewhere, refresh to review updates before saving.`}
-          </div>
-        ) : null}
-        {readError && readError !== blockingReason ? (
-          <p className="action-error" role="alert">
-            {readError}
-          </p>
-        ) : null}
-        {editError && editError !== blockingReason ? (
-          <p className="action-error" role="alert">
-            {editError}
-          </p>
-        ) : null}
-        {editing ? (
-          <div className="eact">
-            <Button
-              disabled={saving}
-              onClick={() => {
-                focusActionsOnClose.current = true;
-                clearEdit();
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              disabled={saving || Boolean(saveProblem)}
-              title={saveProblem}
-              aria-describedby={saveProblem ? accessDescriptionId : undefined}
-              onClick={() => void saveEdit()}
-            >
-              {saving ? 'Saving…' : 'Save changes'}
-            </Button>
-          </div>
-        ) : null}
-
-        <SectionLabel>Details</SectionLabel>
-        <Inset>
-          <InsetRow label="Kind">{kindLabel(displayKind)}</InsetRow>
-          <InsetRow label="Location" valueClass="mark">
-            {store ? <StoreMark snapshot={snapshot} store={store} /> : null}
-            <span title={item.path}>{where}</span>
-          </InsetRow>
-          <InsetRow label="Path">{item.path}</InsetRow>
-          <InsetRow label="Version">{item.version}</InsetRow>
-          <InsetRow label="Size">{fmtSize(item.size)}</InsetRow>
-        </Inset>
-
-        <SectionLabel>Access</SectionLabel>
-        <div className="pillrow">
-          <span className="pill">
-            <Icon name="eye" />
-            Read: {roleText(item.read)}
+    <>
+      <aside
+        ref={panelRef}
+        className="details"
+        aria-label={`Details for ${nameOf(item.path)}`}
+      >
+        <div className="dh">
+          <KindIcon kind={displayKind} />
+          <span className="t">
+            <h2>{nameOf(item.path)}</h2>
+            <small title={displayPath(item.path)}>{where}</small>
           </span>
-          <span className="pill write-access">
-            <Icon name="pencil" />
-            Write: {roleText(item.write)}
-          </span>
-          {team ? (
-            <span className="pill">
-              <Icon name="users" />
-              Shared
-            </span>
+          <button
+            type="button"
+            className="x"
+            title="Close"
+            aria-label="Close"
+            onClick={onClose}
+          >
+            <Icon name="close" />
+          </button>
+        </div>
+        <div className="scroll" ref={editorRef}>
+          {blockingReason && !replacing ? (
+            <p id={accessDescriptionId} className="action-error" role="status">
+              {blockingReason}
+            </p>
           ) : null}
-        </div>
-
-        <div className="who">
-          <SectionLabel>Sharing</SectionLabel>
-          {team && readers ? (
-            <>
-              <p>
-                {peopleLabel(readers.length)} in {store?.name} with{' '}
-                <b>{roleText(item.read)}</b> access or higher can read this
-                item.
-              </p>
-              {parties.map((party) => (
-                <PartyRow
-                  key={party.party_id_hex}
-                  party={party}
-                  canRead={readers.includes(party)}
-                />
-              ))}
-            </>
-          ) : (
-            <p>No one else has access to this item.</p>
+          {/* Item actions; value controls live beside the value. */}
+          {inlineEditing ? null : (
+            <div className="detail-actions">
+              {fileMode ? (
+                <Button
+                  icon="download"
+                  disabled={Boolean(readProblem)}
+                  title={readProblem ?? 'Save a copy to disk'}
+                  aria-describedby={
+                    readProblem ? accessDescriptionId : undefined
+                  }
+                  onClick={downloadFile}
+                >
+                  Download
+                </Button>
+              ) : null}
+              <Button
+                icon={fileMode ? 'refresh' : 'pencil'}
+                disabled={Boolean(writeProblem) || saving}
+                title={
+                  writeProblem ??
+                  (fileMode ? 'Replace this file' : 'Edit this item')
+                }
+                aria-describedby={
+                  writeProblem ? accessDescriptionId : undefined
+                }
+                onClick={() => {
+                  focusEditorOnOpen.current = true;
+                  void beginEdit();
+                }}
+              >
+                {saving && !fileMode
+                  ? 'Reading…'
+                  : fileMode
+                    ? 'Replace'
+                    : 'Edit'}
+              </Button>
+              <Button
+                variant="danger"
+                icon="trash"
+                disabled={Boolean(writeProblem)}
+                title={writeProblem ?? 'Delete this item'}
+                aria-describedby={
+                  writeProblem ? accessDescriptionId : undefined
+                }
+                onClick={() => {
+                  if (requireAccess(true)) onDelete(item);
+                }}
+              >
+                Delete
+              </Button>
+            </div>
           )}
-        </div>
+          {inlineEditing || displayKind === 'Password' ? (
+            <SectionLabel>{inlineEditing ? 'Edit' : 'Fields'}</SectionLabel>
+          ) : null}
+          {preview}
+          {readError && readError !== blockingReason ? (
+            <p className="action-error" role="alert">
+              {readError}
+            </p>
+          ) : null}
+          {!replacing && editError && editError !== blockingReason ? (
+            <p className="action-error" role="alert">
+              {editError}
+            </p>
+          ) : null}
+          {inlineEditing ? (
+            <div className="eact">
+              <Button
+                disabled={saving}
+                onClick={() => {
+                  focusActionsOnClose.current = true;
+                  clearEdit();
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                disabled={saving || Boolean(saveProblem)}
+                title={saveProblem}
+                aria-describedby={saveProblem ? accessDescriptionId : undefined}
+                onClick={() => void saveEdit()}
+              >
+                {saving ? 'Saving…' : 'Save changes'}
+              </Button>
+            </div>
+          ) : null}
 
-        {/* Raw metadata is available only in developer diagnostics. */}
-      </div>
-    </aside>
+          <Inset>
+            <InsetRow label="Kind">{kindLabel(displayKind)}</InsetRow>
+            <InsetRow label="Location" valueClass="mark">
+              {store ? <StoreMark snapshot={snapshot} store={store} /> : null}
+              <span title={displayPath(item.path)}>{where}</span>
+            </InsetRow>
+            <InsetRow label="Path">{displayPath(item.path)}</InsetRow>
+            <InsetRow label="Version">{item.version}</InsetRow>
+            <InsetRow label="Size">{fmtSize(item.size)}</InsetRow>
+          </Inset>
+
+          <SectionLabel>Access</SectionLabel>
+          <div className="pillrow">
+            <span className="pill">
+              <Icon name="eye" />
+              Read: {roleText(item.read)}
+            </span>
+            <span className="pill write-access">
+              <Icon name="pencil" />
+              Write: {roleText(item.write)}
+            </span>
+            {team ? (
+              <span className="pill">
+                <Icon name="users" />
+                Shared
+              </span>
+            ) : null}
+          </div>
+
+          <div className="who">
+            <SectionLabel>Sharing</SectionLabel>
+            {team && readers ? (
+              <>
+                <p>
+                  {peopleLabel(readers.length)} in {store?.name} with{' '}
+                  <b>{roleText(item.read)}</b> access or higher can read this
+                  item.
+                </p>
+                {parties.map((party) => (
+                  <PartyRow
+                    key={party.party_id_hex}
+                    party={party}
+                    canRead={readers.includes(party)}
+                  />
+                ))}
+              </>
+            ) : (
+              <p>No one else has access to this item.</p>
+            )}
+          </div>
+
+          {/* Raw metadata is available only in developer diagnostics. */}
+        </div>
+      </aside>
+      {replacing ? (
+        <SheetDialog
+          title={`Replace ${nameOf(item.path)}`}
+          glyph={<KindIcon kind={displayKind} />}
+          onClose={clearEdit}
+          dismissible={!saving}
+          footer={
+            <>
+              <Button disabled={saving} onClick={clearEdit}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                disabled={saving || Boolean(saveProblem)}
+                title={saveProblem}
+                aria-describedby={saveProblem ? accessDescriptionId : undefined}
+                onClick={() => void saveEdit()}
+              >
+                {saving
+                  ? 'Replacing…'
+                  : replacementPath
+                    ? 'Replace file'
+                    : 'Choose file…'}
+              </Button>
+            </>
+          }
+        >
+          <p>
+            Choose a file to replace the contents of <b>{nameOf(item.path)}</b>.
+          </p>
+          <Inset
+            variant="preview"
+            className={dropHover ? 'drop-hover' : undefined}
+          >
+            <InsetRow label="File">
+              <span className={replacementPath ? 'mono' : 'dim'}>
+                {replacementPath
+                  ? replacementPath.split(/[\\/]/).at(-1)
+                  : dropHover
+                    ? 'Release to use this file'
+                    : 'Drop one file here, or choose one below'}
+              </span>
+            </InsetRow>
+          </Inset>
+          {editError && editError !== saveProblem ? (
+            <p className="action-error" role="alert">
+              {editError}
+            </p>
+          ) : null}
+          {saveProblem ? (
+            <p id={accessDescriptionId} className="action-error" role="status">
+              {saveProblem}
+            </p>
+          ) : null}
+          <p className="pfn">
+            Replacing creates version {item.version + 1}. If this file changed
+            elsewhere, refresh before choosing the replacement again.
+          </p>
+        </SheetDialog>
+      ) : null}
+    </>
   );
 }

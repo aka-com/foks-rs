@@ -789,10 +789,10 @@ async function adeWalk(context, origin) {
 
     await page.goto(`${origin}/?state=settings-enrol`, { waitUntil: 'load' });
     await page
-      .locator('.sheet', { hasText: 'Create a YubiKey account' })
+      .locator('.sheet', { hasText: 'Create an account on a hardware key' })
       .waitFor();
     if ((await page.locator('.sheet input[type="password"]').count()) < 2)
-      failures.push('YubiKey PIN/PUK fields were not concealed');
+      failures.push('Hardware-key PIN/PUK fields were not concealed');
   } catch (error) {
     failures.push(
       `Ade walk: ${error instanceof Error ? error.message : String(error)}`,

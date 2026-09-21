@@ -309,7 +309,7 @@ export function NotificationSettings({
         </Inset>
       )}
       {session && !session.available ? (
-        <p role="alert">Desktop alerts are unavailable.</p>
+        <p role="alert">Desktop alerts are unavailable in this build.</p>
       ) : null}
       {error &&
         // The agent states the refusal; the shell says it again with the

@@ -111,6 +111,102 @@ test('an empty sheet closes behind the navigation without asking', async () => {
   );
 });
 
+test('Files shortcuts create passwords and documents without replacing an open sheet', async () => {
+  const { rendered } = await mount();
+  assert.equal(
+    ui.fireEvent.keyDown(document, { key: 'n', metaKey: true }),
+    false,
+  );
+  const password = await rendered.findByRole('dialog', {
+    name: 'New password',
+  });
+  ui.fireEvent.keyDown(document, {
+    key: 'n',
+    metaKey: true,
+    shiftKey: true,
+  });
+  assert.equal(rendered.queryByRole('dialog', { name: 'New document' }), null);
+  ui.fireEvent.click(
+    ui.within(password).getByRole('button', { name: 'Cancel' }),
+  );
+  assert.equal(
+    ui.fireEvent.keyDown(document, {
+      key: 'N',
+      ctrlKey: true,
+      shiftKey: true,
+    }),
+    false,
+  );
+  await rendered.findByRole('dialog', { name: 'New document' });
+});
+
+test('the native application menu opens the same new-item workflow', async () => {
+  let open: ((kind: 'Password' | 'Document') => void) | undefined;
+  const { rendered } = await mount({
+    native: true,
+    onNewItem: async (listener) => {
+      open = listener;
+      return () => {};
+    },
+  });
+  await ui.waitFor(() => assert.ok(open));
+  ui.act(() => open?.('Document'));
+  await rendered.findByRole('dialog', { name: 'New document' });
+});
+
+test('the Files folder menu creates a folder in its selected vault path', async () => {
+  let request: Parameters<Bridge['createFolder']>[0] | undefined;
+  const { rendered } = await mount({
+    createFolder: async (next) => {
+      request = next;
+      return { applied: true };
+    },
+  });
+  const root = document.querySelector<HTMLElement>(
+    '[data-folder-store="acct:personal"][data-folder-path="/"] .fselect',
+  );
+  assert.ok(root);
+  ui.fireEvent.contextMenu(root);
+  ui.fireEvent.click(rendered.getByRole('menuitem', { name: 'New folder' }));
+  await rendered.findByRole('dialog', { name: 'New folder' });
+  ui.fireEvent.change(rendered.getByLabelText('Name'), {
+    target: { value: 'Projects' },
+  });
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Create folder' }));
+  await ui.waitFor(() => assert.ok(request));
+  assert.deepEqual(request, {
+    storeId: 'acct:personal',
+    path: '/Projects',
+  });
+});
+
+test('discarding a new folder clears its name before the next sheet', async () => {
+  const { rendered } = await mount();
+  const root = document.querySelector<HTMLElement>(
+    '[data-folder-store="acct:personal"][data-folder-path="/"] .fselect',
+  );
+  assert.ok(root);
+  const open = async () => {
+    ui.fireEvent.contextMenu(root);
+    ui.fireEvent.click(rendered.getByRole('menuitem', { name: 'New folder' }));
+    return rendered.findByRole('dialog', { name: 'New folder' });
+  };
+  const first = await open();
+  ui.fireEvent.change(ui.within(first).getByLabelText('Name'), {
+    target: { value: 'DiscardMe' },
+  });
+  ui.fireEvent.click(ui.within(first).getByRole('button', { name: 'Cancel' }));
+  await ui.waitFor(() => assert.ok(confirmation()));
+  ui.fireEvent.click(dialogButton('Discard'));
+  await ui.waitFor(() => assert.equal(confirmation(), null));
+  const second = await open();
+  assert.equal(
+    ui.within(second).getByRole<HTMLInputElement>('textbox', { name: 'Name' })
+      .value,
+    '',
+  );
+});
+
 test('a sheet with something in it asks before the navigation', async () => {
   const { rendered, store } = await mount();
   await openSheet(rendered, 'Password');

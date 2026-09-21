@@ -1307,13 +1307,13 @@ fn validate_yubi_configuration(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let retired = |slot: u8| (0x82..=0x95).contains(&slot);
     if card_serial == 0 {
-        return Err("YubiKey card serial must be positive".into());
+        return Err("hardware key card serial must be positive".into());
     }
     if signing_slot == pq_slot || !retired(signing_slot) || !retired(pq_slot) {
-        return Err("YubiKey key slots must be distinct valid PIV key slots (0x82-0x95)".into());
+        return Err("hardware key slots must be distinct valid PIV key slots (0x82-0x95)".into());
     }
     if pin_attempts == 0 || puk_attempts == 0 {
-        return Err("YubiKey retry counts must be positive".into());
+        return Err("hardware key retry counts must be positive".into());
     }
     Ok(())
 }

@@ -5970,8 +5970,8 @@ fn yubi_card(
         .collect::<Vec<_>>();
     match matches.as_slice() {
         [card] => Ok(card.clone()),
-        [] => Err(format!("YubiKey serial {serial} is not connected").into()),
-        _ => Err(format!("YubiKey serial {serial} is ambiguous").into()),
+        [] => Err(format!("hardware key serial {serial} is not connected").into()),
+        _ => Err(format!("hardware key serial {serial} is ambiguous").into()),
     }
 }
 

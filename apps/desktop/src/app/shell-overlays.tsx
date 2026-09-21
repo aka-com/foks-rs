@@ -76,6 +76,7 @@ export function useDroppedUpload({
             itemKind: 'Document',
             storeId,
             path,
+            initialFolder: path.slice(0, path.lastIndexOf('/')) || '/',
             draft: droppedFileDraft(path, sourcePath),
           });
           await mutationError(error, { report: false });
@@ -137,7 +138,7 @@ export function ShellOverlays({
         onApplied={refresh}
         onError={commandError}
         onMutationError={mutationError}
-        onRefreshConflict={async (item, draft) => {
+        onRefreshConflict={async (item, draft, operation) => {
           const next = await refreshSnapshot();
           const current = next.items.find(
             (candidate) =>
@@ -149,10 +150,20 @@ export function ShellOverlays({
           // resume the draft into, so the edit becomes a new-item draft at the
           // same path instead of being lost.
           if (!current) {
+            if (operation === 'replace') {
+              toasts.show('This file was deleted elsewhere.');
+              return null;
+            }
             toasts.show(
               'This item was deleted elsewhere. Your edit is kept as a new item at the same path.',
             );
             return conflictDraftWorkflow(item, draft);
+          }
+          if (operation === 'replace') {
+            toasts.show(
+              'Catalog refreshed. Review the current file, then choose its replacement again.',
+            );
+            return null;
           }
           setResumeDraft({
             store: item.store,

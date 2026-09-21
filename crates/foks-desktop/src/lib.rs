@@ -2562,7 +2562,7 @@ impl DesktopModel {
             .ok_or("select a profile first")?;
         match action {
             YubiAction::ListCards => Ok(Operation::ListYubiCards { profile }),
-            _ if alias.trim().is_empty() => Err("YubiKey account alias is required"),
+            _ if alias.trim().is_empty() => Err("hardware key account alias is required"),
             YubiAction::ResumeAccount => Ok(Operation::ResumeYubiAccount {
                 profile,
                 alias: alias.to_owned(),
@@ -2846,7 +2846,7 @@ fn validate_yubi_inputs(
     pin: &str,
 ) -> Result<(), &'static str> {
     if card_serial == 0 {
-        return Err("select a nonzero YubiKey serial");
+        return Err("select a nonzero hardware key serial");
     }
     if !(0x82..=0x95).contains(&signing_slot)
         || !(0x82..=0x95).contains(&pq_slot)
@@ -2861,7 +2861,7 @@ fn validate_yubi_inputs(
 }
 
 fn required_pin(pin: Option<SecretString>) -> Result<SecretString, &'static str> {
-    let pin = pin.ok_or("enter the YubiKey PIN")?;
+    let pin = pin.ok_or("enter the hardware key PIN")?;
     validate_pin(pin.expose())?;
     Ok(pin)
 }
@@ -2888,7 +2888,7 @@ fn validate_retry_configuration(
 
 fn required_alias(alias: &str) -> Result<String, &'static str> {
     if alias.trim().is_empty() {
-        Err("enter a YubiKey account alias")
+        Err("enter a hardware key account alias")
     } else {
         Ok(alias.to_owned())
     }
@@ -4900,7 +4900,7 @@ mod tests {
         );
         assert_eq!(
             model.yubi_action_operation(YubiAction::Sync, "hardware", None, None),
-            Err("enter the YubiKey PIN")
+            Err("enter the hardware key PIN")
         );
         assert_eq!(
             model.yubi_action_operation(

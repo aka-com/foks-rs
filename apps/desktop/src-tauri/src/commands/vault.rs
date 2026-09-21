@@ -1422,7 +1422,7 @@ pub async fn import_dropped_file(
     let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
     let store = state.selected_create_store(&store_id)?;
-    // Validate the destination file header before consuming the staged drop path.
+    // Validate the destination before resolving the native-authorized source.
     let header = file_create_header(
         &store,
         &path,
@@ -1431,33 +1431,22 @@ pub async fn import_dropped_file(
         write_role.as_deref(),
     )?;
     let source_path = Zeroizing::new(source_path);
-    let source = state.take_drop_path(source_path.as_str())?;
+    let source = state.upload_path(source_path.as_str())?;
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
-    apply_file_upload(&state, header, source, MutationKind::Create).await
+    let result = apply_file_upload(&state, header, source, MutationKind::Create).await;
+    if result.is_ok() {
+        state.release_upload_path(source_path.as_str());
+    }
+    result
 }
 
 #[tauri::command]
-pub async fn pick_and_import_file(
+pub async fn pick_import_file(
     app: tauri::AppHandle,
     webview: tauri::Webview,
     state: State<'_, AppState>,
-    store_id: String,
-    path: String,
-    read_role: Option<String>,
-    write_role: Option<String>,
-) -> Result<MutationDto, AgentError> {
-    let unlocked = crate::applock::unlocked_generation(&app)?;
+) -> Result<Option<String>, AgentError> {
     require_main_window(&webview)?;
-    let state = state.for_store(&store_id)?;
-    let _permit = prepare_catalog_mutation(&state).await?;
-    let store = state.selected_create_store(&store_id)?;
-    let header = file_create_header(
-        &store,
-        &path,
-        0,
-        read_role.as_deref(),
-        write_role.as_deref(),
-    )?;
     let picker_app = app.clone();
     let source = tauri::async_runtime::spawn_blocking(move || {
         picker_app.dialog().file().blocking_pick_file()
@@ -1465,13 +1454,24 @@ pub async fn pick_and_import_file(
     .await
     .map_err(|error| AgentError::unknown(format!("file picker failed: {error}")))?;
     let Some(source) = source else {
-        return Ok(MutationDto { applied: false });
+        return Ok(None);
     };
     let source = source
         .into_path()
         .map_err(|error| AgentError::new("upload-source", error.to_string(), false))?;
-    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
-    apply_file_upload(&state, header, source, MutationKind::Create).await
+    state.record_picked_path(source).map(Some)
+}
+
+#[tauri::command]
+pub fn release_import_file(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    source_path: String,
+) -> Result<CommandAck, AgentError> {
+    require_main_window(&webview)?;
+    let source_path = Zeroizing::new(source_path);
+    state.release_upload_path(source_path.as_str());
+    Ok(CommandAck { ok: true })
 }
 
 #[tauri::command]
@@ -1492,9 +1492,13 @@ pub async fn replace_dropped_file(
     require_file_item(&item)?;
     let header = file_edit_header(&item, 0)?;
     let source_path = Zeroizing::new(source_path);
-    let source = state.take_drop_path(source_path.as_str())?;
+    let source = state.upload_path(source_path.as_str())?;
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
-    apply_file_upload(&state, header, source, MutationKind::Guarded).await
+    let result = apply_file_upload(&state, header, source, MutationKind::Guarded).await;
+    if result.is_ok() {
+        state.release_upload_path(source_path.as_str());
+    }
+    result
 }
 
 #[tauri::command]

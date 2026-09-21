@@ -281,7 +281,7 @@ pub(crate) fn load_subkey_box(
         foks_server_db::SubkeyChallengeResult::Found(exact) => Ok(exact),
         foks_server_db::SubkeyChallengeResult::Expired => Err(RpcStatus::Expired),
         foks_server_db::SubkeyChallengeResult::NotFound => Err(RpcStatus::NotFound(
-            "YubiKey subkey box not found".to_owned(),
+            "hardware key subkey box not found".to_owned(),
         )),
     }
 }
@@ -541,7 +541,7 @@ fn lookup_failed() -> RpcStatus {
 }
 
 fn permission_denied() -> RpcStatus {
-    RpcStatus::PermissionDenied("YubiKey challenge verification failed".to_owned())
+    RpcStatus::PermissionDenied("hardware key challenge verification failed".to_owned())
 }
 
 fn bad_arguments(error: impl std::fmt::Display) -> RpcStatus {

@@ -43,6 +43,9 @@ async function setup(
   const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
     '/kit/toasts.tsx',
   )) as typeof import('../kit/toasts');
+  const { OverlayProvider } = (await vite.ssrLoadModule(
+    '/kit/overlay-primitives.tsx',
+  )) as typeof import('../kit/overlay-primitives');
   const { FIXTURE } = (await vite.ssrLoadModule(
     '/src/fixture.ts',
   )) as typeof import('../src/fixture');
@@ -66,9 +69,13 @@ async function setup(
     onMutationError: async () => {},
   };
   const panel = () =>
-    createElement(ToastProvider, {
-      controller: new ToastController(),
-      children: createElement(DetailsPanel, props),
+    createElement(OverlayProvider, {
+      backgroundRef: { current: document.getElementById('root') },
+      portalRoot: document.getElementById('overlays')!,
+      children: createElement(ToastProvider, {
+        controller: new ToastController(),
+        children: createElement(DetailsPanel, props),
+      }),
     });
   const draw = () =>
     createElement(
@@ -839,12 +846,71 @@ test('a completed edit returns focus to the item actions', async () => {
   await ui.waitFor(() => assert.equal(document.activeElement, edit));
 });
 
-test('a file editor with no input focuses Cancel', async () => {
+test('a file opens a Replace dialog while text items keep inline Edit', async () => {
   const p = await setup(undefined, (item) => item.kind === 'File');
+  let replaced: Parameters<Bridge['pickAndReplaceFile']>[0] | undefined;
+  p.bridge.pickAndReplaceFile = async (request) => {
+    replaced = request;
+    return { applied: true };
+  };
   const rendered = ui.render(p.draw());
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
-  const cancel = await rendered.findByRole('button', { name: 'Cancel' });
-  await ui.waitFor(() => assert.equal(document.activeElement, cancel));
+  assert.equal(rendered.queryByRole('button', { name: 'Edit' }), null);
+  const replace = rendered.getByRole('button', { name: 'Replace' });
+  ui.fireEvent.click(replace);
+  const dialog = ui.screen.getByRole('dialog', {
+    name: `Replace ${p.subject.path.split('/').at(-1)}`,
+  });
+  const cancel = ui.within(dialog).getByRole('button', { name: 'Cancel' });
+  assert.ok(document.activeElement === cancel, 'Cancel receives initial focus');
+  assert.equal(rendered.queryByRole('button', { name: 'Save changes' }), null);
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(dialog).getByRole('button', { name: 'Choose file…' }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  assert.ok(replaced);
+  assert.deepEqual(replaced, {
+    storeId: p.subject.store,
+    path: p.subject.path,
+    version: p.subject.version,
+  });
+  assert.equal(ui.screen.queryByRole('dialog'), null);
+  assert.ok(replace.isConnected);
+});
+
+test('a file replacement conflict closes Replace and reports replacement-specific recovery', async () => {
+  const p = await setup(undefined, (item) => item.kind === 'File');
+  let conflict:
+    | { item: typeof p.subject; draft: string; operation?: 'edit' | 'replace' }
+    | undefined;
+  p.bridge.pickAndReplaceFile = async () => {
+    throw {
+      code: 'conflict',
+      message: 'The file changed.',
+      retryable: false,
+      fatal: false,
+      ambiguous: false,
+    };
+  };
+  p.props.onConflict = (item, draft, operation) => {
+    conflict = { item, draft, operation };
+  };
+  const rendered = ui.render(p.draw());
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Replace' }));
+  const dialog = ui.screen.getByRole('dialog');
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(dialog).getByRole('button', { name: 'Choose file…' }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  assert.equal(ui.screen.queryByRole('dialog'), null);
+  assert.equal(conflict?.item.path, p.subject.path);
+  assert.equal(conflict?.draft, '');
+  assert.equal(conflict?.operation, 'replace');
 });
 
 test('outside clicks close details while clicks inside and dialog interactions do not', async () => {

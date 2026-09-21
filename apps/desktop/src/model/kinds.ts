@@ -66,14 +66,40 @@ export function isLogin(item: Pick<Item, 'kind' | 'path' | 'value'>): boolean {
   return kindOf(item) === 'Password' && item.path.startsWith('/logins/');
 }
 
-/** The last segment of a path, or `/` at the root. */
-export function nameOf(path: string): string {
-  return path.slice(path.lastIndexOf('/') + 1) || '/';
+/** Decodes one canonical KV path component for display without changing its identity. */
+export function displayPathComponent(component: string): string {
+  if (!component.includes('%')) return component;
+  try {
+    return [...decodeURIComponent(component)]
+      .map((character) => {
+        const code = character.codePointAt(0) ?? 0;
+        return code < 32 || code === 127 ? '�' : character;
+      })
+      .join('');
+  } catch {
+    // Keep malformed or non-UTF-8 components visible and reversible instead
+    // of guessing at bytes that the UI cannot faithfully represent.
+    return component;
+  }
 }
 
-/** The folder chip: the path without its leading slash and last segment. */
+/** Decodes every component of a canonical KV path for display. */
+export function displayPath(path: string): string {
+  if (path === '/') return path;
+  return path.split('/').map(displayPathComponent).join('/');
+}
+
+/** The decoded last segment of a path, or `/` at the root. */
+export function nameOf(path: string): string {
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  return name ? displayPathComponent(name) : '/';
+}
+
+/** The decoded folder path without its leading slash and last segment. */
 export function prefixOf(path: string): string {
   // Return an empty prefix for paths without directory separators.
   const cut = path.lastIndexOf('/');
-  return cut <= 0 ? '' : path.slice(1, cut);
+  return cut <= 0
+    ? ''
+    : displayPath(path.slice(1, cut));
 }

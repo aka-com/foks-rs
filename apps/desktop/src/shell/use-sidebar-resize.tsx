@@ -1,8 +1,8 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-const DEFAULT_WIDTH = 208;
 const MIN_WIDTH = 150;
+const DEFAULT_WIDTH = MIN_WIDTH;
 const MAX_WIDTH = 240;
 const KEY = 'sidebarWidth';
 const clamp = (width: number, max = MAX_WIDTH) =>

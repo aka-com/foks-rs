@@ -9,7 +9,7 @@ import {
   InsetRow,
 } from '../components';
 import type { AgentSnapshot, RoleWire } from '../model';
-import { kindOf, plural, parseRole, formatRole } from '../model';
+import { displayPath, fmtSize, kindOf, parseRole, formatRole } from '../model';
 import type { FilterKind } from '../components';
 import type { Location } from '../location';
 import { NavRow, Sidebar, TrafficStrip } from '../shell/sidebar';
@@ -86,7 +86,9 @@ export function SetupSidebar({
   agent?: RailAgentState;
   blocked?: boolean;
 }): ReactNode {
-  const restart = onRestart ? (
+  // Restart returns to `who`. While already there it would only reopen the
+  // same first step, so omit the action until setup has moved beyond it.
+  const restart = onRestart && checkpoint.state !== 'who' ? (
     <button
       type="button"
       className="nav"
@@ -396,16 +398,14 @@ export function AddedDetails({
         <SectionLabel>Info</SectionLabel>
         <div className="meta">
           <b>Location</b>
-          <code>{item.path}</code>
+          <code>{displayPath(item.path)}</code>
           <b>Kind</b>
           <span>{kind}</span>
           <b>Version</b>
           <span>{item.version}</span>
           <b>Size</b>
           <span>
-            {item.size === null
-              ? 'Size unavailable'
-              : plural(item.size, 'byte')}
+            {fmtSize(item.size)}
           </span>
           <b>Read permission</b>
           <Chip>{roleText(item.read)}</Chip>

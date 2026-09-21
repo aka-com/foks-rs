@@ -1,3 +1,4 @@
+import { TeamInfoPanel } from '../screens/team-info';
 import {
   useCallback,
   useEffect,
@@ -7,7 +8,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from 'react';
-import { OverlayProvider } from '/kit/overlay-primitives';
+import { anyDialogOpen, OverlayProvider } from '/kit/overlay-primitives';
 import { ToastController, ToastProvider } from '/kit/toasts';
 import type { AgentLifecycleController } from '../agent-lifecycle';
 import type { Bridge } from '../bridge';
@@ -204,7 +205,7 @@ export function VaultShell({
             agentSnapshot,
           )
         : null,
-    (value) => value?.kind === 'new',
+    (value) => value?.kind === 'new' || value?.kind === 'new-folder',
     locations,
   );
   const [toasts] = useState(() => new ToastController());
@@ -347,6 +348,21 @@ export function VaultShell({
     ).blocked,
   });
   const here = state.location;
+  const [teamInfo, setTeamInfo] = useState<{
+    storeId: string;
+    trigger?: HTMLElement;
+  } | null>(null);
+  useEffect(() => {
+    setTeamInfo(null);
+  }, [state.location, state.folder, state.selection, concealSignal]);
+  useEffect(() => {
+    if (state.details) setTeamInfo(null);
+  }, [state.details]);
+  const infoStore = teamInfo ? storeOf(shown, teamInfo.storeId) : undefined;
+  useEffect(() => {
+    if (teamInfo && infoStore?.kind !== 'team') setTeamInfo(null);
+  }, [infoStore, teamInfo]);
+
   const pendingFirstRun = incompleteFirstRunCheckpoint();
   const detailsShown =
     state.details &&
@@ -368,13 +384,6 @@ export function VaultShell({
             ? (defaultCreateStore(shown) ?? '')
             : newSelection.store,
         ) ?? undefined);
-  const newDestination =
-    newStore &&
-    newSelection &&
-    newSelection.store !== ALL_ITEMS &&
-    newSelection.path !== '/'
-      ? `${newStore.name} › ${newSelection.path.split('/').filter(Boolean).slice(-1)[0]}`
-      : newStore?.name;
   const { sideCollapsed, railCollapsed, toggleSidebar, windowChromeHidden } =
     useWindowRuntime({
       bridge,
@@ -463,6 +472,62 @@ export function VaultShell({
   // same disabled styling as `BlockedShell`.
   const block = shellBlock(agentLifecycle);
   const chrome = shellChrome(block, agentLifecycle.state, shown.agent.state);
+  const openNewItem = useCallback(
+    (itemKind: Exclude<KindFilter, 'All'>): boolean => {
+      if (
+        chrome.blocked ||
+        !filesHere ||
+        !newStore ||
+        writeBlockReason(shown, newStore) ||
+        anyDialogOpen()
+      )
+        return false;
+      setWorkflow({
+        kind: 'new',
+        itemKind,
+        storeId: newStore.id,
+        ...(newSelection && newSelection.path !== '/'
+          ? { initialFolder: newSelection.path }
+          : {}),
+      });
+      return true;
+    },
+    [chrome.blocked, filesHere, newSelection, newStore, setWorkflow, shown],
+  );
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (
+        !(event.metaKey || event.ctrlKey) ||
+        event.altKey ||
+        event.key.toLowerCase() !== 'n' ||
+        document.querySelector('[role="menu"], [role="listbox"]')
+      )
+        return;
+      if (openNewItem(event.shiftKey ? 'Document' : 'Password'))
+        event.preventDefault();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [openNewItem]);
+  useEffect(() => {
+    if (!bridge.native) return;
+    let disposed = false;
+    let stop: (() => void) | undefined;
+    void bridge
+      .onNewItem((kind) => {
+        if (!document.querySelector('[role="menu"], [role="listbox"]'))
+          openNewItem(kind);
+      })
+      .then((unlisten) => {
+        if (disposed) unlisten();
+        else stop = unlisten;
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      stop?.();
+    };
+  }, [bridge, openNewItem]);
   const chatMigration = useChatMigration(
     bridge,
     agentLifecycle.state === 'ready' && agentCatalogReady && !chrome.blocked,
@@ -606,16 +671,8 @@ export function VaultShell({
                   {...(filesHere && newStore
                     ? {
                         onNew: (itemKind: Exclude<KindFilter, 'All'>) =>
-                          setWorkflow({
-                            kind: 'new',
-                            itemKind,
-                            storeId: newStore.id,
-                            ...(newSelection && newSelection.path !== '/'
-                              ? { initialFolder: newSelection.path }
-                              : {}),
-                          }),
+                          void openNewItem(itemKind),
                         newBlocked: writeBlockReason(shown, newStore),
-                        ...(newDestination ? { newDestination } : {}),
                       }
                     : {})}
                   detailsOpen={detailsShown}
@@ -679,11 +736,34 @@ export function VaultShell({
                     uploadDroppedFile={uploadDroppedFile}
                     accessNow={accessNow}
                     accessGenerations={accessGenerations}
+                    onTeamInfo={(storeId, trigger) => {
+                      locations.setDetails(false);
+                      setTeamInfo({ storeId, trigger });
+                    }}
                   />
                 </ScreenErrorBoundary>
               </main>
             </>
           )}
+          {!chrome.blocked &&
+          listsItems(here) &&
+          !detailsShown &&
+          infoStore?.kind === 'team' ? (
+            <TeamInfoPanel
+              snapshot={shown}
+              store={infoStore}
+              bridge={bridge}
+              requestCount={teamRequestCounts.get(infoStore.id)}
+              accessNow={accessNow}
+              onError={commandError}
+              onNavigate={(location) => locations.navigate(location)}
+              onClose={(restoreFocus = true) => {
+                setTeamInfo(null);
+                if (restoreFocus)
+                  teamInfo?.trigger?.focus({ preventScroll: true });
+              }}
+            />
+          ) : null}
           {here.kind !== 'first-run' && detailsShown ? (
             <DetailsPanel
               snapshot={shown}
@@ -695,8 +775,8 @@ export function VaultShell({
                 locations.setDetails(false);
               }}
               onDelete={(item) => setWorkflow({ kind: 'delete', item })}
-              onConflict={(item, draft) =>
-                setWorkflow({ kind: 'conflict', item, draft })
+              onConflict={(item, draft, operation) =>
+                setWorkflow({ kind: 'conflict', item, draft, operation })
               }
               onApplied={refresh}
               onCommandError={commandError}

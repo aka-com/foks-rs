@@ -229,6 +229,10 @@ export function ChatTab({
               : { kind: 'chat', ref: next },
           );
         }}
+        onChannelInfo={(next, channelId) => {
+          onNavigate({ kind: 'chat', ref: next, channel: channelId });
+          setInfo(true);
+        }}
         // The column's button opens the creation form with no team chosen:
         // it belongs to the column rather than to any one team's row.
         onNewChat={openNewChat}

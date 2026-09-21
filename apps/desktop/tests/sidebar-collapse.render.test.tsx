@@ -84,11 +84,18 @@ async function shell(
 }
 
 /** The collapse toggle beside the traffic lights. */
-function toggle(): HTMLButtonElement {
+function collapseToggle(): HTMLButtonElement {
   const button = document.querySelector<HTMLButtonElement>(
     '.side .traffic .side-collapse',
   );
   assert.ok(button, 'the traffic strip draws the collapse toggle');
+  return button;
+}
+
+function expandToggle(): HTMLButtonElement {
+  const button = ui.screen.getByRole('button', { name: 'Expand sidebar' });
+  assert.ok(button instanceof window.HTMLButtonElement);
+  assert.ok(button.classList.contains('rail-brand'));
   return button;
 }
 
@@ -100,22 +107,27 @@ test('the toggle collapses the rail, flips its label, and stores the preference'
     document.querySelector('.side')?.classList.contains('is-narrow'),
     false,
   );
-  assert.equal(toggle().getAttribute('aria-expanded'), 'true');
-  assert.equal(toggle().title, 'Collapse sidebar');
+  assert.equal(collapseToggle().getAttribute('aria-expanded'), 'true');
+  assert.equal(collapseToggle().title, 'Collapse sidebar');
   assert.equal(document.querySelector('.topbar .side-collapse'), null);
+  const mark = document.querySelector('.rail-brand .mark');
+  assert.ok(mark);
+  assert.equal(mark.textContent?.trim(), '');
+  assert.ok(mark.querySelector('svg.ic'));
 
-  ui.fireEvent.click(toggle());
+  ui.fireEvent.click(collapseToggle());
   await ui.waitFor(() => {
     assert.ok(document.querySelector('.side.is-narrow'));
   });
   assert.ok(document.querySelector('.app.side-narrow'));
-  assert.equal(toggle().getAttribute('aria-expanded'), 'false');
-  assert.equal(toggle().title, 'Expand sidebar');
+  assert.equal(document.querySelector('.side-collapse'), null);
+  assert.equal(expandToggle().getAttribute('aria-expanded'), 'false');
+  assert.equal(expandToggle().title, 'Expand sidebar');
   assert.equal(window.localStorage.getItem('sideCollapsed'), '1');
   // Collapsing is CSS: every row is still in the document.
   assert.equal(document.querySelectorAll('.side .nav').length, rows);
 
-  ui.fireEvent.click(toggle());
+  ui.fireEvent.click(expandToggle());
   await ui.waitFor(() => {
     assert.equal(document.querySelector('.side.is-narrow'), null);
   });
@@ -124,7 +136,7 @@ test('the toggle collapses the rail, flips its label, and stores the preference'
 
 test('a collapsed rail stays collapsed under the pointer and the keyboard', async () => {
   await shell();
-  ui.fireEvent.click(toggle());
+  ui.fireEvent.click(collapseToggle());
   await ui.waitFor(() => {
     assert.ok(document.querySelector('.side.is-narrow'));
   });
@@ -176,7 +188,7 @@ test('an explicit collapse while details are open sticks after closing', async (
   });
   assert.equal(document.querySelector('.side.is-narrow'), null);
 
-  ui.fireEvent.click(toggle());
+  ui.fireEvent.click(collapseToggle());
   await ui.waitFor(() => {
     assert.ok(document.querySelector('.side.is-narrow'));
   });
@@ -219,6 +231,8 @@ test('the sidebar resizes by dragging, persists its width, and restores after co
   const handle = ui.screen.getByRole('separator', { name: 'Resize sidebar' });
   const frame = document.querySelector<HTMLElement>('.window');
   assert.ok(frame);
+  assert.equal(handle.getAttribute('aria-valuenow'), '150');
+  assert.equal(frame.style.getPropertyValue('--side-w-open'), '150px');
   // jsdom does not implement pointer capture or PointerEvent coordinates.
   handle.setPointerCapture = () => {};
   ui.fireEvent(
@@ -226,7 +240,7 @@ test('the sidebar resizes by dragging, persists its width, and restores after co
     new window.MouseEvent('pointerdown', {
       bubbles: true,
       button: 0,
-      clientX: 208,
+      clientX: 150,
     }),
   );
   ui.fireEvent(
@@ -239,12 +253,12 @@ test('the sidebar resizes by dragging, persists its width, and restores after co
   );
   assert.equal(frame.style.getPropertyValue('--side-w-open'), '230px');
   assert.equal(window.localStorage.getItem('sidebarWidth'), '230');
-  ui.fireEvent.click(toggle());
+  ui.fireEvent.click(collapseToggle());
   assert.equal(
     ui.screen.queryByRole('separator', { name: 'Resize sidebar' }),
     null,
   );
-  ui.fireEvent.click(toggle());
+  ui.fireEvent.click(expandToggle());
   const restored = ui.screen.getByRole('separator', { name: 'Resize sidebar' });
   assert.equal(restored.getAttribute('aria-valuenow'), '230');
   ui.fireEvent.keyDown(restored, { key: 'Home' });
@@ -252,6 +266,6 @@ test('the sidebar resizes by dragging, persists its width, and restores after co
   ui.fireEvent.keyDown(restored, { key: 'ArrowLeft' });
   assert.equal(frame.style.getPropertyValue('--side-w-open'), '150px');
   ui.fireEvent.doubleClick(restored);
-  assert.equal(frame.style.getPropertyValue('--side-w-open'), '208px');
-  assert.equal(window.localStorage.getItem('sidebarWidth'), '208');
+  assert.equal(frame.style.getPropertyValue('--side-w-open'), '150px');
+  assert.equal(window.localStorage.getItem('sidebarWidth'), '150');
 });

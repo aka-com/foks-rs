@@ -199,8 +199,8 @@ export function AddDeviceSheet({
         />
         <RadioCard
           icon="key"
-          title="Connect a new YubiKey"
-          detail="Add a connected YubiKey as an authorized device for this account."
+          title="Connect a hardware key"
+          detail="Add a connected hardware key as an authorized device for this account."
           selected={choice === 'provision'}
           onSelect={() => setChoice('provision')}
         />
@@ -819,7 +819,7 @@ export function EnrollSheet({
   // card once it is known — unless the field has already been typed into.
   const [deviceName, setDeviceName] = useState('');
   const [deviceNameTouched, setDeviceNameTouched] = useState(false);
-  const suggestedName = card ? `YubiKey ${card.serial}` : 'YubiKey';
+  const suggestedName = card ? `Hardware key ${card.serial}` : 'Hardware key';
   const shownName = deviceNameTouched ? deviceName : suggestedName;
   const [invite, setInvite] = useState('');
   const [pin, setPin] = useState('');
@@ -858,7 +858,7 @@ export function EnrollSheet({
   const validAttempts = validEnrollmentAttempts(pinAttempts, pukAttempts);
   return (
     <DeviceSheetFrame
-      title="Create a YubiKey account"
+      title="Create an account on a hardware key"
       onClose={() => {
         clear();
         onClose();
@@ -927,11 +927,11 @@ export function EnrollSheet({
       </ol>
       {card ? (
         <p>
-          <b>YubiKey {card.serial}</b> is connected. Choose an alias for this
-          key below.
+          <b>Hardware key {card.serial}</b> is connected. Choose an alias for
+          this key below.
         </p>
       ) : (
-        <Band label="Connect a YubiKey">
+        <Band label="Connect a hardware key">
           No security key is currently detected.
         </Band>
       )}
@@ -1029,7 +1029,7 @@ export function ProvisionSheet({
   );
   const [targetAlias, setTargetAlias] = useState('');
   const [deviceName, setDeviceName] = useState(
-    cards[0] ? `YubiKey ${cards[0].serial}` : 'YubiKey',
+    cards[0] ? `Hardware key ${cards[0].serial}` : 'Hardware key',
   );
   const [serial, setSerial] = useState(cards[0]?.serial ?? 0);
   const [pin, setPin] = useState('');
@@ -1065,7 +1065,7 @@ export function ProvisionSheet({
   );
   return (
     <DeviceSheetFrame
-      title="Connect a YubiKey"
+      title="Connect a hardware key"
       onClose={() => {
         clear();
         onClose();
@@ -1105,7 +1105,7 @@ export function ProvisionSheet({
       }
     >
       {cards.length ? null : (
-        <Band label="Connect a YubiKey">
+        <Band label="Connect a hardware key">
           No security key is currently detected.
         </Band>
       )}
@@ -1129,7 +1129,7 @@ export function ProvisionSheet({
             >
               {cards.map((card) => (
                 <option key={card.serial} value={card.serial}>
-                  YubiKey {card.serial}
+                  Hardware key {card.serial}
                 </option>
               ))}
             </select>

@@ -492,7 +492,7 @@ fn ensure_slot_empty(yubikey: &mut YubiKey, slot: piv::SlotId) -> Result<()> {
         // Firmware before 5.2.3 cannot report slot metadata. Refuse to
         // overwrite because absence cannot be established safely.
         Err(yubikey::Error::NotSupported) => Err(Error::Policy(
-            "YubiKey firmware cannot prove that the selected slot is empty",
+            "hardware key firmware cannot prove that the selected slot is empty",
         )),
         Err(error) => Err(map_error(error)),
     }
@@ -529,12 +529,12 @@ fn verify_locator_slots(yubikey: &mut YubiKey, locator: &YubiDeviceLocator) -> R
 
 fn compressed_public(bytes: &[u8]) -> Result<[u8; 33]> {
     let public = PublicKey::from_sec1_bytes(bytes)
-        .map_err(|_| Error::Provider("YubiKey returned an invalid P-256 public key".into()))?;
+        .map_err(|_| Error::Provider("hardware key returned an invalid P-256 public key".into()))?;
     public
         .to_encoded_point(true)
         .as_bytes()
         .try_into()
-        .map_err(|_| Error::Provider("YubiKey returned an invalid P-256 public key".into()))
+        .map_err(|_| Error::Provider("hardware key returned an invalid P-256 public key".into()))
 }
 
 fn prove_slot(yubikey: &mut YubiKey, slot: SlotId, public: &[u8; 33]) -> Result<()> {
@@ -560,7 +560,7 @@ fn ecdh(yubikey: &mut YubiKey, slot: SlotId, peer: &[u8; 33]) -> Result<[u8; 32]
     .map_err(map_error)?
     .as_slice()
     .try_into()
-    .map_err(|_| Error::Provider("YubiKey returned an invalid ECDH secret".into()))
+    .map_err(|_| Error::Provider("hardware key returned an invalid ECDH secret".into()))
 }
 
 fn map_error(error: yubikey::Error) -> Error {

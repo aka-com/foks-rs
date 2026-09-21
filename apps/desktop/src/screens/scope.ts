@@ -5,6 +5,7 @@
 import {
   KIND_LIST,
   catalog,
+  displayPathComponent,
   kindOf,
   nameOf,
   readersOf,
@@ -92,7 +93,11 @@ export function folderTree(items: readonly Item[]): FolderNode {
   }
   const finish = (node: MutableFolderNode): FolderNode => {
     const folders = [...node.children.values()]
-      .sort((a, b) => a.name.localeCompare(b.name))
+      .sort((a, b) =>
+        displayPathComponent(a.name).localeCompare(
+          displayPathComponent(b.name),
+        ),
+      )
       .map(finish);
     return {
       name: node.name,

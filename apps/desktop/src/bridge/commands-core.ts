@@ -56,6 +56,7 @@ export const coreCommands: Pick<
   | 'onWindowState'
   | 'onChatNotification'
   | 'onOpenSettings'
+  | 'onNewItem'
   | 'onMaintenanceStatus'
   | 'onExitState'
 > = {
@@ -144,6 +145,23 @@ export const coreCommands: Pick<
     }
   },
   onOpenSettings: async (listener) => listen('foks://open-settings', listener),
+  onNewItem: async (listener) => {
+    const password = await listen('foks://new-password', () =>
+      listener('Password'),
+    );
+    try {
+      const document = await listen('foks://new-document', () =>
+        listener('Document'),
+      );
+      return () => {
+        password();
+        document();
+      };
+    } catch (cause) {
+      password();
+      throw cause;
+    }
+  },
   onMaintenanceStatus: async (listener) =>
     listen<unknown>('foks://maintenance-status', (event) => {
       listener(decodeMaintenanceSnapshot(event.payload));

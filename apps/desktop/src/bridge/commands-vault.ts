@@ -6,6 +6,8 @@ import {
   type CommandError,
 } from './errors';
 import { checked, checkedMutation } from './transport';
+import { decodeCommandAck } from './core';
+import { nullableString } from './validation';
 import {
   decodeCatalog,
   decodeCopy,
@@ -29,7 +31,8 @@ export const vaultCommands: Pick<
   | 'editTextItem'
   | 'removeItem'
   | 'importDroppedFile'
-  | 'pickAndImportFile'
+  | 'pickImportFile'
+  | 'releaseImportFile'
   | 'replaceDroppedFile'
   | 'pickAndReplaceFile'
 > = {
@@ -124,16 +127,16 @@ export const vaultCommands: Pick<
       },
       decodeMutation,
     ),
-  pickAndImportFile: ({ storeId, path, readRole, writeRole }) =>
-    checkedMutation(
-      'pick_and_import_file',
-      {
-        storeId,
-        path,
-        ...(readRole === undefined ? {} : { readRole }),
-        ...(writeRole === undefined ? {} : { writeRole }),
-      },
-      decodeMutation,
+  pickImportFile: () =>
+    checked('pick_import_file', undefined, (value) =>
+      nullableString(value, 'pick_import_file response'),
+    ),
+  releaseImportFile: (sourcePath) =>
+    checked(
+      'release_import_file',
+      { sourcePath },
+      decodeCommandAck,
+      false,
     ),
   replaceDroppedFile: ({ storeId, path, version, sourcePath }) =>
     checkedMutation(

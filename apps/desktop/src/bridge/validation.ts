@@ -25,7 +25,7 @@ export function entityId(
 export function deviceMemberId(value: unknown, at: string): string {
   const result = string(value, at);
   if (!/^04[0-9a-f]{64}$/.test(result) && !/^08[0-9a-f]{66}$/.test(result)) {
-    throw new Error(`${at} must be a canonical software-device or YubiKey id`);
+    throw new Error(`${at} must be a canonical software-device or hardware key id`);
   }
   return result;
 }

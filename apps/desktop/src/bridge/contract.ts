@@ -63,7 +63,6 @@ import type {
 import type {
   CatalogDto,
   CopyResponse,
-  CreateFileRequest,
   CreateFolderRequest,
   CreateLinkRequest,
   CreateTextRequest,
@@ -201,7 +200,10 @@ export interface Bridge {
   importDroppedFile(
     request: ImportDroppedFileRequest,
   ): Promise<MutationResponse>;
-  pickAndImportFile(request: CreateFileRequest): Promise<MutationResponse>;
+  /** Selects and authorizes a native file for a later upload. */
+  pickImportFile(): Promise<string | null>;
+  /** Releases a selected or dropped file when its draft is discarded. */
+  releaseImportFile(sourcePath: string): Promise<CommandAck>;
   replaceDroppedFile(
     request: ReplaceDroppedFileRequest,
   ): Promise<MutationResponse>;
@@ -394,6 +396,9 @@ export interface Bridge {
     listener: (kind: 'activate' | 'error') => void,
   ): Promise<Unlisten>;
   onOpenSettings(listener: () => void): Promise<Unlisten>;
+  onNewItem(
+    listener: (kind: 'Password' | 'Document') => void,
+  ): Promise<Unlisten>;
   onMaintenanceStatus(
     listener: (snapshot: MaintenanceSnapshot) => void,
   ): Promise<Unlisten>;

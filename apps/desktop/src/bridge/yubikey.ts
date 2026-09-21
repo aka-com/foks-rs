@@ -171,7 +171,7 @@ export function decodeYubiResult(
   ) {
     const yubiId = string(item.yubiId, `${command}.yubiId`);
     if (!/^08[0-9a-f]{66}$/.test(yubiId))
-      throw new Error(`${command}.yubiId must be a canonical YubiKey id`);
+      throw new Error(`${command}.yubiId must be a canonical hardware key id`);
     const subkeyId = entityId(item.subkeyId, '0d', `${command}.subkeyId`);
     return {
       alias: string(item.alias, `${command}.alias`),

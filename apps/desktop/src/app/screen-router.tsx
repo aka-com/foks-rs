@@ -40,7 +40,9 @@ export function ScreenRouter({
   uploadDroppedFile,
   accessNow,
   accessGenerations,
+  onTeamInfo,
 }: {
+  onTeamInfo: (storeId: string, trigger?: HTMLElement) => void;
   shown: AgentSnapshot;
   bridge: Bridge;
   state: ReturnType<LocationStore['getSnapshot']>;
@@ -103,6 +105,10 @@ export function ScreenRouter({
           await mutationError(error);
         }
       }}
+      onTeamInfo={onTeamInfo}
+      onNewFolder={(storeId, initialFolder) =>
+        setWorkflow({ kind: 'new-folder', storeId, initialFolder })
+      }
       onDelete={(item) => setWorkflow({ kind: 'delete', item })}
       onSettings={(storeId) =>
         locations.navigate({

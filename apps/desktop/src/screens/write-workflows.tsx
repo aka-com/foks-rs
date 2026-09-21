@@ -22,6 +22,7 @@ import {
 import type { CardOption, DocumentSourceKind, FilterKind } from '../components';
 import { useConcealOnInactive } from '../use-conceal-on-inactive';
 import {
+  displayPath,
   isLogin,
   itemKey,
   kindLabel,
@@ -111,14 +112,25 @@ export type WriteWorkflow =
       draft?: NewDraft;
     }
   | {
+      kind: 'new-folder';
+      storeId: StoreRef;
+      initialFolder?: string;
+    }
+  | {
       kind: 'exists';
       itemKind: NewKind;
       storeId: StoreRef;
       path: string;
+      initialFolder?: string;
       draft?: NewDraft;
     }
   | { kind: 'delete'; item: Item }
-  | { kind: 'conflict'; item: Item; draft: string }
+  | {
+      kind: 'conflict';
+      item: Item;
+      draft: string;
+      operation?: 'edit' | 'replace';
+    }
   | null;
 
 /** What the Path field shows while it is empty. */
@@ -218,6 +230,7 @@ export function initialWriteWorkflow(
       itemKind: 'Password',
       storeId: 'acct:personal',
       path: PATH_HINT.Password,
+      initialFolder: '/logins',
     };
   }
   if (state === 'conflict' && snapshot) {
@@ -541,12 +554,16 @@ function NewSheet({
     onPaths: (paths) => {
       setHovering(false);
       if (paths.length !== 1) {
+        if (sourcePath)
+          void bridge.releaseImportFile(sourcePath).catch(onError);
         setSourcePath(null);
         setFileError('Drop exactly one file.');
         return;
       }
       const first = paths[0];
       if (!first) return;
+      if (sourcePath && sourcePath !== first)
+        void bridge.releaseImportFile(sourcePath).catch(onError);
       setSourcePath(first);
       setSource('file');
       setFileError(null);
@@ -572,7 +589,10 @@ function NewSheet({
       resourceName ||
       sourcePath,
     ) || path !== openedPath;
-  const close = useCallback(() => setWorkflow(null), [setWorkflow]);
+  const close = useCallback(() => {
+    if (sourcePath) void bridge.releaseImportFile(sourcePath).catch(onError);
+    setWorkflow(null);
+  }, [bridge, onError, setWorkflow, sourcePath]);
   // Save requests in flight cannot be aborted. Pending drafts require user
   // confirmation before any action that unmounts the sheet.
   useSheetGuard(
@@ -612,6 +632,8 @@ function NewSheet({
     )
       return;
     setSaving(true);
+    let uploadSourcePath = sourcePath;
+    let created = false;
     try {
       if (itemKind === 'Password') {
         await bridge.createTextItem({
@@ -620,20 +642,19 @@ function NewSheet({
           value: `user: ${username}\npassword: ${password}\nurl: ${website}`,
           ...roleArgs,
         });
-      } else if (source === 'file' && sourcePath) {
+      } else if (source === 'file') {
+        if (!uploadSourcePath) {
+          uploadSourcePath = await bridge.pickImportFile();
+          if (!uploadSourcePath) return;
+          setSourcePath(uploadSourcePath);
+          setFileError(null);
+        }
         await bridge.importDroppedFile({
           storeId: store.id,
           path,
-          sourcePath,
+          sourcePath: uploadSourcePath,
           ...roleArgs,
         });
-      } else if (source === 'file') {
-        const result = await bridge.pickAndImportFile({
-          storeId: store.id,
-          path,
-          ...roleArgs,
-        });
-        if (!result.applied) return;
       } else {
         await bridge.createTextItem({
           storeId: store.id,
@@ -642,11 +663,7 @@ function NewSheet({
           ...roleArgs,
         });
       }
-      await onApplied(
-        `${kindLabel(itemKind)} created in ${store.name}`,
-        store.server,
-      );
-      setWorkflow(null);
+      created = true;
     } catch (error) {
       const typed = normalizeCommandError(error);
       if (typed.code === 'already-exists') {
@@ -655,6 +672,7 @@ function NewSheet({
           itemKind,
           storeId: store.id,
           path,
+          initialFolder: path.slice(0, path.lastIndexOf('/')) || '/',
           draft: {
             path,
             site,
@@ -663,7 +681,7 @@ function NewSheet({
             website,
             value,
             resourceName,
-            sourcePath,
+            sourcePath: uploadSourcePath,
             readRole,
             writeRole,
           },
@@ -682,6 +700,16 @@ function NewSheet({
       } else await onMutationError(error);
     } finally {
       setSaving(false);
+    }
+    if (!created) return;
+    setWorkflow(null);
+    try {
+      await onApplied(
+        `${kindLabel(itemKind)} created in ${store.name}`,
+        store.server,
+      );
+    } catch (error) {
+      onError(error);
     }
   };
 
@@ -709,7 +737,7 @@ function NewSheet({
       title={`New ${kindLabel(itemKind).toLowerCase()}`}
       footer={
         <>
-          <Button onClick={() => setWorkflow(null)}>Cancel</Button>
+          <Button onClick={dismiss}>Cancel</Button>
           <Button
             variant="primary"
             disabled={
@@ -879,14 +907,166 @@ function NewSheet({
   );
 }
 
+function NewFolderSheet({
+  snapshot,
+  bridge,
+  workflow,
+  setWorkflow,
+  onApplied,
+  onMutationError,
+  accessNow,
+}: {
+  snapshot: AgentSnapshot;
+  bridge: Bridge;
+  workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'new-folder' }>;
+  setWorkflow: (workflow: WriteWorkflow) => void;
+  onApplied: (message: string, profile?: string) => Promise<void>;
+  onMutationError: MutationFailureHandler;
+  accessNow: () => number;
+}): ReactNode {
+  const [name, setName] = useTabSheetState('folder.name', '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const store = storeOf(snapshot, workflow.storeId);
+  const blocked = store ? writeBlockReason(snapshot, store) : null;
+  const validName = Boolean(
+    name.trim() &&
+    name.trim() !== '.' &&
+    name.trim() !== '..' &&
+    !/[\\/]/.test(name),
+  );
+  const canWrite = Boolean(
+    store &&
+    !blocked &&
+    storeAvailability(snapshot, store, { nowSeconds: accessNow() }).available &&
+    canCreateInStore(snapshot, store.id),
+  );
+  const close = useCallback(() => setWorkflow(null), [setWorkflow]);
+  const discard = (): Extract<GuardVerdict, { verdict: 'prompt' }> => ({
+    verdict: 'prompt',
+    title: 'Discard new folder?',
+    body: 'The folder has not been created.',
+    confirm: 'Discard',
+  });
+  useSheetGuard(
+    saving
+      ? { verdict: 'refuse', reason: SAVING_REFUSAL }
+      : name
+        ? { ...discard(), onConfirm: close }
+        : null,
+    !saving,
+  );
+  const dismiss = () => {
+    if (saving) return;
+    if (name) setConfirmingDiscard(true);
+    else close();
+  };
+  const submit = async () => {
+    if (!store || !canWrite || !validName || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await bridge.createFolder({
+        storeId: store.id,
+        path: namedPath(name.trim(), '/', workflow.initialFolder),
+        ...(store.kind === 'team'
+          ? { readRole: DEFAULT_READ_ROLE, writeRole: DEFAULT_WRITE_ROLE }
+          : {}),
+      });
+      await onApplied(`Folder created in ${store.name}`, store.server);
+      close();
+    } catch (failure) {
+      setError(normalizeCommandError(failure).message);
+      await onMutationError(failure, { report: false });
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <>
+      <DismissibleDialog
+        className="backdrop"
+        aria-label="New folder"
+        onDismiss={dismiss}
+      >
+        <Sheet
+          width="mid"
+          glyph={
+            <span className="kic Folder" aria-hidden="true">
+              <Icon name="folder" />
+            </span>
+          }
+          title="New folder"
+          footer={
+            <>
+              <Button onClick={dismiss}>Cancel</Button>
+              <Button
+                variant="primary"
+                disabled={!canWrite || !validName || saving}
+                onClick={() => void submit()}
+              >
+                {saving ? 'Creating…' : 'Create folder'}
+              </Button>
+            </>
+          }
+        >
+          <SectionLabel>Location</SectionLabel>
+          <Inset>
+            <InsetRow label="Vault">
+              <span>{store?.name ?? 'Vault unavailable'}</span>
+            </InsetRow>
+            {workflow.initialFolder && workflow.initialFolder !== '/' ? (
+              <InsetRow label="Folder">
+                <span>{workflow.initialFolder}</span>
+              </InsetRow>
+            ) : null}
+            <Field
+              label="Name"
+              value={name}
+              onChange={(next) => {
+                setName(next);
+                setError(null);
+              }}
+              placeholder="Folder name"
+            />
+          </Inset>
+          {name && !validName ? (
+            <p className="action-error" role="alert">
+              Enter a name without slashes, “.”, or “..”.
+            </p>
+          ) : null}
+          {store && blocked ? (
+            <Band live>{`${store.name}: ${blocked}`}</Band>
+          ) : null}
+          {error ? (
+            <p className="action-error" role="alert">
+              {error}
+            </p>
+          ) : null}
+        </Sheet>
+      </DismissibleDialog>
+      {confirmingDiscard ? (
+        <NavigationPrompt
+          verdict={discard()}
+          onConfirm={close}
+          onCancel={() => setConfirmingDiscard(false)}
+        />
+      ) : null}
+    </>
+  );
+}
+
 function ExistsSheet({
   snapshot,
+  bridge,
   workflow,
   setWorkflow,
   onOpenExisting,
   onError,
 }: {
   snapshot: AgentSnapshot;
+  bridge: Bridge;
   workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'exists' }>;
   setWorkflow: (workflow: WriteWorkflow) => void;
   onOpenExisting: (
@@ -900,7 +1080,11 @@ function ExistsSheet({
   // This step still holds the draft the new-item sheet carried here, so it is
   // abandoned under the same confirmation, from a navigation or from Escape
   // and the backdrop.
-  const close = useCallback(() => setWorkflow(null), [setWorkflow]);
+  const close = useCallback(() => {
+    const sourcePath = workflow.draft?.sourcePath;
+    if (sourcePath) void bridge.releaseImportFile(sourcePath).catch(onError);
+    setWorkflow(null);
+  }, [bridge, onError, setWorkflow, workflow.draft?.sourcePath]);
   useSheetGuard(discardNewItem(workflow.itemKind, close));
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const sheet = (
@@ -908,7 +1092,7 @@ function ExistsSheet({
       glyph={
         clash ? <KindIcon kind={kindOf(clash) as FilterKind} /> : undefined
       }
-      title={`An item already exists at ${workflow.path}`}
+      title={`An item already exists at ${displayPath(workflow.path)}`}
       footer={
         <>
           <Button
@@ -917,6 +1101,7 @@ function ExistsSheet({
                 kind: 'new',
                 itemKind: workflow.itemKind,
                 storeId: workflow.storeId,
+                initialFolder: workflow.initialFolder,
                 draft: workflow.draft,
               })
             }
@@ -927,7 +1112,7 @@ function ExistsSheet({
             variant="primary"
             onClick={() => {
               void onOpenExisting(workflow).then(
-                () => setWorkflow(null),
+                close,
                 onError,
               );
             }}
@@ -939,8 +1124,8 @@ function ExistsSheet({
     >
       <>
         <p>
-          Nothing was overwritten. Open the existing item, or choose another
-          path.
+          The upload was skipped. Open the existing item and replace it, or
+          choose another path.
         </p>
       </>
     </Sheet>
@@ -991,7 +1176,11 @@ export function WriteOverlay({
    * way to: nothing, when the item is there to review, or a new-item sheet
    * carrying the edit when the item turned out to have been deleted.
    */
-  onRefreshConflict: (item: Item, draft: string) => Promise<WriteWorkflow>;
+  onRefreshConflict: (
+    item: Item,
+    draft: string,
+    operation?: 'edit' | 'replace',
+  ) => Promise<WriteWorkflow>;
   onDiscardConflict: () => void;
   /** Refreshes after a delete conflict and states whether the item is still there. */
   onDeleteConflict: (item: Item) => Promise<void>;
@@ -1016,12 +1205,25 @@ export function WriteOverlay({
         accessNow={accessNow}
       />
     );
+  if (workflow.kind === 'new-folder')
+    return (
+      <NewFolderSheet
+        snapshot={snapshot}
+        bridge={bridge}
+        workflow={workflow}
+        setWorkflow={setWorkflow}
+        onApplied={onApplied}
+        onMutationError={onMutationError}
+        accessNow={accessNow}
+      />
+    );
   // The already-exists step carries the same draft, so it supplies its own
   // dialog for the same reason.
   if (workflow.kind === 'exists')
     return (
       <ExistsSheet
         snapshot={snapshot}
+        bridge={bridge}
         workflow={workflow}
         setWorkflow={setWorkflow}
         onOpenExisting={onOpenExisting}
@@ -1064,11 +1266,16 @@ function ConflictSheet({
 }: {
   workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'conflict' }>;
   setWorkflow: (workflow: WriteWorkflow) => void;
-  onRefreshConflict: (item: Item, draft: string) => Promise<WriteWorkflow>;
+  onRefreshConflict: (
+    item: Item,
+    draft: string,
+    operation?: 'edit' | 'replace',
+  ) => Promise<WriteWorkflow>;
   onDiscardConflict: () => void;
   onError: (error: unknown, item?: Item) => void;
 }): ReactNode {
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const replacing = workflow.operation === 'replace';
 
   if (confirmingDiscard)
     return (
@@ -1091,7 +1298,7 @@ function ConflictSheet({
           footer={
             <>
               <Button onClick={() => setConfirmingDiscard(false)}>
-                Keep editing
+                {replacing ? 'Keep replacing' : 'Keep editing'}
               </Button>
               <Button variant="primary" danger onClick={onDiscardConflict}>
                 Discard changes
@@ -1107,7 +1314,7 @@ function ConflictSheet({
   return (
     <Dialog
       className="backdrop"
-      aria-label="Edit conflict"
+      aria-label={replacing ? 'Replace conflict' : 'Edit conflict'}
       onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
         if (event.key === 'Escape') setConfirmingDiscard(true);
       }}
@@ -1118,14 +1325,18 @@ function ConflictSheet({
         footer={
           <>
             <Button onClick={() => setConfirmingDiscard(true)}>
-              Discard my edit
+              {replacing ? 'Discard replacement' : 'Discard my edit'}
             </Button>
             <Button
               variant="primary"
               onClick={() => {
                 // The refresh finds out whether the item was changed or
                 // removed, and says what this sheet gives way to.
-                void onRefreshConflict(workflow.item, workflow.draft).then(
+                void onRefreshConflict(
+                  workflow.item,
+                  workflow.draft,
+                  workflow.operation,
+                ).then(
                   (next) => setWorkflow(next),
                   (error) => onError(error),
                 );
@@ -1140,8 +1351,9 @@ function ConflictSheet({
           <p>
             {/* The agent reports one conflict for an item that was changed and
                 one that was removed, so this does not claim to know which. */}
-            This item was changed or removed while you were editing. Refresh to
-            see what happened; your edit is kept until you discard it.
+            {replacing
+              ? 'This file changed or was removed while you were replacing it. Refresh to review the current item, then choose the replacement again.'
+              : 'This item was changed or removed while you were editing. Refresh to see what happened; your edit is kept until you discard it.'}
           </p>
         </>
       </Sheet>

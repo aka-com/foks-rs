@@ -145,12 +145,12 @@ export type RemoveItemRequest = ItemRequest;
 export interface ImportDroppedFileRequest extends CreateRoleRequest {
   storeId: StoreRef;
   path: string;
-  /** Path registered from a native file drop event. */
+  /** Path authorized by a native file picker or drop event. */
   sourcePath: string;
 }
 
 export interface ReplaceDroppedFileRequest extends ItemRequest {
-  /** Path registered from a native file drop event. */
+  /** Path authorized by a native file picker or drop event. */
   sourcePath: string;
 }
 

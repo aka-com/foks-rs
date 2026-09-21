@@ -29,6 +29,7 @@ import List from 'lucide/dist/esm/icons/list.mjs';
 import MessageSquare from 'lucide/dist/esm/icons/message-square.mjs';
 import PanelLeftClose from 'lucide/dist/esm/icons/panel-left-close.mjs';
 import PanelLeftOpen from 'lucide/dist/esm/icons/panel-left-open.mjs';
+import PawPrint from 'lucide/dist/esm/icons/paw-print.mjs';
 import Pencil from 'lucide/dist/esm/icons/pencil.mjs';
 import Plug from 'lucide/dist/esm/icons/plug.mjs';
 import Plus from 'lucide/dist/esm/icons/plus.mjs';
@@ -85,6 +86,7 @@ export const FOKS_ICONS = {
   send: Send,
   panelLeftClose: PanelLeftClose,
   panelLeftOpen: PanelLeftOpen,
+  pawPrint: PawPrint,
   plug: Plug,
 } as const satisfies Record<FoksIconName, IconNode>;
 

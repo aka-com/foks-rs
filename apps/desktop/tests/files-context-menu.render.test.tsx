@@ -22,7 +22,10 @@ test.before(async () => {
     server: { middlewareMode: true, hmr: false, ws: false, watch: null },
   });
 });
-test.afterEach(() => ui.cleanup());
+test.afterEach(() => {
+  ui.cleanup();
+  window.localStorage.removeItem('filesView');
+});
 test.after(async () => vite.close());
 
 async function mount(accessNow?: () => number) {
@@ -54,6 +57,8 @@ async function mount(accessNow?: () => number) {
   const reveals: Item[] = [];
   const deletions: Item[] = [];
   const failures: unknown[] = [];
+  const folders: { storeId: string; path: string }[] = [];
+  const teamInfo: string[] = [];
   const bridge = {
     ...mockBridge(FIXTURE),
     copyItemValue: async (request: ItemRequest) => {
@@ -82,6 +87,9 @@ async function mount(accessNow?: () => number) {
       onNew: () => {},
       onResume: async () => {},
       onSettings: () => {},
+      onNewFolder: (storeId: string, path: string) =>
+        folders.push({ storeId, path }),
+      onTeamInfo: (storeId: string) => teamInfo.push(storeId),
       onCommandError: (error: unknown) => failures.push(error),
     });
   }
@@ -103,6 +111,8 @@ async function mount(accessNow?: () => number) {
     reveals,
     deletions,
     failures,
+    folders,
+    teamInfo,
     snapshot: FIXTURE,
     update: (snapshot: AgentSnapshot, blocking = false) =>
       rendered.rerender(view(snapshot, blocking)),
@@ -222,4 +232,115 @@ test('read actions recheck a lease that expires while the menu is open', async (
   ui.fireEvent.click(copy);
   assert.equal(mounted.copies.length, 0);
   assert.ok(ui.screen.getByRole('alert'));
+});
+
+test('vault and team roots expose scoped folder creation and team info without selection changes', async () => {
+  const mounted = await mount();
+  const vault = document.querySelector<HTMLElement>(
+    '[data-folder-store="acct:personal"][data-folder-path="/"]',
+  )!;
+  ui.fireEvent.contextMenu(vault);
+  assert.equal(
+    ui.screen.queryByRole('menuitem', { name: 'Delete folder' }),
+    null,
+  );
+  assert.equal(ui.screen.queryByRole('menuitem', { name: 'Team info' }), null);
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'New folder' }));
+  assert.deepEqual(mounted.folders, [{ storeId: 'acct:personal', path: '/' }]);
+  const before = mounted.locations.getSnapshot();
+  const team = document.querySelector<HTMLElement>(
+    '[data-folder-store="team:eng"][data-folder-path="/"] .fselect',
+  )!;
+  ui.fireEvent.keyDown(team, { key: 'F10', shiftKey: true });
+  assert.ok(ui.screen.getByRole('separator'));
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Team info' }));
+  assert.deepEqual(mounted.teamInfo, ['team:eng']);
+  assert.equal(mounted.locations.getSnapshot(), before);
+});
+
+test('tree and content folders target their own path and explain unsupported deletion', async () => {
+  const mounted = await mount();
+  const folder = document.querySelector<HTMLElement>(
+    '.tpane [data-folder-store="acct:personal"][data-folder-path="/logins"] .fselect',
+  )!;
+  ui.fireEvent.contextMenu(folder);
+  const deletion = ui.screen.getByRole('menuitem', { name: 'Delete folder' });
+  assert.equal(deletion.getAttribute('aria-disabled'), 'true');
+  assert.match(
+    document.getElementById(deletion.getAttribute('aria-describedby')!)!
+      .textContent,
+    /not supported by the desktop agent/,
+  );
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'New folder' }));
+  assert.deepEqual(mounted.folders, [
+    { storeId: 'acct:personal', path: '/logins' },
+  ]);
+  ui.act(() => mounted.locations.setFolder('acct:personal|/'));
+  const content = document.querySelector<HTMLElement>(
+    '.lpane [data-folder-path="/logins"]',
+  )!;
+  assert.ok(content);
+  ui.fireEvent.keyDown(content, { key: 'ContextMenu' });
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'New folder' }));
+  assert.equal(mounted.folders[1].path, '/logins');
+  ui.fireEvent.keyDown(content, { key: 'ContextMenu' });
+  ui.fireEvent.keyDown(document, { key: 'Escape' });
+  assert.equal(ui.screen.queryByRole('menu'), null);
+  assert.equal(document.activeElement, content);
+});
+
+test('grid cards keep item selection, quick actions, and keyboard context menus', async () => {
+  const mounted = await mount();
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Grid view' }));
+  const password = row('github.com');
+  assert.ok(password.closest('.files-grid'));
+  ui.fireEvent.keyDown(password, { key: ' ' });
+  assert.equal(password.getAttribute('aria-pressed'), 'true');
+  ui.fireEvent.click(
+    ui.within(password).getByRole('button', { name: 'Copy github.com' }),
+  );
+  assert.equal(mounted.copies[0]?.path, '/logins/github.com');
+  ui.fireEvent.keyDown(password, { key: 'F10', shiftKey: true });
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Reveal' }));
+  assert.equal(mounted.reveals[0]?.path, '/logins/github.com');
+  await ui.waitFor(() => assert.ok(document.activeElement === password));
+  const file = row('passport-scan.pdf');
+  ui.fireEvent.contextMenu(file);
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Download' }));
+  assert.equal(mounted.downloads[0]?.path, '/documents/passport-scan.pdf');
+  assert.equal(
+    mounted.locations.getSnapshot().selection?.path,
+    '/logins/github.com',
+  );
+  ui.fireEvent.contextMenu(file);
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Show details' }));
+  assert.equal(
+    mounted.locations.getSnapshot().selection?.path,
+    '/documents/passport-scan.pdf',
+  );
+});
+
+test('grid folder menus preserve their scope for right click and Shift+F10', async () => {
+  const mounted = await mount();
+  ui.act(() => mounted.locations.setFolder('acct:personal|/'));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Grid view' }));
+  const folder = row('logins');
+  for (const open of [
+    () => ui.fireEvent.contextMenu(folder),
+    () => ui.fireEvent.keyDown(folder, { key: 'F10', shiftKey: true }),
+  ]) {
+    open();
+    assert.equal(
+      ui.screen
+        .getByRole('menuitem', { name: 'Delete folder' })
+        .getAttribute('aria-disabled'),
+      'true',
+    );
+    ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'New folder' }));
+    assert.equal(mounted.locations.getSnapshot().folder, 'acct:personal|/');
+  }
+  assert.deepEqual(mounted.folders, [
+    { storeId: 'acct:personal', path: '/logins' },
+    { storeId: 'acct:personal', path: '/logins' },
+  ]);
 });

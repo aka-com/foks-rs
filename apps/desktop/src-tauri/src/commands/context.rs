@@ -70,7 +70,7 @@ pub struct AppState {
     scope_state: Arc<MutationScopeState>,
     root: Arc<MutationScopeState>,
     scopes: Arc<Mutex<HashMap<MutationScope, Arc<MutationScopeState>>>>,
-    pending_drop_paths: Arc<Mutex<HashMap<String, PathBuf>>>,
+    pending_upload_paths: Arc<Mutex<HashMap<String, PathBuf>>>,
     local_accounts: Arc<Mutex<HashMap<String, foks_agent_proto::AccountStoreRef>>>,
     /// Profiles whose catalog a mutation retired and no read has covered
     /// since. Their stores are absent from the catalog without being known
@@ -107,7 +107,7 @@ impl AppState {
                 MutationScope::LocalAliases,
                 Arc::new(MutationScopeState::default()),
             )]))),
-            pending_drop_paths: Arc::default(),
+            pending_upload_paths: Arc::default(),
             local_accounts: Arc::default(),
             retired_profiles: Arc::default(),
             accounts: Arc::default(),
@@ -1828,7 +1828,7 @@ impl AppState {
 
     pub(crate) fn record_drop_paths(&self, paths: &[PathBuf]) -> Vec<String> {
         let mut pending = self
-            .pending_drop_paths
+            .pending_upload_paths
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         pending.clear();
@@ -1845,24 +1845,49 @@ impl AppState {
     }
 
     pub(crate) fn clear_drop_paths(&self) {
-        self.pending_drop_paths
+        self.pending_upload_paths
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
     }
 
-    pub(super) fn take_drop_path(&self, wire_path: &str) -> Result<PathBuf, AgentError> {
-        self.pending_drop_paths
+    pub(crate) fn record_picked_path(&self, path: PathBuf) -> Result<String, AgentError> {
+        let wire_path = path.to_str().map(ToOwned::to_owned).ok_or_else(|| {
+            AgentError::new(
+                "upload-source",
+                "The selected file path is not valid UTF-8.",
+                false,
+            )
+        })?;
+        let mut pending = self
+            .pending_upload_paths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        pending.clear();
+        pending.insert(wire_path.clone(), path);
+        Ok(wire_path)
+    }
+
+    pub(super) fn upload_path(&self, wire_path: &str) -> Result<PathBuf, AgentError> {
+        self.pending_upload_paths
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(wire_path)
+            .get(wire_path)
+            .cloned()
             .ok_or_else(|| {
                 AgentError::new(
                     "drop-not-authorized",
-                    "Drop the file again to import it.",
+                    "Choose or drop the file again to import it.",
                     false,
                 )
             })
+    }
+
+    pub(super) fn release_upload_path(&self, wire_path: &str) {
+        self.pending_upload_paths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(wire_path);
     }
 
     /// Inspection commands do not acquire the desktop mutation gate or retire

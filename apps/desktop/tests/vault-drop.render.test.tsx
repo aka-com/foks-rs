@@ -96,6 +96,32 @@ async function mount(
   return { rendered, driver, snapshot };
 }
 
+async function openFileDocument(
+  rendered: ReturnType<typeof ui.render>,
+  name: string,
+): Promise<void> {
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'New' }));
+  ui.fireEvent.click(
+    await rendered.findByRole('menuitem', { name: 'Document' }),
+  );
+  await rendered.findByRole('dialog', { name: 'New document' });
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'File' }));
+  ui.fireEvent.change(rendered.getByLabelText('Name'), {
+    target: { value: name },
+  });
+}
+
+function uploadFailure(code: string, message: string) {
+  return {
+    code,
+    message,
+    retryable: false,
+    ambiguous: false,
+    fatal: false,
+    details: { kind: code },
+  };
+}
+
 test('a drag over a vault names the destination, and the drop uploads there', async () => {
   // The store's own root is the default folder, so the uploaded item lands
   // where the browser is already looking.
@@ -172,9 +198,17 @@ test('dropping several files at once uploads none of them', async () => {
 test('dropping a file onto an existing path displays the conflict resolution step instead of overwriting', async () => {
   // The drop lands in the selected folder, where the fixture already keeps
   // a file of this name.
+  const uploads: { path: string; sourcePath: string }[] = [];
   const { rendered, driver, snapshot } = await mount(
     { kind: 'store', ref: 'acct:personal' },
-    {},
+    {
+      importDroppedFile: async (request) => {
+        uploads.push(request);
+        if (uploads.length === 1)
+          throw uploadFailure('already-exists', 'That path already exists.');
+        return { applied: true };
+      },
+    },
     { folder: '/documents' },
   );
   const taken = snapshot.items.find(
@@ -190,6 +224,15 @@ test('dropping a file onto an existing path displays the conflict resolution ste
   await ui.waitFor(() =>
     assert.ok(rendered.getByText(`An item already exists at ${taken.path}`)),
   );
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Change path' }));
+  await rendered.findByText(name, { selector: '.mono' });
+  ui.fireEvent.change(rendered.getByLabelText('Name'), {
+    target: { value: `copy-${name}` },
+  });
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Create item' }));
+  await ui.waitFor(() => assert.equal(uploads.length, 2));
+  assert.equal(uploads[0]?.sourcePath, uploads[1]?.sourcePath);
+  assert.equal(uploads[1]?.path, `/documents/copy-${name}`);
 });
 
 test('the all-items view has no single destination, so it takes no drop', async () => {
@@ -262,6 +305,141 @@ test('the new-item sheet keeps the drop while it is open', async () => {
   assert.ok(rendered.getByText('report.pdf'));
 });
 
+test('a picker-selected file survives a naming conflict and retries without reopening the picker', async () => {
+  const picked = '/Users/ray/report.pdf';
+  let picks = 0;
+  const uploads: { path: string; sourcePath: string }[] = [];
+  const { rendered } = await mount(
+    { kind: 'store', ref: 'acct:personal' },
+    {
+      pickImportFile: async () => {
+        picks += 1;
+        return picked;
+      },
+      importDroppedFile: async (request) => {
+        uploads.push(request);
+        if (uploads.length === 1)
+          throw uploadFailure('already-exists', 'That path already exists.');
+        return { applied: true };
+      },
+    },
+  );
+  await ui.waitFor(() => assert.ok(rendered.getAllByText('Personal').length));
+  await openFileDocument(rendered, 'report.pdf');
+
+  ui.fireEvent.click(
+    rendered.getByRole('button', { name: 'Choose file and create' }),
+  );
+  await rendered.findByText('An item already exists at /report.pdf');
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Change path' }));
+  await rendered.findByText('report.pdf', { selector: '.mono' });
+  ui.fireEvent.change(rendered.getByLabelText('Name'), {
+    target: { value: 'renamed-report.pdf' },
+  });
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Create item' }));
+
+  await ui.waitFor(() => assert.equal(uploads.length, 2));
+  assert.equal(picks, 1);
+  assert.deepEqual(
+    uploads.map(({ path, sourcePath }) => ({ path, sourcePath })),
+    [
+      { path: '/report.pdf', sourcePath: picked },
+      { path: '/renamed-report.pdf', sourcePath: picked },
+    ],
+  );
+});
+
+test('a picker-selected file survives an upload error and retry', async () => {
+  const picked = '/Users/ray/archive.zip';
+  let picks = 0;
+  const uploads: string[] = [];
+  const { rendered } = await mount(
+    { kind: 'store', ref: 'acct:personal' },
+    {
+      pickImportFile: async () => {
+        picks += 1;
+        return picked;
+      },
+      importDroppedFile: async ({ sourcePath }) => {
+        uploads.push(sourcePath);
+        if (uploads.length === 1)
+          throw uploadFailure('upload-source', 'The file could not be read.');
+        return { applied: true };
+      },
+    },
+  );
+  await ui.waitFor(() => assert.ok(rendered.getAllByText('Personal').length));
+  await openFileDocument(rendered, 'archive.zip');
+
+  ui.fireEvent.click(
+    rendered.getByRole('button', { name: 'Choose file and create' }),
+  );
+  await rendered.findByText('archive.zip', { selector: '.mono' });
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Create item' }));
+
+  await ui.waitFor(() => assert.equal(uploads.length, 2));
+  assert.equal(picks, 1);
+  assert.deepEqual(uploads, [picked, picked]);
+});
+
+test('cancelling the file picker leaves the document draft open', async () => {
+  let uploads = 0;
+  const { rendered } = await mount(
+    { kind: 'store', ref: 'acct:personal' },
+    {
+      pickImportFile: async () => null,
+      importDroppedFile: async () => {
+        uploads += 1;
+        return { applied: true };
+      },
+    },
+  );
+  await ui.waitFor(() => assert.ok(rendered.getAllByText('Personal').length));
+  await openFileDocument(rendered, 'cancelled.pdf');
+  ui.fireEvent.click(
+    rendered.getByRole('button', { name: 'Choose file and create' }),
+  );
+
+  await ui.waitFor(() =>
+    assert.ok(
+      rendered.getByRole('button', { name: 'Choose file and create' }),
+    ),
+  );
+  assert.equal(uploads, 0);
+  assert.ok(rendered.getByRole('dialog', { name: 'New document' }));
+});
+
+test('discarding a selected-file draft releases its native authorization', async () => {
+  const picked = '/Users/ray/private.pdf';
+  const released: string[] = [];
+  const { rendered } = await mount(
+    { kind: 'store', ref: 'acct:personal' },
+    {
+      pickImportFile: async () => picked,
+      importDroppedFile: async () => {
+        throw uploadFailure('upload-source', 'The file could not be read.');
+      },
+      releaseImportFile: async (sourcePath) => {
+        released.push(sourcePath);
+        return { ok: true };
+      },
+    },
+  );
+  await ui.waitFor(() => assert.ok(rendered.getAllByText('Personal').length));
+  await openFileDocument(rendered, 'private.pdf');
+  ui.fireEvent.click(
+    rendered.getByRole('button', { name: 'Choose file and create' }),
+  );
+  await rendered.findByText('private.pdf', { selector: '.mono' });
+
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Cancel' }));
+  assert.deepEqual(released, []);
+  ui.fireEvent.click(
+    await rendered.findByRole('button', { name: 'Discard' }),
+  );
+  await ui.waitFor(() => assert.deepEqual(released, [picked]));
+});
+
 test('replacing a file in the details panel takes the drop from the vault', async () => {
   const uploads: unknown[] = [];
   const { rendered, driver, snapshot } = await mount(
@@ -282,12 +460,12 @@ test('replacing a file in the details panel takes the drop from the vault', asyn
   assert.ok(file);
   await ui.waitFor(() => assert.ok(rendered.getAllByText('Personal').length));
   ui.fireEvent.click(rendered.getByText('id_ed25519'));
-  ui.fireEvent.click(await rendered.findByRole('button', { name: 'Edit' }));
-  await ui.waitFor(() => assert.ok(rendered.getByText('Replace')));
+  ui.fireEvent.click(await rendered.findByRole('button', { name: 'Replace' }));
+  await rendered.findByRole('dialog', { name: 'Replace id_ed25519' });
 
   await driver.hover(true);
   // The panel's own zone answers the drag; the vault behind it stays quiet.
-  assert.ok(rendered.getByText('Release to replace file'));
+  assert.ok(rendered.getByText('Release to use this file'));
   assert.equal(rendered.queryByText(/Drop to upload/), null);
   await driver.drop(['/Users/ray/id_ed25519']);
   await ui.waitFor(() =>

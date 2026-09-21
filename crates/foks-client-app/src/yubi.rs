@@ -1107,7 +1107,7 @@ impl CheckedProfileSession<'_> {
                                 candidate.id.entity_type() == foks_proto::ENTITY_YUBI
                             }) {
                                 return Err(Error::InvalidAccount(
-                                    "revoke the existing YubiKey before provisioning a replacement",
+                                    "revoke the existing hardware key before adding a replacement",
                                 ));
                             }
                             self.client.provision_yubi_device(
@@ -1198,7 +1198,7 @@ impl CheckedProfileSession<'_> {
             .any(|device| device.id.entity_type() == foks_proto::ENTITY_YUBI)
         {
             return Err(Error::InvalidAccount(
-                "revoke the existing YubiKey before provisioning a replacement",
+                "revoke the existing hardware key before adding a replacement",
             ));
         }
         let preparation = PendingYubiPreparation::new(

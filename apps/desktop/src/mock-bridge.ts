@@ -671,19 +671,8 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       });
       return { applied: true };
     },
-    pickAndImportFile: async ({ storeId, path, readRole, writeRole }) => {
-      assertFree(storeId, path);
-      const roles = createRoles(storeId, readRole, writeRole);
-      items.push({
-        store: storeId,
-        path,
-        kind: 'File',
-        size: 0,
-        version: 1,
-        ...roles,
-      });
-      return { applied: true };
-    },
+    pickImportFile: async () => '/tmp/picked-file',
+    releaseImportFile: async () => ({ ok: true }),
     replaceDroppedFile: async ({ storeId, path, version }) => {
       const item = items.find(
         (candidate) => candidate.store === storeId && candidate.path === path,
@@ -1466,6 +1455,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     onWindowState: async () => () => {},
     onChatNotification: async () => () => {},
     onOpenSettings: async () => () => {},
+    onNewItem: async () => () => {},
     onMaintenanceStatus: async () => () => {},
     onExitState: async () => () => {},
   };

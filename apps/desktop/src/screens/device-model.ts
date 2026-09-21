@@ -96,7 +96,7 @@ export function roleLabel(role: AccountDevice['role']): string {
 
 /** The name a device row carries when the agent reports none. */
 export function deviceName(device: AccountDevice): string {
-  return device.name ?? (deviceIsCard(device) ? 'YubiKey' : 'Device');
+  return device.name ?? (deviceIsCard(device) ? 'Hardware key' : 'Device');
 }
 
 function deviceEntry(device: AccountDevice): DeviceEntry {

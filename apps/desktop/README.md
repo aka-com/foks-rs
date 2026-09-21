@@ -554,7 +554,7 @@ the key id for a Mac or a paper key and `yubi:<alias>` for an enrollment,
 which the agent names by alias and reports no id for. A `device=` that no
 longer resolves says the key is not on this account rather than showing an
 empty page. The nine card operations that are recovery paths for a key already in
-trouble, and creating an account on a YubiKey, sit in the enrollment
+trouble, and creating an account on a hardware key, sit in the enrollment
 section's menu, each saying there when it does not apply, and each menu entry
 and the sheet it opens read the same label. A stopped account
 lists nothing and disables every action with the reason.
@@ -1032,7 +1032,7 @@ kept so deep links defined in the design specification resolve to this location.
 | `servers-reset` · `servers-add` · `servers-unprobed` · `servers-check`               | Settings › Servers                      | typed removal, add/check and explicit result states                                                     |
 | `settings&section=servers` · `settings&section=preferences` · `settings&section=mac` | Settings                                | the three pages of the sub-navigation; retired section names resolve to the page that holds them        |
 | `settings-macs` · `settings-macs-work` · `settings-phrase`                           | Devices                                 | Macs, pairing and the one-time paper-key reveal; `settings-macs-work` names the exact `acct:work` store |
-| `settings-keys` · `settings-enrol`                                                   | Devices                                 | the Security key enrollments section and the YubiKey account sheet                                      |
+| `settings-keys` · `settings-enrol`                                                   | Devices                                 | the Security key enrollments section and the hardware-key account sheet                                  |
 | `devices&store=<StoreRef>&device=<key>`                                              | Devices › one key                       | that key's own page; `device=` is the key id, or `yubi:<alias>` for an enrollment                       |
 | `settings-account`                                                                   | Accounts                                | the account panel and its workflows                                                                     |
 | `settings-agent` · `settings-about`                                                  | Settings › Device                       | the application version and lock, the agent status and socket                                           |

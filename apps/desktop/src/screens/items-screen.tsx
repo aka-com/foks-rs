@@ -1,7 +1,7 @@
 /**
  * The Files browser: a folder tree on the left and the selected folder's
  * contents in the middle. The details panel is a third column that the shell
- * mounts beside this screen; this file owns the tree and the list only.
+ * mounts beside this screen; this file owns the tree and the list/grid views.
  *
  * The kind filter is located at the top of the sidebar above the item counts.
  * Search and the New button are located in the window header. The browser
@@ -10,12 +10,15 @@
  * (shown when viewing multiple stores), and Size.
  */
 
-import { Fragment, useId, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
 import { anyDialogOpen, ContextMenu, Menu } from '/kit/overlay-primitives';
 import { useDismissedOnboardingTip } from '../onboarding-tips';
 import { virtualListWindow } from '/kit/virtual-list';
+import { rememberFilesView, storedFilesView } from '../files-view-pref';
+import type { FilesView } from '../files-view-pref';
+import { filesGridWindow } from './files-grid';
 import {
   Band,
   Button,
@@ -32,6 +35,7 @@ import {
   KIND_LIST,
   catalog,
   defaultCreateStore,
+  displayPathComponent,
   fmtSize,
   initials,
   kindLabel,
@@ -84,7 +88,7 @@ import {
 function emptyStoreCopy(store: Store): string {
   return store.kind === 'team'
     ? 'Items stored in this team vault are accessible to team members according to their assigned roles.'
-    : 'Passwords and documents you add here are private to this vault.';
+    : 'Passwords and documents you add are private to this vault.';
 }
 
 function itemCount(count: number): string {
@@ -279,7 +283,9 @@ function Row({
             name={password ? 'key' : 'file'}
             className={password ? 'k' : 'f'}
           />
-          <span className="nm">{name}</span>
+          <span className="nm" title={name}>
+            {name}
+          </span>
           {/* Inside a folder every row shares the location, so the path is
             drawn only where rows come from more than one of them. */}
           {columns.location && prefix ? (
@@ -299,9 +305,7 @@ function Row({
             <span>{whereOf(snapshot, item)}</span>
           </span>
         ) : null}
-        <span className="cell num">
-          {item.size === null ? '' : fmtSize(item.size)}
-        </span>
+        <span className="cell num">{fmtSize(item.size)}</span>
         <span className="acts">
           {item.kind !== 'File' ? (
             <>
@@ -381,7 +385,11 @@ function FolderRow({
   count,
   columns,
   onSelect,
+  storeId,
+  path,
 }: {
+  storeId: string;
+  path: string;
   name: string;
   count: number;
   columns: Columns;
@@ -390,6 +398,9 @@ function FolderRow({
   return (
     <div
       className={columnClass(columns, 'row', 'one', 'folder')}
+      data-folder-store={storeId}
+      data-folder-path={path}
+      aria-haspopup="menu"
       role="button"
       tabIndex={0}
       onClick={onSelect}
@@ -401,7 +412,9 @@ function FolderRow({
     >
       <span className="name">
         <Icon name="folder" className="f" />
-        <span className="nm">{name}</span>
+        <span className="nm" title={name}>
+          {name}
+        </span>
       </span>
       <span className="cell kind">Folder</span>
       {columns.location ? <span className="cell" /> : null}
@@ -425,7 +438,11 @@ function TreeRow({
   action,
   onSelect,
   onToggle,
+  storeId,
+  path,
 }: {
+  storeId?: string;
+  path?: string;
   depth: number;
   active: boolean;
   root?: boolean;
@@ -456,6 +473,8 @@ function TreeRow({
       ]
         .filter(Boolean)
         .join(' ')}
+      data-folder-store={storeId}
+      data-folder-path={path}
       style={{ '--d': depth } as React.CSSProperties}
     >
       {/* Every row keeps the twist cell so names align down the column; a row
@@ -479,6 +498,7 @@ function TreeRow({
       <button
         type="button"
         className="fselect"
+        aria-haspopup={storeId ? 'menu' : undefined}
         aria-current={active ? 'location' : undefined}
         onClick={onSelect}
       >
@@ -592,9 +612,9 @@ function VaultDropZone({
         </b>
         <small>
           {uploading
-            ? 'Encrypting and saving the file.'
+            ? 'Encrypting and saving this file'
             : (target.blocked ??
-              `${folder ? `Saved in ${folder}` : 'Saved at the top level'} · one file at a time`)}
+              (folder ? `Saved in ${folder}` : 'Saved at the top level'))}
         </small>
       </div>
     </div>
@@ -614,6 +634,8 @@ export interface ItemsScreenProps {
   onResume: (storeId: string) => Promise<void>;
   onDelete: (item: Item) => void;
   onSettings: (storeId: string) => void;
+  onTeamInfo?: (storeId: string, trigger?: HTMLElement) => void;
+  onNewFolder?: (storeId: string, path: string) => void;
   onCommandError: (error: unknown, item?: Item) => void;
   /** Saves a file dropped on the vault's content area. */
   onUploadDroppedFile?: (upload: DropUpload) => Promise<void>;
@@ -624,7 +646,6 @@ export interface ItemsScreenProps {
 
 /** Single-line row height now that metadata is displayed in table columns. */
 const ROW_HEIGHT = 38;
-const GRID_VIEW_REASON = 'Grid view is not available yet';
 
 /** Whether `path` is `folder` itself or lies under it. */
 function underFolder(path: string, folder: string): boolean {
@@ -641,17 +662,40 @@ export function ItemsScreen({
   onResume,
   onDelete,
   onSettings,
+  onTeamInfo,
+  onNewFolder,
   onCommandError,
   onUploadDroppedFile,
   dropEnabled = true,
   accessNow = () => Date.now() / 1000,
 }: ItemsScreenProps): ReactNode {
   const toasts = useToast();
-  const gridViewReasonId = useId();
+  const [view, setView] = useState<FilesView>(storedFilesView);
+  const [folderMenu, setFolderMenu] = useState<{
+    x: number;
+    y: number;
+    storeId: string;
+    path: string;
+    trigger: HTMLElement;
+  } | null>(null);
+  const folderMenuAnchor = useRef<HTMLElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
-  const [listMetrics, setListMetrics] = useState({ top: 0, viewport: 600 });
+  const [listMetrics, setListMetrics] = useState({
+    top: 0,
+    viewport: 600,
+    width: 600,
+  });
+  const changeView = (next: FilesView): void => {
+    if (next === view) return;
+    setView(next);
+    rememberFilesView(next);
+    // The layouts have different heights; start at the top without changing
+    // the folder, filters, sorting, or selected item's details.
+    if (bodyRef.current) bodyRef.current.scrollTop = 0;
+    setScrollTop(0);
+  };
   const [nextUpDismissed, setNextUpDismissed] =
     useDismissedOnboardingTip('add-password');
   const { location } = state;
@@ -699,6 +743,7 @@ export function ItemsScreen({
             body.scrollTop,
         ),
         viewport: body.clientHeight || 600,
+        width: list.clientWidth || body.clientWidth || 600,
       });
     };
     measure();
@@ -707,8 +752,16 @@ export function ItemsScreen({
         ? null
         : new ResizeObserver(measure);
     observer?.observe(body);
+    observer?.observe(list);
     return () => observer?.disconnect();
-  }, [items.length, state.kind, state.query, state.folder, location.kind]);
+  }, [
+    items.length,
+    state.kind,
+    state.query,
+    state.folder,
+    location.kind,
+    view,
+  ]);
 
   // Show the unavailable state when a stale link or catalog refresh refers to
   // a store that is no longer present.
@@ -792,12 +845,14 @@ export function ItemsScreen({
       return (
         <Fragment key={foldKey}>
           <TreeRow
+            storeId={treeStore.id}
+            path={folder.path}
             depth={depth}
             active={
               selected.store === treeStore.id && selected.path === folder.path
             }
             icon="folder"
-            name={folder.name}
+            name={displayPathComponent(folder.name)}
             count={folder.count}
             open={open}
             expandable={folder.folders.length > 0}
@@ -818,6 +873,8 @@ export function ItemsScreen({
     return (
       <Fragment key={tree.store.id}>
         <TreeRow
+          storeId={tree.store.id}
+          path="/"
           depth={0}
           root
           active={active}
@@ -909,18 +966,31 @@ export function ItemsScreen({
       />
     ) : null;
 
-  // Search and the All items view use a flat virtualized list; folder views
-  // display direct children.
+  // Search and All items window a flat result set in either layout; folder
+  // views display direct children.
   const flatMode = Boolean(state.query) || selected.store === ALL_ITEMS;
   // Location is a column only when rows span multiple stores.
   const columns: Columns = { location: selected.store === ALL_ITEMS };
-  const rowWindow = virtualListWindow({
-    heights: items.map(() => ROW_HEIGHT),
+  const viewport = {
     listTop: listMetrics.top,
     scrollTop,
     viewport: listMetrics.viewport,
     overscan: 3,
+  };
+  const gridWindow = filesGridWindow({
+    ...viewport,
+    count: items.length,
+    width: listMetrics.width,
+    location: columns.location,
+    overscan: 1,
   });
+  const rowWindow =
+    view === 'grid'
+      ? gridWindow
+      : virtualListWindow({
+          ...viewport,
+          heights: items.map(() => ROW_HEIGHT),
+        });
   const visibleRows = items.slice(rowWindow.start, rowWindow.end);
 
   const folders =
@@ -1010,8 +1080,10 @@ export function ItemsScreen({
     ? [
         ...folders.map((folder) => (
           <FolderRow
+            storeId={selectedTree.store.id}
+            path={folder.path}
             key={folder.path}
-            name={folder.name}
+            name={displayPathComponent(folder.name)}
             count={folder.count}
             columns={columns}
             onSelect={() => selectFolder(selectedTree.store, folder.path)}
@@ -1021,6 +1093,40 @@ export function ItemsScreen({
       ]
     : [];
 
+  const contextStore = folderMenu
+    ? storeOf(snapshot, folderMenu.storeId)
+    : undefined;
+  const newFolderReason = !contextStore
+    ? 'This vault is no longer available.'
+    : !availability(contextStore).available
+      ? storeDescription(snapshot, contextStore)
+      : (writeBlockReason(snapshot, contextStore) ??
+        (onNewFolder
+          ? undefined
+          : 'Folder creation is unavailable in this window.'));
+  const showFolderMenu = (
+    target: EventTarget,
+    x: number,
+    y: number,
+  ): boolean => {
+    if (!(target instanceof Element) || target.closest('[role="menu"]'))
+      return false;
+    const row = target.closest<HTMLElement>('[data-folder-store]');
+    if (!row?.dataset.folderStore || !row.dataset.folderPath) return false;
+    const trigger = row.matches('[role="button"]')
+      ? row
+      : (row.querySelector<HTMLElement>('.fselect') ?? row);
+    trigger.focus({ preventScroll: true });
+    folderMenuAnchor.current = trigger;
+    setFolderMenu({
+      x,
+      y,
+      storeId: row.dataset.folderStore,
+      path: row.dataset.folderPath,
+      trigger,
+    });
+    return true;
+  };
   const vaultHeading = vaultTrees.length === 1 ? 'Your vault' : 'Vaults';
   const allCount = treeItems.length;
   /** The current view's name in the title row. */
@@ -1149,6 +1255,43 @@ export function ItemsScreen({
       </div>
     );
 
+  const sortSelect = (
+    <label className="files-sort-control">
+      <span>Sort</span>
+      <select
+        aria-label="Sort items"
+        value={`${!columns.location && state.sort === 'group' ? 'name' : state.sort}:${state.sortDirection}`}
+        onChange={(event) => {
+          const [sort, direction] = event.target.value.split(':') as [
+            SortKey,
+            SortDirection,
+          ];
+          locations.setSort(sort, direction);
+        }}
+      >
+        <option value="name:asc">Name (A–Z)</option>
+        <option value="name:desc">Name (Z–A)</option>
+        <option value="kind:asc">Kind (ascending)</option>
+        <option value="kind:desc">Kind (descending)</option>
+        {columns.location ? (
+          <>
+            <option value="group:asc">Location (A–Z)</option>
+            <option value="group:desc">Location (Z–A)</option>
+          </>
+        ) : null}
+      </select>
+    </label>
+  );
+  const contentsHeader =
+    view === 'list' ? (
+      <ListHeader
+        columns={columns}
+        sort={state.sort}
+        direction={state.sortDirection}
+        onSort={(sort, direction) => locations.setSort(sort, direction)}
+      />
+    ) : null;
+
   const listBody = flatMode ? (
     !items.length ? (
       state.query ? (
@@ -1160,14 +1303,7 @@ export function ItemsScreen({
       )
     ) : (
       <div className="list-window">
-        <ListHeader
-          columns={columns}
-          sort={state.sort}
-          direction={state.sortDirection}
-          onSort={(sort, direction) => {
-            locations.setSort(sort, direction);
-          }}
-        />
+        {contentsHeader}
         <div className="virtual-rows" ref={listRef}>
           {rowWindow.padTop ? (
             <div
@@ -1175,7 +1311,19 @@ export function ItemsScreen({
               style={{ height: rowWindow.padTop }}
             />
           ) : null}
-          {visibleRows.map((item) => row(item, columns))}
+          {view === 'grid' ? (
+            <div
+              className="files-grid"
+              style={{
+                gridTemplateColumns: `repeat(${gridWindow.columns}, minmax(0, 1fr))`,
+                paddingBottom: gridWindow.trailingGap,
+              }}
+            >
+              {visibleRows.map((item) => row(item, columns))}
+            </div>
+          ) : (
+            visibleRows.map((item) => row(item, columns))
+          )}
           {rowWindow.padBottom ? (
             <div
               className="virtual-spacer"
@@ -1194,15 +1342,10 @@ export function ItemsScreen({
     )
   ) : (
     <div className="list-window">
-      <ListHeader
-        columns={columns}
-        sort={state.sort}
-        direction={state.sortDirection}
-        onSort={(sort, direction) => {
-          locations.setSort(sort, direction);
-        }}
-      />
-      <div className="virtual-rows">{paneRows}</div>
+      {contentsHeader}
+      <div className={view === 'grid' ? 'files-grid' : 'virtual-rows'}>
+        {paneRows}
+      </div>
       {nextUp}
     </div>
   );
@@ -1211,7 +1354,83 @@ export function ItemsScreen({
   return (
     <div className="drop-area">
       {dropZone}
-      <div className="folder-layout">
+      <div
+        className="folder-layout"
+        onContextMenu={(event) => {
+          if (showFolderMenu(event.target, event.clientX, event.clientY))
+            event.preventDefault();
+        }}
+        onKeyDown={(event) => {
+          if (
+            event.key !== 'ContextMenu' &&
+            !(event.key === 'F10' && event.shiftKey)
+          )
+            return;
+          const bounds = (event.target as HTMLElement).getBoundingClientRect();
+          if (showFolderMenu(event.target, bounds.left, bounds.bottom)) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }}
+      >
+        {folderMenu ? (
+          <ContextMenu
+            point={folderMenu}
+            className="menu-portal"
+            onClose={() => {
+              setFolderMenu(null);
+              if (!anyDialogOpen())
+                folderMenuAnchor.current?.focus({ preventScroll: true });
+            }}
+          >
+            <Menu
+              className="menu"
+              aria-label="Folder actions"
+              anchorRef={folderMenuAnchor}
+              initialFocus="first"
+              onClose={() => setFolderMenu(null)}
+            >
+              <MenuItem
+                icon="plus"
+                reason={newFolderReason}
+                onClick={() => {
+                  setFolderMenu(null);
+                  onNewFolder?.(folderMenu.storeId, folderMenu.path);
+                }}
+              >
+                New folder
+              </MenuItem>
+              {folderMenu.path !== '/' ? (
+                <MenuItem
+                  icon="trash"
+                  danger
+                  reason="Deleting folders is not supported by the desktop agent."
+                >
+                  Delete folder
+                </MenuItem>
+              ) : null}
+              {contextStore?.kind === 'team' ? (
+                <>
+                  <div role="separator" className="menu-separator" />
+                  <MenuItem
+                    icon="info"
+                    reason={
+                      onTeamInfo
+                        ? undefined
+                        : 'Team info is unavailable in this window.'
+                    }
+                    onClick={() => {
+                      setFolderMenu(null);
+                      onTeamInfo?.(contextStore.id, folderMenu.trigger);
+                    }}
+                  >
+                    Team info
+                  </MenuItem>
+                </>
+              ) : null}
+            </Menu>
+          </ContextMenu>
+        ) : null}
         <div className="folder-split">
           <aside className="tpane" aria-label="Folders">
             {/* Filter control for item kind (passwords, documents, etc.). */}
@@ -1247,7 +1466,16 @@ export function ItemsScreen({
                   onToggle={() => {}}
                 />
               </div>
-              <h6>{vaultHeading}</h6>
+              <h6
+                tabIndex={vaultTrees.length === 1 ? 0 : undefined}
+                aria-haspopup={vaultTrees.length === 1 ? 'menu' : undefined}
+                data-folder-store={
+                  vaultTrees.length === 1 ? vaultTrees[0].store.id : undefined
+                }
+                data-folder-path="/"
+              >
+                {vaultHeading}
+              </h6>
               {vaultTrees.map(storeRoot)}
               {
                 <h6>
@@ -1302,37 +1530,35 @@ export function ItemsScreen({
                     <span className="sub">
                       {itemCount(shownCount)}
                       {people
-                        ? ` · shared with ${people === 1 ? '1 person' : `${people} people`}`
+                        ? ` · ${people} ${people === 1 ? 'member' : 'members'}`
                         : ''}
                     </span>
                   </>
                 )}
               </span>
               <span className="sp" />
+              {view === 'grid' ? sortSelect : null}
               <span className="seg" role="group" aria-label="View">
                 <button
                   type="button"
-                  className="on"
-                  aria-pressed={true}
+                  className={view === 'list' ? 'on' : ''}
+                  aria-pressed={view === 'list'}
+                  aria-label="List view"
                   title="List view"
+                  onClick={() => changeView('list')}
                 >
                   <Icon name="list" />
                 </button>
-                {/* Grid is not built. The button keeps its place and says
-                    why, `aria-disabled` rather than `disabled` so the
-                    keyboard still reaches the reason. */}
                 <button
                   type="button"
-                  aria-pressed={false}
-                  aria-disabled="true"
-                  aria-describedby={gridViewReasonId}
-                  title={GRID_VIEW_REASON}
+                  className={view === 'grid' ? 'on' : ''}
+                  aria-pressed={view === 'grid'}
+                  aria-label="Grid view"
+                  title="Grid view"
+                  onClick={() => changeView('grid')}
                 >
                   <Icon name="grid" />
                 </button>
-                <span id={gridViewReasonId} className="offscreen">
-                  {GRID_VIEW_REASON}
-                </span>
               </span>
             </div>
             <div

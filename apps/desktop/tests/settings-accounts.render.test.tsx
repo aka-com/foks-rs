@@ -201,7 +201,7 @@ test('the account panel keeps every workflow row from the accounts pane', async 
     'Sign in via SSO',
     'Import from FOKS CLI',
     'Connect an existing account with a paper key',
-    'Create an account on a YubiKey…',
+    'Create an account on a hardware key…',
   ])
     assert.equal(
       rendered.getAllByRole('button', { name }).length,
@@ -243,12 +243,12 @@ test('the account panel keeps every workflow row from the accounts pane', async 
       'Sign in via SSO',
       'Import from FOKS CLI',
       'Connect an existing account with a paper key',
-      'Create an account on a YubiKey…',
+      'Create an account on a hardware key…',
     ],
   );
 });
 
-test('account recovery and YubiKey creation open after the existing actions', async () => {
+test('account recovery and hardware-key creation open after the existing actions', async () => {
   const { rendered } = await renderPeople(await fixture());
 
   await ui.act(async () => {
@@ -272,14 +272,14 @@ test('account recovery and YubiKey creation open after the existing actions', as
   await ui.act(async () => {
     ui.fireEvent.click(
       rendered.getByRole('button', {
-        name: 'Create an account on a YubiKey…',
+        name: 'Create an account on a hardware key…',
       }),
     );
   });
   dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
   assert.equal(
     ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
-    'Create a YubiKey account',
+    'Create an account on a hardware key',
   );
 });
 

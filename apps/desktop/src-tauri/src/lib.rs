@@ -29,6 +29,10 @@ use commands::{AppState, MAIN};
 #[cfg(target_os = "macos")]
 const NEW_WINDOW_MENU_ID: &str = "new-main-window";
 #[cfg(target_os = "macos")]
+const NEW_PASSWORD_MENU_ID: &str = "new-password";
+#[cfg(target_os = "macos")]
+const NEW_DOCUMENT_MENU_ID: &str = "new-document";
+#[cfg(target_os = "macos")]
 const SETTINGS_MENU_ID: &str = "open-settings";
 #[cfg(target_os = "macos")]
 const OPEN_SETTINGS_EVENT: &str = "foks://open-settings";
@@ -78,8 +82,12 @@ fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
     let settings = MenuItemBuilder::with_id(SETTINGS_MENU_ID, "Settings…")
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
-    let new_window = MenuItemBuilder::with_id(NEW_WINDOW_MENU_ID, "New Window")
+    let new_window = MenuItemBuilder::with_id(NEW_WINDOW_MENU_ID, "New Window").build(app)?;
+    let new_password = MenuItemBuilder::with_id(NEW_PASSWORD_MENU_ID, "New Password")
         .accelerator("CmdOrCtrl+N")
+        .build(app)?;
+    let new_document = MenuItemBuilder::with_id(NEW_DOCUMENT_MENU_ID, "Add Document")
+        .accelerator("CmdOrCtrl+Shift+N")
         .build(app)?;
     let items = menu.items()?;
     if let Some(application) = items.first().and_then(|item| item.as_submenu()) {
@@ -93,6 +101,9 @@ fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
     {
         file.prepend(&PredefinedMenuItem::separator(app)?)?;
         file.prepend(&new_window)?;
+        file.prepend(&PredefinedMenuItem::separator(app)?)?;
+        file.prepend(&new_document)?;
+        file.prepend(&new_password)?;
     }
     app.set_menu(menu)?;
     app.on_menu_event(|app, event| {
@@ -100,6 +111,26 @@ fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
         if settings || event.id() == NEW_WINDOW_MENU_ID {
             if let Err(error) = open_main_window(app, settings) {
                 tracing::error!(%error, "Failed to open main window from application menu");
+            }
+            return;
+        }
+        let new_item_event = if event.id() == NEW_PASSWORD_MENU_ID {
+            Some("foks://new-password")
+        } else if event.id() == NEW_DOCUMENT_MENU_ID {
+            Some("foks://new-document")
+        } else {
+            None
+        };
+        if let Some(new_item_event) = new_item_event {
+            use tauri::Emitter as _;
+            let result = open_main_window(app, false).and_then(|()| {
+                app.get_webview_window(MAIN)
+                    .ok_or_else(|| format!("{MAIN} window is unavailable"))?
+                    .emit(new_item_event, ())
+                    .map_err(|error| error.to_string())
+            });
+            if let Err(error) = result {
+                tracing::error!(%error, "Failed to create an item from the application menu");
             }
         }
     });
@@ -292,7 +323,8 @@ pub fn run() {
             commands::vault::edit_text_item,
             commands::vault::remove_item,
             commands::vault::import_dropped_file,
-            commands::vault::pick_and_import_file,
+            commands::vault::pick_import_file,
+            commands::vault::release_import_file,
             commands::vault::replace_dropped_file,
             commands::vault::pick_and_replace_file,
             commands::groups::create_group,

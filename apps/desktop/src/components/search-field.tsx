@@ -1,4 +1,4 @@
-/** Controlled search input with an optional scope chip and keyboard badge. */
+/** Controlled search input with optional scope context and keyboard badge. */
 
 import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
@@ -19,7 +19,7 @@ export interface SearchFieldProps {
    * key opens the palette beside it; it does not claim the key itself.
    */
   kbd?: boolean;
-  /** Optional label displayed as a badge inside the search input to indicate the current search filter scope. */
+  /** Optional search scope used in the input's accessible label. */
   scope?: string;
   /** Whether the search input should be disabled (e.g. when the active view contains no searchable items). */
   disabled?: boolean;
@@ -67,7 +67,6 @@ export function SearchField({
         .filter(Boolean)
         .join(' ')}
     >
-      {scope ? <span className="scope">{scope}</span> : null}
       <Icon name="search" />
       <input
         ref={inputRef}

@@ -38,7 +38,9 @@ pub fn observe(window: &tauri::WebviewWindow) {
                 DropHover { hovering: false },
             ),
             DragDropEvent::Drop { paths, .. } => {
-                // Restrict imports to explicitly dropped native paths consumed once.
+                // Restrict imports to explicitly dropped native paths. The
+                // authorization remains available for retries until upload
+                // succeeds, the draft is discarded, or another drop replaces it.
                 // Non-UTF-8 paths are omitted to preserve lossless path encoding.
                 let state = handle.state::<crate::commands::AppState>();
                 let paths = state.record_drop_paths(paths);

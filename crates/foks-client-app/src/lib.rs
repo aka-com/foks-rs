@@ -131,7 +131,7 @@ pub enum Error {
     Protocol(#[from] foks_proto::Error),
     #[error("FOKS cryptography failed: {0}")]
     Crypto(#[from] foks_crypto::Error),
-    #[error("FOKS YubiKey operation failed: {0}")]
+    #[error("FOKS hardware key operation failed: {0}")]
     Yubi(#[from] foks_yubi::Error),
     #[error("FOKS backup phrase failed: {0}")]
     Backup(#[from] foks_crypto::BackupPhraseError),
@@ -143,7 +143,7 @@ pub enum Error {
     ClientDatabase(#[from] foks_client_db::Error),
     #[error("FOKS background security refresh failed: {0}")]
     BackgroundRefresh(String),
-    #[error("FOKS security refresh is deferred until a YubiKey is unlocked: {0}")]
+    #[error("FOKS security refresh is deferred until a hardware key is unlocked: {0}")]
     YubiUnlockRequired(String),
     #[error("FOKS application TOML failed: {0}")]
     TomlDecode(#[from] toml::de::Error),

@@ -83,7 +83,7 @@ import {
 import type { FoksIconName } from '../icons';
 import type { RailAgentState } from '../shell/sidebar';
 import type { Location } from '../location';
-import { kindOf, storeReadable } from '../model';
+import { displayPath, kindOf, nameOf, storeReadable } from '../model';
 import type { AgentSnapshot } from '../model';
 import { GoProfileChooser } from './go-profile-chooser';
 import { readableBy } from './scope';
@@ -2954,8 +2954,8 @@ function FirstRunSession({
             <div className="row" key={`${item.store}|${item.path}`}>
               <KindIcon kind={kindOf(item) as FilterKind} />
               <span className="name">
-                {item.path.split('/').at(-1)}
-                <small>{item.path}</small>
+                {nameOf(item.path)}
+                <small>{displayPath(item.path)}</small>
               </span>
               <span>
                 <Chip>{readableBy(snapshot, item).label}</Chip>

@@ -704,7 +704,7 @@ test('decoders reject invalid server status, malformed reset tokens, and invalid
       decodeAccountDevices([
         { id: `08${'8'.repeat(64)}`, role: 'owner', current: false },
       ]),
-    /software-device or YubiKey id/,
+    /software-device or hardware key id/,
   );
   assert.throws(
     () =>
@@ -759,7 +759,7 @@ test('decoders reject invalid server status, malformed reset tokens, and invalid
         userChainSequence: 1,
         managementEnrolled: true,
       }),
-    /canonical YubiKey id/,
+    /canonical hardware key id/,
   );
 });
 
@@ -2606,12 +2606,15 @@ test('mock editTextItem increments item version and returns updated value on rea
   );
 });
 
-test('mock pickAndImportFile persists imported file across catalog refreshes', async () => {
+test('mock picker selection can be uploaded across catalog refreshes', async () => {
   const bridge = mockBridge(FIXTURE);
+  const sourcePath = await bridge.pickImportFile();
+  assert.equal(sourcePath, '/tmp/picked-file');
   assert.deepEqual(
-    await bridge.pickAndImportFile({
+    await bridge.importDroppedFile({
       storeId: 'acct:personal',
       path: '/documents/picked.pdf',
+      sourcePath,
     }),
     { applied: true },
   );

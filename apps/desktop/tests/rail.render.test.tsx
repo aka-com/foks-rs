@@ -375,6 +375,35 @@ test('both setup rails omit the connection footer while keeping setup actions', 
   }
 });
 
+test('setup omits Restart until leaving the first step', async () => {
+  const { SetupSidebar } = (await vite.ssrLoadModule(
+    '/src/screens/first-run-view.tsx',
+  )) as typeof import('../src/screens/first-run-view');
+  const { initialFirstRun } = (await vite.ssrLoadModule(
+    '/src/first-run-state.ts',
+  )) as typeof import('../src/first-run-state');
+  const onRestart = () => {};
+  const view = ui.render(
+    createElement(SetupSidebar, {
+      checkpoint: initialFirstRun('own', 'who'),
+      onRestart,
+      onCancel: () => {},
+    }),
+  );
+  assert.equal(
+    view.queryByRole('button', { name: 'Restart setup' }),
+    null,
+  );
+  view.rerender(
+    createElement(SetupSidebar, {
+      checkpoint: initialFirstRun('own', 'address'),
+      onRestart,
+      onCancel: () => {},
+    }),
+  );
+  assert.ok(view.getByRole('button', { name: 'Restart setup' }));
+});
+
 test('a tab click and Control-Tab both navigate over the five tabs', async () => {
   const { journal } = await rail({ kind: 'files' });
   ui.fireEvent.click(tabs()[4]);

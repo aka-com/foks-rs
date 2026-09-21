@@ -683,7 +683,7 @@ export function AccountSection({
           onDone={async () => {
             setSheet(null);
             await onRefresh(
-              'YubiKey account created successfully.',
+              'Hardware-key account created.',
               selected.server,
             );
           }}
@@ -951,7 +951,7 @@ function AccountActions({
         {...access.props('yubi-create', { profile: store.server })}
         onClick={() => onSheet('enroll')}
       >
-        Create an account on a YubiKey…
+        Create an account on a hardware key…
       </Button>
     </div>
   );

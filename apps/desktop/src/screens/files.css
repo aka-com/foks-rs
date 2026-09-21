@@ -77,6 +77,7 @@
    names of a store and of a childless folder line up down the column. */
 .folder-split .tpane .fn,
 .folder-split .tpane .fn:has(> .twist) {
+  position: relative;
   height: 30px;
   gap: 6px;
   border-radius: 7px;
@@ -108,7 +109,18 @@
   text-align: right;
 }
 .folder-split .tpane .fn > .fact {
+  position: absolute;
+  z-index: 1;
+  right: 0;
   margin-right: 0;
+}
+.folder-split .tpane .fn:has(> .warn) > .fact {
+  position: static;
+}
+.folder-split .tpane .fn:has(> .fact):hover > .c,
+.folder-split .tpane .fn:has(> .fact).on > .c,
+.folder-split .tpane .fn:has(> .fact):focus-within > .c {
+  visibility: hidden;
 }
 .folder-split .tpane .fn > .twist {
   margin: 0;
@@ -165,7 +177,7 @@
 /* ---------------------------------------------------------- list column */
 
 .lpane > .lt {
-  height: 38px;
+  height: 44px;
   flex: none;
   display: flex;
   align-items: center;
@@ -228,11 +240,31 @@
   height: 22px;
   font-size: 14px;
 }
-.lpane > .lt .seg button[aria-disabled='true'] {
-  opacity: 0.5;
-  cursor: default;
+.lpane > .lt .files-sort-control {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  color: var(--faint);
+  font-size: 12px;
 }
-
+.lpane > .lt .files-sort-control select {
+  width: 128px;
+  height: 26px;
+  padding: 0 22px 0 7px;
+  border: 1px solid var(--line-mid);
+  border-radius: var(--radius-md);
+  outline: 0;
+  background-color: var(--main-surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+.lpane > .lt .files-sort-control select:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 1px;
+}
 .lpane > .folder-body {
   display: flex;
   flex-direction: column;
@@ -289,6 +321,9 @@
   font-weight: 600;
   color: var(--faint);
 }
+.folder-body .hdr.cols > * {
+  line-height: 18px;
+}
 .folder-body .hdr.cols button.on {
   color: var(--ink);
 }
@@ -310,7 +345,12 @@
   gap: 9px;
   min-width: 0;
   font-size: 13px;
+  line-height: 18px;
   font-weight: 500;
+}
+.folder-body .row .cell {
+  font-size: 13px;
+  line-height: 18px;
 }
 .folder-body .row .name > .ic {
   flex: none;
@@ -382,11 +422,107 @@
 .folder-body .row .acts .ic {
   font-size: 14px;
 }
-.folder-body .row:hover .cell.num,
-.folder-body .row.sel .cell.num {
+.folder-body .row:has(> .acts):hover .cell.num,
+.folder-body .row:has(> .acts).sel .cell.num {
   visibility: hidden;
 }
 
+/* Cards reuse the list's interactive rows and their actions. Fixed heights
+   match files-grid.ts, so a resized inspector can reflow virtual grid rows. */
+.files-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr));
+  gap: 10px;
+}
+.folder-body .files-grid .row.cols {
+  height: 98px;
+  min-width: 0;
+  padding: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: 54px 18px;
+  align-items: center;
+  gap: 4px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--main-surface);
+}
+.folder-body .files-grid .row.cols.loc {
+  height: 120px;
+  grid-template-rows: 54px 18px 18px;
+}
+.folder-body .files-grid .row:hover {
+  background: var(--hover);
+  border-color: var(--line-mid);
+}
+.folder-body .files-grid .row.sel {
+  background: var(--accent-wash-2);
+  border-color: var(--accent-border);
+}
+.folder-body .files-grid .row .name {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-row: 1;
+  grid-template-columns: 28px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 36px) 16px;
+  column-gap: 8px;
+  row-gap: 2px;
+  align-self: stretch;
+}
+.folder-body .files-grid .row .name > .ic {
+  grid-column: 1;
+  grid-row: 1 / -1;
+  align-self: start;
+  font-size: 26px;
+  width: 28px;
+  height: 28px;
+}
+.folder-body .files-grid .row .name .nm {
+  grid-column: 2;
+  grid-row: 1;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  align-self: start;
+}
+.folder-body .files-grid .row .name .fpath {
+  display: block;
+  grid-column: 2;
+  grid-row: 2;
+  font-size: 12px;
+}
+.folder-body .files-grid .row .cell.kind {
+  grid-column: 1;
+  grid-row: 2;
+}
+.folder-body .files-grid .row .cell.num {
+  grid-column: 2;
+  grid-row: 2;
+  visibility: visible;
+}
+.folder-body
+  .files-grid
+  .row:has(> .acts):is(:hover, .sel, :focus-within)
+  .cell.num {
+  visibility: visible;
+}
+.folder-body .files-grid .row .cell.mark {
+  display: flex;
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+.folder-body .files-grid .row .cell.mark > :is(.kico.account, .av.team) {
+  /* Shift centered initials up 2px within the fixed-size avatar tile. */
+  padding-bottom: 4px;
+}
+.folder-body .files-grid .row .cell {
+  font-size: 12px;
+}
+.folder-body .files-grid .row .acts {
+  top: 8px;
+  right: 8px;
+}
 /* Keep the drop affordance at the bottom of the Files pane. */
 .lpane > .dropzone {
   flex: none;
@@ -606,8 +742,8 @@
 /* ------------------------------------------------------- details panel */
 
 .details .dh {
-  align-items: flex-start;
-  padding: 14px 14px 10px;
+  align-items: center;
+  padding: 12px 14px;
 }
 .details .dh .kic {
   width: 36px;

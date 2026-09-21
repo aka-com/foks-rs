@@ -16,6 +16,7 @@ import {
   catalog,
   canCreateInStore,
   canChangeItem,
+  displayPath,
   fmtSize,
   formatRole,
   HUES,
@@ -318,6 +319,14 @@ test('isLogin returns true only for items under /logins/', () => {
 test('nameOf and prefixOf extract filename and parent directory from path', () => {
   assert.equal(nameOf('/logins/github.com'), 'github.com');
   assert.equal(prefixOf('/logins/github.com'), 'logins');
+  assert.equal(
+    nameOf('/documents/aka-recovery-kit-on-this-mac%20%281%29.txt'),
+    'aka-recovery-kit-on-this-mac (1).txt',
+  );
+  assert.equal(prefixOf('/Project%20Files/Design%20Docs/brief.pdf'), 'Project Files/Design Docs');
+  assert.equal(nameOf('/caf%C3%A9.txt'), 'café.txt');
+  assert.equal(nameOf('/bad%escape'), 'bad%escape');
+  assert.equal(displayPath('/Project%20Files/caf%C3%A9.txt'), '/Project Files/café.txt');
   assert.equal(nameOf('/latest-key'), 'latest-key');
   assert.equal(prefixOf('/latest-key'), '');
   assert.equal(nameOf('/'), '/');
