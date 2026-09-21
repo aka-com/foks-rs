@@ -129,8 +129,10 @@ test('errors and observers cannot poison the queue; idle and reentrant submissio
     'executionMilliseconds',
     'outcome',
     'priority',
+    'profile',
     'queueMilliseconds',
   ]);
+  assert.equal((events[0] as { profile: string }).profile, 'p');
   off();
 });
 

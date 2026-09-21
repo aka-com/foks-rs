@@ -13,6 +13,8 @@ export class CatalogReadRetiredError extends Error {
 export interface CatalogReadTiming {
   outcome: 'published' | 'superseded' | 'failed' | 'retired';
   milliseconds: number;
+  /** The read answered a request for fresh facts: a Refresh, or a read back of a write. */
+  forced: boolean;
 }
 
 export class CatalogCoordinator<T> {
@@ -35,10 +37,15 @@ export class CatalogCoordinator<T> {
     };
   }
 
-  private report(outcome: CatalogReadTiming['outcome'], started: number): void {
+  private report(
+    outcome: CatalogReadTiming['outcome'],
+    started: number,
+    forced: boolean,
+  ): void {
     const event = Object.freeze({
       outcome,
       milliseconds: performance.now() - started,
+      forced,
     });
     for (const observer of this.observers) {
       try {
@@ -111,33 +118,33 @@ export class CatalogCoordinator<T> {
             // A failed read does not publish a forced result, so dependent caches
             // remain unchanged until a later successful refresh.
             if (this.dirty) {
-              this.report('superseded', started);
+              this.report('superseded', started, forced);
               forced = true;
               continue;
             }
             if (epoch !== this.epoch) {
-              this.report('retired', started);
+              this.report('retired', started, forced);
               throw new CatalogReadRetiredError();
             }
-            this.report('failed', started);
+            this.report('failed', started, forced);
             throw error;
           } finally {
             reading = false;
           }
           if (this.dirty) {
-            this.report('superseded', started);
+            this.report('superseded', started, forced);
             forced = true;
             continue;
           }
           if (epoch !== this.epoch) {
-            this.report('retired', started);
+            this.report('retired', started, forced);
             throw new CatalogReadRetiredError();
           }
           // Publication can synchronously request a refresh. The completed read
           // no longer owns the pending slot, so that request starts a new drain.
           if (this.pending === pending) this.pending = null;
           this.publish(value, forced);
-          this.report('published', started);
+          this.report('published', started, forced);
           return value;
         }
       })

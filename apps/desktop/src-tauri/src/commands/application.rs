@@ -188,6 +188,18 @@ pub fn app_info(
     })
 }
 
+/// The backend's timing log from a cursor: every agent operation issued
+/// since, under the command that issued it. Read by Copy diagnostics.
+#[tauri::command]
+pub fn diagnostic_timings(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    since: u64,
+) -> Result<crate::diagnostics::TimingBatch, AgentError> {
+    require_main_window(&webview)?;
+    Ok(state.agent.timings().since(since))
+}
+
 /// The process answering on the agent socket: Settings › This Mac shows it
 /// before offering to stop it.
 #[tauri::command]

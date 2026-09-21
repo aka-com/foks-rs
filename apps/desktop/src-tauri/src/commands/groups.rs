@@ -698,7 +698,8 @@ pub async fn list_group_details(
     store_id: String,
 ) -> Result<GroupDetailsDto, AgentError> {
     require_main_window(&webview)?;
-    load_group_details(&state, store_id, state.agent.transport(), true).await
+    let transport = state.agent.transport_for("list_group_details", None);
+    load_group_details(&state, store_id, transport, true).await
 }
 
 pub(super) async fn load_group_details(

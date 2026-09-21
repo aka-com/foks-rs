@@ -7,6 +7,7 @@ import {
   useSyncExternalStore,
 } from 'react';
 import { normalizeCommandError } from '../bridge';
+import { diagnosticLog, hashId } from '../diagnostics/log';
 import type { Bridge, CommandError } from '../bridge';
 import type {
   ChatAction,
@@ -189,8 +190,16 @@ export function useChatConversation(
   );
   const markRead = useCallback(
     async (channel: string, sequence: string) => {
+      const end = diagnosticLog.span('chat.read', {
+        scope: `store#${hashId(storeId)}`,
+      });
       try {
         await request({ action: 'mark-read', channel, sequence });
+        end('ok');
+      } catch (error) {
+        const code = normalizeCommandError(error).code;
+        end(code === 'cancelled' ? 'cancelled' : 'error', { code });
+        throw error;
       } finally {
         service.invalidate(storeId);
       }

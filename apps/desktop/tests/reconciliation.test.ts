@@ -84,7 +84,7 @@ test('routine triggers coalesce without retiring a slow result; invalidation add
   scheduler.dispose();
 });
 
-test('failing profile backs off independently and emits identity-free diagnostics', async () => {
+test('failing profile backs off independently and emits error-free diagnostics', async () => {
   const clock = new Clock(),
     events: unknown[] = [];
   const scheduler = new ReconciliationScheduler(clock);
@@ -114,7 +114,15 @@ test('failing profile backs off independently and emits identity-free diagnostic
   await clock.advance(2_000);
   assert.equal(failed, 3);
   assert.equal(healthy, 1);
-  assert.doesNotMatch(JSON.stringify(events), /private|healthy-profile/);
+  // The job's key and scope are reported; the error it threw is not.
+  assert.doesNotMatch(JSON.stringify(events), /private-value/);
+  assert.ok(
+    events.some(
+      (event) =>
+        (event as { key: string; scope: string }).key === 'private-profile' &&
+        (event as { key: string; scope: string }).scope === 'private-profile',
+    ),
+  );
   assert.equal(scheduler.snapshot('private-profile')?.lastSuccessAt, undefined);
   assert.equal(scheduler.snapshot('healthy-profile')?.lastSuccessAt, 0);
   scheduler.dispose();

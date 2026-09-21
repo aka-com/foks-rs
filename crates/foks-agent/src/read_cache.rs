@@ -147,6 +147,7 @@ impl AuthenticatedUserCache for AgentReadCaches {
             .users
             .get_at(key, Instant::now())?;
         note_cache_hit();
+        super::profile_work::note_auth_cached();
         Some(outcome)
     }
 
@@ -356,6 +357,8 @@ pub(crate) fn open_profile_session(
     cancellation: CancellationToken,
 ) -> foks_client_app::Result<ProfileSession> {
     note_profile(registry.root(), name);
+    let opened = Instant::now();
+    let _session_time = SessionTime(opened);
     let session = match base_client(registry, name) {
         Ok(base) => ProfileSession::open_with_control_and_client(
             registry,
@@ -374,6 +377,14 @@ pub(crate) fn open_profile_session(
     } else {
         session
     })
+}
+
+/// Adds the time an open took to the request's phases, however it ends.
+struct SessionTime(Instant);
+impl Drop for SessionTime {
+    fn drop(&mut self) {
+        super::profile_work::note_session(self.0.elapsed());
+    }
 }
 
 /// Whether an operation may be served from the read caches.

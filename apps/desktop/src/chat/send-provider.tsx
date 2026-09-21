@@ -11,6 +11,7 @@ import type { Bridge } from '../bridge';
 import type { AgentSnapshot } from '../model';
 import type { ChatClock, ChatInboxService } from './inbox-service';
 import { ChatSendService } from './send-service';
+import { diagnosticLog, hashId } from '../diagnostics/log';
 
 const Context = createContext<ChatSendService | null>(null);
 export function ChatSendProvider({
@@ -44,6 +45,21 @@ export function ChatSendProvider({
     if (enabled) service.start();
     return () => service.stop();
   }, [service, enabled]);
+  useLayoutEffect(
+    () =>
+      service.observe((event) =>
+        diagnosticLog.record({
+          name: 'chat.send',
+          scope: `store#${hashId(event.store)}`,
+          id: hashId(event.message),
+          phase: event.step,
+          ms: event.milliseconds,
+          outcome: event.step === 'failed' ? 'error' : 'ok',
+          code: event.code,
+        }),
+      ),
+    [service],
+  );
   return <Context.Provider value={service}>{children}</Context.Provider>;
 }
 export function useChatSends() {

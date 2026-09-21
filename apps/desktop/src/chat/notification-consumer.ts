@@ -56,6 +56,8 @@ export type NotificationMetric =
       incomplete: boolean;
       rows: number;
       bytes: number;
+      /** From the pass's start to its history reads' end. */
+      milliseconds?: number;
     }
   | { kind: 'failure'; cancelled: boolean; busy: boolean; retry: number }
   | { kind: 'eviction' };
@@ -325,6 +327,7 @@ export class NotificationConsumer {
   private async run(p: Progress, job: Job) {
     const revision = p.view.revision,
       generation = p.generation;
+    const started = this.clock.now();
     p.dirtyDuringFlight = false;
     const current = () =>
       this.current(p) &&
@@ -382,6 +385,7 @@ export class NotificationConsumer {
         p.baselineOnly = true;
         this.metric({
           kind: 'pass',
+          milliseconds: this.clock.now() - started,
           candidates: [],
           baselineOnly: true,
           incomplete: true,
@@ -394,6 +398,7 @@ export class NotificationConsumer {
         commit(upper);
         this.metric({
           kind: 'pass',
+          milliseconds: this.clock.now() - started,
           candidates: [],
           baselineOnly: true,
           incomplete: p.view.degraded || first.missing_predecessors.length > 0,
@@ -445,6 +450,7 @@ export class NotificationConsumer {
       commit(upper);
       this.metric({
         kind: 'pass',
+        milliseconds: this.clock.now() - started,
         candidates: candidates.map((m) => m.id),
         baselineOnly: false,
         incomplete,

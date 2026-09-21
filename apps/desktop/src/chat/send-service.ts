@@ -50,6 +50,18 @@ export type SendPhase =
   | 'sent'
   | 'cancelled'
   | 'paused';
+/**
+ * One step of one outgoing message, timed from the moment it was submitted:
+ * its intent saved, its operation prepared, its attempt answered, the message
+ * observed in verified history, or a step failed. Never the text.
+ */
+export interface ChatSendTiming {
+  store: string;
+  message: string;
+  step: 'saved' | 'prepared' | 'attempted' | 'observed' | 'failed';
+  milliseconds: number;
+  code?: string;
+}
 export interface OutgoingMessage {
   id: string;
   channel: string;
@@ -124,12 +136,42 @@ export class ChatSendService {
   private cursor = 0;
   private recoveryProfiles = new Set<string>();
   private synchronizing = false;
+  private observers = new Set<(event: ChatSendTiming) => void>();
 
   constructor(
     private bridge: Bridge,
     private inbox: Inbox,
     private clock: ChatClock = systemChatClock,
   ) {}
+
+  /** Opt-in timings; an observer cannot change what the service does. */
+  observe(observer: (event: ChatSendTiming) => void): () => void {
+    this.observers.add(observer);
+    return () => {
+      this.observers.delete(observer);
+    };
+  }
+  private report(
+    team: Team,
+    message: OutgoingMessage,
+    step: ChatSendTiming['step'],
+    code?: string,
+  ) {
+    const event = Object.freeze({
+      store: team.storeId,
+      message: message.id,
+      step,
+      milliseconds: Math.max(0, this.clock.now() - message.createdAt),
+      ...(code ? { code } : {}),
+    });
+    for (const observer of this.observers) {
+      try {
+        observer(event);
+      } catch {
+        /* diagnostics are not authority */
+      }
+    }
+  }
 
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
@@ -774,6 +816,7 @@ export class ChatSendService {
           text: message.text,
         });
         if (!this.current(team, epoch)) return;
+        this.report(team, message, 'saved');
         message.phase = 'preparing';
         this.publish();
         const action = message.ambiguousPreparation
@@ -789,6 +832,7 @@ export class ChatSendService {
         if (!this.current(team, epoch)) return;
         if (reply.result.kind !== 'operation') throw integrity();
         message.operation = reply.result.operation;
+        this.report(team, message, 'prepared');
       }
       const op = message.operation;
       const checking =
@@ -810,15 +854,18 @@ export class ChatSendService {
           action: checking ? 'reconcile' : 'attempt',
           operation: op.id,
         });
-        if (this.current(team, epoch) && reply.result.kind === 'operation')
+        if (this.current(team, epoch) && reply.result.kind === 'operation') {
           message.phase = message.observed
             ? 'sent'
             : phaseOf(reply.result.operation);
+          this.report(team, message, 'attempted');
+        }
       }
       if (this.current(team, epoch)) this.inbox.invalidate(team.storeId);
     } catch (error) {
       if (!this.current(team, epoch)) return;
       const typed = normalizeCommandError(error);
+      this.report(team, message, 'failed', typed.code);
       message.error = failure(error);
       if (!message.operation) {
         message.ambiguousPreparation ||= typed.ambiguous;
@@ -909,6 +956,7 @@ export class ChatSendService {
       throw channelIntegrity(
         'The sent message does not match verified history.',
       );
+    if (!message.observed) this.report(team, message, 'observed');
     message.observed = true;
     message.phase = 'sent';
     if (!message.intentPending) message.text = undefined;

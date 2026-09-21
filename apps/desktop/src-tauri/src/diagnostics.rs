@@ -1,0 +1,346 @@
+//! A bounded in-memory log of the desktop backend's timings.
+//!
+//! Every agent operation the backend issues is recorded here with the
+//! command that issued it, how long it took and how it ended. Nothing is
+//! written to disk or sent anywhere: the renderer reads the log through the
+//! `diagnostic_timings` command when the Refresh status popover is open, and
+//! Copy diagnostics puts it on the clipboard beside the renderer's own log.
+//!
+//! What is recorded is what the popover already prints: operation and
+//! command names, profiles (server ids) and outcome codes. Never request
+//! fields, values, paths, aliases or error messages.
+
+use foks_agent_proto::{ErrorCode, ResponseResult, ResponseTiming};
+use foks_desktop::AgentError as DesktopAgentError;
+use serde::Serialize;
+use std::collections::{BTreeMap, VecDeque};
+use std::sync::Mutex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// Events retained before the oldest is dropped.
+pub const CAPACITY: usize = 4096;
+const MAX_TEXT: usize = 64;
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum TimingValue {
+    Number(f64),
+    Bool(bool),
+    Text(String),
+}
+
+/// One record, in the shape the renderer's log uses.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimingEvent {
+    /// Milliseconds since the Unix epoch.
+    pub at: u64,
+    pub layer: &'static str,
+    pub name: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub attrs: BTreeMap<&'static str, TimingValue>,
+}
+
+/// The events after a cursor, and the cursor to continue from.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimingBatch {
+    pub events: Vec<TimingEvent>,
+    pub next: u64,
+}
+
+#[derive(Default)]
+struct Entries {
+    entries: VecDeque<(u64, TimingEvent)>,
+    next: u64,
+}
+
+#[derive(Default)]
+pub struct TimingLog {
+    entries: Mutex<Entries>,
+}
+
+impl TimingLog {
+    /// Records one event; the oldest is dropped once the log is full.
+    pub fn record(&self, mut event: TimingEvent) {
+        if let Some(scope) = &mut event.scope {
+            scope.truncate(scope.floor_char_boundary(MAX_TEXT));
+        }
+        if let Some(code) = &mut event.code {
+            code.truncate(code.floor_char_boundary(MAX_TEXT));
+        }
+        for value in event.attrs.values_mut() {
+            if let TimingValue::Text(text) = value {
+                text.truncate(text.floor_char_boundary(MAX_TEXT));
+            }
+        }
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let sequence = entries.next;
+        entries.next += 1;
+        entries.entries.push_back((sequence, event));
+        while entries.entries.len() > CAPACITY {
+            entries.entries.pop_front();
+        }
+    }
+
+    /// The events recorded at or after `cursor`, oldest first.
+    pub fn since(&self, cursor: u64) -> TimingBatch {
+        let entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        TimingBatch {
+            events: entries
+                .entries
+                .iter()
+                .filter(|(sequence, _)| *sequence >= cursor)
+                .map(|(_, event)| event.clone())
+                .collect(),
+            next: entries.next,
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entries
+            .len()
+    }
+}
+
+/// The command a transport was handed to, so every agent operation it
+/// issues is recorded under that command and the profile it works on.
+#[derive(Clone, Debug)]
+pub struct Label {
+    pub command: &'static str,
+    pub scope: Option<String>,
+}
+
+pub fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn millis(elapsed: Duration) -> f64 {
+    (elapsed.as_secs_f64() * 10_000.0).round() / 10.0
+}
+
+fn code_text(code: ErrorCode) -> String {
+    serde_json::to_value(code)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| format!("{code:?}"))
+}
+
+/// The outcome and code an agent operation's result records.
+pub fn outcome_of(
+    result: Result<&ResponseResult, &DesktopAgentError>,
+) -> (&'static str, Option<String>) {
+    match result {
+        Ok(ResponseResult::Success { .. }) => ("ok", None),
+        Ok(ResponseResult::Error { code, .. }) => (
+            if matches!(code, ErrorCode::Busy | ErrorCode::ProfileBusy) {
+                "busy"
+            } else {
+                "error"
+            },
+            Some(code_text(*code)),
+        ),
+        Err(DesktopAgentError::Protocol { code, .. }) => (
+            if matches!(code, ErrorCode::Busy | ErrorCode::ProfileBusy) {
+                "busy"
+            } else {
+                "error"
+            },
+            Some(code_text(*code)),
+        ),
+        Err(DesktopAgentError::Cancelled) => ("cancelled", Some("cancelled".to_owned())),
+        Err(DesktopAgentError::DeadlineExceeded) => ("error", Some("deadline-exceeded".to_owned())),
+        Err(DesktopAgentError::Ambiguous(_)) => ("error", Some("ambiguous".to_owned())),
+        Err(DesktopAgentError::Transport(_)) => ("error", Some("transport".to_owned())),
+        Err(DesktopAgentError::Local(_)) => ("error", Some("local".to_owned())),
+        Err(DesktopAgentError::Ipc { code, .. }) => ("error", Some(code.as_str().to_owned())),
+    }
+}
+
+/// One agent operation as the backend saw it: the command it ran under, the
+/// operation's name, its round trip, its outcome and, when the response
+/// carried one, the agent's own phase timing.
+pub fn agent_operation(
+    label: Option<&Label>,
+    operation: &'static str,
+    elapsed: Duration,
+    outcome: (&'static str, Option<String>),
+    timing: Option<&ResponseTiming>,
+) -> TimingEvent {
+    let mut attrs = BTreeMap::new();
+    attrs.insert("op", TimingValue::Text(operation.to_owned()));
+    if let Some(label) = label {
+        attrs.insert("command", TimingValue::Text(label.command.to_owned()));
+    }
+    if let Some(timing) = timing {
+        let number = |value: u32| TimingValue::Number(f64::from(value));
+        attrs.insert("queue", number(timing.queue_ms));
+        attrs.insert("lock", number(timing.lock_ms));
+        attrs.insert("body", number(timing.body_ms));
+        if timing.pool_ms > 0 {
+            attrs.insert("pool", number(timing.pool_ms));
+        }
+        if timing.start_ms > 0 {
+            attrs.insert("start", number(timing.start_ms));
+        }
+        if timing.session_ms > 0 {
+            attrs.insert("session", number(timing.session_ms));
+        }
+        if timing.lock_retries > 0 {
+            attrs.insert("lock_retries", number(u32::from(timing.lock_retries)));
+        }
+        attrs.insert("auth", TimingValue::Bool(timing.auth_cached));
+        attrs.insert("report", TimingValue::Bool(timing.report_cached));
+        if let Some(behind) = &timing.waited_behind {
+            attrs.insert("waited", TimingValue::Text(behind.clone()));
+        }
+        if timing.wait_ms > 0 || timing.prepare_ms > 0 {
+            attrs.insert("prepare", number(timing.prepare_ms));
+            attrs.insert("wait", number(timing.wait_ms));
+            attrs.insert("rescope", number(timing.rescope_ms));
+        }
+    }
+    TimingEvent {
+        at: now_millis(),
+        layer: "backend",
+        name: "agent.op",
+        scope: label.and_then(|label| label.scope.clone()),
+        phase: None,
+        ms: Some(millis(elapsed)),
+        outcome: Some(outcome.0),
+        code: outcome.1,
+        attrs,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(name: &'static str) -> TimingEvent {
+        TimingEvent {
+            at: 1,
+            layer: "backend",
+            name,
+            scope: None,
+            phase: None,
+            ms: None,
+            outcome: None,
+            code: None,
+            attrs: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn the_log_is_bounded_and_read_from_a_cursor() {
+        let log = TimingLog::default();
+        for _ in 0..(CAPACITY + 5) {
+            log.record(event("a"));
+        }
+        assert_eq!(log.len(), CAPACITY);
+        let all = log.since(0);
+        assert_eq!(all.events.len(), CAPACITY);
+        assert_eq!(all.next, (CAPACITY + 5) as u64);
+        log.record(event("b"));
+        let tail = log.since(all.next);
+        assert_eq!(tail.events.len(), 1);
+        assert_eq!(tail.events[0].name, "b");
+        assert_eq!(log.since(tail.next).events.len(), 0);
+    }
+
+    #[test]
+    fn text_fields_are_bounded() {
+        let log = TimingLog::default();
+        let mut long = event("a");
+        long.scope = Some("s".repeat(200));
+        long.attrs.insert("op", TimingValue::Text("o".repeat(200)));
+        log.record(long);
+        let recorded = &log.since(0).events[0];
+        assert_eq!(recorded.scope.as_ref().unwrap().len(), MAX_TEXT);
+        assert_eq!(
+            match &recorded.attrs["op"] {
+                TimingValue::Text(text) => text.len(),
+                _ => 0,
+            },
+            MAX_TEXT
+        );
+    }
+
+    #[test]
+    fn an_operation_records_its_command_outcome_and_code() {
+        let label = Label {
+            command: "list_profile_catalog",
+            scope: Some("personal".to_owned()),
+        };
+        let ok = agent_operation(
+            Some(&label),
+            "ListKv",
+            Duration::from_millis(12),
+            outcome_of(Ok(&ResponseResult::Success {
+                value: serde_json::Value::Null,
+            })),
+            Some(&ResponseTiming {
+                queue_ms: 402,
+                body_ms: 136,
+                auth_cached: true,
+                report_cached: true,
+                waited_behind: Some("security-root".to_owned()),
+                ..ResponseTiming::default()
+            }),
+        );
+        assert_eq!(ok.scope.as_deref(), Some("personal"));
+        assert_eq!(ok.ms, Some(12.0));
+        assert_eq!(ok.outcome, Some("ok"));
+        assert_eq!(ok.code, None);
+        assert_eq!(
+            serde_json::to_value(&ok).unwrap()["attrs"],
+            serde_json::json!({
+                "auth": true,
+                "body": 136.0,
+                "command": "list_profile_catalog",
+                "lock": 0.0,
+                "op": "ListKv",
+                "queue": 402.0,
+                "report": true,
+                "waited": "security-root",
+            })
+        );
+        let busy = agent_operation(
+            None,
+            "ListKv",
+            Duration::from_millis(1),
+            outcome_of(Err(&DesktopAgentError::Protocol {
+                code: ErrorCode::ProfileBusy,
+                message: "private detail".to_owned(),
+                fields: Box::default(),
+            })),
+            None,
+        );
+        assert_eq!(busy.outcome, Some("busy"));
+        assert_eq!(busy.code.as_deref(), Some("profile-busy"));
+        assert!(!serde_json::to_string(&busy).unwrap().contains("private"));
+    }
+}

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ChatSendService } from '../src/chat/send-service';
+import { ChatSendService, type ChatSendTiming } from '../src/chat/send-service';
 import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';
 import type { ChatAction, ChatReply } from '../src/chat-contract';
@@ -201,5 +201,30 @@ test('drafts for a team the service has not been handed yet are empty, not a fai
     assert.equal(service.drafts('team:eng').get('channel'), 'text');
   } finally {
     service.stop();
+  }
+});
+
+test('a send reports its steps to diagnostics without the text', async () => {
+  const h = await setup();
+  const events: ChatSendTiming[] = [];
+  h.service.observe((event) => {
+    events.push(event);
+  });
+  h.service.observe(() => {
+    throw new Error('observer failure');
+  });
+  try {
+    await h.service.submit('team:eng', h.channel, 'private text');
+    // The mock answers submit-message with a sent operation, so no attempt
+    // follows; a prepared operation would add an 'attempted' step.
+    assert.deepEqual(
+      events.map((event) => event.step),
+      ['saved', 'prepared'],
+    );
+    assert.ok(events.every((event) => event.store === 'team:eng'));
+    assert.equal(new Set(events.map((event) => event.message)).size, 1);
+    assert.doesNotMatch(JSON.stringify(events), /private text/);
+  } finally {
+    h.service.stop();
   }
 });

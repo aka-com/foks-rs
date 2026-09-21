@@ -17,6 +17,7 @@ import type { ChatScope } from '../chat-contract';
 import type { ChatInboxService } from './inbox-service';
 import type { LocalAction, LocalSession } from './local-contract';
 import { NotificationConsumer } from './notification-consumer';
+import { diagnosticLog } from '../diagnostics/log';
 import { notificationKey } from './local-contract';
 /** The agent's code for alerts the system has not permitted. */
 const PERMISSION_CODE = 'chat-notification-permission';
@@ -77,6 +78,32 @@ export function NotificationProvider({
       service,
       session,
       setError,
+      undefined,
+      (event) => {
+        // A pass is timed and counted; the messages it read are not named.
+        if (event.kind === 'pass')
+          diagnosticLog.record({
+            name: 'chat.notify',
+            ms: event.milliseconds,
+            outcome: 'ok',
+            attrs: {
+              rows: event.rows,
+              candidates: event.candidates.length,
+              baseline: event.baselineOnly,
+              incomplete: event.incomplete,
+            },
+          });
+        else if (event.kind === 'failure')
+          diagnosticLog.record({
+            name: 'chat.notify',
+            outcome: event.cancelled
+              ? 'cancelled'
+              : event.busy
+                ? 'busy'
+                : 'error',
+            attrs: { retry: event.retry },
+          });
+      },
     );
     return () => {
       consumer.stop();

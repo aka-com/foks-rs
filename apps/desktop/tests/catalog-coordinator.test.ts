@@ -175,6 +175,7 @@ test('aggregate diagnostics contain no catalog data and cannot alter publication
   assert.deepEqual(await coordinator.refresh(), { privateId: 'excluded' });
   assert.equal(events.length, 1);
   assert.deepEqual(Object.keys(events[0] as object).sort(), [
+    'forced',
     'milliseconds',
     'outcome',
   ]);

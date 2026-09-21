@@ -70,6 +70,31 @@ pub enum ChatAction {
     CleanupPending,
 }
 impl ChatAction {
+    /// The operation name a timing records for this action: the chat
+    /// operation qualified by its action, so a local `Pending` read and a
+    /// remote `SyncInbox` are not one number.
+    pub fn operation_name(&self) -> &'static str {
+        match self {
+            Self::Channels => "Chat/Channels",
+            Self::History { .. } => "Chat/History",
+            Self::NotificationHistory { .. } => "Chat/NotificationHistory",
+            Self::Inbox => "Chat/Inbox",
+            Self::SyncInbox { .. } => "Chat/SyncInbox",
+            Self::MarkRead { .. } => "Chat/MarkRead",
+            Self::PollInbox { .. } => "Chat/PollInbox",
+            Self::PrepareChannel { .. } => "Chat/PrepareChannel",
+            Self::PrepareMessage { .. } => "Chat/PrepareMessage",
+            Self::SubmitMessage { .. } => "Chat/SubmitMessage",
+            Self::Status { .. } => "Chat/Status",
+            Self::OperationBody { .. } => "Chat/OperationBody",
+            Self::Attempt { .. } => "Chat/Attempt",
+            Self::Reconcile { .. } => "Chat/Reconcile",
+            Self::Cancel { .. } => "Chat/Cancel",
+            Self::Finalize { .. } => "Chat/Finalize",
+            Self::Pending => "Chat/Pending",
+            Self::CleanupPending => "Chat/CleanupPending",
+        }
+    }
     pub fn is_mutation(&self) -> bool {
         !matches!(
             self,

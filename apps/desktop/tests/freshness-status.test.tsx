@@ -507,3 +507,67 @@ test('each row lists its jobs: when they ran, when they run next, and what faile
     `The reply did not match. Last succeeded ${new Date(10_000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. Paused until Refresh.`,
   );
 });
+
+test('copied diagnostics keep the status lines first and append the timing log', async () => {
+  const { diagnosticsText } = (await vite.ssrLoadModule(
+    '/src/shell/sync-popover.tsx',
+  )) as typeof import('../src/shell/sync-popover');
+  const { diagnosticLog } = (await vite.ssrLoadModule(
+    '/src/diagnostics/log.ts',
+  )) as typeof import('../src/diagnostics/log');
+  const snapshot = {
+    ...FIXTURE,
+    catalogFreshness: {
+      stores: {},
+      profiles: {
+        [FIXTURE.servers[0].id]: {
+          refreshing: false,
+          lastAttemptAt: 20,
+          lastSuccessAt: 10,
+        },
+      },
+    },
+  };
+  const reconciliation = service(snapshot);
+  const summary = summarizeSync(snapshot, reconciliation);
+  const now = Date.now();
+  diagnosticLog.clear();
+  diagnosticLog.record({
+    name: 'job.catalog',
+    scope: FIXTURE.servers[0].id,
+    phase: 'success',
+    ms: 42,
+    outcome: 'ok',
+    at: now - 1_000,
+  });
+  const text = diagnosticsText(
+    summary,
+    snapshot,
+    [
+      {
+        at: now - 500,
+        layer: 'backend',
+        name: 'agent.op',
+        ms: 7,
+        outcome: 'ok',
+        attrs: { op: 'ListKv' },
+      },
+    ],
+    now,
+  );
+  const lines = text.split('\n');
+  assert.deepEqual(
+    lines.slice(0, summary.diagnostics.length),
+    summary.diagnostics,
+  );
+  assert.match(
+    text,
+    /--- timing \(last 15 min, 2 events, renderer 1 · backend 1/,
+  );
+  assert.match(text, /^agent ready · \d+ servers · \d+ teams · window /m);
+  assert.match(text, /job\.catalog .* success 42ms/);
+  assert.match(text, /agent\.op\s+7ms op=ListKv/);
+  assert.match(text, /--- jobs ---/);
+  diagnosticLog.clear();
+  reconciliation.dispose();
+});

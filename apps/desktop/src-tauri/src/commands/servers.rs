@@ -1132,7 +1132,9 @@ pub async fn describe_server_status(
                 .find(|overview| overview.profile == profile)
                 .map(|overview| overview.server_status.clone())
         });
-    let transport = state.agent.transport();
+    let transport = state
+        .agent
+        .transport_for("describe_server_status", Some(&profile));
     tauri::async_runtime::spawn_blocking(move || {
         let configured = transport_profile(transport.as_ref(), &profile)?;
         let value = match cached {
@@ -1462,7 +1464,9 @@ pub async fn reconcile_server(
     let generation = crate::applock::unlocked_generation(&app)?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let expected = profile.clone();
-    let transport = state.agent.transport();
+    let transport = state
+        .agent
+        .transport_for("reconcile_server", Some(&profile));
     let worker_app = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         crate::applock::require_unlocked_generation(&worker_app, generation)?;

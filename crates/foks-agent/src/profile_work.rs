@@ -32,6 +32,17 @@ impl Scope {
     pub(super) fn profile(profile: &str) -> Self {
         Self::Profiles(vec![profile.to_owned()])
     }
+    /// The scope's kind, as a timing names what a request waited behind.
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Profiles(_) => "profile",
+            Self::LocalMetadata(_) => "local-metadata",
+            Self::SecurityRoot => "security-root",
+            Self::RegistryRead => "registry-read",
+            Self::Root => "root",
+        }
+    }
     fn overlaps(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::None, _) | (_, Self::None) => false,
@@ -249,6 +260,8 @@ impl Drop for Pending {
 pub(super) struct Permit {
     coordinator: Arc<Coordinator>,
     id: u64,
+    /// The scope this permit's request first waited behind, when it waited.
+    pub(super) waited_behind: Option<&'static str>,
 }
 impl Drop for Permit {
     fn drop(&mut self) {
@@ -286,6 +299,29 @@ impl Coordinator {
             coordinator: Arc::clone(self),
             id: Some(id),
         })
+    }
+    /// The scope of the work a waiter is currently behind: an active hold
+    /// first, then an earlier waiter. Recorded once, the first time the
+    /// waiter is refused, so a timing can say what it waited for.
+    fn blocked_by(state: &State, id: u64) -> Option<&'static str> {
+        let index = state
+            .waiting
+            .iter()
+            .position(|(candidate, _)| *candidate == id)?;
+        let work = &state.waiting[index].1;
+        state
+            .active
+            .values()
+            .find(|active| work.conflicts(active))
+            .or_else(|| {
+                state
+                    .waiting
+                    .iter()
+                    .take(index)
+                    .map(|(_, earlier)| earlier)
+                    .find(|earlier| work.conflicts(earlier))
+            })
+            .map(|blocking| blocking.scope.kind())
     }
     // FIFO among conflicting requests, irrespective of foreground/background.
     // Disjoint profiles may pass a blocked waiter; no partial multi-profile hold.
@@ -327,6 +363,7 @@ impl Coordinator {
             Ok(Some(Permit {
                 coordinator: Arc::clone(self),
                 id,
+                waited_behind: None,
             }))
         } else {
             Ok(None)
@@ -341,6 +378,7 @@ impl Coordinator {
         let mut pending = self.enqueue(root, scope)?;
         let id = pending.id.expect("new waiter");
         let deadline = tokio::time::Instant::now() + timeout;
+        let mut waited_behind = None;
         loop {
             let notified = self.changed.notified();
             tokio::pin!(notified);
@@ -348,15 +386,19 @@ impl Coordinator {
             if tokio::time::Instant::now() >= deadline {
                 return Err(AdmissionError::Deadline);
             }
-            if Self::admit(
-                &mut self.state.lock().unwrap_or_else(|e| e.into_inner()),
-                id,
-            ) {
-                pending.id = None;
-                return Ok(Permit {
-                    coordinator: Arc::clone(self),
-                    id,
-                });
+            {
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                if Self::admit(&mut state, id) {
+                    pending.id = None;
+                    return Ok(Permit {
+                        coordinator: Arc::clone(self),
+                        id,
+                        waited_behind,
+                    });
+                }
+                if waited_behind.is_none() {
+                    waited_behind = Self::blocked_by(&state, id);
+                }
             }
             tokio::time::timeout_at(deadline, notified)
                 .await
@@ -374,6 +416,7 @@ impl Coordinator {
         let id = pending.id.expect("new waiter");
         let deadline = Instant::now() + timeout;
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut waited_behind = None;
         loop {
             // Release the mutex before Pending's destructor removes the waiter.
             if cancellation.is_cancelled() {
@@ -390,7 +433,11 @@ impl Coordinator {
                 return Ok(Permit {
                     coordinator: Arc::clone(self),
                     id,
+                    waited_behind,
                 });
+            }
+            if waited_behind.is_none() {
+                waited_behind = Self::blocked_by(&state, id);
             }
             (state, _) = self
                 .blocking_changed
@@ -398,6 +445,55 @@ impl Coordinator {
                 .unwrap_or_else(|e| e.into_inner());
         }
     }
+}
+
+/// What one request spent in the phases the agent can only see from inside
+/// its worker thread: opening profile sessions, retrying the profile file
+/// lock, and whether a cache served it. Installed for the request by
+/// `with_phase_timing`; work outside a request finds none and records nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct PhaseTimes {
+    pub(super) session: Duration,
+    pub(super) lock: Duration,
+    pub(super) lock_retries: u16,
+    pub(super) auth_cached: bool,
+    pub(super) report_cached: bool,
+}
+
+thread_local! {
+    static PHASES: RefCell<Option<PhaseTimes>> = const { RefCell::new(None) };
+}
+
+/// Runs one request's work with a phase accumulator installed and answers
+/// what it accumulated.
+pub(super) fn with_phase_timing<T>(work: impl FnOnce() -> T) -> (T, PhaseTimes) {
+    struct Restore(Option<PhaseTimes>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            PHASES.with(|slot| *slot.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(PHASES.with(|slot| slot.replace(Some(PhaseTimes::default()))));
+    let value = work();
+    let phases = PHASES.with(|slot| slot.borrow().unwrap_or_default());
+    (value, phases)
+}
+
+fn note_phase(update: impl FnOnce(&mut PhaseTimes)) {
+    PHASES.with(|slot| {
+        if let Some(phases) = slot.borrow_mut().as_mut() {
+            update(phases);
+        }
+    });
+}
+pub(super) fn note_session(elapsed: Duration) {
+    note_phase(|phases| phases.session += elapsed);
+}
+pub(super) fn note_auth_cached() {
+    note_phase(|phases| phases.auth_cached = true);
+}
+pub(super) fn note_report_cached() {
+    note_phase(|phases| phases.report_cached = true);
 }
 
 // Controls for external CLI file-lock contention. Only acquisition is retried;
@@ -446,7 +542,13 @@ pub(super) fn wait_for_external_lock() -> Result<(), AdmissionError> {
         if remaining.is_zero() {
             return Err(AdmissionError::Deadline);
         }
+        let slept = Instant::now();
         std::thread::sleep(remaining.min(CONTROL_POLL));
+        let elapsed = slept.elapsed();
+        note_phase(|phases| {
+            phases.lock += elapsed;
+            phases.lock_retries = phases.lock_retries.saturating_add(1);
+        });
         Ok(())
     })
 }
@@ -463,6 +565,49 @@ mod tests {
             Poll::Ready(())
         })
         .await;
+    }
+
+    #[tokio::test]
+    async fn a_permit_names_the_scope_its_request_waited_behind() {
+        let coordinator = Arc::new(Coordinator::default());
+        let root = Path::new("/");
+        let held = coordinator
+            .try_acquire(root, Scope::SecurityRoot)
+            .unwrap()
+            .unwrap();
+        assert_eq!(held.waited_behind, None);
+        let waiter = tokio::spawn({
+            let coordinator = Arc::clone(&coordinator);
+            async move { coordinator.acquire(root, Scope::profile("p"), BUDGET).await }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        drop(held);
+        let permit = waiter.await.unwrap().unwrap();
+        assert_eq!(permit.waited_behind, Some("security-root"));
+        drop(permit);
+        let free = coordinator
+            .acquire(root, Scope::profile("p"), BUDGET)
+            .await
+            .unwrap();
+        assert_eq!(free.waited_behind, None);
+    }
+
+    #[test]
+    fn phase_timing_accumulates_only_inside_a_request() {
+        note_session(Duration::from_millis(5));
+        let ((), phases) = with_phase_timing(|| {
+            note_session(Duration::from_millis(5));
+            note_auth_cached();
+            with_control(Duration::from_secs(1), CancellationToken::new(), || {
+                wait_for_external_lock().unwrap();
+            });
+        });
+        assert_eq!(phases.session, Duration::from_millis(5));
+        assert!(phases.auth_cached);
+        assert!(!phases.report_cached);
+        assert_eq!(phases.lock_retries, 1);
+        assert!(phases.lock >= Duration::from_millis(15));
+        assert_eq!(with_phase_timing(|| ()).1, PhaseTimes::default());
     }
 
     #[tokio::test]

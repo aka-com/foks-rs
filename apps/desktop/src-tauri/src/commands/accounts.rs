@@ -548,7 +548,9 @@ pub async fn list_account_devices(
     require_main_window(&webview)?;
     let generation = state.catalog_generation.load(Ordering::Acquire);
     let account = state.selected_account(&account_store_id)?;
-    let transport = state.agent.transport();
+    let transport = state
+        .agent
+        .transport_for("list_account_devices", Some(&account.profile));
     let devices = tauri::async_runtime::spawn_blocking(move || {
         load_account_devices(transport.as_ref(), &account)
     })
@@ -566,7 +568,9 @@ pub async fn list_backup_enrollments(
 ) -> Result<Vec<BackupEnrollmentDto>, AgentError> {
     require_main_window(&webview)?;
     let account = state.selected_account(&account_store_id)?;
-    let transport = state.agent.transport();
+    let transport = state
+        .agent
+        .transport_for("list_backup_enrollments", Some(&account.profile));
     tauri::async_runtime::spawn_blocking(move || {
         load_backup_enrollments(transport.as_ref(), &account)
     })

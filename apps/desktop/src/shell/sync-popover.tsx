@@ -13,11 +13,13 @@
  * observations.
  */
 
-import { useId, useState, useSyncExternalStore } from 'react';
+import { useEffect, useId, useState, useSyncExternalStore } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { Popover } from '/kit/overlay-primitives';
 import type { AgentSnapshot, CatalogFreshnessEntry, Server } from '../model';
 import { serverDisplayName } from '../model';
+import { formatTimings } from '../diagnostics/format';
+import { diagnosticLog, type TimingEvent } from '../diagnostics/log';
 import type { DesktopReconciliation } from '../desktop-reconciliation';
 import type {
   ReconciliationKind,
@@ -348,6 +350,34 @@ export function summarizeSync(
   };
 }
 
+/**
+ * The text Copy diagnostics puts on the clipboard: the status lines first,
+ * as before, then the timing log. `external` is what the other layers had
+ * reported when the popover opened; the renderer's own events are read now.
+ */
+export function diagnosticsText(
+  summary: SyncSummary,
+  snapshot: AgentSnapshot,
+  external: readonly TimingEvent[] = [],
+  now: number = Date.now(),
+): string {
+  const header = [
+    `agent ${snapshot.agent.state} · ${snapshot.servers.length} servers · ${
+      snapshot.stores.filter((store) => store.kind === 'team').length
+    } teams · window ${
+      typeof document === 'undefined' ? 'unknown' : document.visibilityState
+    }`,
+  ];
+  const events = [...diagnosticLog.events(), ...external].sort(
+    (a, b) => a.at - b.at,
+  );
+  return [
+    ...summary.diagnostics,
+    '',
+    formatTimings(events, { now, header }),
+  ].join('\n');
+}
+
 /** The summary, re-read whenever the scheduler publishes. */
 export function useSyncSummary(
   snapshot: AgentSnapshot,
@@ -527,9 +557,52 @@ export function SyncPopover({
   const [openOverrides, setOpenOverrides] = useState<Record<string, boolean>>(
     {},
   );
+  // The other layers' events are read while the popover is up, so the copy
+  // itself stays synchronous with the click that asked for it.
+  const [external, setExternal] = useState<readonly TimingEvent[]>([]);
+  useEffect(() => {
+    let current = true;
+    diagnosticLog
+      .collect()
+      .then((events) => {
+        if (current) setExternal(events.filter((e) => e.layer !== 'renderer'));
+      })
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, []);
+  // Start the clipboard write during the click so WebKit retains the user
+  // gesture. A promise-backed item can collect fresh diagnostics afterward;
+  // older clipboard implementations use the events collected on opening.
   const copy = (): void => {
-    const text = summary.diagnostics.join('\n');
-    void navigator.clipboard?.writeText(text).catch(() => undefined);
+    const clipboard = navigator.clipboard;
+    if (!clipboard) return;
+    let writing: Promise<void>;
+    try {
+      if (typeof ClipboardItem !== 'undefined' && clipboard.write) {
+        const content = diagnosticLog
+          .collect()
+          .then((events) => events.filter((e) => e.layer !== 'renderer'))
+          .catch(() => external)
+          .then(
+            (latest) =>
+              new Blob([diagnosticsText(summary, snapshot, latest)], {
+                type: 'text/plain',
+              }),
+          );
+        writing = clipboard.write([
+          new ClipboardItem({ 'text/plain': content }),
+        ]);
+      } else {
+        writing = clipboard.writeText(
+          diagnosticsText(summary, snapshot, external),
+        );
+      }
+    } catch {
+      return;
+    }
+    void writing.catch(() => undefined);
   };
   const body = { service, onClose, onOpenServers };
   const single = summary.servers.length === 1 ? summary.servers[0] : null;

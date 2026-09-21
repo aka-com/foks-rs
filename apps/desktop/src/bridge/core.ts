@@ -1,4 +1,5 @@
 import type { AgentStatus } from '../model';
+import type { TimingEvent, TimingValue } from '../diagnostics/log';
 import { decodeCommandError, type CommandError } from './errors';
 import {
   array,
@@ -10,6 +11,62 @@ import {
   record,
   string,
 } from './validation';
+
+/** The backend's timing events after a cursor, and the cursor to continue from. */
+export interface TimingBatch {
+  events: TimingEvent[];
+  next: number;
+}
+function decodeTimingEvent(value: unknown): TimingEvent {
+  const at = 'diagnostic_timings.events[]';
+  const item = record(value, at);
+  const layer = string(item.layer, `${at}.layer`);
+  if (layer !== 'backend' && layer !== 'agent')
+    throw new Error(`${at}.layer is not a backend layer`);
+  const outcome = optionalString(item.outcome, `${at}.outcome`);
+  if (
+    outcome !== undefined &&
+    !['ok', 'error', 'cancelled', 'busy', 'retired'].includes(outcome)
+  )
+    throw new Error(`${at}.outcome is invalid`);
+  const attrs: Record<string, TimingValue> = {};
+  if (item.attrs !== undefined)
+    for (const [key, entry] of Object.entries(
+      record(item.attrs, `${at}.attrs`),
+    ))
+      if (
+        typeof entry === 'number' ||
+        typeof entry === 'boolean' ||
+        typeof entry === 'string'
+      )
+        attrs[key] = entry;
+      else
+        throw new Error(
+          `${at}.attrs.${key} is not a number, boolean or string`,
+        );
+  const ms = item.ms === undefined ? undefined : Number(item.ms);
+  if (ms !== undefined && !Number.isFinite(ms))
+    throw new Error(`${at}.ms is not a number`);
+  return {
+    at: integer(item.at, `${at}.at`),
+    layer,
+    name: string(item.name, `${at}.name`),
+    scope: optionalString(item.scope, `${at}.scope`),
+    id: optionalString(item.id, `${at}.id`),
+    phase: optionalString(item.phase, `${at}.phase`),
+    ms,
+    outcome: outcome as TimingEvent['outcome'],
+    code: optionalString(item.code, `${at}.code`),
+    attrs,
+  };
+}
+export function decodeTimingBatch(value: unknown): TimingBatch {
+  const item = record(value, 'diagnostic_timings response');
+  return {
+    events: array(item.events, 'diagnostic_timings.events', decodeTimingEvent),
+    next: integer(item.next, 'diagnostic_timings.next'),
+  };
+}
 
 export type MaintenanceKind =
   'export' | 'import' | 'verify' | 'relocate' | 'restart';

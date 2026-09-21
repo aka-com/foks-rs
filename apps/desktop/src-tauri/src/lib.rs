@@ -10,6 +10,7 @@ mod agent;
 mod applock;
 mod clipboard;
 mod commands;
+mod diagnostics;
 mod dragdrop;
 mod navigation;
 mod startup;
@@ -249,6 +250,7 @@ pub fn run() {
             commands::servers::describe_reset,
             commands::servers::reset_server,
             commands::application::app_info,
+            commands::application::diagnostic_timings,
             commands::application::restart_app,
             commands::application::quit_app,
             window_state::get_window_state,

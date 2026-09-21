@@ -3,7 +3,7 @@ import test from 'node:test';
 import { PROTOCOL_CAPABILITIES } from '../src/model/types';
 import { cancelled } from '../src/chat/client';
 import { ChatInboxService } from '../src/chat/inbox-service';
-import type { ChatClock } from '../src/chat/inbox-service';
+import type { ChatClock, ChatInboxTiming } from '../src/chat/inbox-service';
 import type { Bridge } from '../src/bridge';
 import type { ChatAction, ChatReply } from '../src/chat-contract';
 import type { TeamStore, AgentSnapshot } from '../src/model';
@@ -766,5 +766,46 @@ test('a hidden window drains every two seconds rather than every quarter second'
   f.service.setVisible(true);
   await f.clock.advance(0);
   assert.deepEqual(delays(), [250]);
+  f.service.stop();
+});
+
+test('polls, synchronizations and arrivals are timed for diagnostics without channels or text', async () => {
+  const f = fixture(1);
+  const events: ChatInboxTiming[] = [];
+  const stop = f.service.observe((event) => {
+    events.push(event);
+  });
+  f.service.observe(() => {
+    throw new Error('observer failure');
+  });
+  await f.clock.advance(500);
+  const first = events.find((event) => event.kind === 'sync');
+  assert.ok(first && first.kind === 'sync');
+  assert.equal(first.outcome, 'ok');
+  assert.equal(first.store, 't0');
+  assert.equal(first.changed, false);
+  assert.ok(!events.some((event) => event.kind === 'arrival'));
+  events.length = 0;
+  await f.clock.advance(1_000);
+  f.bump('2');
+  await f.clock.advance(1_000);
+  const poll = events.find((event) => event.kind === 'poll');
+  assert.ok(poll && poll.kind === 'poll');
+  assert.equal(poll.bumped, true);
+  assert.equal(poll.account, '1:p2:me');
+  assert.ok(poll.milliseconds >= 1_000);
+  const arrival = events.find((event) => event.kind === 'arrival');
+  assert.ok(arrival && arrival.kind === 'arrival');
+  assert.equal(arrival.store, 't0');
+  assert.ok(arrival.milliseconds >= 0 && arrival.milliseconds <= 1_000);
+  // One arrival per bump, not one per periodic resynchronization.
+  events.length = 0;
+  await f.clock.advance(30_000);
+  assert.ok(events.some((event) => event.kind === 'sync'));
+  assert.ok(!events.some((event) => event.kind === 'arrival'));
+  stop();
+  events.length = 0;
+  await f.clock.advance(30_000);
+  assert.equal(events.length, 0);
   f.service.stop();
 });

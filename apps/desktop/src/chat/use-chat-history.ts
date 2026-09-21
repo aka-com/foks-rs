@@ -9,6 +9,7 @@ import type {
   ChatResult,
 } from '../chat-contract';
 import type { HistoryWindow } from './conversation-model';
+import { diagnosticLog, hashId } from '../diagnostics/log';
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
 
@@ -54,11 +55,25 @@ export function useChatHistory(
       setBusy(true);
       setError(null);
       onLoading?.(older);
+      // The page load is timed under a hash of the channel, with the row
+      // count: a thread open, and the reload each incoming message costs.
+      const end = diagnosticLog.span('chat.history', {
+        scope: `chan#${hashId(channel.id)}`,
+        attrs: { older: older !== null },
+      });
       try {
         const reply = await request({
           action: 'history',
           channel: channel.id,
           before: older,
+        });
+        end('ok', {
+          attrs: {
+            rows:
+              reply.result.kind === 'history'
+                ? reply.result.messages.length
+                : 0,
+          },
         });
         if (!active.current) return;
         if (reply.result.kind === 'history') {
@@ -66,6 +81,8 @@ export function useChatHistory(
           onAccepted?.(page, older);
         }
       } catch (e) {
+        const code = normalizeCommandError(e).code;
+        end(code === 'cancelled' ? 'cancelled' : 'error', { code });
         if (active.current) {
           if (normalizeCommandError(e).code === 'chat-channel-integrity')
             onFatal?.(channel.id);

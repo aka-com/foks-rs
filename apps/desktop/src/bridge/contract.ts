@@ -30,6 +30,7 @@ import type {
   CommandAck,
   DropHoverEvent,
   MaintenanceSnapshot,
+  TimingBatch,
   Unlisten,
   WindowStateEvent,
 } from './core';
@@ -82,6 +83,11 @@ export interface Bridge {
   clientStateMaintenanceStatus(): Promise<MaintenanceSnapshot>;
   /** The process on the agent socket. */
   agentProcessInfo(): Promise<AgentProcessInfo>;
+  /**
+   * The backend's timing log from a cursor, for Copy diagnostics. Only the
+   * native bridge has one.
+   */
+  diagnosticTimings?(since: number): Promise<TimingBatch>;
   /**
    * Stops the local agent and starts it again. `takeover` claims an agent
    * this app did not start, once the reader has confirmed that.

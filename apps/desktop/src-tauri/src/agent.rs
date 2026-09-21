@@ -6,11 +6,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use foks_agent_client::AgentClient;
 use foks_agent_proto::{ErrorCode, ErrorFields, Operation, Response, ResponseResult};
 use foks_desktop::{AgentError as DesktopAgentError, AgentTransport, IpcErrorCode};
+
+use crate::diagnostics::{agent_operation, outcome_of, Label, TimingLog};
 use fs2::FileExt as _;
 use serde::Serialize;
 use serde_json::Value;
@@ -479,6 +481,8 @@ struct ObservedTransport {
     maintenance: RwLock<()>,
     disposition: Mutex<TransportDisposition>,
     connection_failure: Arc<Mutex<Option<String>>>,
+    /// Every operation this transport issues, timed, for Copy diagnostics.
+    timings: Arc<TimingLog>,
 }
 
 impl ObservedTransport {
@@ -528,6 +532,69 @@ impl ObservedTransport {
             }
         }
     }
+
+    /// Times one round trip and records it under the command that issued it.
+    /// A response that carries the agent's own phase timing has it recorded
+    /// beside the round trip.
+    fn observe(
+        &self,
+        label: Option<&Label>,
+        operation: &'static str,
+        started: Instant,
+        result: &Result<Response, DesktopAgentError>,
+    ) {
+        let outcome = outcome_of(result.as_ref().map(|response| &response.result));
+        let timing = result
+            .as_ref()
+            .ok()
+            .and_then(|response| response.timing.as_ref());
+        self.timings.record(agent_operation(
+            label,
+            operation,
+            started.elapsed(),
+            outcome,
+            timing,
+        ));
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn call_observed(
+        &self,
+        label: Option<&Label>,
+        operation: Operation,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Value, DesktopAgentError> {
+        let _use = self.reserve_use()?;
+        let name = operation.name();
+        let started = Instant::now();
+        let response = self
+            .client
+            .call_cancellable(operation, cancelled)
+            .map_err(client_to_desktop);
+        self.observe(label, name, started, &response);
+        let result = response.and_then(|response| response_result(response.result));
+        self.record(&result);
+        result
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn stream_observed(
+        &self,
+        label: Option<&Label>,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+    ) -> Result<Value, DesktopAgentError> {
+        let _use = self.reserve_use()?;
+        let started = Instant::now();
+        let response = self
+            .client
+            .put_kv_stream(header, reader)
+            .map_err(client_to_desktop);
+        self.observe(label, "PutKvStream", started, &response);
+        let result = response.and_then(|response| response_result(response.result));
+        self.record(&result);
+        result
+    }
 }
 
 impl AgentTransport for ObservedTransport {
@@ -536,27 +603,11 @@ impl AgentTransport for ObservedTransport {
         operation: Operation,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Value, DesktopAgentError> {
-        let _use = self.reserve_use()?;
-        let result = match self
-            .client
-            .call_cancellable(operation, cancelled)
-            .map_err(client_to_desktop)
-        {
-            Ok(response) => response_result(response.result),
-            Err(error) => Err(error),
-        };
-        self.record(&result);
-        result
+        self.call_observed(None, operation, cancelled)
     }
 
     fn call(&self, operation: Operation) -> Result<Value, DesktopAgentError> {
-        let _use = self.reserve_use()?;
-        let result = match self.client.call(operation).map_err(client_to_desktop) {
-            Ok(response) => response_result(response.result),
-            Err(error) => Err(error),
-        };
-        self.record(&result);
-        result
+        self.call_observed(None, operation, &|| false)
     }
 
     fn put_kv_stream(
@@ -564,17 +615,40 @@ impl AgentTransport for ObservedTransport {
         header: foks_agent_proto::KvUploadHeader,
         reader: &mut dyn std::io::Read,
     ) -> Result<Value, DesktopAgentError> {
-        let _use = self.reserve_use()?;
-        let result = match self
-            .client
-            .put_kv_stream(header, reader)
-            .map_err(client_to_desktop)
-        {
-            Ok(response) => response_result(response.result),
-            Err(error) => Err(error),
-        };
-        self.record(&result);
-        result
+        self.stream_observed(None, header, reader)
+    }
+}
+
+/// The transport a command hands to the shared catalog, roster and chat
+/// code, so the operations issued on the command's behalf, on whatever
+/// thread, are recorded under its name and profile.
+struct LabelledTransport {
+    inner: Arc<ObservedTransport>,
+    label: Label,
+}
+
+impl AgentTransport for LabelledTransport {
+    fn call_cancellable(
+        &self,
+        operation: Operation,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Value, DesktopAgentError> {
+        self.inner
+            .call_observed(Some(&self.label), operation, cancelled)
+    }
+
+    fn call(&self, operation: Operation) -> Result<Value, DesktopAgentError> {
+        self.inner
+            .call_observed(Some(&self.label), operation, &|| false)
+    }
+
+    fn put_kv_stream(
+        &self,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+    ) -> Result<Value, DesktopAgentError> {
+        self.inner
+            .stream_observed(Some(&self.label), header, reader)
     }
 }
 
@@ -634,6 +708,7 @@ impl AgentHandle {
                 maintenance: RwLock::new(()),
                 disposition: Mutex::new(TransportDisposition::Current),
                 connection_failure: Arc::clone(&connection_failure),
+                timings: Arc::default(),
             }),
             socket,
             connection_failure,
@@ -903,6 +978,27 @@ impl AgentHandle {
         self.transport.clone()
     }
 
+    /// The transport for one command's work, recording each operation it
+    /// issues under the command's name and, when it has one, its profile.
+    pub fn transport_for(
+        &self,
+        command: &'static str,
+        scope: Option<&str>,
+    ) -> Arc<dyn AgentTransport> {
+        Arc::new(LabelledTransport {
+            inner: Arc::clone(&self.transport),
+            label: Label {
+                command,
+                scope: scope.map(str::to_owned),
+            },
+        })
+    }
+
+    /// The backend's timing log, read by Copy diagnostics.
+    pub fn timings(&self) -> Arc<TimingLog> {
+        Arc::clone(&self.transport.timings)
+    }
+
     pub async fn call(self: &Arc<Self>, operation: Operation) -> Result<Response, AgentError> {
         let handle = Arc::clone(self);
         tauri::async_runtime::spawn_blocking(move || handle.call_blocking(operation))
@@ -918,11 +1014,14 @@ impl AgentHandle {
             .transport
             .reserve_use()
             .map_err(AgentError::from_desktop)?;
+        let name = operation.name();
+        let started = Instant::now();
         let result = self
             .transport
             .client
             .call(operation)
             .map_err(client_to_desktop);
+        self.transport.observe(None, name, started, &result);
         self.transport.record(&result);
         result.map_err(AgentError::from_desktop)
     }

@@ -1052,7 +1052,9 @@ pub async fn list_profile_catalog(
     // A read of one profile never settles the mutation epoch: it says nothing
     // about the other profiles, whose first pages the agent may still hold.
     let (fresh, _) = state.catalog_read_freshness(false);
-    let transport = state.agent.transport();
+    let transport = state
+        .agent
+        .transport_for("list_profile_catalog", Some(&profile));
     let (snapshot, profiles) = tauri::async_runtime::spawn_blocking(move || {
         // The catalog walk takes this listing rather than issuing its own.
         let mut profiles: Vec<super::servers::ProfileSummary> = serde_json::from_value(

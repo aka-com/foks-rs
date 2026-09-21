@@ -15,6 +15,7 @@ import type { Bridge } from '../bridge';
 import type { AgentSnapshot } from '../model';
 import { ChatInboxService } from './inbox-service';
 import type { ChatClock } from './inbox-service';
+import { diagnosticLog, hashId } from '../diagnostics/log';
 const Context = createContext<ChatInboxService | null>(null);
 export function ChatInboxProvider({
   bridge,
@@ -67,6 +68,58 @@ export function ChatInboxProvider({
     if (enabled) service.start();
     return () => service.stop();
   }, [service, enabled]);
+  // Polls, synchronizations and arrivals go to the timing log under hashed
+  // account and team identifiers; a publish is followed to the next frame
+  // while the window is visible, which is what an inbox change costs to show.
+  useEffect(() => {
+    const stopTimings = service.observe((event) => {
+      if (event.kind === 'poll')
+        diagnosticLog.record({
+          name: 'chat.poll',
+          scope: `acct#${hashId(event.account)}`,
+          ms: event.milliseconds,
+          outcome: event.outcome,
+          code: event.code,
+          attrs: { bumped: event.bumped },
+        });
+      else if (event.kind === 'sync')
+        diagnosticLog.record({
+          name: 'chat.sync',
+          scope: `store#${hashId(event.store)}`,
+          ms: event.milliseconds,
+          outcome: event.outcome,
+          code: event.code,
+          attrs: { changed: event.changed, conversations: event.conversations },
+        });
+      else
+        diagnosticLog.record({
+          name: 'chat.arrival',
+          scope: `store#${hashId(event.store)}`,
+          ms: event.milliseconds,
+          outcome: 'ok',
+        });
+    });
+    let pending = false;
+    const stopFrames = service.subscribe(() => {
+      if (
+        pending ||
+        typeof document === 'undefined' ||
+        typeof requestAnimationFrame !== 'function' ||
+        document.visibilityState !== 'visible'
+      )
+        return;
+      pending = true;
+      const end = diagnosticLog.span('chat.frame');
+      requestAnimationFrame(() => {
+        pending = false;
+        end('ok');
+      });
+    });
+    return () => {
+      stopTimings();
+      stopFrames();
+    };
+  }, [service]);
   // Suspend periodic team synchronization while the window is hidden. Account
   // polling remains active so reported team changes are synchronized for notifications.
   useEffect(() => {

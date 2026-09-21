@@ -53,7 +53,9 @@ pub async fn chat_request(
     let mutation = action.is_mutation();
     let (generation, store) = state.selected_chat(&store_id)?;
     let expected = store.clone();
-    let transport = state.agent.transport();
+    let transport = state
+        .agent
+        .transport_for("chat_request", Some(&store.profile));
     let token = open_chat_view(
         &mut state
             .chat_views

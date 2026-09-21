@@ -985,6 +985,117 @@ pub enum Operation {
 }
 
 impl Operation {
+    /// The variant's name, for a timing or a log line that must not carry
+    /// the operation's fields.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::SetLocalAccountAlias { .. } => "SetLocalAccountAlias",
+            Self::Invitations { .. } => "Invitations",
+            Self::WebAdmin { .. } => "WebAdmin",
+            Self::BotAccount { .. } => "BotAccount",
+            Self::ListAccountRenames { .. } => "ListAccountRenames",
+            Self::RenameAccount { .. } => "RenameAccount",
+            Self::Sso { .. } => "Sso",
+            Self::PrepareDataWrite { .. } => "PrepareDataWrite",
+            Self::ExecuteDataWrite { .. } => "ExecuteDataWrite",
+            Self::DataWriteStatus { .. } => "DataWriteStatus",
+            Self::PendingDataWrites { .. } => "PendingDataWrites",
+            Self::BindDataAccount { .. } => "BindDataAccount",
+            Self::ReadData { .. } => "ReadData",
+            Self::Chat { action, .. } => action.operation_name(),
+            Self::Ping => "Ping",
+            Self::AgentStatus => "AgentStatus",
+            Self::RetentionStatus => "RetentionStatus",
+            Self::DiscoverGoProfiles => "DiscoverGoProfiles",
+            Self::InitializeState { .. } => "InitializeState",
+            Self::AddProfile { .. } => "AddProfile",
+            Self::CheckAndAddProfile { .. } => "CheckAndAddProfile",
+            Self::CheckAndAddGoProfile { .. } => "CheckAndAddGoProfile",
+            Self::RemoveProfile { .. } => "RemoveProfile",
+            Self::SetProfileLabel { .. } => "SetProfileLabel",
+            Self::DescribeResetHardState { .. } => "DescribeResetHardState",
+            Self::ResetHardState { .. } => "ResetHardState",
+            Self::ListProfiles => "ListProfiles",
+            Self::Probe { .. } => "Probe",
+            Self::RefreshLease { .. } => "RefreshLease",
+            Self::ReconcileProfile { .. } => "ReconcileProfile",
+            Self::ListKnownStores { .. } => "ListKnownStores",
+            Self::ListProfileOverview { .. } => "ListProfileOverview",
+            Self::ListAccounts { .. } => "ListAccounts",
+            Self::ListPendingOperations { .. } => "ListPendingOperations",
+            Self::CreateAccount { .. } => "CreateAccount",
+            Self::ResumeAccount { .. } => "ResumeAccount",
+            Self::ListDevices { .. } => "ListDevices",
+            Self::ListBackupEnrollments { .. } => "ListBackupEnrollments",
+            Self::DescribeServerStatus { .. } => "DescribeServerStatus",
+            Self::RemoveDevice { .. } => "RemoveDevice",
+            Self::ProvisionOwnerDevice { .. } => "ProvisionOwnerDevice",
+            Self::ResumeOwnerDeviceProvision { .. } => "ResumeOwnerDeviceProvision",
+            Self::PrepareOwnerBackup { .. } => "PrepareOwnerBackup",
+            Self::CommitOwnerBackup { .. } => "CommitOwnerBackup",
+            Self::RevokeOwnerBackup { .. } => "RevokeOwnerBackup",
+            Self::RecoverOwnerAccount { .. } => "RecoverOwnerAccount",
+            Self::ResumeOwnerRecovery { .. } => "ResumeOwnerRecovery",
+            Self::SetPassphrase { .. } => "SetPassphrase",
+            Self::ChangePassphrase { .. } => "ChangePassphrase",
+            Self::VerifyPassphrase { .. } => "VerifyPassphrase",
+            Self::SetYubiPassphrase { .. } => "SetYubiPassphrase",
+            Self::ChangeYubiPassphrase { .. } => "ChangeYubiPassphrase",
+            Self::VerifyYubiPassphrase { .. } => "VerifyYubiPassphrase",
+            Self::SyncAccount { .. } => "SyncAccount",
+            Self::StartDevicePairing { .. } => "StartDevicePairing",
+            Self::RepublishDevicePairing { .. } => "RepublishDevicePairing",
+            Self::FinishDevicePairing { .. } => "FinishDevicePairing",
+            Self::AcceptDevicePairing { .. } => "AcceptDevicePairing",
+            Self::AcceptGoProfilePairing { .. } => "AcceptGoProfilePairing",
+            Self::ResumeDevicePairingAcceptance { .. } => "ResumeDevicePairingAcceptance",
+            Self::ResumeGoProfilePairing { .. } => "ResumeGoProfilePairing",
+            Self::CopyGoProfileDevice { .. } => "CopyGoProfileDevice",
+            Self::ListYubiCards { .. } => "ListYubiCards",
+            Self::ListYubiAccounts { .. } => "ListYubiAccounts",
+            Self::CreateYubiAccount { .. } => "CreateYubiAccount",
+            Self::ResumeYubiAccount { .. } => "ResumeYubiAccount",
+            Self::ProvisionYubiDevice { .. } => "ProvisionYubiDevice",
+            Self::SyncYubiAccount { .. } => "SyncYubiAccount",
+            Self::YubiPinStatus { .. } => "YubiPinStatus",
+            Self::ChangeYubiPin { .. } => "ChangeYubiPin",
+            Self::ChangeYubiPuk { .. } => "ChangeYubiPuk",
+            Self::UnblockYubiPin { .. } => "UnblockYubiPin",
+            Self::RotateYubiManagementKey { .. } => "RotateYubiManagementKey",
+            Self::ResumeYubiManagementKey { .. } => "ResumeYubiManagementKey",
+            Self::RecoverYubiManagementKey { .. } => "RecoverYubiManagementKey",
+            Self::RecoverYubiSubkey { .. } => "RecoverYubiSubkey",
+            Self::RevokeYubiDevice { .. } => "RevokeYubiDevice",
+            Self::ListKv { .. } => "ListKv",
+            Self::ListTeamKv { .. } => "ListTeamKv",
+            Self::ReadKv { .. } => "ReadKv",
+            Self::ReadKvChunk { .. } => "ReadKvChunk",
+            Self::PutKv { .. } => "PutKv",
+            Self::PutKvStream { .. } => "PutKvStream",
+            Self::PutKvSymlink { .. } => "PutKvSymlink",
+            Self::MkdirKv { .. } => "MkdirKv",
+            Self::RemoveKv { .. } => "RemoveKv",
+            Self::CreateTeam { .. } => "CreateTeam",
+            Self::ResumeTeamCreation { .. } => "ResumeTeamCreation",
+            Self::AbandonTeamCreation { .. } => "AbandonTeamCreation",
+            Self::ListTeams { .. } => "ListTeams",
+            Self::DiscoverTeams { .. } => "DiscoverTeams",
+            Self::SyncTeam { .. } => "SyncTeam",
+            Self::ListTeamDetails { .. } => "ListTeamDetails",
+            Self::ListTeamMembers { .. } => "ListTeamMembers",
+            Self::AddTeamMember { .. } => "AddTeamMember",
+            Self::ResumeTeamMemberAddition { .. } => "ResumeTeamMemberAddition",
+            Self::DemoteTeamMember { .. } => "DemoteTeamMember",
+            Self::RemoveTeamMember { .. } => "RemoveTeamMember",
+            Self::ResumeTeamMemberEdit { .. } => "ResumeTeamMemberEdit",
+            Self::AdmitFederatedTeam { .. } => "AdmitFederatedTeam",
+            Self::ListFederatedTeams { .. } => "ListFederatedTeams",
+            Self::ExpelFederatedTeam { .. } => "ExpelFederatedTeam",
+            Self::RefreshFederatedSecurity { .. } => "RefreshFederatedSecurity",
+            Self::RunDueJobs { .. } => "RunDueJobs",
+        }
+    }
+
     /// Clears request-owned plaintext once a client has serialized it. Secret
     /// strings already zeroize on drop; KV byte/string fields use ordinary
     /// wire types for serde compatibility and therefore need this explicit
@@ -1943,12 +2054,66 @@ impl std::fmt::Debug for Operation {
     }
 }
 
+/// The phases of one request as the agent measured them, in milliseconds,
+/// attached to its response for the desktop's Copy diagnostics. An older
+/// agent omits it; an older client ignores it. Nothing here names the
+/// request's fields.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct ResponseTiming {
+    /// Waiting for profile admission behind conflicting work.
+    #[serde(default)]
+    pub queue_ms: u32,
+    /// Waiting for a worker permit.
+    #[serde(default)]
+    pub pool_ms: u32,
+    /// From the worker being spawned to the operation starting.
+    #[serde(default)]
+    pub start_ms: u32,
+    /// Opening profile sessions, including authentication on a cache miss.
+    #[serde(default)]
+    pub session_ms: u32,
+    /// Retrying the profile file lock against another process's hold.
+    #[serde(default)]
+    pub lock_ms: u32,
+    #[serde(default)]
+    pub lock_retries: u16,
+    /// The operation itself, outside the phases above.
+    #[serde(default)]
+    pub body_ms: u32,
+    /// The authenticated user was served from the agent's cache.
+    #[serde(default)]
+    pub auth_cached: bool,
+    /// A catalog page was served from a retained report.
+    #[serde(default)]
+    pub report_cached: bool,
+    /// The scope of the work admission waited behind, when it waited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waited_behind: Option<String>,
+    /// A chat poll's three phases: prepare under admission, the network
+    /// wait holding nothing, and the scope check after it.
+    #[serde(default)]
+    pub prepare_ms: u32,
+    #[serde(default)]
+    pub wait_ms: u32,
+    #[serde(default)]
+    pub rescope_ms: u32,
+}
+
+impl ResponseTiming {
+    /// Milliseconds as the wire carries them: whole, saturating.
+    pub fn millis(elapsed: std::time::Duration) -> u32 {
+        elapsed.as_millis().min(u32::MAX as u128) as u32
+    }
+}
+
 #[derive(Clone, Deserialize, PartialEq, Serialize)]
 pub struct Response {
     pub version: u32,
     pub id: Option<u64>,
     #[serde(flatten)]
     pub result: ResponseResult,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing: Option<ResponseTiming>,
 }
 
 impl std::fmt::Debug for Response {
@@ -1958,6 +2123,7 @@ impl std::fmt::Debug for Response {
             .field("version", &self.version)
             .field("id", &self.id)
             .field("result", &self.result)
+            .field("timing", &self.timing)
             .finish()
     }
 }
@@ -1968,7 +2134,14 @@ impl Response {
             version: PROTOCOL_VERSION,
             id: Some(id),
             result: ResponseResult::Success { value },
+            timing: None,
         }
+    }
+
+    /// The same response carrying the agent's phase timing.
+    pub fn with_timing(mut self, timing: ResponseTiming) -> Self {
+        self.timing = Some(timing);
+        self
     }
 
     pub fn error(id: u64, code: ErrorCode, message: impl Into<String>) -> Self {
@@ -1993,6 +2166,7 @@ impl Response {
                 message: bounded_field(message.into()),
                 fields: fields.bounded(),
             },
+            timing: None,
         }
     }
 }
@@ -2139,6 +2313,64 @@ fn bounded_field(mut value: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn response_timing_is_optional_on_the_wire() {
+        let plain = serde_json::json!({ "version": PROTOCOL_VERSION, "id": 7, "status": "success", "value": 1 });
+        let decoded: Response = serde_json::from_value(plain.clone()).unwrap();
+        assert_eq!(decoded.timing, None);
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), plain);
+        let timed = Response::success(7, serde_json::json!(1)).with_timing(ResponseTiming {
+            queue_ms: 3,
+            body_ms: 40,
+            auth_cached: true,
+            waited_behind: Some("security-root".to_owned()),
+            ..ResponseTiming::default()
+        });
+        let encoded = serde_json::to_value(&timed).unwrap();
+        assert_eq!(encoded["timing"]["queue_ms"], 3);
+        assert_eq!(encoded["timing"]["waited_behind"], "security-root");
+        assert_eq!(serde_json::from_value::<Response>(encoded).unwrap(), timed);
+        // A timing with a field this build does not know still decodes.
+        let newer = serde_json::json!({ "version": PROTOCOL_VERSION, "id": 7, "status": "success", "value": 1, "timing": { "queue_ms": 1, "future_ms": 2 } });
+        assert_eq!(
+            serde_json::from_value::<Response>(newer)
+                .unwrap()
+                .timing
+                .unwrap()
+                .queue_ms,
+            1
+        );
+    }
+
+    #[test]
+    fn operation_names_are_the_variant_names() {
+        assert_eq!(Operation::AgentStatus.name(), "AgentStatus");
+        assert_eq!(
+            Operation::Chat {
+                store: TeamStoreRef {
+                    profile: "p".to_owned(),
+                    account_alias: "me".to_owned(),
+                    team_alias: "team".to_owned(),
+                    team_id: "03".to_owned() + &"ab".repeat(32),
+                },
+                action: crate::chat::ChatAction::PollInbox {
+                    since: "0".to_owned(),
+                    timeout_milliseconds: 1,
+                },
+            }
+            .name(),
+            "Chat/PollInbox"
+        );
+        assert_eq!(
+            Operation::SetProfileLabel {
+                profile: "p".to_owned(),
+                label: None,
+            }
+            .name(),
+            "SetProfileLabel"
+        );
+    }
 
     #[test]
     fn set_profile_label_has_stable_wire_debug_and_mutation_shapes() {

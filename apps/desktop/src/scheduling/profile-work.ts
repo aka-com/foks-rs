@@ -1,5 +1,9 @@
 /** Serialization shared by every caller using the same bridge and profile. */
 export interface WorkTiming {
+  /** The queue's profile: a server id, as the Refresh status popover names it. */
+  profile: string;
+  /** The background entry's key; foreground work has none. */
+  key?: string;
   priority: 'foreground' | 'background';
   queueMilliseconds: number;
   executionMilliseconds: number;
@@ -61,7 +65,7 @@ const cancellation = () =>
     ambiguous: false,
   });
 
-/** Opt-in aggregate timings only: no profile names, request values or results. */
+/** Opt-in timings: the profile and entry key, never request values or results. */
 export function observeProfileWork(
   owner: object,
   observer: Observer,
@@ -129,6 +133,8 @@ export function scheduleProfileWork<T>(
     busy = false,
   ) => {
     const event: WorkTiming = {
+      profile,
+      ...(background ? { key: background.key } : {}),
       priority: background ? 'background' : 'foreground',
       queueMilliseconds: started - queued,
       executionMilliseconds:

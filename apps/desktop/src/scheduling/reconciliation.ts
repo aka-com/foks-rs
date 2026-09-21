@@ -47,12 +47,21 @@ export interface ReconciliationSnapshot {
    */
   nextAttemptAt?: number;
 }
+/**
+ * One run of one job, reported when it starts and when it settles. Carries
+ * the job's key and scope (a server id, or null for this Mac) so a log can
+ * name the job the way the Refresh status popover does; never the error.
+ */
 export interface ReconciliationDiagnostic {
+  key: string;
+  scope: string | null;
   kind: ReconciliationKind;
   trigger: ReconciliationTrigger;
   outcome: 'started' | 'success' | 'failed' | 'retired';
   milliseconds: number;
   retry: number;
+  /** How long after its due time the run started. */
+  late: number;
 }
 type Waiter = { resolve(): void; reject(error: unknown): void };
 type Entry = {
@@ -366,6 +375,9 @@ export class ReconciliationScheduler {
     const job = entry.job;
     const trigger = entry.trigger;
     const started = this.clock.now();
+    const late = Number.isFinite(entry.due)
+      ? Math.max(0, started - entry.due)
+      : 0;
     const isCurrent = () =>
       !controller.signal.aborted &&
       this.enabled &&
@@ -378,11 +390,14 @@ export class ReconciliationScheduler {
       paused: false,
     });
     this.report({
+      key: job.key,
+      scope: job.scope,
       kind: job.kind,
       trigger,
       outcome: 'started',
       milliseconds: 0,
       retry: entry.retry,
+      late,
     });
     let outcome: ReconciliationDiagnostic['outcome'] = 'retired';
     let failure: unknown;
@@ -455,11 +470,14 @@ export class ReconciliationScheduler {
         }
       }
       this.report({
+        key: job.key,
+        scope: job.scope,
         kind: job.kind,
         trigger,
         outcome,
         milliseconds: Math.max(0, this.clock.now() - started),
         retry: entry.retry,
+        late,
       });
       this.schedule();
     }

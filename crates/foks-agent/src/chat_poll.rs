@@ -3,7 +3,7 @@ use super::{
     chat, dispatch_error_response, profile_work, with_vault, write_response, CANCELLATION_GRACE,
     CHAT_POLL_TIMEOUT,
 };
-use foks_agent_proto::{ErrorCode, Operation, Request, Response, TeamStoreRef};
+use foks_agent_proto::{ErrorCode, Operation, Request, Response, ResponseTiming, TeamStoreRef};
 use foks_client_app::{CancellationToken, ProfileRegistry, ProfileSession};
 use std::{
     path::{Path, PathBuf},
@@ -130,6 +130,7 @@ pub(super) async fn handle_chat_poll(
     let mut task = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         let _guard = guard;
+        let mut timing = ResponseTiming::default();
         match foks_keystore::without_user_interaction(|| {
             run_chat_poll(
                 &state_dir,
@@ -138,11 +139,13 @@ pub(super) async fn handle_chat_poll(
                 poll_timeout,
                 timeout,
                 worker_cancellation,
+                &mut timing,
             )
         }) {
             Ok(value) => Response::success(id, value),
             Err(error) => dispatch_error_response(id, error.as_ref()),
         }
+        .with_timing(timing)
     });
     let deadline = tokio::time::Instant::now() + CHAT_POLL_TIMEOUT;
     let (response, close) = loop {
@@ -182,6 +185,8 @@ pub(super) async fn handle_chat_poll(
     Ok(close)
 }
 
+/// The poll's three phases are timed into `timing` as each ends, so a poll
+/// that fails in its last phase still reports the first two.
 fn run_chat_poll(
     state_dir: &Path,
     store: TeamStoreRef,
@@ -189,7 +194,9 @@ fn run_chat_poll(
     timeout_milliseconds: u64,
     timeout: Duration,
     cancellation: CancellationToken,
+    timing: &mut ResponseTiming,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let phase = std::time::Instant::now();
     let context = {
         let _admission = profile_work::coordinator().acquire_blocking(
             state_dir,
@@ -210,8 +217,12 @@ fn run_chat_poll(
             })
         })?
     };
+    timing.prepare_ms = ResponseTiming::millis(phase.elapsed());
+    let phase = std::time::Instant::now();
     // A long network poll owns no profile admission or checked-session lock.
     let reply = chat::poll(context, since, timeout_milliseconds)?;
+    timing.wait_ms = ResponseTiming::millis(phase.elapsed());
+    let phase = std::time::Instant::now();
     let (_, current_scope) = {
         let _admission = profile_work::coordinator().acquire_blocking(
             state_dir,
@@ -232,6 +243,7 @@ fn run_chat_poll(
             })
         })?
     };
+    timing.rescope_ms = ResponseTiming::millis(phase.elapsed());
     if current_scope != reply.scope {
         return Err(foks_client::Error::ChatIntegrity("chat poll scope changed").into());
     }

@@ -32,7 +32,7 @@ use foks_agent_proto::{
     PendingOperationSummary as WirePendingOperationSummary, ProfileOverview, ProfileProtocol,
     ProfileTrust, Request, ResetArtifactKind as WireResetArtifactKind,
     ResetArtifactSummary as WireResetArtifactSummary, ResetStatePreview as WireResetStatePreview,
-    Response, ResponseResult, ServerStatusSnapshot as WireServerStatusSnapshot,
+    Response, ResponseResult, ResponseTiming, ServerStatusSnapshot as WireServerStatusSnapshot,
     StoredHostStatus as WireStoredHostStatus, TeamDetailsSummary, TeamKind, TeamRole, TeamStoreRef,
     TeamSummary as WireTeamSummary, MAXIMUM_MESSAGE_BYTES,
 };
@@ -877,8 +877,11 @@ async fn handle_connection(
                 continue;
             }
         };
-        let remaining = admission_budget(timeout).saturating_sub(admitted_at.elapsed());
+        let queue = admitted_at.elapsed();
+        let waited_behind = profile_permit.waited_behind;
+        let remaining = admission_budget(timeout).saturating_sub(queue);
         let worker_pool = capacity.worker_pool(&request.operation);
+        let pool_started = Instant::now();
         let permit = match tokio::time::timeout(remaining, worker_pool.acquire_owned()).await {
             Ok(Ok(permit)) => permit,
             Ok(Err(_)) => return Err("agent worker pool closed".into()),
@@ -912,18 +915,25 @@ async fn handle_connection(
             .await?;
             continue;
         }
+        let request_timing = RequestTiming {
+            queue,
+            pool: pool_started.elapsed(),
+            spawned_at: Some(Instant::now()),
+            waited_behind,
+        };
         let supervised = supervise_blocking(
             request.id,
             permit,
             profile_permit,
             operation_timeout,
             move |cancellation| {
-                dispatch_controlled(
+                dispatch_timed(
                     &state,
                     request,
                     operation_timeout,
                     cancellation,
                     operation_ready,
+                    request_timing,
                 )
             },
         )
@@ -1295,6 +1305,19 @@ impl Drop for CancelOnDrop {
     }
 }
 
+/// What the request loop measured before the worker ran: admission and
+/// pool waits, when the worker was spawned, and what admission waited behind.
+#[derive(Clone, Copy, Debug, Default)]
+struct RequestTiming {
+    queue: Duration,
+    pool: Duration,
+    spawned_at: Option<Instant>,
+    waited_behind: Option<&'static str>,
+}
+
+/// `dispatch_timed` without the request loop's measurements, for tests that
+/// dispatch directly.
+#[cfg(test)]
 fn dispatch_controlled(
     state_dir: &Path,
     request: Request,
@@ -1302,24 +1325,70 @@ fn dispatch_controlled(
     cancellation: CancellationToken,
     ready: Arc<AtomicBool>,
 ) -> Response {
+    dispatch_timed(
+        state_dir,
+        request,
+        timeout,
+        cancellation,
+        ready,
+        RequestTiming::default(),
+    )
+}
+
+/// `dispatch_controlled` with the request's phases measured and attached to
+/// the response: the loop's waits, the worker's start latency, session opens,
+/// lock retries and the operation body, plus which caches served it.
+fn dispatch_timed(
+    state_dir: &Path,
+    request: Request,
+    timeout: Duration,
+    cancellation: CancellationToken,
+    ready: Arc<AtomicBool>,
+    request_timing: RequestTiming,
+) -> Response {
     let id = request.id;
     let initializes = matches!(request.operation, Operation::InitializeState { .. });
-    let result = profile_work::with_control(timeout, cancellation.clone(), || {
-        dispatch_result(
-            state_dir,
-            request.operation,
-            timeout,
-            cancellation,
-            ready.load(Ordering::Acquire),
-        )
+    let start = request_timing
+        .spawned_at
+        .map(|spawned| spawned.elapsed())
+        .unwrap_or_default();
+    let body_started = Instant::now();
+    let (result, phases) = profile_work::with_phase_timing(|| {
+        profile_work::with_control(timeout, cancellation.clone(), || {
+            dispatch_result(
+                state_dir,
+                request.operation,
+                timeout,
+                cancellation,
+                ready.load(Ordering::Acquire),
+            )
+        })
     });
+    let total = body_started.elapsed();
     if initializes && result.is_ok() {
         ready.store(true, Ordering::Release);
     }
+    let ms = ResponseTiming::millis;
+    let timing = ResponseTiming {
+        queue_ms: ms(request_timing.queue),
+        pool_ms: ms(request_timing.pool),
+        start_ms: ms(start),
+        session_ms: ms(phases.session),
+        lock_ms: ms(phases.lock),
+        lock_retries: phases.lock_retries,
+        body_ms: ms(total
+            .saturating_sub(phases.session)
+            .saturating_sub(phases.lock)),
+        auth_cached: phases.auth_cached,
+        report_cached: phases.report_cached,
+        waited_behind: request_timing.waited_behind.map(str::to_owned),
+        ..ResponseTiming::default()
+    };
     match result {
         Ok(value) => Response::success(id, value),
         Err(error) => dispatch_error_response(id, error.as_ref()),
     }
+    .with_timing(timing)
 }
 
 fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -> Response {
@@ -4086,6 +4155,7 @@ fn dispatch_result_inner(
             validate_catalog_request(&binding, cursor.as_deref(), limit)?;
             if may_serve_cached_catalog(cursor.as_deref(), fresh) {
                 if let Some(page) = paginate_cached_catalog(&binding, cursor.as_deref(), limit)? {
+                    profile_work::note_report_cached();
                     return Ok(serde_json::to_value(page)?);
                 }
             }
@@ -4113,6 +4183,7 @@ fn dispatch_result_inner(
             validate_catalog_request(&binding, cursor.as_deref(), limit)?;
             if may_serve_cached_catalog(cursor.as_deref(), fresh) {
                 if let Some(page) = paginate_cached_catalog(&binding, cursor.as_deref(), limit)? {
+                    profile_work::note_report_cached();
                     return Ok(serde_json::to_value(page)?);
                 }
             }

@@ -43,6 +43,30 @@ export interface ChatClock {
   cancel(timer: unknown): void;
   random(): number;
 }
+/**
+ * One poll, one synchronization, or the latency between a poll that said an
+ * account moved and the synchronization that published the change. Carries
+ * the account key and the store id, never a channel or a message.
+ */
+export type ChatInboxTiming =
+  | {
+      kind: 'poll';
+      account: string;
+      milliseconds: number;
+      bumped: boolean;
+      outcome: 'ok' | 'error' | 'cancelled';
+      code?: string;
+    }
+  | {
+      kind: 'sync';
+      store: string;
+      milliseconds: number;
+      changed: boolean;
+      conversations: number;
+      outcome: 'ok' | 'error' | 'cancelled';
+      code?: string;
+    }
+  | { kind: 'arrival'; store: string; milliseconds: number };
 export const systemChatClock: ChatClock = {
   now: () => Date.now(),
   later: (fn, delay) => setTimeout(fn, delay),
@@ -61,6 +85,8 @@ interface Team {
   busy: boolean;
   /** Authenticated compatibility deadline, in the clock's millisecond unit. */
   accessExpiresAt?: number;
+  /** When a poll last said this team's account moved, until a sync publishes. */
+  bumpedAt?: number;
 }
 interface Account {
   key: string;
@@ -108,12 +134,30 @@ export class ChatInboxService {
    */
   onCatalogRequired?: (profile: string) => void;
   private catalogRequests = new Map<string, number>();
+  private observers = new Set<(event: ChatInboxTiming) => void>();
   constructor(
     private bridge: Bridge,
     private clock = systemChatClock,
     private capacity = 4,
   ) {}
   getSnapshot = () => this.snapshot;
+  /** Opt-in timings; an observer cannot change what the service does. */
+  observe(observer: (event: ChatInboxTiming) => void): () => void {
+    this.observers.add(observer);
+    return () => {
+      this.observers.delete(observer);
+    };
+  }
+  private report(event: ChatInboxTiming) {
+    const frozen = Object.freeze(event);
+    for (const observer of this.observers) {
+      try {
+        observer(frozen);
+      } catch {
+        /* diagnostics are not authority */
+      }
+    }
+  }
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
     return () => {
@@ -493,6 +537,7 @@ export class ChatInboxService {
   private async sync(account: Account, team: Team) {
     const epoch = this.epoch;
     const generation = team.generation;
+    const started = this.clock.now();
     team.busy = true;
     team.dirty = false;
     this.profiles.add(team.store.server);
@@ -533,6 +578,22 @@ export class ChatInboxService {
       const changed = [...revisions].some(
         ([id, value]) => old?.channelRevisions.get(id) !== value,
       );
+      this.report({
+        kind: 'sync',
+        store: team.store.id,
+        milliseconds: this.clock.now() - started,
+        changed,
+        conversations: data.conversations.length,
+        outcome: 'ok',
+      });
+      if (team.bumpedAt !== undefined) {
+        this.report({
+          kind: 'arrival',
+          store: team.store.id,
+          milliseconds: this.clock.now() - team.bumpedAt,
+        });
+        team.bumpedAt = undefined;
+      }
       this.publish(team.store.id, {
         state: 'ready',
         blockedChannels: new Set(team.blocked),
@@ -553,8 +614,17 @@ export class ChatInboxService {
       team.retry = 250;
       team.due = team.dirty ? 0 : this.clock.now() + 25_000;
     } catch (cause) {
-      if (!this.valid(account, team, epoch, generation)) return;
       const error = normalizeCommandError(cause);
+      this.report({
+        kind: 'sync',
+        store: team.store.id,
+        milliseconds: this.clock.now() - started,
+        changed: false,
+        conversations: 0,
+        outcome: error.code === 'cancelled' ? 'cancelled' : 'error',
+        code: error.code,
+      });
+      if (!this.valid(account, team, epoch, generation)) return;
       if (this.handleError(team.store.id, error)) return;
       const old = this.snapshot.get(team.store.id) ?? initial();
       this.publish(team.store.id, {
@@ -579,6 +649,7 @@ export class ChatInboxService {
     const epoch = this.epoch;
     const generation = team.generation;
     const since = account.head;
+    const started = this.clock.now();
     account.busy = true;
     this.polls++;
     const client = chatClient(this.bridge, team.store.server, team.store.id);
@@ -605,6 +676,15 @@ export class ChatInboxService {
       const result = reply.result;
       if (result.bumped !== BigInt(result.inbox_version) > BigInt(since))
         throw integrity();
+      this.report({
+        kind: 'poll',
+        account: account.key,
+        milliseconds: this.clock.now() - started,
+        bumped: result.bumped,
+        outcome: 'ok',
+      });
+      if (result.bumped)
+        for (const t of account.teams.values()) t.bumpedAt ??= this.clock.now();
       if (BigInt(result.inbox_version) < BigInt(since)) {
         account.head = result.inbox_version;
         // Cancel pre-reset projections, preserve account identity and hard Rust anchors.
@@ -631,8 +711,16 @@ export class ChatInboxService {
       account.retry = 250;
       account.due = this.clock.now() + 250;
     } catch (cause) {
-      if (!this.valid(account, team, epoch, generation)) return;
       const error = normalizeCommandError(cause);
+      this.report({
+        kind: 'poll',
+        account: account.key,
+        milliseconds: this.clock.now() - started,
+        bumped: false,
+        outcome: error.code === 'cancelled' ? 'cancelled' : 'error',
+        code: error.code,
+      });
+      if (!this.valid(account, team, epoch, generation)) return;
       if (error.code === 'cancelled') {
         account.due = 0;
         return;

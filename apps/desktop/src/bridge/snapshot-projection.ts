@@ -24,6 +24,7 @@ import {
   type BackgroundHistoryWork,
 } from '../scheduling/profile-work';
 import type { Bridge } from './contract';
+import { diagnosticLog } from '../diagnostics/log';
 import {
   isHardStateSchemaFailure,
   normalizeCommandError,
@@ -96,6 +97,53 @@ export async function projectCatalog(
    * the user asked for, or a read back of a profile a write changed.
    */
   forceRosters = false,
+): Promise<AgentSnapshot> {
+  // The projection is the renderer's own share of a catalog read: the server
+  // and account listings, and a roster read per team whose chain moved. Its
+  // duration and those counts are what the timing log keeps of it.
+  const end = diagnosticLog.span('catalog.project', {
+    scope: profileScope,
+    attrs: { partial, forced: forceRosters },
+  });
+  const counts = { servers: 0, rosters: 0 };
+  try {
+    const snapshot = await projectCatalogCounted(
+      bridge,
+      response,
+      base,
+      nowSeconds,
+      agent,
+      partial,
+      profileScope,
+      background,
+      forceRosters,
+      counts,
+    );
+    end('ok', { attrs: counts });
+    return snapshot;
+  } catch (error) {
+    end(
+      normalizeCommandError(error).code === 'cancelled' ||
+        normalizeCommandError(error).code === 'catalog-read-retired'
+        ? 'cancelled'
+        : 'error',
+      { code: normalizeCommandError(error).code, attrs: counts },
+    );
+    throw error;
+  }
+}
+
+async function projectCatalogCounted(
+  bridge: Bridge,
+  response: CatalogDto,
+  base: AgentSnapshot | undefined,
+  nowSeconds: number,
+  agent: AgentStatus,
+  partial: boolean,
+  profileScope: string | undefined,
+  background: BackgroundHistoryWork | undefined,
+  forceRosters: boolean,
+  counts: { servers: number; rosters: number },
 ): Promise<AgentSnapshot> {
   const embeddedMetadata =
     partial || (bridge.native && profileScope !== undefined);
@@ -243,6 +291,7 @@ export async function projectCatalog(
     : (await bridge.listServers(response.generation)).filter(
         (server) => profileScope === undefined || server.id === profileScope,
       );
+  counts.servers = listedServers.length;
   const statusResults =
     bridge.native || partial
       ? await Promise.all(
@@ -578,6 +627,7 @@ export async function projectCatalog(
     teams.map(async (store) => {
       const cached = cachedRoster(store);
       if (cached) return { ...cached, failures: [] as GroupDetailFailure[] };
+      counts.rosters++;
       const { parties, federation, failures } = await scheduleProfileWork(
         bridge,
         store.server,

@@ -12,6 +12,7 @@ import {
   decodeDropHover,
   decodeDropPaths,
   decodeMaintenanceSnapshot,
+  decodeTimingBatch,
   decodeWindowState,
 } from './core';
 import { checked, checkedMutation } from './transport';
@@ -40,6 +41,7 @@ export const coreCommands: Pick<
   | 'maintainClientState'
   | 'clientStateMaintenanceStatus'
   | 'agentProcessInfo'
+  | 'diagnosticTimings'
   | 'restartAgent'
   | 'openChatLink'
   | 'copyText'
@@ -91,6 +93,8 @@ export const coreCommands: Pick<
     ),
   agentProcessInfo: () =>
     checked('agent_process_info', undefined, decodeAgentProcessInfo),
+  diagnosticTimings: (since) =>
+    checked('diagnostic_timings', { since }, decodeTimingBatch, false),
   restartAgent: (takeover) =>
     checked('restart_agent', { takeover }, decodeMaintenanceSnapshot),
   openChatLink: (url) => checked('open_chat_link', { url }, decodeCopy),
