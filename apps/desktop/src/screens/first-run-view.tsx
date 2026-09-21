@@ -173,7 +173,7 @@ export function SetupSidebar({
     'Get started',
     'Select a server',
     'Create account',
-    'Recovery codes',
+    'Recovery phrase',
     ...(path === 'invited' ? ['Join a team'] : []),
     'Complete',
   ];

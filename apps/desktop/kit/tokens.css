@@ -107,6 +107,37 @@
   --shadow-sheet: 0 14px 34px rgba(15, 20, 45, 0.16);
   --shadow-window:
     0 24px 60px rgba(15, 20, 45, 0.26), 0 2px 8px rgba(15, 20, 45, 0.12);
+  /* Shell surfaces and controls. */
+  --radio-border: rgba(0, 0, 0, 0.25);
+  --backdrop-strong: rgba(28, 30, 44, 0.55);
+  --backdrop-exit: rgba(28, 30, 44, 0.38);
+  --shadow-seg: 0 1px 2px rgba(15, 20, 45, 0.12);
+  --shadow-panel: -10px 0 22px -16px rgba(0, 0, 0, 0.14);
+  --c-password-wash: rgba(59, 130, 246, 0.12);
+  --c-file-wash: rgba(100, 116, 139, 0.13);
+  --c-folder-wash: rgba(245, 158, 11, 0.14);
+  --store-mark-bg: #4c4c53;
+  --unread-ink: #2b1403;
+
+  /* Foregrounds and washes over the paired sidebar colors. */
+  --rail-fg: #fff;
+  --rail-edge: rgba(0, 0, 0, 0.12);
+  --rail-faint: rgba(255, 255, 255, 0.35);
+  --rail-hover: rgba(255, 255, 255, 0.09);
+  --rail-inactive: rgba(255, 255, 255, 0.62);
+  --rail-outline: rgba(255, 255, 255, 0.55);
+  --rail-outline-muted: rgba(255, 255, 255, 0.4);
+  --rail-secondary: rgba(255, 255, 255, 0.75);
+  --rail-wash: rgba(255, 255, 255, 0.12);
+  --rail-track: rgba(255, 255, 255, 0.22);
+  --rail-dim: rgba(255, 255, 255, 0.65);
+  --rail-account-hover: rgba(255, 255, 255, 0.08);
+  --rail-avatar: rgba(255, 255, 255, 0.175);
+  --rail-muted: rgba(255, 255, 255, 0.7);
+  --rail-badge: rgba(255, 255, 255, 0.2);
+  --rail-focus-ring: rgba(255, 255, 255, 0.18);
+  --rail-resizer: rgba(255, 255, 255, 0.25);
+  --rail-resizer-outline: rgba(255, 255, 255, 0.45);
 }
 
 /* Rail theme variants (`data-rail`) */
@@ -177,4 +208,20 @@
   --shadow-sheet: 0 14px 34px rgba(0, 0, 0, 0.5);
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.2);
   --shadow-window: 0 24px 60px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+
+  --radio-border: rgba(255, 255, 255, 0.44);
+  --backdrop-strong: rgba(4, 6, 12, 0.72);
+  --backdrop-exit: rgba(4, 6, 12, 0.62);
+  --shadow-seg: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-panel: -10px 0 22px -16px rgba(0, 0, 0, 0.7);
+  --c-password-wash: rgba(110, 163, 255, 0.16);
+  --c-file-wash: rgba(154, 168, 186, 0.16);
+  --c-folder-wash: rgba(232, 150, 77, 0.18);
+  --store-mark-bg: #555965;
+  --unread-ink: #2b1403;
+  --rail-fg: #e9edf8;
+  --rail-edge: rgba(0, 0, 0, 0.4);
+  --rail-ink: rgba(255, 255, 255, 0.8);
+  --rail-hover: rgba(255, 255, 255, 0.1);
+  --rail-track: rgba(255, 255, 255, 0.26);
 }

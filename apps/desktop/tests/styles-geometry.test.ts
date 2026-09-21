@@ -17,7 +17,7 @@ const STYLES = [
   '../src/screens/chat-picker.css',
   '../src/shell/search-palette.css',
 ];
-const TOKEN_ONLY_COLORS = STYLES.slice(1);
+const TOKEN_ONLY_COLORS = STYLES;
 const TYPE_FLOOR_PX = 12;
 
 function blockAfter(source: string, marker: string): string {
