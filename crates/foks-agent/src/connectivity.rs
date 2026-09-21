@@ -370,6 +370,7 @@ async fn identity(
     root: &Path,
     profile: &str,
     timeout: Duration,
+    network_budget: Duration,
     workers: Arc<Semaphore>,
 ) -> ResponseResult {
     let root = root.to_owned();
@@ -401,7 +402,7 @@ async fn identity(
             tokio::task::spawn_blocking(move || {
                 let _admission = admission;
                 let _worker = worker;
-                let remaining = identity_network_budget(timeout.saturating_sub(started.elapsed()));
+                let remaining = timeout.saturating_sub(started.elapsed());
                 let cancellation = CancellationToken::new();
                 let result = foks_keystore::without_user_interaction(|| {
                     profile_work::with_control(remaining, cancellation.clone(), || {
@@ -417,7 +418,11 @@ async fn identity(
                         let credentials = ClientCredentials::open(&root)?;
                         checked_session(&credentials, &session, |session| {
                             session
-                                .reconcile_saved_host()
+                                .reconcile_saved_host_with_timeout(
+                                    timeout
+                                        .saturating_sub(started.elapsed())
+                                        .min(network_budget),
+                                )
                                 .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
                         })
                     })
@@ -466,8 +471,16 @@ pub(super) async fn reconcile(
             ),
         }
     };
-    let (identity, compatibility) =
-        tokio::join!(identity(root, profile, timeout, workers), compatibility);
+    let (identity, compatibility) = tokio::join!(
+        identity(
+            root,
+            profile,
+            timeout,
+            identity_network_budget(timeout),
+            workers
+        ),
+        compatibility
+    );
     serde_json::json!({"profile": profile, "identity": identity, "compatibility": compatibility})
 }
 
@@ -487,6 +500,119 @@ mod tests {
         );
         assert_eq!(identity_network_budget(Duration::ZERO), Duration::ZERO);
         assert!(IDENTITY_NETWORK_BUDGET < Duration::from_secs(60));
+    }
+
+    fn saved_identity_profile() -> (
+        foks_server_testkit::TestEnvironment,
+        foks_server_testkit::InProcessServer,
+        PathBuf,
+    ) {
+        let environment = foks_server_testkit::TestEnvironment::new().unwrap();
+        let server = environment.start_server().unwrap();
+        let root = environment.client_path("identity", "state").unwrap();
+        let certificate = environment
+            .client_path("identity", "probe-root.der")
+            .unwrap();
+        environment.write_probe_root(&certificate).unwrap();
+        let credentials =
+            ClientCredentials::initialize(&root, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        registry
+            .add(Profile {
+                name: "saved".into(),
+                label: None,
+                probe: format!(
+                    "localhost:{}",
+                    environment.addresses().unwrap().probe.port()
+                ),
+                protocol: ProtocolPolicy::V019,
+                trust: TrustRoot::CertificateDer { path: certificate },
+            })
+            .unwrap();
+        let session = ProfileSession::open(&registry, "saved").unwrap();
+        credentials
+            .with_checked_session(&session, |checked| checked.probe_and_pin())
+            .unwrap();
+        (environment, server, root)
+    }
+
+    #[tokio::test]
+    async fn identity_network_timeout_releases_profile_admission_and_worker() {
+        let (environment, _server, root) = saved_identity_profile();
+        let listener = environment.reserve_loopback_listener().unwrap();
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        let mut profile = registry.profile("saved").unwrap().clone();
+        profile.probe = format!("localhost:{}", listener.local_addr().unwrap().port());
+        registry.replace(profile).unwrap();
+        drop(registry);
+        listener.set_nonblocking(true).unwrap();
+        let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+        let workers = Arc::new(Semaphore::new(1));
+        let request = identity(
+            &root,
+            "saved",
+            Duration::from_secs(5),
+            Duration::from_millis(500),
+            workers.clone(),
+        );
+        tokio::pin!(request);
+        let _connection = tokio::select! {
+            accepted = listener.accept() => accepted.unwrap().0,
+            result = &mut request => panic!("identity never reached the stalled server: {result:?}"),
+        };
+        let result = tokio::time::timeout(Duration::from_secs(2), request)
+            .await
+            .expect("identity exceeded its network budget");
+        assert!(matches!(
+            result,
+            ResponseResult::Error {
+                code: ErrorCode::ServerUnavailable,
+                ..
+            }
+        ));
+        assert_eq!(workers.available_permits(), 1);
+        let permit = profile_work::coordinator()
+            .acquire(
+                &root,
+                profile_work::Scope::profile("saved"),
+                Duration::from_secs(1),
+            )
+            .await
+            .expect("identity retained profile admission after its network timeout");
+        drop(permit);
+    }
+
+    #[tokio::test]
+    async fn identity_lock_acquisition_outlasts_the_network_budget() {
+        let (_environment, _server, root) = saved_identity_profile();
+        let lock =
+            std::fs::File::open(root.join("profiles/saved/.profile-operation.lock")).unwrap();
+        fs2::FileExt::lock_exclusive(&lock).unwrap();
+        let workers = Arc::new(Semaphore::new(1));
+        let request = identity(
+            &root,
+            "saved",
+            Duration::from_secs(5),
+            Duration::from_secs(1),
+            workers.clone(),
+        );
+        tokio::pin!(request);
+        let waiting = tokio::time::timeout(Duration::from_secs(2), &mut request).await;
+        let available_workers = workers.available_permits();
+        fs2::FileExt::unlock(&lock).unwrap();
+        assert!(
+            waiting.is_err(),
+            "identity stopped while waiting for the local lock: {waiting:?}"
+        );
+        assert_eq!(available_workers, 0);
+        let result = tokio::time::timeout(Duration::from_secs(2), request)
+            .await
+            .expect("identity did not resume after the local lock was released");
+        let ResponseResult::Success { value } = result else {
+            panic!("identity failed after waiting for the local lock: {result:?}");
+        };
+        assert_eq!(value["status"], "connected");
+        assert_eq!(workers.available_permits(), 1);
     }
 
     #[test]

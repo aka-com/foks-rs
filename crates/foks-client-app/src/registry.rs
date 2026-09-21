@@ -1539,6 +1539,19 @@ pub(crate) fn checkpoint_for_store(
 
 impl CheckedProfileSession<'_> {
     pub fn reconcile_saved_host(&self) -> Result<(String, String)> {
+        self.reconcile_saved_host_with_client(&self.client)
+    }
+
+    pub fn reconcile_saved_host_with_timeout(&self, timeout: Duration) -> Result<(String, String)> {
+        if timeout.is_zero() {
+            return Err(Error::Client(foks_client::Error::DeadlineExceeded));
+        }
+        let mut client = self.client.clone();
+        client.set_timeout(timeout);
+        self.reconcile_saved_host_with_client(&client)
+    }
+
+    fn reconcile_saved_host_with_client(&self, client: &FoksClient) -> Result<(String, String)> {
         self.lease.validate()?;
         self.profile.require(Capability::Probe)?;
         let target = ProbeTarget::parse(&self.profile.probe)?;
@@ -1549,11 +1562,8 @@ impl CheckedProfileSession<'_> {
         if expected.host_id().as_bytes() != stored.host_id.as_slice() {
             return Err(Error::RollbackDetected("saved host identity changed"));
         }
-        let outcome = self.client.probe_and_pin_host_id(
-            &target,
-            expected.host_id(),
-            &self.paths.hard_database,
-        )?;
+        let outcome =
+            client.probe_and_pin_host_id(&target, expected.host_id(), &self.paths.hard_database)?;
         Ok((hex(outcome.pinned.host_id().as_bytes()), target.address()))
     }
 
@@ -1890,10 +1900,16 @@ mod tests {
                 assert!(checked.server_status()?.host.is_none());
                 checked.probe_and_pin()?;
                 let before = checked.server_status()?.host.unwrap();
+                assert!(matches!(
+                    checked.reconcile_saved_host_with_timeout(Duration::ZERO),
+                    Err(Error::Client(foks_client::Error::DeadlineExceeded))
+                ));
+                assert_eq!(checked.server_status()?.host.as_ref(), Some(&before));
                 _server.shutdown().unwrap();
                 environment.rotate_host_key().unwrap();
                 let _rotated_server = environment.start_server().unwrap();
-                let (host_id, configured_probe) = checked.reconcile_saved_host()?;
+                let (host_id, configured_probe) =
+                    checked.reconcile_saved_host_with_timeout(Duration::from_secs(5))?;
                 assert_eq!(host_id, before.host_id_hex);
                 assert_eq!(
                     configured_probe,
