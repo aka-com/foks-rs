@@ -8,7 +8,7 @@ import type {
 } from '../chat-contract';
 import { chatAvailable, storeOf } from '../model';
 import type { AgentSnapshot, TeamStore } from '../model';
-import { preparationCanChange, submissionId } from './actions';
+import { failure, preparationCanChange, submissionId } from './actions';
 import { chatClient, integrity, sameScope } from './client';
 import type { ChatInboxService } from './inbox-service';
 import { freezeDto } from './snapshots';
@@ -45,6 +45,17 @@ interface OwnedCreation extends ChannelCreation {
   invalidIdentity?: boolean;
 }
 
+/**
+ * Where a team's pending-ledger check stands while `readyFor` is false: the
+ * `pending` request is in flight, or it ended without the ledger being
+ * trusted. A team that is ready has no check record.
+ */
+export interface ChannelCreationCheck {
+  state: 'checking' | 'failed';
+  /** Empty while checking. */
+  error: string;
+}
+
 export interface ChannelCreationAccess {
   snapshot: AgentSnapshot;
   accessNow?: () => number;
@@ -58,6 +69,8 @@ export class ChannelCreationController {
   private clients = new Set<ReturnType<typeof chatClient>>();
   private scans = new Map<string, { scope: ChatScope; generation: number }>();
   private discovering = new Set<string>();
+  private checks = new Map<string, ChannelCreationCheck>();
+  private checkSnapshot: ReadonlyMap<string, ChannelCreationCheck> = new Map();
   private epoch = 0;
 
   readyFor = (store: string) => {
@@ -84,6 +97,8 @@ export class ChannelCreationController {
   ) {}
 
   getSnapshot = () => this.snapshot;
+  /** The check standing behind each team that `readyFor` refuses, by store. */
+  getChecks = () => this.checkSnapshot;
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
     return () => {
@@ -120,6 +135,13 @@ export class ChannelCreationController {
         }),
       ),
     );
+    for (const listener of this.listeners) listener();
+  }
+
+  private setCheck(store: string, check?: ChannelCreationCheck) {
+    if (check) this.checks.set(store, Object.freeze({ ...check }));
+    else this.checks.delete(store);
+    this.checkSnapshot = new Map(this.checks);
     for (const listener of this.listeners) listener();
   }
 
@@ -487,6 +509,11 @@ export class ChannelCreationController {
     )
       return;
     this.discovering.add(store.id);
+    this.setCheck(store.id, { state: 'checking', error: '' });
+    // What the check leaves behind: nothing once the ledger is trusted, the
+    // reason otherwise, so the sheet can say why rather than offer a retry
+    // that reads as a prerequisite the reader has to satisfy.
+    let check: ChannelCreationCheck | undefined;
     const epoch = this.epoch;
     const scope = entry.scope;
     const generation = this.access().accessGenerations?.get(store.server) ?? 0;
@@ -531,10 +558,21 @@ export class ChannelCreationController {
       }
       if (complete)
         this.scans.set(store.id, { scope: structuredClone(scope), generation });
-      else this.scans.delete(store.id);
+      else {
+        this.scans.delete(store.id);
+        check = {
+          state: 'failed',
+          error:
+            'Review or dismiss saved channel creations before creating another.',
+        };
+      }
+      this.setCheck(store.id, check);
       this.publish();
-    } catch {
+    } catch (cause) {
+      // A disposed controller has already cleared its checks.
+      if (epoch !== this.epoch) return;
       this.scans.delete(store.id);
+      this.setCheck(store.id, { state: 'failed', error: failure(cause) });
     } finally {
       client.dispose();
       this.clients.delete(client);
@@ -548,6 +586,8 @@ export class ChannelCreationController {
     this.clients.clear();
     this.scans.clear();
     this.discovering.clear();
+    this.checks.clear();
+    this.checkSnapshot = new Map();
     this.records.clear();
     this.publish();
   }

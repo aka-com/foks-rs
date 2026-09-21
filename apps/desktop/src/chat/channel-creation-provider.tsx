@@ -19,6 +19,8 @@ import { useChatInbox, useSidebarInbox } from './inbox-provider';
 const Context = createContext<ChannelCreationController | null>(null);
 const empty: ReturnType<ChannelCreationController['getSnapshot']> = [];
 const emptySnapshot = () => empty;
+const noChecks: ReturnType<ChannelCreationController['getChecks']> = new Map();
+const emptyChecks = () => noChecks;
 const noSubscribe = () => () => {};
 
 export function ChannelCreationProvider({
@@ -52,7 +54,12 @@ export function useChannelCreation() {
     controller?.getSnapshot ?? emptySnapshot,
     controller?.getSnapshot ?? emptySnapshot,
   );
-  return { controller, creations };
+  const checks = useSyncExternalStore(
+    controller?.subscribe ?? noSubscribe,
+    controller?.getChecks ?? emptyChecks,
+    controller?.getChecks ?? emptyChecks,
+  );
+  return { controller, creations, checks };
 }
 
 export function ChannelCreationCompletions({

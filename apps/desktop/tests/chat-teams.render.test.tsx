@@ -1183,6 +1183,84 @@ test('an interrupted attempt recovers the same preparation rather than a second'
   });
 });
 
+test('the saved-creation check is announced while it runs and offered again once it fails', async () => {
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  let armed = false;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await mount(
+    snapshot,
+    { kind: 'chat', ref: 'team:household', channel: 'ab'.repeat(16) },
+    (base) => ({
+      ...base,
+      chat: async (store, action, view) => {
+        // Every read of Engineering's saved creations fails until the test
+        // disarms it: the sheet re-reads on its own as the inbox updates.
+        if (armed && action.action === 'pending' && store === 'team:eng') {
+          await gate;
+          throw {
+            code: 'transport',
+            message: 'The agent did not answer.',
+            retryable: true,
+            fatal: false,
+            ambiguous: false,
+          };
+        }
+        return base.chat(store, action, view);
+      },
+    }),
+  );
+  await ui.waitFor(() => assert.ok(heads().length));
+  // The sheet reads every team's saved creations as it opens.
+  armed = true;
+  ui.fireEvent.click(ui.screen.getAllByRole('button', { name: 'New chat' })[0]);
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Team' }));
+  ui.fireEvent.click(
+    await ui.screen.findByRole('option', { name: /^Engineering/ }),
+  );
+  // While the agent's saved creations are being read there is nothing for
+  // the reader to do: the sheet says so and offers no button.
+  await ui.screen.findByText('Checking saved channel creations…');
+  assert.equal(
+    ui.screen.queryByRole('button', { name: 'Check saved creations' }),
+    null,
+  );
+  ui.fireEvent.change(
+    ui.screen.getByRole('textbox', { name: 'Channel name' }),
+    { target: { value: 'design' } },
+  );
+  const create = () =>
+    ui.screen.getByRole<HTMLButtonElement>('button', {
+      name: 'Create channel',
+    });
+  assert.equal(create().disabled, true);
+  await ui.act(async () => {
+    release();
+  });
+  // A check that failed says why, and that is when it is offered again.
+  await ui.screen.findByText(
+    /Saved channel creations could not be checked: The agent did not answer\./,
+  );
+  armed = false;
+  await ui.waitFor(() => {
+    const again = ui.screen.queryByRole('button', {
+      name: 'Check saved creations',
+    });
+    assert.ok(again);
+    ui.fireEvent.click(again);
+  });
+  await ui.waitFor(() =>
+    assert.equal(ui.screen.queryByText(/could not be checked/), null),
+  );
+  assert.equal(
+    ui.screen.queryByText('Checking saved channel creations…'),
+    null,
+  );
+  await ui.waitFor(() => assert.equal(create().disabled, false));
+});
+
 /** New chat → a team → Create a channel, the way the column offers it. */
 async function openCreateForm(team: RegExp): Promise<HTMLElement> {
   ui.fireEvent.click(ui.screen.getAllByRole('button', { name: 'New chat' })[0]);

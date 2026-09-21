@@ -148,7 +148,7 @@ export function NewChatSheet({
   const submittedRef = useRef(onSubmitted);
   submittedRef.current = onSubmitted;
   const [error, setError] = useState('');
-  const { controller, creations } = useChannelCreation();
+  const { controller, creations, checks } = useChannelCreation();
   const [creationId, setCreationId] = useState<string>();
   const active = creations.find((record) => record.id === creationId);
   const draftRef = useRef(onDraft);
@@ -326,6 +326,7 @@ export function NewChatSheet({
   // name is the general channel, and whether the team already has one is the
   // difference between creating it and being refused.
   const channelsKnown = Boolean(entry?.data);
+  const check = picked ? checks.get(picked.store.id) : undefined;
   const locked = busy || outstanding;
   // What refuses a channel the sheet has not sent yet. A preparation the agent
   // has already taken is past all of it: its fields are frozen, so the only
@@ -488,14 +489,28 @@ export function NewChatSheet({
               Channel creation is unavailable in this window.
             </p>
           )}
-          {controller && picked && !controller.readyFor(picked.store.id) && (
-            <p role="status">
-              Saved channel creations must be checked first.{' '}
-              <Button onClick={() => void controller.discover(picked.store)}>
-                Check saved creations
-              </Button>
-            </p>
-          )}
+          {/* Before a channel is submitted the agent's saved creations for
+              the team are read, so a preparation whose reply was lost is
+              recovered rather than duplicated. That check runs on its own
+              when the team's channels arrive; it is announced while it runs
+              and offered again only once it has failed. */}
+          {controller &&
+            picked &&
+            entry?.state === 'ready' &&
+            !picked.reason &&
+            !controller.readyFor(picked.store.id) &&
+            (check?.state === 'failed' ? (
+              <p role="status" className="action-error">
+                Saved channel creations could not be checked: {check.error}{' '}
+                <Button onClick={() => void controller.discover(picked.store)}>
+                  Check saved creations
+                </Button>
+              </p>
+            ) : (
+              <p role="status" className="hint">
+                Checking saved channel creations…
+              </p>
+            ))}
           {active && !active.input && outstanding && (
             <p className="hint">
               The original channel fields are held by the agent. Check the saved

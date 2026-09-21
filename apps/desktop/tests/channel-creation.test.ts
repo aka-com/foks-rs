@@ -579,6 +579,38 @@ test('successful history is bounded and acknowledged terminal records are remove
   controller.dispose();
 });
 
+test('the pending-ledger check is reported while it runs and once it fails', async () => {
+  const { controller, store, changeGeneration, denyAccess } = await setup(
+    async () => reply(prepared),
+  );
+  // A trusted ledger leaves no check behind.
+  assert.equal(controller.getChecks().get(store.id), undefined);
+  const observed: (string | undefined)[] = [];
+  controller.subscribe(() =>
+    observed.push(controller.getChecks().get(store.id)?.state),
+  );
+  changeGeneration();
+  const discovery = controller.discover(store);
+  assert.equal(controller.getChecks().get(store.id)?.state, 'checking');
+  await discovery;
+  assert.equal(controller.readyFor(store.id), true);
+  assert.equal(controller.getChecks().get(store.id), undefined);
+  // No notification shows a check that disagrees with the ledger's trust:
+  // the check is in flight until the scan is recorded, then absent.
+  assert.equal(observed[0], 'checking');
+  assert.ok(observed.slice(1).every((state) => state === undefined));
+  // A refused request leaves its reason, and the ledger untrusted.
+  changeGeneration();
+  denyAccess();
+  await controller.discover(store);
+  assert.equal(controller.readyFor(store.id), false);
+  const check = controller.getChecks().get(store.id);
+  assert.equal(check?.state, 'failed');
+  assert.match(check?.error ?? '', /Chat access changed/);
+  controller.dispose();
+  assert.equal(controller.getChecks().size, 0);
+});
+
 test('pending-ledger overflow stays bounded without evicting ambiguous records or admitting duplicates', async () => {
   const pending = Array.from(
     { length: CHANNEL_CREATION_RECORD_LIMIT + 1 },
@@ -594,6 +626,10 @@ test('pending-ledger overflow stays bounded without evicting ambiguous records o
   );
   assert.equal(controller.getSnapshot().length, CHANNEL_CREATION_RECORD_LIMIT);
   assert.equal(controller.readyFor(store.id), false);
+  assert.match(
+    controller.getChecks().get(store.id)?.error ?? '',
+    /Review or dismiss saved channel creations/,
+  );
   const first = controller.getSnapshot()[0];
   controller.acknowledge(first.id);
   assert.equal(controller.getSnapshot().length, CHANNEL_CREATION_RECORD_LIMIT);
