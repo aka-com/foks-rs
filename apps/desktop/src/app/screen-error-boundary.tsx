@@ -15,16 +15,25 @@ import { Band, Button } from '../components';
 import type { Location } from '../location';
 
 /**
- * What identifies a page for the boundary's key: the fields `sameLocation`
- * in `navigation/routes.ts` reads to tell one page from another, without
- * the conceal signal, on which the screens already remount.
+ * What identifies a page for the boundary's key: every field `sameLocation`
+ * in `navigation/routes.ts` reads to tell one page from another, so moving
+ * to another channel, tab, account, server or device leaves a failed page
+ * behind rather than carrying its failure along; without the conceal
+ * signal, on which the screens already remount.
  */
 export function screenBoundaryKey(location: Location): string {
   return [
     location.kind,
     'ref' in location ? location.ref : '',
     'section' in location ? location.section : '',
-  ].join(':');
+    'store' in location ? location.store : '',
+    'profile' in location ? location.profile : '',
+    'device' in location ? location.device : '',
+    'tab' in location ? location.tab : '',
+    'channel' in location ? location.channel : '',
+  ]
+    .map((part) => part ?? '')
+    .join(':');
 }
 
 interface ScreenErrorBoundaryProps {

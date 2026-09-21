@@ -9,6 +9,8 @@ import { createElement, useState } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 
 import { installDom } from './lib/dom-harness';
+import type { Location } from '../src/location';
+import { sameLocation } from '../src/navigation/routes';
 
 installDom({
   url: 'http://localhost/',
@@ -105,14 +107,69 @@ test('changing location resets the screen error boundary', () => {
   assert.equal(rendered.queryByRole('alert'), null);
 });
 
-test('the key reads the fields that identify a page and nothing else', () => {
+test('the key reads every field that identifies a page and nothing else', () => {
   assert.equal(
     boundary.screenBoundaryKey({ kind: 'store', ref: 'acct:personal' }),
-    'store:acct:personal:',
+    'store:acct:personal::::::',
   );
   assert.equal(
     boundary.screenBoundaryKey({ kind: 'settings', section: 'servers' }),
-    'settings::servers',
+    'settings::servers:::::',
   );
-  assert.equal(boundary.screenBoundaryKey({ kind: 'all' }), 'all::');
+  assert.equal(boundary.screenBoundaryKey({ kind: 'all' }), 'all:::::::');
+  // The fields `sameLocation` distinguishes each make a different page.
+  const pairs: [Location, Location][] = [
+    [
+      { kind: 'chat', ref: 'team:eng', channel: 'a' },
+      { kind: 'chat', ref: 'team:eng', channel: 'b' },
+    ],
+    [
+      { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
+      { kind: 'group-settings', ref: 'team:eng', tab: 'settings' },
+    ],
+    [
+      { kind: 'devices', section: 'keys', store: 'acct:a', device: 'd1' },
+      { kind: 'devices', section: 'keys', store: 'acct:a', device: 'd2' },
+    ],
+    [
+      { kind: 'settings', section: 'servers', profile: 'acme' },
+      { kind: 'settings', section: 'servers', profile: 'personal' },
+    ],
+    [
+      { kind: 'people', store: 'acct:a' },
+      { kind: 'people', store: 'acct:b' },
+    ],
+    [
+      { kind: 'teams', store: 'acct:a' },
+      { kind: 'teams', store: 'acct:b' },
+    ],
+  ];
+  for (const [left, right] of pairs) {
+    assert.equal(sameLocation(left, right), false);
+    assert.notEqual(
+      boundary.screenBoundaryKey(left),
+      boundary.screenBoundaryKey(right),
+    );
+  }
+});
+
+test('moving to another channel of the same team leaves a failed page behind', () => {
+  let setChannel!: (channel: string) => void;
+  function Page({ channel }: { channel: string }) {
+    if (channel === 'broken') throw new Error('Channel broken');
+    return createElement('p', null, `Channel ${channel}`);
+  }
+  function Shell() {
+    const [channel, update] = useState('broken');
+    setChannel = update;
+    return createElement(boundary.ScreenErrorBoundary, {
+      key: boundary.screenBoundaryKey({ kind: 'chat', ref: 'team:eng', channel }),
+      children: createElement(Page, { channel }),
+    });
+  }
+  const { value: rendered } = quietly(() => ui.render(createElement(Shell)));
+  assert.ok(rendered.getByRole('alert'));
+  ui.act(() => setChannel('fine'));
+  assert.ok(rendered.getByText('Channel fine'));
+  assert.equal(rendered.queryByRole('alert'), null);
 });
