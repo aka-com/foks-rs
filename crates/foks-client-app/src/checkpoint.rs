@@ -191,6 +191,88 @@ impl Drop for HeldCheckedProfile {
     }
 }
 
+/// Records the verification read of a checked session carried past the
+/// checks it ran: whether the profile's import-readiness record exists, which
+/// `checked_profile_for_use` would otherwise read the native manifest again
+/// for, and the master key, which every vault opened inside the session would
+/// read it for once more. Each such read is a native credential round trip
+/// (a Keychain query, or on Linux a fresh D-Bus session), so an operation paid
+/// several of them for one manifest that cannot change under it: the readiness
+/// record moves only under an exclusive session or maintenance, the master key
+/// only under maintenance, and the session holds the profile lock and a shared
+/// state lease for its duration. The material lives on this thread exactly as
+/// long as the session that read it, which is how long the session's own
+/// closure would hold the key anyway.
+struct SessionMaterial {
+    state_id: String,
+    profile: PathBuf,
+    import_verification_required: bool,
+    /// Absent when the record is missing or malformed, so `master_key` reads
+    /// the manifest itself and reports the failure it always did.
+    master_key: Option<Zeroizing<[u8; 32]>>,
+}
+
+thread_local! {
+    static SESSION_MATERIAL: std::cell::RefCell<Vec<SessionMaterial>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The material of the sessions entered on this thread, popped on drop so a
+/// nested session on another profile, or another state root, never serves a
+/// caller from a record that is no longer on record.
+struct HeldSessionMaterial {
+    count: usize,
+}
+
+impl HeldSessionMaterial {
+    fn enter(material: impl IntoIterator<Item = SessionMaterial>) -> Self {
+        SESSION_MATERIAL.with(|held| {
+            let mut held = held.borrow_mut();
+            let before = held.len();
+            held.extend(material);
+            Self {
+                count: held.len() - before,
+            }
+        })
+    }
+}
+
+impl Drop for HeldSessionMaterial {
+    fn drop(&mut self) {
+        SESSION_MATERIAL.with(|held| {
+            let mut held = held.borrow_mut();
+            for _ in 0..self.count {
+                held.pop().expect("session material hold is balanced");
+            }
+        });
+    }
+}
+
+/// The master key a session entered on this thread read for `state_id`. The
+/// key is one record of the state, so any held session of that state may
+/// answer for it.
+fn session_master_key(state_id: &str) -> Option<Zeroizing<[u8; 32]>> {
+    SESSION_MATERIAL.with(|held| {
+        held.borrow()
+            .iter()
+            .rev()
+            .filter(|material| material.state_id == state_id)
+            .find_map(|material| material.master_key.clone())
+    })
+}
+
+/// Whether a session entered on this thread found `profile`'s import-readiness
+/// record on the manifest of `state_id`, or `None` when no such session holds.
+fn session_import_verification_required(state_id: &str, profile: &Path) -> Option<bool> {
+    SESSION_MATERIAL.with(|held| {
+        held.borrow()
+            .iter()
+            .rev()
+            .find(|material| material.state_id == state_id && material.profile == profile)
+            .map(|material| material.import_verification_required)
+    })
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CredentialBackend {
@@ -396,14 +478,17 @@ impl ClientCredentials {
             ));
         }
         validate_name(&state.state_id)?;
-        let credentials = Self {
+        // Acquiring the lease already read the native manifest for this
+        // state: it refused a pending maintenance intent and a manifest bound
+        // to another root path, which is what a second read here would check
+        // again on the same record. Every later manifest access verifies the
+        // binding once more under its own lock.
+        Ok(Self {
             lease,
             root,
             state_id: state.state_id,
             backend: state.credential_backend,
-        };
-        credentials.verify_native_root_binding()?;
-        Ok(credentials)
+        })
     }
 
     pub fn backend(&self) -> CredentialBackend {
@@ -487,15 +572,22 @@ impl ClientCredentials {
     pub fn master_key(&self) -> Result<Zeroizing<[u8; 32]>> {
         self.lease.validate()?;
         match self.backend {
-            CredentialBackend::Native => self.with_native_manifest(|manifest| {
-                let bytes = manifest.get(MASTER_KEY_RECORD)?;
-                if bytes.len() != 32 {
-                    return Err(foks_keystore::Error::InvalidMasterKey.into());
+            CredentialBackend::Native => {
+                // Inside a checked session the verification read that entered
+                // it already carried the key; see `SessionMaterial`.
+                if let Some(key) = session_master_key(&self.state_id) {
+                    return Ok(key);
                 }
-                let mut key = Zeroizing::new([0u8; 32]);
-                key.copy_from_slice(&bytes);
-                Ok(key)
-            }),
+                self.with_native_manifest(|manifest| {
+                    let bytes = manifest.get(MASTER_KEY_RECORD)?;
+                    if bytes.len() != 32 {
+                        return Err(foks_keystore::Error::InvalidMasterKey.into());
+                    }
+                    let mut key = Zeroizing::new([0u8; 32]);
+                    key.copy_from_slice(&bytes);
+                    Ok(key)
+                })
+            }
             CredentialBackend::PrivateFile => {
                 foks_keystore::load_master_key_file(self.root.join("master.key"))
                     .map_err(Into::into)
@@ -557,13 +649,6 @@ impl ClientCredentials {
         self.with_native_manifest(|manifest| {
             cancel_profile_publication_with_store(profile, authorization, manifest)
         })
-    }
-
-    fn verify_native_root_binding(&self) -> Result<()> {
-        if self.backend != CredentialBackend::Native {
-            return Ok(());
-        }
-        self.with_native_manifest(|manifest| self.verify_root_binding_with_store(manifest))
     }
 
     pub(super) fn verify_root_binding_with_store(
@@ -642,7 +727,9 @@ impl ClientCredentials {
             return operation(&checked);
         }
         let lock = runtime::ProfileLock::operation(session.paths()).map_err(E::from)?;
-        let database_lock = self.lock_and_verify_checkpoint(session).map_err(E::from)?;
+        let (database_lock, material) =
+            self.lock_and_verify_checkpoint(session).map_err(E::from)?;
+        let material = HeldSessionMaterial::enter(material);
         let checked = if import_proof {
             crate::portability::readiness::validate_for_proof(self, session).map_err(E::from)?;
             CheckedProfileSession { session }
@@ -652,6 +739,7 @@ impl ClientCredentials {
         let held = HeldCheckedProfile::enter(key);
         let result = operation(&checked);
         drop(held);
+        drop(material);
         let checkpoint = self.advance_checkpoint(session);
         let database_unlock = database_lock
             .map(runtime::DatabaseLock::release)
@@ -755,7 +843,7 @@ impl ClientCredentials {
         let Some(second_lock) = acquire(second).map_err(E::from)? else {
             return Ok(None);
         };
-        let database_locks = if nonblocking {
+        let (database_locks, material) = if nonblocking {
             // Try both database/checkpoint locks without waiting while holding
             // either. A shared database identity remains an integrity error.
             if self.backend == CredentialBackend::Native
@@ -767,24 +855,28 @@ impl ClientCredentials {
                     "hard-state database identity is already used by another profile",
                 )));
             }
-            let Some(first_database) = self
+            let Some((first_database, first_material)) = self
                 .try_lock_and_verify_checkpoint(first)
                 .map_err(E::from)?
             else {
                 return Ok(None);
             };
-            let Some(second_database) = self
+            let Some((second_database, second_material)) = self
                 .try_lock_and_verify_checkpoint(second)
                 .map_err(E::from)?
             else {
                 return Ok(None);
             };
-            first_database.into_iter().chain(second_database).collect()
+            (
+                first_database.into_iter().chain(second_database).collect(),
+                first_material.into_iter().chain(second_material).collect(),
+            )
         } else {
             self.lock_and_verify_checkpoints(first, second)
                 .map_err(E::from)?
         };
 
+        let material = HeldSessionMaterial::enter(material);
         let left_checked = checked_profile_for_use(self, left).map_err(E::from)?;
         let right_checked = checked_profile_for_use(self, right).map_err(E::from)?;
         let left_held = HeldCheckedProfile::enter(left_key);
@@ -792,6 +884,7 @@ impl ClientCredentials {
         let result = operation(&left_checked, &right_checked);
         drop(right_held);
         drop(left_held);
+        drop(material);
 
         // Perform every durability and release step before selecting which
         // error to report. An early return here could strand the other
@@ -829,17 +922,19 @@ impl ClientCredentials {
         else {
             return Ok(None);
         };
-        let database_lock = match self
+        let (database_lock, material) = match self
             .try_lock_and_verify_checkpoint(session)
             .map_err(E::from)?
         {
-            Some(lock) => lock,
+            Some(verified) => verified,
             None => return Ok(None),
         };
+        let material = HeldSessionMaterial::enter(material);
         let checked = checked_profile_for_use(self, session).map_err(E::from)?;
         let held = HeldCheckedProfile::enter(key);
         let result = operation(&checked);
         drop(held);
+        drop(material);
         let checkpoint = self.advance_checkpoint(session);
         let database_unlock = database_lock
             .map(runtime::DatabaseLock::release)
@@ -883,18 +978,20 @@ impl ClientCredentials {
         else {
             return Ok(SharedSessionOutcome::Contended);
         };
-        let database_lock = match self
+        let (database_lock, material) = match self
             .try_lock_and_verify_checkpoint_shared(session)
             .map_err(E::from)?
         {
-            SharedVerification::Verified(database_lock) => database_lock,
+            SharedVerification::Verified(database_lock, material) => (database_lock, material),
             SharedVerification::Contended => return Ok(SharedSessionOutcome::Contended),
             SharedVerification::NeedsExclusive => return Ok(SharedSessionOutcome::NeedsExclusive),
         };
+        let material = HeldSessionMaterial::enter(material);
         let checked = checked_profile_for_use(self, session).map_err(E::from)?;
         let held = HeldCheckedProfile::enter(key);
         let result = operation(&checked);
         drop(held);
+        drop(material);
         let checkpoint = self.advance_checkpoint(session);
         let database_unlock = database_lock
             .map(runtime::DatabaseLock::release)
@@ -921,7 +1018,7 @@ impl ClientCredentials {
             return Ok(SharedVerification::NeedsExclusive);
         }
         if self.backend != CredentialBackend::Native {
-            return Ok(SharedVerification::Verified(None));
+            return Ok(SharedVerification::Verified(None, None));
         }
         if !hard_state_artifacts_exist(&session.paths.hard_database)? {
             return Ok(SharedVerification::NeedsExclusive);
@@ -936,14 +1033,19 @@ impl ClientCredentials {
             if current.database_id != database_id {
                 // The database was replaced under the read; only an
                 // exclusive session settles what replaced it.
-                return Ok(SharedCheck::NeedsExclusive);
+                return Ok(None);
             }
-            self.verify_native_checkpoint_shared_with_store(session, &current, manifest)
+            match self.verify_native_checkpoint_shared_with_store(session, &current, manifest)? {
+                SharedCheck::Verified => {
+                    Ok(Some(self.session_material_from_store(session, manifest)?))
+                }
+                SharedCheck::NeedsExclusive => Ok(None),
+            }
         })?;
         Ok(match verified {
             None => SharedVerification::Contended,
-            Some(SharedCheck::Verified) => SharedVerification::Verified(Some(lock)),
-            Some(SharedCheck::NeedsExclusive) => SharedVerification::NeedsExclusive,
+            Some(Some(material)) => SharedVerification::Verified(Some(lock), Some(material)),
+            Some(None) => SharedVerification::NeedsExclusive,
         })
     }
 
@@ -985,13 +1087,16 @@ impl ClientCredentials {
         Ok(SharedCheck::Verified)
     }
 
+    /// Verifies the checkpoint under the database lock and answers that lock
+    /// with the material the same manifest read carried (see
+    /// [`SessionMaterial`]); neither exists for the private-file backend.
     fn lock_and_verify_checkpoint(
         &self,
         session: &ProfileSession,
-    ) -> Result<Option<runtime::DatabaseLock>> {
+    ) -> Result<(Option<runtime::DatabaseLock>, Option<SessionMaterial>)> {
         if self.backend != CredentialBackend::Native {
             self.complete_private_profile_publication(session)?;
-            return Ok(None);
+            return Ok((None, None));
         }
         let pristine = !hard_state_artifacts_exist(&session.paths.hard_database)?;
         let current = session.rollback_checkpoint()?;
@@ -1000,22 +1105,22 @@ impl ClientCredentials {
             .as_ref()
             .is_some_and(|publication| publication.authorized);
         let lock = runtime::DatabaseLock::acquire(&self.root, &current.database_id)?;
-        self.verify_native_checkpoint_for_use(
+        let material = self.verify_native_checkpoint_for_use(
             session,
             &current,
             pristine || authorized,
             publication.as_ref(),
         )?;
-        Ok(Some(lock))
+        Ok((Some(lock), Some(material)))
     }
 
     fn try_lock_and_verify_checkpoint(
         &self,
         session: &ProfileSession,
-    ) -> Result<Option<Option<runtime::DatabaseLock>>> {
+    ) -> Result<Option<(Option<runtime::DatabaseLock>, Option<SessionMaterial>)>> {
         if self.backend != CredentialBackend::Native {
             self.complete_private_profile_publication(session)?;
-            return Ok(Some(None));
+            return Ok(Some((None, None)));
         }
         let pristine = !hard_state_artifacts_exist(&session.paths.hard_database)?;
         let current = session.rollback_checkpoint()?;
@@ -1037,23 +1142,24 @@ impl ClientCredentials {
                 pristine || authorized,
                 publication.as_ref(),
                 manifest,
-            )
+            )?;
+            self.session_material_from_store(session, manifest)
         })?;
-        if verified.is_none() {
+        let Some(material) = verified else {
             return Ok(None);
-        }
-        Ok(Some(Some(lock)))
+        };
+        Ok(Some((Some(lock), Some(material))))
     }
 
     fn lock_and_verify_checkpoints(
         &self,
         first: &ProfileSession,
         second: &ProfileSession,
-    ) -> Result<Vec<runtime::DatabaseLock>> {
+    ) -> Result<(Vec<runtime::DatabaseLock>, Vec<SessionMaterial>)> {
         if self.backend != CredentialBackend::Native {
             self.complete_private_profile_publication(first)?;
             self.complete_private_profile_publication(second)?;
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
         let first_pristine = !hard_state_artifacts_exist(&first.paths.hard_database)?;
         let second_pristine = !hard_state_artifacts_exist(&second.paths.hard_database)?;
@@ -1073,7 +1179,7 @@ impl ClientCredentials {
         for database_id in database_ids {
             locks.push(runtime::DatabaseLock::acquire(&self.root, &database_id)?);
         }
-        self.with_native_manifest(|manifest| {
+        let material = self.with_native_manifest(|manifest| {
             self.verify_native_checkpoint_with_store(
                 first,
                 &first_current,
@@ -1101,9 +1207,13 @@ impl ClientCredentials {
                 second,
                 second_publication.as_ref(),
                 manifest,
-            )
+            )?;
+            Ok(vec![
+                self.session_material_from_store(first, manifest)?,
+                self.session_material_from_store(second, manifest)?,
+            ])
         })?;
-        Ok(locks)
+        Ok((locks, material))
     }
 
     fn complete_private_profile_publication(&self, session: &ProfileSession) -> Result<()> {
@@ -1172,7 +1282,7 @@ impl ClientCredentials {
         current: &RollbackCheckpoint,
         allow_checkpoint_enrollment: bool,
         publication: Option<&ProfilePublicationAuthorization>,
-    ) -> Result<()> {
+    ) -> Result<SessionMaterial> {
         self.with_native_manifest(|manifest| {
             self.verify_native_checkpoint_for_use_with_store(
                 session,
@@ -1180,7 +1290,39 @@ impl ClientCredentials {
                 allow_checkpoint_enrollment,
                 publication,
                 manifest,
-            )
+            )?;
+            self.session_material_from_store(session, manifest)
+        })
+    }
+
+    /// Reads, from a manifest a verification already holds, what the session
+    /// entering on it would otherwise read the manifest again for. A missing
+    /// readiness record is the ordinary state; any other keystore failure is
+    /// the read's own.
+    fn session_material_from_store(
+        &self,
+        session: &ProfileSession,
+        store: &mut impl CheckpointStore,
+    ) -> Result<SessionMaterial> {
+        let key = crate::portability::readiness::key(&session.profile.name)?;
+        let import_verification_required = match store.get(&key) {
+            Ok(_) => true,
+            Err(foks_keystore::Error::Missing) => false,
+            Err(error) => return Err(error.into()),
+        };
+        let master_key = match store.get(MASTER_KEY_RECORD) {
+            Ok(bytes) if bytes.len() == 32 => {
+                let mut key = Zeroizing::new([0u8; 32]);
+                key.copy_from_slice(&bytes);
+                Some(key)
+            }
+            _ => None,
+        };
+        Ok(SessionMaterial {
+            state_id: self.state_id.clone(),
+            profile: held_profile_key(&session.paths.directory),
+            import_verification_required,
+            master_key,
         })
     }
 
@@ -2085,10 +2227,19 @@ fn checked_profile_for_use<'a>(
     session: &'a ProfileSession,
 ) -> Result<CheckedProfileSession<'a>> {
     let key = crate::portability::readiness::key(&session.profile.name)?;
-    if credentials.backend == CredentialBackend::Native
-        && credentials.with_native_manifest(|m| Ok(m.records.contains_key(&key)))?
-    {
-        return Err(Error::ImportVerificationRequired);
+    if credentials.backend == CredentialBackend::Native {
+        // The session's verification read answers this when one holds on
+        // this thread; only a call outside any session reads the manifest.
+        let required = match session_import_verification_required(
+            &credentials.state_id,
+            &held_profile_key(&session.paths.directory),
+        ) {
+            Some(required) => required,
+            None => credentials.with_native_manifest(|m| Ok(m.records.contains_key(&key)))?,
+        };
+        if required {
+            return Err(Error::ImportVerificationRequired);
+        }
     }
     if foks_client_db::HardStateStore::open(&session.paths.hard_database)?
         .requires_import_verification()?
@@ -2304,6 +2455,133 @@ pub(super) fn rollback_record_key(profile: &str) -> Result<String> {
 }
 
 #[cfg(test)]
+mod material_tests {
+    use super::*;
+    use crate::{Profile, ProfileRegistry, ProfileSession, ProtocolPolicy, TrustRoot};
+    use foks_keystore::{MemorySecretStore, SecretStore};
+
+    fn native_credentials(root: &Path, state_id: &str) -> ClientCredentials {
+        ClientCredentials {
+            lease: ClientStateLease::acquire(root).unwrap(),
+            root: root.to_owned(),
+            state_id: state_id.to_owned(),
+            backend: CredentialBackend::Native,
+        }
+    }
+
+    fn one_profile(root: &Path) -> ProfileSession {
+        let mut registry = ProfileRegistry::open(root).unwrap();
+        registry
+            .add(Profile {
+                name: "local".into(),
+                label: None,
+                probe: "example.test".into(),
+                protocol: ProtocolPolicy::V019,
+                trust: TrustRoot::WebPki,
+            })
+            .unwrap();
+        ProfileSession::open(&registry, "local").unwrap()
+    }
+
+    #[test]
+    fn session_material_reads_the_readiness_record_and_the_master_key_once() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let session = one_profile(&root);
+        let credentials = native_credentials(&root, "material-test");
+        let mut store = MemorySecretStore::default();
+
+        let material = credentials
+            .session_material_from_store(&session, &mut store)
+            .unwrap();
+        assert!(!material.import_verification_required);
+        assert!(material.master_key.is_none());
+        assert_eq!(material.profile, held_profile_key(&session.paths.directory));
+
+        SecretStore::put(&mut store, MASTER_KEY_RECORD, &[9; 31]).unwrap();
+        let malformed = credentials
+            .session_material_from_store(&session, &mut store)
+            .unwrap();
+        assert!(malformed.master_key.is_none());
+
+        SecretStore::put(&mut store, MASTER_KEY_RECORD, &[9; 32]).unwrap();
+        SecretStore::put(
+            &mut store,
+            &crate::portability::readiness::key("local").unwrap(),
+            b"{}",
+        )
+        .unwrap();
+        let material = credentials
+            .session_material_from_store(&session, &mut store)
+            .unwrap();
+        assert!(material.import_verification_required);
+        assert_eq!(material.master_key.as_deref(), Some(&[9; 32]));
+    }
+
+    #[test]
+    fn held_material_serves_the_master_key_and_the_readiness_check_within_its_scope() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("state");
+        std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let session = one_profile(&root);
+        let credentials = native_credentials(&root, "held-material-test");
+        let other = native_credentials(&root, "another-state");
+        let profile = held_profile_key(&session.paths.directory);
+
+        // No session holds: nothing is served, so the callers read for
+        // themselves.
+        assert!(session_master_key(&credentials.state_id).is_none());
+        assert!(session_import_verification_required(&credentials.state_id, &profile).is_none());
+
+        let held = HeldSessionMaterial::enter([SessionMaterial {
+            state_id: credentials.state_id.clone(),
+            profile: profile.clone(),
+            import_verification_required: true,
+            master_key: Some(Zeroizing::new([4; 32])),
+        }]);
+        // This environment has no native keystore, so an answer proves the
+        // read was served from the held material and not from the manifest.
+        assert_eq!(&*credentials.master_key().unwrap(), &[4; 32]);
+        assert!(matches!(
+            checked_profile_for_use(&credentials, &session),
+            Err(Error::ImportVerificationRequired)
+        ));
+        // Another state root on the same thread is not served this key.
+        assert!(session_master_key(&other.state_id).is_none());
+        assert!(session_import_verification_required(&other.state_id, &profile).is_none());
+
+        // A nested session's material shadows the outer one for its profile
+        // and is popped with its own hold.
+        {
+            let nested = HeldSessionMaterial::enter([SessionMaterial {
+                state_id: credentials.state_id.clone(),
+                profile: profile.clone(),
+                import_verification_required: false,
+                master_key: None,
+            }]);
+            assert_eq!(
+                session_import_verification_required(&credentials.state_id, &profile),
+                Some(false)
+            );
+            // A missing key on the innermost record falls back to an outer
+            // session of the same state, whose key is the same record.
+            assert_eq!(&*credentials.master_key().unwrap(), &[4; 32]);
+            drop(nested);
+        }
+        assert_eq!(
+            session_import_verification_required(&credentials.state_id, &profile),
+            Some(true)
+        );
+        drop(held);
+        assert!(session_master_key(&credentials.state_id).is_none());
+        assert!(session_import_verification_required(&credentials.state_id, &profile).is_none());
+    }
+}
+
+#[cfg(test)]
 mod manifest_tests {
     use super::*;
 
@@ -2417,7 +2695,7 @@ pub enum SharedSessionOutcome<T> {
 }
 
 enum SharedVerification {
-    Verified(Option<runtime::DatabaseLock>),
+    Verified(Option<runtime::DatabaseLock>, Option<SessionMaterial>),
     Contended,
     NeedsExclusive,
 }
