@@ -5,6 +5,7 @@ import {
   resolveProvisionedIdentity,
   provisionedIdentityProblem,
 } from '../src/first-run-identity';
+import { identityRetryDelay } from '../src/screens/first-run/use-account-identity';
 import {
   initialFirstRun,
   transitionFirstRun,
@@ -204,4 +205,38 @@ test('identity adoption requires the pinned host, unique alias match and scoped 
     'protect',
     'unrelated profile failure does not block identity adoption',
   );
+});
+
+test('the identity probe keeps its patience and spends it in fewer reads', () => {
+  const delays: number[] = [];
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const delay = identityRetryDelay(attempt);
+    if (delay === null) break;
+    delays.push(delay);
+  }
+  // Every retry is one forced whole-catalog read, so the retry count is the
+  // read count. The flat two-second schedule spent its budget in thirty.
+  assert.ok(
+    delays.length < 12,
+    `${delays.length} retries still reads the catalog too often`,
+  );
+  const patience = delays.reduce((total, delay) => total + delay, 0);
+  assert.ok(
+    patience >= 60_000,
+    `${patience}ms is less patient than the flat schedule was`,
+  );
+  // The first wait is unchanged, because these failures almost always clear
+  // on the first retry and that case must not get slower.
+  assert.equal(delays[0], 2_000);
+  // Geometric until the ceiling, then flat: without the ceiling the last
+  // waits would dominate the budget and a late-clearing failure would be
+  // reported long after it cleared.
+  assert.deepEqual(delays.slice(0, 3), [2_000, 4_000, 8_000]);
+  assert.ok(delays.every((delay) => delay <= 8_000));
+  assert.ok(
+    delays.slice(3).every((delay) => delay === 8_000),
+    'the ceiling is not holding',
+  );
+  // The budget is a bound, not a suggestion.
+  assert.equal(identityRetryDelay(delays.length), null);
 });

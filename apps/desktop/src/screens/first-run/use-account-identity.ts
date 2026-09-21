@@ -12,10 +12,50 @@ import type { FirstRunCheckpoint } from '../../first-run-state';
 import type { AgentSnapshot } from '../../model';
 import type { useFirstRunController } from '../../use-first-run-controller';
 
-/** Delay between automatic retries of a transient identity refresh failure. */
+/**
+ * Delay before the first automatic retry of a transient identity refresh
+ * failure, doubling from there. The failures this retries -- a native
+ * mutation still holding the catalog, a snapshot replaced by a concurrent
+ * load -- almost always clear on the first retry, so the first wait stays
+ * short and only a genuinely stuck mutation reaches the longer ones.
+ */
 const IDENTITY_RETRY_DELAY_MS = 2_000;
-/** Bounded so a mutation that never finishes still surfaces its error. */
-const IDENTITY_RETRY_LIMIT = 30;
+/**
+ * Ceiling on that doubling. Without it the last waits dominate the budget
+ * below and a failure that clears late is reported far after it cleared.
+ */
+const IDENTITY_RETRY_MAXIMUM_DELAY_MS = 8_000;
+/**
+ * How long to keep retrying in total, so a mutation that never finishes still
+ * surfaces its error. The flat two-second retry waited sixty seconds across
+ * its thirty attempts; this is that budget rounded up to a whole retry, so
+ * patience is not reduced. What changed is the cost of spending it: ten
+ * whole-catalog reads rather than thirty-one.
+ */
+const IDENTITY_RETRY_BUDGET_MS = 62_000;
+
+/**
+ * The wait before retry `attempt`, or null once the budget is spent.
+ *
+ * Every read this schedules is a forced whole-catalog read: the scoped
+ * per-profile read is unavailable here, because the reconciliation scheduler
+ * that serves it is deliberately not running during first run. So the number
+ * of retries is the number of whole-catalog reads, and backing off is what
+ * bounds it.
+ */
+export function identityRetryDelay(attempt: number): number | null {
+  let elapsed = 0;
+  for (let index = 0; ; index += 1) {
+    const delay = Math.min(
+      IDENTITY_RETRY_DELAY_MS * 2 ** index,
+      IDENTITY_RETRY_MAXIMUM_DELAY_MS,
+    );
+    if (index === attempt)
+      return elapsed + delay > IDENTITY_RETRY_BUDGET_MS ? null : delay;
+    elapsed += delay;
+    if (elapsed >= IDENTITY_RETRY_BUDGET_MS) return null;
+  }
+}
 
 /**
  * Text to show while an identity refresh failure that clears on its own is
@@ -129,7 +169,8 @@ export function useAccountIdentity({
       // by a concurrent load, clears on its own. Wait and try again rather
       // than presenting a vault-screen message as a setup failure.
       const waiting = transientIdentityFailure(typed.code);
-      if (waiting && attempt < IDENTITY_RETRY_LIMIT) {
+      const delay = identityRetryDelay(attempt);
+      if (waiting && delay !== null) {
         retrying = true;
         setIdentityWaiting(waiting);
         identityRetry.current = window.setTimeout(() => {
@@ -142,7 +183,7 @@ export function useAccountIdentity({
             return;
           }
           void refreshAccountIdentity(saved, attempt + 1);
-        }, IDENTITY_RETRY_DELAY_MS);
+        }, delay);
         return;
       }
       setIdentityError(typed.message);

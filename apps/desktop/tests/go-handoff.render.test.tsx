@@ -3,6 +3,7 @@ import test from 'node:test';
 import { createElement, StrictMode } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 import type { Bridge, CommandError, GoProfileCandidate } from '../src/bridge';
+import { identityRetryDelay } from '../src/screens/first-run/use-account-identity';
 import { installDom, settle } from './lib/dom-harness';
 
 installDom({
@@ -1239,14 +1240,23 @@ test('identity loading waits out a native mutation instead of failing setup', as
     ).disabled,
     true,
   );
+  // The retry schedule doubles from two seconds to a ceiling, so the second
+  // wait is longer than the first. Drive it by the delay the probe actually
+  // scheduled rather than assuming a flat cadence.
   for (let attempt = 1; attempt <= 2; attempt++) {
     assert.equal(refreshes, attempt);
-    assert.ok(
-      [...timers.values()].some((timer) => timer.due === now + 2_000),
-      'a busy refresh schedules another attempt after two seconds',
+    const due = [...timers.values()]
+      .map((timer) => timer.due)
+      .filter((at) => at > now)
+      .sort((a, b) => a - b)[0];
+    assert.ok(due !== undefined, 'a busy refresh schedules another attempt');
+    assert.equal(
+      due - now,
+      identityRetryDelay(attempt - 1),
+      'the busy refresh did not use the probe’s own backoff',
     );
     await ui.act(async () => {
-      now += 2_000;
+      now = due;
       for (const [id, timer] of [...timers]) {
         if (timer.due <= now && timers.delete(id)) timer.run();
       }
