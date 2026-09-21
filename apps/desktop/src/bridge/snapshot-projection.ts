@@ -838,11 +838,22 @@ async function projectCatalogCounted(
   const baseItems = new Map(
     (base?.items ?? []).map((item) => [itemKey(item), item]),
   );
-  const items: Item[] = response.items
-    .filter((item) => {
-      const store = liveStores.find((candidate) => candidate.id === item.store);
-      return Boolean(
-        store &&
+  // The item filters below ask the same questions of a store once per item it
+  // holds. Both answers are per store, so they are settled here, after the
+  // inventory rewrite above has put a still-loading store's status back to
+  // 'loading' — built before it, that store's items would be admitted.
+  const inventoryByStore = new Map(
+    storeInventory.map((entry) => [entry.store, entry]),
+  );
+  const availableStores = new Set<string>();
+  {
+    const decided = new Set<string>();
+    for (const store of liveStores) {
+      // The filter this replaces resolved the store with `find`, so a
+      // repeated id is answered by its first record here too.
+      if (decided.has(store.id)) continue;
+      decided.add(store.id);
+      if (
         !unavailableServers.has(store.server) &&
         servers.some(
           (server) =>
@@ -854,17 +865,20 @@ async function projectCatalogCounted(
               store.kind === 'team' ? ['teams', 'kv'] : ['kv'],
             ).available,
         ) &&
-        storeInventory.find((entry) => entry.store === store.id)?.status ===
-          'available',
-      );
-    })
+        inventoryByStore.get(store.id)?.status === 'available'
+      )
+        availableStores.add(store.id);
+    }
+  }
+  const items: Item[] = response.items
+    .filter((item) => availableStores.has(item.store))
     .map((item) => ({
       ...(bridge.native ? {} : baseItems.get(itemKey(item))),
       ...item,
     }));
   const itemKeys = new Set(items.map(itemKey));
   for (const item of base?.items ?? []) {
-    const store = stores.find((store) => store.id === item.store);
+    const store = storesById.get(item.store);
     if (
       !store ||
       !sameIdentityStores.has(item.store) ||
@@ -873,8 +887,7 @@ async function projectCatalogCounted(
       continue;
     if (
       catalogStoreComplete(response, store, partial) &&
-      storeInventory.find((entry) => entry.store === item.store)?.status ===
-        'available'
+      inventoryByStore.get(item.store)?.status === 'available'
     )
       continue;
     const metadata = { ...item };
