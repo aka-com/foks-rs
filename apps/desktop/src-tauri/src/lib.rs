@@ -159,6 +159,7 @@ pub fn run() {
     // that never passes through the window's own close.
     let closing = Arc::new(CloseGuard::default());
     let exiting = Arc::clone(&closing);
+    let exiting_agent = Arc::clone(&agent);
 
     tauri::Builder::default()
         // Register single-instance plugin first so duplicate processes hand off
@@ -264,6 +265,8 @@ pub fn run() {
             window_state::get_window_state,
             window_state::set_traffic_lights_visible,
             close_guard::set_unsent_messages,
+            close_guard::exit_state,
+            close_guard::handle_exit_action,
             commands::vault::list_stores,
             commands::vault::list_catalog,
             commands::vault::list_profile_catalog,
@@ -352,16 +355,15 @@ pub fn run() {
         .expect("failed to start application")
         .run(move |app, event| {
             if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
-                // A quit the user asked for, rather than one the application
-                // requested, is held back until the unsent chat messages it
-                // would discard have been accounted for.
-                let unsent = close_guard::unsent_at_exit(&exiting, code);
-                if unsent > 0 {
+                // User quits are held until both the volatile chat queue and
+                // the agent process owned by this launch have been decided.
+                if close_guard::intercept_exit_request(app, &exiting, &exiting_agent, code) {
                     api.prevent_exit();
-                    close_guard::ask_before_exit(app, &exiting, unsent);
                     return;
                 }
-                agent::terminate_managed_agent();
+                if exiting.terminate_agent_on_exit() {
+                    agent::terminate_managed_agent();
+                }
                 clipboard::defer_exit_cleanup(app, code, &api);
             }
         });

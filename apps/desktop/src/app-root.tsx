@@ -14,6 +14,7 @@ import { useAppBootstrap } from './app/app-bootstrap';
 import { shellBlock } from './app/blocking-shell';
 import { BootstrapScreen } from './app/bootstrap-screen';
 import { VaultShell } from './app/vault-shell';
+import { ExitGuard } from './app/exit-guard';
 
 export interface AppProps {
   /** Supplying a snapshot makes render tests synchronous. Production omits it. */
@@ -43,25 +44,27 @@ export function App({
     pending: !loaded || !activeBridge || !agentController,
     progress: boot.bootProgress,
   });
-  if (block || !loaded || !activeBridge || !agentController)
-    return (
+  const content =
+    block || !loaded || !activeBridge || !agentController ? (
       <BootstrapScreen boot={boot} block={block ?? { kind: 'starting' }} />
+    ) : (
+      <VaultShell
+        snapshot={loaded}
+        bridge={activeBridge}
+        store={store}
+        firstRunStart={boot.firstRunStart}
+        managedProfile={boot.managedProfile}
+        initialDeviceCache={boot.deviceCache}
+        onLock={boot.lockNow}
+        retireBoot={boot.retireBoot}
+        awaitBootRead={boot.awaitBootRead}
+        currentBootSnapshot={boot.currentBootSnapshot}
+        agentController={agentController}
+        maintenanceOwnership={boot.maintenanceOwnership}
+        leaseClock={leaseClock}
+      />
     );
   return (
-    <VaultShell
-      snapshot={loaded}
-      bridge={activeBridge}
-      store={store}
-      firstRunStart={boot.firstRunStart}
-      managedProfile={boot.managedProfile}
-      initialDeviceCache={boot.deviceCache}
-      onLock={boot.lockNow}
-      retireBoot={boot.retireBoot}
-      awaitBootRead={boot.awaitBootRead}
-      currentBootSnapshot={boot.currentBootSnapshot}
-      agentController={agentController}
-      maintenanceOwnership={boot.maintenanceOwnership}
-      leaseClock={leaseClock}
-    />
+    <ExitGuard bridge={activeBridge ?? bridge ?? null}>{content}</ExitGuard>
   );
 }

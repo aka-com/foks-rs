@@ -16,6 +16,8 @@ export type {
   AppLockState,
   CommandAck,
   DropHoverEvent,
+  ExitAction,
+  ExitState,
   MaintenanceDisposition,
   MaintenanceKind,
   MaintenanceOperationOutcome,
@@ -30,6 +32,7 @@ export {
   decodeAppInfo,
   decodeAppLockState,
   decodeCommandAck,
+  decodeExitState,
   decodeMaintenanceSnapshot,
 } from './core';
 export type {

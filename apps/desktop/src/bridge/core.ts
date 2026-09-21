@@ -156,6 +156,42 @@ export interface AppLockState {
 
 export type Unlisten = () => void;
 
+export type ExitState =
+  | { state: 'idle' }
+  | { state: 'decision'; pid: number; unsent: number }
+  | { state: 'stopping'; pid: number; force: boolean }
+  | { state: 'finalizing' }
+  | { state: 'failed'; pid: number; error: string }
+  | { state: 'force-confirmation'; pid: number; error: string };
+
+export type ExitAction =
+  | 'cancel'
+  | 'leave-running'
+  | 'stop-agent'
+  | 'retry'
+  | 'show-force'
+  | 'cancel-force'
+  | 'force-stop';
+
+export function decodeExitState(value: unknown): ExitState {
+  const item = record(value, 'exit_state response');
+  const state = string(item.state, 'exit_state.state');
+  if (state === 'idle' || state === 'finalizing') return { state };
+  const pid = integer(item.pid, 'exit_state.pid');
+  if (pid < 1 || pid > 0xffff_ffff)
+    throw new Error('exit_state.pid must fit a positive u32');
+  if (state === 'decision') {
+    const unsent = integer(item.unsent, 'exit_state.unsent');
+    if (unsent < 0) throw new Error('exit_state.unsent must be non-negative');
+    return { state, pid, unsent };
+  }
+  if (state === 'stopping')
+    return { state, pid, force: bool(item.force, 'exit_state.force') };
+  if (state === 'failed' || state === 'force-confirmation')
+    return { state, pid, error: string(item.error, 'exit_state.error') };
+  throw new Error('exit_state.state is invalid');
+}
+
 export interface CommandAck {
   ok: true;
 }

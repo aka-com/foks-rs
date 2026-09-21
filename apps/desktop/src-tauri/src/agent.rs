@@ -1739,6 +1739,62 @@ impl AgentHandle {
         ))
     }
 
+    /// Stops the agent owned by this desktop and waits until its supervisor
+    /// confirms process exit. Application shutdown uses this without the
+    /// maintenance restore step because the desktop is leaving too.
+    pub fn stop_for_exit(&self) -> Result<(), AgentError> {
+        self.stop_owned_managed_agent()
+    }
+
+    /// Escalates a reader-confirmed failed graceful shutdown. Ownership is
+    /// revalidated immediately before SIGKILL so a replacement socket owner
+    /// can never inherit approval intended for the previous process.
+    pub fn force_stop_for_exit(&self) -> Result<(), AgentError> {
+        self.require_owned_managed_agent()?;
+        let pid = *MANAGED_AGENT_PID
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(pid) = pid else {
+            unreachable!("owned managed-agent preflight returned without a pid");
+        };
+        *self
+            .pending_stop_pid
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(pid);
+        #[cfg(unix)]
+        {
+            let signaled = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+            if signaled != 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+            {
+                return Err(AgentError::new(
+                    "agent-force-stop-failed",
+                    "Failed to force stop the managed local agent.",
+                    true,
+                ));
+            }
+        }
+        for _ in 0..50 {
+            if MANAGED_AGENT_PID
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none()
+            {
+                self.clear_connection_failure();
+                *self
+                    .pending_stop_pid
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        Err(AgentError::new(
+            "agent-force-stop-failed",
+            "The managed local agent is still running after the force stop request.",
+            true,
+        ))
+    }
+
     fn require_owned_managed_agent(&self) -> Result<(), AgentError> {
         let owned = *MANAGED_AGENT_PID
             .lock()

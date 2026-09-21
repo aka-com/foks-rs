@@ -29,6 +29,8 @@ import type {
   AppLockState,
   CommandAck,
   DropHoverEvent,
+  ExitAction,
+  ExitState,
   MaintenanceSnapshot,
   TimingBatch,
   Unlisten,
@@ -157,6 +159,8 @@ export interface Bridge {
   unlockApp(): Promise<AppLockState>;
   restartApp(): Promise<void>;
   quitApp(): Promise<void>;
+  exitState(): Promise<ExitState>;
+  handleExitAction(action: ExitAction): Promise<void>;
   agentStatus(): Promise<AgentStatus>;
   probeAgentStatus?(): Promise<AgentStatus>;
   appInfo(): Promise<AppInfo>;
@@ -393,4 +397,5 @@ export interface Bridge {
   onMaintenanceStatus(
     listener: (snapshot: MaintenanceSnapshot) => void,
   ): Promise<Unlisten>;
+  onExitState(listener: (state: ExitState) => void): Promise<Unlisten>;
 }

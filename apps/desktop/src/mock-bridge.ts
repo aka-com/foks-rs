@@ -474,6 +474,8 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     quitApp: async () => {
       mockAppLifecycleRequests.push('quit');
     },
+    exitState: async () => ({ state: 'idle' }),
+    handleExitAction: async () => {},
     agentStatus: () => Promise.resolve({ ...snapshot.agent }),
     appInfo: async () => ({
       version: '0.3.0',
@@ -1465,5 +1467,6 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     onChatNotification: async () => () => {},
     onOpenSettings: async () => () => {},
     onMaintenanceStatus: async () => () => {},
+    onExitState: async () => () => {},
   };
 }

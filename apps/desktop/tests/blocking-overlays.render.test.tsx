@@ -50,8 +50,93 @@ async function modules() {
   const { mockBridge } = (await vite.ssrLoadModule(
     '/src/mock-bridge.ts',
   )) as typeof import('../src/mock-bridge');
-  return { App, FIXTURE, mockBridge };
+  const { ExitGuard } = (await vite.ssrLoadModule(
+    '/src/app/exit-guard.tsx',
+  )) as typeof import('../src/app/exit-guard');
+  return { App, FIXTURE, mockBridge, ExitGuard };
 }
+
+test('owned-agent exit decision uses sentence-case actions and includes volatile messages', async () => {
+  const { FIXTURE, mockBridge, ExitGuard } = await modules();
+  const actions: string[] = [];
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    native: true,
+    exitState: async () => ({ state: 'decision', pid: 45904, unsent: 2 }),
+    handleExitAction: async (action) => {
+      actions.push(action);
+    },
+  };
+  const rendered = ui.render(
+    createElement(
+      ExitGuard,
+      { bridge },
+      createElement('div', null, 'Vault shell'),
+    ),
+  );
+  assert.match(
+    (await rendered.findByRole('dialog', { name: 'Quit FOKS?' })).textContent ??
+      '',
+    /2 messages have not been sent/,
+  );
+  ui.fireEvent.click(
+    rendered.getByRole('button', { name: 'Quit and stop agent' }),
+  );
+  assert.deepEqual(actions, ['stop-agent']);
+  assert.equal(
+    rendered.queryByRole('button', { name: 'Quit and Stop Agent' }),
+    null,
+  );
+});
+
+test('failed agent shutdown requires a separate force-stop confirmation', async () => {
+  const { FIXTURE, mockBridge, ExitGuard } = await modules();
+  let publish: ((state: import('../src/bridge').ExitState) => void) | undefined;
+  const actions: string[] = [];
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    native: true,
+    exitState: async () => ({
+      state: 'failed',
+      pid: 45904,
+      error: 'The managed local agent did not stop in time.',
+    }),
+    onExitState: async (listener) => {
+      publish = listener;
+      return () => {};
+    },
+    handleExitAction: async (action) => {
+      actions.push(action);
+      if (action === 'show-force')
+        publish?.({
+          state: 'force-confirmation',
+          pid: 45904,
+          error: 'The managed local agent did not stop in time.',
+        });
+    },
+  };
+  const rendered = ui.render(
+    createElement(
+      ExitGuard,
+      { bridge },
+      createElement('div', null, 'Vault shell'),
+    ),
+  );
+  ui.fireEvent.click(
+    await rendered.findByRole('button', { name: 'Force stop…' }),
+  );
+  assert.ok(
+    await rendered.findByRole('alertdialog', {
+      name: 'Force stop FOKS Agent?',
+    }),
+  );
+  const force = rendered.getByRole('button', {
+    name: 'Force stop and quit',
+  });
+  await ui.waitFor(() => assert.equal(force.hasAttribute('disabled'), false));
+  ui.fireEvent.click(force);
+  assert.deepEqual(actions, ['show-force', 'force-stop']);
+});
 
 function deferred<T>(): {
   promise: Promise<T>;
@@ -976,6 +1061,7 @@ test('agent loss from the reconnect catalog restores the takeover', async () => 
 test('maintenance cannot be overwritten by duplicate agent loss', async () => {
   const { App, FIXTURE, mockBridge } = await modules();
   const listeners = new Set<(value: MaintenanceSnapshot) => void>();
+  const lossListeners = new Set<() => void>();
   let lossCalls = 0;
   window.history.replaceState(null, '', '/?state=new');
   const bridge: Bridge = {
@@ -989,6 +1075,10 @@ test('maintenance cannot be overwritten by duplicate agent loss', async () => {
     onMaintenanceStatus: async (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+    onAgentConnectionLoss: async (listener) => {
+      lossListeners.add(listener);
+      return () => lossListeners.delete(listener);
     },
     takeAgentConnectionLoss: async () => {
       lossCalls++;
@@ -1012,6 +1102,10 @@ test('maintenance cannot be overwritten by duplicate agent loss', async () => {
     await Promise.resolve();
   });
   await ui.waitFor(() => assert.ok(document.querySelector('.stopveil')));
+  await ui.act(async () => {
+    for (const listener of lossListeners) listener();
+    await Promise.resolve();
+  });
   await ui.waitFor(() => assert.ok(lossCalls >= 2), { timeout: 1500 });
   assert.equal(document.querySelectorAll('.stopveil, .stopwrap').length, 1);
   assert.ok(document.querySelector('.stopveil'));

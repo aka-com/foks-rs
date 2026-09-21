@@ -1,0 +1,261 @@
+import { useEffect, useState, type ReactNode } from 'react';
+import type { Bridge, ExitAction, ExitState } from '../bridge';
+import { normalizeCommandError } from '../bridge';
+import { Button, Icon } from '../components';
+
+const IDLE: ExitState = { state: 'idle' };
+
+function unsentCopy(count: number): string | null {
+  if (count === 0) return null;
+  return count === 1
+    ? '1 message has not been sent and will be discarded if you quit.'
+    : `${count} messages have not been sent and will be discarded if you quit.`;
+}
+
+function ExitOverlay({
+  state,
+  bridge,
+}: {
+  state: Exclude<ExitState, { state: 'idle' }>;
+  bridge: Bridge;
+}): ReactNode {
+  const [sending, setSending] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const act = (action: ExitAction): void => {
+    if (sending) return;
+    setSending(true);
+    setFailure(null);
+    void bridge
+      .handleExitAction(action)
+      .catch((error) => setFailure(normalizeCommandError(error).message))
+      .finally(() => setSending(false));
+  };
+
+  if (state.state === 'stopping' || state.state === 'finalizing') {
+    const stopping = state.state === 'stopping';
+    return (
+      <div className="exit-takeover solid" role="alertdialog" aria-modal="true">
+        <div className="exit-progress" role="status">
+          <span className="spin" aria-hidden="true" />
+          <b>
+            {stopping
+              ? state.force
+                ? 'Force stopping FOKS Agent…'
+                : 'Stopping FOKS Agent…'
+              : 'Finishing up…'}
+          </b>
+          <span>
+            {stopping
+              ? 'FOKS will quit after the background agent has stopped.'
+              : 'Clearing sensitive clipboard data and closing FOKS.'}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  if (state.state === 'decision') {
+    const unsent = unsentCopy(state.unsent);
+    return (
+      <div
+        className="exit-takeover"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="exit-decision-title"
+      >
+        <div className="exit-card decision">
+          <div className="exit-card-body">
+            <span className="exit-card-icon">
+              <Icon name="gear" />
+            </span>
+            <div>
+              <h2 id="exit-decision-title">Quit FOKS?</h2>
+              {unsent ? <p className="exit-unsent">{unsent}</p> : null}
+              <p>
+                FOKS Agent can keep running for command-line tools and faster
+                startup, or it can stop when the app quits.
+              </p>
+            </div>
+          </div>
+          {failure ? (
+            <p className="action-error" role="alert">
+              {failure}
+            </p>
+          ) : null}
+          <div className="exit-actions three">
+            <Button
+              disabled={sending}
+              data-dialog-autofocus="true"
+              onClick={() => act('cancel')}
+            >
+              Keep FOKS open
+            </Button>
+            <Button disabled={sending} onClick={() => act('leave-running')}>
+              Quit and keep agent running
+            </Button>
+            <Button
+              variant="primary"
+              disabled={sending}
+              onClick={() => act('stop-agent')}
+            >
+              Quit and stop agent
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (state.state === 'failed') {
+    return (
+      <div
+        className="exit-takeover"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="exit-failed-title"
+      >
+        <div className="exit-card failure">
+          <div className="exit-card-body">
+            <span className="exit-card-icon danger">
+              <Icon name="alert" />
+            </span>
+            <div>
+              <h2 id="exit-failed-title">FOKS Agent didn’t stop</h2>
+              <p>
+                FOKS has not quit because its background agent is still running.
+                You can try again, leave it running, or force it to stop.
+              </p>
+              <div className="exit-process">
+                <span>Running agent</span>
+                <code>foks-agent (PID {state.pid})</code>
+              </div>
+              <p className="exit-error">{state.error}</p>
+            </div>
+          </div>
+          {failure ? (
+            <p className="action-error" role="alert">
+              {failure}
+            </p>
+          ) : null}
+          <div className="exit-actions failure-actions">
+            <Button danger disabled={sending} onClick={() => act('show-force')}>
+              Force stop…
+            </Button>
+            <span className="spacer" />
+            <Button disabled={sending} onClick={() => act('cancel')}>
+              Keep FOKS open
+            </Button>
+            <Button disabled={sending} onClick={() => act('leave-running')}>
+              Quit and leave agent running
+            </Button>
+            <Button
+              variant="primary"
+              disabled={sending}
+              onClick={() => act('retry')}
+            >
+              Try again
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="exit-takeover"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="exit-force-title"
+    >
+      <div className="exit-card force">
+        <div className="exit-card-body">
+          <span className="exit-card-icon danger">
+            <Icon name="alert" />
+          </span>
+          <div>
+            <h2 id="exit-force-title">Force stop FOKS Agent?</h2>
+            <p>
+              The agent did not respond to a normal shutdown. Force stopping it
+              can interrupt a local operation.
+            </p>
+            <p className="exit-calm">
+              Server data is unaffected, but an in-progress local write may need
+              to be retried after FOKS starts again.
+            </p>
+          </div>
+        </div>
+        {failure ? (
+          <p className="action-error" role="alert">
+            {failure}
+          </p>
+        ) : null}
+        <div className="exit-actions">
+          <span className="spacer" />
+          <Button
+            disabled={sending}
+            data-dialog-autofocus="true"
+            onClick={() => act('cancel-force')}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            danger
+            disabled={sending}
+            onClick={() => act('force-stop')}
+          >
+            Force stop and quit
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function ExitGuard({
+  bridge,
+  children,
+}: {
+  bridge: Bridge | null;
+  children?: ReactNode;
+}): ReactNode {
+  const [state, setState] = useState<ExitState>(IDLE);
+
+  useEffect(() => {
+    setState(IDLE);
+    if (!bridge?.native) return;
+    let live = true;
+    let unlisten: (() => void) | undefined;
+    void (async () => {
+      const release = await bridge.onExitState((next) => {
+        if (live) setState(next);
+      });
+      if (!live) {
+        release();
+        return;
+      }
+      unlisten = release;
+      const current = await bridge.exitState();
+      if (live) setState(current);
+    })().catch(() => undefined);
+    return () => {
+      live = false;
+      unlisten?.();
+    };
+  }, [bridge]);
+
+  const blocked = state.state !== 'idle';
+  return (
+    <div className="exit-guard-root">
+      <div
+        className="exit-guard-background"
+        inert={blocked || undefined}
+        aria-hidden={blocked || undefined}
+      >
+        {children}
+      </div>
+      {blocked && bridge ? <ExitOverlay state={state} bridge={bridge} /> : null}
+    </div>
+  );
+}

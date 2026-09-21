@@ -263,9 +263,14 @@ pub fn restart_app(app: tauri::AppHandle, webview: tauri::Webview) -> Result<(),
 }
 
 #[tauri::command]
-pub fn quit_app(app: tauri::AppHandle, webview: tauri::Webview) -> Result<(), AgentError> {
+pub fn quit_app(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    closing: State<'_, std::sync::Arc<crate::close_guard::CloseGuard>>,
+) -> Result<(), AgentError> {
     require_main_window(&webview)?;
-    app.exit(0);
+    crate::close_guard::request_app_exit(&app, &closing, &state.agent);
     Ok(())
 }
 

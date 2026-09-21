@@ -31,6 +31,7 @@ import {
   decodeGoProfileDiscovery,
   decodeAppLockState,
   decodeAgentStatus,
+  decodeExitState,
   decodeMaintenanceSnapshot,
   decodeReadItem,
   decodeServers,
@@ -2793,6 +2794,23 @@ test('maintenance snapshots decode typed operation and restoration outcomes', ()
   if (snapshot.state !== 'complete') return;
   assert.deepEqual(snapshot.operation, { status: 'completed' });
   assert.equal(snapshot.disposition.status, 'restoration-failed');
+});
+
+test('exit states decode the owned process and reject malformed transitions', () => {
+  assert.deepEqual(
+    decodeExitState({ state: 'decision', pid: 45904, unsent: 2 }),
+    { state: 'decision', pid: 45904, unsent: 2 },
+  );
+  assert.deepEqual(
+    decodeExitState({ state: 'stopping', pid: 45904, force: true }),
+    { state: 'stopping', pid: 45904, force: true },
+  );
+  assert.throws(() =>
+    decodeExitState({ state: 'decision', pid: 0, unsent: 0 }),
+  );
+  assert.throws(() =>
+    decodeExitState({ state: 'failed', pid: 45904, error: null }),
+  );
 });
 
 test('mock server labels change only the selected profile and reject unknown ids', async () => {

@@ -11,6 +11,7 @@ import {
   decodeConnectionLoss,
   decodeDropHover,
   decodeDropPaths,
+  decodeExitState,
   decodeMaintenanceSnapshot,
   decodeTimingBatch,
   decodeWindowState,
@@ -30,6 +31,8 @@ export const coreCommands: Pick<
   | 'unlockApp'
   | 'restartApp'
   | 'quitApp'
+  | 'exitState'
+  | 'handleExitAction'
   | 'agentStatus'
   | 'probeAgentStatus'
   | 'appInfo'
@@ -54,6 +57,7 @@ export const coreCommands: Pick<
   | 'onChatNotification'
   | 'onOpenSettings'
   | 'onMaintenanceStatus'
+  | 'onExitState'
 > = {
   cancelChat: (viewId) => invoke<void>('cancel_chat_requests', { viewId }),
   chat: (storeId, action, viewId) =>
@@ -72,6 +76,9 @@ export const coreCommands: Pick<
   unlockApp: () => checked('unlock_app', undefined, decodeAppLockState),
   restartApp: () => invoke<void>('restart_app'),
   quitApp: () => invoke<void>('quit_app'),
+  exitState: () => checked('exit_state', undefined, decodeExitState),
+  handleExitAction: (action) =>
+    checked('handle_exit_action', { action }, () => undefined),
   agentStatus: () => checked('agent_status', undefined, decodeAgentStatus),
   probeAgentStatus: () =>
     checked('agent_status', undefined, decodeAgentStatus, false),
@@ -140,5 +147,9 @@ export const coreCommands: Pick<
   onMaintenanceStatus: async (listener) =>
     listen<unknown>('foks://maintenance-status', (event) => {
       listener(decodeMaintenanceSnapshot(event.payload));
+    }),
+  onExitState: async (listener) =>
+    listen<unknown>('foks://exit-state', (event) => {
+      listener(decodeExitState(event.payload));
     }),
 };
