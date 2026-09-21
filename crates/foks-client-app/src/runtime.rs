@@ -595,6 +595,13 @@ impl CheckedProfileSession<'_> {
                 .collect::<std::collections::BTreeMap<_, _>>();
             let mut recipients =
                 std::collections::BTreeMap::<Vec<u8>, VerifiedTeamRecipient>::new();
+            // Memoized user projections, scoped to one discovery pass exactly
+            // like `recipients`: a restart re-authenticates the graph at a new
+            // head, so both maps are rebuilt from scratch. A cached projection
+            // is only reused when it still satisfies the equal-root guard for
+            // the team being processed, which makes the reuse indistinguishable
+            // from a fresh load at that team's authenticated head.
+            let mut users = std::collections::BTreeMap::<Vec<u8>, TeamRefreshParty>::new();
             let mut restarted = false;
 
             for team_id in graph.child_first {
@@ -708,6 +715,7 @@ impl CheckedProfileSession<'_> {
                 }
                 let mut parties = std::collections::BTreeMap::new();
                 let mut unavailable = false;
+                let team_root = team.verified.tree_root();
                 for member in team.verified.members() {
                     let key = team_refresh_party_key(&member.party, member.scoped_host.as_ref());
                     let party = if member.scoped_host.is_some() {
@@ -747,12 +755,29 @@ impl CheckedProfileSession<'_> {
                                 TeamRefreshParty::User(user.verified.clone())
                             }
                             foks_proto::ENTITY_USER => {
-                                TeamRefreshParty::User(self.load_team_refresh_user(
-                                    host,
-                                    credential,
-                                    &member.party,
-                                    &team.view_token,
-                                )?)
+                                match users
+                                    .get(member.party.as_bytes())
+                                    .filter(|cached| {
+                                        cached.matches_local_root(host.host_id(), &team_root)
+                                    })
+                                    .cloned()
+                                {
+                                    Some(cached) => cached,
+                                    None => {
+                                        let loaded =
+                                            TeamRefreshParty::User(self.load_team_refresh_user(
+                                                host,
+                                                credential,
+                                                &member.party,
+                                                &team.view_token,
+                                            )?);
+                                        users.insert(
+                                            member.party.as_bytes().to_vec(),
+                                            loaded.clone(),
+                                        );
+                                        loaded
+                                    }
+                                }
                             }
                             foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM => {
                                 let recipient = match recipients.get(member.party.as_bytes()) {
