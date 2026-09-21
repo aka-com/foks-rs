@@ -6,6 +6,7 @@ import {
   type ReconciliationClock,
   type ReconciliationContext,
   type ReconciliationJob,
+  type ReconciliationSnapshot,
   type ReconciliationTrigger,
 } from './scheduling/reconciliation';
 
@@ -183,7 +184,23 @@ export class DesktopReconciliation {
     this.accepted = retained;
   }
   wake(trigger: ReconciliationTrigger): void {
-    this.scheduler.requestAll(trigger, ['catalog', 'registry', 'metadata']);
+    this.scheduler.requestAll(trigger, ['registry', 'metadata']);
+    // A focus asks for the catalog as it is now, and a recovery does so
+    // after reading the whole catalog itself, so a profile's catalog job is
+    // left alone when a read covered it within the last 30 seconds: a focus
+    // event fires on every window switch, and before this every recovery
+    // read every profile once more right behind the read that had just
+    // covered it. A network event asks for every profile: what failed
+    // while the network was gone is exactly what has to be read again.
+    const settled = trigger === 'foreground' || trigger === 'recovery';
+    this.scheduler.requestAll(
+      trigger,
+      ['catalog'],
+      settled
+        ? ({ scope, snapshot }) =>
+            this.recent(snapshot) || (scope !== null && this.covered(scope))
+        : undefined,
+    );
     // A recovery reconnects to the agent. Whatever the catalog says about
     // bound teams was frozen while it was gone, so every account is
     // discovered again instead of waiting for its own sweep.
@@ -192,15 +209,46 @@ export class DesktopReconciliation {
     if (this.reads.connectivity) {
       for (const server of this.reads.snapshot().servers) {
         const key = profileConnectivityKey(this.reads.snapshot(), server.id);
-        const last = this.scheduler.snapshot(key)?.lastAttemptAt;
-        const elapsed =
-          last === undefined
-            ? Infinity
-            : this.reads.nowSeconds() * 1_000 - last;
-        if (trigger !== 'foreground' || elapsed < 0 || elapsed >= 30_000)
+        if (
+          trigger !== 'foreground' ||
+          !this.recent(this.scheduler.snapshot(key))
+        )
           this.scheduler.request(key, trigger);
       }
     }
+  }
+  /**
+   * Whether the job ran within the last 30 seconds. A clock that moved
+   * backwards answers no, so the job runs rather than waits on a time that
+   * never comes.
+   */
+  private recent(
+    snapshot: Readonly<ReconciliationSnapshot> | undefined,
+  ): boolean {
+    const last = Math.max(
+      snapshot?.lastAttemptAt ?? -Infinity,
+      snapshot?.lastSuccessAt ?? -Infinity,
+    );
+    const elapsed = this.reads.nowSeconds() * 1_000 - last;
+    return elapsed >= 0 && elapsed < 30_000;
+  }
+  /**
+   * Whether the live snapshot records a successful catalog read of `profile`
+   * that the job has not yet been told of. A whole-catalog read publishes
+   * its snapshot before the next `update` reconciles the job with it, and a
+   * recovery wakes the jobs right after such a read; once `update` has run,
+   * the job's own record answers through `recent`.
+   */
+  private covered(profile: string): boolean {
+    const current = this.reads.snapshot();
+    const facts = current.catalogFreshness?.profiles[profile];
+    return (
+      facts !== undefined &&
+      facts !== this.accepted.get(profileRefreshKey(current, profile)) &&
+      facts.lastSuccessAt !== undefined &&
+      !facts.refreshing &&
+      !facts.error
+    );
   }
   reconnect(profile: string, trigger: ReconciliationTrigger = 'manual'): void {
     this.scheduler.request(

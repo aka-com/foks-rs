@@ -94,8 +94,8 @@ export async function projectCatalog(
   profileScope?: string,
   background?: BackgroundHistoryWork,
   /**
-   * Read every team's roster even when its chain has not moved: a refresh
-   * the user asked for, or a read back of a profile a write changed.
+   * Read every team's roster even when its chain has not moved, for a
+   * refresh the user asked for.
    */
   forceRosters = false,
   activity?: RefreshOperation,

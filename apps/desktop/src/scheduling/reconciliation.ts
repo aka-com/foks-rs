@@ -275,12 +275,25 @@ export class ReconciliationScheduler {
     );
     this.schedule();
   }
+  /**
+   * Requests every job, or every job of the given kinds; a job `unless`
+   * answers true for is left on its own schedule.
+   */
   requestAll(
     trigger: ReconciliationTrigger,
     kinds?: readonly ReconciliationKind[],
+    unless?: (entry: {
+      key: string;
+      scope: string | null;
+      snapshot: Readonly<ReconciliationSnapshot>;
+    }) => boolean,
   ): void {
     for (const [key, entry] of this.entries)
-      if (!kinds || kinds.includes(entry.job.kind)) this.request(key, trigger);
+      if (
+        (!kinds || kinds.includes(entry.job.kind)) &&
+        !unless?.({ key, scope: entry.job.scope, snapshot: this.view(entry) })
+      )
+        this.request(key, trigger);
   }
   reconciled(key: string): void {
     const entry = this.entries.get(key);

@@ -868,9 +868,17 @@ function ShellHarness({
 }
 
 async function shell(
-  options: { enabled?: boolean; override?: (base: Bridge) => Bridge } = {},
+  options: {
+    enabled?: boolean;
+    override?: (base: Bridge) => Bridge;
+    initial?: (snapshot: AgentSnapshot) => AgentSnapshot;
+  } = {},
 ) {
-  const data = await fixture();
+  const fixed = await fixture();
+  const data = {
+    ...fixed,
+    initial: options.initial ? options.initial(fixed.initial) : fixed.initial,
+  };
   const clock = new Clock();
   const reads: string[] = [];
   const whole: number[] = [];
@@ -1206,4 +1214,102 @@ test('a forced refresh discards the metadata of the profiles whose catalog chang
     await settle();
   });
   assert.deepEqual(invalidations.slice(3), [[], undefined]);
+});
+
+test('a mutation refresh reuses rosters whose team chains are unchanged', async () => {
+  // Every team store reports the same pinned chain sequence before and after
+  // the write, which is what a vault write leaves it at.
+  const withSequence = <T extends { kind: string }>(
+    stores: readonly T[],
+  ): T[] =>
+    stores.map((store) =>
+      store.kind === 'team' ? { ...store, chain_seqno: 4 } : store,
+    );
+  const harness = await shell({
+    initial: (snapshot) => ({
+      ...snapshot,
+      stores: withSequence(snapshot.stores),
+    }),
+    override: (base) => ({
+      ...base,
+      listProfileCatalog: async (profile) => {
+        const response = await base.listProfileCatalog(profile);
+        return {
+          ...response,
+          stores: withSequence(response.stores),
+          knownStores: withSequence(response.knownStores),
+        };
+      },
+    }),
+  });
+  // Only an active team has a roster to read.
+  const teams = harness.data.initial.stores.filter(
+    (store) =>
+      store.kind === 'team' && store.active && store.server === harness.profile,
+  );
+  const ids = (stores: readonly { id: string }[]) =>
+    stores.map((store) => store.id).sort();
+  // A team the snapshot holds a roster for is not read again; one it holds
+  // none for has to be read, unchanged sequence or not.
+  const held = teams.filter((team) =>
+    harness.data.initial.parties.some((party) => party.store === team.id),
+  );
+  assert.ok(held.length > 0);
+  const applied = harness.runtime().catalog.refresh('Saved', harness.profile);
+  await harness.clock.advance(0);
+  await applied;
+  assert.deepEqual(harness.reads, [harness.profile]);
+  assert.deepEqual(
+    [...harness.rosters].sort(),
+    ids(teams.filter((team) => !held.includes(team))),
+  );
+  assert.ok(
+    held.every((team) =>
+      harness
+        .runtime()
+        .catalog.latestRef.current.parties.some(
+          (party) => party.store === team.id,
+        ),
+    ),
+  );
+  // A refresh the user asks for reads the rosters whether or not the chain
+  // moved.
+  const manual = harness
+    .runtime()
+    .reconciliation.scheduler.run(
+      profileRefreshKey(
+        harness.runtime().catalog.latestRef.current,
+        harness.profile,
+      ),
+      'manual',
+    );
+  assert.ok(manual);
+  await harness.clock.advance(1_000);
+  await manual;
+  assert.deepEqual([...new Set(harness.rosters)].sort(), ids(teams));
+});
+
+test('a recovery wakes no catalog job for a profile the whole read it follows just covered', async () => {
+  const harness = await shell();
+  // What a recovery does: read the whole catalog, then wake the jobs.
+  const whole = harness.runtime().catalog.refreshSnapshot(true);
+  await harness.clock.advance(0);
+  await whole;
+  assert.equal(harness.whole.length, 1);
+  harness.runtime().reconciliation.wake('recovery');
+  await harness.clock.advance(1_000);
+  assert.deepEqual(harness.reads, []);
+  // The jobs keep their own schedule.
+  await harness.clock.advance(30_000);
+  assert.ok(harness.reads.length > 0);
+  // A focus once that read is 30 seconds behind reads the profiles again.
+  const before = harness.reads.length;
+  await harness.clock.advance(1_000);
+  harness.runtime().reconciliation.wake('foreground');
+  await harness.clock.advance(1_000);
+  assert.equal(harness.reads.length, before);
+  await harness.clock.advance(29_000);
+  harness.runtime().reconciliation.wake('foreground');
+  await harness.clock.advance(1_000);
+  assert.ok(harness.reads.length > before);
 });

@@ -186,8 +186,11 @@ test('completed startup catalog yields to a later shell refresh', async () => {
     await ui.waitFor(() =>
       assert.match(document.body.textContent ?? '', /boot-partial-marker/),
     );
+    // A network event asks every catalog job to read again. A focus within
+    // 30 seconds of the read that just completed would leave the jobs on
+    // their schedule instead.
     await ui.act(async () => {
-      window.dispatchEvent(new dom.window.Event('focus'));
+      window.dispatchEvent(new dom.window.Event('online'));
     });
     await ui.waitFor(() =>
       assert.match(document.body.textContent ?? '', /new-catalog-marker/),

@@ -296,7 +296,7 @@ export async function loadProfileSnapshot(
   nowSeconds: number = Math.floor(Date.now() / 1000),
   isCurrent: () => boolean = () => true,
   background?: BackgroundHistoryWork,
-  /** Read this profile's rosters, for a read back of a write it made. */
+  /** Read this profile's rosters whether or not a team chain moved. */
   forceRosters = false,
 ): Promise<AgentSnapshot> {
   if (!isCurrent()) throw new CatalogReadRetiredError();

@@ -625,3 +625,89 @@ test('a snapshot keeps how long the last run took, on success and on failure', a
   assert.equal(scheduler.snapshot('p')?.lastMilliseconds, 80);
   scheduler.dispose();
 });
+
+test('a focus or recovery wake leaves a catalog job alone that a read covered within 30 seconds', async () => {
+  const clock = new Clock();
+  let snapshot: AgentSnapshot = {
+    ...FIXTURE,
+    servers: FIXTURE.servers.map((server) => ({
+      ...server,
+      trust: { status: 'verified' },
+      compatibility: { status: 'not-required' },
+      passiveStatus: { status: 'available', source: 'signed-server-status' },
+      restrictions: [],
+    })),
+    profileInventory: FIXTURE.servers.map((server) => ({
+      profile: server.id,
+      accounts: 'complete',
+      teams: 'complete',
+    })),
+  };
+  const reads: string[] = [];
+  const service = new DesktopReconciliation(
+    {
+      snapshot: () => snapshot,
+      nowSeconds: () => clock.now() / 1_000,
+      profile: async (profile) => {
+        reads.push(profile);
+      },
+      registry: async () => {},
+      metadata: async () => {},
+      discovery: async () => {},
+    },
+    clock,
+  );
+  service.update(snapshot);
+  service.scheduler.setEnabled(true);
+  await clock.advance(0);
+  const profiles = snapshot.catalogProfiles.length;
+  assert.ok(profiles > 0);
+  assert.equal(reads.length, 0);
+  // A profile no read has covered is read on a recovery.
+  service.wake('recovery');
+  await clock.advance(1_000);
+  assert.equal(reads.length, profiles);
+  // A focus within 30 seconds of that read leaves the jobs on their schedule.
+  service.wake('foreground');
+  await clock.advance(1_000);
+  await clock.advance(20_000);
+  service.wake('foreground');
+  await clock.advance(1_000);
+  assert.equal(reads.length, profiles);
+  // The schedule itself still runs the jobs at their interval.
+  await clock.advance(8_000);
+  assert.equal(reads.length, 2 * profiles);
+  // A network event asks for every profile whatever was read last.
+  service.wake('network');
+  await clock.advance(1_000);
+  assert.equal(reads.length, 3 * profiles);
+  // A whole-catalog read that covered a profile counts as a read of it: a
+  // recovery reads the whole catalog before it wakes the jobs, so the jobs
+  // it wakes are those the read did not cover.
+  await clock.advance(25_000);
+  snapshot = {
+    ...snapshot,
+    catalogFreshness: {
+      profiles: Object.fromEntries(
+        snapshot.catalogProfiles.map((profile) => [
+          profile,
+          { lastSuccessAt: clock.now() / 1_000, refreshing: false },
+        ]),
+      ),
+      stores: {},
+    },
+  };
+  service.update(snapshot);
+  await clock.advance(5_000);
+  service.wake('recovery');
+  await clock.advance(1_000);
+  assert.equal(reads.length, 3 * profiles);
+  service.wake('network');
+  await clock.advance(1_000);
+  assert.equal(reads.length, 4 * profiles);
+  await clock.advance(27_000);
+  service.wake('recovery');
+  await clock.advance(0);
+  assert.equal(reads.length, 4 * profiles);
+  service.dispose();
+});
