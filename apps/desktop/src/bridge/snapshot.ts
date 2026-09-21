@@ -178,6 +178,7 @@ async function loadSnapshotOnce(
   ready: AgentStatus | undefined,
   activity: RefreshOperation,
 ): Promise<AgentSnapshot> {
+  const startedAt = performance.now();
   if (!isCurrent()) throw new CatalogReadRetiredError();
   activity.update('Checking local agent');
   const agent = ready ?? (await bridge.agentStatus());
@@ -281,6 +282,7 @@ async function loadSnapshotOnce(
       undefined,
       forceRosters,
       activity,
+      startedAt,
     );
     if (!isCurrent()) throw new CatalogReadRetiredError();
     return snapshot;
@@ -299,6 +301,7 @@ export async function loadProfileSnapshot(
   /** Read this profile's rosters whether or not a team chain moved. */
   forceRosters = false,
 ): Promise<AgentSnapshot> {
+  const startedAt = performance.now();
   if (!isCurrent()) throw new CatalogReadRetiredError();
   const response = await scheduleProfileWork(
     bridge,
@@ -339,6 +342,8 @@ export async function loadProfileSnapshot(
     profile,
     background,
     forceRosters,
+    undefined,
+    startedAt,
   );
   if (!isCurrent()) throw new CatalogReadRetiredError();
   return mergeProfileSnapshot(base, projected, profile);

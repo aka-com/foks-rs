@@ -163,7 +163,7 @@ export function RecoveryStep({
           The keys controlling this account are only saved on this device. We
           recommend adding at least one recovery method now.
         </p>
-        <div className="two">
+        <div className="setup-grid">
           <div className="pcard">
             <h3>Recovery phrase</h3>
             <p>

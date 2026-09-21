@@ -1,6 +1,6 @@
 import type { Store, StoreRef } from '../model/types';
 import { chatTabLocation } from './chat-tab-memory';
-import { accountAtLocation, railTabOf } from './routes';
+import { accountAtLocation, railTabOf, sameLocation } from './routes';
 import { transition } from './transition';
 import { INITIAL_STATE } from './types';
 import type {
@@ -18,6 +18,7 @@ import type {
   Scene,
   Selection,
   SortKey,
+  SortDirection,
 } from './types';
 
 /* ----------------------------------------------------------------- store -- */
@@ -31,8 +32,31 @@ export class LocationStore {
   private actingAccount?: StoreRef;
   private hasInventory = false;
   private readonly tabs = new Map<RailTab, LocationState>();
+  private readonly history: LocationState[] = [];
+
+  backTarget(): Location | null {
+    return this.current.location.kind === 'first-run'
+      ? null
+      : (this.history.at(-1)?.location ?? null);
+  }
+
+  back(options: GuardedOptions = {}): void {
+    const target = this.history.at(-1);
+    if (!target || this.current.location.kind === 'first-run') return;
+    this.guarded(
+      { kind: 'navigate', location: target.location },
+      () => {
+        if (this.history.at(-1) !== target) return;
+        this.history.pop();
+        this.accountLocation(target.location);
+        this.publish({ ...target, sheet: undefined }, false);
+      },
+      options,
+    );
+  }
 
   clearTabMemory(): void {
+    this.history.length = 0;
     this.clearSheet();
     this.tabs.clear();
   }
@@ -158,11 +182,21 @@ export class LocationStore {
   /** Apply an action. Publishes only when the state actually changed. */
   dispatch(action: LocationAction): LocationState {
     const next = transition(this.current, action);
-    return this.publish(next);
+    return this.publish(next, !(action.type === 'navigate' && action.replace));
   }
 
-  private publish(next: LocationState): LocationState {
+  private publish(next: LocationState, recordHistory = true): LocationState {
     if (next === this.current) return next;
+    if (
+      recordHistory &&
+      (!sameLocation(next.location, this.current.location) ||
+        next.folder !== this.current.folder) &&
+      this.current.location.kind !== 'first-run' &&
+      next.location.kind !== 'first-run'
+    ) {
+      this.history.push({ ...this.current, sheet: undefined });
+      if (this.history.length > 100) this.history.shift();
+    }
     const tab = railTabOf(this.current.location);
     if (tab) this.tabs.set(tab, this.current);
     this.current = next;
@@ -337,11 +371,18 @@ export class LocationStore {
     );
   }
 
-  select(selection: Selection, options: GuardedOptions = {}): void {
+  select(
+    selection: Selection,
+    options: GuardedOptions & { closeDetails?: boolean } = {},
+  ): void {
     this.guarded(
       { kind: 'select', selection },
       () => {
-        this.dispatch({ type: 'select', selection });
+        this.dispatch({
+          type: 'select',
+          selection,
+          closeDetails: options.closeDetails,
+        });
       },
       options,
     );
@@ -359,8 +400,8 @@ export class LocationStore {
     this.dispatch({ type: 'kind', kind });
   }
 
-  setSort(sort: SortKey): void {
-    this.dispatch({ type: 'sort', sort });
+  setSort(sort: SortKey, direction: SortDirection = 'asc'): void {
+    this.dispatch({ type: 'sort', sort, direction });
   }
 
   setFolder(folder: string): void {
@@ -382,6 +423,7 @@ export function storeAtScene(scene: Scene): LocationStore {
     view: scene.view,
     kind: scene.kind,
     sort: scene.sort,
+    sortDirection: scene.sortDirection,
     folder: scene.folder,
     closedFolders: scene.closedFolders,
   });

@@ -178,7 +178,7 @@ export class DesktopReconciliation {
         !facts.refreshing &&
         !facts.error
       )
-        this.scheduler.reconciled(key);
+        this.scheduler.reconciled(key, facts.lastMilliseconds);
       retained.set(key, facts);
     }
     this.accepted = retained;

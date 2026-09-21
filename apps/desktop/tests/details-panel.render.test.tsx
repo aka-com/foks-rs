@@ -94,18 +94,23 @@ for (const kind of ['Secret', 'File'] as const) {
       ),
     };
     rendered.rerender(p.draw());
+    // Copy is drawn twice — once in the actions row, once beside the value
+    // it copies — and both have to refuse the same way.
     for (const name of kind === 'File'
       ? ['Download', 'Edit', 'Delete']
-      : ['Show', 'Copy', 'Edit', 'Delete']) {
-      const button = rendered.getByRole('button', {
+      : ['Show', 'Reveal', 'Copy', 'Edit', 'Delete']) {
+      const buttons = rendered.getAllByRole('button', {
         name,
-      }) as HTMLButtonElement;
-      assert.equal(button.disabled, true, name);
-      assert.match(button.title, /unavailable|could not be loaded/i);
-      const description = button.getAttribute('aria-describedby');
-      assert.ok(
-        description && document.getElementById(description)?.textContent,
-      );
+      }) as HTMLButtonElement[];
+      assert.ok(buttons.length, name);
+      for (const button of buttons) {
+        assert.equal(button.disabled, true, name);
+        assert.match(button.title, /unavailable|could not be loaded/i);
+        const description = button.getAttribute('aria-describedby');
+        assert.ok(
+          description && document.getElementById(description)?.textContent,
+        );
+      }
     }
     assert.equal(
       (rendered.getByRole('button', { name: 'Close' }) as HTMLButtonElement)
@@ -813,4 +818,30 @@ test('reselecting the item being edited asks nothing; another item asks', async 
   });
   assert.equal(asked.length, 1);
   assert.deepEqual(store.getSnapshot().selection, edited);
+});
+
+test('outside clicks close details while clicks inside and dialog interactions do not', async () => {
+  const { props, draw } = await setup();
+  let closed = 0;
+  props.onClose = () => {
+    closed++;
+  };
+  ui.render(draw());
+  const panel = document.querySelector('.details')!;
+  const pointer = (target: Element) =>
+    ui.fireEvent(
+      target,
+      new window.MouseEvent('pointerdown', { bubbles: true, button: 0 }),
+    );
+  pointer(panel);
+  assert.equal(closed, 0);
+  const dialog = document.createElement('div');
+  dialog.setAttribute('role', 'dialog');
+  document.body.append(dialog);
+  pointer(dialog);
+  pointer(document.body);
+  assert.equal(closed, 0);
+  dialog.remove();
+  pointer(document.body);
+  assert.equal(closed, 1);
 });

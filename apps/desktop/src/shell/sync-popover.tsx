@@ -330,13 +330,13 @@ export function summarizeSync(
             ? 'ok'
             : 'unknown';
       const detail = device.refreshing
-        ? `Loading device lists · ${device.ready} of ${device.total} accounts`
+        ? `Loading device lists (${device.ready} of ${device.total})`
         : device.failed
           ? `${device.error ?? 'Some device lists are unavailable'}${device.lastSuccessAt === undefined ? '' : ` · Last updated ${clockTime(device.lastSuccessAt)}`}`
           : device.unavailable
             ? `Device access unavailable for ${device.unavailable} of ${device.total} accounts`
             : device.total
-              ? `Updated ${clockTime(device.lastSuccessAt)}`
+              ? clockTime(device.lastSuccessAt)
               : 'No accounts';
       jobs.push({
         kind: 'devices',
@@ -483,7 +483,11 @@ export function summarizeSync(
   const activities: { id: string; label: string; startedAt?: number }[] =
     service.activities.getSnapshot().map((activity) => ({
       id: `catalog:${activity.id}`,
-      label: `${activity.isCurrent() ? '' : 'Finishing earlier refresh · '}${activity.phases.join(' · ')}`,
+      label: `${activity.isCurrent() ? '' : 'Finishing earlier refresh · '}${
+        activity.phases.every((phase) => phase.startsWith('Loading '))
+          ? `Loading ${activity.phases.map((phase) => phase.slice('Loading '.length)).join(', ')}`
+          : activity.phases.join(' · ')
+      }`,
       startedAt: activity.startedAt,
     }));
   // Local failures already expose all of their jobs in the This Mac group.
@@ -593,73 +597,51 @@ export const SYNC_STATUS_ID = 'sync-status-popover';
  * the row's own text is held by a test without standing the popover up.
  */
 export function JobTimes({ job }: { job: SyncJobSummary }): ReactNode {
-  if (job.kind === 'devices')
-    return (
-      <span
-        className={`sync-when sync-device-status${job.state === 'failed' ? ' failed' : ''}`}
-        role={job.state === 'refreshing' ? 'status' : undefined}
-      >
-        {job.detail}
-      </span>
-    );
+  const status = (text: ReactNode) => (
+    <td
+      colSpan={3}
+      className={`sync-when${job.kind === 'devices' ? ' sync-device-status' : ''}${job.state === 'failed' ? ' failed' : ''}`}
+      role={job.state === 'refreshing' ? 'status' : undefined}
+    >
+      {text}
+    </td>
+  );
+  if (job.kind === 'devices') return status(job.detail);
   if (job.kind === 'chat')
-    return (
-      <span
-        className={`sync-when${job.state === 'failed' ? ' failed' : ''}`}
-        role={job.state === 'refreshing' ? 'status' : undefined}
-      >
-        {job.state === 'refreshing'
-          ? 'Loading unread counts…'
-          : job.state === 'failed'
-            ? 'Unread counts incomplete'
-            : job.state === 'ok'
-              ? 'Unread counts loaded'
-              : 'No available chats'}
-      </span>
+    return status(
+      job.state === 'refreshing'
+        ? 'Loading unread counts…'
+        : job.state === 'failed'
+          ? 'Unread counts incomplete'
+          : job.state === 'ok'
+            ? 'Unread counts loaded'
+            : 'No available chats',
     );
-  // Scheduled time, duration, then last-run time. These compact values read
-  // left to right in the same order for successful and not-yet-successful jobs.
-  const took = runDuration(job.lastMilliseconds);
   if (job.state === 'failed')
-    return (
-      <span className="sync-when failed">
-        {job.paused
-          ? 'Paused'
-          : job.nextAttemptAt !== undefined
-            ? `Retry at ${clockTime(job.nextAttemptAt)}`
-            : ''}
-      </span>
+    return status(
+      job.paused
+        ? 'Paused'
+        : job.nextAttemptAt !== undefined
+          ? `Retry at ${clockTime(job.nextAttemptAt)}`
+          : '',
     );
-  if (job.state === 'refreshing')
-    return (
-      <span className="sync-when sync-timing">
-        {took ? <span>{took}</span> : null}
-        {job.lastSuccessAt === undefined ? null : (
-          <span>{clockTime(job.lastSuccessAt)}</span>
-        )}
-      </span>
-    );
-  if (job.state === 'unknown')
-    return (
-      <span className="sync-when sync-timing">
-        {job.lastAttemptAt !== undefined ? (
-          <>
-            {took ? <span>{took}</span> : null}
-            <span>{clockTime(job.lastAttemptAt)}</span>
-          </>
-        ) : (
-          'Not yet run'
-        )}
-      </span>
-    );
+  if (job.state === 'unknown' && job.lastAttemptAt === undefined)
+    return status('Not yet run');
+  const last = job.state === 'unknown' ? job.lastAttemptAt : job.lastSuccessAt;
   return (
-    <span className="sync-when sync-timing">
-      {job.nextAttemptAt !== undefined ? (
-        <span className="sync-next">Next {clockTime(job.nextAttemptAt)}</span>
-      ) : null}
-      {took ? <span>{took}</span> : null}
-      <span>{clockTime(job.lastSuccessAt)}</span>
-    </span>
+    <>
+      <td className="sync-when sync-next">
+        {job.state === 'ok' && job.nextAttemptAt !== undefined
+          ? `Next ${clockTime(job.nextAttemptAt)}`
+          : null}
+      </td>
+      <td className="sync-when sync-duration">
+        {runDuration(job.lastMilliseconds)}
+      </td>
+      <td className="sync-when sync-last">
+        {last === undefined ? null : clockTime(last)}
+      </td>
+    </>
   );
 }
 
@@ -682,15 +664,27 @@ function ServerBody({
         <p className="sync-cause">{server.message}</p>
       ) : null}
       {server.jobs.length ? (
-        <ul className="sync-jobs" aria-label={`${server.name} jobs`}>
-          {server.jobs.map((job) => (
-            <li key={job.kind} title={job.detail}>
-              <span className={`sync-dot ${job.state}`} aria-hidden="true" />
-              <b>{job.label}</b>
-              <JobTimes job={job} />
-            </li>
-          ))}
-        </ul>
+        <table
+          className="sync-jobs sync-job-table"
+          aria-label={`${server.name} jobs`}
+        >
+          <tbody>
+            {server.jobs.map((job) => (
+              <tr key={job.kind} title={job.detail}>
+                <th scope="row">
+                  <span className="sync-job-name">
+                    <span
+                      className={`sync-dot ${job.state}`}
+                      aria-hidden="true"
+                    />
+                    <b>{job.label}</b>
+                  </span>
+                </th>
+                <JobTimes job={job} />
+              </tr>
+            ))}
+          </tbody>
+        </table>
       ) : null}
       {server.state === 'failed' && server.id ? (
         <div className="sync-actions">
@@ -772,7 +766,7 @@ function ServerRow({
         <span className={`sync-dot ${server.state}`} aria-hidden="true" />
         <b>{server.name}</b>
         <span className={`sync-status ${server.state}`}>{status}</span>
-        <Icon name="chev" className="sync-chev" />
+        <Icon name="chevronDown" className="sync-chev" />
       </button>
       <div id={bodyId} className="sync-body" hidden={!open}>
         <ServerBody server={server} {...body} />
@@ -884,7 +878,7 @@ export function SyncPopover({
       anchorRef={anchorRef}
       className={`menu-portal sync-popover${single ? '' : ' multi'}`}
       align="end"
-      minWidth={340}
+      minWidth={400}
       onClose={onClose}
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
@@ -958,13 +952,15 @@ export function SyncPopover({
           {onRefresh ? (
             <Button
               size="sm"
-              variant="quiet"
-              icon="again"
+              variant="plain"
+              icon="refresh"
               aria-label="Refresh now"
               title="Refresh now"
               disabled={refreshDisabled}
               onClick={onRefresh}
-            />
+            >
+              Refresh now
+            </Button>
           ) : null}
         </div>
       </div>

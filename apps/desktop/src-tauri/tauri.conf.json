@@ -16,7 +16,7 @@
         "title": "FOKS Desktop",
         "width": 960,
         "height": 640,
-        "minWidth": 960,
+        "minWidth": 860,
         "minHeight": 640,
         "resizable": true,
         "visible": true,

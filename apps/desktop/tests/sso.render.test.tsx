@@ -252,3 +252,38 @@ test('account linkage status chooses explicit first-link action and preserves lo
     'link-existing',
   );
 });
+
+test('SSO login hides the PIN behind Hardware key and clears it when disabled', async () => {
+  const { SsoPanel } = (await vite.ssrLoadModule(
+    '/src/components/sso-panel.tsx',
+  )) as typeof import('../src/components/sso-panel');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  ui.render(
+    await overlay(
+      createElement(SsoPanel, {
+        bridge: mockBridge(),
+        profile: 'host',
+        account: 'work',
+        login: true,
+        presentation,
+        onComplete: () => {},
+      }),
+    ),
+  );
+  const pinLabel = 'Security key PIN (enrolled keys only)';
+  assert.equal(ui.screen.queryByLabelText(pinLabel), null);
+  const toggle = ui.screen.getByRole('checkbox', { name: 'Hardware key' });
+  ui.fireEvent.click(toggle);
+  ui.fireEvent.change(ui.screen.getByLabelText(pinLabel), {
+    target: { value: '123456' },
+  });
+  ui.fireEvent.click(toggle);
+  assert.equal(ui.screen.queryByLabelText(pinLabel), null);
+  ui.fireEvent.click(toggle);
+  assert.equal(
+    (ui.screen.getByLabelText(pinLabel) as HTMLInputElement).value,
+    '',
+  );
+});

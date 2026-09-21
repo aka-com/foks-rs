@@ -641,7 +641,7 @@ export function AccountSection({
           profile={selected.server}
           account={selected.account}
           presentation={{
-            title: 'Open web admin panel',
+            title: 'Web admin panel',
             onClose: () => setSheet(null),
           }}
         />
@@ -835,7 +835,7 @@ function AccountPanel({
               </>
             ) : server?.trust.status === 'verified' ? (
               <span className="verified-mark" role="img" aria-label="Verified">
-                <Icon name="check-circle" />
+                <Icon name="circleCheck" />
               </span>
             ) : null}
           </span>
@@ -916,7 +916,7 @@ function AccountActions({
         {...access.props('web-admin-configure', target)}
         onClick={() => onSheet('admin')}
       >
-        Open web admin panel
+        Web admin panel
       </Button>
       <Button
         variant="plain"
@@ -986,9 +986,11 @@ export function UnavailableAccount({
         </>
       }
     >
+      {/* The notice carries its actions at the right, so the sentence no
+          longer points below itself for them. */}
       <p>
-        This account is no longer available on this device. Select another
-        account below or refresh.
+        This account is no longer available on this device. Refresh, or select
+        another account.
       </p>
       {stores.length ? null : (
         <p>

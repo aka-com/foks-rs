@@ -8,7 +8,7 @@
  * does not draw them.
  */
 
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { Button } from '../components';
 import { NotificationSettings } from '../chat/notification-provider';
 import {
@@ -37,6 +37,7 @@ export function ChannelInfoPanel({
   scope,
   onNavigate,
   onClose,
+  toggleRef,
 }: {
   snapshot: AgentSnapshot;
   store: TeamStore;
@@ -46,23 +47,57 @@ export function ChannelInfoPanel({
   loading?: boolean;
   scope?: ChatScope;
   onNavigate: (location: Location) => void;
-  onClose: () => void;
+  onClose: (restoreFocus?: boolean) => void;
+  toggleRef?: RefObject<HTMLButtonElement | null>;
 }): ReactNode {
+  const panel = useRef<HTMLElement>(null);
+  useEffect(() => {
+    // The panel begins translated beyond the window during its entrance.
+    // Focusing it must not scroll the shell to that temporary position.
+    panel.current?.focus({ preventScroll: true });
+  }, []);
+  useEffect(() => {
+    const dismiss = (event: PointerEvent): void => {
+      const target = event.target;
+      if (!(target instanceof Element) || event.button !== 0) return;
+      if (
+        panel.current?.contains(target) ||
+        toggleRef?.current?.contains(target) ||
+        target.closest('[role="dialog"], [role="menu"], [role="listbox"]')
+      )
+        return;
+      onClose(false);
+    };
+    document.addEventListener('pointerdown', dismiss);
+    return () => document.removeEventListener('pointerdown', dismiss);
+  }, [onClose, toggleRef]);
   const rosterFailure = groupDetailFailure(snapshot, store.id, 'roster');
   const parties = [...partiesOf(snapshot, store.id)].sort(
     (left, right) =>
       roleRank(right.destination_role) - roleRank(left.destination_role),
   );
   return (
-    <aside className="chat-info" aria-label="Channel info">
+    <aside
+      ref={panel}
+      className="chat-info"
+      aria-label="Channel info"
+      tabIndex={-1}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' && !event.defaultPrevented) {
+          event.preventDefault();
+          event.stopPropagation();
+          onClose();
+        }
+      }}
+    >
       <div className="chat-info-head">
         <b>Channel info</b>
         <Button
           variant="quiet"
-          icon="x"
+          icon="close"
           aria-label="Close channel info"
           title="Close"
-          onClick={onClose}
+          onClick={() => onClose()}
         />
       </div>
       <section>
@@ -73,14 +108,14 @@ export function ChannelInfoPanel({
           {channel
             ? channel.description || 'No description.'
             : loading
-              ? 'Loading the channel…'
+              ? 'Loading channel…'
               : 'No channel is open.'}
         </p>
       </section>
       {channel && (
         <section>
           <h3>Visibility</h3>
-          <p>
+          <p className="chat-visibility-title">
             <b>
               {channel.admin ? 'Admins and owners' : 'Everyone on the team'}
             </b>
@@ -111,7 +146,7 @@ export function ChannelInfoPanel({
           </div>
         )}
         <Button
-          icon="people"
+          icon="users"
           title="Manage membership and access to team files and chat"
           onClick={() =>
             onNavigate({
@@ -126,7 +161,12 @@ export function ChannelInfoPanel({
       </section>
       {channel && (
         <section>
-          <h3>Alerts on this device</h3>
+          <h3>Channel alerts</h3>
+          <NotificationSettings
+            storeId={store.id}
+            scope={scope}
+            channel={channel.id}
+          />
           <Button
             onClick={() =>
               onNavigate({ kind: 'settings', section: 'preferences' })
@@ -134,11 +174,6 @@ export function ChannelInfoPanel({
           >
             Device notification settings
           </Button>
-          <NotificationSettings
-            storeId={store.id}
-            scope={scope}
-            channel={channel.id}
-          />
         </section>
       )}
     </aside>

@@ -346,7 +346,7 @@ test('mounted shell ignores duplicate maintenance completion side effects', asyn
   });
   assert.match(
     document.querySelector('.stopveil')?.textContent ?? '',
-    /export · running/i,
+    /export · in progress/i,
   );
 
   snapshot = {

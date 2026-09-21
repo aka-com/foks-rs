@@ -35,7 +35,11 @@ export function transition(
       return {
         ...state,
         selection: action.selection,
-        details: action.selection ? true : state.details,
+        details: action.selection
+          ? true
+          : action.closeDetails
+            ? false
+            : state.details,
       };
     case 'search':
       return state.query === action.query
@@ -54,9 +58,14 @@ export function transition(
         ? state
         : { ...state, kind: action.kind };
     case 'sort':
-      return state.sort === action.sort
+      return state.sort === action.sort &&
+        state.sortDirection === (action.direction ?? 'asc')
         ? state
-        : { ...state, sort: action.sort };
+        : {
+            ...state,
+            sort: action.sort,
+            sortDirection: action.direction ?? 'asc',
+          };
     case 'folder':
       return state.folder === action.folder && state.selection === null
         ? state

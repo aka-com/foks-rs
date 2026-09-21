@@ -496,7 +496,7 @@ test('a Teams row menu says why an action does not apply', async () => {
   assert.equal(inert(user), false);
   assert.equal(
     user.querySelector('.menu-choice small')?.textContent,
-    'Invite by their username',
+    'Invite by username',
   );
   const federated = choiceItem(
     'Engineering',
@@ -505,7 +505,7 @@ test('a Teams row menu says why an action does not apply', async () => {
   assert.equal(inert(federated), false);
   assert.equal(
     federated.querySelector('.menu-choice small')?.textContent,
-    'Add a remote team via federation',
+    'Add team via federation',
   );
   assert.equal(ui.screen.queryByRole('menuitem', { name: 'Leave…' }), null);
 

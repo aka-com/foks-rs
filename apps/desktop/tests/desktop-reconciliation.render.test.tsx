@@ -797,6 +797,15 @@ test('foreground reconciliation performs one catalog read per unchanged profile'
   await clock.advance(60_000);
   const before = { reads: data.reads(), probes };
   assert.ok(before.probes > 0);
+  const control = document.createElement('button');
+  document.body.append(control);
+  await ui.act(async () => {
+    control.dispatchEvent(new window.FocusEvent('focus', { bubbles: true }));
+  });
+  await clock.advance(0);
+  assert.equal(probes, before.probes);
+  assert.equal(data.reads(), before.reads);
+  control.remove();
   await ui.act(async () => {
     window.dispatchEvent(new Event('focus'));
   });

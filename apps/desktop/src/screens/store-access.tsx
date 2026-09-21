@@ -9,17 +9,14 @@ import {
   storeOf,
   serverOf,
   storeDescriptionState,
-  storeHeadingDescription,
 } from '../model';
 import type {
-  AccountStore,
   Item,
   Store,
   StoreDescriptionState,
   AgentSnapshot,
   StoreOperation,
 } from '../model';
-import { PageHeader } from '../shell/page-header';
 
 export function itemActionProblem(
   snapshot: AgentSnapshot,
@@ -138,7 +135,7 @@ export function accessCopy(
     case 'vault-unavailable':
       return {
         title: 'Vault unavailable',
-        detail: `The contents of ${store.name} could not be loaded. ${subject}.`,
+        detail: `${subject} because the latest contents of ${store.name} could not be loaded.`,
         action: 'review-server',
       };
     case 'check-in-expired':
@@ -156,7 +153,7 @@ export function accessCopy(
     case 'schema-incompatible':
       return {
         title: 'Vault schema incompatible',
-        detail: `${subject}. This data is incompatible with your current version of FOKS. Please update FOKS or contact your administrator.`,
+        detail: `${subject}. This data is incompatible with the installed version of FOKS. Update FOKS or contact your administrator.`,
         action: 'review-server',
       };
     case 'import-verification-required':
@@ -168,7 +165,9 @@ export function accessCopy(
     case 'agent-unavailable':
       return {
         title: 'Local service unavailable',
-        detail: subject,
+        // Every other state names the condition as well as the subject; this
+        // one said only the subject.
+        detail: `${subject} while the local service is stopped.`,
         action: 'review-server',
       };
     case 'setup-incomplete': {
@@ -204,15 +203,11 @@ export interface StoreAccessTakeoverProps {
   onOpenServer: (profile: string) => void;
   onFinishSetup: () => void;
   headerAction?: ReactNode;
-  noHeader?: boolean;
   /**
    * `band` draws the message as a full-width alert with its one action at the
    * right end, on the alert's center line — the group page's treatment.
    */
   variant?: 'notice' | 'band';
-  /** Omitted where the header is suppressed; the header's own subtitle is the
-   * only place this store's server name is conditioned on it. */
-  activeAccount?: Pick<AccountStore, 'server'>;
 }
 
 export function StoreAccessTakeover({
@@ -222,9 +217,7 @@ export function StoreAccessTakeover({
   onOpenServer,
   onFinishSetup,
   headerAction,
-  noHeader = false,
   variant = 'notice',
-  activeAccount,
 }: StoreAccessTakeoverProps): ReactNode {
   const state = storeDescriptionState(snapshot, store, { operation });
   if (state === 'normal') return null;
@@ -252,18 +245,6 @@ export function StoreAccessTakeover({
 
   return (
     <>
-      {noHeader ? null : (
-        <PageHeader
-          title={store.name}
-          subtitle={storeHeadingDescription(snapshot, store, activeAccount)}
-          action={
-            <>
-              {state === 'setup-incomplete' ? null : action}
-              {headerAction}
-            </>
-          }
-        />
-      )}
       <div className="body">
         {variant === 'band' ? (
           // The takeover replaces the page's content, so what it says is a
@@ -286,6 +267,9 @@ export function StoreAccessTakeover({
             </Band>
           </>
         ) : (
+          // The window header's crumb names the store; the notice says what
+          // stands between the reader and its items, with every action at its
+          // right.
           <Notice
             severity={
               state === 'loading'
@@ -295,7 +279,12 @@ export function StoreAccessTakeover({
                   : 'crit'
             }
             title={copy.title}
-            actions={action}
+            actions={
+              <>
+                {action}
+                {headerAction}
+              </>
+            }
           >
             <p>{copy.detail}</p>
           </Notice>

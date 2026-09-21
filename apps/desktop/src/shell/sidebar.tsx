@@ -1,22 +1,22 @@
 /**
  * The navigation rail.
  *
- * Six fixed tabs — Files, Chat, Teams, Devices, Account, Settings — under an
- * account header that names the active account and opens the account menu, and
- * over the agent light at the foot. The rail's top is the window's traffic-light
- * strip: there is no title bar above it. The rail does not enumerate stores;
+ * Five fixed tabs — Files, Chat, Teams, Devices, Settings — under the window's
+ * traffic-light strip and the product mark, over the setup card and the
+ * account switcher that names the active account and opens the account menu.
+ * There is no title bar above the strip. The rail does not enumerate stores;
  * Files and Teams list them on their own pages. Control-Tab cycles through the
- * six tabs. Every tab's indicator sits in one trailing slot: Chat and Teams
- * carry a
- * muted count, Devices and Settings a dot, since neither has a number to
- * substantiate, while Chat loading appears in the header Refresh control.
- * The rail is 200px open and 46px collapsed. The width is selected by the user
- * from the rail itself: it never expands on hover or focus.
+ * five tabs. Every tab's indicator sits in one trailing slot: Chat and Teams
+ * carry a count pill, Devices and Settings an alert dot beside whatever number
+ * is known, while Chat loading appears in the header Refresh control.
+ * The rail defaults to 208px open and 56px collapsed. Its expanded width is
+ * resizable and persisted; it never expands on hover or focus.
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Menu, Popover, anyDialogOpen } from '/kit/overlay-primitives';
 import { Icon } from '../components';
+import { useSidebarResize } from './use-sidebar-resize';
 import {
   chatAvailable,
   localAliasOf,
@@ -45,7 +45,7 @@ interface RailTabSpec {
 const RAIL_TABS: readonly RailTabSpec[] = [
   { id: 'files', label: 'Files', icon: 'folder', location: { kind: 'files' } },
   { id: 'chat', label: 'Chat', icon: 'chat', location: { kind: 'chat' } },
-  { id: 'teams', label: 'Teams', icon: 'people', location: { kind: 'teams' } },
+  { id: 'teams', label: 'Teams', icon: 'users', location: { kind: 'teams' } },
   {
     id: 'devices',
     label: 'Devices',
@@ -55,7 +55,7 @@ const RAIL_TABS: readonly RailTabSpec[] = [
   {
     id: 'settings',
     label: 'Settings',
-    icon: 'gear',
+    icon: 'settings',
     location: { kind: 'settings' },
   },
 ];
@@ -203,6 +203,18 @@ export function NavRow({
   );
 }
 
+/** Configuration and action callbacks for the sidebar setup progress card. */
+export interface RailSetup {
+  /** Number of completed steps. */
+  done: number;
+  total: number;
+  /** Short label for the next setup step. */
+  next: string;
+  onContinue: () => void;
+  /** Optional callback invoked when dismissing the card with "Later". When omitted, the "Later" button is hidden. */
+  onLater?: () => void;
+}
+
 export interface SidebarProps {
   /** Absent while the agent is starting: the rail draws its frame regardless. */
   snapshot?: AgentSnapshot;
@@ -233,13 +245,21 @@ export interface SidebarProps {
    */
   status?: ReactNode;
   /**
+   * First run's progress, drawn in the same slot as the setup card rather
+   * than as a row. Omitted once setup is done, or by a caller that has only
+   * the row to give.
+   */
+  setup?: RailSetup;
+  /**
    * First run is already in the flow, so the account menu's "Add an account or
    * server…" re-enters it rather than navigating to the flow's first step.
    */
   onReenter?: () => void;
   /** Arms the application lock. Omitted where no lock command is reachable. */
   onLock?: () => void;
-  /** Collapsed to the 46px icon-only track. The rail carries the toggle. */
+  /**
+   * Collapsed to the 56px icon-only track. The traffic strip carries the toggle.
+   */
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
   /** Connection status displayed in the rail footer. */
@@ -251,9 +271,11 @@ export interface SidebarProps {
 }
 
 /**
- * The rail's account header and its menu: the accounts on this Mac grouped by
+ * The rail's account switcher and its menu, at the foot of the rail: the
+ * accounts on this Mac grouped by
  * server, then the two commands that are not a place — adding an account and
- * locking the app. This is the application's only account switcher; the
+ * locking the app. The row names the account and the host it lives on; no
+ * connection state is reported here. This is the application's only account switcher; the
  * Account section of Settings names the account in its own header and has no
  * switcher of its own. The dot rides the avatar for a note no tab's own badge
  * can resolve, and opens Settings › Account, where that note is still listed.
@@ -263,6 +285,7 @@ export function AccountHeader({
   location,
   account,
   attention = 0,
+  blocked = false,
   onNavigate,
   onReenter,
   onLock,
@@ -271,6 +294,8 @@ export function AccountHeader({
   location: Location;
   account?: StoreRef;
   attention?: number;
+  /** Whether the sidebar footer is disabled and dimmed during a blocking operation. */
+  blocked?: boolean;
   onNavigate: (location: Location) => void;
   onReenter?: () => void;
   onLock?: () => void;
@@ -285,11 +310,17 @@ export function AccountHeader({
     snapshot.accounts.find((entry) => entry.store === store.id)?.username ??
     store.account;
   const username = active ? usernameOf(active) : 'No account';
+  const activeServer = active
+    ? snapshot.servers.find((candidate) => candidate.id === active.server)
+    : undefined;
   const server = active
-    ? serverLocalAlias(
-        snapshot.servers.find((entry) => entry.id === active.server),
-      )
+    ? serverLocalAlias(activeServer)
     : 'None on this device';
+  // The foot names the host the account lives on. The reader's own label for
+  // that server is the accessible name and the tooltip, where a second line
+  // costs nothing; the row itself has one line for it and a hostname is what
+  // distinguishes two accounts of the same name.
+  const host = active ? (activeServer?.name ?? server) : server;
   // Preserve account-scoped locations when selecting an account; otherwise,
   // open the account's own page, Settings › Account.
   const selectAccount = (store: AccountStore): void => {
@@ -316,7 +347,7 @@ export function AccountHeader({
   // Account marks use the same username-derived hue as the Files vault row.
   const close = (): void => setOpen(false);
   return (
-    <div className="rail-head">
+    <div className={blocked ? 'rail-foot is-blocked' : 'rail-foot'}>
       <button
         type="button"
         ref={anchorRef}
@@ -332,10 +363,10 @@ export function AccountHeader({
         </span>
         <span className="t">
           <b>{username}</b>
-          <small>{server}</small>
+          <small>{host}</small>
         </span>
         <span className="chev">
-          <Icon name="chev" />
+          <Icon name="chevronDown" />
         </span>
       </button>
       {attention > 0 ? (
@@ -368,19 +399,6 @@ export function AccountHeader({
           >
             {servers.map((serverId) => (
               <div key={serverId}>
-                <div className="cap">
-                  {(() => {
-                    const entry = snapshot.servers.find(
-                      (candidate) => candidate.id === serverId,
-                    );
-                    const name = serverLocalAlias(entry);
-                    // Only the label a reader gave the server is a section
-                    // heading. The host keeps its own case: uppercasing a
-                    // hostname reads wrong, and it is what wrapped this caption
-                    // onto a second line.
-                    return name;
-                  })()}
-                </div>
                 {accounts
                   .filter((store) => store.server === serverId)
                   .map((store) => {
@@ -414,7 +432,14 @@ export function AccountHeader({
                           <AccountMark name={usernameOf(store)} />
                           <span className="t">
                             {usernameOf(store)}
-                            <small>{localAliasOf(snapshot, store)}</small>
+                            <small>
+                              {localAliasOf(snapshot, store)} ·{' '}
+                              {serverLocalAlias(
+                                snapshot.servers.find(
+                                  (entry) => entry.id === serverId,
+                                ),
+                              )}
+                            </small>
                           </span>
                           <span
                             className={
@@ -549,10 +574,11 @@ function railChatUnread(
 type RailCount = { label: string; description: string; warning?: boolean };
 
 /**
- * Status indicator for each tab. Unread counts trail the label in neutral text;
- * dots indicate actionable status without a numeric value, and all dots use
- * the same orange as unread markers. A count carrying `warn` is a total
- * that is known to be short of something, drawn in amber rather than dropped.
+ * Status indicator for each tab. Unread counts trail the label as an orange
+ * pill; orange dots indicate actionable status and stand beside whatever
+ * number is known rather than replacing it.
+ * A count carrying `warn` is a total that is known to be short of something,
+ * drawn in orange rather than dropped.
  */
 function RailTail({
   kind,
@@ -574,6 +600,47 @@ function RailTail({
   );
 }
 
+/**
+ * Setup progress card displayed above the account switcher. Shows completion progress, the next setup action, and buttons to continue or postpone setup. When collapsed, renders a compact fraction icon with full details in the tooltip.
+ *
+ * The "Later" button is only rendered when an onLater callback is provided.
+ */
+function SetupCard({ setup }: { setup?: RailSetup }): ReactNode {
+  if (!setup) return null;
+  const { done, total, next, onContinue, onLater } = setup;
+  const share = total > 0 ? Math.min(1, Math.max(0, done / total)) : 0;
+  return (
+    <div
+      className="setup-card"
+      data-short={`${done}/${total}`}
+      title={`Finish setting up: ${done} of ${total} steps done`}
+    >
+      <b>Finish setting up</b>
+      <small>{next}</small>
+      <div
+        className="bar"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={total}
+        aria-valuenow={done}
+        aria-label="Setup progress"
+      >
+        <i style={{ width: `${Math.round(share * 100)}%` }} />
+      </div>
+      <div className="act">
+        <button type="button" onClick={onContinue}>
+          Continue
+        </button>
+        {onLater ? (
+          <button type="button" className="dim" onClick={onLater}>
+            Later
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function Sidebar({
   snapshot,
   location,
@@ -585,6 +652,7 @@ export function Sidebar({
   onNavigate,
   onTabNavigate,
   status,
+  setup,
   onReenter,
   onLock,
   collapsed = false,
@@ -592,6 +660,7 @@ export function Sidebar({
   nativeChrome = false,
   blocked = false,
 }: SidebarProps): ReactNode {
+  const resize = useSidebarResize(!collapsed && !blocked);
   const chatInbox = useSidebarInbox();
   const unread = snapshot ? railChatUnread(snapshot, chatInbox) : null;
   const here = railTabOf(location);
@@ -622,7 +691,7 @@ export function Sidebar({
       ) : undefined;
     if (tab === 'devices')
       return devicesAlert ? (
-        <RailTail kind="dot" description={devicesAlert.description} />
+        <RailTail kind="dot warn" description={devicesAlert.description} />
       ) : undefined;
     if (tab === 'settings') {
       const reasons = [
@@ -632,7 +701,11 @@ export function Sidebar({
           : undefined,
       ].filter((reason): reason is string => Boolean(reason));
       return reasons.length ? (
-        <RailTail kind="dot warn" description={reasons.join('; ')} />
+        <RailTail kind="dot warn" description={reasons.join('; ')}>
+          {/* The dot's own number, where one exists: the notices the Account
+              section lists. A server's lapsed check-in has none. */}
+          {attention > 0 ? <span className="num">{attention}</span> : undefined}
+        </RailTail>
       ) : undefined;
     }
     return undefined;
@@ -664,38 +737,57 @@ export function Sidebar({
 
   return (
     <nav
-      className={['side', 'rail', collapsed ? 'is-narrow' : '']
+      ref={resize.ref}
+      className={[
+        'side',
+        'rail',
+        collapsed ? 'is-narrow' : '',
+        resize.dragging ? 'is-resizing' : '',
+      ]
         .filter(Boolean)
         .join(' ')}
       aria-label="Main Navigation"
     >
-      <TrafficStrip native={nativeChrome} />
+      {resize.handle}
+      <TrafficStrip native={nativeChrome}>
+        {onToggleCollapsed ? (
+          <button
+            type="button"
+            className="side-collapse"
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            disabled={blocked}
+            onClick={onToggleCollapsed}
+          >
+            <Icon name={collapsed ? 'panelLeftOpen' : 'panelLeftClose'} />
+          </button>
+        ) : null}
+      </TrafficStrip>
       <div className={blocked ? 'rail-body is-blocked' : 'rail-body'}>
-        {snapshot ? (
-          <AccountHeader
-            snapshot={snapshot}
-            location={location}
-            account={account}
-            attention={attention}
-            onNavigate={onNavigate}
-            onReenter={onReenter}
-            onLock={onLock}
-          />
-        ) : (
-          // No account is known yet. The header keeps its height so the tabs
-          // below it do not move once one is.
-          <div className="rail-head">
-            <div className="who who-empty">
-              <span className="avatar" aria-hidden="true" />
-            </div>
-          </div>
-        )}
+        <div className="rail-brand">
+          <span className="mark" aria-hidden="true">
+            F
+          </span>
+          <span className="lab">FOKS</span>
+        </div>
         <div className="rail-tabs">
           {RAIL_TABS.map((tab) => (
             <NavRow
               key={tab.id}
               active={here === tab.id}
-              glyph={<Icon name={tab.icon} />}
+              glyph={
+                <Icon
+                  name={tab.icon}
+                  className={
+                    tab.id === 'chat'
+                      ? 'rail-chat-icon'
+                      : tab.id === 'files'
+                        ? 'rail-files-icon'
+                        : undefined
+                  }
+                />
+              }
               name={tab.label}
               // The expanded rail already reads the label; a tooltip repeating
               // it is noise.
@@ -712,23 +804,28 @@ export function Sidebar({
       </div>
       <div className="side-bottom">
         {status}
-        {onToggleCollapsed ? (
-          <button
-            type="button"
-            className="nav side-collapse"
-            aria-expanded={!collapsed}
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            disabled={blocked}
-            onClick={onToggleCollapsed}
-          >
-            <Icon name={collapsed ? 'panel-hollow' : 'panel-filled'} />
-            <span className="t">
-              {collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            </span>
-          </button>
-        ) : null}
+        <SetupCard setup={setup} />
       </div>
+      {snapshot ? (
+        <AccountHeader
+          snapshot={snapshot}
+          location={location}
+          account={account}
+          attention={attention}
+          blocked={blocked}
+          onNavigate={onNavigate}
+          onReenter={onReenter}
+          onLock={onLock}
+        />
+      ) : (
+        // No account is known yet. The foot keeps its height so nothing above
+        // it moves once one is.
+        <div className="rail-foot">
+          <div className="who who-empty">
+            <span className="avatar" aria-hidden="true" />
+          </div>
+        </div>
+      )}
     </nav>
   );
 }

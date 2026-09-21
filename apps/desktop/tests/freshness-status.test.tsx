@@ -706,7 +706,7 @@ test('a job row states how long its last run took beside the time it ran', () =>
   });
   assert.match(
     successful,
-    /sync-next[^>]*>Next .*<\/span><span>1\.20s<\/span><span>.+<\/span>/,
+    /sync-next[^>]*>Next .*<\/td><td class="sync-when sync-duration">1\.20s<\/td><td class="sync-when sync-last">.+<\/td>/,
   );
   assert.doesNotMatch(successful, /Next at/);
   // An attempt that has not yet succeeded states its duration too.
@@ -718,7 +718,7 @@ test('a job row states how long its last run took beside the time it ran', () =>
   });
   assert.match(
     attempted,
-    /sync-timing[^>]*><span>340ms<\/span><span>.+<\/span>/,
+    /sync-duration[^>]*>340ms<\/td><td class="sync-when sync-last">.+<\/td>/,
   );
   assert.doesNotMatch(attempted, /Attempted| in /);
   // A job that has not run yet, or whose duration is unknown, states none.
@@ -784,4 +784,16 @@ test('healthy local work is named and an active retry remains busy despite its p
     'refreshing',
   );
   reconciliation.dispose();
+});
+
+test('concurrent loading phases share one Loading prefix', () => {
+  const reconciliation = service(FIXTURE);
+  const activity = reconciliation.activities.begin('Loading catalog');
+  const roster = activity.child('Loading team rosters');
+  assert.equal(
+    summarizeSync(FIXTURE, reconciliation).activities[0].label,
+    'Loading catalog, team rosters',
+  );
+  roster.finish();
+  activity.finish();
 });

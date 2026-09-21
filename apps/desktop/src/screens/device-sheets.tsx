@@ -235,7 +235,7 @@ function DeviceSheetFrame({
       footer={footer}
       glyph={
         <span className={`server-mark ${danger ? 'danger' : ''}`}>
-          <Icon name={danger ? 'trash' : 'gear'} />
+          <Icon name={danger ? 'trash' : 'settings'} />
         </span>
       }
     >
@@ -1306,6 +1306,9 @@ export function YubiActionSheet({
             <input
               type="password"
               value={other}
+              placeholder={
+                otherLabel === 'Passphrase' ? 'Enter a passphrase' : undefined
+              }
               onChange={(event) => setOther(event.target.value)}
             />
           </InsetRow>
@@ -1313,6 +1316,7 @@ export function YubiActionSheet({
         {needsConfirmation ? (
           <Field
             label="Confirm"
+            placeholder="Repeat passphrase"
             value={confirmation}
             onChange={setConfirmation}
             type="password"
@@ -1771,7 +1775,14 @@ export function PassphraseSheet({
           conditions, so neither is offered until it is known which applies.
         </Band>
       ) : loading || mode === null ? (
-        <p className="hint">Reading this account's passphrase state…</p>
+        <Inset className="passphrase-loading">
+          <div
+            role="status"
+            aria-label="Reading this account's passphrase state"
+          >
+            <span className="spin" aria-hidden="true" />
+          </div>
+        </Inset>
       ) : (
         <>
           <p>
@@ -1789,6 +1800,7 @@ export function PassphraseSheet({
             {checking ? (
               <Field
                 label="Current"
+                placeholder="Enter current passphrase"
                 value={current}
                 onChange={(value) => {
                   setCurrent(value);
@@ -1801,12 +1813,16 @@ export function PassphraseSheet({
             ) : null}
             <Field
               label={mode === 'set' ? 'Passphrase' : 'New'}
+              placeholder={
+                mode === 'set' ? 'Enter a passphrase' : 'Enter new passphrase'
+              }
               value={passphrase}
               onChange={setPassphrase}
               type="password"
             />
             <Field
               label="Confirm"
+              placeholder="Repeat passphrase"
               value={confirmation}
               onChange={setConfirmation}
               type="password"

@@ -5,7 +5,7 @@ import type { ReactNode, Ref } from 'react';
 import { Button, Chip, Icon } from '../components';
 import { ChatAlerts, failureAlert, type ChatAlert } from './chat-alerts';
 import type { ChatAction, ChatChannel, ChatReply } from '../chat-contract';
-import { plural, shortId } from '../model';
+import { hue, plural, shortId } from '../model';
 import { TEXT_LIMIT_LABEL } from './use-chat-composer';
 import { useMessageComposer } from './use-message-composer';
 import { OutgoingRow } from './outgoing-row';
@@ -15,9 +15,12 @@ import { useChatHistory } from './use-chat-history';
 import { PendingRow } from './pending-row';
 import {
   channelTitle,
+  continuesMessageGroup,
+  messageClock,
   messageDate,
+  messageDay,
+  messageDayKey,
   messageTime,
-  relativeMessageTime,
 } from './presentation';
 export function ChatThread({
   autofocusComposer,
@@ -63,7 +66,7 @@ export function ChatThread({
    * header omits the count rather than claiming zero.
    */
   memberCount?: number;
-  /** Opens the channel info panel; the header's ⓘ button. */
+  /** Callback to toggle the channel info panel, which displays the member roster. */
   onInfo?: () => void;
   infoOpen?: boolean;
   /** The caller's handle on the ⓘ, so closing the panel can focus it again. */
@@ -163,33 +166,23 @@ export function ChatThread({
   return (
     <>
       <div className="chat-thread-header">
-        <div className="chat-thread-title">
-          {/* The team is already named by the crumbs and the channel column,
-              so the header names the channel alone. */}
-          <h2>
-            <span className="chan">{title}</span>
-          </h2>
-          {/* Who is here, and nothing else: the channel's description and its
-              access line are both in the info panel, which draws the
-              description under "Description" and the access under
-              "Visibility". A channel whose roster has not arrived has no
-              count, and the line is empty rather than shortened. */}
-          <p>
-            {memberCount !== undefined && (
-              <span className="chat-member-count">
-                {plural(memberCount, 'member')}
-              </span>
-            )}
+        <h2>{title}</h2>
+        {(channel.description?.trim() || memberCount !== undefined) && (
+          <p className="chat-thread-sub">
+            {channel.description?.trim() ||
+              (memberCount === undefined ? '' : plural(memberCount, 'member'))}
           </p>
-        </div>
+        )}
         {channel.admin && <Chip>Admins</Chip>}
         {!channel.readable && <Chip tone="warn">Restricted</Chip>}
+        <span className="chat-thread-spacer" />
         {onInfo && (
           <Button
             variant="quiet"
+            className="chat-head-act"
             icon="info"
-            aria-label="Channel info"
             title="Channel info"
+            aria-label="Channel info"
             on={infoOpen}
             ref={infoRef}
             onClick={onInfo}
@@ -263,7 +256,7 @@ export function ChatThread({
                     Load older messages
                   </Button>
                 ) : messages.length > 0 ? (
-                  <small>Beginning of the conversation</small>
+                  <small>Beginning of the channel</small>
                 ) : null}
               </div>
               {initialLoading && (
@@ -280,9 +273,20 @@ export function ChatThread({
                 !pending.length &&
                 !busy &&
                 !error && (
-                  <p className="chat-quiet chat-messages-empty">
-                    No messages yet. Send a message to start the conversation.
-                  </p>
+                  <div className="chat-empty chat-messages-empty">
+                    <div>
+                      <Icon name="chat" size={30} />
+                      <b>No messages yet</b>
+                      <span>
+                        Send a message to start the conversation.{' '}
+                        {memberCount !== undefined && teamName
+                          ? `Only the ${plural(memberCount, 'member')} of ${teamName} can read it.`
+                          : teamName
+                            ? `Only the members of ${teamName} can read it.`
+                            : ''}
+                      </span>
+                    </div>
+                  </div>
                 )}
               {messages.map((m, index) => {
                 const own = actor !== null && m.sender === actor;
@@ -292,8 +296,28 @@ export function ChatThread({
                   BigInt(m.sequence) > BigInt(newFrom) &&
                   (index === 0 ||
                     BigInt(messages[index - 1].sequence) <= BigInt(newFrom));
+                const avatarName = m.sender
+                  ? (senderNames.get(m.sender) ?? shortId(m.sender))
+                  : 'Team member';
+                const author = own ? 'You' : avatarName;
+                // The day is carried once, above the first message of each
+                // local day, so no row repeats it.
+                const day = messageDayKey(m.insert_time);
+                const newDay =
+                  Boolean(day) &&
+                  (index === 0 ||
+                    messageDayKey(messages[index - 1].insert_time) !== day);
+                const grouped =
+                  !isNew &&
+                  !newDay &&
+                  continuesMessageGroup(messages[index - 1], m);
                 return (
                   <Fragment key={sends.messageKey(storeId, m.id)}>
+                    {newDay && (
+                      <div className="chat-daysep" role="separator">
+                        <span>{messageDay(m.insert_time)}</span>
+                      </div>
+                    )}
                     {isNew && (
                       <div
                         className="chat-divider"
@@ -303,34 +327,48 @@ export function ChatThread({
                         <span>New</span>
                       </div>
                     )}
-                    <article className="chat-message" data-message={m.id}>
-                      <header>
-                        <span
-                          className={own ? 'chat-sender you' : 'chat-sender'}
-                          title={m.sender ?? undefined}
-                        >
-                          {own
-                            ? 'You'
-                            : m.sender
-                              ? (senderNames.get(m.sender) ?? shortId(m.sender))
-                              : 'Team member'}
-                        </span>
-                        <time
-                          dateTime={messageDate(m.insert_time)?.toISOString()}
-                          title={`Sent ${messageTime(m.send_time)} · inserted as message ${m.sequence}`}
-                        >
-                          {relativeMessageTime(m.insert_time)}
-                        </time>
-                      </header>
-                      {m.content.kind === 'text' ? (
-                        <MessageText text={m.content.text} actions={bridge} />
-                      ) : (
-                        <p className="chat-unsupported">
-                          {m.content.kind === 'oversized'
-                            ? 'This message exceeds the desktop display limit.'
-                            : 'This message type is not supported yet.'}
-                        </p>
-                      )}
+                    <article
+                      className={
+                        grouped ? 'chat-message grouped' : 'chat-message'
+                      }
+                      data-message={m.id}
+                      title={grouped ? messageTime(m.insert_time) : undefined}
+                    >
+                      {/* The author's initial over the hue their name
+                          resolves to, the same hue the rest of the shell
+                          draws that name in. */}
+                      <span
+                        className="chat-avatar"
+                        aria-hidden="true"
+                        style={{ background: hue(avatarName) }}
+                      >
+                        {avatarName.slice(0, 1).toUpperCase()}
+                      </span>
+                      <div className="chat-message-body">
+                        <header className={grouped ? 'offscreen' : undefined}>
+                          <span
+                            className={own ? 'chat-sender you' : 'chat-sender'}
+                            title={m.sender ?? undefined}
+                          >
+                            {author}
+                          </span>
+                          <time
+                            dateTime={messageDate(m.insert_time)?.toISOString()}
+                            title={`Sent ${messageTime(m.send_time)} · Message #${m.sequence}`}
+                          >
+                            {messageClock(m.insert_time)}
+                          </time>
+                        </header>
+                        {m.content.kind === 'text' ? (
+                          <MessageText text={m.content.text} actions={bridge} />
+                        ) : (
+                          <p className="chat-unsupported">
+                            {m.content.kind === 'oversized'
+                              ? 'This message exceeds the desktop display limit.'
+                              : 'This message type is not supported yet.'}
+                          </p>
+                        )}
+                      </div>
                     </article>
                   </Fragment>
                 );
@@ -341,6 +379,11 @@ export function ChatThread({
                   <OutgoingRow
                     key={message.id}
                     message={message}
+                    avatarName={
+                      actor
+                        ? (senderNames.get(actor) ?? shortId(actor))
+                        : 'Team member'
+                    }
                     storeId={storeId}
                     service={sends}
                     bridge={bridge}
@@ -369,13 +412,14 @@ export function ChatThread({
             </div>
             {!atBottom && messages.length > 0 && (
               <Button
+                variant="quiet"
                 size="sm"
-                icon="chev"
+                icon="chevronDown"
                 className="chat-jump"
+                aria-label="Jump to latest"
+                title="Jump to latest"
                 onClick={jumpToLatest}
-              >
-                Jump to latest
-              </Button>
+              />
             )}
           </div>
           {channel.writable ? (
@@ -395,23 +439,36 @@ export function ChatThread({
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => {
                   if (
-                    e.key === 'Enter' &&
-                    !e.shiftKey &&
-                    !e.nativeEvent.isComposing &&
-                    e.keyCode !== 229
-                  ) {
+                    e.key !== 'Enter' ||
+                    e.nativeEvent.isComposing ||
+                    e.keyCode === 229
+                  )
+                    return;
+                  if (e.altKey) {
+                    e.preventDefault();
+                    const field = e.currentTarget;
+                    field.setRangeText(
+                      '\n',
+                      field.selectionStart,
+                      field.selectionEnd,
+                      'end',
+                    );
+                    setDraft(field.value);
+                  } else if (!e.shiftKey) {
                     e.preventDefault();
                     void send();
                   }
                 }}
               />
-              <Button
-                variant="primary"
+              <button
+                className="chat-send"
                 type="submit"
+                aria-label="Send"
+                title="Send"
                 disabled={!canSend || overLimit || !draft.trim()}
               >
-                Send
-              </Button>
+                <Icon name="send" size={16} />
+              </button>
               {nearLimit && (
                 <small
                   className={overLimit ? 'chat-meter over' : 'chat-meter'}

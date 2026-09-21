@@ -765,7 +765,7 @@ export function InvitationPanel({
         // people, not the account panels' gear.
         glyph={
           <span className="kico invite">
-            <Icon name="people" />
+            <Icon name="users" />
           </span>
         }
         step={confirming ? 'Step 2 of 2' : 'Step 1 of 2'}

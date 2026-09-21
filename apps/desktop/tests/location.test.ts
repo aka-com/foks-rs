@@ -843,6 +843,7 @@ test('full scene state round-trips through URL serialization', () => {
       selection: { store: 'team:eng', path: '/deploy/production-token' },
       kind: 'Password' as const,
       sort: 'group' as const,
+      sortDirection: 'desc' as const,
       folder: '/deploy',
       closedFolders: ['team:eng|/deploy/archive'],
       lease: 'lapsed' as const,
@@ -1331,4 +1332,19 @@ test('an unsafe sheet cannot leave a restorable draft when navigation applies', 
   store.setSheetRestorable(id, undefined);
   store.navigateTab('files');
   assert.equal(store.getSnapshot().sheet, undefined);
+});
+
+test('closing a selection also closes its details pane when requested', () => {
+  const selected = transition(INITIAL_STATE, {
+    type: 'select',
+    selection: { store: 'acct:personal', path: '/test' },
+  });
+  assert.equal(selected.details, true);
+  const closed = transition(selected, {
+    type: 'select',
+    selection: null,
+    closeDetails: true,
+  });
+  assert.equal(closed.selection, null);
+  assert.equal(closed.details, false);
 });

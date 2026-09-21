@@ -319,6 +319,8 @@ export interface GroupDetailFailure {
 }
 
 export interface CatalogFreshnessEntry {
+  /** Elapsed time of the catalog load that last successfully covered this entry. */
+  lastMilliseconds?: number;
   lastSuccessAt?: number;
   lastAttemptAt?: number;
   refreshing: boolean;

@@ -104,7 +104,7 @@ function FindGroups({
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
-        Find teams <Icon name="chev" className="chevron" />
+        Find teams <Icon name="chevronDown" className="chevron" />
       </Button>
       {open ? (
         <Popover
@@ -167,7 +167,7 @@ function FindGroups({
                               : (results[store.id] ?? (reason ? reason : ''))}
                           </small>
                         </span>
-                        <Icon name="again" />
+                        <Icon name="refresh" />
                       </MenuItem>
                     );
                   })}
@@ -260,7 +260,7 @@ function TeamRow({
           </Chip>
           {/* The row opens the team, and says so at its end. */}
           <span className="go" aria-hidden="true">
-            <Icon name="chev" />
+            <Icon name="chevronDown" />
           </span>
         </span>
       </button>
@@ -416,7 +416,7 @@ export function TeamsScreen({
       <span className="rowmenu">
         <MenuButton
           variant="quiet"
-          icon="more"
+          icon="ellipsis"
           trailingIcon={null}
           label=""
           menuLabel={`Actions for ${store.name}`}
@@ -427,7 +427,7 @@ export function TeamsScreen({
               {store.active === false ? (
                 <>
                   <MenuItem
-                    icon="again"
+                    icon="refresh"
                     onClick={() => {
                       close();
                       finishSetup(store);
@@ -454,7 +454,7 @@ export function TeamsScreen({
                   user or admit a federated team from another server. Disabled
                   options provide an explanatory reason directly in the menu. */}
               <MenuItem
-                icon="person"
+                icon="user"
                 reason={rosterReason}
                 onClick={() => {
                   close();
@@ -463,11 +463,11 @@ export function TeamsScreen({
               >
                 <span className="menu-choice">
                   <span>Add a user…</span>
-                  <small>Invite by their username</small>
+                  <small>Invite by username</small>
                 </span>
               </MenuItem>
               <MenuItem
-                icon="people"
+                icon="users"
                 reason={federationReason}
                 onClick={() => {
                   close();
@@ -476,7 +476,7 @@ export function TeamsScreen({
               >
                 <span className="menu-choice">
                   <span>Add a team from another server…</span>
-                  <small>Add a remote team via federation</small>
+                  <small>Add team via federation</small>
                 </span>
               </MenuItem>
               <div className="menu-separator" role="separator" />
@@ -490,7 +490,7 @@ export function TeamsScreen({
                 Copy team ID
               </MenuItem>
               <MenuItem
-                icon="out"
+                icon="externalLink"
                 onClick={() => {
                   close();
                   onNavigate({ kind: 'store', ref: store.id });
@@ -616,7 +616,7 @@ export function TeamsScreen({
               ) : (
                 <div className="empty">
                   <div className="big">
-                    <Icon name="people" />
+                    <Icon name="users" />
                   </div>
                   <h2>No teams yet</h2>
                   <p>Share files and channels with a team.</p>

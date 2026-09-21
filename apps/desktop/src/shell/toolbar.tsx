@@ -1,48 +1,53 @@
 /**
- * Toolbar displayed across the top of the folder browser, above both the
- * folder tree and the item list.
+ * The primary New control.
  *
- * The kind filter fills a cell the width of the tree column, so it sits over
- * the counts it changes; the scoped search field and New control take the
- * list column. The list column headers handle sorting, and the inspector is a
- * permanent column.
+ * It used to sit in a toolbar of its own across the top of the folder
+ * browser, beside the kind filter and a scoped search field. The header row
+ * carries the search field and this button now, and the kind filter belongs
+ * to the tree column, so nothing is left here but the control itself — the
+ * header draws it, and the browser's empty states draw it again where the
+ * reader is already looking.
  */
 
 import type { ReactNode } from 'react';
-import {
-  KindIcon,
-  MenuButton,
-  SearchField,
-  SegmentedControl,
-} from '../components';
-import { KINDS, KIND_LIST, kindLabel } from '../model';
+import { KindIcon, MenuButton } from '../components';
+import { KIND_LIST, kindLabel } from '../model';
 import type { KindFilter } from '../location';
 
-export interface ToolbarProps {
+export interface NewItemButtonProps {
   onNew: (kind: Exclude<KindFilter, 'All'>) => void;
-  kind: KindFilter;
-  onKind: (kind: KindFilter) => void;
-  query: string;
-  onQuery: (query: string) => void;
-  /** "Search all items" / "Search this vault" / "Search this team". */
-  searchPlaceholder: string;
+  /**
+   * The store or folder the items screen would save into, named in a header
+   * line above the kinds. Omitted where the destination is not settled, in
+   * which case the menu is the kinds alone.
+   */
+  destination?: string;
+  /** Tooltip message explaining why item creation is disabled, if applicable. */
+  reason?: string | null;
+  disabled?: boolean;
 }
 
-/** The primary New control — kind menu, no plus, a down chevron. */
+/** Primary button that displays a dropdown menu of item kinds to create. */
 export function NewItemButton({
   onNew,
-}: {
-  onNew: (kind: Exclude<KindFilter, 'All'>) => void;
-}): ReactNode {
+  destination,
+  reason = null,
+  disabled = false,
+}: NewItemButtonProps): ReactNode {
   return (
     <MenuButton
       label="New"
       variant="primary"
+      icon="plus"
       menuLabel="Create item"
       align="end"
+      className="newwrap"
+      disabled={disabled || reason !== null}
+      {...(reason ? { title: reason } : {})}
     >
       {(close) => (
         <>
+          {destination ? <div className="mh">New in {destination}</div> : null}
           {KIND_LIST.map((name) => (
             <button
               key={name}
@@ -61,47 +66,5 @@ export function NewItemButton({
         </>
       )}
     </MenuButton>
-  );
-}
-
-export function Toolbar({
-  onNew,
-  kind,
-  onKind,
-  query,
-  onQuery,
-  searchPlaceholder,
-}: ToolbarProps): ReactNode {
-  return (
-    <div className="toolbar">
-      {/* The toolbar spans both columns of the folder browser. The filter
-          cell is the tree column's width, so the kind filter sits over the
-          counts it changes; search and New take the list column. */}
-      <div className="toolbar-filter">
-        <SegmentedControl<KindFilter>
-          label="Filter items by kind"
-          value={kind}
-          onChange={onKind}
-          items={[
-            { id: 'All', label: 'All' },
-            ...KIND_LIST.map((name) => ({
-              id: name,
-              label: KINDS[name].plural,
-              title: KINDS[name].blurb,
-            })),
-          ]}
-        />
-      </div>
-      <div className="toolbar-rest">
-        {/* The ⌘K shortcut is reserved for the global palette. */}
-        <SearchField
-          value={query}
-          onChange={onQuery}
-          placeholder={searchPlaceholder}
-          shortcut={false}
-        />
-        <NewItemButton onNew={onNew} />
-      </div>
-    </div>
   );
 }

@@ -295,7 +295,7 @@ export class ReconciliationScheduler {
       )
         this.request(key, trigger);
   }
-  reconciled(key: string): void {
+  reconciled(key: string, milliseconds?: number): void {
     const entry = this.entries.get(key);
     if (!entry) return;
     entry.retry = 0;
@@ -305,6 +305,7 @@ export class ReconciliationScheduler {
       error: undefined,
       refreshing: Boolean(entry.active),
       lastSuccessAt: this.clock.now(),
+      lastMilliseconds: milliseconds,
       paused: false,
     });
     this.schedule();

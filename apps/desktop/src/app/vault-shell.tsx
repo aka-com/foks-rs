@@ -19,16 +19,19 @@ import {
   FIRST_RUN_CHECKPOINT_KEY,
   completedFirstRunSteps,
   decodeFirstRunCheckpoint,
+  firstRunNextStep,
   firstRunStepCount,
   type FirstRunCheckpoint,
 } from '../first-run-state';
 import {
   storeAtScene,
   useLocationState,
+  type KindFilter,
   type LocationStore,
 } from '../location';
 import {
   applyLease,
+  defaultCreateStore,
   settingsAlertSummary,
   storeOf,
   storeReadable,
@@ -46,20 +49,19 @@ import {
   devicesAlertSummary,
 } from '../screens/device-alert';
 import { DetailsPanel } from '../screens/details-panel';
-import {
-  FirstRunChecklistStatus,
-  FirstRunExperience,
-} from '../screens/first-run-screen';
+import { FirstRunExperience } from '../screens/first-run-screen';
 import { unroutedNotices } from '../screens/account-section';
-import { listsItems } from '../screens/scope';
+import { ALL_ITEMS, folderSelection, listsItems } from '../screens/scope';
 import { teamRequestsBadge, useTeamRequestCounts } from '../operation-queries';
 import {
   initialWriteWorkflow,
+  writeBlockReason,
   type WriteWorkflow,
 } from '../screens/write-workflows';
 import { useSearchShortcut } from '../shell/search-palette';
 import { Sidebar } from '../shell/sidebar';
 import { Topbar } from '../shell/topbar';
+import { requestNewChat } from '../screens/chat-tab';
 import { useAccessRuntime } from './access-runtime';
 import { AccessLifetime } from './access-lifetime';
 import { shellBlock, shellChrome } from './blocking-shell';
@@ -337,6 +339,11 @@ export function VaultShell({
     state,
     lease: scene.lease,
     toasts,
+    blocked: shellChrome(
+      shellBlock(agentLifecycle),
+      agentLifecycle.state,
+      shown.agent.state,
+    ).blocked,
   });
   const here = state.location;
   const pendingFirstRun = incompleteFirstRunCheckpoint();
@@ -345,6 +352,28 @@ export function VaultShell({
     listsItems(here) &&
     !(here.kind === 'store' && !storeReadable(shown, here.ref)) &&
     !(state.selection && !storeReadable(shown, state.selection.store));
+  // Where the header's New control saves, and whether it can. The items
+  // screen settles the same destination from the same tree selection; this
+  // reads that selection rather than a second source of truth, and falls back
+  // to the account the screen would fall back to.
+  const filesHere = listsItems(here);
+  const newSelection = filesHere ? folderSelection(here, state.folder) : null;
+  const newStore =
+    newSelection === null
+      ? undefined
+      : (storeOf(
+          shown,
+          newSelection.store === ALL_ITEMS
+            ? (defaultCreateStore(shown) ?? '')
+            : newSelection.store,
+        ) ?? undefined);
+  const newDestination =
+    newStore &&
+    newSelection &&
+    newSelection.store !== ALL_ITEMS &&
+    newSelection.path !== '/'
+      ? `${newStore.name} › ${newSelection.path.split('/').filter(Boolean).slice(-1)[0]}`
+      : newStore?.name;
   const { sideCollapsed, railCollapsed, toggleSidebar, windowChromeHidden } =
     useWindowRuntime({
       bridge,
@@ -517,13 +546,24 @@ export function VaultShell({
                   locations.navigate(location);
                 }}
                 onLock={lockFromMenu}
-                status={
-                  pendingFirstRun ? (
-                    <FirstRunChecklistStatus
-                      checkpoint={pendingFirstRun}
-                      onNavigate={(location) => locations.navigate(location)}
-                    />
-                  ) : undefined
+                // Setup progress is the rail's card, not a row: the card
+                // names what comes next and continues where setup stopped.
+                setup={
+                  pendingFirstRun &&
+                  completedFirstRunSteps(pendingFirstRun) <
+                    firstRunStepCount(pendingFirstRun)
+                    ? {
+                        done: completedFirstRunSteps(pendingFirstRun),
+                        total: firstRunStepCount(pendingFirstRun),
+                        next: firstRunNextStep(pendingFirstRun),
+                        onContinue: () =>
+                          locations.navigate({
+                            kind: 'first-run',
+                            step: pendingFirstRun.state,
+                            path: pendingFirstRun.path,
+                          }),
+                      }
+                    : undefined
                 }
                 onToggleCollapsed={toggleSidebar}
                 collapsed={sideCollapsed}
@@ -542,8 +582,43 @@ export function VaultShell({
                   folder={state.folder}
                   onNavigate={(location) => locations.navigate(location)}
                   onSetFolder={(folder) => locations.setFolder(folder)}
-                  onSearch={() => setSearchOpen(true)}
+                  // One field for the shell: on the views that list items it
+                  // drives the same query the browser reads.
+                  {...(filesHere || here.kind === 'chat'
+                    ? {
+                        query: state.query,
+                        onQuery: (query: string) => locations.search(query),
+                      }
+                    : {})}
+                  {...(here.kind === 'chat'
+                    ? { onNewChat: requestNewChat }
+                    : {})}
+                  {...(filesHere && newStore
+                    ? {
+                        onNew: (itemKind: Exclude<KindFilter, 'All'>) =>
+                          setWorkflow({
+                            kind: 'new',
+                            itemKind,
+                            storeId: newStore.id,
+                            ...(newSelection && newSelection.path !== '/'
+                              ? { initialFolder: newSelection.path }
+                              : {}),
+                          }),
+                        newBlocked: writeBlockReason(shown, newStore),
+                        ...(newDestination ? { newDestination } : {}),
+                      }
+                    : {})}
+                  detailsOpen={detailsShown}
+                  {...(filesHere
+                    ? {
+                        onToggleDetails: () => {
+                          if (detailsShown) locations.setDetails(false);
+                          else if (state.selection) locations.setDetails(true);
+                        },
+                      }
+                    : {})}
                   collapsed={sideCollapsed}
+                  onToggleCollapsed={toggleSidebar}
                   refreshing={refreshingSnapshot}
                   onRefresh={() =>
                     refreshAll(() => {

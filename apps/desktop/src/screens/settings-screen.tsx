@@ -1,4 +1,6 @@
 import { localAliasOf } from '../model';
+import { useDismissedOnboardingTip } from '../onboarding-tips';
+import { setAppearance, useAppearance, type Appearance } from '../appearance';
 /**
  * The Settings tab: a sub-navigation of three pages, held on screen beside
  * whichever one is open.
@@ -237,12 +239,26 @@ export function SettingsScreen({
 
 /** Locally stored desktop alert and appearance preferences. */
 function PreferencesSection(): ReactNode {
+  const [passwordTipDismissed, setPasswordTipDismissed] =
+    useDismissedOnboardingTip('add-password');
   return (
     <>
-      <SectionLabel>Desktop alerts</SectionLabel>
-      <NotificationSettings />
       <SectionLabel>Appearance</SectionLabel>
       <RailColorPicker />
+      <SectionLabel>Desktop alerts</SectionLabel>
+      <NotificationSettings />
+      <SectionLabel>Onboarding tips</SectionLabel>
+      <Inset className="settings-checkboxes">
+        <label>
+          <input
+            type="checkbox"
+            aria-label="Show the add a password tip"
+            checked={!passwordTipDismissed}
+            onChange={(event) => setPasswordTipDismissed(!event.target.checked)}
+          />
+          <span>Add a password</span>
+        </label>
+      </Inset>
     </>
   );
 }
@@ -252,6 +268,7 @@ function PreferencesSection(): ReactNode {
  * this page shows it.
  */
 function RailColorPicker(): ReactNode {
+  const appearance = useAppearance();
   const [color, setColor] = useState(storedRailColor);
   const choose = (id: string): void => {
     setColor(id);
@@ -260,6 +277,29 @@ function RailColorPicker(): ReactNode {
   };
   return (
     <Inset className="settings-inset middle wide">
+      <InsetRow label="Theme">
+        <div
+          className="seg txt appearance-picker"
+          role="group"
+          aria-label="Theme"
+        >
+          {(['light', 'dark', 'system'] as const).map((value: Appearance) => (
+            <button
+              type="button"
+              key={value}
+              className={appearance === value ? 'on' : undefined}
+              aria-pressed={appearance === value}
+              onClick={() => setAppearance(value)}
+            >
+              {value === 'light'
+                ? 'Light'
+                : value === 'dark'
+                  ? 'Dark'
+                  : 'System'}
+            </button>
+          ))}
+        </div>
+      </InsetRow>
       <InsetRow label="Sidebar color">
         <div className="swatches" role="radiogroup" aria-label="Sidebar color">
           {RAIL_COLORS.map((entry) => (
@@ -270,10 +310,15 @@ function RailColorPicker(): ReactNode {
               className={entry.id === color ? 'swatch on' : 'swatch'}
               aria-checked={entry.id === color}
               aria-label={entry.label}
-              title={entry.label}
+              title={`${entry.label} — light / dark`}
               onClick={() => choose(entry.id)}
             >
-              <i style={{ background: entry.hex }} aria-hidden="true" />
+              <i
+                style={{
+                  background: `linear-gradient(135deg, ${entry.hex} 50%, ${entry.darkHex} 50%)`,
+                }}
+                aria-hidden="true"
+              />
               <span>{entry.label}</span>
             </button>
           ))}
@@ -386,8 +431,8 @@ function DeviceSection({
             </Button>
           }
         >
-          Require your operating-system credentials before FOKS can read vault
-          data again.
+          Require an operating-system unlock before FOKS can read vault data
+          again.
         </InsetRow>
       </Inset>
       <SectionLabel>Agent</SectionLabel>
@@ -433,7 +478,8 @@ function DeviceSection({
           )}
           {foreign ? (
             <small>
-              Not started by this app. Transfer and move restart it first.
+              Agent started by another app. Use 'Restart...' to take ownership
+              of the agent.
             </small>
           ) : null}
         </InsetRow>
@@ -463,6 +509,25 @@ function DeviceSection({
       <SectionLabel>FOKS data</SectionLabel>
       <Inset className="settings-inset wide">
         <InsetRow
+          label="Move data"
+          action={
+            <Button
+              size="sm"
+              disabled={maintenanceUnavailable}
+              onClick={() =>
+                maintain('relocate', () => bridge.relocateClientState())
+              }
+            >
+              Choose folder…
+            </Button>
+          }
+        >
+          <small>
+            Move every profile and its credentials to another folder. Requires
+            restart.
+          </small>
+        </InsetRow>
+        <InsetRow
           label="Transfer"
           action={
             <>
@@ -488,7 +553,7 @@ function DeviceSection({
           }
         >
           <small>
-            Exports this desktop app's credentials exactly. We recommend linking
+            Export this app's accounts. Clones the device; we recommend linking
             a new device instead.
           </small>
         </InsetRow>
@@ -508,25 +573,6 @@ function DeviceSection({
         >
           <small>
             Check the current account is still valid on all connected servers.
-          </small>
-        </InsetRow>
-        <InsetRow
-          label="Move FOKS data"
-          action={
-            <Button
-              size="sm"
-              disabled={maintenanceUnavailable}
-              onClick={() =>
-                maintain('relocate', () => bridge.relocateClientState())
-              }
-            >
-              Choose folder…
-            </Button>
-          }
-        >
-          <small>
-            Move every profile and its credentials to another folder on this
-            device. Requires restart.
           </small>
         </InsetRow>
       </Inset>
@@ -652,7 +698,7 @@ function RestartAgentSheet({
       title={copy ? copy.title : 'Restart the agent?'}
       glyph={
         <span className="server-mark">
-          <Icon name="again" />
+          <Icon name="refresh" />
         </span>
       }
       footer={

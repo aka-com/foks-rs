@@ -3,7 +3,7 @@
  *
  * Native webview history gestures are disabled because the application uses
  * `history.replaceState` and maintains its own navigation state. A completed
- * gesture navigates to `parentLocation`, matching the topbar Back action.
+ * gesture returns to the previous committed navigation in the app history.
  */
 
 import type { Location } from '../location';
@@ -23,7 +23,7 @@ export const QUIET_MS = 300;
 export interface SwipeBackOptions {
   /**
    * Where a back swipe goes, read when the gesture completes. `null` makes
-   * the gesture inert — a tab's root, chat and first run have no parent.
+   * the gesture inert when there is no earlier visit.
    */
   target: () => Location | null;
   /**
@@ -81,7 +81,13 @@ export class SwipeBackTracker {
   wheel(event: WheelEvent): void {
     // Pinch-zoom arrives as a ctrl-wheel on macOS, and any other modifier
     // means the reader is driving something that is not navigation.
-    if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey)
+    if (
+      event.defaultPrevented ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.altKey ||
+      event.shiftKey
+    )
       return;
     const at = this.now();
     const gap = this.lastEventAt === null ? Infinity : at - this.lastEventAt;

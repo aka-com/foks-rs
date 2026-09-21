@@ -817,6 +817,20 @@ export function completedFirstRunSteps(state: FirstRunCheckpoint): number {
   return count;
 }
 
+/**
+ * One line naming the step setup wants next, for the rail's setup card. The
+ * order follows `completedFirstRunSteps`: a server, an account, recovery, and
+ * for an invitee the group.
+ */
+export function firstRunNextStep(state: FirstRunCheckpoint): string {
+  if (!state.profile) return 'choose a server';
+  if (!state.account) return 'create or recover your account';
+  if (!(state.passphraseSet || state.backupCommitted))
+    return 'save your recovery codes';
+  if (state.path === 'invited' && !state.added) return 'join your team';
+  return 'finish setup';
+}
+
 /** Personal setup ends after account recovery; invitees also join their group. */
 export function firstRunStepCount(state: FirstRunCheckpoint): number {
   return state.path === 'invited' ? 4 : 3;

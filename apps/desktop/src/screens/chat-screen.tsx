@@ -29,7 +29,6 @@ import { lastPosition } from '../chat/snapshots';
 import { useChatSends } from '../chat/send-provider';
 import { cancelled } from '../chat/errors';
 import { chatTeams } from './chat-teams';
-import './chat.css';
 
 const systemAccessNow = () => Date.now() / 1000;
 
@@ -145,6 +144,13 @@ export function ChatScreen({
   }, [channelIds, drafts, channelsKnown]);
   const storeId = store?.id ?? '';
   const senderNames = partyNames(agentSnapshot, storeId);
+  // Resolve our own identity from the account even before the roster arrives.
+  const ownAccount = agentSnapshot.accounts.find(
+    (account) =>
+      account.server === store?.server &&
+      account.alias === (scope?.store.account_alias ?? store?.account),
+  );
+  if (actor && ownAccount) senderNames.set(actor, ownAccount.username);
   // The roster the team page already loads, read here rather than fetched
   // again. A team whose roster has not arrived yet has no parties on this
   // store id, which is indistinguishable from an empty team — but a real team
@@ -307,7 +313,7 @@ export function ChatScreen({
     ) : !team ? (
       <div className="empty">
         <span className="big">
-          <Icon name="people" />
+          <Icon name="users" />
         </span>
         <h2>Chat unavailable</h2>
         <p>Select an active team in the sidebar to open its conversations.</p>
@@ -412,7 +418,7 @@ export function ChatScreen({
         ) : (
           <div className="empty">
             <span className="big">
-              <Icon name="people" />
+              <Icon name="users" />
             </span>
             <h2>No conversations yet</h2>
             <p>Create a channel for this team to start chatting.</p>

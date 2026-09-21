@@ -9,16 +9,16 @@
 export interface RailColor {
   id: string;
   label: string;
-  /** The hex `tokens.css` sets for this id; here so a picker can draw it. */
+  /** The paired colors from `tokens.css`, used by the split preview. */
   hex: string;
+  darkHex: string;
 }
 
 export const RAIL_COLORS: readonly RailColor[] = [
-  { id: 'default', label: 'Blue', hex: '#4c6be1' },
-  { id: 'iris', label: 'Iris', hex: '#6a6ff0' },
-  { id: 'lavender', label: 'Lavender', hex: '#7a77f1' },
-  { id: 'sky', label: 'Sky', hex: '#4f8ef7' },
-  { id: 'slate', label: 'Slate', hex: '#5468b3' },
+  { id: 'default', label: 'Blue', hex: '#4c6be1', darkHex: '#3c4e91' },
+  { id: 'iris', label: 'Iris', hex: '#6a6ff0', darkHex: '#5a4f96' },
+  { id: 'sky', label: 'Sky', hex: '#3b81f6', darkHex: '#315d99' },
+  { id: 'slate', label: 'Slate', hex: '#5468b3', darkHex: '#46578e' },
 ];
 
 export const DEFAULT_RAIL_COLOR = RAIL_COLORS[0].id;
@@ -26,6 +26,7 @@ export const DEFAULT_RAIL_COLOR = RAIL_COLORS[0].id;
 const KEY = 'railColor';
 
 function known(id: string | null | undefined): string {
+  if (id === 'lavender') return 'iris';
   return RAIL_COLORS.some((color) => color.id === id)
     ? (id as string)
     : DEFAULT_RAIL_COLOR;

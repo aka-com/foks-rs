@@ -1,6 +1,29 @@
 import { partiesOf, shortId } from '../model';
 import type { AgentSnapshot, StoreRef } from '../model';
-import type { ChatChannel, ChatConversation } from '../chat-contract';
+import type {
+  ChatChannel,
+  ChatConversation,
+  ChatMessage,
+} from '../chat-contract';
+
+/** Runs use server insertion times, matching the displayed clock and order. */
+export function continuesMessageGroup(
+  previous: ChatMessage | undefined,
+  current: ChatMessage,
+): boolean {
+  if (!previous || !current.sender || previous.sender !== current.sender)
+    return false;
+  const before = messageDate(previous.insert_time);
+  const after = messageDate(current.insert_time);
+  if (
+    !before ||
+    !after ||
+    messageDayKey(previous.insert_time) !== messageDayKey(current.insert_time)
+  )
+    return false;
+  const elapsed = after.valueOf() - before.valueOf();
+  return elapsed >= 0 && elapsed <= 5 * 60 * 1000;
+}
 import {
   CHAT_DESCRIPTION_MAX_CHARS,
   CHAT_DESCRIPTION_MIN_CHARS,
@@ -188,14 +211,7 @@ export function roleTextWithoutBand(role: string): string {
 
 export function accessSummary(channel: ChatChannel): string {
   if (!channel.readable) return 'Read access required';
-  if (channel.read_role === channel.write_role)
-    return `${roleTextWithoutBand(channel.read_role)} can read and write`;
-  const read = roleTextWithoutBand(channel.read_role);
-  const write = roleTextWithoutBand(channel.write_role);
-  // Two member bands differ in the band alone, so the band is what is named.
-  return read === write
-    ? `Read ${channel.read_role} · Write ${channel.write_role}`
-    : `Read ${read} · Write ${write}`;
+  return channel.writable ? 'You can read and write' : 'You can read only';
 }
 
 /**
@@ -266,6 +282,64 @@ export function messageTime(milliseconds: string): string {
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: 'medium',
     timeStyle: 'short',
+  }).format(date);
+}
+
+/**
+ * The clock beside a message: the hour and minute alone, "9:12 AM" where the
+ * locale is twelve-hour. The day is carried once per run of messages by the
+ * separator above them, so no row repeats it and no row carries seconds, which
+ * no reader of a conversation sorts by.
+ */
+export function messageClock(milliseconds: string): string {
+  const date = messageDate(milliseconds);
+  if (!date) return `Time ${milliseconds}`;
+  return new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
+}
+
+/**
+ * The calendar day a message belongs to, as a local `YYYY-MM-DD` key. Messages
+ * are grouped on this, so the separator changes exactly where the local date
+ * does rather than on a fixed number of hours.
+ */
+export function messageDayKey(milliseconds: string): string {
+  const date = messageDate(milliseconds);
+  if (!date) return '';
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+/**
+ * What a day separator says: "Today" or "Yesterday" for the two days a reader
+ * does not have to place, the weekday within the past week, and the full date
+ * before that.
+ */
+export function messageDay(
+  milliseconds: string,
+  nowMilliseconds: number = Date.now(),
+): string {
+  const date = messageDate(milliseconds);
+  if (!date) return '';
+  const key = messageDayKey(milliseconds);
+  const now = new Date(nowMilliseconds);
+  if (key === messageDayKey(String(nowMilliseconds))) return 'Today';
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (key === messageDayKey(String(yesterday.valueOf()))) return 'Yesterday';
+  const days = (nowMilliseconds - date.valueOf()) / 86_400_000;
+  if (days > 0 && days < 6)
+    return new Intl.DateTimeFormat(undefined, { weekday: 'long' }).format(date);
+  return new Intl.DateTimeFormat(undefined, {
+    year:
+      date.getFullYear() === now.getFullYear()
+        ? undefined
+        : ('numeric' as const),
+    month: 'long',
+    day: 'numeric',
   }).format(date);
 }
 

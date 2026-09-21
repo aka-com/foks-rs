@@ -180,7 +180,7 @@ test('leaving the button without reaching the popover closes it', async () => {
   assert.equal(document.querySelector('.sync-popover'), null);
 });
 
-test('while refreshing, the spinner takes the icon’s place rather than sitting over it', async () => {
+test('displays spinning icon and "Syncing…" status text while refreshing', async () => {
   const service = reconciliation();
   const activity = service.activities.begin('Loading catalog');
   const rendered = ui.render(
@@ -193,14 +193,20 @@ test('while refreshing, the spinner takes the icon’s place rather than sitting
     button.getAttribute('aria-label'),
     'Refreshing vaults, teams, chat, and devices',
   );
-  assert.ok(button.querySelector('.spin'));
-  assert.equal(button.querySelector('svg.ic'), null);
-  assert.equal(document.querySelector('.sync-badge'), null);
+  // The sync icon has a spinning animation without an overlay ring or status dot.
+  assert.ok(button.classList.contains('busy'));
+  assert.ok(button.querySelector('svg.ic'));
+  assert.equal(button.querySelector('.spin'), null);
+  assert.equal(button.querySelector('.dot'), null);
+  assert.equal(button.querySelector('.t')?.textContent, 'Syncing…');
   await ui.act(async () => activity.finish());
   rendered.rerender(createElement(Harness, { service, refreshing: false }));
   assert.equal(button.getAttribute('aria-busy'), null);
-  assert.equal(button.querySelector('.spin'), null);
+  assert.equal(button.classList.contains('busy'), false);
   assert.ok(button.querySelector('svg.ic'));
+  // When idle, displays a green status dot alongside the "Synced" label.
+  assert.ok(button.querySelector('.dot.ok'));
+  assert.equal(button.querySelector('.t')?.textContent, 'Synced');
 });
 
 test('remaining work is visible beside healthy jobs and disappears when it settles', async () => {

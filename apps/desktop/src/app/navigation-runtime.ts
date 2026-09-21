@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { anyDialogOpen } from '/kit/overlay-primitives';
 import type { ToastController } from '/kit/toasts';
 import {
-  parentLocation,
   sceneHref,
   sceneOf,
   type LocationStore,
@@ -10,6 +9,7 @@ import {
 } from '../location';
 import type { NavigationPromptVerdict } from '../navigation-guard';
 import { mountSwipeBack } from '../shell/swipe-back';
+import { mountBackInputs } from '../shell/back-inputs';
 
 /** A `prompt` verdict on screen, with the promise the store is waiting on. */
 interface PendingPrompt {
@@ -22,11 +22,13 @@ export function useShellNavigation({
   state,
   lease,
   toasts,
+  blocked = false,
 }: {
   locations: LocationStore;
   state: ReturnType<LocationStore['getSnapshot']>;
   lease: Scene['lease'];
   toasts: ToastController;
+  blocked?: boolean;
 }) {
   // Handles navigation guard outcomes: `prompt` renders the confirmation dialog
   // below, and `refuse` displays an alert toast. The active pending navigation is
@@ -78,7 +80,7 @@ export function useShellNavigation({
     }
   }, [state, lease]);
 
-  // Escape clears search query first, then deselects active item.
+  // Escape clears search first, then closes the active item and its pane.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return;
@@ -86,7 +88,8 @@ export function useShellNavigation({
       if (event.defaultPrevented) return;
       const current = locations.getSnapshot();
       if (current.query) locations.search('');
-      else if (current.selection) locations.select(null);
+      else if (current.selection)
+        locations.select(null, { closeDetails: true });
     };
     document.addEventListener('keydown', onKeyDown);
     return () => {
@@ -95,31 +98,37 @@ export function useShellNavigation({
   }, [locations]);
 
   const here = state.location;
-  // Handle trackpad back gestures consistently with the topbar back button.
-  // The destination is read through a ref so the listener mounts once. Suppress
-  // gestures while a dialog is open or a navigation guard blocks the target to
-  // avoid opening confirmation dialogs or displaying errors from gestures.
-  const hereRef = useRef(here);
-  hereRef.current = here;
-  useEffect(
-    () =>
-      mountSwipeBack({
-        target: () => parentLocation(hereRef.current),
-        enabled: () => {
-          if (anyDialogOpen()) return false;
-          const parent = parentLocation(hereRef.current);
-          return (
-            parent !== null &&
-            locations.navigationVerdict({
-              kind: 'navigate',
-              location: parent,
-            }) === null
-          );
-        },
-        navigate: (location) => locations.navigate(location),
-      }),
-    [locations],
-  );
+  // Back follows committed navigation history, including cross-tab links.
+  useEffect(() => {
+    const enabled = () =>
+      !blocked &&
+      !anyDialogOpen() &&
+      locations.getSnapshot().location.kind !== 'first-run' &&
+      !document.querySelector('[role="menu"], [role="listbox"]');
+    const stopSwipe = mountSwipeBack({
+      target: () => locations.backTarget(),
+      enabled: () => {
+        const target = locations.backTarget();
+        return (
+          enabled() &&
+          target !== null &&
+          locations.navigationVerdict({
+            kind: 'navigate',
+            location: target,
+          }) === null
+        );
+      },
+      navigate: () => locations.back(),
+    });
+    const stopInputs = mountBackInputs({
+      enabled,
+      back: () => locations.back(),
+    });
+    return () => {
+      stopSwipe();
+      stopInputs();
+    };
+  }, [locations, blocked]);
   // A prompt asks whether to leave the page it was raised on. If the shell
   // left it some other way, the question no longer applies.
   useEffect(() => {

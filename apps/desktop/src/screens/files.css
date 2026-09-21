@@ -1,0 +1,759 @@
+/* -------------------------------------------------- the Files browser --
+   The tree column carries the kind filter over the counts it changes, and
+   the list column carries its own title row. Search and New live in the
+   window header, so the band that used to hold them is gone. */
+
+.folder-split {
+  grid-template-columns: 232px minmax(0, 1fr);
+}
+
+/* ---------------------------------------------------------- tree column */
+
+.folder-split > .tpane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--line-soft);
+}
+.tpane > .filt {
+  flex: none;
+  padding: 8px 8px 6px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.tpane > .filt .seg {
+  display: flex;
+  width: 100%;
+  height: 30px;
+}
+.tpane > .filt .seg button {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px;
+  justify-content: center;
+  font-size: 12px;
+}
+.tpane > .tscroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 8px 10px;
+}
+.tpane h6 {
+  display: flex;
+  align-items: center;
+  padding: 12px 8px 4px;
+  letter-spacing: 0.07em;
+}
+.tpane .fn + h6 {
+  padding-top: 12px;
+}
+.tpane h6 .plus {
+  margin-left: auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+  opacity: 0;
+}
+.tpane h6:hover .plus,
+.tpane h6:focus-within .plus {
+  opacity: 1;
+}
+.tpane h6 .plus:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.tpane h6 .plus .ic {
+  font-size: 14px;
+}
+
+/* Rows indent 16px per depth; the twist cell is kept on every row, so the
+   names of a store and of a childless folder line up down the column. */
+.folder-split .tpane .fn,
+.folder-split .tpane .fn:has(> .twist) {
+  height: 30px;
+  gap: 6px;
+  border-radius: 7px;
+  padding-left: calc(6px + var(--d, 0) * 16px);
+}
+.folder-split .tpane .fn .fselect {
+  gap: 6px;
+  height: 30px;
+  padding: 0;
+}
+/* Keep keyboard focus inside clipped breadcrumbs and virtualized rows. */
+.crumbs button:focus-visible,
+.folder-split .row:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: -2px;
+}
+/* The selection button omits the twist and count; frame the whole tree row. */
+.folder-split .tpane .fn:has(> .fselect:focus-visible) {
+  outline: 2px solid var(--accent-border);
+  outline-offset: -2px;
+}
+.folder-split .tpane .fn .fselect:focus-visible {
+  outline: none;
+}
+.folder-split .tpane .fn > .c,
+.folder-split .tpane .fn > .warn {
+  flex: none;
+  margin-right: 8px;
+  text-align: right;
+}
+.folder-split .tpane .fn > .fact {
+  margin-right: 0;
+}
+.folder-split .tpane .fn > .twist {
+  margin: 0;
+  width: 16px;
+  height: 16px;
+  font-size: 12px;
+}
+.folder-split .tpane .fn > .twist.none {
+  visibility: hidden;
+}
+.folder-split .tpane .fn .fselect > .av.team,
+.folder-split .tpane .fn .fselect > .kico.account {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  font-size: var(--mark-type);
+  flex: none;
+}
+.folder-split .tpane .fn .fselect > .ic {
+  font-size: 15px;
+  color: var(--folder-amber);
+}
+.folder-split .tpane .fn.root .fselect > .ic,
+.folder-split .tpane .fn.quiet .fselect > .ic {
+  color: var(--muted);
+}
+.folder-split .tpane .fn.on .fselect > .ic {
+  color: var(--accent-ink);
+}
+.tpane .fn.quiet {
+  color: var(--faint);
+  font-weight: 400;
+  font-size: 12.5px;
+}
+.folder-split .tpane .fn.quiet .fselect > .ic {
+  font-size: 14px;
+  color: var(--faint);
+}
+/* A store whose server check-in lapsed states that instead of a count. */
+.tpane .fn .warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  color: var(--amber-ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+.tpane .fn .warn .ic {
+  font-size: 12px;
+}
+
+/* ---------------------------------------------------------- list column */
+
+.lpane > .lt {
+  height: 38px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.lpane > .lt .back {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.lpane > .lt .back:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.lpane > .lt .back .ic {
+  font-size: 15px;
+}
+.lpane > .lt .where {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lpane > .lt .where .sub {
+  font-weight: 500;
+  color: var(--muted);
+}
+.lpane > .lt .where .search-scope {
+  margin-left: -1px;
+}
+.lpane > .lt .where .av.team,
+.lpane > .lt .where .kico.account {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  font-size: var(--mark-type);
+  flex: none;
+}
+.lpane > .lt .sp {
+  flex: 1;
+}
+.lpane > .lt .seg {
+  flex: none;
+  height: 26px;
+}
+.lpane > .lt .seg button {
+  width: 26px;
+  height: 22px;
+  font-size: 14px;
+}
+.lpane > .lt .seg button[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.lpane > .folder-body {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 12px 12px;
+}
+.lpane > .folder-body > * {
+  flex: none;
+}
+.lpane > .folder-body > .starter {
+  flex: 1;
+}
+
+/* The list measures itself: beside an open inspector, or at the window's
+   narrowest, the folder path and the Location column give way so the name
+   keeps its room. */
+.lpane {
+  container-type: inline-size;
+}
+@container (max-width: 600px) {
+  .folder-body .row .name .fpath {
+    display: none;
+  }
+  .folder-body .hdr.cols.loc,
+  .folder-body .row.cols.loc {
+    grid-template-columns: minmax(0, 1fr) 90px 66px;
+  }
+  .folder-body .cols.loc > :nth-child(3) {
+    display: none;
+  }
+}
+
+/* Name, Kind, (Location), Size. There is no Modified column: the catalog
+   carries no write timestamp. */
+.folder-body .hdr.cols,
+.folder-body .row.cols {
+  grid-template-columns: minmax(0, 1fr) 90px 66px;
+  gap: 10px;
+  padding: 0 10px;
+}
+.folder-body .hdr.cols.loc,
+.folder-body .row.cols.loc {
+  grid-template-columns: minmax(0, 1fr) 90px 140px 66px;
+}
+.folder-body .hdr.cols {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 28px;
+  margin-bottom: 0;
+  border-bottom: 0;
+  background: var(--main-surface);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--faint);
+}
+.folder-body .hdr.cols button.on {
+  color: var(--ink);
+}
+.folder-body .row.one {
+  position: relative;
+  height: 38px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.folder-body .row.sel {
+  background: var(--accent-wash-2);
+}
+.folder-body .row.ro {
+  opacity: 0.75;
+}
+.folder-body .row .name {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
+.folder-body .row .name > .ic {
+  flex: none;
+  font-size: 16px;
+  color: var(--muted);
+}
+.folder-body .row .name > .ic.k {
+  color: var(--key-gold);
+}
+.folder-body .row .name > .ic.f {
+  color: var(--folder-amber);
+}
+.folder-body .row .name .nm {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* In "All items" the folder replaces the chip the row used to carry. */
+.folder-body .row .name .fpath {
+  min-width: 0;
+  font-weight: 400;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.folder-body .row .cell.mark .kico.account,
+.folder-body .row .cell.mark .av.team {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  font-size: var(--mark-type);
+  flex: none;
+}
+
+/* The row's own actions, floating over the Size cell they replace. */
+.folder-body .row .acts {
+  position: absolute;
+  opacity: 0;
+  right: 8px;
+  top: 4px;
+  display: none;
+  gap: 2px;
+  padding: 1px;
+  border: 1px solid var(--line-mid);
+  border-radius: 7px;
+  background: var(--main-surface);
+  box-shadow: var(--shadow-xs);
+}
+.folder-body .row:hover .acts,
+.folder-body .row.sel .acts {
+  display: flex;
+  opacity: 1;
+}
+.folder-body .row .acts button {
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.folder-body .row .acts button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.folder-body .row .acts .ic {
+  font-size: 14px;
+}
+.folder-body .row:hover .cell.num,
+.folder-body .row.sel .cell.num {
+  visibility: hidden;
+}
+
+/* A visual affordance for the drop the window already accepts. */
+.folder-body .dropzone {
+  margin: 6px 10px 0;
+  padding: 10px;
+  border: 1.5px dashed var(--line-mid);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--faint);
+  font-size: 12px;
+}
+.folder-body .dropzone .ic {
+  font-size: 15px;
+}
+
+.folder-body .nextup {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.folder-body .nextup > .ic {
+  flex: none;
+  font-size: 15px;
+  color: var(--accent-ink);
+}
+.folder-body .nextup .sp {
+  flex: 1;
+}
+.folder-body .nextup .lnk {
+  color: var(--accent-ink);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.folder-body .nextup .x {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+}
+.folder-body .nextup .x:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+/* A store that can still be read but no longer written. */
+.folder-body .lnotice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 4px 2px 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--amber-border);
+  border-radius: 10px;
+  background: var(--amber-wash);
+  color: var(--amber-ink);
+}
+.folder-body .lnotice > .ic {
+  flex: none;
+  margin-top: 1px;
+  font-size: 16px;
+}
+.folder-body .lnotice .t {
+  flex: 1;
+  min-width: 0;
+}
+.folder-body .lnotice b {
+  display: block;
+  font-size: 13px;
+  font-weight: 650;
+}
+.folder-body .lnotice p {
+  margin-top: 1px;
+  font-size: 12.5px;
+  opacity: 0.9;
+}
+.folder-body .lnotice .btn.cap {
+  flex: none;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: var(--radius-md);
+  border-color: var(--line-mid);
+  background: var(--btn-bg);
+  color: var(--ink);
+}
+.folder-body .lnotice .btn.cap:hover {
+  background: var(--btn-hover);
+}
+
+/* ------------------------------------------------- empty and first run */
+
+.folder-body .empty {
+  padding: 48px 24px;
+}
+.folder-body .empty .big {
+  width: auto;
+  height: auto;
+  margin-bottom: 12px;
+  border-radius: 0;
+  background: none;
+  font-size: 36px;
+  color: var(--faint);
+}
+.folder-body .empty h2 {
+  font-size: 14px;
+  font-weight: 700;
+}
+.folder-body .empty p {
+  font-size: 13px;
+}
+.folder-body .empty .btn {
+  margin-top: 14px;
+}
+
+.folder-body .starter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 24px 24px 32px;
+  text-align: center;
+}
+.folder-body .starter h2 {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.folder-body .starter p {
+  max-width: 44ch;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.folder-body .cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  width: min(620px, 100%);
+}
+.folder-body .card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 118px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--btn-bg);
+  text-align: left;
+}
+.folder-body button.card:hover {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+.folder-body .card .ci {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--accent-wash-2);
+  color: var(--accent-ink);
+  font-size: 17px;
+}
+.folder-body .card b {
+  display: block;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--ink);
+}
+.folder-body .card small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.folder-body .card kbd,
+.folder-body .card .cli {
+  margin-top: auto;
+}
+.folder-body .card kbd {
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--btn-bg);
+  font: 12px var(--sans);
+  line-height: 1.5;
+  color: var(--faint);
+}
+.folder-body .card .cli {
+  max-width: 100%;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: var(--chip-bg);
+  font: 12px var(--sans);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------- details panel */
+
+.details .dh {
+  align-items: flex-start;
+  padding: 14px 14px 10px;
+}
+.details .dh .kic {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--btn-bg);
+  color: var(--muted);
+  font-size: 18px;
+}
+.details .dh .kic .ic {
+  font-size: 18px;
+}
+.details .dh h2 {
+  font-size: 14px;
+}
+.details .scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+.details .scroll > * {
+  flex-shrink: 0;
+}
+.details .scroll > .sec {
+  margin: 0 0 -6px 2px;
+}
+.details .scroll > .pfn,
+.details .scroll > .action-error {
+  margin: 0 2px;
+}
+.details .scroll > .eact,
+.details .scroll > .detail-actions {
+  margin: 0;
+}
+.details .detail-actions {
+  gap: 6px;
+}
+.details .detail-actions .btn {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+.details .detail-actions .btn .ic {
+  font-size: 14px;
+}
+.details .prev .irow .a button.value-action,
+.details .inset.edit .fr .a button.value-action {
+  width: 24px;
+  padding: 0;
+  justify-content: center;
+}
+.details .scroll > .inset .fr {
+  min-height: 36px;
+  padding: 6px 12px;
+}
+.details .scroll > .inset .fr .k {
+  width: 78px;
+  font-size: 12px;
+}
+.details .scroll > .inset .fr .v {
+  font-size: 12.5px;
+}
+.details .scroll > .inset .fr .v.mark {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.details .scroll > .inset .fr .v.mark > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.details .scroll > .inset .fr .v.mark .kico.account,
+.details .scroll > .inset .fr .v.mark .av.team {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  font-size: var(--mark-type);
+  flex: none;
+}
+.details .prev .irow {
+  min-height: 36px;
+}
+.details .prev .irow .k {
+  width: 78px;
+  font-size: 12px;
+}
+.details .pillrow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.details .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  background: var(--chip-bg);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.details .pill.write-access .ic {
+  translate: 0 -1px;
+}
+.details .pill .ic {
+  font-size: 13px;
+}
+.details .filedoc {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+}
+.details .filedoc .big {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 48px;
+  border: 1px solid var(--line-mid);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 20px;
+}
+.details .filedoc .t {
+  min-width: 0;
+}
+.details .filedoc .t b {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.details .filedoc .t small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+.details .who {
+  margin: 0;
+}
+
+.inset .appearance-picker {
+  align-self: flex-start;
+  padding: 2px;
+  border-top: 0;
+}

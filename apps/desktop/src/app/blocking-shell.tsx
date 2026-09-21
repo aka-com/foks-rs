@@ -6,7 +6,7 @@ import {
   maintenanceOutcomeMessage,
   type AgentLifecycle,
 } from '../agent-lifecycle';
-import { Button, CopyBox, Icon } from '../components';
+import { Button, CopyBox } from '../components';
 import type { AgentSnapshot } from '../model';
 import type { BootProgress } from './app-bootstrap';
 import { Sidebar, railAgentState, type RailAgentState } from '../shell/sidebar';
@@ -190,20 +190,19 @@ export function AgentStopCard({
           Your vaults remain on this device and on their configured servers.
         </p>
       ) : null}
+      {/* Every takeover card states a refused action the same way: the small
+          footnote under the body, in the danger ink. */}
       {failure ? (
-        <p className="action-error" role="alert">
+        <p className="fn bad" role="alert">
           {failure}
         </p>
       ) : null}
-      {actions ? <div className="acts2">{actions}</div> : null}
+      {actions ? <div className="tacts">{actions}</div> : null}
     </>
   );
   return (
-    <div className="card stopcard">
-      <h2>
-        <Icon name="alert" />
-        {label}
-      </h2>
+    <div className="tcard stopcard">
+      <h2>{label}</h2>
       {body}
     </div>
   );
@@ -223,22 +222,23 @@ export function AgentLostCard({
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   return (
-    <div className="notice stop">
+    <div className="tcard">
       <h2>Connection to background service lost</h2>
       <p>
         {credentialsRequired
           ? 'Keychain access is needed to restore your connection.'
-          : 'The background service stopped responding. Click Retry to reconnect.'}
+          : 'The background service stopped responding. Select Retry to reconnect. Your local data is stored on this device and is not affected.'}
       </p>
-      {message && !credentialsRequired ? <p className="fn">{message}</p> : null}
+      {message && !credentialsRequired ? <p>{message}</p> : null}
       {failure ? (
-        <p className="fn" role="alert">
+        <p className="fn bad" role="alert">
           {failure}
         </p>
       ) : null}
-      <div className="acts2">
+      <div className="tacts">
         <Button
           variant="primary"
+          busy={busy}
           disabled={busy}
           onClick={() => {
             setBusy(true);
@@ -254,7 +254,11 @@ export function AgentLostCard({
             })();
           }}
         >
-          {credentialsRequired ? 'Restore connection' : 'Retry'}
+          {busy
+            ? 'Retrying…'
+            : credentialsRequired
+              ? 'Restore connection'
+              : 'Retry'}
         </Button>
         <Button
           disabled={busy}
@@ -305,7 +309,7 @@ export function Takeover({
         ? 'Connection to background service lost'
         : block.kind === 'locked'
           ? 'FOKS is locked'
-          : 'Couldn’t load FOKS';
+          : 'FOKS could not start';
   const role = block.kind === 'locked' ? 'dialog' : 'alertdialog';
   if (modal)
     return (

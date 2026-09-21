@@ -290,17 +290,23 @@ function engineeringChannels(): string[] {
   const group = document.querySelector<HTMLElement>(
     '.chat-channel-list[aria-label="Engineering"]',
   );
-  return [...(group?.querySelectorAll('.chat-channel .n') ?? [])].map(
-    (node) => node.textContent ?? '',
-  );
+  return [...(group?.querySelectorAll('.chat-channel') ?? [])]
+    .filter((row) => row.querySelector('.hash'))
+    .map((row) => `#${row.querySelector('.n')?.textContent ?? ''}`);
 }
 
-/** A channel row of the column, by the title it draws. */
+/**
+ * Finds a channel row in the channel list by its full displayed title (e.g. "#general").
+ */
 async function channelRow(title: string): Promise<HTMLButtonElement> {
   return ui.waitFor(() => {
     const row = [
       ...document.querySelectorAll<HTMLButtonElement>('.chat-channel'),
-    ].find((node) => node.querySelector('.n')?.textContent === title);
+    ].find(
+      (node) =>
+        node.querySelector('.hash') &&
+        `#${node.querySelector('.n')?.textContent}` === title,
+    );
     assert.ok(row, `the column lists ${title}`);
     return row;
   });

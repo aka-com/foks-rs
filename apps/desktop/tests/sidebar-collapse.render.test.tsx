@@ -83,12 +83,12 @@ async function shell(
   return rendered;
 }
 
-/** The rail's collapse toggle. */
+/** The collapse toggle beside the traffic lights. */
 function toggle(): HTMLButtonElement {
   const button = document.querySelector<HTMLButtonElement>(
-    '.side .side-collapse',
+    '.side .traffic .side-collapse',
   );
-  assert.ok(button, 'the rail draws the collapse toggle');
+  assert.ok(button, 'the traffic strip draws the collapse toggle');
   return button;
 }
 
@@ -102,6 +102,7 @@ test('the toggle collapses the rail, flips its label, and stores the preference'
   );
   assert.equal(toggle().getAttribute('aria-expanded'), 'true');
   assert.equal(toggle().title, 'Collapse sidebar');
+  assert.equal(document.querySelector('.topbar .side-collapse'), null);
 
   ui.fireEvent.click(toggle());
   await ui.waitFor(() => {
@@ -211,4 +212,46 @@ test('every tab draws a glyph, so all five survive the collapsed rail', async ()
   );
   for (const tab of tabs)
     assert.ok(tab.querySelector('.ic'), `${tab.textContent} has a glyph`);
+});
+
+test('the sidebar resizes by dragging, persists its width, and restores after collapse', async () => {
+  await shell();
+  const handle = ui.screen.getByRole('separator', { name: 'Resize sidebar' });
+  const frame = document.querySelector<HTMLElement>('.window');
+  assert.ok(frame);
+  // jsdom does not implement pointer capture or PointerEvent coordinates.
+  handle.setPointerCapture = () => {};
+  ui.fireEvent(
+    handle,
+    new window.MouseEvent('pointerdown', {
+      bubbles: true,
+      button: 0,
+      clientX: 208,
+    }),
+  );
+  ui.fireEvent(
+    handle,
+    new window.MouseEvent('pointermove', { bubbles: true, clientX: 230 }),
+  );
+  ui.fireEvent(
+    handle,
+    new window.MouseEvent('pointerup', { bubbles: true, clientX: 230 }),
+  );
+  assert.equal(frame.style.getPropertyValue('--side-w-open'), '230px');
+  assert.equal(window.localStorage.getItem('sidebarWidth'), '230');
+  ui.fireEvent.click(toggle());
+  assert.equal(
+    ui.screen.queryByRole('separator', { name: 'Resize sidebar' }),
+    null,
+  );
+  ui.fireEvent.click(toggle());
+  const restored = ui.screen.getByRole('separator', { name: 'Resize sidebar' });
+  assert.equal(restored.getAttribute('aria-valuenow'), '230');
+  ui.fireEvent.keyDown(restored, { key: 'Home' });
+  assert.equal(frame.style.getPropertyValue('--side-w-open'), '150px');
+  ui.fireEvent.keyDown(restored, { key: 'ArrowLeft' });
+  assert.equal(frame.style.getPropertyValue('--side-w-open'), '150px');
+  ui.fireEvent.doubleClick(restored);
+  assert.equal(frame.style.getPropertyValue('--side-w-open'), '208px');
+  assert.equal(window.localStorage.getItem('sidebarWidth'), '208');
 });

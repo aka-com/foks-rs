@@ -74,7 +74,7 @@ export function CardSelect({
           <b>{chosen ? chosen.title : placeholder}</b>
           {chosen?.detail === undefined ? null : <small>{chosen.detail}</small>}
         </span>
-        <Icon name="chev" className="card-select-chevron" />
+        <Icon name="chevronDown" className="card-select-chevron" />
       </button>
       {open ? (
         <Popover

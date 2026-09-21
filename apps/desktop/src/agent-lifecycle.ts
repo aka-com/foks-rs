@@ -62,7 +62,18 @@ export function agentLifecycleLabel(lifecycle: AgentLifecycle): string {
     case 'initializing':
       return 'Starting the FOKS agent';
     case 'maintenance':
-      return `${lifecycle.kind} · ${lifecycle.phase}`;
+      return [
+        lifecycle.kind,
+        {
+          selecting: 'Preparing...',
+          confirming: 'Awaiting approval...',
+          quiescing: 'Stopping agent...',
+          running: 'In progress...',
+          restoring: 'Starting agent...',
+        }[lifecycle.phase],
+      ]
+        .map((label) => label[0].toUpperCase() + label.slice(1))
+        .join(' · ');
     case 'restart-required':
       return 'Restart required';
     case 'recovery-required':

@@ -281,7 +281,7 @@ test('Account opens first and carries the server inventory at its bottom', async
     .within(nav)
     .getAllByRole('tab')
     .map((tab) => tab.textContent);
-  assert.deepEqual(tabs, ['Account', 'Preferences', 'Device']);
+  assert.deepEqual(tabs, ['Account', 'Preferences', 'Storage']);
   const account = ui.within(nav).getByRole('tab', { name: 'Account' });
   assert.equal(account.getAttribute('aria-selected'), 'true');
   // Account is the sub-navigation's landing page. Its header names the
@@ -469,7 +469,7 @@ test('opening a device-wide server retains the selected account', async () => {
     onNavigate: (location) => chosen.push(location),
   });
 
-  ui.fireEvent.click(rendered.getAllByRole('button', { name: 'Manage' })[0]);
+  ui.fireEvent.click(rendered.getAllByRole('button', { name: 'Manage ›' })[0]);
   const destination = chosen.at(-1);
   assert.equal(destination?.kind, 'settings');
   if (destination?.kind !== 'settings') return;
@@ -517,7 +517,7 @@ test('choosing a sub-navigation section replaces the page, dropping any open ser
     onNavigate: (location) => chosen.push(location),
   });
 
-  ui.fireEvent.click(rendered.getByRole('tab', { name: 'Device' }));
+  ui.fireEvent.click(rendered.getByRole('tab', { name: 'Storage' }));
   assert.deepEqual(chosen.at(-1), { kind: 'settings', section: 'mac' });
 });
 
@@ -544,7 +544,7 @@ test('walking the sub-navigation by keyboard keeps focus on the section it selec
 test('a section address opens that page, each with the sub-navigation beside it', async () => {
   for (const [section, heading] of [
     ['preferences', 'Preferences'],
-    ['mac', 'Device'],
+    ['mac', 'Storage'],
   ] as const) {
     ui.cleanup();
     const rendered = await renderSettings(await fixture(), {
@@ -578,7 +578,7 @@ test('Preferences holds desktop alert preferences and the rail color', async () 
     [...main.querySelectorAll(':scope > .sec')].map(
       (label) => label.textContent,
     ),
-    ['Desktop alerts', 'Appearance'],
+    ['Appearance', 'Desktop alerts', 'Onboarding tips'],
   );
   assert.equal(rendered.queryByRole('button', { name: 'Passphrase…' }), null);
   assert.ok(
@@ -621,7 +621,7 @@ test('a server address keeps the sub-navigation on screen, Account still selecte
   );
   // The other two sections are still one click away, not hidden behind the
   // server the reader opened.
-  assert.ok(ui.within(nav).getByRole('tab', { name: 'Device' }));
+  assert.ok(ui.within(nav).getByRole('tab', { name: 'Storage' }));
 });
 
 test('the passphrase sheet changes a configured passphrase behind a check', async () => {
@@ -785,13 +785,13 @@ test('a profile address opens that server instead of the page', async () => {
   assert.ok(rendered.getByRole('button', { name: 'Rename…' }));
   assert.ok(rendered.getByText('Remove server and credentials'));
   assert.equal(rendered.getAllByRole('button', { name: 'Remove…' }).length, 1);
-  // The sub-navigation stays on screen — "Device" is one of its labels —
+  // The sub-navigation stays on screen — "Storage" is one of its labels —
   // but that page's own content is not drawn behind a server: the danger
   // zone here is this server's, and the Mac-wide reset is not on it.
   assert.ok(
     ui
       .within(rendered.getByRole('navigation', { name: 'Settings sections' }))
-      .getByRole('tab', { name: 'Device' }),
+      .getByRole('tab', { name: 'Storage' }),
   );
   assert.equal(rendered.queryByRole('button', { name: 'Reset…' }), null);
   assert.equal(rendered.queryByRole('button', { name: 'Lock now' }), null);
@@ -1528,7 +1528,7 @@ test('a maintenance action refused for a foreign agent asks to restart it, then 
   await ui.waitFor(() =>
     assert.match(
       rendered.getByText('Status').closest('.fr')?.textContent ?? '',
-      /Not started by this app\. Transfer and move restart it first\./,
+      /Agent started by another app\. Use 'Restart\.\.\.' to take ownership of the agent\./,
     ),
   );
   await ui.act(async () => {
@@ -1620,4 +1620,52 @@ test('a passphrase conflict blocks another write until its status refresh succee
   ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Retry' }));
   await ui.waitFor(() => assert.equal(change().disabled, false));
   assert.equal(reads, 3);
+});
+
+test('Preferences applies and persists the chosen appearance', async () => {
+  const rendered = await renderSettings(await fixture(), {
+    where: { section: 'preferences' },
+  });
+  try {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Dark' }));
+    assert.equal(document.documentElement.dataset.theme, 'dark');
+    assert.equal(window.localStorage.getItem('appearance'), 'dark');
+    assert.equal(
+      rendered
+        .getByRole('button', { name: 'Dark' })
+        .getAttribute('aria-pressed'),
+      'true',
+    );
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'System' }));
+    assert.equal(window.localStorage.getItem('appearance'), 'system');
+  } finally {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Light' }));
+  }
+});
+
+test('dismissed onboarding tips persist and can be restored in Preferences', async () => {
+  const key = 'onboarding.dismissed.add-password';
+  window.localStorage.setItem(key, 'true');
+  const options: SettingsOptions = { where: { section: 'preferences' } };
+  const first = await renderSettings(await fixture(), options);
+  const checkbox = first.getByRole('checkbox', {
+    name: 'Show the add a password tip',
+  }) as HTMLInputElement;
+  assert.equal(checkbox.checked, false);
+  ui.fireEvent.click(first.getByText('Add a password'));
+  assert.equal(checkbox.checked, true);
+  assert.equal(window.localStorage.getItem(key), null);
+  ui.fireEvent.click(checkbox);
+  assert.equal(window.localStorage.getItem(key), 'true');
+  first.unmount();
+  const second = await renderSettings(await fixture(), options);
+  assert.equal(
+    (
+      second.getByRole('checkbox', {
+        name: 'Show the add a password tip',
+      }) as HTMLInputElement
+    ).checked,
+    false,
+  );
+  window.localStorage.removeItem(key);
 });

@@ -131,6 +131,7 @@ export function ScreenRouter({
       // with no `ref` the tab is the only thing that knows which team that is,
       // so it is handed the whole map and picks from the `ref` it resolved.
       accessGenerations={accessGenerations}
+      query={state.query}
       onNavigate={(location, options) => locations.navigate(location, options)}
     />
   ) : here.kind === 'group-settings' ? (

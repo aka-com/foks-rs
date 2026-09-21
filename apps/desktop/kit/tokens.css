@@ -1,38 +1,57 @@
 /* Shared design tokens */
 
 :root {
+  color-scheme: light;
   /* text */
   --ink: #1d1d1f;
   --ink-2: #2c2c30;
   --ink-3: #3c3c42;
   --muted: #66666f;
   --muted-2: #6d6d76;
+  --faint: #8a8a92;
+
+  /* typography */
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
 
   /* accents */
-  --accent: #0a7cff;
-  --accent-ink: #0a63d0;
-  --accent-wash: rgba(10, 124, 255, 0.08);
-  --accent-wash-2: rgba(10, 124, 255, 0.12);
-  --accent-border: rgba(10, 124, 255, 0.32);
+  --accent: var(--rail);
+  --accent-ink: color-mix(in srgb, var(--rail) 85%, #000);
+  --accent-wash: color-mix(in srgb, var(--rail) 8%, transparent);
+  --accent-wash-2: color-mix(in srgb, var(--rail) 12%, transparent);
+  --accent-border: color-mix(in srgb, var(--rail) 32%, transparent);
+  --accent-hover: color-mix(in srgb, var(--accent) 94%, #000);
+  --accent-hover-border: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--accent) 70%, #fff) 25%,
+    transparent
+  );
+  --ink-inverse: #fff;
   --danger: #ff3b30;
   --danger-ink: #d70015;
   --danger-text: #7a1208;
+  --danger-solid: #d70015;
+  --danger-solid-hover: #7a1208;
   --danger-wash: rgba(255, 59, 48, 0.08);
   --danger-border: rgba(255, 59, 48, 0.38);
   --amber-ink: #7a5410;
   --amber-strong: #b06a00;
   --amber-wash: rgba(255, 190, 50, 0.16);
   --amber-border: rgba(200, 140, 20, 0.3);
-  --warning-dot: #d59600;
+  --warning-dot: var(--unread);
   --ok-ink: #248a3d;
   --ok-solid: #34c759;
   --ok-wash: rgba(52, 199, 89, 0.14);
   --ok-border: rgba(52, 199, 89, 0.38);
 
   /* surfaces */
+  --app-ground: #e7e8ee;
+  --surface: #f6f6f9;
+  --main-surface: #fff;
   --panel: #fbfbfd;
   --btn-bg: #fff;
   --btn-hover: #f2f2f5;
+  --hover: rgba(0, 0, 0, 0.05);
   --chip-bg: rgba(0, 0, 0, 0.06);
   --chip-ink: #4c4c53;
   --wash: rgba(0, 0, 0, 0.025);
@@ -42,7 +61,9 @@
   --unread: #ff6f21;
 
   /* navigation rail */
-  --rail: #4c6be1;
+  --rail-light: #4c6be1;
+  --rail-dark: #3c4e91;
+  --rail: var(--rail-light);
   --rail-ink: rgba(255, 255, 255, 0.82);
   --rail-line: rgba(255, 255, 255, 0.14);
   --rail-active: rgba(255, 255, 255, 0.16);
@@ -52,25 +73,106 @@
   --line-soft: rgba(0, 0, 0, 0.06);
   --line-mid: rgba(0, 0, 0, 0.1);
   --line-field: rgba(0, 0, 0, 0.16);
+  --search-border: var(--line-field);
+  --window-border: rgba(0, 0, 0, 0.16);
+  --scrollbar-thumb: rgba(60, 60, 67, 0.4);
+
+  /* item kinds */
+  --c-password: #3b82f6;
+  --c-file: #64748b;
+  --c-resource: #d97706;
+  --c-link: #7c3aed;
+  --c-team: #636366;
+  --c-none: #aeaeb2;
+
+  /* radius scale */
+  --radius-sm: 7px;
+  --radius-md: 9px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 99px;
 
   /* Store mark initials (< 12px type floor exemption) */
   --mark-type: 10px;
 
+  /* Item glyphs: the key a password is drawn with, the amber every folder
+     and document mark shares. */
+  --key-gold: #b8860b;
+  --folder-amber: #b45309;
+
   /* shadows */
   --shadow-xs: 0 1px 1px rgba(15, 20, 45, 0.04);
+  --shadow-menu: 0 10px 28px rgba(15, 20, 45, 0.14);
   --shadow-sheet: 0 14px 34px rgba(15, 20, 45, 0.16);
+  --shadow-window:
+    0 24px 60px rgba(15, 20, 45, 0.26), 0 2px 8px rgba(15, 20, 45, 0.12);
 }
 
 /* Rail theme variants (`data-rail`) */
 :root[data-rail='iris'] {
-  --rail: #6a6ff0;
-}
-:root[data-rail='lavender'] {
-  --rail: #7a77f1;
+  --rail-light: #6a6ff0;
+  --rail-dark: #5a4f96;
 }
 :root[data-rail='sky'] {
-  --rail: #4f8ef7;
+  --rail-light: #3b81f6;
+  --rail-dark: #315d99;
 }
 :root[data-rail='slate'] {
-  --rail: #5468b3;
+  --rail-light: #5468b3;
+  --rail-dark: #46578e;
+}
+
+/* Dark appearance follows the Files redesign palette; the rail uses the dark half of its chosen color pair. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --rail: var(--rail-dark);
+  --ink: #ecedf1;
+  --ink-2: #dcdde3;
+  --ink-3: #c7c9d2;
+  --muted: #a4a6b0;
+  --muted-2: #a4a6b0;
+  --faint: #92949f;
+  --accent-ink: color-mix(in srgb, var(--rail) 45%, #fff);
+  --accent-wash: color-mix(in srgb, var(--rail) 24%, transparent);
+  --accent-wash-2: color-mix(in srgb, var(--rail) 36%, transparent);
+  --accent-border: color-mix(in srgb, var(--rail) 70%, transparent);
+  --accent-hover: color-mix(in srgb, var(--accent) 94%, #fff);
+  --accent-hover-border: color-mix(in srgb, var(--accent) 25%, transparent);
+  --danger-solid: #b82c26;
+  --danger-solid-hover: #a5221e;
+  --app-ground: #111217;
+  --surface: #1b1d24;
+  --main-surface: #23252e;
+  --panel: #20222a;
+  --btn-bg: #2a2c36;
+  --btn-hover: #32343f;
+  --chip-bg: rgba(255, 255, 255, 0.08);
+  --chip-ink: #c7c9d2;
+  --hover: rgba(255, 255, 255, 0.06);
+  --wash: rgba(255, 255, 255, 0.025);
+  --line: rgba(255, 255, 255, 0.09);
+  --line-soft: rgba(255, 255, 255, 0.07);
+  --line-mid: rgba(255, 255, 255, 0.12);
+  --line-field: rgba(255, 255, 255, 0.22);
+  --search-border: var(--line-mid);
+  --window-border: rgba(255, 255, 255, 0.16);
+  --scrollbar-thumb: rgba(210, 210, 220, 0.4);
+  --amber-ink: #e0b25a;
+  --amber-strong: #e0b25a;
+  --amber-wash: rgba(255, 190, 50, 0.14);
+  --amber-border: rgba(224, 178, 90, 0.32);
+  --ok-ink: #5cd47a;
+  --danger-ink: #ff8a80;
+  --danger-text: #ffaaa2;
+  --danger-wash: rgba(255, 59, 48, 0.14);
+  --backdrop: rgba(0, 0, 0, 0.5);
+  --key-gold: #d5ad42;
+  --folder-amber: #d78b42;
+  --c-resource: #e0a556;
+  --c-link: #b69afa;
+  --c-file: #abb8c8;
+  --shadow-menu: 0 10px 28px rgba(0, 0, 0, 0.4);
+  --shadow-sheet: 0 14px 34px rgba(0, 0, 0, 0.5);
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-window: 0 24px 60px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
 }

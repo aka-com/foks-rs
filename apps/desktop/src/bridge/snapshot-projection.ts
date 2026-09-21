@@ -99,6 +99,7 @@ export async function projectCatalog(
    */
   forceRosters = false,
   activity?: RefreshOperation,
+  loadStartedAt?: number,
 ): Promise<AgentSnapshot> {
   const operation = activity?.child('Loading catalog details');
   // The projection is the renderer's own share of a catalog read: the server
@@ -122,6 +123,7 @@ export async function projectCatalog(
       forceRosters,
       counts,
       operation,
+      loadStartedAt,
     );
     end('ok', { attrs: counts });
     return snapshot;
@@ -146,6 +148,7 @@ async function projectCatalogCounted(
   forceRosters: boolean,
   counts: { servers: number; rosters: number },
   activity?: RefreshOperation,
+  loadStartedAt?: number,
 ): Promise<AgentSnapshot> {
   // A native response that carries the locally known server facts and accounts
   // is projected from them, whichever command produced it, so the whole-catalog
@@ -913,6 +916,9 @@ async function projectCatalogCounted(
       partial,
       nowSeconds,
       profileScope,
+      loadStartedAt === undefined
+        ? undefined
+        : Math.max(0, performance.now() - loadStartedAt),
     ),
   });
   if (!bridge.native) {

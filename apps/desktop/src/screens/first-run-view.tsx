@@ -17,6 +17,7 @@ import type { RailAgentState } from '../shell/sidebar';
 import { PageHeader } from '../shell/page-header';
 import {
   completedFirstRunSteps,
+  firstRunNextStep,
   firstRunStepCount,
   type FirstRunCheckpoint,
   type FirstRunPath,
@@ -135,7 +136,7 @@ export function SetupSidebar({
               disabled={blocked || !recoverEnabled}
               onClick={onRecoverAccount}
             >
-              <Icon name="person" />
+              <Icon name="user" />
               <span className="t">Recover account</span>
             </button>
           ) : null}
@@ -147,7 +148,7 @@ export function SetupSidebar({
               disabled={blocked || cancelDisabled}
               onClick={onCancel}
             >
-              <Icon name="x" />
+              <Icon name="close" />
               <span className="t">
                 {checkpoint.account ||
                 checkpoint.provisionedAccount ||
@@ -200,7 +201,7 @@ export function SetupSidebar({
               disabled={blocked || cancelDisabled}
               onClick={onCancel}
             >
-              <Icon name="x" />
+              <Icon name="close" />
               <span className="t">
                 {checkpoint.account ||
                 checkpoint.provisionedAccount ||
@@ -280,14 +281,26 @@ export function FirstRunAppSidebar({
   /** The Devices tab's dot, as the shell computes it elsewhere. */
   devicesAlert?: { description: string } | null;
 }): ReactNode {
-  // Render setup progress in the sidebar status slot.
+  // Setup progress is the rail's card; the invitation note keeps the status
+  // slot under it.
+  const completed = completedFirstRunSteps(checkpoint);
+  const total = firstRunStepCount(checkpoint);
+  const setup =
+    completed < total
+      ? {
+          done: completed,
+          total,
+          next: firstRunNextStep(checkpoint),
+          onContinue: () =>
+            onNavigate({
+              kind: 'first-run',
+              step: checkpoint.state,
+              path: checkpoint.path,
+            }),
+        }
+      : undefined;
   const status = (
     <>
-      <FirstRunChecklistStatus
-        checkpoint={checkpoint}
-        active
-        onNavigate={onNavigate}
-      />
       {checkpoint.path === 'invited' && !checkpoint.added ? (
         <p className="side-note">
           {groupName} will appear under Teams once your access is approved. FOKS
@@ -313,6 +326,7 @@ export function FirstRunAppSidebar({
       }
       nativeChrome={native}
       onNavigate={onNavigate}
+      setup={setup}
       status={status}
       onReenter={onReenter}
       collapsed={collapsed}

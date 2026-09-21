@@ -13,7 +13,7 @@ import {
   useContext,
   useId,
 } from 'react';
-import type { ReactElement, ReactNode } from 'react';
+import type { MouseEventHandler, ReactElement, ReactNode } from 'react';
 
 export type InsetVariant = 'field' | 'preview';
 
@@ -53,6 +53,7 @@ export function Inset({
 }
 
 export interface InsetRowProps {
+  onClick?: MouseEventHandler<HTMLDivElement>;
   /** The row's label — `.k`, the fixed-width first column. */
   label?: ReactNode;
   /** The value — `.v`. `valueClass` carries the design's `mono` / `mask`. */
@@ -100,6 +101,7 @@ function adoptControl(
 }
 
 export function InsetRow({
+  onClick,
   label,
   children,
   valueClass,
@@ -128,6 +130,7 @@ export function InsetRow({
   return (
     <div
       className={classes}
+      onClick={onClick}
       onMouseDown={(event) => {
         const target = event.target;
         if (!(target instanceof Element)) return;

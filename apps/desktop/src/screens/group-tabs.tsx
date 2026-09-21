@@ -259,7 +259,7 @@ export function ChannelsTab({
         </Button>
         <p className="fn">
           Channels are encrypted with the team key. Access is determined by each
-          member’s assigned role.
+          member’s role.
         </p>
       </div>
     </div>
@@ -279,7 +279,6 @@ export function FilesTab({
   store: TeamStore;
   onNavigate: (location: Location) => void;
 }): ReactNode {
-  const items = itemCountOf(snapshot, store);
   const state = storeDescriptionState(snapshot, store);
   if (state !== 'normal') {
     const copy = accessCopy(state, store, displayServerName(snapshot, store));
@@ -299,7 +298,7 @@ export function FilesTab({
           action={
             <Button
               variant="primary"
-              icon="out"
+              icon="externalLink"
               onClick={() => onNavigate({ kind: 'store', ref: store.id })}
             >
               Open in Files
@@ -317,11 +316,6 @@ export function FilesTab({
           </span>
           <span className="t">
             <b>View {store.name}’s items in Files</b>
-            <small>
-              {items ? plural(items, 'item') : 'No items yet'} — the passwords
-              and documents shared with this team. Permissions set here control
-              who can access each item.
-            </small>
           </span>
         </InsetRow>
       </Inset>
@@ -385,7 +379,7 @@ export function IncompleteGroupPage({
               action={
                 <Button
                   size="sm"
-                  icon="out"
+                  icon="externalLink"
                   onClick={() =>
                     onNavigate({
                       kind: 'settings',

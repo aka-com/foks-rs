@@ -40,9 +40,6 @@ import {
 } from '../model';
 import type { AgentSnapshot, Store, StoreRef } from '../model';
 import type { Location } from '../location';
-import type { FoksIconName } from '../icons';
-
-import './search-palette.css';
 
 /* ---------------------------------------------------------------- scopes -- */
 
@@ -425,7 +422,7 @@ function EntryGlyph({ glyph }: { glyph: SearchEntry['glyph'] }): ReactNode {
     case 'item':
       return (
         <span className={`kico md ${glyph.itemKind}`} aria-hidden="true">
-          <Icon name={KINDS[glyph.itemKind].icon as FoksIconName} />
+          <Icon name={KINDS[glyph.itemKind].icon} />
         </span>
       );
     case 'store':

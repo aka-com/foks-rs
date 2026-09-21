@@ -559,7 +559,7 @@ test('boot error retry restarts startup', async () => {
   };
   const rendered = ui.render(createElement(App, { bridge }));
   const dialog = await rendered.findByRole('alertdialog', {
-    name: 'Couldn’t load FOKS',
+    name: 'FOKS could not start',
   });
   assert.ok(dialog.classList.contains('takeover'));
   assert.ok(dialog.classList.contains('lock-back'));
@@ -589,6 +589,10 @@ test('the agent-lost dialog shows the reason it was given', async () => {
     dialog.textContent ?? '',
     /The agent socket closed while reading the catalog\./,
   );
+  const paragraphs = dialog.querySelectorAll('.tcard > p');
+  assert.equal(paragraphs.length, 2);
+  assert.equal(paragraphs[1].classList.contains('fn'), false);
+  assert.doesNotMatch(dialog.textContent ?? '', /Lost .* ago/);
   rendered.unmount();
 });
 
@@ -851,7 +855,9 @@ test('lost-connection dialog renders beside a dimmed navigation rail', async () 
   assert.ok(document.querySelector('.side.rail .rail-tabs'));
   assert.ok(document.querySelector('.rail-body.is-blocked'));
   assert.ok(
-    document.querySelector('.topbar .topsearch')?.hasAttribute('disabled'),
+    document
+      .querySelector('.topbar .topsearch input')
+      ?.hasAttribute('disabled'),
   );
   rendered.unmount();
 });
@@ -1197,7 +1203,7 @@ test('takeover transitions restore focus without releasing retained isolation', 
     await Promise.resolve();
   });
   const maintenance = await rendered.findByRole('alertdialog', {
-    name: 'export · running',
+    name: 'Export · In progress...',
   });
   assert.ok(document.activeElement === maintenance);
   assert.equal(document.querySelectorAll('.takeover').length, 1);
@@ -1407,13 +1413,10 @@ test('agent loss closes the search palette until a later shortcut reopens it', a
     },
   };
   const rendered = ui.render(createElement(App, { bridge }));
-  const search = await ui.waitFor(() => {
-    const button = document.querySelector<HTMLButtonElement>('.topsearch');
-    assert.ok(button);
-    assert.equal(button.disabled, false);
-    return button;
-  });
-  ui.fireEvent.click(search);
+  // ⌘K is the only way into the palette now: the header's field filters the
+  // open view rather than standing in for the palette's trigger.
+  await ui.waitFor(() => assert.ok(document.querySelector('.topbar')));
+  ui.fireEvent.keyDown(document, { key: 'k', metaKey: true });
   await ui.waitFor(() => assert.ok(document.querySelector('.pal-back')));
   await ui.act(async () => {
     loss.resolve('The agent socket closed.');
@@ -1507,7 +1510,7 @@ test('active maintenance overlay renders no action buttons', async () => {
   });
   const dialog = document.querySelector('.stopveil');
   assert.ok(dialog);
-  assert.match(dialog.textContent ?? '', /export · running/i);
+  assert.match(dialog.textContent ?? '', /export · in progress/i);
   assert.equal(dialog.querySelectorAll('button').length, 0);
   rendered.unmount();
 });

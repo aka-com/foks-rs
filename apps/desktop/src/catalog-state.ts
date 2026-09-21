@@ -243,6 +243,7 @@ export function projectCatalogFreshness(
   partial: boolean,
   nowSeconds: number,
   profileScope?: string,
+  milliseconds?: number,
 ): CatalogFreshness {
   const previous = base?.catalogFreshness;
   const entry = (
@@ -253,6 +254,9 @@ export function projectCatalogFreshness(
     ...prior,
     lastAttemptAt: nowSeconds,
     ...(complete && !error ? { lastSuccessAt: nowSeconds } : {}),
+    ...(complete && !error && milliseconds !== undefined
+      ? { lastMilliseconds: milliseconds }
+      : {}),
     refreshing: partial && !complete && !error,
     error: error ?? (partial && !complete ? prior?.error : undefined),
   });

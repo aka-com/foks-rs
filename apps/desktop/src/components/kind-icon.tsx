@@ -10,7 +10,6 @@ import type { ReactNode } from 'react';
 import { Icon } from './icon';
 import { KINDS, hue, isLogin, kindOf, nameOf } from '../model';
 import type { Item } from '../model';
-import type { FoksIconName } from '../icons';
 
 /** Item kinds available for filtering and creation. */
 export type FilterKind = keyof typeof KINDS;
@@ -24,7 +23,7 @@ export interface KindIconProps {
 export function KindIcon({ kind, className }: KindIconProps): ReactNode {
   return (
     <span className={['kic', kind, className].filter(Boolean).join(' ')}>
-      <Icon name={KINDS[kind].icon as FoksIconName} />
+      <Icon name={KINDS[kind].icon} />
     </span>
   );
 }
@@ -51,7 +50,7 @@ export function KindGlyph({ item, size }: KindGlyphProps): ReactNode {
   const kind = kindOf(item) as FilterKind;
   return (
     <span className={[...classes, kind].join(' ')}>
-      <Icon name={KINDS[kind].icon as FoksIconName} />
+      <Icon name={KINDS[kind].icon} />
     </span>
   );
 }

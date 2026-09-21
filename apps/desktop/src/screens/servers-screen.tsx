@@ -395,7 +395,7 @@ export function ServersSection({
               </Button>
               <Button
                 size="sm"
-                icon="again"
+                icon="refresh"
                 disabled={
                   busy ||
                   selectedState === 'blocked' ||
@@ -534,15 +534,19 @@ function ServerRow({
             <Button
               size="sm"
               variant={state === 'unprobed' ? 'primary' : 'plain'}
-              icon="again"
+              icon="refresh"
               disabled={busy}
               onClick={() => onCheck(server)}
             >
               Check
             </Button>
           ) : null}
-          <Button size="sm" onClick={() => onOpen(server.id)}>
-            Manage
+          <Button
+            size="sm"
+            className="account-fact-link"
+            onClick={() => onOpen(server.id)}
+          >
+            Manage ›
           </Button>
         </>
       }
@@ -652,7 +656,7 @@ function StatusBand({
           <Button
             size="sm"
             variant="primary"
-            icon="again"
+            icon="refresh"
             disabled={busy}
             onClick={onCheck}
           >
@@ -673,7 +677,7 @@ function StatusBand({
           <Button
             variant="plain"
             size="sm"
-            icon="again"
+            icon="refresh"
             disabled={busy}
             onClick={onCheck}
           >

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import { useWorkflowAccess } from '../workflow-context';
-import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { Bridge } from '../bridge';
 import { normalizeCommandError } from '../bridge';
@@ -245,18 +244,37 @@ export function SsoPanel({
     : progress?.browserAvailable
       ? 'browser'
       : 'begin';
-  const pinField = (label: string): ReactNode => (
-    <div className="local-field-card">
-      <label className="local-field-row">
-        <span>{label}</span>
+  const hardwareRequired = progress?.state === 'hardware-verification-required';
+  const loginHardware = (
+    <>
+      <label className="checkline">
         <input
-          type="password"
-          autoComplete="off"
-          value={pin}
-          onChange={(e) => setPin(e.target.value)}
+          type="checkbox"
+          checked={hardware || hardwareRequired}
+          disabled={blocked || hardwareRequired}
+          onChange={(event) => {
+            setHardware(event.target.checked);
+            if (!event.target.checked) setPin('');
+          }}
         />
+        Hardware key
       </label>
-    </div>
+      {hardware || hardwareRequired ? (
+        <div className="local-field-card">
+          <label className="local-field-row">
+            <span>Security key PIN (enrolled keys only)</span>
+            <input
+              type="password"
+              autoComplete="off"
+              placeholder="Enter security key PIN"
+              disabled={blocked}
+              value={pin}
+              onChange={(event) => setPin(event.target.value)}
+            />
+          </label>
+        </div>
+      ) : null}
+    </>
   );
   const beginButton = resumeOnly ? null : (
     <Button
@@ -463,7 +481,7 @@ export function SsoPanel({
         {intro}
         {statusLine}
         {errorLine}
-        {login ? pinField('Security key PIN (enrolled keys only)') : null}
+        {login ? loginHardware : null}
       </PanelSheet>
     );
   return (
@@ -475,7 +493,7 @@ export function SsoPanel({
       {intro}
       {statusLine}
       {errorLine}
-      {login && pinField('Security key PIN (enrolled keys only)')}
+      {login && loginHardware}
       {!login && (
         <>
           <SectionLabel>Keys</SectionLabel>
@@ -518,7 +536,6 @@ export function SsoPanel({
           </p>
         </>
       )}
-      {finishable && login && pinField('Security key PIN (enrolled keys only)')}
       {primarySlot ? createPortal(primaryButton, primarySlot) : null}
       {showActions ? (
         <div className="btns">

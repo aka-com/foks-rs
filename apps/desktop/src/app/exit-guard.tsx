@@ -66,7 +66,7 @@ function ExitOverlay({
         <div className="exit-card decision">
           <div className="exit-card-body">
             <span className="exit-card-icon">
-              <Icon name="gear" />
+              <Icon name="settings" />
             </span>
             <div>
               <h2 id="exit-decision-title">Quit FOKS?</h2>
@@ -120,7 +120,7 @@ function ExitOverlay({
               <Icon name="alert" />
             </span>
             <div>
-              <h2 id="exit-failed-title">FOKS Agent didn’t stop</h2>
+              <h2 id="exit-failed-title">FOKS Agent did not stop</h2>
               <p>
                 FOKS has not quit because its background agent is still running.
                 You can try again, leave it running, or force it to stop.

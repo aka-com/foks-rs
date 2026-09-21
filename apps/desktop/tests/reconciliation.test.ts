@@ -691,13 +691,21 @@ test('a focus or recovery wake leaves a catalog job alone that a read covered wi
       profiles: Object.fromEntries(
         snapshot.catalogProfiles.map((profile) => [
           profile,
-          { lastSuccessAt: clock.now() / 1_000, refreshing: false },
+          {
+            lastSuccessAt: clock.now() / 1_000,
+            refreshing: false,
+            lastMilliseconds: 125,
+          },
         ]),
       ),
       stores: {},
     },
   };
   service.update(snapshot);
+  for (const entry of service.scheduler.observations()) {
+    if (entry.kind === 'catalog')
+      assert.equal(entry.snapshot.lastMilliseconds, 125);
+  }
   await clock.advance(5_000);
   service.wake('recovery');
   await clock.advance(1_000);

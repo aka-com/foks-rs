@@ -49,6 +49,7 @@ export function useChatComposer(
     }
   };
   const send = () => {
+    if (!draft.trim()) return;
     setSendError('');
     // An acknowledged local intent survives navigation before preparation.
     // Once the agent has prepared it, its durable operation is recovered by

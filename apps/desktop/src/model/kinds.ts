@@ -14,13 +14,14 @@
  */
 
 import type { Item, ItemKind } from './types';
+import type { FoksIconName } from '../icon-name';
 
 export interface KindMeta {
   /** Display label for the kind. */
   label: string;
   plural: string;
-  /** A `FoksIconName`; kept as a plain string so the model imports no view. */
-  icon: string;
+  /** Type-only dependency keeps invalid display metadata out of the UI. */
+  icon: FoksIconName;
   blurb: string;
 }
 

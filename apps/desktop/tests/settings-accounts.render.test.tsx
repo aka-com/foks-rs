@@ -197,7 +197,7 @@ test('the account panel keeps every workflow row from the accounts pane', async 
     'Teams ›',
     'Passphrase…',
     'Bot accounts',
-    'Open web admin panel',
+    'Web admin panel',
     'Sign in via SSO',
     'Import from FOKS CLI',
     'Connect an existing account with a paper key',
@@ -239,7 +239,7 @@ test('the account panel keeps every workflow row from the accounts pane', async 
     ),
     [
       'Bot accounts',
-      'Open web admin panel',
+      'Web admin panel',
       'Sign in via SSO',
       'Import from FOKS CLI',
       'Connect an existing account with a paper key',
@@ -820,7 +820,7 @@ test('a trust block stops remote workflows while local recovery controls remain 
   );
   for (const name of [
     'Bot accounts',
-    'Open web admin panel',
+    'Web admin panel',
     'Import from FOKS CLI',
   ])
     assert.equal(

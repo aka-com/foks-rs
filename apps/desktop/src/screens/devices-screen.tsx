@@ -694,7 +694,7 @@ export function DevicesScreen({
               !backupsUnknown &&
               !backups.length ? (
                 <Band
-                  label="No recovery key configured"
+                  label="No recovery key"
                   action={
                     <Button
                       size="sm"
@@ -731,6 +731,16 @@ export function DevicesScreen({
                       <InsetRow
                         key={entry.address}
                         className="devrow"
+                        onClick={(event) => {
+                          if (
+                            event.target instanceof Element &&
+                            event.target.closest(
+                              'button, a, input, select, textarea',
+                            )
+                          )
+                            return;
+                          openDevice(entry.address);
+                        }}
                         action={
                           <>
                             {deviceRowAction(entry)}
@@ -760,8 +770,10 @@ export function DevicesScreen({
                     </InsetRow>
                   )}
                 </Inset>
-                {metadataStatus}
-                <div className="device-list-actions">{refreshHardwareKeys}</div>
+                <div className="device-list-actions">
+                  {refreshHardwareKeys}
+                  {metadataStatus}
+                </div>
               </div>
             </div>
           </div>

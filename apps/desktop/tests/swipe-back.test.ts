@@ -16,7 +16,10 @@ import type { Location } from '../src/location';
 installDom({ url: 'http://localhost/', body: '<div id="root"></div>' });
 
 test('the viewport and nested scroll containers suppress elastic overscroll without disabling scrolling', async () => {
-  const css = await readSource('../src/styles/app.css', import.meta.url);
+  const css = await readSource(
+    '../src/styles/native-window.css',
+    import.meta.url,
+  );
   const rule = /(?:^|\n)\*\s*\{([^}]*)\}/.exec(css);
   assert.ok(rule);
   assert.match(rule[1], /overscroll-behavior: none;/);
@@ -66,6 +69,7 @@ function clock(): { now: () => number; advance: (ms: number) => void } {
 }
 
 interface WheelFields {
+  defaultPrevented?: boolean;
   deltaX?: number;
   deltaY?: number;
   ctrlKey?: boolean;
@@ -342,4 +346,10 @@ test('the mounted listener reads the events and stops on unsubscribe', () => {
   stop();
   send();
   assert.equal(navigations.length, 1);
+});
+
+test('a wheel event consumed by another control cannot navigate back', () => {
+  const subject = rig();
+  subject.fullSwipe({ defaultPrevented: true });
+  assert.deepEqual(subject.navigations, []);
 });

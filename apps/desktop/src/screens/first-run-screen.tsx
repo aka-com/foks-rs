@@ -170,13 +170,13 @@ const JOINING_OPTIONS: readonly {
 }[] = [
   {
     path: 'own',
-    icon: 'person',
+    icon: 'user',
     title: 'Set up my own account',
     detail: 'Set up your account and Personal vault.',
   },
   {
     path: 'invited',
-    icon: 'people',
+    icon: 'users',
     title: 'Join an existing team',
     detail: 'Accept an invitation to join someone else’s team.',
   },
@@ -198,7 +198,11 @@ function JoiningChoice({
     refs.current[next]?.focus();
   };
   return (
-    <div className="opts" role="radiogroup" aria-label="Setup method">
+    <div
+      className="setup-method-options"
+      role="radiogroup"
+      aria-label="Setup method"
+    >
       {JOINING_OPTIONS.map((option, index) => {
         const on = value === option.path;
         return (
@@ -211,7 +215,7 @@ function JoiningChoice({
             role="radio"
             aria-checked={on}
             tabIndex={on || (value === null && index === 0) ? 0 : -1}
-            className={on ? 'opt on' : 'opt'}
+            className={on ? 'setup-method-option on' : 'setup-method-option'}
             onClick={() => onChange(option.path)}
             onKeyDown={(event) => {
               if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
@@ -1648,7 +1652,7 @@ function FirstRunSession({
             </label>
           </div>
         ) : null}
-        <div className="actions operation-actions">
+        <div className="setup-actions operation-actions">
           {adoptable ? (
             <Button
               variant="primary"
@@ -1724,7 +1728,7 @@ function FirstRunSession({
             {identityWaiting}
           </p>
         ) : null}
-        <div className="actions">
+        <div className="setup-actions">
           <Button
             variant="primary"
             disabled={identityLoading || !agentReady}
@@ -1845,7 +1849,7 @@ function FirstRunSession({
           Checking for existing accounts from the official FOKS CLI. No changes
           will be made to your data.
         </p>
-        <div className="actions">
+        <div className="setup-actions">
           <Button variant="primary" disabled busy>
             Checking…
           </Button>
@@ -1897,7 +1901,7 @@ function FirstRunSession({
             </div>
           </RadioGroup>
         </Inset>
-        <div className="actions">
+        <div className="setup-actions">
           <Button
             variant="primary"
             disabled={goStart === 'existing' && !goCandidate}
@@ -1962,7 +1966,7 @@ function FirstRunSession({
           </div>
         ) : null}
         <JoiningChoice value={pendingPath} onChange={setPendingPath} />
-        <div className="actions">
+        <div className="setup-actions">
           <Button
             variant="primary"
             disabled={!pendingPath || !agentReady || busy}
@@ -2580,7 +2584,7 @@ function FirstRunSession({
           {message ||
             'This team’s vault could not be opened. Retry to check your membership again, or choose another team.'}
         </p>
-        <div className="actions">
+        <div className="setup-actions">
           <Button
             variant="primary"
             disabled={busy}
@@ -2646,7 +2650,7 @@ function FirstRunSession({
             </div>
           </div>
         ) : null}
-        <div className="two">
+        <div className="setup-grid">
           <div className="col">
             <div className="pcard">
               <h3>Message for {adminShort}</h3>
@@ -2667,7 +2671,7 @@ function FirstRunSession({
               </p>
             </div>
             <Inset className="checklist">
-              <InsetRow label={<Icon name="people" />}>
+              <InsetRow label={<Icon name="users" />}>
                 <b>{group} will appear under Teams</b>
                 <span className="hint">
                   Teams appear once membership is confirmed by the server.
@@ -2733,7 +2737,7 @@ function FirstRunSession({
               </p>
               <details className="dd">
                 <summary>
-                  <Icon name="chev" />
+                  <Icon name="chevronDown" />
                   Details
                 </summary>
                 <p>
@@ -2850,7 +2854,9 @@ function FirstRunSession({
         {recoverySet ? null : (
           <div className="checklist-notice">
             <Band
-              label={`Recovery keys for ${checkpoint.account?.username} are only saved on this device.`}
+              // Every other band's label is the short lead-in the sentence
+              // after it completes, not a sentence of its own.
+              label="Recovery not set up"
               action={
                 <Button
                   size="sm"
@@ -2861,8 +2867,8 @@ function FirstRunSession({
                 </Button>
               }
             >
-              Without a backup method, this account can’t be recovered if this
-              device is lost.
+              The keys for {checkpoint.account?.username} are saved only on this
+              device, so this account cannot be recovered if the device is lost.
             </Band>
           </div>
         )}
@@ -2891,7 +2897,10 @@ function FirstRunSession({
     content = (
       <Pane title={group} subtitle={`Team on ${profile?.canonicalName}`} wide>
         <Notice
-          title={addedStore ? `Joined ${group}` : `${group}: vault unavailable`}
+          // The pane's title already names the team, so the notice states the
+          // condition alone, in the same words the store access takeover uses.
+          severity={addedStore ? 'info' : 'warn'}
+          title={addedStore ? `Joined ${group}` : 'Vault unavailable'}
           actions={
             <>
               <Button onClick={() => onNavigate({ kind: 'all' })}>
@@ -2974,7 +2983,7 @@ function FirstRunSession({
             {agentRetryError}
           </div>
         ) : null}
-        <div className="actions">
+        <div className="setup-actions">
           <Button
             variant="primary"
             disabled={agentRetrying}

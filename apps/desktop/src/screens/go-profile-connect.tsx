@@ -41,6 +41,7 @@ export function GoProfileConnectSheet({
   onError,
 }: Props): ReactNode {
   const [discovery, setDiscovery] = useState<GoProfileDiscovery | null>(null);
+  const [picked, setPicked] = useState<string | null>(null);
   const [selected, setSelected] = useState<GoProfileCandidate | null>(null);
   const [profileName, setProfileName] = useState('');
   const [server, setServer] = useState('');
@@ -220,6 +221,10 @@ export function GoProfileConnectSheet({
         (!existingProfile || candidate.hostId === existingProfile.host_id),
     ) ?? [];
 
+  const pickedCandidate = candidates.find(
+    (candidate) => candidate.candidateId === picked,
+  );
+
   return (
     <SheetDialog
       onClose={onClose}
@@ -232,11 +237,33 @@ export function GoProfileConnectSheet({
           </Button>
           {selected && !checked ? (
             <Button
+              disabled={busy}
+              onClick={() => {
+                setSelected(null);
+                setChecked(null);
+                setError(null);
+              }}
+            >
+              Back
+            </Button>
+          ) : null}
+          {!selected && candidates.length > 0 ? (
+            <Button
+              variant="primary"
+              disabled={busy || !pickedCandidate}
+              onClick={() => {
+                if (pickedCandidate) choose(pickedCandidate);
+              }}
+            >
+              Continue
+            </Button>
+          ) : selected && !checked ? (
+            <Button
               variant="primary"
               disabled={busy || !server.trim() || !profileName.trim()}
               onClick={() => void check()}
             >
-              Add server
+              Import
             </Button>
           ) : checked && method === 'pair' ? (
             <>
@@ -286,13 +313,13 @@ export function GoProfileConnectSheet({
       {candidates.length && !selected ? (
         <GoProfileChooser
           candidates={candidates}
-          selected={null}
-          onSelect={choose}
+          selected={picked}
+          onSelect={(candidate) => setPicked(candidate.candidateId)}
         />
       ) : null}
       {selected && !checked ? (
         <>
-          <SectionLabel>Add the server before pairing</SectionLabel>
+          <p>Add the server before pairing.</p>
           <Inset className="cli-server-fields">
             <Field
               disabled={busy}
@@ -315,16 +342,6 @@ export function GoProfileConnectSheet({
               onClick={() => setServer('foks.app:4430')}
             >
               Use official FOKS server
-            </Button>
-            <Button
-              size="sm"
-              disabled={busy}
-              onClick={() => {
-                setSelected(null);
-                setChecked(null);
-              }}
-            >
-              Choose another account
             </Button>
           </div>
         </>

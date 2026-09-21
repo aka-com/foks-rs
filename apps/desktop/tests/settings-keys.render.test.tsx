@@ -816,14 +816,28 @@ test('a key’s row opens its own page, with the full id and a way to copy it', 
     store: 'acct:personal',
     onNavigate: (location) => chosen.push(location),
   });
+  const row = list.getByText('Travel Mac').closest('.devrow');
+  assert.ok(row);
+  ui.fireEvent.click(list.getByText('Travel Mac'));
+  ui.fireEvent.click(row);
+  assert.equal(chosen.length, 2);
   await ui.act(async () => {
     ui.fireEvent.click(list.getByRole('button', { name: 'Open Travel Mac' }));
   });
+  assert.equal(chosen.length, 3);
   assert.deepEqual(chosen.at(-1), {
     kind: 'devices',
     store: 'acct:personal',
     device: travel,
   });
+  ui.fireEvent.click(
+    ui.within(row as HTMLElement).getByRole('button', { name: 'Remove…' }),
+  );
+  assert.equal(
+    chosen.length,
+    3,
+    'Remove opens its confirmation without navigating',
+  );
   ui.cleanup();
 
   const copied: string[] = [];
@@ -1314,7 +1328,7 @@ test('an account with no paper key gets its own band without publishing shell al
   });
   assert.ok(bridgeRef.current);
   await ui.waitFor(() => {
-    assert.ok(page.getByText('No recovery key configured'));
+    assert.ok(page.getByText('No recovery key'));
   });
   assert.equal(
     deviceAlertRegistry(bridgeRef.current)
@@ -1352,5 +1366,5 @@ test('an account with a paper key draws no band without publishing shell alerts'
       .paperKeys.get('acct:personal'),
     undefined,
   );
-  assert.equal(page.queryByText('No recovery key configured'), null);
+  assert.equal(page.queryByText('No recovery key'), null);
 });

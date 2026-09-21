@@ -4,54 +4,9 @@
  * Displays a disclosure button that expands or collapses associated panel content.
  */
 
-import { createElement, useId, useState } from 'react';
+import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ChevronDown, type IconNode } from 'lucide';
-
-const REACT_ATTR_NAMES: Readonly<Record<string, string>> = {
-  class: 'className',
-  'stroke-linecap': 'strokeLinecap',
-  'stroke-linejoin': 'strokeLinejoin',
-  'stroke-width': 'strokeWidth',
-};
-
-function lucideNode(node: IconNode | { default?: IconNode }): IconNode {
-  if (Array.isArray(node)) return node;
-  if (node && Array.isArray(node.default)) return node.default;
-  throw new Error('lucide icon node is missing');
-}
-
-function ChevronDownIcon(): ReactNode {
-  const node = lucideNode(ChevronDown);
-  return (
-    <svg
-      className="toggle-chevron"
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 24 24"
-      width={13}
-      height={13}
-      aria-hidden="true"
-      focusable="false"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      {node.map(([tag, attributes], index) =>
-        createElement(tag, {
-          ...Object.fromEntries(
-            Object.entries(attributes ?? {}).map(([key, value]) => [
-              REACT_ATTR_NAMES[key] ?? key,
-              value,
-            ]),
-          ),
-          key: index,
-        }),
-      )}
-    </svg>
-  );
-}
+import { Icon } from './icon';
 
 export interface ToggleProps {
   label: ReactNode;
@@ -88,7 +43,7 @@ export function Toggle({
           setUncontrolled((value) => !value);
         }}
       >
-        <ChevronDownIcon />
+        <Icon name="chevronDown" className="toggle-chevron" size={13} />
         {label}
       </button>
       <div id={panelId} className="toggle-body" hidden={!open}>

@@ -1,5 +1,5 @@
 /**
- * Renders SVG icons from structured element definitions without raw markup strings.
+ * Renders SVG icons from the semantic Lucide registry.
  *
  * Standard icon stroke width, line caps, and fill attributes default to consistent
  * design system values.
@@ -9,12 +9,6 @@ import { createElement } from 'react';
 import type { ReactNode } from 'react';
 import { FOKS_ICONS } from '../icons';
 import type { FoksIconName } from '../icons';
-
-const REACT_ATTR_NAMES: Readonly<Record<string, string>> = {
-  'stroke-linecap': 'strokeLinecap',
-  'stroke-linejoin': 'strokeLinejoin',
-  'stroke-width': 'strokeWidth',
-};
 
 export interface IconProps {
   name: FoksIconName;
@@ -43,13 +37,8 @@ export function Icon({ name, size, className }: IconProps): ReactNode {
     >
       {FOKS_ICONS[name].map(([tag, attrs], index) =>
         createElement(tag, {
-          ...Object.fromEntries(
-            Object.entries(attrs).map(([key, value]) => [
-              REACT_ATTR_NAMES[key] ?? key,
-              value,
-            ]),
-          ),
-          key: index,
+          ...attrs,
+          key: attrs.key ?? index,
         }),
       )}
     </svg>

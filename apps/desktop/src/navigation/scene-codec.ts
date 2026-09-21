@@ -48,7 +48,13 @@ function decodeSelection(value: string | null): Selection {
 
 type SceneNavigation = Pick<
   Scene,
-  'selection' | 'view' | 'kind' | 'sort' | 'folder' | 'closedFolders'
+  | 'selection'
+  | 'view'
+  | 'kind'
+  | 'sort'
+  | 'sortDirection'
+  | 'folder'
+  | 'closedFolders'
 >;
 
 export function decodeSceneNavigation(
@@ -68,6 +74,10 @@ export function decodeSceneNavigation(
       alias.kind ??
       INITIAL_SCENE.kind,
     sort: oneOf(SORTS, params.get('sort')) ?? alias.sort ?? INITIAL_SCENE.sort,
+    sortDirection:
+      oneOf(['asc', 'desc'] as const, params.get('direction')) ??
+      alias.sortDirection ??
+      INITIAL_SCENE.sortDirection,
     folder: params.get('folder') ?? alias.folder ?? INITIAL_SCENE.folder,
     closedFolders: (params.get('closed') ?? '').split(',').filter(Boolean),
   };
@@ -94,6 +104,7 @@ export function sceneHref(href: string, scene: Scene): string {
     view: scene.view === INITIAL_SCENE.view ? null : scene.view,
     kind: scene.kind === INITIAL_SCENE.kind ? null : scene.kind,
     sort: scene.sort === INITIAL_SCENE.sort ? null : scene.sort,
+    direction: scene.sortDirection === 'desc' ? 'desc' : null,
     folder: scene.folder || null,
     closed: scene.closedFolders.length ? scene.closedFolders.join(',') : null,
     lease: scene.lease === INITIAL_SCENE.lease ? null : scene.lease,
@@ -108,6 +119,7 @@ export function sceneOf(state: LocationState, lease: LeaseState): Scene {
     view: state.view,
     kind: state.kind,
     sort: state.sort,
+    sortDirection: state.sortDirection,
     folder: state.folder,
     closedFolders: state.closedFolders,
     lease,

@@ -517,11 +517,24 @@ test('disables account selection and dialog dismissal while server verification 
     assert.ok(rendered.getByRole('radio', { name: /cli-owner/ })),
   );
   assert.equal(rendered.queryByText('CLI accounts on this device'), null);
+  const continueButton = rendered.getByRole('button', {
+    name: 'Continue',
+  }) as HTMLButtonElement;
+  assert.equal(continueButton.disabled, true);
   ui.fireEvent.click(rendered.getByRole('radio', { name: /cli-owner/ }));
+  assert.equal(
+    (rendered.getByRole('radio', { name: /cli-owner/ }) as HTMLInputElement)
+      .checked,
+    true,
+  );
+  assert.equal(rendered.queryByLabelText('Server address'), null);
+  assert.equal(continueButton.disabled, false);
+  assert.ok(continueButton.classList.contains('primary'));
+  ui.fireEvent.click(continueButton);
   ui.fireEvent.click(
     rendered.getByRole('button', { name: 'Use official FOKS server' }),
   );
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add server' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Import' }));
   assert.equal(
     (rendered.getByLabelText('Server address') as HTMLInputElement).disabled,
     true,
@@ -529,7 +542,7 @@ test('disables account selection and dialog dismissal while server verification 
   assert.equal(
     (
       rendered.getByRole('button', {
-        name: 'Choose another account',
+        name: 'Back',
       }) as HTMLButtonElement
     ).disabled,
     true,
@@ -1377,10 +1390,11 @@ test('a server added after unmount is listed on Accounts and pairs without anoth
     ),
   );
   ui.fireEvent.click(await adding.findByRole('radio', { name: /cli-owner/ }));
+  ui.fireEvent.click(adding.getByRole('button', { name: 'Continue' }));
   ui.fireEvent.click(
     adding.getByRole('button', { name: 'Use official FOKS server' }),
   );
-  ui.fireEvent.click(adding.getByRole('button', { name: 'Add server' }));
+  ui.fireEvent.click(adding.getByRole('button', { name: 'Import' }));
   adding.unmount();
   await ui.act(async () => {
     resolve({
@@ -1428,9 +1442,10 @@ test('a server added after unmount is listed on Accounts and pairs without anoth
   );
   ui.fireEvent.click(ui.within(row).getByRole('button', { name: 'Pair' }));
   ui.fireEvent.click(await accounts.findByRole('radio', { name: /cli-owner/ }));
+  ui.fireEvent.click(accounts.getByRole('button', { name: 'Continue' }));
   assert.ok(accounts.getByRole('button', { name: 'Pair this device' }));
   assert.ok(accounts.getByRole('button', { name: 'Resume pairing' }));
-  assert.equal(accounts.queryByRole('button', { name: 'Add server' }), null);
+  assert.equal(accounts.queryByRole('button', { name: 'Import' }), null);
   assert.equal(adds, 1);
 });
 
@@ -1470,6 +1485,7 @@ test('CLI pairing resumes without entering a new device name', async () => {
     }),
   );
   ui.fireEvent.click(await rendered.findByRole('radio', { name: /cli-owner/ }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Continue' }));
   assert.equal(
     (rendered.getByLabelText('Device name') as HTMLInputElement).value,
     '',

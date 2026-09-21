@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Button, Icon } from '../components';
+import { Button } from '../components';
 import type { useAppBootstrap } from './app-bootstrap';
 import { AgentStopCard, BlockedShell, type ShellBlock } from './blocking-shell';
 
@@ -18,20 +18,23 @@ export function BootstrapScreen({
         : 'your operating-system password';
     return (
       <BlockedShell bridge={activeBridge} block={block}>
-        <div className="card lockcard">
-          <span className="glyph" aria-hidden="true">
-            <Icon name="shield" />
-          </span>
+        <div className="tcard lockcard">
           <h2 id="app-lock-title">FOKS is locked</h2>
-          <p>Authenticate with {mechanism} to unlock FOKS.</p>
+          <p>Authenticate with {mechanism}.</p>
           {lockError ? (
-            <p className="action-error" role="alert">
+            <p className="fn bad" role="alert">
               {lockError}
             </p>
           ) : null}
-          <Button variant="primary" disabled={unlocking} onClick={boot.unlock}>
-            Unlock
-          </Button>
+          <div className="tacts">
+            <Button
+              variant="primary"
+              disabled={unlocking}
+              onClick={boot.unlock}
+            >
+              Unlock
+            </Button>
+          </div>
         </div>
       </BlockedShell>
     );
@@ -39,17 +42,25 @@ export function BootstrapScreen({
   if (block.kind === 'boot-error') {
     return (
       <BlockedShell bridge={activeBridge} block={block}>
-        <div className="card lockcard">
-          <span className="glyph warn" aria-hidden="true">
-            <Icon name="alert" />
-          </span>
-          <h2 id="app-boot-error-title">Couldn’t load FOKS</h2>
-          <p className="action-error" role="alert">
+        {/* A startup failure is an error takeover, so it takes the stop
+            card's shape — a reported reason it can scroll, inline actions —
+            rather than the lock card's single full-width control. */}
+        <div className="tcard stopcard">
+          <h2 id="app-boot-error-title">FOKS could not start</h2>
+          {/* The card states the condition in its own words and the reported
+              reason in the footnote, as the other takeover cards do. */}
+          <p>
+            The startup read did not complete. Retry to start FOKS again. Your
+            vaults remain on this device and on their configured servers.
+          </p>
+          <p className="fn bad" role="alert">
             {block.message}
           </p>
-          <Button variant="primary" onClick={boot.retry}>
-            Retry
-          </Button>
+          <div className="tacts">
+            <Button variant="primary" onClick={boot.retry}>
+              Retry
+            </Button>
+          </div>
         </div>
       </BlockedShell>
     );

@@ -250,13 +250,9 @@ export function NotificationSettings({
     <div
       className={`chat-local-settings${storeId ? '' : ' device-notification-settings'}`}
     >
-      {!session ? (
-        <p role="status">Checking local alert settings…</p>
-      ) : !session.available ? (
-        <p>Desktop alerts are unavailable in this runtime.</p>
-      ) : null}
+      {!session ? <p role="status">Checking local alert settings…</p> : null}
       {!storeId && (
-        <Inset className="notification-preferences">
+        <Inset className="notification-preferences settings-checkboxes">
           <label>
             <input
               type="checkbox"
@@ -269,7 +265,7 @@ export function NotificationSettings({
                 })
               }
             />
-            Enable desktop alerts on this device
+            <span>Enable desktop alerts on this device</span>
           </label>
           <label>
             <input
@@ -283,15 +279,15 @@ export function NotificationSettings({
                 })
               }
             />
-            Include message previews
+            <span>Include message previews</span>
           </label>
         </Inset>
       )}
       {storeId && scope && channel && key && (
         <Inset className="chat-alert-mode">
-          <InsetRow label="Channel alerts">
+          <InsetRow label="Alerts">
             <CardSelect
-              label="Channel alerts"
+              label="Alerts"
               value={mode}
               disabled={!session?.available}
               options={[
@@ -312,6 +308,9 @@ export function NotificationSettings({
           </InsetRow>
         </Inset>
       )}
+      {session && !session.available ? (
+        <p role="alert">Desktop alerts are unavailable.</p>
+      ) : null}
       {error &&
         // The agent states the refusal; the shell says it again with the
         // settings pane attached, because it is the one error with a way out.

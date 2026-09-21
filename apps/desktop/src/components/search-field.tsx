@@ -1,4 +1,4 @@
-/** Controlled search input with a clear button and keyboard shortcut. */
+/** Controlled search input with an optional scope chip and keyboard badge. */
 
 import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
@@ -14,6 +14,17 @@ export interface SearchFieldProps {
    * avoid conflicting with the global search palette shortcut.
    */
   shortcut?: boolean;
+  /**
+   * Draw the ⌘K badge without binding the key. The header's field says which
+   * key opens the palette beside it; it does not claim the key itself.
+   */
+  kbd?: boolean;
+  /** Optional label displayed as a badge inside the search input to indicate the current search filter scope. */
+  scope?: string;
+  /** Whether the search input should be disabled (e.g. when the active view contains no searchable items). */
+  disabled?: boolean;
+  /** Additional CSS class name for custom layout and positioning. */
+  className?: string;
 }
 
 function isMac(): boolean {
@@ -28,6 +39,10 @@ export function SearchField({
   onChange,
   placeholder,
   shortcut = true,
+  kbd = false,
+  scope,
+  disabled = false,
+  className,
 }: SearchFieldProps): ReactNode {
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -45,16 +60,23 @@ export function SearchField({
     };
   }, [shortcut]);
 
+  const label = scope ? `Search ${scope}` : placeholder;
   return (
-    <label className={shortcut ? 'search' : 'search no-shortcut'}>
+    <label
+      className={['search', shortcut ? '' : 'no-shortcut', className ?? '']
+        .filter(Boolean)
+        .join(' ')}
+    >
+      {scope ? <span className="scope">{scope}</span> : null}
       <Icon name="search" />
       <input
         ref={inputRef}
         type="text"
         value={value}
         placeholder={placeholder}
-        aria-label={placeholder}
+        aria-label={label}
         autoComplete="off"
+        disabled={disabled}
         onChange={(event) => {
           onChange(event.target.value);
         }}
@@ -65,7 +87,7 @@ export function SearchField({
           }
         }}
       />
-      {shortcut ? (
+      {shortcut || kbd ? (
         <kbd aria-hidden="true">{isMac() ? '⌘K' : 'Ctrl K'}</kbd>
       ) : null}
     </label>

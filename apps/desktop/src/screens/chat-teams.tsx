@@ -1,27 +1,29 @@
 /**
  * The Chat tab's inbox column: every team with chat, at once.
  *
- * Every team is a heading with its `#channels` indented under it, the general
- * channel included, so a team's row means the same thing whether it has one
- * channel or ten: clicking it folds or unfolds the channel list, and clicking a
- * channel opens that channel. The fold state is local to the column and keyed
- * by team id — it does not persist. A collapsed team keeps its unread total on
- * the heading, so folding the channel list away loses no information about
- * what is unread. Each channel row carries its own unread count and, when it
- * has nothing else to say, the last message and when it arrived.
- * The rows are built from `useSidebarInbox()` — the per-team projections
- * `ChatInboxService` already keeps for the rail's badge — so a team is listed,
- * previewed and counted without a conversation being mounted for it. Named
- * teams whose server offers no chat sit dimmed at the foot under "Chat
- * unavailable"; shares are not listed, because chat lives in a named team. The
- * column belongs to the tab and outlives a team switch.
+ * Displays the Chat tab inbox sidebar containing all teams and their channels.
+ *
+ * Each team header expands and collapses its channel list; collapse state is
+ * tracked in component state by team ID. When collapsed, the team header shows
+ * the aggregate unread count for its channels.
+ *
+ * Team and channel data are supplied by `useChatInbox()`. If a team's channels
+ * fail to load, an inline error with a retry button is shown in place of the
+ * channel list. Teams on servers that do not support chat are listed in a
+ * disabled state at the bottom. Filtering is driven by the search query passed
+ * from the window header.
  */
 
 import { useId, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Button, Icon, SectionLabel } from '../components';
+import { Icon, MenuItem, SectionLabel } from '../components';
+import { ContextMenu, Menu } from '/kit/overlay-primitives';
+import { useChannelCreation } from '../chat/channel-creation-provider';
 import {
   chatAvailable,
+  partiesOf,
+  roleRank,
+  plural,
   serverDisplayName,
   teamCaption,
   storeDescription,
@@ -35,15 +37,13 @@ import type {
   TeamStore,
 } from '../model';
 import {
+  channelLabel,
   channelMeta,
   channelTitle,
   listChannels,
-  partyNames,
-  previewLine,
-  previewTime,
 } from '../chat/presentation';
 import type { ListedChannel } from '../chat/presentation';
-import { useSidebarInbox } from '../chat/inbox-provider';
+import { useChatInbox } from '../chat/inbox-provider';
 import type { TeamInbox } from '../chat/inbox-service';
 import { teamUnread } from '../chat/unread';
 import { GroupMark } from './group-mark';
@@ -195,18 +195,20 @@ interface TeamRow {
   entry: TeamInbox | undefined;
   /** This Mac can open the team's chat right now. */
   reachable: boolean;
-  /** The one line a row states instead of a preview: a reason or a failure. */
+  /** True if channels failed to load for this team. */
+  failed: boolean;
+  /** Status or error message displayed in place of the channel list. */
   status: string;
   /**
    * What a synchronization that succeeded could not finish, said beside the
-   * preview rather than in place of it.
+   * channels rather than in place of them.
    */
   note: string;
   /** `undefined` while the team's channel list has not arrived. */
   channels: ListedChannel[] | undefined;
   badge: { label: string; description: string } | null;
-  /** The team's people, resolved once per team rather than once per row. */
-  names: ReadonlyMap<string, string>;
+  /** Team subtitle showing server host and member count (if known). */
+  caption: string;
   server: string;
 }
 
@@ -249,18 +251,27 @@ function teamRow(
     : storeDescription(snapshot, store, options);
   const loading = firstSynchronization(entry);
   const unread = reachable && !loading ? teamUnread(entry) : null;
+  const server = teamCaption(snapshot, store, { kind: false });
+  // The roster the Teams page already loads, read rather than fetched again. A
+  // real team always has at least its own member, so an empty roster means it
+  // has not arrived and the subtitle is the host alone rather than "0 members".
+  const members = partiesOf(snapshot, store.id).length || undefined;
   return {
     store,
     entry,
     reachable,
+    failed,
     status: unavailable || failure || (loading ? 'Loading channels…' : ''),
     note: !failed && reachable && entry?.data ? entry.error || entry.note : '',
     channels: entry?.data
       ? listChannels(entry.data.channels, entry.data.conversations)
       : undefined,
     badge: reachable ? unread : { label: '!', description: unavailable },
-    names: partyNames(snapshot, store.id),
-    server: teamCaption(snapshot, store, { kind: false }),
+    caption:
+      members === undefined
+        ? server
+        : `${server} · ${plural(members, 'member')}`,
+    server,
   };
 }
 
@@ -284,6 +295,11 @@ export interface ChatTeamColumnProps {
   onNewChat: () => void;
   /** Opens a team's page on the Teams tab, where its setup is finished. */
   onTeams: (ref: StoreRef) => void;
+  /**
+   * The window header's scoped search text. The column carries no field of its
+   * own; it narrows to the teams and channels this matches.
+   */
+  query?: string;
 }
 
 export function ChatTeamColumn({
@@ -294,8 +310,17 @@ export function ChatTeamColumn({
   onOpen,
   onNewChat,
   onTeams,
+  query: search = '',
 }: ChatTeamColumnProps): ReactNode {
-  const inbox = useSidebarInbox();
+  const { service, snapshot: inbox } = useChatInbox();
+  const { controller } = useChannelCreation();
+  const [context, setContext] = useState<{
+    x: number;
+    y: number;
+    team?: StoreRef;
+    channel?: string;
+  } | null>(null);
+
   // Which teams have their channel list folded away, by team id.
   // This is local to the column and does not persist: a team reopens expanded
   // the next time the column mounts.
@@ -311,7 +336,7 @@ export function ChatTeamColumn({
     });
   // The column searches names, not messages: the agent has no message index,
   // so a query that matched text would be a promise the client cannot keep.
-  const [filter, setFilter] = useState('');
+  const filter = search;
   const query = filter.trim().toLowerCase();
   // The clock is the tab's, but the object it arrives in is rebuilt every
   // render, so the memo is keyed on the moment rather than on its identity —
@@ -321,7 +346,6 @@ export function ChatTeamColumn({
   // between two ticks is seen on the next one.
   const { nowSeconds, agentReady, catalogReady } = accessOptions;
   const second = nowSeconds === undefined ? undefined : Math.floor(nowSeconds);
-  const now = nowSeconds === undefined ? Date.now() : nowSeconds * 1000;
   // Every row reads the whole snapshot and the whole inbox map, so building
   // them is worth doing once per change rather than once per keystroke in the
   // search field.
@@ -343,6 +367,36 @@ export function ChatTeamColumn({
   const dimmed = withoutChat.filter(
     (store) => !query || store.name.toLowerCase().includes(query),
   );
+  const contextTeam = context?.team
+    ? snapshot.stores.find(
+        (store) => store.id === context.team && store.kind === 'team',
+      )
+    : undefined;
+  const contextRow = rows.find((row) => row.store.id === context?.team);
+  const contextChannel = contextRow?.channels?.find(
+    ({ channel }) => channel.id === context?.channel,
+  );
+  const openReason = !contextChannel
+    ? 'This channel is no longer available.'
+    : !contextRow?.reachable
+      ? contextRow?.status || 'Chat is unavailable for this team.'
+      : !contextChannel.channel.readable ||
+          contextRow.entry?.blockedChannels.has(contextChannel.channel.id)
+        ? 'You do not have access to this channel.'
+        : undefined;
+  const createReason = !controller
+    ? 'Channel creation is unavailable in this window.'
+    : !rows.some(
+          (row) =>
+            row.reachable &&
+            partiesOf(snapshot, row.store.id).some(
+              (party) =>
+                party.label === 'you' && roleRank(party.destination_role) >= 1,
+            ),
+        )
+      ? 'No team with channel creation access is currently available.'
+      : undefined;
+  const closeContext = () => setContext(null);
   let listed = 0;
   const teamRows: ReactNode[] = [];
   rows.forEach((row) => {
@@ -358,7 +412,6 @@ export function ChatTeamColumn({
         key={row.store.id}
         row={row}
         channels={matching}
-        now={now}
         selected={selected}
         activeChannel={row.store.id === selected ? activeChannel : undefined}
         // A search in progress overrides a fold: a channel the query
@@ -368,44 +421,35 @@ export function ChatTeamColumn({
         collapsed={query ? false : collapsedTeams.has(row.store.id)}
         onToggleCollapse={() => toggleCollapsed(row.store.id)}
         onOpen={onOpen}
+        // Retrying one team reloads that team alone: every other team's
+        // channels, and the conversation open beside the column, are untouched.
+        onRetry={() => service.invalidate(row.store.id)}
       />,
     );
   });
   return (
-    <aside className="chat-inbox" aria-label="Chat inbox">
-      <div className="chat-inbox-top">
-        {/* The field names itself, so there is no label to wrap it in: an empty
-            `<label>` would be a label with nothing in it. */}
-        <div className="search">
-          <Icon name="search" />
-          <input
-            type="search"
-            value={filter}
-            // The "No chat" teams are part of the column and are searched with
-            // the rest of it, so the field is live whenever the column lists
-            // anything at all.
-            disabled={!teams.length && !withoutChat.length}
-            placeholder="Search"
-            aria-label="Search teams and channels"
-            autoComplete="off"
-            onChange={(event) => setFilter(event.target.value)}
-          />
-        </div>
-        <Button
-          variant="primary"
-          icon="plus"
-          // The sheet this opens creates a channel; existing conversations
-          // open from the column below it, so the button names what it does.
-          aria-label="New channel"
-          disabled={!teams.length}
-          title={
-            teams.length
-              ? 'New channel'
-              : 'Chat requires a team on a server with chat enabled'
-          }
-          onClick={onNewChat}
-        />
-      </div>
+    <aside
+      className="chat-inbox"
+      aria-label="Chat inbox"
+      onContextMenu={(event) => {
+        if (
+          !(event.target instanceof Element) ||
+          event.target.closest('[role="menu"]')
+        )
+          return;
+        event.preventDefault();
+        const channel = event.target.closest<HTMLElement>(
+          '[data-chat-channel]',
+        );
+        const team = event.target.closest<HTMLElement>('[data-chat-team]');
+        setContext({
+          x: event.clientX,
+          y: event.clientY,
+          team: team?.dataset.chatTeam,
+          channel: channel?.dataset.chatChannel,
+        });
+      }}
+    >
       {/* Screen reader status announcement for search filtering results.
           The element is rendered persistently to ensure aria-live announcements
           fire. */}
@@ -415,9 +459,36 @@ export function ChatTeamColumn({
           : ''}
       </p>
       <div className="chat-inbox-scroll">
+        {/* Nothing to list and nothing to search: the column says what would
+            be here, and the pane beside it says how to get one. */}
+        {!teams.length && !withoutChat.length && (
+          <div className="chat-inbox-none">
+            <b>No teams yet</b>
+            <span>Teams appear here with their channels.</span>
+          </div>
+        )}
         {/* The heading draws only once there is a team under it: a search
-            that clears every team drops the heading with it. */}
-        {teamRows.length > 0 && <SectionLabel>Teams</SectionLabel>}
+            that clears every team drops the heading with it. The "+" it
+            carries is the column's one action, and it opens the same channel
+            creation the conversation pane does. */}
+        {teamRows.length > 0 && (
+          <SectionLabel
+            className="chat-inbox-label"
+            action={
+              <button
+                type="button"
+                className="chat-inbox-add"
+                aria-label="New channel"
+                title="New channel"
+                onClick={onNewChat}
+              >
+                <Icon name="plus" size={14} />
+              </button>
+            }
+          >
+            Teams
+          </SectionLabel>
+        )}
         {teamRows}
         {query &&
           !listed &&
@@ -437,6 +508,7 @@ export function ChatTeamColumn({
               return (
                 <div
                   className="chat-team-head off"
+                  data-chat-team={store.id}
                   key={store.id}
                   title={`${store.name} · ${reason}`}
                 >
@@ -466,6 +538,72 @@ export function ChatTeamColumn({
           </>
         )}
       </div>
+      {context ? (
+        <ContextMenu
+          point={context}
+          className="menu-portal"
+          onClose={closeContext}
+        >
+          <Menu
+            className="menu"
+            aria-label="Chat sidebar actions"
+            initialFocus="first"
+            onClose={closeContext}
+          >
+            {context.channel ? (
+              <>
+                <MenuItem
+                  icon="chat"
+                  reason={openReason}
+                  onClick={() => {
+                    closeContext();
+                    onOpen(context.team!, context.channel);
+                  }}
+                >
+                  Open channel
+                </MenuItem>
+                <MenuItem
+                  icon="pencil"
+                  reason="Editing channels is not implemented."
+                >
+                  Edit channel
+                </MenuItem>
+                <MenuItem
+                  icon="trash"
+                  danger
+                  reason="Deleting channels is not implemented."
+                >
+                  Delete channel
+                </MenuItem>
+              </>
+            ) : context.team ? (
+              <MenuItem
+                icon="users"
+                reason={
+                  contextTeam ? undefined : 'This team is no longer available.'
+                }
+                onClick={() => {
+                  closeContext();
+                  onTeams(context.team!);
+                }}
+              >
+                Go to team
+              </MenuItem>
+            ) : (
+              <MenuItem
+                icon="plus"
+                reason={createReason}
+                onClick={() => {
+                  closeContext();
+                  onNewChat();
+                }}
+              >
+                Create channel
+              </MenuItem>
+            )}
+          </Menu>
+        </ContextMenu>
+      ) : null}
     </aside>
   );
 }
@@ -489,16 +627,15 @@ function channelUnreadTotal(channels: readonly ListedChannel[]): number {
 function TeamHeading({
   row,
   channels,
-  now,
   selected,
   activeChannel,
   collapsed,
   onToggleCollapse,
   onOpen,
+  onRetry,
 }: {
   row: TeamRow;
   channels: readonly ListedChannel[];
-  now: number;
   /** The team whose conversation is mounted beside the column. */
   selected?: StoreRef;
   activeChannel?: string;
@@ -506,6 +643,8 @@ function TeamHeading({
   collapsed: boolean;
   onToggleCollapse: () => void;
   onOpen: (ref: StoreRef, channel?: string) => void;
+  /** Reloads the channel list for this team. */
+  onRetry: () => void;
 }): ReactNode {
   // A heading's own count is normally the sum of the counts already drawn
   // beside its channels, so only what the channels cannot say is drawn here:
@@ -535,13 +674,17 @@ function TeamHeading({
     row.channels?.length === 1 && !row.channels[0].channel.name
       ? row.channels[0]
       : undefined;
-  // A known empty list folds its placeholder row just like a channel list.
+  // A known empty list folds its placeholder row just like a channel list, and
+  // so does the row that stands in for a channel list that could not be read.
   // A team whose list has not arrived opens its own pane, which states
   // the reason: loading, locked, or unavailable.
-  const foldable = channels.length > 0 || empty;
+  const foldable = channels.length > 0 || empty || row.failed;
   const open = activeChannel !== undefined || row.store.id === selected;
   return (
-    <div className={collapsed ? 'chat-team collapsed' : 'chat-team'}>
+    <div
+      className={collapsed ? 'chat-team collapsed' : 'chat-team'}
+      data-chat-team={row.store.id}
+    >
       {/* The whole row is the fold control: it has no other click to collide
           with, since opening a channel is a click on the channel's own row. */}
       <button
@@ -560,23 +703,48 @@ function TeamHeading({
         title={[`${row.store.name} · ${row.server}`, row.badge?.description]
           .filter(Boolean)
           .join(' · ')}
-        onClick={foldable ? onToggleCollapse : () => onOpen(row.store.id)}
+        onClick={() => {
+          if (!foldable) {
+            onOpen(row.store.id);
+            return;
+          }
+          onToggleCollapse();
+          if (row.channels?.length === 1) {
+            onOpen(row.store.id, row.channels[0].channel.id);
+          }
+        }}
       >
         <GroupMark store={row.store} size="sm" />
         <span className="t">
           <b>{row.store.name}</b>
-          <small className="chat-row-identity">{row.server}</small>
-          {row.status && <small>{row.status}</small>}
+          {!(row.status && !row.failed) && !row.note && (
+            <small className="chat-row-identity">{row.caption}</small>
+          )}
+          {/* A channel list that could not be read is stated by the row that
+              stands in for the channels, not twice. */}
+          {row.status && !row.failed && <small>{row.status}</small>}
           {row.note && <small className="chat-row-note">{row.note}</small>}
         </span>
-        {badge && (
-          <span className="chat-unread" aria-label={badge.description}>
-            {badge.label}
+        {/* A team whose channels are unknown has no count to give: the glyph
+            says the count is withheld rather than zero. */}
+        {row.failed ? (
+          <span
+            className="chat-team-warn"
+            title="Channels could not be loaded"
+            aria-label="Channels could not be loaded"
+          >
+            <Icon name="alert" size={14} />
           </span>
+        ) : (
+          badge && (
+            <span className="chat-unread" aria-label={badge.description}>
+              {badge.label}
+            </span>
+          )
         )}
         {foldable && (
           <span className="chat-team-chev" aria-hidden="true">
-            <Icon name="chev" size={14} />
+            <Icon name="chevronDown" size={14} />
           </span>
         )}
       </button>
@@ -591,10 +759,36 @@ function TeamHeading({
           role="group"
           aria-label={row.store.name}
         >
+          {/* The failure is drawn where the missing channels would have been,
+              so the team stays recognizable and the retry is beside what it
+              reloads. */}
+          {row.failed && (
+            <div className="chat-channel fail" role="status" title={row.status}>
+              <Icon name="alert" size={14} />
+              {/* The same sentence the row's warning glyph is labelled
+                  with, so the two do not name the failure differently. */}
+              <span className="n">Channels could not be loaded</span>
+              {/* The open team's pane states the failure and carries the
+                  retry, so the row does not offer a second one. */}
+              {row.store.id !== selected && (
+                <button
+                  type="button"
+                  className="chat-channel-retry"
+                  onClick={onRetry}
+                >
+                  Retry
+                </button>
+              )}
+            </div>
+          )}
           {empty && (
             <button
               type="button"
-              className={open ? 'chat-channel on' : 'chat-channel'}
+              className={
+                open
+                  ? 'chat-channel no-channels on'
+                  : 'chat-channel no-channels'
+              }
               aria-label={`No channels in ${row.store.name}`}
               aria-current={open ? 'page' : undefined}
               onClick={() => onOpen(row.store.id)}
@@ -609,24 +803,19 @@ function TeamHeading({
             const active = channel.id === activeChannel;
             const count = channelCount(listedChannel);
             const meta = channelMeta(listedChannel, row.entry?.blockedChannels);
-            // The caption is the one thing the row has to say beside its
-            // name: why it is quiet, else what was last said in it.
+            // A channel row is its name. The one thing it adds is why it is
+            // quiet — restricted, hidden, muted, stopped — or, for the lone
+            // general channel of a team that has never been used, that nothing
+            // has been said in it yet.
             const preview = conversation?.preview;
-            const line = meta
-              ? ''
-              : previewLine(
-                  conversation,
-                  row.entry?.scope?.actor ?? null,
-                  row.names,
-                );
             const caption =
               meta ||
-              line ||
               (listedChannel === lone && !preview ? 'No messages yet' : '');
             return (
               <button
                 type="button"
                 key={channel.id}
+                data-chat-channel={channel.id}
                 className={[
                   'chat-channel',
                   active ? 'on' : '',
@@ -640,21 +829,27 @@ function TeamHeading({
                   .filter(Boolean)
                   .join(' ')}
                 aria-current={active ? 'page' : undefined}
+                // The "#" is drawn as its own faint glyph, so the row states
+                // its own name rather than leaving a reader to assemble
+                // "#" and "general" out of two elements.
+                aria-label={
+                  caption
+                    ? `${channelTitle(channel)} · ${caption}`
+                    : channelTitle(channel)
+                }
                 // A channel of an unreachable team opens the locked pane, which
                 // states the reason. Disabling it would be the one row in the
                 // column that answers nothing: the team's own row is clickable
                 // and lands in the same place.
                 onClick={() => onOpen(row.store.id, channel.id)}
               >
-                <span className="t">
-                  <span className="n">{channelTitle(channel)}</span>
-                  {caption && <small>{caption}</small>}
+                <span className="hash" aria-hidden="true">
+                  #
                 </span>
-                {preview && !meta && row.reachable && (
-                  <span className="when">
-                    {previewTime(preview.insert_time, now)}
-                  </span>
-                )}
+                <span className="t">
+                  <span className="n">{channelLabel(channel)}</span>
+                  {caption && <small> · {caption}</small>}
+                </span>
                 {channel.admin && (
                   <span
                     className="lock"

@@ -29,6 +29,8 @@ export function Notice({
   footnote,
   actions,
 }: NoticeProps): ReactNode {
+  // The glyph says the severity before the color does: an alert triangle
+  // for anything that needs the reader, an info circle for a quiet note.
   return (
     <div
       className={
@@ -39,10 +41,13 @@ export function Notice({
             : 'notice'
       }
     >
-      {eyebrow === undefined ? null : <div className="who">{eyebrow}</div>}
-      <h2>{title}</h2>
-      {children}
-      {footnote === undefined ? null : <p className="fn">{footnote}</p>}
+      <Icon name={severity === 'info' ? 'info' : 'alert'} />
+      <div className="t">
+        {eyebrow === undefined ? null : <div className="who">{eyebrow}</div>}
+        <h2>{title}</h2>
+        {children}
+        {footnote === undefined ? null : <p className="fn">{footnote}</p>}
+      </div>
       {actions === undefined ? null : <div className="acts2">{actions}</div>}
     </div>
   );

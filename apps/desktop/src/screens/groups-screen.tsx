@@ -34,7 +34,6 @@ import {
   tabId,
   tabPanelId,
   Tabs,
-  Toggle,
 } from '../components';
 import {
   actionableGroupMember,
@@ -284,7 +283,7 @@ function PartyMark({ party }: { party: Party }): ReactNode {
       className="kico round"
       style={{ background: machine ? 'var(--c-none)' : hue(name) }}
     >
-      {machine ? <Icon name="term" /> : name.slice(0, 1).toUpperCase()}
+      {machine ? <Icon name="terminal" /> : name.slice(0, 1).toUpperCase()}
     </span>
   );
 }
@@ -332,7 +331,7 @@ function PartyRow({
         <RoleChip role={party.destination_role} />
         <MenuButton
           variant="quiet"
-          icon="more"
+          icon="ellipsis"
           trailingIcon={null}
           label=""
           menuLabel={`Actions for ${name}`}
@@ -602,7 +601,7 @@ function FederationEntryRow({
         {!entry.active && entry.operation_id_hex ? (
           <Button
             size="sm"
-            icon="again"
+            icon="refresh"
             disabled={!manageable}
             title={
               manageable
@@ -616,7 +615,7 @@ function FederationEntryRow({
         ) : null}
         <MenuButton
           variant="quiet"
-          icon="more"
+          icon="ellipsis"
           trailingIcon={null}
           label=""
           menuLabel={`Actions for ${entry.remote_team_alias}`}
@@ -791,7 +790,7 @@ function MembersTab({
             className="kico"
             style={{ background: 'var(--chip-bg)', color: 'var(--muted)' }}
           >
-            <Icon name="people" />
+            <Icon name="users" />
           </span>
           <span className="t">
             <b>No members yet.</b>
@@ -1100,7 +1099,7 @@ function SettingsTab({
         <InsetRow
           action={
             <Button
-              icon="out"
+              icon="externalLink"
               onClick={() =>
                 onNavigate({
                   kind: 'settings',
@@ -1126,41 +1125,6 @@ function SettingsTab({
       </Inset>
     </div>
   );
-}
-
-function inspectResponse(
-  snapshot: AgentSnapshot,
-  store: Store,
-  tab: Tab,
-): unknown {
-  if (tab === 'settings') return store;
-  return {
-    people: partiesOf(snapshot, store.id).map((party) => ({
-      ...(party.username ? { username: party.username } : {}),
-      party_kind: party.party_kind,
-      generation: party.generation,
-      locally_manageable: party.locally_manageable,
-      party_id_hex: party.party_id_hex,
-      ...(party.scoped_host_id_hex
-        ? { scoped_host_id_hex: party.scoped_host_id_hex }
-        : {}),
-      source_role: party.source_role,
-      destination_role: party.destination_role,
-    })),
-    federation: snapshot.federation
-      .filter((entry) => entry.store === store.id)
-      .map((entry) => ({
-        remote_profile: entry.remote_profile,
-        remote_team_alias: entry.remote_team_alias,
-        remote_host_id_hex: entry.remote_host_id_hex,
-        remote_team_id_hex: entry.remote_team_id_hex,
-        destination: entry.destination,
-        ...(entry.operation_id_hex
-          ? { operation_id_hex: entry.operation_id_hex }
-          : {}),
-        active: entry.active,
-      })),
-  };
 }
 
 /**
@@ -1561,7 +1525,7 @@ export function GroupSheet({
           // The group does not exist yet, so it has no mark: a group's color
           // and initial are earned at creation, not previewed over an account.
           <span className="kico md neutral">
-            <Icon name="people" />
+            <Icon name="users" />
           </span>
         ) : (
           <GroupMark store={store} />
@@ -1845,8 +1809,9 @@ export function GroupSheet({
             ) : null}
             {target && !canTarget(snapshot, target) ? (
               <Notice title={`${partyName(target)} cannot be removed here`}>
-                This member cannot be removed here. They are managed by another
-                server or account.
+                {/* The body is a paragraph in every other notice, and it says
+                    the reason rather than repeating the title. */}
+                <p>This member is managed by another server or account.</p>
               </Notice>
             ) : null}
           </>
@@ -2193,8 +2158,11 @@ export function GroupSettingsScreen({
       <>
         <PageHeader title="Team unavailable" subtitle="" />
         <div className="body">
-          <Notice title="This team is no longer available">
-            Refresh or choose another team from Teams.
+          {/* A store that is gone is the same class of problem as an account
+              that is gone, and takes the same treatment: a danger row alert
+              whose body is a paragraph like every other notice's. */}
+          <Notice severity="crit" title="Team no longer available">
+            <p>Refresh the page, or select another team from the Teams tab.</p>
           </Notice>
         </div>
       </>
@@ -2215,18 +2183,16 @@ export function GroupSettingsScreen({
   const canManageRoster = rosterReason === undefined;
   const named = store.team_kind === 'named';
   const serverName = displayServerName(snapshot, store);
-  // The header's own chip: server, then the member count, each dropped
+  // The header's badges: server, then the member count, each dropped
   // rather than guessed when it is not known. The count is silent while the
   // roster or the admitted teams could not be read, the same as the Members
   // tab's own count.
-  const headerChip = [
+  const headerChips = [
     serverName,
     !canReadRoster || rosterFailure || federationFailure
       ? null
       : plural(memberCount, 'member'),
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  ].filter(Boolean);
   // The channels this group's inbox entry holds, or `undefined` while the
   // service has not answered for it. A hidden conversation is listed on the
   // tab but not counted on the strip, the way New chat counts.
@@ -2272,7 +2238,7 @@ export function GroupSettingsScreen({
           aria-label="Teams home"
           onClick={() => onNavigate({ kind: 'teams' })}
         >
-          <Icon name="chev" />
+          <Icon name="chevronDown" />
         </button>
         <GroupMark store={store} size="big" />
         <div className="t">
@@ -2283,7 +2249,9 @@ export function GroupSettingsScreen({
           {/* The role this account holds here is not repeated in the header;
               it already reads on this account's own row under Members. */}
           <div className="sub">
-            {headerChip ? <Chip>{headerChip}</Chip> : null}
+            {headerChips.map((label, index) => (
+              <Chip key={index}>{label}</Chip>
+            ))}
           </div>
         </div>
         <div className="header-action">
@@ -2302,7 +2270,7 @@ export function GroupSettingsScreen({
               {(close) => (
                 <>
                   <MenuItem
-                    icon="person"
+                    icon="user"
                     reason={rosterReason}
                     onClick={() => {
                       close();
@@ -2311,11 +2279,11 @@ export function GroupSettingsScreen({
                   >
                     <span className="menu-choice">
                       <b>A user</b>
-                      <small>Invite by their username</small>
+                      <small>Invite by username</small>
                     </span>
                   </MenuItem>
                   <MenuItem
-                    icon="people"
+                    icon="users"
                     reason={federationReason}
                     onClick={() => {
                       close();
@@ -2324,7 +2292,7 @@ export function GroupSettingsScreen({
                   >
                     <span className="menu-choice">
                       <b>A team from another server</b>
-                      <small>Add a remote team via federation</small>
+                      <small>Add team via federation</small>
                     </span>
                   </MenuItem>
                   <div className="menu-separator" role="separator" />
@@ -2341,10 +2309,7 @@ export function GroupSettingsScreen({
                   >
                     <span className="menu-choice">
                       <b>By invitation…</b>
-                      <small>
-                        Create an invitation to send, and review pending
-                        operations.
-                      </small>
+                      <small>Create or view invitations</small>
                     </span>
                   </MenuItem>
                 </>
@@ -2356,7 +2321,7 @@ export function GroupSettingsScreen({
               disabled, with the reason in the item. */}
           <MenuButton
             variant="quiet"
-            icon="more"
+            icon="ellipsis"
             trailingIcon={null}
             label=""
             menuLabel="Team actions"
@@ -2368,7 +2333,7 @@ export function GroupSettingsScreen({
             {(close) => (
               <>
                 <MenuItem
-                  icon="again"
+                  icon="refresh"
                   reason={
                     unavailable
                       ? `Restore access to ${displayServerName(snapshot, store)} first.`
@@ -2399,15 +2364,6 @@ export function GroupSettingsScreen({
                 >
                   Copy team ID
                 </MenuItem>
-                <MenuItem
-                  icon="out"
-                  onClick={() => {
-                    close();
-                    onNavigate({ kind: 'store', ref: store.id });
-                  }}
-                >
-                  Open in vault
-                </MenuItem>
               </>
             )}
           </MenuButton>
@@ -2418,7 +2374,6 @@ export function GroupSettingsScreen({
           operation="metadata"
           snapshot={snapshot}
           store={store}
-          noHeader
           variant="band"
           onOpenServer={(profile) =>
             onNavigate({ kind: 'settings', section: 'account', profile })
@@ -2549,7 +2504,6 @@ export function GroupSettingsScreen({
                   snapshot={snapshot}
                   store={store}
                   operation="teams"
-                  noHeader
                   variant="band"
                   onOpenServer={(profile) =>
                     onNavigate({
@@ -2628,20 +2582,6 @@ export function GroupSettingsScreen({
                     }
                   />
                 </div>
-              ) : null}
-              {/* The raw response belongs to the two tabs it is the response
-                  for: the roster under Members, the store under Settings. */}
-              {tab === 'settings' ||
-              (tab === 'people' && !rosterFailure && !federationFailure) ? (
-                <Toggle label="Inspect response">
-                  <pre>
-                    {JSON.stringify(
-                      inspectResponse(snapshot, store, tab),
-                      null,
-                      1,
-                    )}
-                  </pre>
-                </Toggle>
               ) : null}
             </div>
           </div>

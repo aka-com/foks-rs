@@ -1,5 +1,4 @@
 import { useChannelCreation } from '../chat/channel-creation-provider';
-import './chat-picker.css';
 /**
  * New channel opens a channel-creation form directly.
  *

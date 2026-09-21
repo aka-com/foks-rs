@@ -1,34 +1,45 @@
 /**
- * The topbar: the bar at the top of the content column, where the title bar
- * used to be.
+ * The header row: one 48px band across the top of the content column.
  *
- * It carries the back chevron and the crumbs that say where the reader is, and
- * at its right end the three shell-wide controls — the search trigger, the rail
- * collapse toggle and the catalog refresh. Its empty parts are the window's
- * drag region, because the rail's strip alone does not reach across the window.
- *
- * The page's own header (`PageHeader`) sits directly under it and carries the
- * title, the page actions and the per-page search field.
+ * It replaced the two bands the shell used to draw — the title strip and the
+ * page's own header — so the breadcrumb, search field, primary New control
+ * and sync status share one line. Its empty parts are the window's drag
+ * region, because the rail's
+ * strip alone does not reach across the window.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
-import { Button, Icon } from '../components';
+import { Button, Icon, SearchField } from '../components';
 import type { DesktopReconciliation } from '../desktop-reconciliation';
 import { SYNC_STATUS_ID, SyncPopover, useSyncSummary } from './sync-popover';
+import { serverAvailability } from '../model/lease';
+import { NewItemButton } from './toolbar';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { channelLabel } from '../chat/presentation';
-import { serverLocalAlias, storeOf } from '../model';
-import type { AgentSnapshot, DeviceLabel } from '../model';
+import {
+  initials,
+  hue as accountHue,
+  usernameOf,
+  serverLocalAlias,
+  storeHues,
+  storeNavigationOrder,
+  storeOf,
+} from '../model';
+import type { AgentSnapshot, DeviceLabel, Store } from '../model';
 import {
   SETTINGS_SECTION_LABEL,
-  parentLocation,
   railTabOf,
   settingsSectionOf,
 } from '../location';
-import type { Location, RailTab } from '../location';
-import { filesFolderCrumb } from '../screens/scope';
+import type { KindFilter, Location, RailTab } from '../location';
+import {
+  ALL_ITEMS,
+  filesFolderCrumb,
+  folderKey,
+  folderSelection,
+} from '../screens/scope';
 
 /** The word each tab is called, as the rail labels it. */
 const TAB_LABEL: Readonly<Record<RailTab, string>> = {
@@ -37,6 +48,15 @@ const TAB_LABEL: Readonly<Record<RailTab, string>> = {
   teams: 'Teams',
   devices: 'Devices',
   settings: 'Settings',
+};
+
+/** Root location for each navigation tab used when clicking its breadcrumb segment. */
+const TAB_LOCATION: Readonly<Record<RailTab, Location>> = {
+  chat: { kind: 'chat' },
+  files: { kind: 'files' },
+  teams: { kind: 'teams' },
+  devices: { kind: 'devices' },
+  settings: { kind: 'settings' },
 };
 
 /**
@@ -115,6 +135,31 @@ export function crumbTrail(
   return trail;
 }
 
+/** Represents a single breadcrumb segment, including label, optional store icon, and click handler. */
+interface CrumbSegment {
+  label: string;
+  /** Associated store when the segment represents a store, used to render its icon. */
+  store?: Store;
+  onClick?: () => void;
+}
+
+/** Computes the scope badge label for the search input based on the active location (e.g. current folder in Files, active channel in Chat, or tab name). */
+export function scopeLabel(
+  location: Location,
+  snapshot?: AgentSnapshot,
+  folder = '',
+  channelName?: string,
+): string {
+  const tab = railTabOf(location);
+  if (!tab) return '';
+  if (tab !== 'files') {
+    if (tab === 'chat' && channelName) return `#${channelName}`;
+    return TAB_LABEL[tab];
+  }
+  const labels = filesFolderCrumb(snapshot, location, folder).labels;
+  return labels.length ? labels[labels.length - 1] : TAB_LABEL[tab];
+}
+
 export interface TopbarProps {
   /** Absent while the agent is starting; the crumbs then name the tab alone. */
   snapshot?: AgentSnapshot;
@@ -123,38 +168,72 @@ export interface TopbarProps {
   /** The Files tree's selected folder (`LocationState.folder`). */
   folder?: string;
   onNavigate: (location: Location) => void;
-  /** Steps the Files tree's selection back one folder. Omitted where the
-   *  tree's selection is not reachable, in which case Back only ever
-   *  navigates a location. */
+  /** Steps the Files tree's selection. Omitted where the tree's selection is
+   *  not reachable, in which case only the tab's own crumb navigates. */
   onSetFolder?: (folder: string) => void;
-  /** Opens the search palette. Omitted where no palette is mounted. */
-  onSearch?: () => void;
+  /** Current search/filter query and change handler for the active view. */
+  query?: string;
+  onQuery?: (query: string) => void;
   collapsed: boolean;
   onToggleCollapsed?: () => void;
+  /** Files: opens the new-item sheet for one kind. */
+  onNew?: (kind: Exclude<KindFilter, 'All'>) => void;
+  /** Target store or folder name displayed in the New menu header. */
+  newDestination?: string;
+  /** Tooltip explanation when the New action is disabled; null when enabled. */
+  newBlocked?: string | null;
+  /** Chat: opens the New chat sheet. */
+  onNewChat?: () => void;
+  /** Files: whether the details panel is open, and the way to toggle it. */
+  detailsOpen?: boolean;
+  onToggleDetails?: () => void;
   refreshing?: boolean;
   onRefresh?: () => void;
   /**
-   * The reconciliation service, when the shell has one. With it the refresh
-   * button carries a state badge and a Refresh status popover; without it the
-   * button is the plain manual refresh.
+   * The reconciliation service, when the shell has one. With it the sync
+   * control carries a worded state and a Refresh status popover; without it
+   * it is the plain manual refresh.
    */
   syncService?: DesktopReconciliation;
   /** Opens one server under Settings › Account, from the popover. */
   onOpenServers?: (profile: string) => void;
-  /** A blocking state: the bar is drawn, and nothing on it acts. */
+  /** Whether the topbar controls are disabled during a blocking operation. */
   blocked?: boolean;
 }
 
 /** How long the status popover survives the pointer leaving it. */
 const SYNC_HOVER_CLOSE_MS = 180;
 
+/** Returns the CSS class, icon name, and text label for a given sync state. */
+function syncFace(state: 'synced' | 'syncing' | 'lapsed' | 'failed' | 'lost'): {
+  className: string;
+  icon: 'refresh' | 'alert' | 'plug';
+  label: string;
+} {
+  switch (state) {
+    case 'syncing':
+      return { className: 'sync busy', icon: 'refresh', label: 'Syncing…' };
+    case 'lapsed':
+      return {
+        className: 'sync warn',
+        icon: 'alert',
+        label: 'Check-in expired',
+      };
+    case 'failed':
+      return { className: 'sync warn', icon: 'alert', label: 'Refresh failed' };
+    case 'lost':
+      return { className: 'sync bad', icon: 'plug', label: 'Disconnected' };
+    default:
+      return { className: 'sync', icon: 'refresh', label: 'Synced' };
+  }
+}
+
 /**
- * The refresh button with its status: one square button that refreshes on
- * click, a spinner in the icon's place while any server is refreshing and an
- * orange dot when one could not be refreshed. Pointing at the button — or
- * reaching it with the keyboard — opens the per-server popover; there is no
- * separate trigger for it. The spinner and the dot are decorative; the button
- * carries the accessible name.
+ * The sync control with its status: one worded button that refreshes on
+ * click, a spinning icon while any server is refreshing and the failure said
+ * in words rather than by a dot. Pointing at the button — or reaching it with
+ * the keyboard — opens the per-server popover; there is no separate trigger
+ * for it.
  *
  * The popover is portaled, so it is not a descendant of the button's wrapper:
  * the pointer and the focus are tracked on both, and the popover only closes
@@ -213,7 +292,28 @@ function SyncControls({
     setOpen(false);
   };
   const spinning = summary.refreshing;
-  const badge = summary.failed ? 'failed' : null;
+  // A blocked shell is one whose agent has stopped answering, whatever the
+  // servers last reported: the control says that before it says anything
+  // about a lease.
+  // A lapsed check-in is a lease fact, not a refresh result: it is said
+  // before a refresh failure, which is what `summary.failed` reports.
+  const lapsed = snapshot.servers.some((server) => {
+    const availability = serverAvailability(snapshot, server);
+    return (
+      !availability.available && availability.reason === 'check-in-expired'
+    );
+  });
+  const face = syncFace(
+    blocked
+      ? 'lost'
+      : spinning
+        ? 'syncing'
+        : lapsed
+          ? 'lapsed'
+          : summary.failed
+            ? 'failed'
+            : 'synced',
+  );
   return (
     <span
       className="global-refresh-wrap"
@@ -223,21 +323,24 @@ function SyncControls({
       onFocus={track('focus', true)}
       onBlur={track('focus', false)}
     >
-      <Button
-        variant="quiet"
-        className="global-refresh"
-        icon={spinning ? undefined : 'again'}
-        busy={spinning}
+      <button
+        type="button"
+        className={`global-refresh ${face.className}`}
         aria-label={
           spinning ? 'Refreshing vaults, teams, chat, and devices' : 'Refresh'
         }
+        title="Refresh vaults, teams, chat and devices"
+        aria-busy={spinning || undefined}
         aria-describedby={open ? SYNC_STATUS_ID : undefined}
         disabled={refreshing || blocked}
         onClick={onRefresh}
-      />
-      {badge ? (
-        <span className={`sync-badge ${badge}`} aria-hidden="true" />
-      ) : null}
+      >
+        {face.icon === 'refresh' ? null : <Icon name={face.icon} />}
+        {face.label === 'Synced' ? (
+          <span className="dot ok" aria-hidden="true" />
+        ) : null}
+        <span className="t">{face.label}</span>
+      </button>
       {open ? (
         <SyncPopover
           snapshot={snapshot}
@@ -256,6 +359,79 @@ function SyncControls({
   );
 }
 
+/**
+ * Generates clickable breadcrumb segments for the topbar. For the Files tab, segments reflect folder hierarchy and update folder selection; for other tabs, segments are derived from crumbTrail with only the root tab being interactive.
+ */
+function crumbSegments(
+  location: Location,
+  trail: readonly string[],
+  snapshot: AgentSnapshot | undefined,
+  folder: string,
+  onNavigate: (location: Location) => void,
+  onSetFolder?: (folder: string) => void,
+): CrumbSegment[] {
+  const tab = railTabOf(location);
+  if (!tab || !trail.length) return [];
+  const root: CrumbSegment = {
+    label: trail[0],
+    onClick: () => {
+      if (tab === 'files') onSetFolder?.('');
+      onNavigate(TAB_LOCATION[tab]);
+    },
+  };
+  if (tab !== 'files') {
+    return [root, ...trail.slice(1).map((label) => ({ label }))];
+  }
+  const selected = folderSelection(location, folder);
+  if (selected.store === ALL_ITEMS || !snapshot)
+    return [root, ...trail.slice(1).map((label) => ({ label }))];
+  const store = storeOf(snapshot, selected.store);
+  if (!store) return [root, ...trail.slice(1).map((label) => ({ label }))];
+  const storePage = location.kind === 'store';
+  // `crumbTrail` puts the store first and then one word per folder, which is
+  // exactly the sequence of tree selections to step back through.
+  const parts = trail.slice(2);
+  const segments: CrumbSegment[] = [
+    root,
+    {
+      label: store.name,
+      store,
+      onClick: () => onSetFolder?.(folderKey(storePage, store.id, '/')),
+    },
+  ];
+  parts.forEach((label, index) => {
+    const path = `/${parts.slice(0, index + 1).join('/')}`;
+    segments.push({
+      label,
+      onClick: () => onSetFolder?.(folderKey(storePage, store.id, path)),
+    });
+  });
+  return segments;
+}
+
+/** Renders a store avatar badge using its assigned color. */
+function CrumbMark({
+  store,
+  hue,
+  accountName,
+}: {
+  store: Store;
+  hue: string | undefined;
+  accountName?: string;
+}): ReactNode {
+  return (
+    <span
+      className={`crumb-mark${store.kind === 'account' ? ' account' : ''}`}
+      style={{ background: accountName ? accountHue(accountName) : hue }}
+      aria-hidden="true"
+    >
+      {accountName
+        ? accountName.slice(0, 1).toUpperCase()
+        : initials(store.name)}
+    </span>
+  );
+}
+
 export function Topbar({
   snapshot,
   deviceLabel,
@@ -263,9 +439,12 @@ export function Topbar({
   folder = '',
   onNavigate,
   onSetFolder,
-  onSearch,
-  collapsed,
-  onToggleCollapsed,
+  query,
+  onQuery,
+  onNew,
+  newDestination,
+  newBlocked = null,
+  onNewChat,
   refreshing = false,
   onRefresh,
   syncService,
@@ -284,73 +463,99 @@ export function Topbar({
             (conversation) => conversation.channel.id === location.channel,
           )?.channel
       : undefined;
+  const channelName = open ? channelLabel(open) : undefined;
   const trail = crumbTrail(
     location,
     snapshot,
-    open ? channelLabel(open) : undefined,
+    channelName,
     deviceLabel,
     folder,
   );
-  const parent = blocked ? null : parentLocation(location);
-  // One step back can be a narrower folder within the same page, not just a
-  // different location — the tree's own selection, which `parentLocation`
-  // does not see. `null` here means there is no folder narrower than the
-  // location's own root, so Back falls through to `parent`.
-  const folderBack = blocked
-    ? null
-    : filesFolderCrumb(snapshot, location, folder).back;
-  const canGoBack = folderBack !== null || Boolean(parent);
-  const goBack = (): void => {
-    if (folderBack !== null) onSetFolder?.(folderBack);
-    else if (parent) onNavigate(parent);
-  };
+  const segments = crumbSegments(
+    location,
+    trail,
+    snapshot,
+    folder,
+    onNavigate,
+    onSetFolder,
+  );
+  const hues = snapshot
+    ? storeHues(storeNavigationOrder(snapshot))
+    : new Map<string, string>();
+  const tab = railTabOf(location);
+  const scope = scopeLabel(location, snapshot, folder, channelName);
+  // Only the views that filter accept a query; the rest draw the field inert
+  // so the header keeps its shape from page to page.
+  const searchable = Boolean(onQuery) && !blocked;
   return (
     <div className="topbar" data-tauri-drag-region="">
-      {collapsed ? (
-        <button
-          type="button"
-          className="back"
-          title="Back"
-          aria-label="Back"
-          disabled={!canGoBack}
-          onClick={goBack}
-        >
-          <Icon name="back" />
-        </button>
-      ) : null}
-      <div className="crumbs" data-tauri-drag-region="">
-        {trail.map((crumb, index) => (
-          // Keyed by position as well as text: a store named after its own tab
-          // ("Files › Files") would otherwise collide.
-          <span key={`${index}-${crumb}`} data-tauri-drag-region="">
-            {index === 0 ? <b>{crumb}</b> : crumb}
-            {index < trail.length - 1 ? <i className="sep">›</i> : null}
-          </span>
-        ))}
-      </div>
+      <nav className="crumbs" aria-label="Breadcrumb" data-tauri-drag-region="">
+        {segments.map((segment, index) => {
+          const last = index === segments.length - 1;
+          return (
+            // Keyed by position as well as text: a store named after its own
+            // tab ("Files › Files") would otherwise collide.
+            <Fragment key={`${index}-${segment.label}`}>
+              {index > 0 ? (
+                <span className="sep" aria-hidden="true">
+                  <Icon name="chevronDown" />
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className={last ? 'cur' : undefined}
+                aria-current={last ? 'page' : undefined}
+                disabled={blocked || last || !segment.onClick}
+                onClick={segment.onClick}
+              >
+                {segment.store ? (
+                  <CrumbMark
+                    store={segment.store}
+                    hue={hues.get(segment.store.id)}
+                    accountName={
+                      segment.store.kind === 'account' && snapshot
+                        ? (usernameOf(snapshot, segment.store) ??
+                          segment.store.account)
+                        : undefined
+                    }
+                  />
+                ) : null}
+                <span className="t">{segment.label}</span>
+              </button>
+            </Fragment>
+          );
+        })}
+      </nav>
       <span className="grow" data-tauri-drag-region="" />
-      <button
-        type="button"
-        className="topsearch"
-        disabled={!onSearch || blocked}
-        title={onSearch ? 'Search everything' : 'Search is not available yet'}
-        onClick={onSearch}
-      >
-        <Icon name="search" />
-        <span className="t">Search everything</span>
-        <kbd>⌘K</kbd>
-      </button>
-      {onToggleCollapsed ? (
-        <Button
-          variant="quiet"
-          className="side-collapse"
-          icon={collapsed ? 'panel-hollow' : 'panel-filled'}
-          aria-expanded={!collapsed}
-          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          disabled={blocked}
-          onClick={onToggleCollapsed}
+      {tab === 'files' || tab === 'chat' ? (
+        <SearchField
+          className="topsearch"
+          scope={scope}
+          value={query ?? ''}
+          onChange={onQuery ?? (() => undefined)}
+          placeholder="Search"
+          disabled={!searchable}
+          shortcut={false}
+          kbd
         />
+      ) : null}
+      {tab === 'files' && onNew ? (
+        <NewItemButton
+          onNew={onNew}
+          destination={newDestination}
+          reason={newBlocked}
+          disabled={blocked}
+        />
+      ) : tab === 'chat' && onNewChat ? (
+        <Button
+          variant="primary"
+          icon="plus"
+          className="new-chat"
+          disabled={blocked}
+          onClick={onNewChat}
+        >
+          New chat
+        </Button>
       ) : null}
       {onRefresh && syncService && snapshot ? (
         <SyncControls
@@ -362,11 +567,9 @@ export function Topbar({
           onOpenServers={onOpenServers}
         />
       ) : onRefresh ? (
-        <Button
-          variant="quiet"
-          className="global-refresh"
-          icon={refreshing ? undefined : 'again'}
-          busy={refreshing}
+        <button
+          type="button"
+          className={`global-refresh ${syncFace(refreshing ? 'syncing' : 'synced').className}`}
           aria-label={
             refreshing ? 'Refreshing vaults, teams, and devices' : 'Refresh'
           }
@@ -377,7 +580,10 @@ export function Topbar({
           }
           disabled={refreshing || blocked}
           onClick={onRefresh}
-        />
+        >
+          {refreshing ? null : <span className="dot ok" aria-hidden="true" />}
+          <span className="t">{refreshing ? 'Syncing…' : 'Synced'}</span>
+        </button>
       ) : null}
     </div>
   );

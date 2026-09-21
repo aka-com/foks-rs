@@ -1,8 +1,8 @@
 /**
- * Page header displaying the title, actions, and search input.
+ * Page header displaying the page title and actions.
  *
- * Search input state is controlled by the active location. When searching is
- * unsupported for the current view, omitting the query handlers hides the input.
+ * It carries no search field: there is one field in the shell, in the header
+ * row above, and it filters whichever view is open.
  *
  * The Files browser has no plain title: its header is a breadcrumb of the
  * folder the tree has open, so it passes `crumbs` instead. The crumb trail is
@@ -12,7 +12,7 @@
 
 import { Fragment } from 'react';
 import type { ReactNode } from 'react';
-import { Icon, SearchField } from '../components';
+import { Icon } from '../components';
 
 export interface HeaderParts {
   title: string;
@@ -28,13 +28,6 @@ export interface HeaderParts {
 export interface Crumb {
   label: string;
   onClick?: () => void;
-}
-
-/** "Search all items" / "Search Household" / "Search" when that is too long. */
-export function searchPlaceholder(title: string): string {
-  if (title === 'All items') return 'Search all items';
-  const full = `Search ${title}`;
-  return full.length > 18 ? 'Search' : full;
 }
 
 export interface PageHeaderProps extends HeaderParts {
@@ -60,9 +53,6 @@ export interface PageHeaderProps extends HeaderParts {
   action?: ReactNode;
   /** A rule under the header, for pages with no toolbar to carry one. */
   ruled?: boolean;
-  /** Omitted on a pane that has nothing to search. */
-  query?: string;
-  onQuery?: (query: string) => void;
   /** A clickable folder path in place of the plain title. */
   crumbs?: readonly Crumb[];
 }
@@ -76,8 +66,6 @@ export function PageHeader({
   tail,
   action,
   ruled = false,
-  query,
-  onQuery,
 }: PageHeaderProps): ReactNode {
   return (
     <div className={ruled ? 'path ruled' : 'path'}>
@@ -90,7 +78,7 @@ export function PageHeader({
               <Fragment key={`${index}-${crumb.label}`}>
                 {index > 0 ? (
                   <span className="sep">
-                    <Icon name="chev" />
+                    <Icon name="chevronDown" />
                   </span>
                 ) : null}
                 {crumb.onClick ? (
@@ -121,13 +109,6 @@ export function PageHeader({
           {tail}
           {action}
         </div>
-      ) : null}
-      {query !== undefined && onQuery ? (
-        <SearchField
-          value={query}
-          onChange={onQuery}
-          placeholder={searchPlaceholder(title)}
-        />
       ) : null}
     </div>
   );

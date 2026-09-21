@@ -1,34 +1,27 @@
 /* Shell stylesheet */
-
-@import '/kit/tokens.css';
-
-:root{
-  --faint:#8a8a92;
-  --surface:#f6f6f9;--main-surface:#fff;
-  --hover:rgba(0,0,0,.05);
-  --shadow-menu:0 10px 28px rgba(15,20,45,.14);
-  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;--mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
-  --c-password:#3b82f6;--c-file:#64748b;--c-resource:#d97706;--c-link:#7c3aed;--c-team:#636366;--c-none:#aeaeb2;
-  /* Radius scale: 7 / 9 / 12 / 16 / pill. */
-  --radius-sm:7px;--radius-md:9px;--radius-lg:12px;--radius-xl:16px;--radius-pill:99px;
-}
 *{box-sizing:border-box;margin:0;padding:0}
 [hidden]{display:none!important}
 /* Type floor: 12px minimum */
 small{font-size:12px}
-body{background:#e7e8ee;color:var(--ink);font:14px/1.45 var(--sans);min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:12px 16px 16px;-webkit-font-smoothing:antialiased}
+body{background:var(--app-ground);color:var(--ink);font:14px/1.45 var(--sans);min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:12px 16px 16px;-webkit-font-smoothing:antialiased}
 button,input,textarea{font:inherit;color:inherit}
 button{background:none;border:0;cursor:pointer}
+:focus-visible{outline-color:var(--accent)}
 a{color:inherit;text-decoration:none}
 svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none}
 
 /* Window container */
-.window{position:relative;width:min(1180px,96vw);height:min(760px,88vh);background:var(--main-surface);border-radius:var(--radius-lg);border:1px solid rgba(0,0,0,.16);box-shadow:0 24px 60px rgba(15,20,45,.26),0 2px 8px rgba(15,20,45,.12);overflow:hidden;display:flex;flex-direction:column;--topbar-h:44px;--side-w-open:224px;--side-w:var(--side-w-open)}
+.window{position:relative;width:min(1180px,96vw);height:min(760px,88vh);background:var(--main-surface);border-radius:var(--radius-lg);border:1px solid var(--window-border);box-shadow:var(--shadow-window);overflow:hidden;display:flex;flex-direction:column;--topbar-h:48px;--side-w-open:208px;--side-w:var(--side-w-open)}
 /* Shell grid */
 .app{flex:1;min-height:0;display:grid;position:relative;--side-track:auto;--side-pad:10px;--side-head-pad:10px;--side-open-content:calc(var(--side-w-open) - var(--side-pad) * 2);--details-w:300px;grid-template-columns:var(--side-track) minmax(0,1fr);transition:grid-template-columns .2s ease}
 .app.with-details{grid-template-columns:var(--side-track) minmax(0,1fr) var(--details-w)}
+/* Overlay the inspector on small screens (<1180px) to maintain minimum item list width. */
+@media (max-width:1179px){
+  .app.with-details{grid-template-columns:var(--side-track) minmax(0,1fr)}
+  .app.with-details>.details{position:absolute;top:var(--topbar-h);right:0;bottom:0;width:var(--details-w);z-index:5;box-shadow:var(--shadow-menu)}
+}
 /* Collapsed rail width */
-.window:has(>.app.side-narrow){--side-w:46px}
+.window:has(>.app.side-narrow){--side-w:56px}
 @media (prefers-reduced-motion:reduce){.app{transition:none}}
 
 /* Sidebar */
@@ -59,12 +52,10 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 /* Label hide transition */
 .side.is-narrow .nav .t{flex:0 0 0;width:0;overflow:hidden;opacity:0;transition:opacity .1s ease}
 .side.is-narrow h6{height:0;padding-top:0;padding-bottom:0;opacity:0}
-/* Center the glyph: drop the row gap and the horizontal padding so a hidden
-   label cannot shift it. */
+/* Centered icons */
 .side.is-narrow .nav{position:relative;justify-content:center;padding-left:0;padding-right:0;gap:0}
 .side.is-narrow .fn{display:none}
-/* A count becomes a 7px dot on the glyph's top-right corner. `font-size:0`
-   drops the text visually and leaves it in the accessibility tree. */
+/* Badge dot */
 .side.is-narrow .nav>.badge{position:absolute;top:calc(50% - 8.5px);left:calc(50% + 9px);right:auto;transform:translate(-50%,-50%);width:7px;min-width:0;height:7px;padding:0;border-radius:var(--radius-pill);font-size:0;line-height:0;overflow:hidden;margin:0;box-shadow:0 0 0 1.5px var(--surface)}
 .side.is-narrow .nav.on>.badge{box-shadow:0 0 0 1.5px var(--accent-wash-2)}
 @media (prefers-reduced-motion:reduce){
@@ -72,28 +63,34 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 }
 
 /* Navigation rail */
-.window:has(>.app>.side.rail){--side-w-open:200px}
-/* Window drag strip */
+.window:has(>.app>.side.rail){--side-w-open:208px}
 .side.rail{background:var(--rail);border-right-color:rgba(0,0,0,.12);color:var(--rail-ink);padding:0;overflow-x:hidden;overflow-y:auto;user-select:none}
-.traffic{flex:none;display:flex;align-items:center;min-height:32px;padding:14px 14px 6px}
-.traffic .lights{display:flex;gap:8px}
+/* Window drag strip */
+.traffic{flex:none;display:flex;align-items:center;min-height:32px;padding:14px 16px 10px}
+.traffic .lights{display:flex;gap:7px}
 .traffic .light{width:12px;height:12px;border-radius:50%;background:rgba(255,255,255,.35)}
-.side.rail .nav{position:relative;color:var(--rail-ink);border-radius:0;border-left:3px solid transparent;padding:11px 18px;gap:14px;font-size:14px;font-weight:500}
-.side.rail .nav:hover{background:rgba(255,255,255,.08);color:#fff}
-.side.rail .nav.on{background:var(--rail-active);border-left-color:#fff;color:#fff}
-.side.rail .nav .ic,.side.rail .nav.on .ic{color:inherit;font-size:20px;width:20px}
-.side.rail .nav+.nav{margin-top:0}
-/* Rail counts trail the label; attention dots overlay the icon. */
-.side.rail .nav .rail-tail{margin-left:auto;flex:none;min-width:20px;height:20px;display:grid;place-items:center;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;color:rgba(255,255,255,.62)}
-.side.rail .nav.on .rail-tail{color:rgba(255,255,255,.85)}
-.side.rail .nav .rail-tail.count.warn{color:var(--warning-dot)}
-.side.rail .nav .rail-tail.dot{position:absolute;top:11px;left:33px;margin:0;min-width:0;width:7px;height:7px;border-radius:50%;box-shadow:0 0 0 2px var(--rail)}
-.side.rail .nav .rail-tail.dot::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--unread)}
-.side.rail .nav .rail-tail.dot.warn::before{background:var(--unread)}
-.side.rail .rail-tabs{display:flex;flex-direction:column;padding:10px 0}
+/* Product mark and wordmark */
+.side.rail .rail-brand{translate:0 -1px;flex:none;display:flex;align-items:center;gap:9px;padding:6px 16px 8px;color:#fff;font-size:13px;font-weight:700;letter-spacing:.02em;white-space:nowrap}
+.side.rail .rail-brand .mark{width:22px;height:22px;flex:none;display:grid;place-items:center;border-radius:6px;background:#fff;color:var(--rail);font-size:12px;font-weight:800;line-height:1}
+/* Sidebar tab styling with pill-shaped active state and no border indicator. */
+.side.rail .nav{position:relative;min-height:34px;width:calc(100% - 16px);margin:1px 8px;padding:4px 10px;border-left:0;border-radius:8px;gap:11px;font-size:13px;font-weight:500;color:var(--rail-ink)}
+.side.rail .nav:hover{background:rgba(255,255,255,.09);color:#fff}
+.side.rail .nav.on{background:var(--rail-active);color:#fff;font-weight:600}
+.side.rail .nav .ic,.side.rail .nav.on .ic{color:inherit;font-size:17px;width:17px}
+.side.rail .nav .ic.rail-chat-icon{font-size:16px;width:16px;margin-right:1px}
+.side.rail .nav .ic.rail-files-icon{translate:0 -0.5px}
+/* Sidebar tab indicator styling for count badges and alert dots. */
+.side.rail .nav .rail-tail{margin-left:auto;flex:none;display:flex;align-items:center;justify-content:center;min-width:18px;gap:6px;line-height:1;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;color:#fff}
+.side.rail .nav .rail-tail.count{min-width:18px;height:18px;padding:0 5px;border-radius:var(--radius-pill);background:var(--unread)}
+.side.rail .nav .rail-tail.count.warn{background:var(--warning-dot)}
+.side.rail .nav .rail-tail .num{font-weight:600;color:rgba(255,255,255,.82)}
+.side.rail .nav.on .rail-tail .num{color:#fff}
+.side.rail .nav .rail-tail.dot::before{content:"";order:1;flex:none;width:7px;height:7px;border-radius:50%;background:var(--unread)}
+.side.rail .nav .rail-tail.dot.warn::before{background:var(--warning-dot)}
+.side.rail .rail-tabs{display:flex;flex-direction:column;padding:0}
 /* Setup step rail */
 .side.rail.setup-side{width:var(--side-w-open)}
-.side.rail .setup-steps{display:flex;flex-direction:column;padding:10px 0}
+.side.rail .setup-steps{display:flex;flex-direction:column;padding:6px 0}
 /* Step items */
 .side.rail .setup-step{cursor:default;align-items:center;white-space:normal}
 .side.rail .setup-step .t{font-size:inherit;font-weight:inherit;transform:none;white-space:normal;overflow:visible;line-height:1.25}
@@ -107,52 +104,53 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side.rail .setup-step.done .setup-mark,.side.rail .setup-step.on .setup-mark{background:#fff;border-color:#fff;color:var(--rail)}
 .side.rail .setup-mark .ic{width:12px;height:12px;font-size:12px;stroke-width:2.6}
 /* Blocked rail state */
-.side.rail .rail-body.is-blocked,.side.rail .setup-steps.is-blocked{opacity:.45;pointer-events:none}
-/* Account header */
-.side.rail .rail-head{position:relative;border-bottom:1px solid var(--rail-line)}
-/* Account button */
-.side.rail .who{display:flex;align-items:center;gap:14px;width:100%;padding:10px 18px 14px;border-left:3px solid transparent;text-align:left;color:inherit}
-.side.rail .who:hover,.side.rail .who[aria-expanded="true"]{background:rgba(255,255,255,.1)}
-.side.rail .who .avatar{width:24px;height:24px;margin:0 -2px;flex:none;border-radius:50%;background:#fff;color:var(--rail);font-weight:700;font-size:13px;display:grid;place-items:center}
-.side.rail .who.who-empty .avatar{background:rgba(255,255,255,.35)}
-.side.rail .who .t{flex:1;min-width:0;line-height:1.2;overflow:hidden}
-.side.rail .who .t b{display:block;color:#fff;font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.side.rail .who .t small{display:block;font-size:12px;opacity:.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.side.rail .who .chev{display:grid;place-items:center;opacity:.8;flex:none}
-.side.rail .attn{position:absolute;left:40px;top:10px;width:11px;height:11px;padding:0;border-radius:50%;background:var(--unread);border:2px solid var(--rail)}
+.side.rail .rail-body.is-blocked,.side.rail .rail-foot.is-blocked,.side.rail .setup-steps.is-blocked{opacity:.45;pointer-events:none}
+/* Setup progress card positioned above the account switcher */
+.side.rail .setup-card{flex:none;margin:8px 10px;padding:10px 11px;border-radius:10px;background:rgba(255,255,255,.12);color:#fff;font-size:12px;line-height:1.35}
+.side.rail .setup-card b{display:block;font-weight:650;margin-bottom:2px}
+.side.rail .setup-card small{display:block;font-size:12px;color:rgba(255,255,255,.75)}
+.side.rail .setup-card .bar{height:4px;margin:8px 0;border-radius:2px;background:rgba(255,255,255,.22);overflow:hidden}
+.side.rail .setup-card .bar i{display:block;height:100%;border-radius:2px;background:#fff}
+.side.rail .setup-card .act{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.side.rail .setup-card .act button{font-size:12px;font-weight:600;color:#fff}
+.side.rail .setup-card .act button.dim{font-weight:500;color:rgba(255,255,255,.65)}
+/* Account switcher in the sidebar footer */
+.side.rail .rail-foot{flex:none;position:relative;border-top:1px solid var(--rail-line)}
+.side.rail .who{display:flex;align-items:center;gap:10px;width:100%;padding:10px 12px 12px;border-left:0;text-align:left;color:#fff;white-space:nowrap}
+.side.rail:not(.is-narrow) .who{padding-bottom:11px}
+.side.rail .who:hover,.side.rail .who[aria-expanded="true"]{background:rgba(255,255,255,.08)}
+.side.rail .who .avatar{width:28px;height:28px;margin:0;flex:none;border-radius:50%;background:#fff;color:var(--rail);font-weight:700;font-size:12px;display:grid;place-items:center}
+.side.rail .who.who-empty .avatar{background:rgba(255,255,255,.175)}
+.side.rail .who .t{flex:1;min-width:0;line-height:1.25;overflow:hidden}
+.side.rail .who .t b{display:block;color:#fff;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.side.rail .who .t small{display:block;font-size:12px;color:rgba(255,255,255,.7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.side.rail .who .chev{display:grid;place-items:center;opacity:.7;flex:none}
+.side.rail .attn{position:absolute;left:31px;top:8px;width:11px;height:11px;padding:0;border-radius:50%;background:var(--unread);border:2px solid var(--rail)}
 .side.rail .attn:hover{background:var(--unread)}
 /* Status slot */
 .side.rail .side-bottom{padding-bottom:0}
-.side.rail .side-bottom>.nav{font-size:13px;padding:7px 18px;gap:14px}
-.side.rail .side-bottom>.nav .ic{font-size:20px;width:20px}
-.side.rail .side-bottom>.nav .badge{flex:none;padding:0 5px;font-size:12px}
 /* Bottom nav spacing */
-.side.rail .side-bottom>.nav:last-of-type{margin-bottom:10px}
-.side.rail .side-note{margin:2px 14px 8px 55px;font-size:12px;line-height:1.45;color:var(--rail-ink);opacity:.85}
+.side.rail .side-bottom>.nav:last-of-type{margin-bottom:9px}
+.side.rail .side-note{margin:2px 12px 8px;font-size:12px;line-height:1.45;color:var(--rail-ink);opacity:.85}
 .side.rail .foot{border-top:1px solid var(--rail-line);padding-top:0}
 .side.rail h6{color:rgba(255,255,255,.7);padding-left:16px}
 .side.rail .badge{color:#fff;background:rgba(255,255,255,.2)}
-/* Agent status indicator */
-.side.rail .status{display:flex;align-items:center;gap:14px;padding:10px 18px 14px;border-left:3px solid transparent;font-size:13px;color:var(--rail-ink);opacity:.78}
-.side.rail .status i{width:7px;height:7px;margin:0 6.5px;border-radius:50%;background:var(--ok-solid);flex:none}
-.side.rail .status .t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-style:normal;color:inherit}
-.side.rail .status.agent-starting i{background:var(--warning-dot);animation:rail-pulse 1.1s ease-in-out infinite}
-.side.rail .status.agent-stopped i{background:#ff5f57}
-.side.rail .status.agent-locked i{background:rgba(255,255,255,.5)}
-@keyframes rail-pulse{0%,100%{opacity:.25}50%{opacity:1}}
-@media (prefers-reduced-motion:reduce){.side.rail .status.agent-starting i{animation:none}}
 /* Collapsed rail variants */
-.side.rail.is-narrow .traffic{padding:14px 6px 6px}
+.side.rail.is-narrow .traffic{padding:14px 6px 10px}
 .side.rail.is-narrow .traffic .lights{visibility:hidden;gap:5px}
-.side.rail.is-narrow .who{justify-content:center;padding-left:0;padding-right:0;gap:0;border-right:3px solid transparent}
+.side.rail.is-narrow .rail-brand{justify-content:center;padding-left:0;padding-right:0;gap:0}
+.side.rail.is-narrow .rail-brand .lab{display:none}
+.side.rail.is-narrow .nav{width:36px;min-height:34px;height:34px;margin:1px 10px;padding:0}
+.side.rail.is-narrow .nav>.rail-tail{position:absolute;top:6px;right:-1px;margin:0;gap:0}
+.side.rail.is-narrow .nav>.rail-tail .num{display:none}
+.side.rail.is-narrow .nav>.rail-tail.count{width:8px;min-width:8px;height:8px;padding:0;font-size:0;overflow:hidden}
+.side.rail.is-narrow .nav>.rail-tail.dot::before{width:8px;height:8px}
+.side.rail.is-narrow .setup-card{width:36px;height:36px;margin:8px auto;padding:0;display:grid;place-items:center;border-radius:8px}
+.side.rail.is-narrow .setup-card>*{display:none}
+.side.rail.is-narrow .setup-card::before{content:attr(data-short);font-size:12px;font-weight:700}
+.side.rail.is-narrow .who{justify-content:center;padding-left:0;padding-right:0;gap:0}
 .side.rail.is-narrow .who .t,.side.rail.is-narrow .who .chev{display:none}
-.side.rail.is-narrow .attn{left:calc(50% + 7px);top:9px}
-.side.rail.is-narrow .nav>.rail-tail{position:absolute;top:11px;left:calc(50% + 6px);margin:0;min-width:0;width:6px;height:6px;border-radius:50%;font-size:0;box-shadow:0 0 0 2px var(--rail)}
-.side.rail.is-narrow .nav>.rail-tail.dot::before{width:6px;height:6px}
-.side.rail.is-narrow .nav>.rail-tail.count{background:var(--unread)}
-.side.rail.is-narrow .nav>.rail-tail.count.warn{background:var(--unread)}
-.side.rail.is-narrow .status{justify-content:center;padding-left:0;padding-right:0;gap:0;border-right:3px solid transparent}
-.side.rail.is-narrow .status .t{display:none}
+.side.rail.is-narrow .attn{left:36px;top:10px}
 /* Account menu */
 .rail-account-menu{width:256px}
 .rail-account-menu .cap{font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -171,37 +169,39 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .rail-account-menu .warnline .t{flex:1;min-width:0}
 /* Inline link button */
 .rail-account-menu .warnline .lnk{display:inline;width:auto;color:inherit;font-size:12px;font-weight:600;text-decoration:underline;padding:0}
-.menu .menu-separator{border-top:1px solid var(--line-soft);margin:6px 0}
+.menu .menu-separator{border-top:1px solid var(--line-soft);margin:5px 0}
 
-/* Scrollbars. The thumb shows while the pointer is over a pane, and for 700ms
-   after a scroll — `VaultShell` adds `.scrolling` from a capture-phase scroll
-   listener, so keyboard scrolling reveals the thumb too. The gutter is
-   reserved either way, so a thumb appearing does not shift the layout. */
+/* Scrollbars */
 .body,.settings-main,.main,.side,.details .scroll{scrollbar-width:thin;scrollbar-color:transparent transparent;transition:scrollbar-color .25s ease}
 .body:hover,.settings-main:hover,.main:hover,.side:hover,.details .scroll:hover,
-.body.scrolling,.settings-main.scrolling,.main.scrolling,.side.scrolling,.details .scroll.scrolling{scrollbar-color:rgba(60,60,67,.4) transparent}
+.body.scrolling,.settings-main.scrolling,.main.scrolling,.side.scrolling,.details .scroll.scrolling{scrollbar-color:var(--scrollbar-thumb) transparent}
 /* Webkit scrollbar fallback */
 .body::-webkit-scrollbar,.settings-main::-webkit-scrollbar,.main::-webkit-scrollbar,.side::-webkit-scrollbar,.details .scroll::-webkit-scrollbar{width:11px;height:11px}
 .body::-webkit-scrollbar-track,.settings-main::-webkit-scrollbar-track,.main::-webkit-scrollbar-track,.side::-webkit-scrollbar-track,.details .scroll::-webkit-scrollbar-track{background:transparent}
 .body::-webkit-scrollbar-thumb,.settings-main::-webkit-scrollbar-thumb,.main::-webkit-scrollbar-thumb,.side::-webkit-scrollbar-thumb,.details .scroll::-webkit-scrollbar-thumb{background:transparent;border:3px solid transparent;border-radius:var(--radius-pill);background-clip:padding-box}
 .body:hover::-webkit-scrollbar-thumb,.settings-main:hover::-webkit-scrollbar-thumb,.main:hover::-webkit-scrollbar-thumb,.side:hover::-webkit-scrollbar-thumb,.details .scroll:hover::-webkit-scrollbar-thumb,
-.body.scrolling::-webkit-scrollbar-thumb,.settings-main.scrolling::-webkit-scrollbar-thumb,.main.scrolling::-webkit-scrollbar-thumb,.side.scrolling::-webkit-scrollbar-thumb,.details .scroll.scrolling::-webkit-scrollbar-thumb{background:rgba(60,60,67,.4);background-clip:padding-box}
+.body.scrolling::-webkit-scrollbar-thumb,.settings-main.scrolling::-webkit-scrollbar-thumb,.main.scrolling::-webkit-scrollbar-thumb,.side.scrolling::-webkit-scrollbar-thumb,.details .scroll.scrolling::-webkit-scrollbar-thumb{background:var(--scrollbar-thumb);background-clip:padding-box}
 
 /* Avatar */
 .av{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;color:#fff;border:2px solid var(--surface);overflow:hidden;letter-spacing:-.04em}
 .av.team{border-radius:6px;font-size:12px;border:0}
 
 /* Main content area */
-.main{position:relative;min-width:0;min-height:0;display:flex;flex-direction:column;background:#fff;container-type:inline-size}
-/* Refresh status: a badge over the top bar's refresh button, and the per-server popover the button opens on hover. */
+.main{position:relative;min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--main-surface);container-type:inline-size}
+/* Sync status: a worded control in the header row, and the per-server popover it opens on hover.
+   The words carry the state — there is no dot over the control to read instead. */
 .global-refresh-wrap{position:relative;display:inline-flex;align-items:center;flex:none}
-.sync-badge{position:absolute;top:1px;left:22px;width:8px;height:8px;border-radius:50%;box-shadow:0 0 0 2px #fff;pointer-events:none}
-.sync-badge.failed{background:var(--unread)}
-/* While refreshing, the spinner stands where the icon was: the same ring the popover's rows spin, at the icon's size.
-   Qualified with .btn so it outranks the generic button spinner, which paints its ring in the button's text colour from a later stylesheet. */
-.btn.global-refresh .spin{box-sizing:border-box;width:15px;height:15px;border:1.6px solid var(--line-mid);border-top-color:var(--accent);border-right-color:var(--line-mid);border-radius:50%;animation:btn-spin .9s linear infinite}
-@media (prefers-reduced-motion:reduce){.btn.global-refresh .spin{animation:none}}
-.sync-popover{padding:6px 0 0;font-size:12.5px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto;background:var(--main-surface);border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-menu)}
+.sync{display:inline-flex;align-items:center;gap:6px;flex:none;height:28px;padding:0 9px;border-radius:var(--radius-sm);color:var(--muted);font-size:12px;white-space:nowrap}
+.sync:hover{background:var(--hover)}
+.sync .ic{font-size:15px;flex:none}
+.sync .dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--ok-solid)}
+.sync.busy .ic{animation:btn-spin 1s linear infinite}
+.sync.warn{color:var(--amber-ink)}
+.sync.bad{color:var(--danger-ink)}
+.sync[disabled]{cursor:default}
+.sync[disabled]:hover{background:none}
+@media (prefers-reduced-motion:reduce){.sync.busy .ic{animation:none}}
+.sync-popover{padding:6px 0 0;min-width:min(400px,calc(100vw - 16px));font-size:12.5px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto;background:var(--main-surface);border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-menu)}
 .sync-row{padding:0 8px}
 .sync-popover.multi .sync-row+.sync-row{margin-top:2px;padding-top:2px;border-top:1px solid var(--line-soft)}
 /* The header: a plain line for a lone server, a disclosure button among several. */
@@ -223,8 +223,7 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .sync-popover:not(.multi) .sync-body{padding-left:6px}
 .sync-cause{margin:2px 0 8px;padding:7px 9px;border-radius:8px;background:var(--amber-wash);color:var(--ink);line-height:1.45}
 .sync-jobs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
-.sync-jobs li{display:grid;grid-template-columns:6px 1fr auto;align-items:center;gap:8px;min-height:24px;padding:2px 0;font-size:12px;color:var(--muted)}
-.sync-jobs li+li{border-top:1px solid var(--line-soft)}
+.sync-jobs li{display:grid;grid-template-columns:6px 1fr auto;align-items:center;gap:8px;min-height:26px;padding:2px 0;font-size:12.5px;color:var(--muted)}
 .sync-jobs .sync-dot{width:6px;height:6px}
 .sync-activities{margin:0 14px 10px;padding-top:6px;border-top:1px solid var(--line-soft)}
 .sync-activities b{overflow-wrap:anywhere}
@@ -234,33 +233,61 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .sync-device-status{white-space:normal;overflow-wrap:anywhere;max-width:240px}
 .sync-when.failed{color:var(--amber-ink)}
 .sync-next{color:var(--faint)}
+.sync-jobs.sync-job-table{display:table;width:100%;border-collapse:collapse;font-size:12.5px;color:var(--muted)}
+.sync-job-table th,.sync-job-table td{height:26px;padding:2px 0;vertical-align:middle}
+.sync-job-table th{width:100%;text-align:left;font-weight:500}
+.sync-job-table td{padding-left:10px;text-align:right}
+.sync-jobs li+li,.sync-job-table tr+tr{border-top:1px solid color-mix(in srgb,var(--line-soft) 50%,transparent)}
+.sync-job-name{display:flex;align-items:center;gap:8px;white-space:nowrap}
+.sync-job-table .sync-device-status{max-width:none}
 .sync-actions{display:flex;align-items:center;gap:8px;margin-top:8px}
 .sync-empty{margin:0;padding:8px 14px 14px;color:var(--muted)}
 .sync-foot{display:flex;justify-content:flex-end;align-items:center;gap:12px;margin-top:6px;padding:8px 14px;border-top:1px solid var(--line-soft);background:var(--hover)}
-/* Topbar */
-.topbar{height:var(--topbar-h);flex:none;display:flex;align-items:center;gap:8px;padding:0 20px 0 16px;border-bottom:1px solid var(--line-soft);user-select:none}
-.topbar .back{width:28px;height:28px;flex:none;border-radius:var(--radius-sm);display:grid;place-items:center;color:var(--muted);font-size:17px}
-.topbar .back:hover{background:var(--hover);color:var(--ink)}
-.topbar .back[disabled]{opacity:.35;cursor:default}
-.topbar .back[disabled]:hover{background:none;color:var(--muted)}
-/* Breadcrumbs */
-.topbar .crumbs{position:relative;top:1px;display:block;min-width:0;font-size:13px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.topbar .crumbs b{color:var(--ink);font-weight:600}
+/* Header row containing top-level navigation and shell controls. */
+.topbar{height:var(--topbar-h);flex:none;display:flex;align-items:center;gap:8px;padding:0 14px 0 10px;border-bottom:1px solid var(--line-soft);user-select:none}
+/* Topbar navigation breadcrumbs. */
+.topbar .crumbs{display:flex;align-items:center;gap:0;min-width:0;font-size:13.5px;overflow:hidden}
+.topbar .crumbs button{display:inline-flex;align-items:center;min-width:0;padding:3px 6px;border-radius:6px;color:var(--muted);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.topbar .crumbs button:hover:not([disabled]){background:var(--hover);color:var(--ink)}
+.topbar .crumbs .cur{flex:none;color:var(--ink);font-weight:650}
+.topbar .crumbs button[disabled]{cursor:default}
+.topbar .crumbs button .t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Breadcrumb separator */
-.topbar .crumbs .sep{display:inline;transform:none;font-style:normal;margin:0 5px;color:var(--faint)}
+.topbar .crumbs .sep{display:inline-flex;align-items:center;flex:none;padding:0 1px;color:var(--faint);font-size:12px;transform:rotate(-90deg)}
+.topbar .crumbs>button:first-child{margin-left:0}
+/* Store icon mark in breadcrumbs matching the Files tree badge color. */
+.topbar .crumbs .crumb-mark{flex:none;width:16px;height:16px;margin-right:4px;padding-bottom:1px;border-radius:4px;display:grid;place-items:center;color:#fff;font-size:var(--mark-type);font-weight:700;letter-spacing:-.04em}
 .topbar .grow{flex:1 1 20px;min-width:8px;align-self:stretch}
-/* Search button */
-.topbar .topsearch{display:flex;align-items:center;gap:8px;flex:0 1 240px;width:240px;min-width:120px;height:32px;padding:0 10px;border-radius:var(--radius-md);background:var(--surface);border:1px solid transparent;color:var(--muted);font-size:13px;transition:background .12s ease,border-color .12s ease,color .12s ease}
-.topbar .topsearch:hover{background:var(--btn-hover);border-color:var(--line-mid);color:var(--ink)}
-.topbar .topsearch[disabled]{opacity:.55;cursor:default}
-.topbar .topsearch[disabled]:hover{background:var(--surface);border-color:transparent;color:var(--muted)}
-.topbar .topsearch .ic{font-size:16px;flex:none}
-.topbar .topsearch .t{flex:1;min-width:0;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.topbar .topsearch kbd{flex:none;font:12px var(--sans);color:var(--faint);border:1px solid var(--line);border-radius:5px;padding:1px 5px;background:#fff}
+/* The shell's one search field: a scope chip, the input, and the palette's key. */
+.topbar .topsearch{position:relative;display:flex;align-items:center;gap:7px;flex:0 1 auto;width:min(320px,34%);min-width:140px;max-width:none;height:30px;padding:0 10px;border-radius:8px;border:1px solid var(--search-border);background:var(--btn-bg);color:var(--muted)}
+.topbar .topsearch:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-wash-2)}
+.topbar .topsearch:has(input[disabled]){opacity:.6}
+.topbar .topsearch>.scope{translate:-2px 0;display:inline-flex;align-items:center;flex:none;max-width:45%;height:20px;padding:0 6px;border-radius:5px;background:var(--chip-bg);color:var(--muted);font-size:12px;font-weight:500;letter-spacing:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.topbar .topsearch>.ic{position:static;flex:none;font-size:15px;color:var(--muted)}
+.topbar .topsearch input{display:block;flex:1;min-width:0;width:auto;height:auto;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;outline:0;color:var(--ink);font-size:13px}
+.topbar .topsearch input:focus{border:0;background:transparent;box-shadow:none}
+.topbar .topsearch input::placeholder{color:var(--faint)}
+.topbar .topsearch kbd{position:static;flex:none;margin-left:auto;top:auto;right:auto;font:12px var(--sans);color:var(--faint);border:1px solid var(--line);border-radius:5px;padding:0 5px;background:var(--btn-bg)}
 .topbar .btn{flex:none}
 .topbar .btn.icon{width:30px;height:30px}
+.topbar .btn.primary{height:30px;font-size:13.25px}
+.topbar .btn.primary>.ic:first-child{font-size:15px}
+.topbar :is(.newwrap .btn,.btn.new-chat):has(>.ic:first-child:not(.chevron)){padding-left:10px}
+.topbar :is(.newwrap .btn,.btn.new-chat):has(>.ic.chevron:last-child){padding-right:10px}
+.topbar .newwrap{flex:none;display:inline-flex}
+/* Destination header displayed at the top of the New item menu. */
+.menu .mh{padding:8px 10px 4px;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+/* Modal dialog card for blocking / stopped shell states. */
+.tcard{width:min(440px,100%);padding:12px 22px 18px;border:1px solid var(--line-mid);border-radius:var(--radius-xl);background:var(--btn-bg);box-shadow:var(--shadow-sheet)}
+.tcard h2{margin:8px 0 6px;font-size:16px;font-weight:700;letter-spacing:-.01em}
+.tcard p{color:var(--muted);line-height:1.45}
+.tcard p.fn{margin-top:8px;font-size:12px;line-height:1.45;color:var(--faint)}
+.tcard p.fn.bad{color:var(--danger-ink)}
+.tcard .tacts{display:flex;align-items:center;gap:8px;margin-top:16px}
 /* Page header */
-.path{display:flex;align-items:center;gap:10px;padding:14px 20px 10px;background:#fff}
+/* A page's own title row, under the window header that already names the
+   page: a section heading's size, not a second page title. */
+.path{display:flex;align-items:center;gap:10px;padding:10px 20px 8px;background:var(--main-surface)}
 .path.ruled{border-bottom:1px solid var(--line-soft)}
 /* Two-line header padding */
 .path.ruled:has(.loc-copy>.sub){padding:12px 20px}
@@ -269,9 +296,9 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 /* Header title layout */
 .loc{display:flex;align-items:center;gap:9px;min-width:0;flex:1 1 auto}
 .loc-copy{min-width:0;flex:1 1 auto;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.loc h1{display:inline;font-size:20px;font-weight:700;letter-spacing:-.01em}
+.loc h1{display:inline;font-size:16px;font-weight:650;letter-spacing:-.01em}
 /* Subtitle layout */
-.loc-copy:has(>.sub)>h1{display:block;margin-bottom:1px;font-size:17px;line-height:1.15}
+.loc-copy:has(>.sub)>h1{display:block;margin-bottom:1px;font-size:16px;line-height:1.15}
 .loc-copy .sub{display:flex;align-items:center;gap:8px;min-width:0;font-size:13px;line-height:1.3;color:var(--muted)}
 .loc-copy .sub>span{overflow:hidden;text-overflow:ellipsis}
 .loc-badge{display:inline-flex;vertical-align:middle;margin-left:9px}
@@ -280,10 +307,10 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .loc .btn{height:28px;font-size:13px;flex:none}
 .search{position:relative;width:230px;flex:0 6 230px;min-width:124px}
 .search input{width:100%;height:32px;border:1px solid var(--line-field);border-radius:var(--radius-md);padding:0 54px 0 32px;background:var(--surface);outline:none}
-.search input:focus{border-color:var(--accent-border);background:#fff;box-shadow:0 0 0 3px var(--accent-wash)}
+.search input:focus{border-color:var(--accent-border);background:var(--main-surface);box-shadow:0 0 0 3px var(--accent-wash)}
 .search .ic{position:absolute;left:10px;top:8px;font-size:16px;color:var(--muted)}
 .search.no-shortcut input{padding-right:12px}
-.search kbd{position:absolute;right:8px;top:7px;font:12px var(--sans);color:var(--faint);border:1px solid var(--line);border-radius:5px;padding:1px 5px;background:#fff}
+.search kbd{position:absolute;right:8px;top:7px;font:12px var(--sans);color:var(--faint);border:1px solid var(--line);border-radius:5px;padding:1px 5px;background:var(--main-surface)}
 /* The toolbar spans the folder browser: a filter cell the tree column's width
    (`--tree-w`, set on .folder-layout) and a cell over the list for search and
    New. The 6px left inset matches .tpane's own padding, so the filter's edges
@@ -301,11 +328,11 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .toolbar .btn.primary,.empty .btn.primary{height:30px}
 .scope{font-size:13px;color:var(--muted)}.toolbar .scope{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.path .loc>.scope{flex:1;min-width:0;margin-left:auto;overflow:hidden;text-align:right;text-overflow:ellipsis;white-space:nowrap}
 .btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border:1px solid var(--line-mid);border-radius:var(--radius-md);background:var(--btn-bg);font-weight:500;box-shadow:var(--shadow-xs);white-space:nowrap}
-.btn:hover{background:var(--btn-hover)}.btn.primary{background:var(--accent);border-color:color-mix(in srgb,var(--accent) 58%,#fff);color:#fff;font-weight:600}
-.btn.primary:hover{background:var(--accent-ink);border-color:color-mix(in srgb,var(--accent-ink) 70%,#fff)}.btn.danger{color:var(--danger-ink)}.btn.danger:hover{background:var(--danger-wash)}
-.btn.primary.danger{background:var(--danger-ink);border-color:color-mix(in srgb,var(--danger-ink) 58%,#fff);color:#fff}
-.btn.primary.danger:hover{background:var(--danger-text);border-color:color-mix(in srgb,var(--danger-text) 70%,#fff);color:#fff}
-.btn.primary.danger[disabled]:hover{background:var(--danger-ink);border-color:color-mix(in srgb,var(--danger-ink) 58%,#fff);color:#fff}
+.btn:hover{background:var(--btn-hover)}.btn.primary{background:var(--accent);border-color:color-mix(in srgb,color-mix(in srgb,var(--accent) 58%,var(--ink-inverse)) 25%,transparent);color:var(--ink-inverse);font-weight:600}
+.btn.primary:hover{background:var(--accent-hover);border-color:var(--accent-hover-border)}.btn.danger{color:var(--danger-ink)}.btn.danger:hover{background:var(--danger-wash)}
+.btn.primary.danger{background:var(--danger-solid);border-color:color-mix(in srgb,color-mix(in srgb,var(--danger-ink) 58%,var(--ink-inverse)) 25%,transparent);color:var(--ink-inverse)}
+.btn.primary.danger:hover{background:var(--danger-solid-hover);border-color:color-mix(in srgb,color-mix(in srgb,var(--danger-text) 70%,var(--ink-inverse)) 25%,transparent);color:var(--ink-inverse)}
+.btn.primary.danger[disabled]:hover{background:var(--danger-solid);border-color:color-mix(in srgb,color-mix(in srgb,var(--danger-ink) 58%,var(--ink-inverse)) 25%,transparent);color:var(--ink-inverse)}
 .btn[disabled]{opacity:.5;cursor:default;box-shadow:none}.btn[disabled]:hover{background:var(--btn-bg)}.btn.primary[disabled]:hover{background:var(--accent)}
 /* Disabled button */
 .btn[aria-disabled='true']{opacity:.5;cursor:default;box-shadow:none}.btn[aria-disabled='true']:hover{background:var(--btn-bg)}
@@ -314,13 +341,13 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .btn.icon{width:32px;padding:0;justify-content:center;color:var(--ink-3)}
 .btn.icon.on{background:var(--accent-wash-2);border-color:var(--accent-border);color:var(--accent-ink)}
 .btn.cap{height:24px;padding:0 9px;font-size:12px;border-radius:var(--radius-pill);background:var(--chip-bg);border-color:transparent;box-shadow:none;color:var(--ink-2)}
-.btn.cap:hover{background:rgba(0,0,0,.1)}.btn.cap .ic{font-size:13px}
+.btn.cap:hover{background:var(--hover)}.btn.cap .ic{font-size:13px}
 .seg{display:inline-flex;background:var(--chip-bg);border-radius:var(--radius-md);padding:2px}
 .seg button{width:32px;height:28px;border-radius:var(--radius-sm);display:grid;place-items:center;color:var(--muted);font-size:16px}
-.seg button.on{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(15,20,45,.12)}
+.seg button.on{background:var(--main-surface);color:var(--ink);box-shadow:0 1px 2px rgba(15,20,45,.12)}
 .seg.txt button{width:auto;height:28px;padding:0 10px;font-size:12.5px;font-weight:500}
 .menuwrap{position:relative}
-.menu{position:absolute;top:36px;left:0;min-width:210px;background:#fff;border:1px solid var(--line);border-radius:11px;box-shadow:var(--shadow-menu);padding:6px;z-index:5}
+.menu{position:absolute;top:36px;left:0;min-width:210px;background:var(--main-surface);border:1px solid var(--line);border-radius:11px;box-shadow:var(--shadow-menu);padding:5px;z-index:5}
 .menu.right{left:auto;right:0}
 .menu button{display:flex;align-items:center;gap:9px;width:100%;padding:6px 9px;border-radius:var(--radius-sm);text-align:left}.menu button:hover{background:var(--hover)}
 .menu button.kind-menu-item{padding-block:4px}
@@ -331,6 +358,7 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .menu button.on{background:var(--accent-wash);color:var(--accent-ink);font-weight:600}
 /* Multi-line menu choice */
 .menu button .menu-choice{display:flex;flex-direction:column;gap:1px;min-width:0}
+.menu button .menu-choice b,.menu button .menu-choice strong{font-weight:400}
 .menu button .menu-choice small{font-weight:400;color:var(--muted);white-space:normal}
 /* Scoped search */
 .toolbar .search{width:160px;flex:0 1 160px}
@@ -367,7 +395,7 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .kic.Document{background:rgba(100,116,139,.13);color:var(--c-file)}
 .acts{display:flex;justify-content:flex-end;gap:2px;opacity:0;transition:opacity .12s}
 .acts button{width:28px;height:28px;border-radius:var(--radius-sm);display:grid;place-items:center;color:var(--ink-3);font-size:16px}
-.acts button:hover{background:rgba(0,0,0,.08)}.acts button.danger:hover{background:var(--danger-wash);color:var(--danger-ink)}
+.acts button:hover{background:var(--hover)}.acts button.danger:hover{background:var(--danger-wash);color:var(--danger-ink)}
 .acts button[disabled]{opacity:.35;cursor:default}
 .chip{display:inline-block;width:max-content;font-size:12px;font-weight:600;padding:1px 8px;border-radius:var(--radius-pill);background:var(--chip-bg);color:var(--chip-ink);white-space:nowrap}
 .chip.you{color:var(--accent-ink);background:var(--accent-wash-2)}
@@ -396,25 +424,28 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .empty{display:flex;flex-direction:column;align-items:center;text-align:center;padding:90px 20px 0;color:var(--muted)}
 .empty .big{width:88px;height:88px;border-radius:24px;background:var(--surface);display:grid;place-items:center;font-size:44px;color:var(--c-password);margin-bottom:16px}
 .empty h2{font-size:17px;font-weight:650;color:var(--ink);margin-bottom:4px}.empty p{max-width:380px;margin-bottom:16px}
-.notice{max-width:560px;margin:60px auto 0;padding:22px 24px;border-radius:var(--radius-lg);border:1px solid var(--amber-border);background:var(--amber-wash)}
-.notice .who{font-size:12px;font-weight:600;color:var(--amber-strong);letter-spacing:.04em;text-transform:uppercase;margin-bottom:6px}
-.notice h2{font-size:17px;font-weight:650;letter-spacing:-.01em;margin-bottom:8px}
-.notice p{color:var(--ink-3);margin-bottom:10px}.notice p:last-of-type{margin-bottom:0}.notice .fn{font-size:12.5px;color:var(--muted);margin-top:10px}
-.notice .acts2{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:14px}
-/* Account attention band */
-.people-attention .band{margin:2px 0 4px}
-.notice .acts2 .btn{line-height:1}
-.notice.info{border-color:var(--line);background:var(--surface)}
-.notice.info .who{color:var(--muted)}
-.notice.stop{border-color:var(--danger-border);background:var(--danger-wash)}
+.notice{display:flex;align-items:flex-start;gap:10px;width:100%;margin:0 0 12px;padding:9px 12px;border-radius:10px;border:1px solid var(--amber-border);background:var(--amber-wash);color:var(--amber-ink)}
+.notice>.ic{flex:none;margin-top:1px;font-size:16px}
+.notice .t{flex:1;min-width:0;overflow-wrap:anywhere}
+.notice .who{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;opacity:.85;margin-bottom:2px}
+.notice h2{font-size:13px;font-weight:650;letter-spacing:0;margin:0;color:inherit}
+.notice p{margin:1px 0 0;font-size:12.5px;line-height:1.45;color:inherit;opacity:.9}
+.notice .fn{margin-top:6px;font-size:12px;opacity:.8}
+.notice .acts2{flex:none;display:flex;align-items:center;flex-wrap:wrap;gap:6px}
+.notice .acts2 .btn{height:26px;padding:0 10px;border-radius:var(--radius-md);font-size:12px;line-height:1;border-color:var(--line-mid);background:var(--btn-bg);color:var(--ink);box-shadow:var(--shadow-xs)}
+.notice .acts2 .btn:not(.primary):hover{background:var(--btn-hover)}
+.notice .acts2 .btn.primary{border-color:color-mix(in srgb,var(--accent) 25%,transparent);background:var(--accent);color:#fff}
+.notice.info{border-color:var(--line);background:var(--surface);color:var(--ink)}
+.notice.info p,.notice.info .who{color:var(--muted);opacity:1}
+.notice.stop{border-color:var(--danger-border);background:var(--danger-wash);color:var(--danger-text)}
 .notice.stop .who{color:var(--danger-ink)}
-/* Notice band */
-.band{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:var(--radius-md);background:var(--amber-wash);border:1px solid var(--amber-border);color:var(--amber-ink);font-size:12.5px;line-height:1.35}
+/* Single-line alert band sharing visual styling with .notice, with an inline heading. */
+.band{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:10px;background:var(--amber-wash);border:1px solid var(--amber-border);color:var(--amber-ink);font-size:12.5px;line-height:1.45}
 /* Band heading */
-.band b,.band h2{display:inline;font-size:inherit;font-weight:700;white-space:nowrap}
+.band b,.band h2{display:inline;font-size:inherit;font-weight:650;white-space:nowrap}
 /* Screen reader only */
 .offscreen{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-.band .ic{flex:none}
+.band .ic{flex:none;font-size:16px}
 .band.stop{background:var(--danger-wash);border-color:var(--danger-border);color:var(--danger-text)}
 .band.stop b,.band.stop h2{color:var(--danger-ink);white-space:normal}
 .band.ok{background:var(--ok-wash);border-color:var(--ok-border);color:var(--ok-ink)}
@@ -433,7 +464,6 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 /* Takeover frame */
 .takeover{position:absolute;inset:var(--topbar-h) 0 0 var(--side-w);z-index:18;display:grid;place-items:center;padding:20px;overflow:auto}
 .stopwrap{background:var(--main-surface)}
-.stopwrap .notice{width:min(470px,100%);margin:0}
 
 /* Blocking states */
 .booting{flex:1;min-height:0;display:grid;place-items:center;align-content:center;gap:12px;padding:20px;text-align:center;color:var(--muted)}
@@ -446,20 +476,13 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .stopveil{background:color-mix(in srgb,var(--main-surface) 84%,transparent);backdrop-filter:blur(2px)}
 /* First run takeover offset */
 .window:has(>.app>.first-run-main)>.takeover{top:0}
-.stopcard{display:block;width:min(470px,100%);max-height:100%;overflow:auto;padding:22px 24px;background:var(--main-surface);box-shadow:var(--shadow-sheet)}
-.stopcard h2{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:17px;font-weight:650;letter-spacing:-.01em}
-.stopcard h2 .ic{flex:none;font-size:18px;color:var(--danger-ink)}
-.stopcard p{margin-bottom:10px;color:var(--ink-3);line-height:1.5}
-.stopcard p.calm{margin-top:12px;color:var(--muted);font-size:12.5px}
-.stopcard .copybox{margin-bottom:6px}
-.stopcard .acts2{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+/* Apply modal card styling to stop, lock, and boot overlays. */
+.tcard.stopcard{max-height:100%;overflow:auto}
+.tcard p+p{margin-top:8px}
+.tcard p.calm{margin-top:12px;font-size:12.5px}
+.tcard .copybox{margin-top:8px}
 .lock-back{inset:0;z-index:40;background:rgba(28,30,44,.55);backdrop-filter:blur(6px)}
-.lockcard{display:block;width:min(400px,100%);padding:26px 26px 22px;text-align:center;background:var(--main-surface);box-shadow:var(--shadow-sheet)}
-.lockcard .glyph{width:56px;height:56px;margin:0 auto 14px;border-radius:50%;display:grid;place-items:center;background:var(--accent-wash-2);color:var(--accent-ink);font-size:26px}
-.lockcard .glyph.warn{background:var(--danger-wash);color:var(--danger-ink)}
-.lockcard h2{margin-bottom:6px;font-size:18px;font-weight:650;letter-spacing:-.01em}
-.lockcard p{margin-bottom:16px;color:var(--muted-2);line-height:1.5}
-.lockcard .action-error{margin:-6px 0 14px}
+.tcard.lockcard{width:min(360px,100%)}
 .lockcard .btn{width:100%;height:34px;justify-content:center}
 
 /* Multi-step flow pane */
@@ -473,6 +496,8 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .pfoot .spacer{flex:1}.pfoot .note,.pfoot .amber{max-width:520px}
 .ptitle{font-size:15px;font-weight:650;letter-spacing:-.01em}
 .lnk{color:var(--accent-ink);font-weight:500;font-size:13px}
+/* Centre text actions optically within prompt rows. */
+button.lnk{translate:0 -1px}
 .hint .lnk{font-size:inherit;font-weight:inherit}
 details.dd{font-size:12.5px;color:var(--muted);margin-top:8px}
 details.dd summary{cursor:pointer;color:var(--accent-ink);font-weight:500}
@@ -508,7 +533,7 @@ details.dd li b{color:var(--ink-2)}
 .tpane .fn .fact:hover{background:var(--accent-wash-2)}
 .tpane .fn:hover{background:var(--hover)}
 .tpane .fn.on{background:var(--accent-wash-2);color:var(--accent-ink)}
-.tpane .fn .fselect>.ic{font-size:15px;color:#b45309}
+.tpane .fn .fselect>.ic{font-size:15px;color:var(--folder-amber)}
 .tpane .fn.root .fselect>.ic{color:var(--muted)}
 .tpane .fn.on .fselect>.ic{color:var(--accent-ink)}
 .tpane .fn .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -517,7 +542,7 @@ details.dd li b{color:var(--ink-2)}
 /* Twist toggle */
 .twist{flex:none;width:18px;height:18px;display:grid;place-items:center;color:var(--faint);border-radius:4px;font-size:13px;transform:rotate(-90deg);transition:transform .12s ease}
 .twist.open{transform:none}
-.twist:hover{background:rgba(0,0,0,.08);color:var(--ink)}
+.twist:hover{background:var(--hover);color:var(--ink)}
 .lpane{min-width:0;display:flex;flex-direction:column}
 .lpane .folder-body{padding-top:6px}
 /* Folder table */
@@ -540,7 +565,7 @@ details.dd li b{color:var(--ink-2)}
 .crumbs h1.cur{padding:0;color:var(--ink);font-size:19px;white-space:nowrap}
 .crumbs>button:first-child{margin-left:-7px}
 .crumbs .sep{display:inline-grid;place-items:center;color:var(--faint);font-size:12px;transform:rotate(-90deg)}
-.kic.Folder{background:rgba(245,158,11,.14);color:#b45309}
+.kic.Folder{background:rgba(245,158,11,.14);color:var(--folder-amber)}
 .kic.Store{background:var(--chip-bg);color:var(--ink-3)}
 @container (max-width:700px){.folder-split{grid-template-columns:minmax(0,1fr)}.tpane{display:none}}
 
@@ -548,7 +573,7 @@ details.dd li b{color:var(--ink-2)}
 .drop-area{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}
 .drop-veil{position:absolute;inset:0;z-index:4;display:grid;place-items:center;padding:20px;background:color-mix(in srgb,color-mix(in srgb,var(--main-surface) 84%,var(--accent)) 72%,transparent);border:2px dashed var(--accent-border);border-radius:var(--radius-lg);pointer-events:none}
 .drop-veil.off{background:color-mix(in srgb,color-mix(in srgb,var(--main-surface) 88%,var(--danger-ink)) 72%,transparent);border-color:var(--danger-ink)}
-.drop-card{display:grid;justify-items:center;gap:4px;text-align:center;max-width:420px;padding:16px 22px;border-radius:var(--radius-lg);background:#fff;box-shadow:var(--shadow-menu)}
+.drop-card{display:grid;justify-items:center;gap:4px;text-align:center;max-width:420px;padding:16px 22px;border-radius:var(--radius-lg);background:var(--main-surface);box-shadow:var(--shadow-menu)}
 .drop-card .glyph{width:40px;height:40px;border-radius:var(--radius-md);display:grid;place-items:center;font-size:20px;background:var(--accent-wash-2);color:var(--accent-ink)}
 .drop-veil.off .drop-card .glyph{background:var(--danger-wash);color:var(--danger-ink)}
 .drop-card b{font-size:14px;font-weight:650}
@@ -571,13 +596,13 @@ details.dd li b{color:var(--ink-2)}
 .prev .irow:first-child{border-top:0}
 .prev .irow .k{color:var(--muted);flex:none;width:66px}
 .prev .irow .v{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.prev .irow .v.mask{font:12px var(--mono);letter-spacing:.14em;color:var(--faint);white-space:nowrap;overflow:visible}
-.prev .irow .v.mono{font:12.5px var(--mono);color:var(--ink-2)}
+.prev .irow .v.mask{font:12px var(--sans);letter-spacing:.14em;color:var(--faint);white-space:nowrap;overflow:visible}
+.prev .irow .v.value-text{font:12.5px var(--sans);color:var(--ink-2)}
 .prev .irow .a{display:flex;gap:4px;flex:none}
 .prev .irow.rev{flex-wrap:wrap;row-gap:2px}.prev .irow.rev .a{margin-left:auto}
 .prev .irow.rev .v{flex-basis:100%;order:3;padding-bottom:3px;white-space:normal;overflow-wrap:anywhere}
 .prev .irow .a button{height:24px;padding:0 8px;border-radius:var(--radius-pill);background:var(--chip-bg);font-size:12px;font-weight:600;color:var(--chip-ink);display:inline-flex;align-items:center;gap:4px}
-.prev .irow .a button:hover:not(:disabled){background:rgba(0,0,0,.1)}.prev .irow .a button .ic{font-size:13px}
+.prev .irow .a button:hover:not(:disabled){background:var(--hover)}.prev .irow .a button .ic{font-size:13px}
 .prev .pad{padding:12px}
 .prev .row2{display:flex;gap:8px;margin-top:10px}.prev .row2 .btn{height:30px;padding:0 11px;font-size:13px}
 .prev .fileglyph{display:flex;align-items:center;gap:12px}
@@ -590,10 +615,10 @@ details.dd li b{color:var(--ink-2)}
 .detail-actions .btn{height:30px;font-size:13px;padding:0 11px}
 .details .inset.edit{margin-bottom:4px}
 .details .inset.edit .fr .k{width:80px;font-size:12.5px}
-.details .inset.edit .fr input[type=password]{font:13px var(--mono);letter-spacing:.08em}
+.details .inset.edit .fr input[type=password]{font:13px var(--sans);letter-spacing:.08em}
 .details .inset.edit .fr .a{display:flex;gap:4px;flex:none}
 .details .inset.edit .fr .a button{height:24px;padding:0 8px;border-radius:var(--radius-pill);background:var(--chip-bg);font-size:12px;font-weight:600;color:var(--chip-ink);display:inline-flex;align-items:center;gap:4px}
-.details .inset.edit .fr .a button:hover:not(:disabled){background:rgba(0,0,0,.1)}
+.details .inset.edit .fr .a button:hover:not(:disabled){background:var(--hover)}
 .details .inset.edit .fr .a button .ic{font-size:13px}
 .details .prev .irow .a button[disabled],.details .inset.edit .fr .a button[disabled]{opacity:.5;cursor:default}
 .eact{display:flex;gap:8px;justify-content:flex-end;margin:12px 0 6px}
@@ -624,12 +649,12 @@ details.dd li b{color:var(--ink-2)}
 .toggle-trigger:focus-visible,details.adv>summary:focus-visible,details.dd>summary:focus-visible{outline:2px solid var(--accent-border);outline-offset:-2px}
 .toggle-chevron{flex:none;transform:rotate(-90deg);transform-origin:center;transition:transform .15s ease}
 .toggle-trigger[aria-expanded="true"] .toggle-chevron{transform:none}
-.toggle-body pre{font:12px/1.5 var(--mono);background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:6px;white-space:pre-wrap}
+.toggle-body pre{font:12px/1.5 var(--mono);background:var(--main-surface);border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:6px;white-space:pre-wrap}
 .deferred{font-size:12px;color:var(--muted);margin-top:8px;line-height:1.5}
 
 /* Sheets and form fields */
 .backdrop{position:absolute;inset:0;background:var(--backdrop);display:grid;place-items:center;z-index:10}
-.sheet{width:460px;max-height:92%;display:flex;flex-direction:column;background:#fff;border-radius:var(--radius-xl);box-shadow:var(--shadow-sheet);padding:20px 24px 18px;overflow:hidden}
+.sheet{width:460px;max-height:92%;display:flex;flex-direction:column;background:var(--main-surface);border-radius:var(--radius-xl);box-shadow:var(--shadow-sheet);padding:20px 24px 18px;overflow:hidden}
 .sheet.wide{width:560px}
 .sheet .sb{flex:1;min-height:0;overflow:auto;margin:0 -4px;padding:0 4px}
 .sheet .hd{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex:none}
@@ -639,9 +664,10 @@ details.dd li b{color:var(--ink-2)}
 .sheet .hd .t .step{display:block;font-size:12px;color:var(--muted)}
 .sheet h2{font-size:16px;font-weight:650;letter-spacing:-.01em}
 .sheet p{color:var(--ink-3);font-size:13.5px;margin-bottom:8px}.sheet .fn{font-size:12.5px;color:var(--muted)}
+.sheet .sb>p:first-child{margin-top:3px;margin-bottom:10px}
 .sheet .ft{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-top:14px;align-items:center;flex:none}
 .sheet .ft .spacer{flex:1}
-.sheet .btn.primary.danger{background:var(--danger-ink);color:#fff;border-color:transparent}
+.sheet .btn.primary.danger{background:var(--danger-solid);color:var(--ink-inverse);border-color:transparent}
 .sheet .band{margin-top:10px}
 .sheet .sec{margin-top:12px}.sheet .sb>.sec:first-child{margin-top:4px}
 .sheet .confirm-inset{margin-top:10px}
@@ -663,7 +689,7 @@ details.dd li b{color:var(--ink-2)}
 .radio{display:flex;align-items:flex-start;gap:10px;padding:7px 12px;border-top:1px solid var(--line-soft);cursor:pointer;text-align:left;width:100%}
 .radio:first-child{border-top:0}.radio:hover{background:var(--wash)}
 .inset > .radios:not(:first-child) .radio:first-child{border-top:1px solid var(--line-soft)}
-.radio .rb{width:15px;height:15px;border-radius:50%;border:1px solid rgba(0,0,0,.25);background:#fff;flex:none;margin-top:2px;display:grid;place-items:center}
+.radio .rb{width:15px;height:15px;border-radius:50%;border:1px solid rgba(0,0,0,.25);background:var(--main-surface);flex:none;margin-top:2px;display:grid;place-items:center}
 .radio.on .rb{background:var(--accent);border-color:transparent}
 .radio.on .rb::after{content:"";width:5px;height:5px;border-radius:50%;background:#fff}
 /* Radio option icon */
@@ -708,8 +734,12 @@ details.dd li b{color:var(--ink-2)}
 .crumb{display:inline-flex;align-items:center;gap:4px;font-size:13px;color:var(--muted);font-weight:500;padding:3px 6px;margin-left:-6px;border-radius:6px}
 .crumb:hover{background:var(--hover);color:var(--ink)}
 .crumb .ic{font-size:14px}
-.band .t{flex:1;min-width:0}
-.band .a{margin-left:auto;flex:none;display:flex;gap:6px;align-self:center}
+.band .t{flex:1;min-width:0;overflow-wrap:anywhere}
+.band .a{margin-left:auto;flex:none;display:flex;flex-wrap:wrap;gap:6px;align-self:center}
+/* Align alert band button sizing and spacing with standard notice buttons. */
+.band .a .btn{height:26px;padding:0 10px;border-radius:var(--radius-md);font-size:12px;line-height:1;border-color:var(--line-mid);background:var(--btn-bg);color:var(--ink);box-shadow:var(--shadow-xs)}
+.band .a .btn:not(.primary):hover{background:var(--btn-hover)}
+.band .a .btn.primary{border-color:color-mix(in srgb,var(--accent) 25%,transparent);background:var(--accent);color:#fff}
 .hostid{display:flex;align-items:center;gap:8px;min-width:0}
 .hostid code{font-size:12.5px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .stopped{color:var(--faint);font-style:italic}
@@ -762,6 +792,7 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 .nav-rows .settings-main{margin:18px 20px 0}
 /* Nav footnote */
 .nav-rows .fn{padding:8px 20px 0;font-size:12.5px;color:var(--muted)}
+
 /* Account switcher */
 .switch{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:2px 0 12px}
 .switch .acc{display:flex;align-items:center;gap:8px;min-width:0;padding:7px 12px 7px 10px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface)}
@@ -774,17 +805,6 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 .switch .acc .t small{display:block;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* Account status note */
 .switch .acc .t small.why{color:var(--amber-ink);max-width:260px}
-
-/* The chosen account's head on People: mark, username, server, chips, on one
-   flat row above the sections that describe the account. */
-.phead{display:flex;align-items:center;gap:14px;padding:16px 0 4px;min-width:0}
-.phead .kico.big{width:52px;height:52px;font-size:21px;border-radius:50%;border:0;box-shadow:none}
-.phead .t{min-width:0;line-height:1.3}
-.phead .t h2{font-size:20px;font-weight:700;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-/* The server line and the chips that qualify it are one line, not a line and
-   a pair of chips pushed to the far end of the row. */
-.phead .t .line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;color:var(--muted)}
-.phead .t small{display:block;font-size:13px;color:var(--muted)}
 
 /* Name chip */
 .namechip{display:flex;align-items:center;gap:6px;min-width:0}
@@ -817,18 +837,11 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 /* Pairing phrase */
 .pair-steps .copybox .mono{font-size:15px;letter-spacing:.02em}
 
-/* ---------- toasts ----------
-   `apps/desktop/kit/toasts.tsx` owns the behaviour — auto-dismiss, dedupe, a cap on how
-   many stack, and a tone that decides whether a screen reader is interrupted.
-   These are the design's pill, given that markup. Unlike the `.flash` they
-   replace, two of them stack instead of occupying the same spot, and a long
-   message wraps instead of being clipped to one line. The host portals to
-   `#overlays` with the sheets; z-index is above `.backdrop` (10) and
-   portaled menus (16) so a toast from a sheet remains visible and clickable. */
+/* Toasts */
 .toasts{position:fixed;left:0;right:0;bottom:18px;z-index:20;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none}
-.toast{display:flex;align-items:center;gap:10px;max-width:min(90%,520px);padding:7px 10px 7px 14px;border-radius:var(--radius-pill);background:var(--ink);color:#fff;font-size:13px;line-height:1.4;box-shadow:var(--shadow-menu);opacity:0;transform:translateY(8px);transition:opacity .25s,transform .25s;pointer-events:auto}
+.toast{display:flex;align-items:center;gap:10px;max-width:min(90%,520px);padding:7px 10px 7px 14px;border-radius:var(--radius-pill);background:var(--ink);color:var(--main-surface);font-size:13px;line-height:1.4;box-shadow:var(--shadow-menu);opacity:0;transform:translateY(8px);transition:opacity .25s,transform .25s;pointer-events:auto}
 .toast.show{opacity:1;transform:none}
-.toast[data-toast-tone="warning"]{background:var(--danger-ink)}
+.toast[data-toast-tone="warning"]{background:var(--danger-solid)}
 .toast-message{min-width:0;overflow-wrap:anywhere}
 .toast-action,.toast-dismiss{border:0;background:none;color:inherit;font:inherit;cursor:pointer;flex:none}
 .toast-action{font-weight:650;padding:2px 4px}
@@ -837,9 +850,14 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 
 /* Collapsed rail nav overrides */
 .side.rail.is-narrow .nav{justify-content:center;padding-left:0;padding-right:0;gap:0;border-right:3px solid transparent}
-.side.rail.is-narrow .attn{left:31px}
-.side.rail.is-narrow .who .avatar{transform:translateY(2px)}
 .side.rail .traffic{position:relative}
+.traffic .side-collapse{translate:0 -1px;position:absolute;right:12px;top:6px;display:grid;place-items:center;width:28px;height:28px;border:0;background:transparent;box-shadow:none;color:rgba(255,255,255,.75)}
+.traffic .side-collapse .ic{font-size:17px}
+.traffic .side-collapse:hover:not(:disabled){color:#fff}
+.traffic .side-collapse:focus-visible{outline:2px solid #fff;outline-offset:2px}
+.traffic .side-collapse:disabled{opacity:.45;cursor:default}
+.side.rail:not(.is-narrow) .traffic .side-collapse{top:calc(100% + 3px);z-index:1}
+.side.rail.is-narrow .traffic .side-collapse{right:14px;top:8px}
 
 .chat-migration { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 20px; font-size: 13px; flex-shrink: 0; }
 
@@ -867,3 +885,24 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 .exit-progress b{color:var(--ink);font-size:16px;font-weight:600}.exit-progress span:last-child{font-size:12.5px}
 @media (prefers-reduced-motion:reduce){.exit-progress .spin{animation:none}}
 @media (max-width:760px){.exit-actions.three,.exit-actions.failure-actions{flex-wrap:wrap}.exit-actions.three .btn{flex:1 1 100%}.exit-actions.failure-actions .spacer{display:none}.exit-card-body{padding:20px}.exit-card>.action-error{margin-left:20px;margin-right:20px}}
+
+.side.rail.is-narrow .nav>.ic,.side.rail.is-narrow .side-collapse>.ic,.side.rail.is-narrow .rail-brand .mark{transform:translateX(1px)}
+
+/* Center the drag target over the boundary, outside the scrolling rail. */
+.side.rail{position:relative}
+.side.rail.is-resizing{transition:none}
+
+/* Respect the operating system motion preference for every present and future
+   component. Near-zero durations preserve transition and animation events that
+   application code or browser controls may rely on. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+.sidebar-resizer{position:absolute;z-index:4;top:0;bottom:0;left:calc(var(--side-w) - 3px);width:6px;cursor:col-resize;touch-action:none;-webkit-app-region:no-drag}
+.sidebar-resizer:hover,.sidebar-resizer:focus-visible,.sidebar-resizer.is-resizing{background:rgba(255,255,255,.25)}
+.sidebar-resizer:focus-visible{outline:1px dotted rgba(255,255,255,.45);outline-offset:-1px}

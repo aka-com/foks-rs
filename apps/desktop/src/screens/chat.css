@@ -1,16 +1,17 @@
 /* Tab including team column, the conversation, and info panel. */
 .chat-screen {
   position: relative;
+  overflow: clip;
   display: grid;
-  grid-template-columns: 272px minmax(0, 1fr);
+  --chat-inbox-w: 264px;
+  grid-template-columns: var(--chat-inbox-w) minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   height: 100%;
 }
-/* The panel is the shell's right-hand panel width, the same track the Files
-   details panel uses. */
-.chat-screen.with-info {
-  grid-template-columns: 272px minmax(0, 1fr) var(--details-w);
+/* Info panel width (260px), sized for channel description, members, and settings. */
+.chat-screen {
+  --chat-info-w: 260px;
 }
 
 /* Team column elements. */
@@ -22,35 +23,70 @@
   border-right: 1px solid var(--line-soft);
   background: var(--surface);
 }
-.chat-inbox-top {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 10px 12px;
-}
-.chat-inbox-top .search {
-  flex: 1;
-  min-width: 0;
-}
-.chat-inbox-top .btn.primary {
-  flex: none;
-  width: 32px;
-  padding: 0;
-  justify-content: center;
-}
 .chat-inbox-scroll {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding-bottom: 10px;
+  padding: 0 8px 10px;
 }
-.chat-inbox-scroll .sec {
-  margin: 8px 12px 2px;
+/* Inbox column section header and hover add button. */
+.chat-inbox-scroll .sec.chat-inbox-label {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 12px 8px 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.chat-inbox-label .right {
+  margin-left: auto;
+  display: flex;
+}
+.chat-inbox-add {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--faint);
+  opacity: 0;
+  cursor: pointer;
+}
+.chat-inbox-label:hover .chat-inbox-add,
+.chat-inbox-add:focus-visible {
+  opacity: 1;
+}
+.chat-inbox-add:hover {
+  background: var(--hover);
+  color: var(--ink);
 }
 .chat-inbox-empty {
   padding: 22px 16px;
   text-align: center;
+}
+/* Empty state styling for inbox column. */
+.chat-inbox-none {
+  padding: 60px 16px 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.chat-inbox-none b {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.chat-team {
+  margin-bottom: 2px;
 }
 /* A team: a heading row that folds its channels, which are indented under it. */
 .chat-team-head {
@@ -58,11 +94,13 @@
   align-items: center;
   gap: 9px;
   width: 100%;
-  padding: 6px 8px 6px 12px;
+  height: 42px;
+  padding: 0 8px;
   border: 0;
+  border-radius: var(--radius-md);
   background: none;
   font: inherit;
-  color: inherit;
+  color: var(--ink);
   text-align: left;
   cursor: pointer;
 }
@@ -76,20 +114,17 @@
 /* A team with no channel rows opens its own pane, and is drawn current the way
    a channel row is. */
 .chat-team-head.on {
-  background: var(--accent);
-  color: var(--main-surface);
+  background: var(--accent-wash-2);
+  color: var(--accent-ink);
 }
 .chat-team-head.on .t small,
 .chat-team-head.on .t small.chat-row-note {
-  color: var(--main-surface);
+  color: var(--accent-ink);
   opacity: 0.85;
 }
-.chat-team-head.on .chat-unread {
-  background: var(--main-surface);
-  color: var(--accent-ink);
-}
 .chat-team-head.off {
-  padding: 6px 8px 6px 12px;
+  height: auto;
+  padding: 6px 8px;
   opacity: 0.55;
   cursor: default;
 }
@@ -104,6 +139,7 @@
 .chat-team-head .t {
   flex: 1;
   min-width: 0;
+  line-height: 1.2;
 }
 .chat-team-head .t b {
   display: block;
@@ -128,18 +164,25 @@
 /* The fold indicator: part of the row, not a control of its own. */
 .chat-team-chev {
   flex: none;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   display: grid;
   place-items: center;
-  color: var(--muted);
-  transition: transform 0.12s ease;
+  color: var(--faint);
+  transition: transform 0.15s ease;
 }
 .chat-team.collapsed .chat-team-chev {
   transform: rotate(-90deg);
 }
+/* Warning icon displayed when team channels fail to load. */
+.chat-team-warn {
+  flex: none;
+  display: inline-flex;
+  color: var(--danger-ink);
+}
 .chat-nochat-label {
   border-top: 1px solid var(--line-soft);
+  margin-top: 6px;
   padding-top: 10px;
 }
 .chat-status {
@@ -155,12 +198,8 @@
   min-width: 0;
   flex-wrap: wrap;
 }
-.chat-status .band .t {
-  overflow-wrap: anywhere;
-}
 .chat-status .band .a {
   max-width: 100%;
-  flex-wrap: wrap;
 }
 .chat-status .band small {
   display: block;
@@ -171,29 +210,43 @@
 .chat-channel-list {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 0 0 6px;
+  margin-top: 1px;
+  padding: 0 0 2px;
 }
 .chat-channel {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   width: 100%;
-  padding: 4px 12px 4px 43px;
+  height: 30px;
+  padding: 0 8px 0 42px;
   border: 0;
+  border-radius: var(--radius-sm);
   background: none;
   font: inherit;
   font-size: 13px;
+  font-weight: 500;
   text-align: left;
   color: var(--ink-2);
   cursor: pointer;
 }
+.chat-channel.no-channels .n {
+  color: var(--faint);
+}
+.chat-channel .hash {
+  flex: none;
+  color: var(--faint);
+  font-weight: 600;
+}
 .chat-channel:hover {
   background: var(--hover);
 }
+.chat-channel.on,
+.chat-channel.on .hash {
+  color: var(--accent-ink);
+}
 .chat-channel.on {
-  background: var(--accent);
-  color: var(--main-surface);
+  background: var(--accent-wash-2);
 }
 /* Unreachable team channels. */
 .chat-channel.off {
@@ -202,45 +255,31 @@
 .chat-channel .t {
   flex: 1;
   min-width: 0;
-}
-.chat-channel .n {
-  display: block;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.chat-channel .n {
+  color: inherit;
+}
 .chat-channel.unread .n {
-  font-weight: 700;
+  font-weight: 650;
   color: var(--ink);
 }
 .chat-channel.on .n,
 .chat-channel.on.unread .n,
 .chat-channel.on small {
-  color: var(--main-surface);
+  color: var(--accent-ink);
 }
 .chat-channel small {
-  display: block;
   font-size: 12px;
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-weight: 400;
+  color: var(--faint);
 }
 /* Hidden or muted channels shown in the column as dimmed rows. */
 .chat-channel.hidden .t,
 .chat-channel.muted .t {
   opacity: 0.6;
-}
-.chat-channel .when {
-  flex: none;
-  align-self: flex-start;
-  margin-top: 1px;
-  font-size: 12px;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
-.chat-channel.on .when {
-  color: var(--main-surface);
 }
 .chat-channel .lock {
   flex: none;
@@ -248,22 +287,52 @@
   place-items: center;
   opacity: 0.6;
 }
-.chat-channel.on .chat-unread {
-  background: var(--main-surface);
+/* Error row displayed when channel loading fails. */
+.chat-channel.fail {
+  height: auto;
+  min-height: 30px;
+  gap: 6px;
+  padding: 5px 8px 5px 36px;
+  color: var(--danger-text);
+  cursor: default;
+}
+.chat-channel.fail:hover {
+  background: none;
+}
+.chat-channel.fail .n {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.3;
+}
+.chat-channel-retry {
+  flex: none;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--accent-ink);
+  cursor: pointer;
+}
+.chat-channel-retry:hover {
+  text-decoration: underline;
 }
 /* Same unread color used everywhere. */
 .chat-unread {
   flex: none;
-  min-width: 20px;
+  min-width: 18px;
+  height: 18px;
   padding: 0 6px;
+  box-sizing: border-box;
   border-radius: var(--radius-pill);
-  text-align: center;
+  display: grid;
+  place-items: center;
   color: var(--main-surface);
   background: var(--unread);
   font-size: 12px;
   font-weight: 700;
-  line-height: 19px;
   font-variant-numeric: tabular-nums;
 }
 .chat-unread.muted {
@@ -352,6 +421,42 @@
 .chat-conversation-body {
   padding: 20px;
 }
+/* Empty state layout for conversation pane and message list. */
+.chat-empty {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+}
+.chat-empty .ic {
+  width: 30px;
+  height: 30px;
+  color: var(--faint);
+  stroke-width: 1.2;
+}
+.chat-empty b {
+  display: block;
+  margin: 10px 0 3px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.chat-empty span,
+.chat-empty p {
+  display: block;
+  max-width: 40ch;
+  margin: 0;
+  line-height: 1.45;
+}
+.chat-empty-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 16px;
+}
 .chat-locked {
   flex: 1;
   display: grid;
@@ -390,6 +495,13 @@
 
 /* Begin channel info panel. */
 .chat-info {
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: var(--chat-info-w);
+  max-width: calc(100% - var(--chat-inbox-w));
+  z-index: 2;
+  box-shadow: var(--shadow-menu);
+  animation: chat-info-in 180ms ease-out;
   min-height: 0;
   overflow: auto;
   border-left: 1px solid var(--line-soft);
@@ -424,6 +536,9 @@
 }
 .chat-info .chat-quiet {
   padding: 0;
+}
+.chat-info .chat-visibility-title {
+  margin-bottom: 2px;
 }
 .chat-info-members {
   margin-bottom: 8px;
@@ -474,6 +589,7 @@
 }
 .chat-info .chat-local-settings {
   padding: 0;
+  margin-bottom: 12px;
   border-bottom: 0;
 }
 .chat-info .chat-local-settings label {
@@ -528,64 +644,60 @@
   flex: none;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 10px 16px;
+  gap: 8px;
+  height: 44px;
+  padding: 0 16px;
   border-bottom: 1px solid var(--line-soft);
 }
-.chat-thread-title {
-  flex: 1;
+/* Single-line header displaying channel name, team, and member count. */
+.chat-thread-header h2 {
+  flex: 0 1 auto;
   min-width: 0;
-}
-/* Channel name header. Keep broader width and avoid collapsing. */
-.chat-thread-title h2 {
-  display: flex;
-  align-items: baseline;
-  min-width: 0;
+  margin: 0;
   overflow: hidden;
-  font-size: 16px;
-  font-weight: 700;
+  text-overflow: ellipsis;
+  font-size: 14px;
+  font-weight: 650;
   letter-spacing: -0.01em;
   white-space: nowrap;
 }
-.chat-thread-title h2 .team {
+.chat-thread-sub {
+  translate: 0 1px;
   flex: 0 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--muted);
-  font-weight: 600;
-}
-.chat-thread-title h2 .sep {
-  flex: none;
-  color: var(--muted);
-  font-weight: 400;
-  white-space: pre;
-}
-.chat-thread-title h2 .chan {
-  flex: none;
-}
-.chat-thread-title p {
-  margin: 2px 0 0;
-  font-size: 12px;
+  margin: 0;
+  font-size: 12.5px;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.chat-thread-header .btn.icon {
-  width: 28px;
-  height: 28px;
+.chat-thread-spacer {
+  flex: 1 1 auto;
+}
+.chat-thread-header .btn.chat-head-act {
   flex: none;
+  width: 26px;
+  height: 26px;
+  gap: 6px;
+  padding: 0;
   border: 0;
+  border-radius: var(--radius-md);
   box-shadow: none;
   background: transparent;
+  font-size: 12.5px;
+  font-weight: 500;
   color: var(--muted);
 }
-.chat-thread-header .btn.icon:hover {
-  background: var(--btn-hover);
+.chat-thread-header .btn.chat-head-act .ic {
+  width: 15px;
+  height: 15px;
+}
+.chat-thread-header .btn.chat-head-act:hover {
+  background: var(--hover);
   color: var(--ink);
 }
-.chat-thread-header .btn.icon.on {
+.chat-thread-header .btn.chat-head-act.on {
   background: var(--accent-wash-2);
   color: var(--accent-ink);
 }
@@ -599,8 +711,11 @@
 .chat-messages {
   flex: 1;
   overflow: auto;
-  padding: 8px 20px 16px;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 16px 19px;
 }
 .chat-history-edge {
   display: flex;
@@ -615,22 +730,74 @@
   text-align: center;
   padding-top: 24px;
 }
+/* Empty state sizing when rendered inside the scrollable message list. */
+.chat-messages > .chat-empty.chat-messages-empty {
+  flex: 1;
+  padding: 0 24px;
+}
+/* Message row layout: avatar, sender name, timestamp, and body. */
 .chat-message {
-  margin: 0 0 14px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+}
+.chat-avatar {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  margin-top: 2px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--main-surface);
+  font-size: var(--mark-type);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.chat-message-body {
+  flex: 1;
+  min-width: 0;
+}
+.chat-message.grouped {
+  margin-top: -10px;
+}
+.chat-message.grouped .chat-avatar {
+  visibility: hidden;
+  height: 0;
+  margin-top: 0;
 }
 .chat-message header {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
+}
+.chat-message:not(.grouped) .chat-message-body header {
+  margin-bottom: 1px;
 }
 .chat-sender {
   font-size: 13px;
-  font-weight: 600;
-  color: var(--ink-2);
+  font-weight: 650;
+  color: var(--ink);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Date separator dividing message groups by day. */
+.chat-daysep {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--faint);
+}
+.chat-daysep::before,
+.chat-daysep::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--line-soft);
 }
 .chat-sender.you {
   color: var(--accent-ink);
@@ -660,8 +827,10 @@
 .chat-message p {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  margin: 3px 0 0;
-  line-height: 1.5;
+  margin: 2px 0 0;
+  max-width: 62ch;
+  line-height: 1.45;
+  color: var(--ink-2);
   user-select: text;
 }
 .chat-message p.chat-unsupported {
@@ -694,18 +863,25 @@
   border: 1px solid var(--line);
   box-shadow: var(--shadow-menu);
 }
+/* The text grows beside Send; the byte counter gets its own row. */
 .chat-composer {
-  --composer-control-height: 32px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  gap: 8px 10px;
   flex: none;
-  padding: 12px 20px 16px;
-  border-top: 1px solid var(--line-soft);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  align-items: end;
+  gap: 0 6px;
+  padding: 6px;
+  margin: 0 16px 14px;
+  border: 1px solid var(--line-field);
+  border-radius: var(--radius-lg);
+  background: var(--main-surface);
+}
+.chat-composer:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash-2);
 }
 .chat-composer .band {
-  margin: 0 0 10px;
+  margin: 10px 10px 0;
 }
 .chat-composer textarea {
   display: block;
@@ -713,14 +889,14 @@
   box-sizing: border-box;
   min-width: 0;
   resize: none;
-  min-height: var(--composer-control-height);
+  min-height: 28px;
   max-height: 220px;
   overflow-y: auto;
-  padding: 5px 10px;
+  padding: 4px 6px;
   color: inherit;
-  background: var(--main-surface);
-  border: 1px solid var(--line-field);
-  border-radius: var(--radius-md);
+  background: transparent;
+  border: 0;
+  outline: 0;
   font: inherit;
   line-height: 20px;
 }
@@ -728,14 +904,29 @@
   color: var(--faint);
 }
 .chat-composer textarea[disabled] {
-  background: var(--surface);
   color: var(--muted);
 }
-.chat-composer > .btn {
-  height: var(--composer-control-height);
+.chat-send {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--main-surface);
+  cursor: pointer;
+}
+.chat-send[disabled] {
+  background: var(--chip-bg);
+  color: var(--faint);
+  cursor: default;
 }
 .chat-composer .chat-meter {
-  grid-column: 1;
+  grid-column: 1 / -1;
+  padding: 4px 6px 0;
   font-size: 12px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
@@ -744,15 +935,11 @@
   color: var(--danger-ink);
   font-weight: 600;
 }
-.chat-composer textarea:focus-visible,
 .chat-channel:focus-visible,
-.chat-jump:focus-visible {
+.chat-jump:focus-visible,
+.chat-send:focus-visible {
   outline: 2px solid var(--accent-border);
   outline-offset: 1px;
-}
-.chat-composer textarea:focus-visible {
-  border-color: var(--accent);
-  outline-offset: 0;
 }
 /* New-chat channel selection uses a two-column grid for team avatars and text. */
 .chat-pick .radio:has(.kico) {
@@ -849,40 +1036,38 @@
 .chat-create .inset .fr .v small.action-error {
   color: var(--danger-ink);
 }
-@container (max-width: 920px) {
-  .chat-screen.with-info {
-    grid-template-columns: 272px minmax(0, 1fr);
+@keyframes chat-info-in {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
   }
-  /* Below this there is no room for both, so the panel covers the
-     conversation completely rather than obscuring part of each message and
-     the header controls. */
-  .chat-screen.with-info .chat-info {
-    position: absolute;
-    inset: 0 0 0 272px;
-    width: auto;
-    z-index: 2;
-    box-shadow: var(--shadow-menu);
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-info {
+    animation: none;
   }
 }
 @container (max-width: 900px) {
-  .chat-screen,
-  .chat-screen.with-info {
-    grid-template-columns: 220px minmax(0, 1fr);
-  }
-  .chat-screen.with-info .chat-info {
-    inset-inline-start: 220px;
+  .chat-screen {
+    --chat-inbox-w: 220px;
   }
 }
 @media (max-width: 860px) {
-  .chat-screen,
-  .chat-screen.with-info {
-    grid-template-columns: 220px minmax(0, 1fr);
+  .chat-screen {
+    --chat-inbox-w: 220px;
   }
   .chat-thread-header,
-  .chat-messages,
-  .chat-composer {
+  .chat-messages {
     padding-left: 12px;
     padding-right: 12px;
+  }
+  .chat-composer {
+    margin-left: 12px;
+    margin-right: 12px;
   }
   .chat-conversation > .band,
   .chat-conversation > .chat-status {

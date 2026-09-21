@@ -1,0 +1,10 @@
+@layer tokens, base, components, features, overrides;
+
+@import '/kit/tokens.css' layer(tokens);
+@import './shell.css' layer(base);
+@import './app.css' layer(components);
+@import '../screens/files.css' layer(features.files);
+@import '../screens/chat.css' layer(features.chat);
+@import '../screens/chat-picker.css' layer(features.chat);
+@import '../shell/search-palette.css' layer(features.search);
+@import './native-window.css' layer(overrides);

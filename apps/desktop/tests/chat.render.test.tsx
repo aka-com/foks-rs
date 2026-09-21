@@ -180,7 +180,59 @@ test('composer suppresses IME and repeated Enter, and renders hostile text safel
   assert.equal(attempts, 0);
   assert.equal(document.querySelector('.chat-messages img'), null);
   assert.equal((composer as HTMLTextAreaElement).value, '');
+  const ownMessage = ui.screen
+    .getByText('<img src=x onerror=alert(1)>')
+    .closest('.chat-message');
+  assert.ok(ownMessage);
+  assert.equal(ownMessage.querySelector('.chat-sender')?.textContent, 'You');
+  assert.equal(ownMessage.querySelector('.chat-avatar')?.textContent, 'V');
 });
+test('empty and whitespace-only messages are silent no-ops', async () => {
+  let submissions = 0;
+  await setup((base) => ({
+    ...base,
+    chat: async (store, action) => {
+      if (action.action === 'submit-message') submissions++;
+      return base.chat(store, action);
+    },
+  }));
+  const composer = ui.screen.getByRole('textbox', { name: 'Message' });
+  const form = composer.closest('form');
+  assert.ok(form);
+  for (const value of ['', '   ', '\t\n \u00a0']) {
+    ui.fireEvent.change(composer, { target: { value } });
+    await ui.act(async () => {
+      ui.fireEvent.keyDown(composer, { key: 'Enter' });
+      ui.fireEvent.submit(form);
+    });
+    assert.equal(submissions, 0);
+    assert.equal((composer as HTMLTextAreaElement).value, value);
+    assert.equal(
+      ui.screen.queryByText('The message is empty or exceeds the text limit.'),
+      null,
+    );
+  }
+});
+test('Option–Enter inserts a newline at the cursor without sending', async () => {
+  let submissions = 0;
+  await setup((base) => ({
+    ...base,
+    chat: async (store, action) => {
+      if (action.action === 'submit-message') submissions++;
+      return base.chat(store, action);
+    },
+  }));
+  const composer = ui.screen.getByRole('textbox', {
+    name: 'Message',
+  }) as HTMLTextAreaElement;
+  ui.fireEvent.change(composer, { target: { value: 'hello world' } });
+  composer.setSelectionRange(5, 6);
+  ui.fireEvent.keyDown(composer, { key: 'Enter', altKey: true });
+  assert.equal(composer.value, 'hello\nworld');
+  assert.equal(composer.selectionStart, 6);
+  assert.equal(submissions, 0);
+});
+
 test('the composer exposes only supported actions', async () => {
   await setup();
   for (const label of [
@@ -197,27 +249,37 @@ test('the composer exposes only supported actions', async () => {
   assert.equal(ui.screen.queryByText('@user'), null);
 });
 
-test('renders channel descriptions, message times, and bounded inbox previews', async () => {
+test('renders channel descriptions, message timestamps, and channel rows without message previews', async () => {
   await setup();
-  // The header's subtitle is the member count alone; the description is in the
-  // channel info panel, which is where the header's Channel info button opens.
+  // The header shows the description instead of the team and member count.
   await ui.waitFor(() =>
-    assert.ok(document.querySelector('.chat-member-count')?.textContent),
+    assert.match(
+      document.querySelector('.chat-thread-sub')?.textContent ?? '',
+      /^A place for the whole team\.$/,
+    ),
   );
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Channel info' }));
-  await ui.screen.findByText('A place for the whole team.');
-  assert.ok(
-    ui.screen.getByText('Team member: Team chat is ready.', { exact: true }),
+  await ui.screen.findAllByText('A place for the whole team.');
+  // A channel row is its name and its unread count: the inbox column carries
+  // no preview line, so the message text is drawn once, in the conversation.
+  assert.deepEqual(
+    [...document.querySelectorAll('.chat-channel .n')].map(
+      (row) => row.textContent,
+    ),
+    ['general'],
+  );
+  assert.equal(
+    ui.screen.queryByText('Team member: Team chat is ready.', { exact: true }),
+    null,
   );
   const time = document.querySelector<HTMLTimeElement>('.chat-message time');
   assert.equal(time?.dateTime, '2023-11-14T22:13:20.001Z');
-  assert.match(time?.title ?? '', /inserted as message 1/);
-  // A bare age, no "ago": "just now", "5 min", "2 hours", "3 years".
-  assert.match(
-    time?.textContent ?? '',
-    /^(just now|\d+ (min|hours?|days?|weeks?|months?|years?))$/,
-  );
+  assert.match(time?.title ?? '', /Message #1/);
+  // The clock alone, with no seconds and no date: the day is carried once by
+  // the separator above the run of messages.
+  assert.match(time?.textContent ?? '', /^\d{1,2}:\d{2}(\s?(AM|PM))?$/i);
   assert.doesNotMatch(time?.textContent ?? '', /2023/);
+  assert.ok(document.querySelector('.chat-daysep')?.textContent);
 });
 
 for (const incremental of [false, true])
@@ -619,7 +681,7 @@ test('team members opens the existing membership workflow in the same window', a
   await setup(undefined, true, (location) => {
     destination = location;
   });
-  // Team members moved behind the conversation header's ⓘ, into the panel.
+  // Team membership management is accessed via the conversation header's Members button.
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Channel info' }));
   ui.fireEvent.click(
     ui.screen.getByRole('button', { name: 'Manage in Teams' }),
@@ -764,7 +826,7 @@ test('own messages read as You and unread messages sit under a New divider', asy
     const rows = [...document.querySelectorAll('.chat-divider, .chat-message')];
     assert.deepEqual(
       rows.map((row) => row.className),
-      ['chat-message', 'chat-divider', 'chat-message', 'chat-message'],
+      ['chat-message', 'chat-divider', 'chat-message', 'chat-message grouped'],
     );
   } finally {
     Object.defineProperty(document, 'hasFocus', {
@@ -1769,9 +1831,35 @@ test('reopening a conversation retains verified messages during a delayed or fai
   }
 });
 
-test('channel info keeps channel overrides and links to device notification settings', async () => {
+test('channel info keeps channel overrides and links to device notification settings', async (t) => {
   const destinations: unknown[] = [];
   await setup(undefined, true, (location) => destinations.push(location));
+  const originalFocus = HTMLElement.prototype.focus;
+  const panelFocus: (FocusOptions | undefined)[] = [];
+  t.mock.method(
+    HTMLElement.prototype,
+    'focus',
+    function (this: HTMLElement, options?: FocusOptions) {
+      if (this.classList.contains('chat-info')) panelFocus.push(options);
+      originalFocus.call(this, options);
+    },
+  );
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Channel info' }));
+  const panel = await ui.screen.findByRole('complementary', {
+    name: 'Channel info',
+  });
+  assert.equal(document.activeElement, panel);
+  assert.ok(panelFocus.length > 0);
+  assert.ok(panelFocus.every((options) => options?.preventScroll === true));
+  ui.fireEvent.keyDown(panel, { key: 'Escape' });
+  assert.equal(
+    ui.screen.queryByRole('complementary', { name: 'Channel info' }),
+    null,
+  );
+  assert.equal(
+    document.activeElement,
+    ui.screen.getByRole('button', { name: 'Channel info' }),
+  );
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Channel info' }));
   assert.equal(
     ui.screen.queryByRole('checkbox', {
@@ -1779,7 +1867,7 @@ test('channel info keeps channel overrides and links to device notification sett
     }),
     null,
   );
-  await ui.screen.findByLabelText('Channel alerts');
+  await ui.screen.findByLabelText('Alerts');
   ui.fireEvent.click(
     ui.screen.getByRole('button', { name: 'Device notification settings' }),
   );
@@ -1900,4 +1988,35 @@ test('the provider stops periodic team synchronization while the window is hidde
   } finally {
     visibility('visible');
   }
+});
+
+test('clicking outside channel info dismisses it without stealing focus or toggling it back open', async () => {
+  await setup();
+  const toggle = ui.screen.getByRole('button', { name: 'Channel info' });
+  ui.fireEvent.click(toggle);
+  const panel = await ui.screen.findByRole('complementary', {
+    name: 'Channel info',
+  });
+  const pointer = (target: Element) =>
+    ui.fireEvent(
+      target,
+      new window.MouseEvent('pointerdown', { bubbles: true, button: 0 }),
+    );
+  pointer(panel);
+  assert.ok(ui.screen.queryByRole('complementary', { name: 'Channel info' }));
+  const composer = ui.screen.getByRole('textbox', { name: 'Message' });
+  composer.focus();
+  pointer(composer);
+  assert.equal(
+    ui.screen.queryByRole('complementary', { name: 'Channel info' }),
+    null,
+  );
+  assert.equal(document.activeElement, composer);
+  ui.fireEvent.click(toggle);
+  pointer(toggle);
+  ui.fireEvent.click(toggle);
+  assert.equal(
+    ui.screen.queryByRole('complementary', { name: 'Channel info' }),
+    null,
+  );
 });

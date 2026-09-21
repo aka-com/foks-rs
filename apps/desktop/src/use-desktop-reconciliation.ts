@@ -387,7 +387,9 @@ export function useDesktopReconciliation(
     return () => service.scheduler.setEnabled(false);
   }, [service, options.bridge, options.enabled]);
   useEffect(() => {
-    const foreground = () => {
+    const foreground = (event: Event) => {
+      // Focus moving between controls is not the app returning to the foreground.
+      if (event.type === 'focus' && event.target !== window) return;
       service.scheduler.setVisible(!document.hidden);
       if (!document.hidden) service.wake('foreground');
     };

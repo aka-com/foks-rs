@@ -237,5 +237,7 @@ export function scopedItems(
           .includes(needle),
     );
   }
-  return [...items].sort(SORTS[sort](snapshot));
+  const compare = SORTS[sort](snapshot);
+  const direction = state.sortDirection === 'desc' ? -1 : 1;
+  return [...items].sort((a, b) => direction * compare(a, b));
 }

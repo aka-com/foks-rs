@@ -1,33 +1,35 @@
 /**
- * The Files browser: a permanent folder tree on the left and the selected
- * folder's contents in the middle. The details panel is a third, permanent
- * column that the shell mounts beside this screen; this file owns the tree
- * and the list only.
+ * The Files browser: a folder tree on the left and the selected folder's
+ * contents in the middle. The details panel is a third column that the shell
+ * mounts beside this screen; this file owns the tree and the list only.
  *
- * The item browser defaults to the "All items" view across all stores,
- * filtering results when a store or folder is selected. Items are presented in
- * a table with Name, Kind, Location (omitted when filtered to a single store),
- * and Size columns, with sortable column headers. The topbar breadcrumb
- * displays the active folder path, omitting a redundant page header.
+ * The kind filter is located at the top of the sidebar above the item counts.
+ * Search and the New button are located in the window header. The browser
+ * displays "All items" by default and filters to a specific store or folder
+ * when selected in the tree. Table columns include Name, Kind, Location
+ * (shown when viewing multiple stores), and Size.
  */
 
 import { Fragment, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
+import { useDismissedOnboardingTip } from '../onboarding-tips';
 import { virtualListWindow } from '/kit/virtual-list';
-import { Band, Button, Icon, KindIcon, Notice } from '../components';
+import { Band, Button, Icon, Notice, SegmentedControl } from '../components';
 import type { FilterKind } from '../components';
 import type { FoksIconName } from '../icons';
 import { PageHeader } from '../shell/page-header';
-import { NewItemButton, Toolbar } from '../shell/toolbar';
 import {
   KINDS,
+  KIND_LIST,
+  catalog,
   defaultCreateStore,
   fmtSize,
   initials,
   kindLabel,
   kindOf,
   nameOf,
+  partiesOf,
   prefixOf,
   storeDescription,
   storeDescriptionState,
@@ -45,6 +47,7 @@ import type {
   LocationStore,
   LocationState,
   SortKey,
+  SortDirection,
 } from '../location';
 import { normalizeCommandError } from '../bridge';
 import type { Bridge } from '../bridge';
@@ -72,24 +75,20 @@ function emptyStoreCopy(store: Store): string {
     : 'Passwords and documents you add here are private to this vault.';
 }
 
-function PathChip({ path }: { path: string }): ReactNode {
-  const prefix = prefixOf(path);
-  return prefix ? (
-    <span className="pchip" title={`In /${prefix}`}>
-      <Icon name="folder" />
-      {prefix}
-    </span>
-  ) : null;
+function itemCount(count: number): string {
+  return `${count} ${count === 1 ? 'item' : 'items'}`;
 }
 
 /**
- * Store badge displayed in item table rows. Teams display their initials with
- * their assigned theme color; personal vaults display a standard vault icon.
+ * Renders a store's badge (team initials with its theme hue, or account avatar
+ * with its hashed color). Used consistently across the tree, title bar, and Location column.
  */
 function StoreMark({
+  snapshot,
   store,
   hue,
 }: {
+  snapshot: AgentSnapshot;
   store: Store;
   hue: string | undefined;
 }): ReactNode {
@@ -98,7 +97,7 @@ function StoreMark({
       {initials(store.name)}
     </span>
   ) : (
-    <Icon name="vault" />
+    <AccountMark name={usernameOf(snapshot, store) ?? store.account} />
   );
 }
 
@@ -116,29 +115,35 @@ function columnClass(columns: Columns, ...more: string[]): string {
 function ListHeader({
   columns,
   sort,
+  direction,
   onSort,
 }: {
   columns: Columns;
   sort: SortKey;
-  onSort: (sort: SortKey) => void;
+  direction: SortDirection;
+  onSort: (sort: SortKey, direction: SortDirection) => void;
 }): ReactNode {
   // Within one store, ordering by store is ordering by name; the Name header
   // says so while the Location header is not drawn.
   const shown = !columns.location && sort === 'group' ? 'name' : sort;
-  const head = (key: SortKey, label: string): ReactNode => (
+  const head = (key: SortKey, label: string, num = false): ReactNode => (
     <button
       type="button"
-      className={shown === key ? 'on' : ''}
+      className={[shown === key ? 'on' : '', num ? 'num' : '']
+        .filter(Boolean)
+        .join(' ')}
       aria-pressed={shown === key}
-      onClick={() => onSort(key)}
+      title={`Sort by ${label.toLowerCase()} ${shown === key && direction === 'asc' ? 'descending' : 'ascending'}`}
+      onClick={() =>
+        onSort(key, shown === key && direction === 'asc' ? 'desc' : 'asc')
+      }
     >
       {label}
-      {shown === key ? ' ↓' : ''}
+      {shown === key ? (direction === 'asc' ? ' ↑' : ' ↓') : ''}
     </button>
   );
   return (
     <div className={`hdr ${columnClass(columns)}`}>
-      <span />
       {head('name', 'Name')}
       {head('kind', 'Kind')}
       {columns.location ? head('group', 'Location') : null}
@@ -153,9 +158,12 @@ interface RowProps {
   item: Item;
   columns: Columns;
   selected: boolean;
-  /** The folder view already names the path, so it suppresses the chip. */
-  chip: boolean;
+  /** A store that can be read but not written: rows are drawn back. */
+  readOnly: boolean;
   onSelect: () => void;
+  onCopy: (item: Item) => void;
+  onReveal: (item: Item) => void;
+  onDownload: (item: Item) => void;
 }
 
 function Row({
@@ -164,14 +172,43 @@ function Row({
   item,
   columns,
   selected,
-  chip,
+  readOnly,
   onSelect,
+  onCopy,
+  onReveal,
+  onDownload,
 }: RowProps): ReactNode {
   const kind = kindOf(item) as FilterKind;
   const store = storeOf(snapshot, item.store);
+  const name = nameOf(item.path);
+  const prefix = prefixOf(item.path);
+  const password = kind === 'Password';
+  const action = (
+    label: string,
+    icon: FoksIconName,
+    run: (item: Item) => void,
+  ): ReactNode => (
+    <button
+      type="button"
+      title={label}
+      aria-label={`${label} ${name}`}
+      onClick={(event) => {
+        event.stopPropagation();
+        run(item);
+      }}
+    >
+      <Icon name={icon} />
+    </button>
+  );
   return (
     <div
-      className={columnClass(columns, 'row', 'one', selected ? 'sel' : '')}
+      className={columnClass(
+        columns,
+        'row',
+        'one',
+        selected ? 'sel' : '',
+        readOnly ? 'ro' : '',
+      )}
       role="button"
       tabIndex={0}
       aria-pressed={selected}
@@ -182,22 +219,43 @@ function Row({
         onSelect();
       }}
     >
-      <KindIcon kind={kind} />
       <span className="name">
-        <span className="tt">
-          <span>{nameOf(item.path)}</span>
-          {chip ? <PathChip path={item.path} /> : null}
-        </span>
+        <Icon
+          name={password ? 'key' : 'file'}
+          className={password ? 'k' : 'f'}
+        />
+        <span className="nm">{name}</span>
+        {/* Inside a folder every row shares the location, so the path is
+            drawn only where rows come from more than one of them. */}
+        {columns.location && prefix ? (
+          <span className="fpath">/{prefix}</span>
+        ) : null}
       </span>
       <span className="cell kind">{kindLabel(kind)}</span>
       {columns.location ? (
         <span className="cell mark">
-          {store ? <StoreMark store={store} hue={hues.get(store.id)} /> : null}
+          {store ? (
+            <StoreMark
+              snapshot={snapshot}
+              store={store}
+              hue={hues.get(store.id)}
+            />
+          ) : null}
           <span>{whereOf(snapshot, item)}</span>
         </span>
       ) : null}
       <span className="cell num">
         {item.size === null ? '' : fmtSize(item.size)}
+      </span>
+      <span className="acts">
+        {password ? (
+          <>
+            {action('Copy', 'copy', onCopy)}
+            {action('Reveal', 'eye', onReveal)}
+          </>
+        ) : (
+          action('Download', 'download', onDownload)
+        )}
       </span>
     </div>
   );
@@ -232,19 +290,13 @@ function FolderRow({
         onSelect();
       }}
     >
-      <span className="kic Folder">
-        <Icon name="folder" />
-      </span>
       <span className="name">
-        <span className="tt">
-          <span>{name}</span>
-        </span>
+        <Icon name="folder" className="f" />
+        <span className="nm">{name}</span>
       </span>
       <span className="cell kind">Folder</span>
       {columns.location ? <span className="cell" /> : null}
-      <span className="cell num">
-        {count} {count === 1 ? 'item' : 'items'}
-      </span>
+      <span className="cell num">{itemCount(count)}</span>
     </div>
   );
 }
@@ -253,10 +305,12 @@ function TreeRow({
   depth,
   active,
   root,
+  quiet,
   icon,
   mark,
   name,
   count,
+  tag,
   open,
   expandable,
   action,
@@ -266,12 +320,16 @@ function TreeRow({
   depth: number;
   active: boolean;
   root?: boolean;
-  icon: 'folder' | 'vault' | 'grid';
-  /** Drawn in place of `icon` when the row names a team. */
+  /** The muted invitation row a section draws in place of no rows at all. */
+  quiet?: boolean;
+  icon: 'folder' | 'vault' | 'grid' | 'plus';
+  /** Drawn in place of `icon` when the row names a store. */
   mark?: ReactNode;
   name: string;
   /** Omitted, not drawn as 0, when there is nothing to count. */
   count?: number;
+  /** Replaces the count when the row has a condition to state instead. */
+  tag?: ReactNode;
   open: boolean;
   expandable: boolean;
   /** A control that belongs to the row, drawn after its name. */
@@ -281,14 +339,18 @@ function TreeRow({
 }): ReactNode {
   return (
     <div
-      className={['fn', active ? 'on' : '', root ? 'root' : '']
+      className={[
+        'fn',
+        active ? 'on' : '',
+        root ? 'root' : '',
+        quiet ? 'quiet' : '',
+      ]
         .filter(Boolean)
         .join(' ')}
       style={{ '--d': depth } as React.CSSProperties}
     >
-      {/* Store root rows cannot be collapsed and have no expand toggle, so
-          their icons align flush with the left edge. Nested expandable folders
-          place the disclosure toggle within the indent column. */}
+      {/* Every row keeps the twist cell so names align down the column; a row
+          with nothing to disclose leaves it empty. */}
       {expandable ? (
         <button
           type="button"
@@ -300,9 +362,11 @@ function TreeRow({
             onToggle();
           }}
         >
-          <Icon name="chev" />
+          <Icon name="chevronDown" />
         </button>
-      ) : null}
+      ) : (
+        <span className="twist none" aria-hidden="true" />
+      )}
       <button
         type="button"
         className="fselect"
@@ -311,9 +375,9 @@ function TreeRow({
       >
         {mark ?? <Icon name={icon} />}
         <span className="nm">{name}</span>
-        {count ? <span className="c">{count}</span> : null}
       </button>
       {action}
+      {tag ?? (count === undefined ? null : <span className="c">{count}</span>)}
     </div>
   );
 }
@@ -435,7 +499,7 @@ export interface ItemsScreenProps {
   bridge: Bridge;
   state: LocationState;
   locations: LocationStore;
-  /** Unused now that reveal is details-panel-only; kept for the caller's wiring. */
+  /** Opens the selected item's value in the details panel, already revealed. */
   onReveal: (item: Item) => void;
   onNew: (kind: NewKind, storeId: string, folder?: string) => void;
   onResume: (storeId: string) => Promise<void>;
@@ -463,31 +527,36 @@ export function ItemsScreen({
   bridge,
   state,
   locations,
+  onReveal,
   onNew,
   onResume,
   onSettings,
+  onCommandError,
   onUploadDroppedFile,
   dropEnabled = true,
   accessNow = () => Date.now() / 1000,
 }: ItemsScreenProps): ReactNode {
+  const toasts = useToast();
   const bodyRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [listMetrics, setListMetrics] = useState({ top: 0, viewport: 600 });
+  const [nextUpDismissed, setNextUpDismissed] =
+    useDismissedOnboardingTip('add-password');
   const { location } = state;
   const store =
     location.kind === 'store' ? storeOf(snapshot, location.ref) : undefined;
-  // The account the rail header currently names, so a store's own heading
-  // does not repeat a server the rail already states.
-  const activeAccountRef = locations.getAccount();
-  const activeAccount = activeAccountRef
-    ? storeOf(snapshot, activeAccountRef)
-    : undefined;
   const storePage = location.kind === 'store';
   const selected = folderSelection(location, state.folder);
   // Search flattens the browser to matching results; it must not invalidate
   // the selected folder or change where New saves.
   const folderItems = scopedItems(snapshot, { ...state, query: '' });
+  // The tree draws every store whatever page it is on: a store page pins the
+  // list to one store, not the map beside it, so its counts come from the
+  // whole catalog rather than the page's own scope.
+  const treeItems = storePage
+    ? scopedItems(snapshot, { ...state, query: '', location: { kind: 'all' } })
+    : folderItems;
   // A search runs over the tree's selection — one store and folder, or every
   // item from the "All items" leaf — which is what the placeholder promises.
   const items = scopedItems(snapshot, state).filter(
@@ -499,7 +568,7 @@ export function ItemsScreen({
   // tree is the only way into a store now, so none may be left unreachable.
   const trees: StoreTree[] = storeDisplayOrder(snapshot).map((candidate) => ({
     store: candidate,
-    root: folderTree(folderItems.filter((item) => item.store === candidate.id)),
+    root: folderTree(treeItems.filter((item) => item.store === candidate.id)),
   }));
   const vaultTrees = trees.filter((tree) => tree.store.kind === 'account');
   const teamTrees = trees.filter((tree) => tree.store.kind === 'team');
@@ -537,8 +606,8 @@ export function ItemsScreen({
       <>
         <PageHeader title="Vault unavailable" subtitle="" />
         <div className="body">
-          <Notice title="This vault is no longer available">
-            Refresh or choose another vault from Files.
+          <Notice severity="crit" title="Vault no longer available">
+            <p>Refresh, or choose another vault from Files.</p>
           </Notice>
         </div>
       </>
@@ -550,7 +619,6 @@ export function ItemsScreen({
       <StoreAccessTakeover
         snapshot={snapshot}
         store={store}
-        activeAccount={activeAccount}
         onOpenServer={(profile) =>
           locations.navigate({ kind: 'settings', section: 'account', profile })
         }
@@ -559,7 +627,7 @@ export function ItemsScreen({
           store.kind === 'team' ? (
             <Button
               variant="quiet"
-              icon="gear"
+              icon="settings"
               title="Team settings"
               aria-label="Team settings"
               onClick={() => onSettings(store.id)}
@@ -577,6 +645,13 @@ export function ItemsScreen({
     ? (folderAt(selectedTree.root, selected.path) ?? selectedTree.root)
     : undefined;
   const closed = new Set(state.closedFolders);
+  const availability = (candidate: Store) =>
+    storeAvailability(snapshot, candidate, { nowSeconds: accessNow() });
+  /** True if the store's check-in lease has expired (read-only). */
+  const leaseExpired = (candidate: Store): boolean => {
+    const access = availability(candidate);
+    return !access.available && access.reason === 'check-in-expired';
+  };
 
   /**
    * Moves the browser to `path` in `target`. A `store` location is pinned to
@@ -584,6 +659,11 @@ export function ItemsScreen({
    * the broad tree first, so every store the tree lists stays reachable from
    * it, even from a deep link that opened on just one of them.
    */
+  /** Navigates to the global "All items" view, unpinning from any single store page. */
+  const goAllItems = (): void => {
+    if (storePage) locations.navigate({ kind: 'all' });
+    locations.setFolder(ALL_ITEMS);
+  };
   const selectFolder = (target: Store, path: string): void => {
     const samePage = storePage && target.id === location.ref;
     if (storePage && !samePage) locations.navigate({ kind: 'all' });
@@ -607,6 +687,7 @@ export function ItemsScreen({
             }
             icon="folder"
             name={folder.name}
+            count={folder.count}
             open={open}
             expandable={folder.folders.length > 0}
             onSelect={() => selectFolder(treeStore, folder.path)}
@@ -617,10 +698,12 @@ export function ItemsScreen({
       );
     });
 
-  // Store root rows cannot be collapsed and have no expand toggle; their icons
-  // align flush with the left container edge.
+  // Render store root row and its expandable folder sub-tree.
   const storeRoot = (tree: StoreTree): ReactNode => {
     const active = selected.store === tree.store.id && selected.path === '/';
+    const foldKey = `${tree.store.id}|/`;
+    const open = !closed.has(foldKey);
+    const expired = leaseExpired(tree.store);
     return (
       <Fragment key={tree.store.id}>
         <TreeRow
@@ -629,17 +712,24 @@ export function ItemsScreen({
           active={active}
           icon="vault"
           mark={
-            tree.store.kind === 'team' ? (
-              <StoreMark store={tree.store} hue={hues.get(tree.store.id)} />
-            ) : (
-              <AccountMark
-                name={usernameOf(snapshot, tree.store) ?? tree.store.account}
-              />
-            )
+            <StoreMark
+              snapshot={snapshot}
+              store={tree.store}
+              hue={hues.get(tree.store.id)}
+            />
           }
           name={tree.store.name}
-          open
-          expandable={false}
+          count={tree.root.count}
+          tag={
+            expired ? (
+              <span className="warn" title="This server check-in has expired">
+                <Icon name="alert" />
+                expired
+              </span>
+            ) : undefined
+          }
+          open={open}
+          expandable={tree.root.folders.length > 0}
           action={
             tree.store.kind === 'team' ? (
               <button
@@ -652,14 +742,14 @@ export function ItemsScreen({
                   onSettings(tree.store.id);
                 }}
               >
-                <Icon name="gear" />
+                <Icon name="settings" />
               </button>
             ) : undefined
           }
           onSelect={() => selectFolder(tree.store, '/')}
-          onToggle={() => {}}
+          onToggle={() => locations.toggleFolder(foldKey)}
         />
-        {drawFolders(tree.root.folders, tree.store, 0)}
+        {open ? drawFolders(tree.root.folders, tree.store, 1) : null}
       </Fragment>
     );
   };
@@ -676,12 +766,7 @@ export function ItemsScreen({
       : undefined;
   const currentStoreAvailable = (storeId: string): boolean => {
     const candidate = storeOf(snapshot, storeId);
-    return Boolean(
-      candidate &&
-      storeAvailability(snapshot, candidate, {
-        nowSeconds: accessNow(),
-      }).available,
-    );
+    return Boolean(candidate && availability(candidate).available);
   };
   const createNew = (itemKind: Exclude<KindFilter, 'All'>): void => {
     if (createStore && currentStoreAvailable(createStore))
@@ -727,10 +812,76 @@ export function ItemsScreen({
   });
   const visibleRows = items.slice(rowWindow.start, rowWindow.end);
 
-  const folders = selectedNode?.folders ?? [];
+  const folders =
+    state.sortDirection === 'desc'
+      ? [...(selectedNode?.folders ?? [])].reverse()
+      : (selectedNode?.folders ?? []);
   const folderScopedItems = selectedNode?.items ?? [];
   const showEmptyFolder =
     Boolean(selectedTree) && !folders.length && !folderScopedItems.length;
+
+  /* ------------------------------------------------------- row actions -- */
+
+  const request = (item: Item) => ({
+    storeId: item.store,
+    path: item.path,
+    version: item.version,
+  });
+  const copyItem = (item: Item): void => {
+    void bridge.copyItemValue(request(item)).then(
+      () =>
+        toasts.show(
+          `${kindOf(item) === 'Password' ? 'Password' : 'Value'} copied`,
+        ),
+      (error: unknown) => onCommandError(error, item),
+    );
+  };
+  const revealItem = (item: Item): void => {
+    // Reveal happens in the details panel, where the value is masked again on
+    // a selection change or a lost window: select the item, then ask for it.
+    locations.select({ store: item.store, path: item.path });
+    onReveal(item);
+  };
+  const downloadItem = (item: Item): void => {
+    void bridge.downloadFile(request(item)).then(
+      ({ saved }) =>
+        toasts.show(
+          saved ? `Downloaded ${nameOf(item.path)}` : 'Download cancelled',
+        ),
+      (error: unknown) => onCommandError(error, item),
+    );
+  };
+
+  const selectedStore = selectedTree?.store ?? store;
+  // Reads work from the local copy while writes do not: the list says so once,
+  // above the rows, and draws them back rather than hiding them.
+  const readOnlyReason = selectedStore
+    ? !availability(selectedStore).available
+      ? storeDescription(snapshot, selectedStore)
+      : writeBlockReason(snapshot, selectedStore)
+    : null;
+  const readOnly = Boolean(readOnlyReason);
+  const expiredHere = Boolean(selectedStore && leaseExpired(selectedStore));
+
+  const row = (item: Item, chipColumns: Columns): ReactNode => (
+    <Row
+      key={`${item.store}|${item.path}`}
+      snapshot={snapshot}
+      hues={hues}
+      item={item}
+      columns={chipColumns}
+      selected={
+        state.selection?.store === item.store &&
+        state.selection.path === item.path
+      }
+      readOnly={readOnly}
+      onSelect={() => locations.select({ store: item.store, path: item.path })}
+      onCopy={copyItem}
+      onReveal={revealItem}
+      onDownload={downloadItem}
+    />
+  );
+
   const paneRows = selectedTree
     ? [
         ...folders.map((folder) => (
@@ -742,59 +893,230 @@ export function ItemsScreen({
             onSelect={() => selectFolder(selectedTree.store, folder.path)}
           />
         )),
-        ...folderScopedItems.map((item) => (
-          <Row
-            key={`${item.store}|${item.path}`}
-            snapshot={snapshot}
-            hues={hues}
-            item={item}
-            columns={columns}
-            selected={
-              state.selection?.store === item.store &&
-              state.selection.path === item.path
-            }
-            chip={false}
-            onSelect={() =>
-              locations.select({ store: item.store, path: item.path })
-            }
-          />
-        )),
+        ...folderScopedItems.map((item) => row(item, columns)),
       ]
     : [];
 
   const vaultHeading = vaultTrees.length === 1 ? 'Your vault' : 'Vaults';
-  const searchPlaceholder =
+  const allCount = treeItems.length;
+  /** The current view's name in the title row. */
+  const scopeLabel =
     selected.store === ALL_ITEMS
-      ? 'Search all items'
+      ? 'All items'
       : selected.path !== '/'
-        ? 'Search this folder'
-        : selectedTree?.store.kind === 'team'
-          ? 'Search this team'
-          : 'Search this vault';
-  const searchScope = selectedTree?.store.name ?? store?.name;
-  const allCount = folderItems.length;
+        ? nameOf(selected.path)
+        : (selectedStore?.name ?? 'All items');
+  const shownCount =
+    selected.store === ALL_ITEMS ? items.length : (selectedNode?.count ?? 0);
+  const people =
+    selectedStore?.kind === 'team'
+      ? partiesOf(snapshot, selectedStore.id).length
+      : 0;
+  const backTo =
+    selectedTree && selected.path !== '/'
+      ? {
+          store: selectedTree.store,
+          path: selected.path.slice(0, selected.path.lastIndexOf('/')) || '/',
+        }
+      : null;
+
+  /* ------------------------------------------------------- empty states -- */
+
+  const vaultEmpty = catalog(snapshot).length === 0;
+  const starter = (
+    <div className="starter">
+      <div>
+        <h2>Your vault is empty</h2>
+        <p>Start by adding any of these items to your vault.</p>
+      </div>
+      <div className="cards">
+        <button
+          type="button"
+          className="card"
+          onClick={() => createNew('Password')}
+        >
+          <span className="ci">
+            <Icon name="key" />
+          </span>
+          <b>New password</b>
+          <small>A login, API key or any secret value.</small>
+          <kbd>⌘N</kbd>
+        </button>
+        <button
+          type="button"
+          className="card"
+          onClick={() => createNew('Document')}
+        >
+          <span className="ci">
+            <Icon name="upload" />
+          </span>
+          <b>Add a document</b>
+          <small>Drop a file anywhere in this window, or pick one.</small>
+          <kbd>⇧⌘N</kbd>
+        </button>
+        {/* The app has no CLI import command, so this card states the one the
+            CLI already has rather than offering an action it cannot run. */}
+        <div className="card static">
+          <span className="ci">
+            <Icon name="terminal" />
+          </span>
+          <b>Import from the CLI</b>
+          <small>Bring items from an existing FOKS install.</small>
+          <span className="cli">foks kv export …</span>
+        </div>
+      </div>
+    </div>
+  );
+
+  const searchMiss = (
+    <div className="empty">
+      <div className="big">
+        <Icon name="search" />
+      </div>
+      <h2>Nothing matches “{state.query}”</h2>
+      <p>Try a shorter word, or press ⌘K to search every vault and team.</p>
+    </div>
+  );
+
+  const emptyHere = (scopeStore: Store | undefined): ReactNode => (
+    <div className="empty">
+      <div className="big">
+        <Icon name={kindMeta?.icon ?? 'key'} />
+      </div>
+      <h2>No items yet</h2>
+      <p>
+        {scopeStore && selected.path === '/'
+          ? emptyStoreCopy(scopeStore)
+          : scopeStore
+            ? 'This folder is empty.'
+            : 'Save passwords and documents to get started.'}
+      </p>
+    </div>
+  );
+
+  const dropStrip =
+    state.query || readOnly || !dropTarget || dropTarget.blocked ? null : (
+      <div className="dropzone" aria-hidden="true">
+        <Icon name="upload" />
+        Drop files to add to vault
+      </div>
+    );
+
+  // The suggestion applies once the vault holds something but no password:
+  // the agent can sign in from one without the value living in a file.
+  const nextUp =
+    state.query ||
+    nextUpDismissed ||
+    vaultEmpty ||
+    catalog(snapshot).some((item) => kindOf(item) === 'Password') ? null : (
+      <div className="nextup">
+        <Icon name="key" />
+        <span>Next: Try adding a password.</span>
+        <span className="sp" />
+        <button
+          type="button"
+          className="lnk"
+          onClick={() => createNew('Password')}
+        >
+          New password
+        </button>
+        <button
+          type="button"
+          className="x"
+          title="Not now"
+          aria-label="Not now"
+          onClick={() => setNextUpDismissed(true)}
+        >
+          <Icon name="close" />
+        </button>
+      </div>
+    );
+
+  const listBody = flatMode ? (
+    !items.length ? (
+      state.query ? (
+        searchMiss
+      ) : vaultEmpty ? (
+        starter
+      ) : (
+        emptyHere(selectedStore)
+      )
+    ) : (
+      <div className="list-window">
+        <ListHeader
+          columns={columns}
+          sort={state.sort}
+          direction={state.sortDirection}
+          onSort={(sort, direction) => {
+            locations.setSort(sort, direction);
+          }}
+        />
+        <div className="virtual-rows" ref={listRef}>
+          {rowWindow.padTop ? (
+            <div
+              className="virtual-spacer"
+              style={{ height: rowWindow.padTop }}
+            />
+          ) : null}
+          {visibleRows.map((item) => row(item, columns))}
+          {rowWindow.padBottom ? (
+            <div
+              className="virtual-spacer"
+              style={{ height: rowWindow.padBottom }}
+            />
+          ) : null}
+        </div>
+        {dropStrip}
+        {nextUp}
+      </div>
+    )
+  ) : showEmptyFolder ? (
+    vaultEmpty ? (
+      starter
+    ) : (
+      emptyHere(selectedTree?.store)
+    )
+  ) : (
+    <div className="list-window">
+      <ListHeader
+        columns={columns}
+        sort={state.sort}
+        direction={state.sortDirection}
+        onSort={(sort, direction) => {
+          locations.setSort(sort, direction);
+        }}
+      />
+      <div className="virtual-rows">{paneRows}</div>
+      {dropStrip}
+      {nextUp}
+    </div>
+  );
 
   return (
     <div className="drop-area">
       {dropZone}
       <div className="folder-layout">
-        {/* The toolbar spans both columns: the kind filter sits over the tree
-            whose counts it changes, search and New over the list. */}
-        <Toolbar
-          onNew={createNew}
-          kind={state.kind}
-          onKind={(kind) => {
-            locations.setKind(kind);
-          }}
-          query={state.query}
-          onQuery={(query) => {
-            locations.search(query);
-          }}
-          searchPlaceholder={searchPlaceholder}
-        />
         <div className="folder-split">
           <aside className="tpane" aria-label="Folders">
-            {!storePage ? (
+            {/* Filter control for item kind (passwords, documents, etc.). */}
+            <div className="filt">
+              <SegmentedControl<KindFilter>
+                label="Filter items by kind"
+                value={state.kind}
+                onChange={(kind) => {
+                  locations.setKind(kind);
+                }}
+                items={[
+                  { id: 'All', label: 'All' },
+                  ...KIND_LIST.map((name) => ({
+                    id: name,
+                    label: KINDS[name].plural,
+                    title: KINDS[name].blurb,
+                  })),
+                ]}
+              />
+            </div>
+            <div className="tscroll">
               <div className="tree-all">
                 <TreeRow
                   depth={0}
@@ -805,17 +1127,115 @@ export function ItemsScreen({
                   count={allCount}
                   open={false}
                   expandable={false}
-                  onSelect={() => locations.setFolder(ALL_ITEMS)}
+                  onSelect={() => goAllItems()}
                   onToggle={() => {}}
                 />
               </div>
-            ) : null}
-            {!storePage ? <h6>{vaultHeading}</h6> : null}
-            {vaultTrees.map(storeRoot)}
-            {!storePage && teamTrees.length ? <h6>Teams</h6> : null}
-            {!storePage ? teamTrees.map(storeRoot) : null}
+              <h6>{vaultHeading}</h6>
+              {vaultTrees.map(storeRoot)}
+              {
+                <h6>
+                  Teams
+                  <button
+                    type="button"
+                    className="plus"
+                    title="New team"
+                    aria-label="New team"
+                    onClick={() => locations.navigate({ kind: 'teams' })}
+                  >
+                    <Icon name="plus" />
+                  </button>
+                </h6>
+              }
+              {teamTrees.map(storeRoot)}
+              {!teamTrees.length ? (
+                <TreeRow
+                  depth={0}
+                  quiet
+                  active={false}
+                  icon="plus"
+                  name="Join or create a team"
+                  open={false}
+                  expandable={false}
+                  onSelect={() => locations.navigate({ kind: 'teams' })}
+                  onToggle={() => {}}
+                />
+              ) : null}
+            </div>
           </aside>
           <section className="lpane" aria-label="Folder contents">
+            <div className="lt">
+              {locations.backTarget() ? (
+                <button
+                  type="button"
+                  className="back"
+                  title="Back"
+                  aria-label="Back"
+                  onClick={() => locations.back()}
+                >
+                  <Icon name="arrowLeft" />
+                </button>
+              ) : backTo ? (
+                <button
+                  type="button"
+                  className="back"
+                  title="Parent folder"
+                  aria-label="Parent folder"
+                  onClick={() => selectFolder(backTo.store, backTo.path)}
+                >
+                  <Icon name="arrowLeft" />
+                </button>
+              ) : selectedTree ? (
+                <button
+                  type="button"
+                  className="back"
+                  title="Back to All items"
+                  aria-label="Back to All items"
+                  onClick={() => goAllItems()}
+                >
+                  <Icon name="arrowLeft" />
+                </button>
+              ) : null}
+              <span className="where">
+                {state.query ? (
+                  <>
+                    Results for “{state.query}”
+                    <span className="sub search-scope">in {scopeLabel}</span>
+                  </>
+                ) : (
+                  <>
+                    {selectedStore && selected.path === '/' ? (
+                      <StoreMark
+                        snapshot={snapshot}
+                        store={selectedStore}
+                        hue={hues.get(selectedStore.id)}
+                      />
+                    ) : null}
+                    {scopeLabel}
+                    <span className="sub">
+                      {itemCount(shownCount)}
+                      {people
+                        ? ` · shared with ${people === 1 ? '1 person' : `${people} people`}`
+                        : ''}
+                    </span>
+                  </>
+                )}
+              </span>
+              <span className="sp" />
+              <span className="seg" role="group" aria-label="View">
+                <button type="button" className="on" title="List view">
+                  <Icon name="list" />
+                </button>
+                <button
+                  type="button"
+                  aria-disabled="true"
+                  title="Grid view is not available yet"
+                  onClick={(event) => event.preventDefault()}
+                >
+                  <Icon name="grid" />
+                </button>
+              </span>
+            </div>
             <div
               className="body folder-body"
               ref={bodyRef}
@@ -828,110 +1248,25 @@ export function ItemsScreen({
                   ))}
                 </div>
               ) : null}
-              {flatMode ? (
-                !items.length ? (
-                  state.query ? (
-                    <div className="empty">
-                      <h2>
-                        No items{' '}
-                        {searchScope ? `in ${searchScope}` : 'anywhere'} match “
-                        {state.query}”
-                      </h2>
-                      <p>
-                        Search by item name, path, or vault. Item contents are
-                        encrypted and cannot be searched.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="empty">
-                      <div className="big">
-                        <Icon
-                          name={
-                            kindMeta ? (kindMeta.icon as FoksIconName) : 'key'
-                          }
-                        />
-                      </div>
-                      <h2>No items yet</h2>
-                      <p>
-                        {store
-                          ? emptyStoreCopy(store)
-                          : 'Save passwords and documents to get started.'}
-                      </p>
-                      <NewItemButton onNew={createNew} />
-                    </div>
-                  )
-                ) : (
-                  <div className="list-window">
-                    <ListHeader
-                      columns={columns}
-                      sort={state.sort}
-                      onSort={(sort) => {
-                        locations.setSort(sort);
-                      }}
-                    />
-                    <div className="virtual-rows" ref={listRef}>
-                      {rowWindow.padTop ? (
-                        <div
-                          className="virtual-spacer"
-                          style={{ height: rowWindow.padTop }}
-                        />
-                      ) : null}
-                      {visibleRows.map((item) => (
-                        <Row
-                          key={`${item.store}|${item.path}`}
-                          snapshot={snapshot}
-                          hues={hues}
-                          item={item}
-                          columns={columns}
-                          selected={
-                            state.selection?.store === item.store &&
-                            state.selection.path === item.path
-                          }
-                          chip
-                          onSelect={() => {
-                            locations.select({
-                              store: item.store,
-                              path: item.path,
-                            });
-                          }}
-                        />
-                      ))}
-                      {rowWindow.padBottom ? (
-                        <div
-                          className="virtual-spacer"
-                          style={{ height: rowWindow.padBottom }}
-                        />
-                      ) : null}
-                    </div>
-                  </div>
-                )
-              ) : showEmptyFolder ? (
-                <div className="empty">
-                  <div className="big">
-                    <Icon
-                      name={kindMeta ? (kindMeta.icon as FoksIconName) : 'key'}
-                    />
-                  </div>
-                  <h2>No items yet</h2>
-                  <p>
-                    {selected.path === '/' && selectedTree
-                      ? emptyStoreCopy(selectedTree.store)
-                      : 'This folder is empty.'}
-                  </p>
-                  <NewItemButton onNew={createNew} />
+              {expiredHere && selectedStore ? (
+                <div className="lnotice" role="status">
+                  <Icon name="alert" />
+                  <span className="t">
+                    <b>Your server session has expired.</b>
+                    <p>
+                      Check in again to save changes. Items here can still be
+                      read and copied.
+                    </p>
+                  </span>
+                  <Button
+                    size="sm"
+                    onClick={() => void onResume(selectedStore.id)}
+                  >
+                    Check in
+                  </Button>
                 </div>
-              ) : (
-                <div className="list-window">
-                  <ListHeader
-                    columns={columns}
-                    sort={state.sort}
-                    onSort={(sort) => {
-                      locations.setSort(sort);
-                    }}
-                  />
-                  <div className="virtual-rows">{paneRows}</div>
-                </div>
-              )}
+              ) : null}
+              {listBody}
             </div>
           </section>
         </div>

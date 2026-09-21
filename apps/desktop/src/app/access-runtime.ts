@@ -105,7 +105,8 @@ export function useAccessRuntime({
       },
     );
     expiryCoordinator.current = coordinator;
-    const reconcileForeground = (): void => {
+    const reconcileForeground = (event?: Event): void => {
+      if (event?.type === 'focus' && event.target !== window) return;
       coordinator.foreground();
       if (!bridge.native && foregroundRefreshAllowed.current)
         void refreshSnapshotRef

@@ -42,7 +42,7 @@ export const SETTINGS_SECTION_LABEL: Readonly<Record<SettingsSection, string>> =
     account: 'Account',
     servers: 'Account',
     preferences: 'Preferences',
-    mac: 'Device',
+    mac: 'Storage',
   };
 
 /** Which pane of the Devices tab is open. */
@@ -129,6 +129,7 @@ export type KindFilter = 'All' | 'Password' | 'Document';
 
 /** The sort menu's choice. */
 export type SortKey = 'name' | 'kind' | 'group';
+export type SortDirection = 'asc' | 'desc';
 
 export interface LocationState {
   /** Front-end sheet drafts only; never part of Location or URL encoding. */
@@ -142,6 +143,7 @@ export interface LocationState {
   details: boolean;
   kind: KindFilter;
   sort: SortKey;
+  sortDirection: SortDirection;
   /** Selected folder in folder view: `store|/path` on All, `/path` in a store. */
   folder: string;
   /** Comma-free tree node keys whose children are folded. */
@@ -156,6 +158,7 @@ export const INITIAL_STATE: LocationState = {
   details: false,
   kind: 'All',
   sort: 'name',
+  sortDirection: 'asc',
   folder: '',
   closedFolders: [],
 };
@@ -224,12 +227,12 @@ export interface NavigationPrompter {
 
 export type LocationAction =
   | { type: 'navigate'; location: Location; replace?: boolean }
-  | { type: 'select'; selection: Selection }
+  | { type: 'select'; selection: Selection; closeDetails?: boolean }
   | { type: 'search'; query: string }
   | { type: 'view'; view: ViewMode }
   | { type: 'details'; open: boolean }
   | { type: 'kind'; kind: KindFilter }
-  | { type: 'sort'; sort: SortKey }
+  | { type: 'sort'; sort: SortKey; direction?: SortDirection }
   | { type: 'folder'; folder: string }
   | { type: 'toggle-folder'; folder: string };
 
@@ -253,6 +256,7 @@ export interface Scene {
   view: ViewMode;
   kind: KindFilter;
   sort: SortKey;
+  sortDirection: SortDirection;
   folder: string;
   closedFolders: readonly string[];
   lease: LeaseState;
@@ -268,6 +272,7 @@ export const INITIAL_SCENE: Scene = {
   view: 'list',
   kind: 'All',
   sort: 'name',
+  sortDirection: 'asc',
   folder: '',
   closedFolders: [],
   lease: 'fresh',

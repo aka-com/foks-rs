@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { Bridge } from '../bridge';
 import { Button } from '../components';
+import { hue } from '../model';
 import type { ChatSendService, OutgoingMessage } from './send-service';
 import { MessageText } from './message-text';
 import { failure } from './actions';
@@ -15,11 +16,13 @@ const statusLabels: Partial<Record<OutgoingMessage['phase'], string>> = {
 };
 export function OutgoingRow({
   message,
+  avatarName,
   storeId,
   service,
   bridge,
 }: {
   message: OutgoingMessage;
+  avatarName: string;
   storeId: string;
   service: ChatSendService;
   bridge: Bridge;
@@ -53,64 +56,73 @@ export function OutgoingRow({
       data-submission={message.submission}
       data-operation={message.operation?.id}
     >
-      <div className="chat-outgoing-content">
-        <header>
-          <span className="chat-sender you">You</span>
-          {sending ? (
-            <span
-              className="chat-send-spinner"
-              role="status"
-              aria-label="Sending"
-            />
-          ) : (
-            <time
-              dateTime={new Date(message.createdAt).toISOString()}
-              title={messageTime(String(message.createdAt))}
-            >
-              {relativeMessageTime(String(message.createdAt))}
-            </time>
+      <span
+        className="chat-avatar"
+        aria-hidden="true"
+        style={{ background: hue(avatarName) }}
+      >
+        {avatarName.slice(0, 1).toUpperCase()}
+      </span>
+      <div className="chat-message-body">
+        <div className="chat-outgoing-content">
+          <header>
+            <span className="chat-sender you">You</span>
+            {sending ? (
+              <span
+                className="chat-send-spinner"
+                role="status"
+                aria-label="Sending"
+              />
+            ) : (
+              <time
+                dateTime={new Date(message.createdAt).toISOString()}
+                title={messageTime(String(message.createdAt))}
+              >
+                {relativeMessageTime(String(message.createdAt))}
+              </time>
+            )}
+          </header>
+          {message.text !== undefined && (
+            <MessageText text={message.text} actions={bridge} />
           )}
-        </header>
-        {message.text !== undefined && (
-          <MessageText text={message.text} actions={bridge} />
-        )}
-      </div>
-      {!sending &&
-      (statusLabel || message.error || message.cleanupError || error) ? (
-        <div className="chat-send-status">
-          {statusLabel && <span role="status">{statusLabel}</span>}
-          {message.error && <span>{message.error}</span>}
-          {retryable && (
-            <Button
-              size="sm"
-              disabled={message.running}
-              onClick={() => void run(false)}
-            >
-              {message.phase === 'unconfirmed' ? 'Check again' : 'Retry'}
-            </Button>
-          )}
-          {editable && (
-            <Button size="sm" onClick={() => void run(true)}>
-              Edit
-            </Button>
-          )}
-          {message.cleanupError && (
-            <>
-              <span role="status">
-                Local message storage needs attention. {message.cleanupError}
-              </span>
+        </div>
+        {!sending &&
+        (statusLabel || message.error || message.cleanupError || error) ? (
+          <div className="chat-send-status">
+            {statusLabel && <span role="status">{statusLabel}</span>}
+            {message.error && <span>{message.error}</span>}
+            {retryable && (
               <Button
                 size="sm"
                 disabled={message.running}
                 onClick={() => void run(false)}
               >
-                Retry local cleanup
+                {message.phase === 'unconfirmed' ? 'Check again' : 'Retry'}
               </Button>
-            </>
-          )}
-          {error && <span role="alert">{error}</span>}
-        </div>
-      ) : null}
+            )}
+            {editable && (
+              <Button size="sm" onClick={() => void run(true)}>
+                Edit
+              </Button>
+            )}
+            {message.cleanupError && (
+              <>
+                <span role="status">
+                  Local message storage needs attention. {message.cleanupError}
+                </span>
+                <Button
+                  size="sm"
+                  disabled={message.running}
+                  onClick={() => void run(false)}
+                >
+                  Retry local cleanup
+                </Button>
+              </>
+            )}
+            {error && <span role="alert">{error}</span>}
+          </div>
+        ) : null}
+      </div>
     </article>
   );
 }

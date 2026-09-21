@@ -287,7 +287,9 @@ test('renders a Teams count, Devices and Settings dots, and no empty indicators'
   );
   const devicesDot = devicesTab.querySelector('.rail-tail.dot');
   assert.ok(devicesDot, 'Devices carries its dot');
-  assert.equal(devicesDot.classList.contains('warn'), false);
+  // A device waiting on approval is a state to act on, so the dot is orange,
+  // as the Settings dot is.
+  assert.ok(devicesDot.classList.contains('warn'));
   assert.equal(
     devicesDot.getAttribute('aria-label'),
     'An account has no paper key',
@@ -469,10 +471,13 @@ test('the account menu switches account, adds one, and locks the app', async () 
   const header = document.querySelector<HTMLButtonElement>('.side.rail .who');
   assert.ok(header);
   assert.equal(header.querySelector('.t b')?.textContent, 'satoshi');
+  // The foot's second line is the host the account lives on, not the reader's
+  // own label for that server, which the accessible name still carries.
   assert.equal(
     header.querySelector('.t small')?.textContent,
-    'Personal server',
+    'foks.example.net',
   );
+  assert.equal(header.getAttribute('aria-label'), 'satoshi · Personal server');
 
   const open = async (): Promise<HTMLElement> => {
     ui.fireEvent.click(header);

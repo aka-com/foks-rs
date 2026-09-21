@@ -1,193 +1,93 @@
 /**
- * Shared SVG icon definitions for the FOKS shell.
- * Stored as structural element tuples ([tag, attributes]) rendered by Icon components.
+ * Semantic icon registry for the FOKS shell.
+ *
+ * Product code names the meaning of an icon while this module owns the
+ * corresponding Lucide glyph. Keeping the mapping here prevents screens from
+ * depending on library export names or maintaining SVG path data themselves.
  */
 
-/** Represents a single SVG child element definition as a tag and attribute record tuple. */
-export type IconElement = readonly [
-  tag: 'path' | 'circle' | 'rect',
-  attrs: Readonly<Record<string, string | number>>,
-];
+import type { IconNode } from 'lucide';
+import ArrowLeft from 'lucide/dist/esm/icons/arrow-left.mjs';
+import Check from 'lucide/dist/esm/icons/check.mjs';
+import ChevronDown from 'lucide/dist/esm/icons/chevron-down.mjs';
+import CircleAlert from 'lucide/dist/esm/icons/circle-alert.mjs';
+import CircleCheck from 'lucide/dist/esm/icons/circle-check.mjs';
+import Copy from 'lucide/dist/esm/icons/copy.mjs';
+import DoorOpen from 'lucide/dist/esm/icons/door-open.mjs';
+import Download from 'lucide/dist/esm/icons/download.mjs';
+import Ellipsis from 'lucide/dist/esm/icons/ellipsis.mjs';
+import ExternalLink from 'lucide/dist/esm/icons/external-link.mjs';
+import Eye from 'lucide/dist/esm/icons/eye.mjs';
+import EyeOff from 'lucide/dist/esm/icons/eye-off.mjs';
+import File from 'lucide/dist/esm/icons/file.mjs';
+import Flag from 'lucide/dist/esm/icons/flag.mjs';
+import Folder from 'lucide/dist/esm/icons/folder.mjs';
+import Grid2x2 from 'lucide/dist/esm/icons/grid-2x2.mjs';
+import Info from 'lucide/dist/esm/icons/info.mjs';
+import KeyRound from 'lucide/dist/esm/icons/key-round.mjs';
+import Laptop from 'lucide/dist/esm/icons/laptop.mjs';
+import List from 'lucide/dist/esm/icons/list.mjs';
+import MessageSquare from 'lucide/dist/esm/icons/message-square.mjs';
+import PanelLeftClose from 'lucide/dist/esm/icons/panel-left-close.mjs';
+import PanelLeftOpen from 'lucide/dist/esm/icons/panel-left-open.mjs';
+import Pencil from 'lucide/dist/esm/icons/pencil.mjs';
+import Plug from 'lucide/dist/esm/icons/plug.mjs';
+import Plus from 'lucide/dist/esm/icons/plus.mjs';
+import RefreshCw from 'lucide/dist/esm/icons/refresh-cw.mjs';
+import Search from 'lucide/dist/esm/icons/search.mjs';
+import Send from 'lucide/dist/esm/icons/send.mjs';
+import Server from 'lucide/dist/esm/icons/server.mjs';
+import Settings from 'lucide/dist/esm/icons/settings.mjs';
+import ShieldCheck from 'lucide/dist/esm/icons/shield-check.mjs';
+import Terminal from 'lucide/dist/esm/icons/terminal.mjs';
+import Trash from 'lucide/dist/esm/icons/trash.mjs';
+import Upload from 'lucide/dist/esm/icons/upload.mjs';
+import User from 'lucide/dist/esm/icons/user.mjs';
+import Users from 'lucide/dist/esm/icons/users.mjs';
+import Vault from 'lucide/dist/esm/icons/vault.mjs';
+import X from 'lucide/dist/esm/icons/x.mjs';
+import type { FoksIconName } from './icon-name';
 
 export const FOKS_ICONS = {
-  key: [
-    ['circle', { cx: 8, cy: 14, r: 4 }],
-    ['path', { d: 'M11 11l9-9M17 5l2.5 2.5M14.5 7.5 17 10' }],
-  ],
-  term: [
-    ['rect', { x: 3, y: 5, width: 18, height: 14, rx: 2 }],
-    ['path', { d: 'M7 9l3 3-3 3M12 15h5' }],
-  ],
-  /* A Mac in a device list, as distinct from a terminal. */
-  laptop: [
-    ['rect', { x: 3, y: 5, width: 18, height: 11, rx: 2 }],
-    ['path', { d: 'M2 19h20' }],
-  ],
-  file: [
-    [
-      'path',
-      { d: 'M6 3h8l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z' },
-    ],
-    ['path', { d: 'M14 3v4h4' }],
-  ],
-  people: [
-    ['circle', { cx: 9, cy: 8, r: 3.2 }],
-    ['path', { d: 'M3 19c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5' }],
-    ['path', { d: 'M15.5 5.2a3.2 3.2 0 0 1 0 5.6' }],
-    ['path', { d: 'M17 13.6c2.4.5 4 2.5 4 5.4' }],
-  ],
-  person: [
-    ['circle', { cx: 12, cy: 7.5, r: 4 }],
-    ['path', { d: 'M4 20c.6-4.2 3.6-6.3 8-6.3s7.4 2.1 8 6.3' }],
-  ],
-  vault: [
-    ['rect', { x: 3, y: 4, width: 18, height: 16, rx: 2.5 }],
-    ['circle', { cx: 12, cy: 12, r: 3.5 }],
-    ['path', { d: 'M12 8.5v1.5M12 14v1.5M8.5 12H10M14 12h1.5' }],
-  ],
-  search: [
-    ['circle', { cx: 11, cy: 11, r: 6.5 }],
-    ['path', { d: 'M16 16l4.5 4.5' }],
-  ],
-  grid: [
-    ['rect', { x: 4, y: 4, width: 6.5, height: 6.5, rx: 1.5 }],
-    ['rect', { x: 13.5, y: 4, width: 6.5, height: 6.5, rx: 1.5 }],
-    ['rect', { x: 4, y: 13.5, width: 6.5, height: 6.5, rx: 1.5 }],
-    ['rect', { x: 13.5, y: 13.5, width: 6.5, height: 6.5, rx: 1.5 }],
-  ],
-  chev: [['path', { d: 'M6 9l6 6 6-6' }]],
-  info: [
-    ['circle', { cx: 12, cy: 12, r: 8.5 }],
-    ['path', { d: 'M12 11v5M12 8h.01' }],
-  ],
-  download: [['path', { d: 'M12 4v11M7 10l5 5 5-5M4 20h16' }]],
-  copy: [
-    ['rect', { x: 9, y: 9, width: 11, height: 11, rx: 2 }],
-    ['path', { d: 'M5 15V5a1 1 0 0 1 1-1h10' }],
-  ],
-  trash: [['path', { d: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13' }]],
-  eye: [
-    ['path', { d: 'M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z' }],
-    ['circle', { cx: 12, cy: 12, r: 3 }],
-  ],
-  eyeoff: [
-    [
-      'path',
-      {
-        d: 'M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M6.6 6.6C4 8.2 2 12 2 12s3.5 6 10 6c1.7 0 3.2-.4 4.4-1M9.9 6.2C10.5 6.1 11.2 6 12 6c6.5 0 10 6 10 6s-.8 1.4-2.3 2.9',
-      },
-    ],
-  ],
-  plus: [['path', { d: 'M12 5v14M5 12h14' }]],
-  folder: [
-    [
-      'path',
-      {
-        d: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
-      },
-    ],
-  ],
-  sortName: [
-    ['path', { d: 'M4 6h9M4 12h7M4 18h5' }],
-    ['path', { d: 'M17 6v12M14 15l3 3 3-3' }],
-  ],
-  sortKind: [
-    ['circle', { cx: 7.5, cy: 7.5, r: 3.5 }],
-    ['rect', { x: 13, y: 4, width: 7, height: 7, rx: 1.5 }],
-    ['path', { d: 'M7.5 13.5l3.5 6.5h-7z' }],
-    ['path', { d: 'M13 20l3.5-6.5 3.5 6.5z' }],
-  ],
-  sortGroup: [
-    ['path', { d: 'M12 4l8 4-8 4-8-4z' }],
-    ['path', { d: 'M4 12l8 4 8-4' }],
-    ['path', { d: 'M4 16l8 4 8-4' }],
-  ],
-  x: [['path', { d: 'M6 6l12 12M18 6L6 18' }]],
-  gear: [
-    [
-      'path',
-      {
-        d: 'M12.17 3.5h-.34a1.7 1.7 0 0 0-1.7 1.7v.17a1.7 1.7 0 0 1-.85 1.44l-.34.26a1.7 1.7 0 0 1-1.7 0l-.17-.08a1.7 1.7 0 0 0-2.29.6l-.17.34A1.7 1.7 0 0 0 5.2 10.22l.17.09a1.7 1.7 0 0 1 .85 1.44v.43a1.7 1.7 0 0 1-.85 1.53l-.17.09a1.7 1.7 0 0 0-.59 2.3l.17.34a1.7 1.7 0 0 0 2.3.6l.17-.08a1.7 1.7 0 0 1 1.7 0l.34.26a1.7 1.7 0 0 1 .85 1.44v.17a1.7 1.7 0 0 0 1.7 1.7h.34a1.7 1.7 0 0 0 1.7-1.7v-.17a1.7 1.7 0 0 1 .85-1.44l.34-.25a1.7 1.7 0 0 1 1.7 0l.17.09a1.7 1.7 0 0 0 2.3-.59l.17-.34a1.7 1.7 0 0 0-.59-2.29l-.17-.08a1.7 1.7 0 0 1-.85-1.53v-.42a1.7 1.7 0 0 1 .85-1.44l.17-.08a1.7 1.7 0 0 0 .6-2.29l-.17-.34a1.7 1.7 0 0 0-2.29-.59l-.17.09a1.7 1.7 0 0 1-1.7 0l-.34-.25a1.7 1.7 0 0 1-.85-1.44V5.2a1.7 1.7 0 0 0-1.7-1.7z',
-      },
-    ],
-    ['circle', { cx: 12, cy: 12, r: 2.6 }],
-  ],
-  server: [
-    ['rect', { x: 3, y: 4, width: 18, height: 6, rx: 1.5 }],
-    ['rect', { x: 3, y: 14, width: 18, height: 6, rx: 1.5 }],
-    ['path', { d: 'M7 7h.01M7 17h.01' }],
-  ],
-  check: [['path', { d: 'M5 12l5 5 9-10' }]],
-  /* A state mark rather than an action: the ring says the check is a
-     fact about the thing beside it, not a button to confirm it. */
-  'check-circle': [
-    ['circle', { cx: 12, cy: 12, r: 8.5 }],
-    ['path', { d: 'M8.5 12l2.5 2.5 4.5-5' }],
-  ],
-  pencil: [
-    ['path', { d: 'M4 20l4.5-1L19 8.5a2 2 0 0 0-3-3L5.5 16z' }],
-    ['path', { d: 'M14 7l3 3' }],
-  ],
-  back: [['path', { d: 'M15 5l-7 7 7 7' }]],
-  shield: [
-    ['path', { d: 'M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z' }],
-    ['path', { d: 'M9 12l2 2 4-4' }],
-  ],
-  alert: [
-    ['circle', { cx: 12, cy: 12, r: 8.5 }],
-    ['path', { d: 'M12 8v5M12 16h.01' }],
-  ],
-  again: [
-    ['path', { d: 'M20 12a8 8 0 1 1-2.6-5.9' }],
-    ['path', { d: 'M20 4v4h-4' }],
-  ],
-  more: [
-    ['circle', { cx: 5, cy: 12, r: 1.2, fill: 'currentColor' }],
-    ['circle', { cx: 12, cy: 12, r: 1.2, fill: 'currentColor' }],
-    ['circle', { cx: 19, cy: 12, r: 1.2, fill: 'currentColor' }],
-  ],
-  out: [
-    [
-      'path',
-      {
-        d: 'M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5',
-      },
-    ],
-  ],
-  flag: [['path', { d: 'M5 21V4h13l-2.5 4L18 12H5' }]],
-  door: [
-    ['path', { d: 'M5 21V3h9v18M14 21h5M3 21h2' }],
-    ['circle', { cx: 11.5, cy: 12, r: 1, fill: 'currentColor' }],
-  ],
-  chat: [
-    [
-      'path',
-      {
-        d: 'M21 14.5a2 2 0 0 1-2 2H8l-5 3.5V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z',
-      },
-    ],
-  ],
-  /* The composer's three controls the agent has no action for. */
-  /* Sidebar collapse toggle, expanded state. */
-  'panel-filled': [
-    ['rect', { x: 3, y: 4, width: 18, height: 16, rx: 2 }],
-    ['path', { d: 'M9.5 4v16', fill: 'none' }],
-    [
-      'path',
-      {
-        d: 'M4.6 5.5h3.3v13H4.6z',
-        fill: 'currentColor',
-        stroke: 'none',
-        opacity: '.55',
-      },
-    ],
-  ],
-  /* Sidebar collapse toggle, collapsed state. */
-  'panel-hollow': [
-    ['rect', { x: 3, y: 4, width: 18, height: 16, rx: 2 }],
-    ['path', { d: 'M9.5 4v16' }],
-  ],
-} as const satisfies Record<string, readonly IconElement[]>;
+  key: KeyRound,
+  terminal: Terminal,
+  laptop: Laptop,
+  file: File,
+  users: Users,
+  user: User,
+  vault: Vault,
+  search: Search,
+  grid: Grid2x2,
+  chevronDown: ChevronDown,
+  info: Info,
+  download: Download,
+  upload: Upload,
+  list: List,
+  copy: Copy,
+  trash: Trash,
+  eye: Eye,
+  eyeOff: EyeOff,
+  plus: Plus,
+  folder: Folder,
+  close: X,
+  settings: Settings,
+  server: Server,
+  check: Check,
+  circleCheck: CircleCheck,
+  pencil: Pencil,
+  arrowLeft: ArrowLeft,
+  shield: ShieldCheck,
+  alert: CircleAlert,
+  refresh: RefreshCw,
+  ellipsis: Ellipsis,
+  externalLink: ExternalLink,
+  flag: Flag,
+  door: DoorOpen,
+  chat: MessageSquare,
+  send: Send,
+  panelLeftClose: PanelLeftClose,
+  panelLeftOpen: PanelLeftOpen,
+  plug: Plug,
+} as const satisfies Record<FoksIconName, IconNode>;
 
-/** Every icon name the shell can draw. */
-export type FoksIconName = keyof typeof FOKS_ICONS;
+export type { FoksIconName } from './icon-name';

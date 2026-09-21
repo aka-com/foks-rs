@@ -425,7 +425,7 @@ FOKS has no identity
 proofs to list. Under them the rows are:
 username with Change…, the local alias, the passphrase with a
 link to
-Settings › Preferences, followed by Bot accounts, Open web admin panel, Sign in
+Settings › Preferences, followed by Bot accounts, Web admin panel, Sign in
 via SSO, and Import from FOKS CLI, each opening its corresponding panel. If
 account access is suspended, username changes are disabled with an explanatory
 reason while the remaining recovery actions stay available. An account's mark is the
@@ -847,10 +847,11 @@ FOKS its own `--faint`, `--surface`, `--main-surface`, `--hover` and
 `tests/styles-geometry.test.ts` fails if a token is ever declared in both
 places.
 
-**Theme: FOKS is light-only in Phase 1, and the fork is at the kit seam.**
-`apps/desktop/kit/tokens.css` carries light values only and there is no theme script in
-`index.html`. If dark theme support is added to FOKS, it should be declared in
-this stylesheet.
+**Appearance:** Preferences offers Light, Dark, and System. Light is the default;
+the choice is stored locally as `appearance`. `public/theme-init.js` applies the
+choice before first paint, and `src/appearance.ts` follows system and storage
+changes. Dark overrides live in `kit/tokens.css`, using the Files redesign palette
+while preserving the selected sidebar color.
 
 ## Navigation guards
 
@@ -936,7 +937,7 @@ The unit and render-test layers live in `tests/`:
   (the mock's whole render layer is `innerHTML`, and none of it came along), no
   `window.__TAURI__`, the Tauri API imported in one file, the model free of the
   DOM, the mock bundled out.
-- `styles-geometry.test.ts` — the token split, the light-only rule and the
+- `styles-geometry.test.ts` — the token split, light and dark color schemes, and the
   shell's grid, read off the CSS since jsdom computes no layout.
 - `sync-status.render.test.tsx` — the topbar's refresh control: one button, and
   the Refresh status popover it opens on hover. The popover is portaled, so the

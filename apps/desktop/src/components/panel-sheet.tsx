@@ -54,7 +54,7 @@ export function PanelSheet({
       glyph={
         glyph ?? (
           <span className="server-mark">
-            <Icon name="gear" />
+            <Icon name="settings" />
           </span>
         )
       }

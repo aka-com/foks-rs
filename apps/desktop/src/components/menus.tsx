@@ -141,7 +141,7 @@ export function MenuButton({
   variant = 'plain',
   size = 'md',
   icon,
-  trailingIcon = 'chev',
+  trailingIcon = 'chevronDown',
   className,
   disabled = false,
   title,

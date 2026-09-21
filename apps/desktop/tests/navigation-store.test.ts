@@ -220,3 +220,80 @@ test('superseded prompts do not run callbacks and navigateAndSelect stays guarde
   assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
   assert.equal(confirmed, 1);
 });
+
+test('Back follows cross-tab visits and restores page state without cycling', () => {
+  const store = new LocationStore({
+    ...INITIAL_STATE,
+    location: { kind: 'files' },
+  });
+  store.search('token');
+  store.select({ store: ACCOUNT_A.id, path: '/token' });
+  const files = store.getSnapshot();
+  store.navigate({ kind: 'settings', section: 'account', store: ACCOUNT_A.id });
+  const settings = store.getSnapshot().location;
+  store.navigate({ kind: 'devices', store: ACCOUNT_A.id });
+  store.back();
+  assert.deepEqual(store.getSnapshot().location, settings);
+  store.navigate({ kind: 'teams', store: ACCOUNT_A.id });
+  store.back();
+  assert.deepEqual(store.getSnapshot().location, settings);
+  store.back();
+  assert.deepEqual(store.getSnapshot(), { ...files, sheet: undefined });
+  assert.equal(store.backTarget(), null);
+  store.back();
+  assert.equal(store.getSnapshot().location.kind, 'files');
+});
+
+test('Back ignores replacements, preserves history on refusal, and clears at session reset', () => {
+  const store = new LocationStore({
+    ...INITIAL_STATE,
+    location: { kind: 'files' },
+  });
+  store.navigate({ kind: 'chat' });
+  store.navigate(
+    { kind: 'chat', ref: 'team:eng', channel: 'general' },
+    { replace: true },
+  );
+  assert.deepEqual(store.backTarget(), { kind: 'files' });
+  const unregister = store.registerGuard(() => ({
+    verdict: 'refuse',
+    reason: 'Saving',
+  }));
+  store.back();
+  assert.equal(store.getSnapshot().location.kind, 'chat');
+  assert.deepEqual(store.backTarget(), { kind: 'files' });
+  unregister();
+  store.back();
+  assert.equal(store.getSnapshot().location.kind, 'files');
+  store.navigateTab('settings');
+  store.clearTabMemory();
+  assert.equal(store.backTarget(), null);
+});
+
+test('Back restores the previous Files folder without restoring transient sheets', () => {
+  const store = new LocationStore({
+    ...INITIAL_STATE,
+    location: { kind: 'files' },
+  });
+  store.setFolder('account-a|/one');
+  store.setSheetField('draft', 'temporary');
+  store.setFolder('account-a|/two');
+  store.back();
+  assert.equal(store.getSnapshot().folder, 'account-a|/one');
+  assert.equal(store.getSnapshot().sheet, undefined);
+});
+
+test('first-run blocks history Back even with earlier visits and force enabled', () => {
+  const store = new LocationStore({
+    ...INITIAL_STATE,
+    location: { kind: 'files' },
+  });
+  store.navigate({ kind: 'settings' });
+  store.navigate({ kind: 'first-run', step: 'address' });
+  assert.equal(store.backTarget(), null);
+  store.back({ force: true });
+  assert.deepEqual(store.getSnapshot().location, {
+    kind: 'first-run',
+    step: 'address',
+  });
+});

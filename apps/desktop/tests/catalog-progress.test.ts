@@ -5,6 +5,7 @@ import { vaultCommands } from '../src/bridge/commands-vault';
 import {
   enqueueProfileWork,
   loadSnapshot,
+  loadProfileSnapshot,
   type Bridge,
   type CatalogDto,
 } from '../src/bridge';
@@ -30,7 +31,8 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-test('valid final catalogs supersede failed partial projections and failed publication callbacks', async () => {
+test('valid final catalogs supersede failed partial projections and failed publication callbacks', async (t) => {
+  t.mock.method(performance, 'now', () => 0);
   for (const publicationFailure of [false, true]) {
     const base = mockBridge(FIXTURE);
     const catalog = await base.listCatalog();
@@ -731,5 +733,41 @@ test('a roster the profile queue cannot admit degrades that team, not the whole 
     );
   } finally {
     mock.timers.reset();
+  }
+});
+
+test('initial and scoped catalog loads record elapsed duration', async (t) => {
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const base = mockBridge(FIXTURE);
+  const bridge: Bridge = {
+    ...base,
+    listCatalog: async (...args) => {
+      const result = await base.listCatalog(...args);
+      now += 125;
+      return result;
+    },
+    listProfileCatalog: async (...args) => {
+      const result = await base.listProfileCatalog(...args);
+      now += 75;
+      return result;
+    },
+  };
+  const initial = await loadSnapshot(bridge, FIXTURE, 1);
+  assert.equal(initial.catalogFreshness?.attempt?.lastMilliseconds, 125);
+  const successful = Object.entries(initial.catalogFreshness!.profiles).filter(
+    ([, value]) => value.lastSuccessAt === 1 && !value.error,
+  );
+  assert.ok(successful.length);
+  for (const [, value] of successful) assert.equal(value.lastMilliseconds, 125);
+  const profile = successful[0][0];
+  const scoped = await loadProfileSnapshot(bridge, profile, initial, 2);
+  assert.equal(scoped.catalogFreshness?.profiles[profile].lastMilliseconds, 75);
+  for (const [other, value] of successful) {
+    if (other !== profile)
+      assert.equal(
+        scoped.catalogFreshness?.profiles[other].lastMilliseconds,
+        value.lastMilliseconds,
+      );
   }
 });

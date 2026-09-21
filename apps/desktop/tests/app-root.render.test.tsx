@@ -79,7 +79,7 @@ test('the rail draws the five tabs, the unread badge and the Settings dot', asyn
   );
   // Partner has never been verified (Acme's own lapsed check-in note is only
   // live once its lease is actually expired, which the running demo agent
-  // has not made true here), so the Settings tab carries the amber dot for
+  // has not made true here), so the Settings tab carries the orange dot for
   // Partner alone.
   const settingsDot = tabs[4].querySelector('.rail-tail.dot');
   assert.ok(settingsDot, 'the Settings tab carries its own dot');
@@ -166,12 +166,13 @@ test('a tab navigates, and Control-Tab walks the six of them', async () => {
   assert.equal(document.querySelector('.side.rail .rail-back'), null);
 });
 
-/** The topbar crumb, segments joined by the separator glyph. */
+/** Returns header breadcrumb segments joined by a chevron separator. */
 function crumbs(): string | undefined {
-  return document
-    .querySelector('.topbar .crumbs')
-    ?.textContent?.replace(/\s*›\s*/g, '›')
-    .trim();
+  const nav = document.querySelector('.topbar .crumbs');
+  if (!nav) return undefined;
+  return [...nav.querySelectorAll('button .t')]
+    .map((segment) => segment.textContent?.trim() ?? '')
+    .join('›');
 }
 
 test('the Files tree lists the stores the roots page used to enumerate', async () => {
@@ -197,12 +198,7 @@ test('the Files tree lists the stores the roots page used to enumerate', async (
   });
   // Browsing a store through the tree is client-side selection, not a
   // location change, but the topbar reads that same selection.
-  assert.equal(
-    document
-      .querySelector('.topbar .crumbs')
-      ?.textContent?.includes('Engineering'),
-    true,
-  );
+  assert.equal(crumbs()?.includes('Engineering'), true);
   assert.equal(document.querySelector('.side.rail .rail-back'), null);
   const allItems = rows.find(
     (row) => row.querySelector('.nm')?.textContent === 'All items',

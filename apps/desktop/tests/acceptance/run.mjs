@@ -579,7 +579,7 @@ async function folderWalk(context, origin) {
       .waitFor();
 
     await page
-      .locator('.toolbar')
+      .locator('.topbar')
       .getByRole('button', { name: 'New', exact: true })
       .click();
     await page.getByRole('menuitem', { name: 'Document' }).click();
@@ -606,7 +606,7 @@ async function folderWalk(context, origin) {
       );
 
     await page
-      .locator('.toolbar')
+      .locator('.topbar')
       .getByRole('button', { name: 'New', exact: true })
       .click();
     await page.getByRole('menuitem', { name: 'Document' }).click();

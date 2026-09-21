@@ -36,12 +36,31 @@ import {
   noChatReason,
   openingConversation,
 } from './chat-teams';
-import './chat.css';
+
+/**
+ * Wires the window header's "New chat" button to the active Chat tab.
+ *
+ * Because the header renders outside the Chat tab, it delegates channel creation
+ * to the active tab. When ChatTab is mounted, this opens the channel creation
+ * sheet for the currently open conversation. If ChatTab is unmounted, calling
+ * this function is a no-op.
+ */
+let newChatRequest: (() => void) | null = null;
+
+/** Opens the Chat tab's channel-creation sheet. The header's button calls this. */
+export function requestNewChat(): void {
+  newChatRequest?.();
+}
 
 export interface ChatTabProps {
   snapshot: AgentSnapshot;
   bridge: Bridge;
   location: Extract<Location, { kind: 'chat' }>;
+  /**
+   * The window header's scoped search text. The inbox column narrows to the
+   * teams and channels it matches; the column has no field of its own.
+   */
+  query?: string;
   /**
    * The options are carried for the tab's own resolution of `{kind:'chat'}`,
    * which is forced: everything the reader asks for goes through the guards.
@@ -64,6 +83,7 @@ export function ChatTab({
   snapshot,
   bridge,
   location,
+  query,
   onNavigate,
   accessNow = systemAccessNow,
   accessGenerations = NO_GENERATIONS,
@@ -100,6 +120,18 @@ export function ChatTab({
     setNewChat(null);
     setSubmittedSheet(null);
   };
+  // The column's "+" opens the creation form with no team chosen: it belongs
+  // to the column rather than to any one team's row.
+  const openNewChat = () =>
+    setNewChat({ originRef: ref, originChannel: location.channel });
+  // The header's "New chat" button reaches the mounted tab through this, and
+  // reaches nothing once the tab unmounts.
+  useEffect(() => {
+    newChatRequest = openNewChat;
+    return () => {
+      if (newChatRequest === openNewChat) newChatRequest = null;
+    };
+  });
   // The ⓘ toggle takes focus back when the panel it opened closes.
   const infoToggle = useRef<HTMLButtonElement | null>(null);
   const conversation = useRef<HTMLElement | null>(null);
@@ -121,7 +153,7 @@ export function ChatTab({
       // move the reader asked for, so no screen is asked about it. A guard
       // that prompted here would put a question between the reader and a Chat
       // tab that has not finished opening.
-      { force: true },
+      { force: true, replace: true },
     );
   }, [location.ref, location.channel, openingRef, openingChannel, onNavigate]);
   // A New chat belongs to the location it was opened in: a team or channel
@@ -199,10 +231,9 @@ export function ChatTab({
         }}
         // The column's button opens the creation form with no team chosen:
         // it belongs to the column rather than to any one team's row.
-        onNewChat={() =>
-          setNewChat({ originRef: ref, originChannel: location.channel })
-        }
+        onNewChat={openNewChat}
         onTeams={(next) => onNavigate({ kind: 'teams', store: next })}
+        query={query}
       />
       <section
         className="chat-conversation"
@@ -220,8 +251,11 @@ export function ChatTab({
         open &&
         !channelsEmpty &&
         chatAvailable(snapshot, open, accessOptions) ? (
-          <div className="empty" role="status">
-            <p>Choose a channel to open a conversation.</p>
+          <div className="chat-empty" role="status">
+            <div>
+              <Icon name="chat" size={30} />
+              <p>Choose a channel to open a conversation.</p>
+            </div>
           </div>
         ) : ref ? (
           <ChatScreen
@@ -273,11 +307,15 @@ export function ChatTab({
           loading={loading}
           scope={entry?.scope}
           onNavigate={onNavigate}
-          onClose={() => {
+          toggleRef={infoToggle}
+          onClose={(restoreFocus = true) => {
             setInfo(false);
             // During a loading switch the new pane may not have an info toggle.
             // Keep focus in the conversation instead of dropping it.
-            (infoToggle.current ?? conversation.current)?.focus();
+            if (restoreFocus)
+              (infoToggle.current ?? conversation.current)?.focus({
+                preventScroll: true,
+              });
           }}
         />
       )}
@@ -366,18 +404,33 @@ function NoTeamWithChat({
   onNavigate: (location: Location) => void;
 }): ReactNode {
   return (
-    <div className="empty">
-      <span className="big">
-        <Icon name="chat" />
-      </span>
-      <h2>No team chats yet</h2>
-      <p>
-        Chat is available in teams when supported by their server. Create or
-        join a team to get started.
-      </p>
-      <Button variant="primary" onClick={() => onNavigate({ kind: 'teams' })}>
-        Create or join a team
-      </Button>
+    <div className="chat-empty">
+      <div>
+        <Icon name="chat" size={30} />
+        <b>No team chats yet</b>
+        <span>
+          Every team has a #general channel. Create a team, or accept an
+          invitation, to start.
+        </span>
+        {/* Both flows are sheets on the Teams page, which has no address of
+            its own for either, so both buttons open that page. */}
+        <div className="chat-empty-actions">
+          <Button
+            variant="primary"
+            icon="plus"
+            title="Create a team on the Teams page"
+            onClick={() => onNavigate({ kind: 'teams' })}
+          >
+            Create a team
+          </Button>
+          <Button
+            title="Paste an invitation on the Teams page"
+            onClick={() => onNavigate({ kind: 'teams' })}
+          >
+            Accept an invitation
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

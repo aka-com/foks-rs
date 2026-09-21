@@ -20,9 +20,11 @@ export function fmtSize(bytes: number | null): string {
  * and spaces: `sam.ortiz` → `SO`, `deploy-bot` → `DB`, `satoshi` → `S`.
  */
 export function initials(name: string): string {
+  // Words are runs of letters and digits: punctuation such as the "(" in
+  // "Work (Acme)" never becomes an initial.
   return name
     .replace(/@.*/, '')
-    .split(/[.\-_ ]/)
+    .split(/[^\p{L}\p{N}]+/u)
     .filter(Boolean)
     .slice(0, 2)
     .map((word) => word[0].toUpperCase())
