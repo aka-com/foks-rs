@@ -26,13 +26,30 @@ fn role_label(role: foks_proto::Role) -> String {
         _ => format!("Member ({})", role.visibility().unwrap_or(0)),
     }
 }
+/// Bounds a channel's name or description to the characters the chat limits
+/// admit. This device checks its own before sealing them, but another client
+/// can seal a longer one, and nothing on the server can see the plaintext to
+/// refuse it. The desktop holds every reply to the same limits and treats one
+/// outside them as it treats any reply outside its contract, parking the
+/// whole account's chat, so a peer's over-long name is presented to what
+/// fits, with the cut marked.
+fn bounded_chars(text: &str, maximum: usize) -> String {
+    if text.chars().count() <= maximum {
+        return text.to_owned();
+    }
+    let kept: String = text.chars().take(maximum.saturating_sub(1)).collect();
+    format!("{kept}…")
+}
 fn channel(value: foks_client::ChatChannel) -> ChatChannel {
     ChatChannel {
         id: hex(&value.metadata.id.0),
-        name: SecretString::new(value.name.0.as_str()),
-        description: value
-            .description
-            .map(|description| SecretString::new(description.0.as_str())),
+        name: SecretString::new(&bounded_chars(value.name.0.as_str(), CHAT_NAME_MAX_CHARS)),
+        description: value.description.map(|description| {
+            SecretString::new(&bounded_chars(
+                description.0.as_str(),
+                CHAT_DESCRIPTION_MAX_CHARS,
+            ))
+        }),
         admin: value.metadata.tier == RtChannelTier::Admin,
         readable: !value.metadata.unreadable,
         writable: value.writable,
@@ -628,6 +645,27 @@ mod tests {
             CHAT_DESCRIPTION_MAX_CHARS,
             ChatLimits::DESCRIPTION_MAX_CHARS
         );
+    }
+
+    /// A channel another client named past the limit reaches the desktop
+    /// within the bytes its contract admits, rather than as a reply it
+    /// refuses for the whole account.
+    #[test]
+    fn peer_channel_text_is_bounded_to_the_limits_the_desktop_holds() {
+        let name = bounded_chars(&"x".repeat(CHAT_NAME_MAX_CHARS + 1), CHAT_NAME_MAX_CHARS);
+        assert_eq!(name.chars().count(), CHAT_NAME_MAX_CHARS);
+        assert!(name.ends_with('…'));
+        let wide = bounded_chars(&"💬".repeat(200), CHAT_NAME_MAX_CHARS);
+        assert_eq!(wide.chars().count(), CHAT_NAME_MAX_CHARS);
+        assert!(wide.len() <= CHAT_NAME_BYTES);
+        let description = bounded_chars(
+            &"y".repeat(CHAT_DESCRIPTION_MAX_CHARS * 2),
+            CHAT_DESCRIPTION_MAX_CHARS,
+        );
+        assert_eq!(description.chars().count(), CHAT_DESCRIPTION_MAX_CHARS);
+        assert!(description.len() <= CHAT_DESCRIPTION_BYTES);
+        let exact = "z".repeat(CHAT_NAME_MAX_CHARS);
+        assert_eq!(bounded_chars(&exact, CHAT_NAME_MAX_CHARS), exact);
     }
 
     #[test]
