@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, useRef, useState } from 'react';
-import { installDom } from './lib/dom-harness';
+import { installDom, settle } from './lib/dom-harness';
 import { useDesktopReconciliation } from '../src/use-desktop-reconciliation';
 import {
   profileConnectivityKey,
@@ -1146,7 +1146,7 @@ test('a forced refresh discards the metadata of the profiles whose catalog chang
       () => {},
       () => {},
     );
-    await new Promise((done) => setTimeout(done, 0));
+    await settle();
   });
   assert.deepEqual(invalidations.slice(3), [[], undefined]);
 });

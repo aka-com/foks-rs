@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, StrictMode, useState } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
-import { installDom } from './lib/dom-harness';
+import { installDom, settle } from './lib/dom-harness';
 import { readSource } from './lib/source';
 import type { Location } from '../src/location';
 import type { AgentSnapshot } from '../src/model';
@@ -1508,7 +1508,7 @@ test('New chat refuses what the agent would refuse, by the button and by Enter',
   assert.equal(create().disabled, true);
   // Enter is the button: it sends exactly what the button would send.
   ui.fireEvent.submit(form);
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await settle();
   assert.deepEqual(prepared, []);
   ui.fireEvent.change(name, { target: { value: 'design' } });
   const description = ui.screen.getByRole('textbox', {
@@ -1528,7 +1528,7 @@ test('New chat refuses what the agent would refuse, by the button and by Enter',
   );
   assert.equal(create().disabled, true);
   ui.fireEvent.submit(form);
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await settle();
   assert.deepEqual(prepared, []);
   ui.fireEvent.change(description, { target: { value: '' } });
   await ui.waitFor(() => assert.equal(create().disabled, false));

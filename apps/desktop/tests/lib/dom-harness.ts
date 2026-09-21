@@ -10,6 +10,18 @@ import { JSDOM } from 'jsdom';
 export const nativeSetInterval = globalThis.setInterval;
 export const nativeSetTimeout = globalThis.setTimeout;
 
+/**
+ * Resolves on the next timer tick, once the promises already queued have
+ * settled. With `timers: true` the global timers are unreferenced, so a
+ * `setTimeout` wait at the end of a test does not keep the process alive and
+ * node can cancel the test before the timer fires. This timer is referenced.
+ */
+export function settle(): Promise<void> {
+  return new Promise((resolve) => {
+    nativeSetTimeout(resolve, 0);
+  });
+}
+
 class TestResizeObserver {
   observe() {}
   unobserve() {}

@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createElement, StrictMode } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 import type { Bridge, CommandError, GoProfileCandidate } from '../src/bridge';
-import { installDom } from './lib/dom-harness';
+import { installDom, settle } from './lib/dom-harness';
 
 installDom({
   url: 'http://localhost/',
@@ -598,7 +598,7 @@ test('first-run waits for shared readiness and never initializes itself', async 
     }),
   );
   assert.ok(rendered.getByRole('button', { name: 'Preparing service…' }));
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await settle();
   assert.equal(initializations, 0);
   assert.equal(discoveries, 0);
 });
