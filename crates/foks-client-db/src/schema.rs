@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 38;
+pub(crate) const VERSION: u32 = 39;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
     "import_readiness",
@@ -157,7 +157,7 @@ CREATE TABLE merkle_heads (
     host_id BLOB PRIMARY KEY REFERENCES hosts(host_id) ON DELETE CASCADE,
     epoch INTEGER NOT NULL CHECK (epoch >= 0),
     root_hash BLOB NOT NULL CHECK (length(root_hash) = 32),
-    evidence_kind INTEGER NOT NULL CHECK (evidence_kind IN (1, 2, 3)),
+    evidence_kind INTEGER NOT NULL CHECK (evidence_kind IN (1, 2, 3, 4)),
     anchor_epoch INTEGER CHECK (anchor_epoch IS NULL OR anchor_epoch >= 0),
     evidence_bytes BLOB NOT NULL CHECK (length(evidence_bytes) > 0),
     FOREIGN KEY (host_id, epoch) REFERENCES merkle_roots(host_id, epoch)

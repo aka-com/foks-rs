@@ -10,6 +10,11 @@ use crate::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MerkleRootEvidence {
     SignedBootstrap(Vec<u8>),
+    /// A verified head restored from trusted local storage. Historical roots
+    /// are local assertions, not a self-contained network proof.
+    LocalCheckpoint {
+        signed_root: Vec<u8>,
+    },
     /// A later independently signed public-probe root plus the evidence that
     /// authenticated the prior durable head. Host-key rotation produces a new
     /// signed probe anchor without invalidating roots used by persisted user
@@ -490,6 +495,52 @@ pub fn verify_merkle_advance(
     })
 }
 
+/// Restores a flat checkpoint from **trusted local storage**. Callers must
+/// enforce their local database/rollback admission policy separately. This
+/// verifies the signed head and structural consistency, but deliberately does
+/// not re-prove the historical roots. Never use it for network-supplied roots.
+pub fn restore_local_merkle_checkpoint(
+    parts: VerifiedMerkleRootParts<'_>,
+    hostchain_bytes: &[u8],
+) -> Result<VerifiedMerkleRoot> {
+    let MerkleRootEvidence::LocalCheckpoint { signed_root } = parts.evidence else {
+        return Err(Error::PersistedMerkleEvidence);
+    };
+    let bootstrap = MerkleRootEvidence::SignedBootstrap(signed_root.clone());
+    let mut restored = restore_merkle_anchor(
+        parts.epoch,
+        parts.root_hash,
+        parts.root_bytes,
+        &bootstrap,
+        &[AuthenticatedMerkleRoot {
+            epoch: parts.epoch,
+            root_hash: parts.root_hash,
+            root_bytes: Some(parts.root_bytes.to_vec()),
+        }],
+        hostchain_bytes,
+    )?;
+    let mut roots = BTreeMap::new();
+    for entry in parts.authenticated_roots {
+        if entry.epoch > parts.epoch || roots.insert(entry.epoch, entry.clone()).is_some() {
+            return Err(Error::PersistedMerkleEvidence);
+        }
+        if let Some(bytes) = &entry.root_bytes {
+            let root = MerkleRoot::decode(bytes)?;
+            if root.epoch != entry.epoch
+                || prefixed_hash(MERKLE_ROOT_TYPE_ID, &root.encoded()?)? != entry.root_hash
+            {
+                return Err(Error::PersistedMerkleEvidence);
+            }
+        }
+    }
+    if roots.get(&parts.epoch) != restored.authenticated_roots.first() {
+        return Err(Error::PersistedMerkleEvidence);
+    }
+    restored.evidence = parts.evidence.clone();
+    restored.authenticated_roots = roots.into_values().collect();
+    Ok(restored)
+}
+
 /// Revalidates an untrusted SQLite representation of a Merkle anchor back to
 /// its signed public-probe bootstrap before recreating the sealed capability.
 #[allow(clippy::too_many_arguments)]
@@ -539,6 +590,7 @@ fn restore_merkle_evidence(
         return Err(Error::PersistedMerkleEvidence);
     }
     match evidence {
+        MerkleRootEvidence::LocalCheckpoint { .. } => Err(Error::PersistedMerkleEvidence),
         MerkleRootEvidence::SignedBootstrap(signed_bytes) => {
             let signed = SignedBlob::decode(signed_bytes)?;
             if signed.inner != root_bytes {

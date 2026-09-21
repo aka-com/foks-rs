@@ -733,6 +733,85 @@ mod tests {
     }
 
     #[test]
+    fn local_checkpoint_has_an_explicit_trust_boundary_and_validates_its_projection() {
+        let public = verify_public_host("foks.app", PROBE).unwrap();
+        let root = public.snapshot.merkle_root();
+        let MerkleRootEvidence::SignedBootstrap(signed) = root.evidence() else {
+            panic!()
+        };
+        let checkpoint = MerkleRootEvidence::LocalCheckpoint {
+            signed_root: signed.clone(),
+        };
+        let mut parts = root.parts();
+        parts.evidence = &checkpoint;
+        let historical = AuthenticatedMerkleRoot {
+            epoch: 1,
+            root_hash: [42; 32],
+            root_bytes: None,
+        };
+        let mut roots = root.authenticated_roots().to_vec();
+        roots.push(historical.clone());
+        parts.authenticated_roots = &roots;
+        let restored =
+            restore_local_merkle_checkpoint(parts, public.snapshot.chain_bytes()).unwrap();
+        assert!(restored.authenticated_roots().contains(&historical));
+        assert!(restore_merkle_anchor(
+            parts.epoch,
+            parts.root_hash,
+            parts.root_bytes,
+            parts.evidence,
+            parts.authenticated_roots,
+            public.snapshot.chain_bytes()
+        )
+        .is_err());
+        let check = |roots: &[AuthenticatedMerkleRoot]| {
+            restore_local_merkle_checkpoint(
+                VerifiedMerkleRootParts {
+                    authenticated_roots: roots,
+                    ..parts
+                },
+                public.snapshot.chain_bytes(),
+            )
+        };
+        assert!(check(&[]).is_err());
+        assert!(check(std::slice::from_ref(&historical)).is_err());
+        let mut bad = roots.clone();
+        bad.push(historical);
+        assert!(check(&bad).is_err());
+        bad = roots.clone();
+        bad[1].epoch = parts.epoch + 1;
+        assert!(check(&bad).is_err());
+        bad = roots.clone();
+        bad[1].root_bytes = Some(parts.root_bytes.to_vec());
+        assert!(check(&bad).is_err());
+        assert!(restore_local_merkle_checkpoint(
+            VerifiedMerkleRootParts {
+                root_hash: [0; 32],
+                ..parts
+            },
+            public.snapshot.chain_bytes()
+        )
+        .is_err());
+        let invalid_signature = MerkleRootEvidence::LocalCheckpoint {
+            signed_root: vec![0; 96],
+        };
+        assert!(restore_local_merkle_checkpoint(
+            VerifiedMerkleRootParts {
+                evidence: &invalid_signature,
+                ..parts
+            },
+            public.snapshot.chain_bytes()
+        )
+        .is_err());
+        // Repeatedly restoring and re-checkpointing never introduces a prior edge.
+        for _ in 0..4100 {
+            let restored =
+                restore_local_merkle_checkpoint(parts, public.snapshot.chain_bytes()).unwrap();
+            assert_eq!(restored.evidence(), &checkpoint);
+        }
+    }
+
+    #[test]
     fn persisted_merkle_anchor_is_reauthenticated_from_its_signed_bootstrap() {
         let public = verify_public_host("foks.app", PROBE).unwrap();
         let root = public.snapshot.merkle_root();

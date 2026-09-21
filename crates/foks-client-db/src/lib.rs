@@ -2,12 +2,14 @@
 //!
 //! This crate is intentionally below the protocol verifier. It preserves the
 //! exact signed bytes supplied by that verifier and enforces monotonic pins,
-//! but it does not parse Snowpack or verify signatures itself.
+//! and stores flat local Merkle checkpoints. Legacy checkpoint migration also
+//! verifies the retained signed head before adopting the trusted-local format.
 
 #![forbid(unsafe_code)]
 
 mod chat_limits;
 pub use chat_limits::ChatLimits;
+mod merkle_checkpoint;
 mod schema;
 mod soft;
 mod soft_schema;
@@ -809,6 +811,9 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
             expected: APPLICATION_ID,
         });
     }
+    if version == 38 {
+        return merkle_checkpoint::migrate(connection);
+    }
     if version != SCHEMA_VERSION {
         return Err(Error::UnsupportedSchema {
             found: version,
@@ -820,9 +825,15 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
 
 fn install_revision_triggers(transaction: &Transaction<'_>) -> Result<()> {
     for table in schema::REVISION_TABLES {
-        for operation in ["insert", "update", "delete"] {
-            transaction.execute_batch(&format!(
-                "CREATE TRIGGER hard_state_revision_{table}_{operation}
+        install_table_revision_triggers(transaction, table)?;
+    }
+    Ok(())
+}
+
+fn install_table_revision_triggers(transaction: &Transaction<'_>, table: &str) -> Result<()> {
+    for operation in ["insert", "update", "delete"] {
+        transaction.execute_batch(&format!(
+            "CREATE TRIGGER hard_state_revision_{table}_{operation}
                  AFTER {operation} ON {table}
                  BEGIN
                    UPDATE hard_state_metadata
@@ -830,8 +841,7 @@ fn install_revision_triggers(transaction: &Transaction<'_>) -> Result<()> {
                        write_token = randomblob(16)
                    WHERE singleton = 1;
                  END;"
-            ))?;
-        }
+        ))?;
     }
     Ok(())
 }
@@ -1621,21 +1631,12 @@ fn accept_merkle_root(
     validate_merkle_root(root)?;
     let stored = connection
         .query_row(
-            "SELECT epoch, root_hash, evidence_kind, anchor_epoch, evidence_bytes
-             FROM merkle_heads WHERE host_id = ?1",
+            "SELECT epoch, root_hash FROM merkle_heads WHERE host_id = ?1",
             [host_id],
-            |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, Vec<u8>>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, Option<i64>>(3)?,
-                    row.get::<_, Vec<u8>>(4)?,
-                ))
-            },
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)),
         )
         .optional()?;
-    if let Some((stored_epoch, stored_hash, _, _, _)) = &stored {
+    if let Some((stored_epoch, stored_hash)) = &stored {
         let stored_epoch = stored_unsigned("Merkle epoch", *stored_epoch)?;
         match root.epoch.cmp(&stored_epoch) {
             std::cmp::Ordering::Less => {
@@ -1666,28 +1667,12 @@ fn accept_merkle_root(
     }
 
     accept_authenticated_roots(connection, host_id, root.authenticated_roots)?;
-    let refreshed_evidence;
-    let evidence = if let Some((stored_epoch, _, kind, anchor, bytes)) = &stored {
-        let stored_epoch = stored_unsigned("Merkle epoch", *stored_epoch)?;
-        if root.epoch > stored_epoch
-            && matches!(root.evidence, MerkleRootEvidence::SignedBootstrap(_))
-        {
-            refreshed_evidence = MerkleRootEvidence::SignedRefresh {
-                signed_root: match root.evidence {
-                    MerkleRootEvidence::SignedBootstrap(bytes) => bytes.clone(),
-                    _ => unreachable!(),
-                },
-                prior_epoch: stored_epoch,
-                prior: Box::new(decode_evidence(*kind, *anchor, bytes.clone())?),
-            };
-            &refreshed_evidence
-        } else {
-            root.evidence
-        }
-    } else {
-        root.evidence
+    // Acceptance receives a verifier-issued capability. Retain its signed
+    // head, not the proof history used to obtain that capability.
+    let evidence = MerkleRootEvidence::LocalCheckpoint {
+        signed_root: merkle_checkpoint::signed_head(root.evidence).to_vec(),
     };
-    let (evidence_kind, anchor_epoch, evidence_bytes) = encode_evidence(evidence)?;
+    let (evidence_kind, anchor_epoch, evidence_bytes) = encode_evidence(&evidence)?;
     connection.execute(
         "INSERT INTO merkle_heads \
          (host_id, epoch, root_hash, evidence_kind, anchor_epoch, evidence_bytes) \
@@ -1777,7 +1762,10 @@ fn validate_merkle_root(root: VerifiedMerkleRootParts<'_>) -> Result<()> {
         ));
     }
     match &root.evidence {
-        MerkleRootEvidence::SignedBootstrap(bytes) if bytes.is_empty() => {
+        MerkleRootEvidence::LocalCheckpoint { signed_root: bytes }
+        | MerkleRootEvidence::SignedBootstrap(bytes)
+            if bytes.is_empty() =>
+        {
             Err(Error::InvalidSnapshot("signed Merkle evidence is empty"))
         }
         MerkleRootEvidence::SignedRefresh { signed_root, .. } if signed_root.is_empty() => {
@@ -1878,10 +1866,15 @@ fn load_authenticated_roots(
 
 fn validate_evidence_order(evidence: &MerkleRootEvidence, upper: u64) -> Result<()> {
     match evidence {
-        MerkleRootEvidence::SignedBootstrap(bytes) if bytes.is_empty() => {
+        MerkleRootEvidence::LocalCheckpoint { signed_root: bytes }
+        | MerkleRootEvidence::SignedBootstrap(bytes)
+            if bytes.is_empty() =>
+        {
             Err(Error::InvalidSnapshot("signed Merkle evidence is empty"))
         }
-        MerkleRootEvidence::SignedBootstrap(_) => Ok(()),
+        MerkleRootEvidence::LocalCheckpoint { .. } | MerkleRootEvidence::SignedBootstrap(_) => {
+            Ok(())
+        }
         MerkleRootEvidence::SignedRefresh {
             signed_root,
             prior_epoch,
@@ -1911,6 +1904,7 @@ fn validate_evidence_order(evidence: &MerkleRootEvidence, upper: u64) -> Result<
 
 fn encode_evidence(evidence: &MerkleRootEvidence) -> Result<(i64, Option<i64>, Vec<u8>)> {
     let (kind, anchor) = match evidence {
+        MerkleRootEvidence::LocalCheckpoint { .. } => (4, None),
         MerkleRootEvidence::SignedBootstrap(_) => (1, None),
         MerkleRootEvidence::SignedRefresh { prior_epoch, .. } => {
             (3, Some(sqlite_integer("Merkle prior epoch", *prior_epoch)?))
@@ -1925,6 +1919,9 @@ fn encode_evidence(evidence: &MerkleRootEvidence) -> Result<(i64, Option<i64>, V
 
 fn evidence_value(evidence: &MerkleRootEvidence) -> Value {
     match evidence {
+        MerkleRootEvidence::LocalCheckpoint { signed_root } => {
+            Value::Array(vec![Value::Unsigned(3), Value::Binary(signed_root.clone())])
+        }
         MerkleRootEvidence::SignedBootstrap(bytes) => {
             Value::Array(vec![Value::Unsigned(0), Value::Binary(bytes.clone())])
         }
@@ -1960,6 +1957,7 @@ fn decode_evidence(
 ) -> Result<MerkleRootEvidence> {
     let evidence = evidence_from_value(&decode(&bytes)?, 0)?;
     match (&evidence, kind, anchor_epoch) {
+        (MerkleRootEvidence::LocalCheckpoint { .. }, 4, None) => Ok(evidence),
         (MerkleRootEvidence::SignedBootstrap(_), 1, None) => Ok(evidence),
         (MerkleRootEvidence::SignedRefresh { prior_epoch, .. }, 3, Some(stored_prior))
             if *prior_epoch == stored_unsigned("Merkle prior epoch", stored_prior)? =>
@@ -1989,6 +1987,11 @@ fn evidence_from_value(value: &Value, depth: usize) -> Result<MerkleRootEvidence
         ));
     };
     match fields.as_slice() {
+        [Value::Unsigned(3), Value::Binary(bytes)] if !bytes.is_empty() => {
+            Ok(MerkleRootEvidence::LocalCheckpoint {
+                signed_root: bytes.clone(),
+            })
+        }
         [Value::Unsigned(0), Value::Binary(bytes)] => {
             Ok(MerkleRootEvidence::SignedBootstrap(bytes.clone()))
         }
@@ -3372,7 +3375,9 @@ mod tests {
                 epoch: root.epoch,
                 root_hash: root.root_hash,
                 root_bytes: root.root_bytes.to_vec(),
-                evidence: root.evidence.clone(),
+                evidence: MerkleRootEvidence::LocalCheckpoint {
+                    signed_root: merkle_checkpoint::signed_head(root.evidence).to_vec(),
+                },
                 authenticated_roots: root.authenticated_roots.to_vec(),
             },
         }
@@ -3575,6 +3580,35 @@ mod tests {
             store.accept_host_parts(direct.parts()).unwrap(),
             Acceptance::Unchanged
         );
+    }
+
+    #[test]
+    fn thousands_of_advances_persist_flat_heads_and_reopen() {
+        let (directory, mut store) = store();
+        let mut host = snapshot();
+        let path = store.connection.path().unwrap().to_owned();
+        for epoch in 11..5011u64 {
+            host.merkle_root.epoch = epoch;
+            host.merkle_root.authenticated_roots[0].epoch = epoch;
+            store.accept_host_parts(host.parts()).unwrap();
+        }
+        let size: i64 = store
+            .connection
+            .query_row("SELECT length(evidence_bytes) FROM merkle_heads", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(size < 128);
+        drop(store);
+        let reopened = HardStateStore::open(std::path::Path::new(&path)).unwrap();
+        let loaded = reopened.host_for_lookup("foks.example").unwrap().unwrap();
+        assert_eq!(loaded.merkle_root.epoch, 5010);
+        assert_eq!(loaded.merkle_root.authenticated_roots.len(), 5000);
+        assert!(matches!(
+            loaded.merkle_root.evidence,
+            MerkleRootEvidence::LocalCheckpoint { .. }
+        ));
+        drop(directory);
     }
 
     #[test]

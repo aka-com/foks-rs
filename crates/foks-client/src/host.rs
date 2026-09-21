@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use super::host_memo;
 use super::{
-    decode, restore_merkle_anchor, restore_public_host_identity, restore_verified_team,
+    decode, restore_local_merkle_checkpoint, restore_public_host_identity, restore_verified_team,
     restore_verified_user, verify_public_host, Acceptance, CertificateDer, EntityId, Error,
     FoksClient, HardStateStore, HostService, Path, PathBuf, Result, ServiceType,
     StoredHostSnapshot, Value, VerifiedPublicHost, VerifiedTeamState, VerifiedUserState,
@@ -322,12 +322,14 @@ fn pinned_host_from_snapshot(
         &snapshot.chain_bytes,
         &snapshot.public_zone_bytes,
     )?;
-    let anchor = restore_merkle_anchor(
-        snapshot.merkle_root.epoch,
-        snapshot.merkle_root.root_hash,
-        &snapshot.merkle_root.root_bytes,
-        &snapshot.merkle_root.evidence,
-        &snapshot.merkle_root.authenticated_roots,
+    let anchor = restore_local_merkle_checkpoint(
+        foks_verify::VerifiedMerkleRootParts {
+            epoch: snapshot.merkle_root.epoch,
+            root_hash: snapshot.merkle_root.root_hash,
+            root_bytes: &snapshot.merkle_root.root_bytes,
+            evidence: &snapshot.merkle_root.evidence,
+            authenticated_roots: &snapshot.merkle_root.authenticated_roots,
+        },
         &snapshot.chain_bytes,
     )?;
     if identity.canonical_name() != snapshot.canonical_name

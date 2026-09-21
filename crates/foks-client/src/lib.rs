@@ -47,11 +47,12 @@ use foks_rpc::{
 use foks_snowpack::{decode, Value};
 use foks_verify::{
     authenticate_historical_roots_from_latest, merkle_history_requirements, normalize_device_name,
-    normalize_username, restore_merkle_anchor, restore_public_host_identity, restore_verified_team,
-    restore_verified_user, user_chain_root_epochs, verify_non_self_user_chain,
-    verify_non_self_user_chain_increment, verify_public_host, verify_signed_merkle_advance,
-    verify_user_chain, verify_user_chain_increment, AuthenticatedMerkleRoots, HostService,
-    VerifiedMerkleAdvance, VerifiedPublicHost, VerifiedTeamState, VerifiedUserState,
+    normalize_username, restore_local_merkle_checkpoint, restore_public_host_identity,
+    restore_verified_team, restore_verified_user, user_chain_root_epochs,
+    verify_non_self_user_chain, verify_non_self_user_chain_increment, verify_public_host,
+    verify_signed_merkle_advance, verify_user_chain, verify_user_chain_increment,
+    AuthenticatedMerkleRoots, HostService, VerifiedMerkleAdvance, VerifiedPublicHost,
+    VerifiedTeamState, VerifiedUserState,
 };
 use rustls::pki_types::CertificateDer;
 use thiserror::Error;
