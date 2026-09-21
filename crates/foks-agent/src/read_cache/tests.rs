@@ -318,6 +318,27 @@ fn reads_of_devices_keys_and_rosters_leave_retained_material_in_place() {
     }
 }
 
+/// The renderer's send service issues both of these every two seconds for
+/// every team, whether or not anything is pending. Each one reads the local
+/// pending-operation store and nothing else, so neither may be classified as
+/// a mutation: that would drop every retained outcome and view twice per
+/// tick and leave the caches serving almost nothing.
+#[test]
+fn idle_pending_chat_reads_leave_retained_material_in_place() {
+    for action in [ChatAction::Pending, ChatAction::CleanupPending] {
+        let operation = Operation::Chat {
+            store: team_store("local"),
+            action: action.clone(),
+        };
+        assert_eq!(
+            class(&operation),
+            Class::Leaves,
+            "expected retained material to survive: {}",
+            action.operation_name()
+        );
+    }
+}
+
 #[test]
 fn an_operation_that_writes_durable_state_is_never_in_the_leaves_list() {
     // Each of these reads too, but each one also writes: a local account label
@@ -396,6 +417,20 @@ fn only_an_unlisted_operation_drops_what_the_caches_hold() {
         TeamViewTokenCache::get(&caches, &team_key("local", 2)).is_some(),
         "a listed non-read must not drop retained material"
     );
+
+    for action in [ChatAction::Pending, ChatAction::CleanupPending] {
+        seed();
+        let name = action.operation_name();
+        assert!(dispatch(Operation::Chat {
+            store: team_store("missing"),
+            action,
+        })
+        .is_err());
+        assert!(
+            TeamViewTokenCache::get(&caches, &team_key("local", 2)).is_some(),
+            "{name} runs on every idle tick and must not drop retained material"
+        );
+    }
 
     seed();
     assert!(dispatch(Operation::RemoveDevice {

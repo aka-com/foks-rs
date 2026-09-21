@@ -471,10 +471,19 @@ pub(crate) fn operation_leaves_retained_material(operation: &Operation) -> bool 
         Operation::Probe { .. }
         | Operation::ReconcileProfile { .. }
         | Operation::RefreshLease { .. } => true,
-        // Status reads a local submission record; every other chat action is
-        // either a read that is already served from the caches, a long poll,
-        // or a mutation.
-        Operation::Chat { action, .. } => matches!(action, ChatAction::Status { .. }),
+        // Status, Pending and CleanupPending read the local pending-operation
+        // store: one submission record, the operations still in flight, and
+        // the terminal ones whose material is still to be cleared. None of
+        // them authenticates, loads a team or reaches the server, so none can
+        // supersede a retained outcome or view. The renderer issues the last
+        // two every two seconds per team even when nothing is pending, so
+        // treating them as mutations empties both caches on every idle tick.
+        // Every other chat action is either a read that is already served
+        // from the caches, a long poll, or a mutation.
+        Operation::Chat { action, .. } => matches!(
+            action,
+            ChatAction::Status { .. } | ChatAction::Pending | ChatAction::CleanupPending
+        ),
         _ => false,
     }
 }
