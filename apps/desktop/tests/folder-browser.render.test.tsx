@@ -284,6 +284,48 @@ test('search scopes to the selected tree row', async () => {
   );
 });
 
+/** Every tree row the folder pane draws: its name, count and open state. */
+function treeShape(): string[] {
+  return [
+    ...document.querySelectorAll<HTMLButtonElement>('.tpane .fselect'),
+  ].map((button) =>
+    [
+      button.querySelector('.nm')?.textContent ?? '',
+      button.querySelector('.c')?.textContent ?? '',
+      button.getAttribute('aria-current') ?? '',
+      button.getAttribute('aria-expanded') ?? '',
+    ].join('|'),
+  );
+}
+
+test('typing a query leaves the folder tree unchanged', async () => {
+  await mount({ kind: 'all' });
+  ui.fireEvent.click(treeRow('Personal'));
+  await ui.waitFor(() => assert.equal(currentTitle(), 'Personal'));
+  const before = treeShape();
+  assert.ok(before.length > 1, 'the tree draws more than one row');
+  const search = document.querySelector<HTMLInputElement>(
+    '.toolbar .search input',
+  );
+  assert.ok(search);
+  // The tree is the browser's map: a search narrows the list beside it, not
+  // the folders it is searching within, and never the counts they state.
+  ui.fireEvent.change(search, { target: { value: 'github' } });
+  await ui.waitFor(() =>
+    assert.equal(document.querySelectorAll('.lpane .body .row').length, 1),
+  );
+  assert.deepEqual(treeShape(), before);
+  // A query nothing matches empties the list and still leaves the tree whole.
+  ui.fireEvent.change(search, { target: { value: 'no-such-item-anywhere' } });
+  await ui.waitFor(() => assert.ok(document.querySelector('.lpane .empty')));
+  assert.deepEqual(treeShape(), before);
+  ui.fireEvent.change(search, { target: { value: '' } });
+  await ui.waitFor(() =>
+    assert.equal(document.querySelector('.lpane .empty'), null),
+  );
+  assert.deepEqual(treeShape(), before);
+});
+
 test('a missing store renders the unavailable state', async () => {
   await mount({ kind: 'store', ref: 'acct:gone' }, undefined, '.notice');
   assert.match(

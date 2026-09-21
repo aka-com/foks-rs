@@ -220,7 +220,7 @@ export function scopedItems(
   state: LocationState,
 ): Item[] {
   const { location, kind, query, sort } = state;
-  let items = catalog(snapshot);
+  let items: readonly Item[] = catalog(snapshot);
   if (location.kind === 'store') {
     items = items.filter((item) => item.store === location.ref);
   }

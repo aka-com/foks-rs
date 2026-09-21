@@ -611,11 +611,54 @@ export function canChangeItem(
   return own.length === 1 && admits(own[0].destination_role, item.write);
 }
 
-/** Returns all accessible items from readable stores, excluding directory entries. */
-export function catalog(snapshot: AgentSnapshot): Item[] {
-  return snapshot.items.filter(
-    (item) => item.kind !== 'Folder' && storeReadable(snapshot, item.store),
+/**
+ * Items keyed by the snapshot they were read from.
+ *
+ * The memo is exact because a published snapshot is immutable: every producer
+ * (the catalog projection, `mergeProfileSnapshot`, `markCatalogRefresh`,
+ * `settleCatalogRefresh`, `failCatalogRefresh`, `applyLease`, and the shell's
+ * `shown` memo) builds a new object with fresh arrays rather than writing
+ * through the one it was given, so a snapshot that is still reachable still
+ * describes the same catalog.
+ *
+ * The one input outside the snapshot is the clock: `storeAvailability` reads
+ * it to decide whether a compatibility lease has expired. `catalog` takes no
+ * `AvailabilityOptions`, so it always reads the wall clock, and the answer
+ * could change without the snapshot changing. `LeaseExpiryCoordinator`
+ * mediates that: it publishes a new snapshot at each expiry boundary, so the
+ * memo is dropped exactly where the answer can move.
+ */
+const catalogCache = new WeakMap<AgentSnapshot, readonly Item[]>();
+
+/**
+ * Returns all accessible items from readable stores, excluding directory
+ * entries.
+ *
+ * The result is shared between callers and must not be sorted or otherwise
+ * mutated in place; copy it first.
+ */
+export function catalog(snapshot: AgentSnapshot): readonly Item[] {
+  const memo = catalogCache.get(snapshot);
+  if (memo) return memo;
+  // One availability decision per store rather than one per item: the store
+  // resolution and the server, capability and inventory scans behind
+  // `storeReadable` cost the same for every item that names the same store.
+  // An item whose store is absent from `snapshot.stores` is excluded either
+  // way, because `storeReadable` resolves the store first.
+  const readable = new Set<string>();
+  const decided = new Set<string>();
+  for (const store of snapshot.stores) {
+    // `storeOf` resolves an id with `find`, so a repeated id is answered by
+    // its first record here too.
+    if (decided.has(store.id)) continue;
+    decided.add(store.id);
+    if (storeAvailability(snapshot, store).available) readable.add(store.id);
+  }
+  const items = snapshot.items.filter(
+    (item) => item.kind !== 'Folder' && readable.has(item.store),
   );
+  catalogCache.set(snapshot, items);
+  return items;
 }
 
 /** Returns all readable stores in navigation display order. */
