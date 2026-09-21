@@ -697,9 +697,22 @@ async fn refresh_hosted_profiles(
             return timers::Outcome::Error;
         }
     };
+    // The poll interval bounds how quickly a profile that still needs a lease
+    // acquires one, not how often a profile that already holds a long-lived
+    // one refetches it. A profile whose stored lease is validated and not yet
+    // near its expiry is skipped: its capability checks already answer from
+    // the stored artifact, so the fetch would apply an artifact that reports
+    // "unchanged" while competing for that profile's admission.
+    let now = match now_microseconds() {
+        Ok(now) => now / 1_000_000,
+        Err(_) => {
+            eprintln!("foks-agent compatibility refresh could not read the system clock");
+            return timers::Outcome::Error;
+        }
+    };
     let profiles = registry
         .profiles()
-        .filter(|profile| profile.compatibility_lease_url().is_some())
+        .filter(|profile| profile.protocol.needs_lease_renewal_at(now))
         .map(|profile| profile.name.clone())
         .collect::<Vec<_>>();
     drop(registry);

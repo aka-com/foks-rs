@@ -339,6 +339,19 @@ async fn renew_one(
             )
         }
     };
+    let now = match now_microseconds() {
+        Ok(now) => now / 1_000_000,
+        Err(error) => return scoped_error(profile, error.as_ref()),
+    };
+    if snapshot.matches_stored_validated_artifact(&signed, now) {
+        // Applying the artifact the profile already stores writes nothing and
+        // reports "unchanged". Taking the profile-scoped admission to reach
+        // that conclusion would block the user's own work on this profile for
+        // no state change, so the steady state answers without it.
+        drop(worker);
+        steps.step("apply");
+        return success("unchanged");
+    }
     let admission = match profile_work::coordinator()
         .acquire(
             root,
@@ -349,10 +362,6 @@ async fn renew_one(
     {
         Ok(permit) => permit,
         Err(error) => return scoped_error(profile, &error),
-    };
-    let now = match now_microseconds() {
-        Ok(now) => now / 1_000_000,
-        Err(error) => return scoped_error(profile, error.as_ref()),
     };
     let applied = tokio::task::spawn_blocking(move || {
         let _admission = admission;
@@ -1175,6 +1184,106 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn renewal_snapshot_recognizes_the_artifact_it_already_stores() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut registry = ProfileRegistry::open(directory.path()).unwrap();
+        let seed = [
+            0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec,
+            0x2c, 0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03,
+            0x1c, 0xae, 0x7f, 0x60,
+        ];
+        let mut artifact = foks_compat_artifact::CanaryArtifact {
+            schema_version: foks_compat_artifact::SCHEMA_VERSION,
+            generation: 1,
+            target: "foks.app".into(),
+            run_id: "reconcile-1".into(),
+            generated_at: 100,
+            expires_at: 200,
+            protocol_metadata_sha256: foks_client_app::PINNED_PROTOCOL_METADATA_SHA256.into(),
+            mutation_digest: "11".repeat(32),
+            read_digest: "11".repeat(32),
+            outcome: foks_compat_artifact::Outcome::Compatible,
+            capabilities: ["kv".to_owned()].into_iter().collect(),
+            drift_reason: String::new(),
+        };
+        let signed =
+            foks_compat_artifact::SignedCanaryArtifact::sign(artifact.clone(), &seed).unwrap();
+        registry
+            .add(Profile {
+                name: "saved".into(),
+                label: None,
+                probe: "foks.app".into(),
+                protocol: ProtocolPolicy::CurrentProbeOnly {
+                    canary_public_key:
+                        "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a".into(),
+                    lease_url: "https://updates.example.test/lease.json".into(),
+                    last_artifact: None,
+                },
+                trust: TrustRoot::WebPki,
+            })
+            .unwrap();
+
+        // Nothing is stored yet, so the fetched artifact still has to be applied.
+        assert!(!registry
+            .hosted_lease_renewal("saved")
+            .unwrap()
+            .unwrap()
+            .matches_stored_validated_artifact(&signed, 110));
+        assert!(
+            registry
+                .hosted_lease_renewal("saved")
+                .unwrap()
+                .unwrap()
+                .apply(&signed, 110)
+                .unwrap()
+                .0
+        );
+
+        // Refetching the same artifact is a no-op that needs no admission,
+        // and `apply` agrees that it changes nothing.
+        let snapshot = registry.hosted_lease_renewal("saved").unwrap().unwrap();
+        assert!(snapshot.matches_stored_validated_artifact(&signed, 110));
+        assert!(!snapshot.apply(&signed, 110).unwrap().0);
+
+        // Once the stored artifact has lapsed, `apply` rejects it rather than
+        // reporting "unchanged", so the short circuit must not fire.
+        let snapshot = registry.hosted_lease_renewal("saved").unwrap().unwrap();
+        assert!(!snapshot.matches_stored_validated_artifact(&signed, 200));
+        assert!(snapshot.apply(&signed, 200).is_err());
+
+        // A different artifact is never short-circuited.
+        artifact.generation = 2;
+        artifact.run_id = "reconcile-2".into();
+        let next =
+            foks_compat_artifact::SignedCanaryArtifact::sign(artifact.clone(), &seed).unwrap();
+        assert!(!registry
+            .hosted_lease_renewal("saved")
+            .unwrap()
+            .unwrap()
+            .matches_stored_validated_artifact(&next, 110));
+
+        // A stored artifact that does not grant this client leaves the
+        // profile probe-only, where `apply` reports the rejection; that
+        // outcome must keep reaching the caller.
+        artifact.generation = 3;
+        artifact.outcome = foks_compat_artifact::Outcome::Drift;
+        artifact.capabilities.clear();
+        artifact.drift_reason = "protocol drift".into();
+        let drift = foks_compat_artifact::SignedCanaryArtifact::sign(artifact, &seed).unwrap();
+        registry
+            .hosted_lease_renewal("saved")
+            .unwrap()
+            .unwrap()
+            .apply(&drift, 110)
+            .unwrap();
+        assert!(!registry
+            .hosted_lease_renewal("saved")
+            .unwrap()
+            .unwrap()
+            .matches_stored_validated_artifact(&drift, 110));
     }
 
     #[test]

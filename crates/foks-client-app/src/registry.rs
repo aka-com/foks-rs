@@ -15,6 +15,14 @@ const PROFILE_PUBLICATION_BINDING_TYPE_ID: u64 = 0x9171_dbed_137a_c227;
 
 pub const PROFILE_LABEL_MAX_BYTES: usize = 64;
 
+/// How long before a validated compatibility lease expires a periodic poll
+/// starts refetching it. Canary artifacts are capped at a seven-day lifetime
+/// (`foks_compat_artifact::CanaryArtifact::validate`), so six hours is a small
+/// fraction of a full-length lease while still leaving many polling intervals
+/// of retry budget before the stored lease lapses. Shorter leases use half
+/// their own lifetime instead, so the margin never exceeds the lease.
+pub const COMPATIBILITY_RENEWAL_MARGIN_SECONDS: u64 = 6 * 60 * 60;
+
 fn validate_profile_label(label: Option<&str>) -> Result<()> {
     let Some(label) = label else {
         return Ok(());
@@ -188,6 +196,35 @@ impl ProtocolPolicy {
                     .filter_map(|name| capability_from_canary(name).ok())
                     .collect(),
             },
+        }
+    }
+
+    /// Whether a periodic compatibility poll should fetch this profile's
+    /// signed canary at `now`.
+    ///
+    /// A validated lease is refetched only once its remaining lifetime falls
+    /// inside [`COMPATIBILITY_RENEWAL_MARGIN_SECONDS`], or inside half the
+    /// lease when the issuer published a lease shorter than twice that
+    /// margin. Every other state -- no artifact yet, an artifact that does
+    /// not grant this client, and an expired one -- keeps the caller's plain
+    /// polling cadence, because such a profile still needs a usable lease.
+    ///
+    /// Skipping a fetch cannot widen what the profile may do: the capability
+    /// check in [`CompatibilityStatus::denial_at`] fails closed at the stored
+    /// `expires_at` whether or not anything polled. The one behavioural
+    /// consequence is that a revocation republished mid-lease is observed up
+    /// to one margin later than a poll on every tick would observe it.
+    pub fn needs_lease_renewal_at(&self, now: u64) -> bool {
+        match self {
+            // No lease service is configured for this profile.
+            Self::V019 => false,
+            Self::CurrentProbeOnly { .. } => true,
+            Self::CurrentValidated { artifact, .. } => {
+                let artifact = &artifact.artifact;
+                let lifetime = artifact.expires_at.saturating_sub(artifact.generated_at);
+                let margin = COMPATIBILITY_RENEWAL_MARGIN_SECONDS.min(lifetime / 2);
+                artifact.expires_at.saturating_sub(now) <= margin
+            }
         }
     }
 
@@ -483,6 +520,28 @@ pub struct HostedLeaseRenewal {
 impl HostedLeaseRenewal {
     pub fn url(&self) -> &str {
         self.profile.compatibility_lease_url().unwrap_or_default()
+    }
+
+    /// Whether `signed` is the still-valid artifact this profile already
+    /// stores as its validated lease. [`Self::apply`] would return
+    /// `(false, Validated { .. })` for it without writing anything, so a
+    /// caller may report "unchanged" directly instead of taking a
+    /// profile-scoped admission to re-derive that answer.
+    ///
+    /// The expiry is part of the test because `Profile::apply_canary`
+    /// rejects an artifact that has already lapsed, even one it stores
+    /// itself; short-circuiting such an artifact would turn that rejection
+    /// into a success.
+    pub fn matches_stored_validated_artifact(
+        &self,
+        signed: &SignedCanaryArtifact,
+        now: u64,
+    ) -> bool {
+        matches!(
+            &self.profile.protocol,
+            ProtocolPolicy::CurrentValidated { artifact, .. }
+                if artifact.as_ref() == signed && now < signed.artifact.expires_at
+        )
     }
 
     pub fn apply(
@@ -2130,6 +2189,69 @@ mod tests {
             CompatibilityStatus::NotRequired.denial_at(Capability::Federation, 200),
             None
         );
+    }
+
+    #[test]
+    fn lease_renewal_polls_only_within_the_expiry_margin() {
+        fn signed(generated_at: u64, expires_at: u64) -> Box<SignedCanaryArtifact> {
+            Box::new(SignedCanaryArtifact {
+                artifact: foks_compat_artifact::CanaryArtifact {
+                    schema_version: foks_compat_artifact::SCHEMA_VERSION,
+                    generation: 1,
+                    target: "foks.example.test".to_owned(),
+                    run_id: "run-1".to_owned(),
+                    generated_at,
+                    expires_at,
+                    protocol_metadata_sha256: PINNED_PROTOCOL_METADATA_SHA256.to_owned(),
+                    mutation_digest: "11".repeat(32),
+                    read_digest: "11".repeat(32),
+                    outcome: CanaryOutcome::Compatible,
+                    capabilities: ["kv".to_owned()].into_iter().collect(),
+                    drift_reason: String::new(),
+                },
+                key_id: "11".repeat(32),
+                signature: "11".repeat(64),
+            })
+        }
+        fn validated(generated_at: u64, expires_at: u64) -> ProtocolPolicy {
+            ProtocolPolicy::CurrentValidated {
+                canary_public_key: "unused-by-selection".to_owned(),
+                lease_url: "https://updates.example.test/lease".to_owned(),
+                artifact: signed(generated_at, expires_at),
+            }
+        }
+
+        // A profile with no lease service never polls.
+        assert!(!ProtocolPolicy::V019.needs_lease_renewal_at(0));
+
+        // A profile that has never fetched a lease, and one whose last
+        // artifact does not grant this client, both keep polling.
+        for last_artifact in [None, Some(signed(0, 7 * 24 * 60 * 60))] {
+            assert!(ProtocolPolicy::CurrentProbeOnly {
+                canary_public_key: "unused-by-selection".to_owned(),
+                lease_url: "https://updates.example.test/lease".to_owned(),
+                last_artifact,
+            }
+            .needs_lease_renewal_at(0));
+        }
+
+        // A full-length lease uses the flat margin.
+        let week = 7 * 24 * 60 * 60;
+        let policy = validated(0, week);
+        assert!(!policy.needs_lease_renewal_at(0));
+        assert!(!policy.needs_lease_renewal_at(week - COMPATIBILITY_RENEWAL_MARGIN_SECONDS - 1));
+        assert!(policy.needs_lease_renewal_at(week - COMPATIBILITY_RENEWAL_MARGIN_SECONDS));
+        // An expired lease polls on every tick, and so does one whose expiry
+        // is already behind the caller's clock.
+        assert!(policy.needs_lease_renewal_at(week));
+        assert!(policy.needs_lease_renewal_at(week + 1));
+
+        // A lease shorter than twice the margin uses half its own lifetime,
+        // so the margin can never swallow the whole lease.
+        let hour = 60 * 60;
+        let short = validated(0, hour);
+        assert!(!short.needs_lease_renewal_at(hour / 2 - 1));
+        assert!(short.needs_lease_renewal_at(hour / 2));
     }
 
     #[test]
