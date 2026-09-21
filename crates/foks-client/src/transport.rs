@@ -242,6 +242,11 @@ pub(crate) struct PooledConnection {
 }
 
 impl PooledConnection {
+    /// Changes the deadline each later call on this connection is given.
+    pub(crate) fn set_timeout(&mut self, timeout: Duration) {
+        self.timeout = timeout;
+    }
+
     pub(crate) fn call(&mut self, request: &[u8], is_void: bool) -> Result<Vec<u8>> {
         let control = OperationControl {
             deadline: Instant::now()
@@ -414,6 +419,11 @@ impl FoksClient {
         self.cancellation = source.cancellation.clone();
         self.maximum_frame_length = source.maximum_frame_length;
         self
+    }
+
+    /// The deadline each operation on this client is given.
+    pub(crate) fn timeout(&self) -> Duration {
+        self.timeout
     }
 
     pub fn set_timeout(&mut self, timeout: Duration) {
