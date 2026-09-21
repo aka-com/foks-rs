@@ -80,6 +80,13 @@ impl Timers {
         self.with(name, |record| record.next_due_at_ms = Some(due));
     }
 
+    /// Moves a timer's next tick, for a loop that sleeps to its own next due
+    /// time rather than to a fixed period.
+    pub fn due_in(&self, name: &'static str, now_ms: u64, delay: Duration) {
+        let due = now_ms.saturating_add(millis(delay));
+        self.with(name, |record| record.next_due_at_ms = Some(due));
+    }
+
     /// Records a tick that did no work: the agent was not ready yet, the
     /// previous pass was still running, or nothing was due.
     pub fn skipped(&self, name: &'static str) {
@@ -237,7 +244,7 @@ mod tests {
         for name in [RETENTION, SCHEDULER, COMPATIBILITY, OWNERSHIP] {
             timers.begin(name, 1).finish(Outcome::Ok);
         }
-        timers.tick(SCHEDULER, 1_000, Duration::from_millis(250));
+        timers.due_in(SCHEDULER, 1_000, Duration::from_millis(250));
         let reported = timers.snapshot(1_000);
         assert_eq!(
             reported

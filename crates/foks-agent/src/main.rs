@@ -94,6 +94,10 @@ const CATALOG_CACHE_LIFETIME: Duration = Duration::from_secs(60);
 /// The background loops whose period is fixed rather than configured.
 const RETENTION_PERIOD: Duration = Duration::from_secs(60);
 const OWNERSHIP_PERIOD: Duration = Duration::from_secs(5);
+/// The soonest the scheduler wakes after a pass. A job that is due but could
+/// not run — its profile was busy, or its own backoff moved it — must not
+/// turn the loop into a spin.
+const SCHEDULER_MINIMUM_DELAY: Duration = Duration::from_secs(1);
 const RESET_TOKEN_LIFETIME: Duration = Duration::from_secs(60);
 const MAXIMUM_RESET_TICKETS: usize = 64;
 
@@ -259,8 +263,12 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     let scheduler_cancellation = CancellationToken::new();
     let _scheduler_cancellation_guard = CancelOnDrop(scheduler_cancellation.clone());
     let scheduler_period = Duration::from_secs(arguments.scheduler_poll_seconds);
-    let mut scheduler = tokio::time::interval(scheduler_period);
-    scheduler.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // The poll is an upper bound, not a cadence: each pass reports when the
+    // earliest job it saw is next due, and the loop wakes then when that is
+    // sooner. A pass that reports nothing leaves the fixed poll in place, and
+    // the first pass is due at once, as the fixed poll's first tick was.
+    let mut scheduler_due_at = tokio::time::Instant::now();
+    let (scheduler_reported, mut scheduler_reports) = tokio::sync::mpsc::channel::<Duration>(1);
     let compatibility_period = Duration::from_secs(arguments.compatibility_poll_seconds);
     let mut compatibility = tokio::time::interval(compatibility_period);
     compatibility.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -360,9 +368,22 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                     run.finish(timers::Outcome::Ok);
                 });
             }
-            _ = scheduler.tick() => {
+            Some(delay) = scheduler_reports.recv() => {
+                let delay = delay.max(SCHEDULER_MINIMUM_DELAY);
+                let wake = tokio::time::Instant::now() + delay;
+                if wake < scheduler_due_at {
+                    scheduler_due_at = wake;
+                    timers::timers().due_in(
+                        timers::SCHEDULER,
+                        timers::now_milliseconds(),
+                        delay,
+                    );
+                }
+            }
+            _ = tokio::time::sleep_until(scheduler_due_at) => {
                 let now_ms = timers::now_milliseconds();
-                timers::timers().tick(timers::SCHEDULER, now_ms, scheduler_period);
+                scheduler_due_at = tokio::time::Instant::now() + scheduler_period;
+                timers::timers().due_in(timers::SCHEDULER, now_ms, scheduler_period);
                 if !agent_ownership_is_current(&root_lease, &agent_lock, &socket_guard, &state_dir) {
                     eprintln!("foks-agent ownership was displaced; exiting");
                     scheduler_cancellation.cancel();
@@ -380,11 +401,18 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                 let cancellation = scheduler_cancellation.clone();
                 let workers = blocking.clone();
                 let run = timers::timers().begin(timers::SCHEDULER, now_ms);
+                let reported = scheduler_reported.clone();
                 tokio::spawn(async move {
                     let _scheduler_permit = scheduler_permit;
-                    let outcome =
+                    let (outcome, next_due) =
                         run_scheduled_profiles(state, timeout, cancellation, workers).await;
                     run.finish(outcome);
+                    if let Some(next_due) = next_due {
+                        // A report the loop has not read yet stands; this one
+                        // is dropped rather than blocking the pass, and the
+                        // next pass reads the due times again anyway.
+                        let _ = reported.try_send(next_due);
+                    }
                 });
             }
             _ = compatibility.tick() => {
@@ -419,18 +447,20 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// One scheduler pass over every profile. Reports how the pass ended, so the
-/// loop's own record says whether the work it held admission for succeeded.
+/// loop's own record says whether the work it held admission for succeeded,
+/// and how long it is until the earliest job the pass saw is due, so the loop
+/// can wake for it rather than on its fixed poll.
 async fn run_scheduled_profiles(
     state_dir: PathBuf,
     timeout: Duration,
     cancellation: CancellationToken,
     workers: Arc<Semaphore>,
-) -> timers::Outcome {
+) -> (timers::Outcome, Option<Duration>) {
     let registry = match ProfileRegistry::open(&state_dir) {
         Ok(registry) => registry,
         Err(error) => {
             eprintln!("foks-agent scheduler could not open profiles: {error}");
-            return timers::Outcome::Error;
+            return (timers::Outcome::Error, None);
         }
     };
     let profiles = registry
@@ -442,6 +472,15 @@ async fn run_scheduled_profiles(
         })
         .map(|profile| profile.name.clone())
         .collect::<Vec<_>>();
+    let hard_databases = profiles
+        .iter()
+        .filter_map(|profile| {
+            registry
+                .paths(profile)
+                .ok()
+                .map(|paths| (profile.clone(), paths.hard_database))
+        })
+        .collect::<BTreeMap<_, _>>();
     drop(registry);
     // A fixed cutoff keeps completed or failed jobs from becoming due again
     // within this pass, even if a different job takes a long time.
@@ -449,22 +488,33 @@ async fn run_scheduled_profiles(
         Ok(now) => now,
         Err(error) => {
             eprintln!("foks-agent scheduler could not read time: {error}");
-            return timers::Outcome::Error;
+            return (timers::Outcome::Error, None);
         }
     };
     let mut outcome = timers::Outcome::Ok;
+    let mut earliest = None;
     for profile in profiles {
         if cancellation.is_cancelled() {
             break;
         }
+        let hard_database = hard_databases.get(&profile);
+        let next_run_at = hard_database.and_then(|path| profile_next_run(path));
+        // Opening the profile and taking its admission for a profile whose
+        // jobs are all in the future competes with foreground requests for
+        // nothing. The durable due time answers that without either.
+        if !scheduled_profile_is_due(next_run_at, now) {
+            earliest = earlier_run(earliest, next_run_at);
+            continue;
+        }
         let state = state_dir.clone();
+        let scheduled = profile.clone();
         let result = run_scheduled_batches(
             &state_dir,
             timeout,
             cancellation.clone(),
             workers.clone(),
             move |remaining, control| {
-                run_scheduled_profile(&state, &profile, now, remaining, control)
+                run_scheduled_profile(&state, &scheduled, now, remaining, control)
                     .map_err(|error| error.to_string())
             },
         )
@@ -473,8 +523,55 @@ async fn run_scheduled_profiles(
             outcome = timers::Outcome::Error;
             eprintln!("foks-agent scheduled refresh failed: {error}");
         }
+        // The pass rescheduled whatever it ran, so this is the profile's next
+        // due time rather than the one read before the batch.
+        earliest = earlier_run(
+            earliest,
+            hard_database.and_then(|path| profile_next_run(path)),
+        );
     }
-    outcome
+    (
+        outcome,
+        scheduled_delay(earliest, now_microseconds().unwrap_or(now)),
+    )
+}
+
+/// The next time a profile has scheduled work, read from its durable job
+/// state. `None` means the profile has no jobs, no hard state yet, or state
+/// that could not be read; each of those runs the profile as before rather
+/// than skipping work on a guess.
+///
+/// This read takes no profile admission and no profile lock. It is a
+/// consistent SQLite read of one column: a value that changes while it is
+/// read costs at most one further pass, never a missed job, because the
+/// claim itself still happens under the scheduler lock.
+fn profile_next_run(hard_database: &Path) -> Option<u64> {
+    if !hard_database.exists() {
+        return None;
+    }
+    foks_client::FoksScheduler::new(hard_database, foks_client::SchedulerConfig::default())
+        .ok()?
+        .next_run_at()
+        .ok()?
+}
+
+/// Whether a profile's scheduled work is due. A profile whose due time could
+/// not be read is due: the pass itself registers a profile's default jobs.
+fn scheduled_profile_is_due(next_run_at: Option<u64>, now: u64) -> bool {
+    next_run_at.is_none_or(|due| due <= now)
+}
+
+fn earlier_run(earliest: Option<u64>, candidate: Option<u64>) -> Option<u64> {
+    match (earliest, candidate) {
+        (Some(earliest), Some(candidate)) => Some(earliest.min(candidate)),
+        (earliest, candidate) => earliest.or(candidate),
+    }
+}
+
+/// How long until the earliest job a pass saw is due, for the loop's next
+/// wake. Microseconds durably, milliseconds and coarser in the loop.
+fn scheduled_delay(earliest: Option<u64>, now: u64) -> Option<Duration> {
+    earliest.map(|due| Duration::from_micros(due.saturating_sub(now)))
 }
 
 const SCHEDULED_JOBS_PER_PROFILE: usize = 16;
@@ -5656,6 +5753,67 @@ impl Drop for SocketGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SCHEDULER_PROBE: &[u8] = include_bytes!(
+        "../../foks-snowpack/tests/fixtures/foks-v0.1.9/foks.app/probe-response.snowp"
+    );
+
+    #[test]
+    fn a_profile_with_no_job_due_is_not_opened_and_reports_its_next_run() {
+        let directory = tempfile::tempdir().unwrap();
+        let hard_database = directory.path().join("hard.sqlite");
+        // No hard state at all: the pass runs the profile as it always did,
+        // and opening it is what registers its default jobs.
+        assert_eq!(profile_next_run(&hard_database), None);
+        assert!(!hard_database.exists());
+        assert!(scheduled_profile_is_due(None, 100));
+
+        let host = foks_verify::verify_public_host("foks.app", SCHEDULER_PROBE).unwrap();
+        foks_client_db::HardStateStore::open(&hard_database)
+            .unwrap()
+            .accept_verified_host(&host.snapshot)
+            .unwrap();
+        // Hard state without jobs is the same unknown: the profile is opened
+        // so its default refresh jobs are registered.
+        assert_eq!(profile_next_run(&hard_database), None);
+
+        let scheduler = foks_client::FoksScheduler::new(
+            &hard_database,
+            foks_client::SchedulerConfig::default(),
+        )
+        .unwrap();
+        scheduler
+            .register(foks_client::ScheduledJobRegistration {
+                job_id: [7; 16],
+                kind: foks_client_db::ScheduledJobKind::UserRefresh,
+                host_id: host.snapshot.host_id().to_vec(),
+                scope_id: vec![9; 33],
+                interval_micros: 1_000,
+                first_run_at: 5_000,
+                registered_at: 100,
+            })
+            .unwrap();
+        assert_eq!(profile_next_run(&hard_database), Some(5_000));
+        assert!(!scheduled_profile_is_due(Some(5_000), 4_999));
+        assert!(scheduled_profile_is_due(Some(5_000), 5_000));
+    }
+
+    #[test]
+    fn a_pass_reports_the_earliest_due_time_it_saw() {
+        assert_eq!(earlier_run(None, None), None);
+        assert_eq!(earlier_run(None, Some(9)), Some(9));
+        assert_eq!(earlier_run(Some(9), None), Some(9));
+        assert_eq!(earlier_run(Some(9), Some(4)), Some(4));
+        // A profile whose state could not be read contributes nothing, so
+        // the loop keeps its fixed poll rather than waking for a guess.
+        assert_eq!(scheduled_delay(None, 1_000), None);
+        assert_eq!(
+            scheduled_delay(Some(2_500_000), 500_000),
+            Some(Duration::from_secs(2))
+        );
+        // An overdue job asks for the soonest wake, not a negative one.
+        assert_eq!(scheduled_delay(Some(1), 1_000), Some(Duration::ZERO));
+    }
 
     #[test]
     fn pairing_relay_budget_ends_before_the_agent_cancels_the_operation() {

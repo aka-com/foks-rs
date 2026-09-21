@@ -387,6 +387,54 @@ mod tests {
     }
 
     #[test]
+    fn the_next_run_is_the_earliest_a_caller_can_read_without_claiming() {
+        // A periodic scheduler reads this before it opens the profile or
+        // takes its admission, so it must answer for every state a job can
+        // be in without changing any of them.
+        let (_directory, scheduler, host_id) = scheduler();
+        assert_eq!(scheduler.next_run_at().unwrap(), None);
+        for (job_id, first_run_at) in [([21; 16], 900u64), ([22; 16], 400)] {
+            scheduler
+                .register(ScheduledJobRegistration {
+                    job_id,
+                    kind: ScheduledJobKind::UserRefresh,
+                    host_id: host_id.clone(),
+                    scope_id: vec![12; 33],
+                    interval_micros: 10_000,
+                    first_run_at,
+                    registered_at: 1,
+                })
+                .unwrap();
+        }
+        assert_eq!(scheduler.next_run_at().unwrap(), Some(400));
+        // Reading it twice does not claim, lease or reschedule anything.
+        assert_eq!(scheduler.next_run_at().unwrap(), Some(400));
+        assert_eq!(
+            scheduler.run_due(399, |_| Ok(())).unwrap(),
+            SchedulerRunReport::default()
+        );
+
+        // A completed job reports its rescheduled time; the other job's
+        // earlier due time still governs.
+        let report = scheduler.run_due(400, |_| Ok(())).unwrap();
+        assert_eq!(report.runs.len(), 1);
+        assert_eq!(scheduler.next_run_at().unwrap(), Some(900));
+        assert!(report.runs[0].next_run_at > 900);
+
+        // A job under a lease another process holds is due no earlier than
+        // that lease expires, so a reader does not report work it cannot run.
+        let leased = HardStateStore::open(&scheduler.hard_database)
+            .unwrap()
+            .claim_due_scheduled_jobs(900, 5_000, 1)
+            .unwrap();
+        assert_eq!(leased.len(), 1);
+        assert_eq!(scheduler.next_run_at().unwrap(), Some(5_000));
+        assert!(scheduler.unregister(&[21; 16]).unwrap());
+        assert!(scheduler.unregister(&[22; 16]).unwrap());
+        assert_eq!(scheduler.next_run_at().unwrap(), None);
+    }
+
+    #[test]
     fn security_refresh_failures_never_back_off_past_their_cadence() {
         let (_directory, mut scheduler, host_id) = scheduler();
         scheduler.config.jitter_percent = 100;
