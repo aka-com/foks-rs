@@ -29,7 +29,7 @@ test.after(async () => {
   dom.window.close();
 });
 
-test('startup mounts local catalog shells before a blocked profile and hands off maintenance once', async () => {
+test('startup mounts local catalog shells at the first-paint deadline and hands off maintenance once', async () => {
   const { App } = (await vite.ssrLoadModule(
     '/src/app-root.tsx',
   )) as typeof import('../src/app-root');
@@ -72,14 +72,18 @@ test('startup mounts local catalog shells before a blocked profile and hands off
     },
     clientStateMaintenanceStatus: async () => maintenance,
   };
-  const rendered = ui.render(createElement(App, { bridge }));
+  // The skeleton partial reports no inventory, so the loading screen holds the
+  // window until the first-paint deadline releases it.
+  const rendered = ui.render(
+    createElement(App, { bridge, firstPaintDeadlineMs: 40 }),
+  );
   try {
     await ui.waitFor(() => {
       assert.doesNotMatch(
         document.body.textContent ?? '',
         /Starting the FOKS agent/,
       );
-      assert.ok(document.querySelector('.app'));
+      assert.ok(document.querySelector('.side.rail .who .t'));
     });
     assert.doesNotMatch(document.body.textContent ?? '', /Welcome to FOKS/);
     await ui.waitFor(() => assert.equal(listeners.size, 1));
@@ -169,7 +173,11 @@ test('healthy startup progress renders and an older boot cannot overwrite a shel
       };
     },
   };
-  const rendered = ui.render(createElement(App, { bridge }));
+  // The partial names a profile that never reports, so the shell mounts on the
+  // first-paint deadline rather than on the partial itself.
+  const rendered = ui.render(
+    createElement(App, { bridge, firstPaintDeadlineMs: 40 }),
+  );
   try {
     await ui.waitFor(() =>
       assert.match(document.body.textContent ?? '', /boot-partial-marker/),

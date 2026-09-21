@@ -3015,6 +3015,88 @@ test('scoped native projection uses embedded metadata without querying root list
   );
 });
 
+test('a whole-catalog response with embedded metadata queries no root lists', async () => {
+  const bridge = mockBridge(FIXTURE);
+  const response = await bridge.listCatalog();
+  const accounts = await bridge.listAccounts();
+  const unreachable = FIXTURE.servers[FIXTURE.servers.length - 1].id;
+  const localMetadata = {
+    accounts,
+    profiles: await Promise.all(
+      response.profiles.map(async (profile) => ({
+        profile,
+        label: null,
+        configuredProbe: profile,
+        // The read of the last profile failed, so it carries no status. It is
+        // still a configured server and must still be listed.
+        status:
+          profile === unreachable
+            ? null
+            : await bridge.describeServerStatus(profile),
+        error: null,
+      })),
+    ),
+  };
+  const forbidden = async (): Promise<never> => {
+    throw new Error('unscoped enrichment');
+  };
+  const native: Bridge = {
+    ...bridge,
+    native: true,
+    listCatalog: async () => ({ ...response, localMetadata }),
+    listServers: forbidden,
+    listAccounts: forbidden,
+    describeServerStatus: forbidden,
+  };
+  const snapshot = await loadSnapshot(native, FIXTURE, 1);
+  assert.deepEqual(
+    snapshot.servers.map((server) => server.id),
+    response.profiles,
+  );
+  assert.deepEqual(
+    snapshot.accounts.map((account) => account.store),
+    accounts.map((account) => account.store),
+  );
+  assert.equal(
+    snapshot.servers.find((server) => server.id === unreachable)!.passiveStatus
+      .status,
+    'failed',
+  );
+  // Without the metadata the same response still falls back to the per-server
+  // reads, which is what a bridge that supplies none of it relies on.
+  let listedServers = 0;
+  let listedAccounts = 0;
+  let describedStatus = 0;
+  const fallback = await loadSnapshot(
+    {
+      ...bridge,
+      native: true,
+      listCatalog: async () => response,
+      listServers: async (generation) => {
+        listedServers++;
+        return bridge.listServers(generation);
+      },
+      listAccounts: async (generation) => {
+        listedAccounts++;
+        return bridge.listAccounts(generation);
+      },
+      describeServerStatus: async (profile) => {
+        describedStatus++;
+        return bridge.describeServerStatus(profile);
+      },
+    },
+    FIXTURE,
+    1,
+  );
+  assert.equal(listedServers, 1);
+  assert.equal(listedAccounts, 1);
+  assert.equal(describedStatus, response.profiles.length);
+  assert.deepEqual(
+    fallback.servers.map((server) => server.id),
+    snapshot.servers.map((server) => server.id),
+  );
+});
+
 test('retired scoped work cannot publish its result', async () => {
   const bridge = mockBridge(FIXTURE);
   const profile = FIXTURE.servers[0].id;

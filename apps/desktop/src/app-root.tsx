@@ -24,6 +24,8 @@ export interface AppProps {
   store?: LocationStore;
   /** Controlled wall clock for expiry lifecycle tests. */
   leaseClock?: LeaseExpiryClock;
+  /** Shortens the first-paint deadline so boot tests do not wait it out. */
+  firstPaintDeadlineMs?: number;
 }
 
 export function App({
@@ -31,13 +33,15 @@ export function App({
   bridge,
   store,
   leaseClock,
+  firstPaintDeadlineMs,
 }: AppProps): ReactNode {
-  const boot = useAppBootstrap(agentSnapshot, bridge);
+  const boot = useAppBootstrap(agentSnapshot, bridge, firstPaintDeadlineMs);
   const { loaded, activeBridge, agentController } = boot;
   const block = shellBlock(boot.agentLifecycle, {
     locked: Boolean(boot.lockState && activeBridge),
     error: boot.loadError,
     pending: !loaded || !activeBridge || !agentController,
+    progress: boot.bootProgress,
   });
   if (block || !loaded || !activeBridge || !agentController)
     return (

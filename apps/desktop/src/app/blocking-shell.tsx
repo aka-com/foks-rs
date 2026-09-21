@@ -8,6 +8,7 @@ import {
 } from '../agent-lifecycle';
 import { Button, CopyBox, Icon } from '../components';
 import type { AgentSnapshot } from '../model';
+import type { BootProgress } from './app-bootstrap';
 import { Sidebar, railAgentState, type RailAgentState } from '../shell/sidebar';
 import { Topbar } from '../shell/topbar';
 
@@ -56,7 +57,7 @@ function agentStop(lifecycle: AgentLifecycle): AgentStop | null {
 }
 
 export type ShellBlock =
-  | { kind: 'starting' }
+  | { kind: 'starting'; progress?: BootProgress }
   | { kind: 'locked' }
   | { kind: 'boot-error'; message: string }
   | { kind: 'stop'; lifecycle: AgentStop }
@@ -64,7 +65,13 @@ export type ShellBlock =
 
 export function shellBlock(
   lifecycle: AgentLifecycle,
-  startup?: { locked: boolean; error: string | null; pending: boolean },
+  startup?: {
+    locked: boolean;
+    error: string | null;
+    pending: boolean;
+    /** The catalog read behind the loading screen, once it reports. */
+    progress?: BootProgress | null;
+  },
 ): ShellBlock | null {
   if (startup) {
     if (startup.locked) return { kind: 'locked' };
@@ -74,7 +81,10 @@ export function shellBlock(
     const stop = agentStop(lifecycle);
     return stop && stop.state !== 'maintenance'
       ? { kind: 'stop', lifecycle: stop }
-      : { kind: 'starting' };
+      : {
+          kind: 'starting',
+          ...(startup.progress ? { progress: startup.progress } : {}),
+        };
   }
   const stop = agentStop(lifecycle);
   if (stop) return { kind: 'stop', lifecycle: stop };
@@ -265,7 +275,7 @@ export function Takeover({
   if (block.kind === 'starting')
     return (
       <div className="takeover">
-        <StartingScreen />
+        <StartingScreen progress={block.progress} />
       </div>
     );
   const className = `takeover ${
@@ -349,13 +359,30 @@ export function BlockedShell({
   );
 }
 
-/** The content area while the agent starts. */
-function StartingScreen(): ReactNode {
+/**
+ * The content area while the agent starts and, once the catalog read reports,
+ * while it runs. The live region keeps its identity across partials so the
+ * progress line is re-read rather than announced as a new region.
+ */
+function StartingScreen({ progress }: { progress?: BootProgress }): ReactNode {
   return (
     <div className="booting" role="status">
       <span className="spin" aria-hidden="true" />
-      <b>Starting the FOKS agent…</b>
-      <span className="line">Startup usually takes a few seconds.</span>
+      <b>
+        {progress ? 'Connecting to your vaults' : 'Starting the FOKS agent…'}
+      </b>
+      <span className="line">
+        {progress
+          ? 'This can take a few seconds.'
+          : 'Startup usually takes a few seconds.'}
+      </span>
+      {progress && progress.total > 0 ? (
+        <span className="line prog">
+          {progress.ready < progress.total
+            ? `${progress.ready} of ${progress.total} profiles ready`
+            : 'Loading items…'}
+        </span>
+      ) : null}
     </div>
   );
 }

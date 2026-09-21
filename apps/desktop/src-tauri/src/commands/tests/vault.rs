@@ -13,7 +13,7 @@ use foks_desktop::{CatalogItem, CatalogSnapshot, CatalogStoreRef, CatalogStoreSu
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 #[test]
 fn catalog_dto_preserves_store_read_provenance_for_empty_inventories() {
@@ -98,6 +98,137 @@ fn progressive_metadata_uses_only_completed_overviews_and_preserves_scoped_error
         metadata.profiles[2].error.as_ref().unwrap().code,
         "profile-busy"
     );
+}
+
+/// Answers one whole-catalog walk over two configured profiles, one of which
+/// cannot be reached. Every call is recorded so a read can be counted.
+struct CatalogReadTransport {
+    calls: Mutex<Vec<Operation>>,
+}
+
+impl foks_desktop::AgentTransport for CatalogReadTransport {
+    fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        self.calls.lock().unwrap().push(operation.clone());
+        match operation {
+            Operation::ListProfiles => Ok(serde_json::json!([
+                {"name": "work.example", "probe": "work.example",
+                 "protocol": {"generation": "v019"}, "trust": {"kind": "web-pki"}},
+                {"name": "down.example", "probe": "down.example",
+                 "protocol": {"generation": "v019"}, "trust": {"kind": "web-pki"}},
+            ])),
+            Operation::ListKnownStores { .. } => Ok(serde_json::json!([])),
+            Operation::ListProfileOverview { profile } if profile == "down.example" => Err(
+                foks_desktop::AgentError::Transport("profile unreachable".into()),
+            ),
+            Operation::ListProfileOverview { profile } => {
+                Ok(serde_json::to_value(foks_agent_proto::ProfileOverview {
+                    profile: profile.clone(),
+                    accounts: foks_agent_proto::ResponseResult::Success {
+                        value: serde_json::json!([
+                            {"profile": profile, "alias": "personal", "username": "alice"}
+                        ]),
+                    },
+                    teams: foks_agent_proto::ResponseResult::Success {
+                        value: serde_json::json!([]),
+                    },
+                    server_status: foks_agent_proto::ResponseResult::Success {
+                        value: serde_json::json!({
+                            "profile": profile, "configured_probe": profile, "host": null,
+                            "compatibility": {"status": "not-required"}, "chat_supported": null,
+                        }),
+                    },
+                })
+                .unwrap())
+            }
+            Operation::ListKv { .. } => Ok(serde_json::to_value(foks_agent_proto::KvPage {
+                snapshot_version: 1,
+                entries: vec![],
+                next_cursor: None,
+            })
+            .unwrap()),
+            other => panic!("unexpected catalog operation {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_whole_catalog_read_lists_profiles_once_and_carries_local_metadata() {
+    let transport = Arc::new(CatalogReadTransport {
+        calls: Mutex::new(vec![]),
+    });
+    let profiles = crate::commands::vault::catalog_profile_listing(transport.as_ref()).unwrap();
+    let snapshot = foks_desktop::load_catalog_cancellable_with_profiles(
+        transport.clone(),
+        profiles
+            .iter()
+            .map(|profile| profile.name.clone())
+            .collect(),
+        foks_desktop::CatalogLoadToken::default(),
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        transport
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|call| matches!(call, Operation::ListProfiles))
+            .count(),
+        1,
+        "the hoisted listing is the only one the read issues"
+    );
+    let dto = crate::commands::vault::catalog_dto(&snapshot, 7, Some(&profiles)).unwrap();
+    assert_eq!(dto.generation, 7);
+    let metadata = dto.local_metadata.expect("the read attaches its metadata");
+    // The metadata is built from the registry listing, so the profile whose
+    // read failed is still a configured server the renderer can draw.
+    assert_eq!(
+        metadata
+            .profiles
+            .iter()
+            .map(|profile| profile.profile.as_str())
+            .collect::<Vec<_>>(),
+        ["work.example", "down.example"]
+    );
+    assert!(metadata.profiles[0].status.is_some());
+    assert!(metadata.profiles[1].status.is_none());
+    assert!(metadata.profiles[1].error.is_none());
+    assert_eq!(metadata.accounts.len(), 1);
+    assert_eq!(metadata.accounts[0].profile, "work.example");
+    assert!(dto
+        .failures
+        .iter()
+        .any(|failure| failure.profile.as_deref() == Some("down.example")));
+}
+
+#[test]
+fn a_store_only_read_attaches_no_local_metadata() {
+    let transport = Arc::new(CatalogReadTransport {
+        calls: Mutex::new(vec![]),
+    });
+    let snapshot =
+        foks_desktop::load_stores_cancellable(transport.clone(), Default::default()).unwrap();
+    let dto = crate::commands::vault::catalog_dto(&snapshot, 3, None).unwrap();
+    assert!(dto.local_metadata.is_none());
+    // The walk still lists the profiles for itself; hoisting the listing for
+    // an item read did not add a second one here.
+    assert_eq!(
+        transport
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|call| matches!(call, Operation::ListProfiles))
+            .count(),
+        1
+    );
+    assert!(!transport
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|call| matches!(call, Operation::ListKv { .. })));
 }
 
 pub(super) const READ_VALUE: &[u8] = b"guest-password";

@@ -1,7 +1,7 @@
 import { mergeProfileSnapshot } from '../catalog-state';
 import { CatalogReadRetiredError } from '../catalog-coordinator';
 import { profileInventoryComplete, serverFactAvailability } from '../model';
-import type { AgentSnapshot } from '../model';
+import type { AgentSnapshot, AgentStatus } from '../model';
 import {
   scheduleProfileWork,
   type BackgroundHistoryWork,
@@ -92,6 +92,11 @@ export async function loadSnapshot(
   isCurrent: () => boolean = () => true,
   /** Read every roster, for a refresh the user asked for. */
   forceRosters = false,
+  /**
+   * The readiness a caller already established, so a boot does not probe the
+   * agent twice. Absent means probe, as every other caller does.
+   */
+  ready?: AgentStatus,
 ): Promise<AgentSnapshot> {
   try {
     return await loadSnapshotOnce(
@@ -101,6 +106,7 @@ export async function loadSnapshot(
       onPartial,
       isCurrent,
       forceRosters,
+      ready,
     );
   } catch (error) {
     if (
@@ -115,6 +121,7 @@ export async function loadSnapshot(
       onPartial,
       isCurrent,
       forceRosters,
+      ready,
     );
   }
 }
@@ -126,9 +133,10 @@ async function loadSnapshotOnce(
   onPartial: ((snapshot: AgentSnapshot) => void) | undefined,
   isCurrent: () => boolean,
   forceRosters: boolean,
+  ready: AgentStatus | undefined,
 ): Promise<AgentSnapshot> {
   if (!isCurrent()) throw new CatalogReadRetiredError();
-  const agent = await bridge.agentStatus();
+  const agent = ready ?? (await bridge.agentStatus());
   if (!isCurrent()) throw new CatalogReadRetiredError();
   if (agent.state !== 'ready') {
     const error: CommandError = {

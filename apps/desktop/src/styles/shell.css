@@ -439,6 +439,8 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .booting{flex:1;min-height:0;display:grid;place-items:center;align-content:center;gap:12px;padding:20px;text-align:center;color:var(--muted)}
 .booting b{color:var(--ink);font-weight:600;font-size:15px}
 .booting .line{font-size:12.5px;max-width:420px}
+/* Tabular figures keep the profile count from shifting as it climbs. */
+.booting .prog{color:var(--ink);font-variant-numeric:tabular-nums}
 .booting .spin{width:26px;height:26px;border:2.5px solid var(--line-mid);border-top-color:var(--accent);border-radius:50%;animation:btn-spin .8s linear infinite}
 @media (prefers-reduced-motion:reduce){.booting .spin{animation:none}}
 .stopveil{background:color-mix(in srgb,var(--main-surface) 84%,transparent);backdrop-filter:blur(2px)}

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  discoverUnboundTeams,
   isAgentReadinessError,
   loadSnapshot,
   normalizeCommandError,
@@ -16,9 +15,52 @@ import type { AgentSnapshot } from '../model';
 import { initialScene } from './scenes';
 import { MaintenanceOwnership } from './maintenance-ownership';
 
+/**
+ * How long the loading screen may wait for every profile to report before it
+ * hands the window to the shell anyway. A profile whose server is unreachable
+ * reports only when its request deadline expires, which is longer than this.
+ */
+export const FIRST_PAINT_DEADLINE_MS = 2500;
+
+/** What the loading screen says about the catalog read behind it. */
+export interface BootProgress {
+  /** Profiles that have listed both their accounts and their teams. */
+  ready: number;
+  /** Profiles the read is walking. */
+  total: number;
+}
+
+function bootProgressOf(partial: AgentSnapshot): BootProgress {
+  return {
+    ready: partial.catalogProfiles.filter((profile) => {
+      const inventory = partial.profileInventory.find(
+        (entry) => entry.profile === profile,
+      );
+      return (
+        inventory?.accounts === 'complete' && inventory.teams === 'complete'
+      );
+    }).length,
+    total: partial.catalogProfiles.length,
+  };
+}
+
+/**
+ * Whether this partial is worth the first paint: every profile has listed its
+ * accounts and its teams, and no store is still loading. A read that reports
+ * no profiles is vacuously ready — there is nothing left to wait for.
+ */
+function firstPaintReady(partial: AgentSnapshot): boolean {
+  return (
+    profileInventoryComplete(partial, 'accounts') &&
+    profileInventoryComplete(partial, 'teams') &&
+    !partial.storeInventory.some((entry) => entry.status === 'loading')
+  );
+}
+
 export function useAppBootstrap(
   agentSnapshot?: AgentSnapshot,
   bridge?: Bridge,
+  firstPaintDeadlineMs: number = FIRST_PAINT_DEADLINE_MS,
 ) {
   const [activeBridge, setActiveBridge] = useState<Bridge | null>(
     () => bridge ?? null,
@@ -31,6 +73,7 @@ export function useAppBootstrap(
     null,
   );
   const [managedProfile, setManagedProfile] = useState<string | null>(null);
+  const [bootProgress, setBootProgress] = useState<BootProgress | null>(null);
   const [lockState, setLockState] = useState<AppLockState | null>(null);
   const [lockError, setLockError] = useState<string | null>(null);
   const [unlocking, setUnlocking] = useState(false);
@@ -79,6 +122,10 @@ export function useAppBootstrap(
     let bootInvalidated = false;
     let restartScheduled = false;
     let stopLifecycle: (() => void) | undefined;
+    let painted = false;
+    let latest: AgentSnapshot | null = null;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    setBootProgress(null);
     const restartFromMaintenanceSnapshot = (): void => {
       bootInvalidated = true;
       if (restartScheduled) return;
@@ -141,26 +188,73 @@ export function useAppBootstrap(
           return;
         }
         const requested = initialScene(selected).location.kind === 'first-run';
-        const [status, appInfo] = await Promise.all([
-          controller.establish(),
-          selected.appInfo(),
-        ]);
+        // Readiness comes first and alone: a catalog read issued before the
+        // agent reports ready fails with bootstrap-required rather than
+        // waiting.
+        const status = await controller.establish();
         if (!alive || bootInvalidated) return;
-        setManagedProfile(appInfo.managedProfile ?? null);
         const current = (): boolean =>
           alive && !bootInvalidated && generation === bootGeneration.current;
-        const publishPartial = (partial: AgentSnapshot): void => {
-          if (
-            !current() ||
-            controller.snapshot().state !== 'ready' ||
-            !partial.stores.length
-          )
-            return;
+        // appInfo shares no state with the catalog read, so the two run
+        // together and the managed profile is published as soon as it lands.
+        // The rejection handler keeps a failure that loses the race to a
+        // catalog failure from surfacing as an unhandled rejection; the await
+        // below still reports it.
+        const info = selected.appInfo();
+        void info.then(
+          (resolved) => {
+            if (current()) setManagedProfile(resolved.managedProfile ?? null);
+          },
+          () => undefined,
+        );
+        const mount = (snapshot: AgentSnapshot): void => {
           if (!maintenanceOwner.handoff(current)) return;
+          painted = true;
+          if (deadline !== undefined) {
+            clearTimeout(deadline);
+            deadline = undefined;
+          }
           publishedBootGeneration.current = generation;
-          setLoaded(partial);
+          setLoaded(snapshot);
           setLoadError(null);
         };
+        const publishPartial = (partial: AgentSnapshot): void => {
+          if (!current() || controller.snapshot().state !== 'ready') return;
+          // Without an account, the completed read and appInfo must choose
+          // automatic onboarding before the shell initializes its scene.
+          // A deadline must not hand off that decision either.
+          if (
+            !painted &&
+            !requested &&
+            !partial.stores.some((entry) => entry.kind === 'account')
+          ) {
+            latest = partial;
+            setBootProgress(bootProgressOf(partial));
+            return;
+          }
+          if (painted || firstPaintReady(partial)) {
+            mount(partial);
+            return;
+          }
+          // Hold the loading screen and report the read's progress into it,
+          // rather than mounting a shell of stores that all read "loading".
+          latest = partial;
+          setBootProgress(bootProgressOf(partial));
+          deadline ??= setTimeout(() => {
+            deadline = undefined;
+            if (!latest || painted) return;
+            if (!current() || controller.snapshot().state !== 'ready') return;
+            if (
+              !requested &&
+              !latest.stores.some((entry) => entry.kind === 'account')
+            )
+              return;
+            mount(latest);
+          }, firstPaintDeadlineMs);
+        };
+        // The agent is up and the read is what the window is now waiting on, so
+        // the loading screen says so before the first profile reports.
+        setBootProgress({ ready: 0, total: 0 });
         let next: AgentSnapshot;
         try {
           next = await loadSnapshot(
@@ -169,6 +263,8 @@ export function useAppBootstrap(
             undefined,
             publishPartial,
             current,
+            false,
+            status,
           );
         } catch (error) {
           const typed = normalizeCommandError(error);
@@ -183,27 +279,12 @@ export function useAppBootstrap(
             throw error;
           next = emptySnapshot(status);
         }
+        // Teams granted to an account after its first-run setup are found by
+        // the scheduler's discovery job shortly after the shell mounts, not
+        // here: discover_groups is a mutation, so the read that followed it
+        // re-walked every store's first page past the agent's retained cache.
         if (!current()) return;
-        // On an ordinary launch, look for teams that were granted to an
-        // account after its first-run setup. An explicit first-run location
-        // keeps its own discovery step, so leave it untouched.
-        if (!requested && profileInventoryComplete(next, 'accounts')) {
-          try {
-            if (maintenanceOwner.handedOff) publishPartial(next);
-            if (await discoverUnboundTeams(selected, next, current)) {
-              if (!current()) return;
-              next = await loadSnapshot(
-                selected,
-                next,
-                undefined,
-                publishPartial,
-                current,
-              );
-            }
-          } catch {
-            // Team discovery is best-effort and must not block launch.
-          }
-        }
+        const appInfo = await info;
         if (!current()) return;
         if (
           !maintenanceOwner.handedOff &&
@@ -232,10 +313,7 @@ export function useAppBootstrap(
         // installed before querying the replayable native snapshot, so events
         // in this handoff window are recovered without two listeners racing
         // the same controller revision.
-        if (!maintenanceOwner.handoff(current)) return;
-        publishedBootGeneration.current = generation;
-        setLoaded(next);
-        setLoadError(null);
+        mount(next);
       } catch (error) {
         if (!alive || bootInvalidated || generation !== bootGeneration.current)
           return;
@@ -246,14 +324,28 @@ export function useAppBootstrap(
           return;
         setAgentLifecycle({ state: 'failure', error });
         setLoadError(normalizeCommandError(error).message);
+      } finally {
+        // The read is over: it either mounted the shell or failed into the
+        // error card, so the first-paint deadline has nothing left to release.
+        if (deadline !== undefined) {
+          clearTimeout(deadline);
+          deadline = undefined;
+        }
       }
     })();
     return () => {
       alive = false;
+      if (deadline !== undefined) clearTimeout(deadline);
       stopLifecycle?.();
       maintenanceOwner.retire();
     };
-  }, [bootEpoch, bridge, agentSnapshot, maintenanceOwnership]);
+  }, [
+    bootEpoch,
+    bridge,
+    agentSnapshot,
+    maintenanceOwnership,
+    firstPaintDeadlineMs,
+  ]);
 
   // Re-arm the app lock from the shell. The command layer arms the lock and
   // returns its state; on a platform that cannot authenticate, `locked` stays
@@ -318,6 +410,7 @@ export function useAppBootstrap(
     loadError,
     firstRunStart,
     managedProfile,
+    bootProgress,
     lockState,
     lockError,
     unlocking,

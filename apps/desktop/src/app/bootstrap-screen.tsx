@@ -65,5 +65,10 @@ export function BootstrapScreen({
       </BlockedShell>
     );
   }
-  return <BlockedShell bridge={activeBridge} block={{ kind: 'starting' }} />;
+  return (
+    <BlockedShell
+      bridge={activeBridge}
+      block={block.kind === 'starting' ? block : { kind: 'starting' }}
+    />
+  );
 }

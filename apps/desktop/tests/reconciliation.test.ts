@@ -332,6 +332,69 @@ test('desktop scheduling discovers already-bound accounts repeatedly without run
   service.dispose();
 });
 
+test('desktop scheduling discovers an account that is bound to no team', async () => {
+  const clock = new Clock();
+  const base: AgentSnapshot = {
+    ...FIXTURE,
+    servers: FIXTURE.servers.map((server) => ({
+      ...server,
+      trust: { status: 'verified' },
+      compatibility: { status: 'not-required' },
+      passiveStatus: { status: 'available', source: 'signed-server-status' },
+      restrictions: [],
+    })),
+    profileInventory: FIXTURE.servers.map((server) => ({
+      profile: server.id,
+      accounts: 'complete',
+      teams: 'complete',
+    })),
+  };
+  // Launch no longer runs its own pass over the unbound accounts, so the
+  // periodic job has to reach them.
+  const snapshot: AgentSnapshot = {
+    ...base,
+    stores: base.stores.filter((store) => store.kind !== 'team'),
+    storeInventory: base.storeInventory.filter((entry) =>
+      base.stores.some(
+        (store) => store.id === entry.store && store.kind !== 'team',
+      ),
+    ),
+  };
+  const unbound = snapshot.accounts.find((account) =>
+    snapshot.stores.some(
+      (store) =>
+        store.kind === 'account' &&
+        store.id === account.store &&
+        store.server === account.server &&
+        store.account === account.alias,
+    ),
+  );
+  assert.ok(unbound);
+  assert.equal(
+    snapshot.stores.some((store) => store.kind === 'team'),
+    false,
+  );
+  const accounts: string[] = [];
+  const service = new DesktopReconciliation(
+    {
+      snapshot: () => snapshot,
+      nowSeconds: () => clock.now() / 1_000,
+      profile: async () => {},
+      registry: async () => {},
+      metadata: async () => {},
+      discovery: async (account) => {
+        accounts.push(account.store);
+      },
+    },
+    clock,
+  );
+  service.update(snapshot);
+  service.scheduler.setEnabled(true);
+  await clock.advance(10_000);
+  assert.ok(accounts.includes(unbound.store));
+  service.dispose();
+});
+
 test('a snapshot names the next attempt while the job is idle, and none while it runs or is parked', async () => {
   const clock = new Clock(),
     gate = deferred();

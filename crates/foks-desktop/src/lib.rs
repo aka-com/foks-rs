@@ -737,6 +737,19 @@ pub fn load_catalog_cancellable(
     load_catalog_with_token(transport, true, fresh, token)
 }
 
+/// The whole catalog, for a caller that has already listed the configured
+/// profiles. The desktop backend decodes that listing into its own richer
+/// summary for the metadata it attaches to the result, so taking it here keeps
+/// one `ListProfiles` per catalog read instead of two.
+pub fn load_catalog_cancellable_with_profiles(
+    transport: Arc<dyn AgentTransport>,
+    profiles: Vec<String>,
+    token: CatalogLoadToken,
+    fresh: bool,
+) -> Result<CatalogSnapshot, AgentError> {
+    load_catalog_profiles(transport, profiles, true, fresh, token, &|_| {})
+}
+
 pub fn load_profile_catalog_cancellable(
     transport: Arc<dyn AgentTransport>,
     profile: String,

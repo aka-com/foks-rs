@@ -889,6 +889,36 @@ pub(super) fn catalog_local_metadata(
     Ok(CatalogLocalMetadataDto { accounts, profiles })
 }
 
+/// The configured profiles, decoded into the desktop's own summary. The
+/// catalog walk takes this listing rather than issuing its own.
+pub(super) fn catalog_profile_listing(
+    transport: &dyn foks_desktop::AgentTransport,
+) -> Result<Vec<super::servers::ProfileSummary>, AgentError> {
+    serde_json::from_value(
+        transport
+            .call(Operation::ListProfiles)
+            .map_err(AgentError::from_desktop)?,
+    )
+    .map_err(|error| super::validation::invalid_response(error.to_string()))
+}
+
+/// A catalog response at the published generation. `profiles` attaches the
+/// locally known server facts and accounts, which spare the renderer a
+/// `list_servers`, a `describe_server_status` per server and a `list_accounts`
+/// over the agent's single local lane.
+pub(super) fn catalog_dto(
+    snapshot: &CatalogSnapshot,
+    generation: u64,
+    profiles: Option<&[super::servers::ProfileSummary]>,
+) -> Result<CatalogDto, AgentError> {
+    let mut dto = CatalogDto::from_snapshot(snapshot)?;
+    if let Some(profiles) = profiles {
+        dto.local_metadata = Some(catalog_local_metadata(snapshot, profiles)?);
+    }
+    dto.generation = generation;
+    Ok(dto)
+}
+
 async fn load_catalog(
     state: &AppState,
     app: &tauri::AppHandle,
@@ -917,21 +947,26 @@ async fn load_catalog(
     let transport = state.agent.transport();
     let worker_state = state.clone();
     let worker_app = app.clone();
-    let snapshot = tauri::async_runtime::spawn_blocking(move || {
-        if let Some(channel) = on_partial {
-            let profiles: Vec<super::servers::ProfileSummary> = serde_json::from_value(
-                transport
-                    .call(Operation::ListProfiles)
-                    .map_err(AgentError::from_desktop)?,
-            )
-            .map_err(|error| super::validation::invalid_response(error.to_string()))?;
+    let (snapshot, profiles) = tauri::async_runtime::spawn_blocking(move || {
+        // An item read takes this listing once and hands it to the catalog
+        // walk, so the walk issues no listing of its own and the local
+        // metadata attached below is built from the same registry view. A
+        // store-only read walks no KV tree and attaches no metadata, so it
+        // does not pay for the listing.
+        let profiles: Vec<super::servers::ProfileSummary> = if include_items {
+            catalog_profile_listing(transport.as_ref())?
+        } else {
+            Vec::new()
+        };
+        let names: Vec<String> = profiles
+            .iter()
+            .map(|profile| profile.name.clone())
+            .collect();
+        let snapshot = if let Some(channel) = on_partial {
             let failure = std::sync::Mutex::new(None);
             let snapshot = foks_desktop::load_catalog_progressive_with_profiles(
                 transport,
-                profiles
-                    .iter()
-                    .map(|profile| profile.name.clone())
-                    .collect(),
+                names,
                 token.clone(),
                 fresh,
                 |snapshot| {
@@ -943,10 +978,7 @@ async fn load_catalog(
                             snapshot.clone(),
                             |published, accepted| {
                                 sent = (|| {
-                                    let mut dto = CatalogDto::from_snapshot(accepted)?;
-                                    dto.local_metadata =
-                                        Some(catalog_local_metadata(accepted, &profiles)?);
-                                    dto.generation = published;
+                                    let dto = catalog_dto(accepted, published, Some(&profiles))?;
                                     crate::applock::require_unlocked_generation(
                                         &worker_app,
                                         access,
@@ -978,17 +1010,17 @@ async fn load_catalog(
             }
             snapshot
         } else if include_items {
-            foks_desktop::load_catalog_cancellable(transport, token, fresh)
+            foks_desktop::load_catalog_cancellable_with_profiles(transport, names, token, fresh)
                 .map_err(AgentError::from_desktop)
         } else {
             foks_desktop::load_stores_cancellable(transport, token)
                 .map_err(AgentError::from_desktop)
-        }
+        }?;
+        Ok::<_, AgentError>((snapshot, profiles))
     })
     .await
     .map_err(|error| AgentError::unknown(format!("Failed to load vault catalog: {error}")))??;
-    let mut dto = CatalogDto::from_snapshot(&snapshot)?;
-    dto.generation = generation;
+    let mut dto = catalog_dto(&snapshot, generation, None)?;
     // A load that lost its generation to a later load or mutation must not be
     // reported as the current snapshot: the reads that follow it would answer
     // from whichever snapshot replaced it.
@@ -996,10 +1028,7 @@ async fn load_catalog(
     if include_items {
         let mut result = Ok(dto);
         if !state.publish_catalog_snapshot(generation, snapshot, |published, accepted| {
-            result = CatalogDto::from_snapshot(accepted).map(|mut dto| {
-                dto.generation = published;
-                dto
-            });
+            result = catalog_dto(accepted, published, Some(&profiles));
         }) {
             return Err(super::context::catalog_changed_during_read());
         }
@@ -1079,11 +1108,7 @@ pub async fn list_profile_catalog(
     crate::applock::require_unlocked_generation(app, access)?;
     let mut result = Err(super::context::catalog_changed_during_read());
     if !state.publish_catalog_snapshot(generation, snapshot, |published, accepted| {
-        result = CatalogDto::from_snapshot(accepted).and_then(|mut dto| {
-            dto.local_metadata = Some(catalog_local_metadata(accepted, &profiles)?);
-            dto.generation = published;
-            Ok(dto)
-        });
+        result = catalog_dto(accepted, published, Some(&profiles));
     }) {
         return Err(super::context::catalog_changed_during_read());
     }

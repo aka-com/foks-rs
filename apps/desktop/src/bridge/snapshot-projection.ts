@@ -145,8 +145,14 @@ async function projectCatalogCounted(
   forceRosters: boolean,
   counts: { servers: number; rosters: number },
 ): Promise<AgentSnapshot> {
+  // A native response that carries the locally known server facts and accounts
+  // is projected from them, whichever command produced it, so the whole-catalog
+  // read spends no further IPC hops on them. A bridge that supplies none of it
+  // — the fixtures and the web mock — keeps the per-server reads.
   const embeddedMetadata =
-    partial || (bridge.native && profileScope !== undefined);
+    partial ||
+    (bridge.native &&
+      (profileScope !== undefined || response.localMetadata !== undefined));
   const globalFailure = response.failures.find((failure) =>
     ['bootstrap-required', 'agent-lost', 'version-mismatch'].includes(
       failure.error.code,
