@@ -9,6 +9,8 @@ import {
   type InvitationAction,
   type InvitationReply,
 } from '../src/invitation-contract';
+import { INVITATION_ACTIVITY } from '../src/invitation-activity';
+import type { TeamStore } from '../src/model';
 installDom({
   url: 'http://localhost/',
   body: '<div id="root"></div><div id="overlays"></div>',
@@ -59,6 +61,68 @@ test('invitation boundary rejects secret fields, bad handles and oversized inbox
     { state: 'submission-unknown', operation_id: 'a'.repeat(32) },
   );
 });
+test('the invitation activity band stays quiet about a read the profile could not admit', async () => {
+  const { InvitationRecovery } = (await vite.ssrLoadModule(
+    '/src/components/invitation-recovery.tsx',
+  )) as typeof import('../src/components/invitation-recovery');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const team = FIXTURE.stores.find(
+    (store): store is TeamStore => store.kind === 'team',
+  );
+  assert.ok(team);
+  // The read is queued on the profile; work ahead of it that never finishes
+  // expires it at the admission deadline, and the agent being busy reads
+  // the same way. Neither is the user's to hear about from a badge.
+  let failure: unknown = {
+    code: 'profile-busy',
+    message: 'Profile queue deadline exceeded; request did not start.',
+    retryable: true,
+    fatal: false,
+    ambiguous: false,
+  };
+  const bridge = {
+    ...mockBridge(FIXTURE),
+    invitation: async (): Promise<InvitationReply> => {
+      throw failure;
+    },
+  };
+  const errors: unknown[] = [];
+  const rendered = ui.render(
+    await overlay(
+      createElement(InvitationRecovery, {
+        bridge,
+        store: team,
+        onReview: () => {},
+        onError: (error: unknown) => errors.push(error),
+      }),
+    ),
+  );
+  await ui.act(async () => {});
+  assert.deepEqual(errors, []);
+  assert.equal(rendered.queryByText('Invitation activity'), null);
+  // What changes the session still reaches the handler.
+  failure = {
+    code: 'agent-lost',
+    message: 'The agent stopped.',
+    retryable: false,
+    fatal: true,
+    ambiguous: false,
+  };
+  await ui.act(async () => {
+    window.dispatchEvent(
+      new window.CustomEvent(INVITATION_ACTIVITY, {
+        detail: { profile: team.server, account: team.account },
+      }),
+    );
+  });
+  assert.equal(errors.length, 1);
+});
+
 test('preview precedes request preparation and unknown delivery is checked without replay', async () => {
   const { InvitationPanel } = (await vite.ssrLoadModule(
     '/src/components/invitation-panel.tsx',

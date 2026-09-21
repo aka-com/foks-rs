@@ -1,7 +1,10 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import { useDeviceCache } from '../device-cache';
 import { useMetadataQuery, useMetadataRepository } from '../query-hooks';
-import { invitationRecoveryQuery } from '../operation-queries';
+import {
+  invitationRecoveryQuery,
+  reportableTeamRequestError,
+} from '../operation-queries';
 import type { Bridge } from '../bridge';
 import type { TeamStore } from '../model';
 import { Band, Button } from './index';
@@ -21,7 +24,17 @@ export function InvitationRecovery({
   const devices = useDeviceCache();
   const repository = useMetadataRepository(bridge, devices?.repository);
   const query = invitationRecoveryQuery(repository, bridge, store);
-  const state = useMetadataQuery(query, { onError });
+  // The band is a badge, read on every visit to a team the user manages: a
+  // profile queue that could not admit the read, or an agent that was busy,
+  // leaves it blank rather than saying so. What changes the session itself
+  // still reaches the handler, as it does for the team request count.
+  const report = useCallback(
+    (error: unknown) => {
+      if (reportableTeamRequestError(error)) onError(error);
+    },
+    [onError],
+  );
+  const state = useMetadataQuery(query, { onError: report });
   useEffect(() => {
     const refresh = (event: Event) => {
       const scope = (
