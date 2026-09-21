@@ -3,10 +3,9 @@ import type { Bridge } from '../bridge';
 import { Fragment, useId } from 'react';
 import type { ReactNode, Ref } from 'react';
 import { Button, Chip, Icon } from '../components';
-import { ChatAlerts, type ChatAlert } from './chat-alerts';
+import { ChatAlerts, failureAlert, type ChatAlert } from './chat-alerts';
 import type { ChatAction, ChatChannel, ChatReply } from '../chat-contract';
 import { plural, shortId } from '../model';
-import { failure } from './actions';
 import { TEXT_LIMIT_LABEL } from './use-chat-composer';
 import { useMessageComposer } from './use-message-composer';
 import { OutgoingRow } from './outgoing-row';
@@ -118,6 +117,7 @@ export function ChatThread({
     before,
     missing,
     error,
+    failure,
     setError,
     busy,
     loaded,
@@ -195,7 +195,7 @@ export function ChatThread({
             void load();
             // One refresh: this history, the team's channels, and the saved
             // work the conversation is recovering.
-            void refreshInbox().catch((e) => setError(failure(e)));
+            void refreshInbox().catch((e) => setError(e));
           }}
         />
         {onSearch && (
@@ -242,13 +242,9 @@ export function ChatThread({
       <ChatAlerts
         alerts={[
           ...alerts,
-          {
-            message: error,
-            severity: 'crit',
-            actions: [
-              { label: 'Retry', disabled: busy, run: () => void load() },
-            ],
-          },
+          failureAlert(failure, teamName, [
+            { label: 'Retry', disabled: busy, run: () => void load() },
+          ]),
           {
             message: missing
               ? 'Some earlier messages could not be checked. This history has incomplete verification.'

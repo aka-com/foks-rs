@@ -719,7 +719,7 @@ for (const distinct of [false, true]) {
   test(`chat failures share an inset below the header and deduplicate causes, distinct=${distinct}`, async () => {
     let failing = false;
     const failures = new Set<string>();
-    const cause = 'This group is no longer in the vault.';
+    const cause = 'This group could not be read.';
     await setup((base) => ({
       ...base,
       chat: async (store, action, view) => {
@@ -791,6 +791,63 @@ for (const distinct of [false, true]) {
     }
   });
 }
+
+test('a team the catalog no longer lists is reported as inaccessible, not as a fault', async () => {
+  let failing = false;
+  await setup((base) => ({
+    ...base,
+    chat: async (store, action, view) => {
+      if (failing && action.action === 'history')
+        throw {
+          code: 'store-not-found',
+          message:
+            'This group is currently inaccessible. There may have been a server issue or you may have been removed.',
+          fatal: false,
+          retryable: false,
+          ambiguous: false,
+        };
+      return base.chat(store, action, view);
+    },
+  }));
+  const refresh = ui.screen.getByRole<HTMLButtonElement>('button', {
+    name: 'Refresh messages',
+  });
+  await ui.waitFor(() => assert.equal(refresh.disabled, false));
+  failing = true;
+  ui.fireEvent.click(refresh);
+  const conversation = ui.screen.getByRole('region', {
+    name: 'Conversation',
+  });
+  const band = await ui.waitFor(() => {
+    const found = conversation.querySelector('.chat-status .band');
+    assert.ok(found);
+    return found;
+  });
+  // The band names the team and states the cause as a condition, drawn as
+  // information rather than as a critical alert; the agent's own wording is
+  // not repeated.
+  assert.ok(band.classList.contains('info'));
+  assert.ok(!band.classList.contains('stop'));
+  assert.equal(band.getAttribute('role'), 'status');
+  ui.within(band as HTMLElement).getByText(
+    'Engineering is currently inaccessible.',
+  );
+  ui.within(band as HTMLElement).getByText(
+    'There may have been a server issue or you may have been removed.',
+  );
+  assert.equal(
+    ui.within(conversation).queryByText(/no longer in the vault/),
+    null,
+  );
+  ui.within(band as HTMLElement).getByRole('button', { name: 'Retry' });
+  failing = false;
+  ui.fireEvent.click(
+    ui.within(band as HTMLElement).getByRole('button', { name: 'Retry' }),
+  );
+  await ui.waitFor(() =>
+    assert.ok(!conversation.querySelector('.chat-status')),
+  );
+});
 
 test('deduplicated alerts retain severity and distinct recovery actions without retrying twice', async () => {
   const { ChatAlerts } = await vite.ssrLoadModule('/src/chat/chat-alerts.tsx');

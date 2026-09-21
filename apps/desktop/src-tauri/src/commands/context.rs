@@ -1177,7 +1177,7 @@ impl AppState {
                 unrefreshed_store_error(catalog, store).unwrap_or_else(|| {
                     AgentError::new(
                         "store-not-found",
-                        "This group is no longer in the vault.",
+                        "This group is currently inaccessible. There may have been a server issue or you may have been removed.",
                         false,
                     )
                 })
@@ -1364,7 +1364,7 @@ impl AppState {
             return Err(unrefreshed_store_error(catalog, id).unwrap_or_else(|| {
                 AgentError::new(
                     "store-not-found",
-                    "This group is no longer in the vault.",
+                    "This group is currently inaccessible. There may have been a server issue or you may have been removed.",
                     false,
                 )
             }));

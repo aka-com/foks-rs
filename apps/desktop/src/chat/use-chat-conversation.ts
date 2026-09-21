@@ -7,7 +7,7 @@ import {
   useSyncExternalStore,
 } from 'react';
 import { normalizeCommandError } from '../bridge';
-import type { Bridge } from '../bridge';
+import type { Bridge, CommandError } from '../bridge';
 import type {
   ChatAction,
   ChatReply,
@@ -44,7 +44,7 @@ export function useChatConversation(
     service.histories.getSnapshot,
   );
   const historyBindings = useRef(new WeakMap<ChatResult, HistoryBinding>());
-  const [error, setError] = useState('');
+  const [failure, setFailure] = useState<CommandError | null>(null);
   const [blocked, setBlocked] = useState('');
   const fatal = useRef('');
   const accessRef = useRef(access);
@@ -173,7 +173,7 @@ export function useChatConversation(
   const refresh = useCallback(
     async (priority: ChatWorkPriority = 'foreground') => {
       const client = owner.current;
-      setError('');
+      setFailure(null);
       service.invalidate(storeId);
       try {
         await sends.refresh(storeId, priority);
@@ -182,7 +182,7 @@ export function useChatConversation(
           owner.current === client &&
           normalizeCommandError(cause).code !== 'cancelled'
         )
-          setError(normalizeCommandError(cause).message);
+          setFailure(normalizeCommandError(cause));
       }
     },
     [sends, service, storeId],
@@ -265,11 +265,19 @@ export function useChatConversation(
           )
         : null,
     error:
-      error ||
+      failure?.message ||
       (!inbox?.data || inbox?.state === 'unavailable'
         ? (inbox?.error ?? '')
         : ''),
+    // The same failures with their codes, for callers that present a cause
+    // differently from a plain fault.
+    failure:
+      failure ??
+      (!inbox?.data || inbox?.state === 'unavailable'
+        ? (inbox?.failure ?? null)
+        : null),
     syncError: inbox?.data ? inbox.error : '',
+    syncFailure: inbox?.data ? (inbox.failure ?? null) : null,
     note: inbox?.data ? inbox.note : '',
     degraded: inbox?.data?.degraded ?? false,
     loading: !inbox || (inbox.state === 'loading' && !inbox.error),

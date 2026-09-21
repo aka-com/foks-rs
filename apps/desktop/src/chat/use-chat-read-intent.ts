@@ -1,7 +1,6 @@
 import { focusedWindow } from './visibility';
 import { useEffect, useRef, useState } from 'react';
 import type { ChatMessage } from '../chat-contract';
-import { failure } from './actions';
 
 /** Read intent comes from a focused timeline, never from a filtered thread pane. */
 export function useChatReadIntent(
@@ -10,7 +9,7 @@ export function useChatReadIntent(
   atBottom: boolean,
   readThrough: string | null,
   markRead: (channel: string, sequence: string) => Promise<void>,
-  setError: (message: string) => void,
+  setError: (cause: unknown) => void,
   enabled: boolean,
 ) {
   const [newFrom, setNewFrom] = useState<string | null>(null);
@@ -54,7 +53,7 @@ export function useChatReadIntent(
             if (!disposed) markedThrough.current = latest;
           })
           .catch((cause) => {
-            if (!disposed) setError(failure(cause));
+            if (!disposed) setError(cause);
           })
           .finally(() => {
             if (markingThrough.current === latest) markingThrough.current = '0';

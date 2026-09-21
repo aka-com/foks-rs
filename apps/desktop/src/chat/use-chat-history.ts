@@ -1,4 +1,5 @@
 import { normalizeCommandError } from '../bridge';
+import type { CommandError } from '../bridge';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   ChatAction,
@@ -7,7 +8,6 @@ import type {
   ChatReply,
   ChatResult,
 } from '../chat-contract';
-import { failure } from './actions';
 import type { HistoryWindow } from './conversation-model';
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
@@ -31,7 +31,14 @@ export function useChatHistory(
   const missing = accepted
     ? [...accepted.verification.values()].some(Boolean)
     : false;
-  const [error, setError] = useState('');
+  const [failure, setFailure] = useState<CommandError | null>(null);
+  // Errors keep their code beside their message, so the thread can choose
+  // how to present a cause rather than treating every failure alike.
+  const setError = useCallback(
+    (cause: unknown) => setFailure(cause ? normalizeCommandError(cause) : null),
+    [],
+  );
+  const error = failure?.message ?? '';
   const [busy, setBusy] = useState(false);
   const active = useRef(false);
   const reading = useRef(false);
@@ -45,7 +52,7 @@ export function useChatHistory(
       }
       reading.current = true;
       setBusy(true);
-      setError('');
+      setError(null);
       onLoading?.(older);
       try {
         const reply = await request({
@@ -62,7 +69,7 @@ export function useChatHistory(
         if (active.current) {
           if (normalizeCommandError(e).code === 'chat-channel-integrity')
             onFatal?.(channel.id);
-          setError(failure(e));
+          setError(e);
         }
       } finally {
         reading.current = false;
@@ -75,7 +82,7 @@ export function useChatHistory(
         }
       }
     },
-    [request, channel.id, onAccepted, onFatal, onLoading],
+    [request, channel.id, onAccepted, onFatal, onLoading, setError],
   );
   useEffect(() => {
     active.current = true;
@@ -94,6 +101,7 @@ export function useChatHistory(
     before,
     missing,
     error,
+    failure,
     setError,
     busy,
     loaded: accepted !== null,

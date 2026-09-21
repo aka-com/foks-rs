@@ -1,5 +1,5 @@
 import { ChatThread } from '../chat/chat-thread';
-import { ChatAlerts, type ChatAlert } from '../chat/chat-alerts';
+import { ChatAlerts, failureAlert, type ChatAlert } from '../chat/chat-alerts';
 import { PendingRow } from '../chat/pending-row';
 import {
   channelTitle,
@@ -84,6 +84,7 @@ export function ChatScreen({
     conversations,
     pending,
     error,
+    failure,
     syncError,
     note,
     degraded,
@@ -219,7 +220,7 @@ export function ChatScreen({
   // joins the thread's own alerts below its header. Without a channel,
   // the failure owns the empty pane instead of being repeated above it.
   const alerts: ChatAlert[] = [
-    { message: error, severity: 'crit', actions: [retryInbox] },
+    failureAlert(failure, store?.name, [retryInbox]),
     {
       message: syncError,
       severity: 'warn',
