@@ -421,8 +421,14 @@ fn synced_inbox(
     Ok(synced.inbox)
 }
 
+/// `credentials` is the handle the caller opened to enter this session. The
+/// send and attempt arms hand it to the client so they do not open a second
+/// one from inside the profile and database lock span, where the manifest
+/// lock would be taken again for answers the held state lease already
+/// excludes from changing.
 pub(super) fn dispatch(
     state_dir: &Path,
+    credentials: &ClientCredentials,
     session: &CheckedProfileSession<'_>,
     vault: &mut AccountVault<'_>,
     master: &[u8; 32],
@@ -431,6 +437,7 @@ pub(super) fn dispatch(
 ) -> Result<serde_json::Value> {
     dispatch_with_page_rows(
         state_dir,
+        credentials,
         session,
         vault,
         master,
@@ -442,6 +449,7 @@ pub(super) fn dispatch(
 
 fn dispatch_with_page_rows(
     state_dir: &Path,
+    credentials: &ClientCredentials,
     session: &CheckedProfileSession<'_>,
     vault: &mut AccountVault<'_>,
     master: &[u8; 32],
@@ -775,7 +783,7 @@ fn dispatch_with_page_rows(
         ChatAction::SubmitMessage { channel, text, .. } => ChatResult::Operation {
             operation: operation(
                 session.submit_chat_message(
-                    &ClientCredentials::open(state_dir)?,
+                    credentials,
                     team,
                     foks_client_app::ChatMessageInput {
                         channel: RtChannelId(id(&channel)?),
@@ -794,7 +802,7 @@ fn dispatch_with_page_rows(
         },
         ChatAction::Attempt { operation: op } => ChatResult::Operation {
             operation: operation(session.attempt_chat_operation(
-                &ClientCredentials::open(state_dir)?,
+                credentials,
                 team,
                 &id(&op)?,
                 vault,
@@ -1081,6 +1089,7 @@ mod tests {
             let mut history = |channel: String, after: u64| -> Result<ChatReply> {
                 Ok(serde_json::from_value(dispatch_with_page_rows(
                     &state,
+                    &credentials,
                     session,
                     &mut vault,
                     &master,

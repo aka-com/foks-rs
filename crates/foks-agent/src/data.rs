@@ -27,10 +27,11 @@ pub(super) fn write_control(
     }
     let profile =
         crate::read_cache::open_profile_session(registry, &scope.profile, timeout, cancellation)?;
-    with_vault(state_dir, &profile, |session, vault| {
+    // As in `execute`: the session already holds the vault wrapping key, so a
+    // second credentials handle here would only repeat the manifest reads
+    // behind it from inside the profile and database lock span.
+    with_vault_and_master(state_dir, &profile, |session, vault, master| {
         session.check_data_identity(&scope.account_alias, &scope.host_id, &scope.user_id, vault)?;
-        let credentials = ClientCredentials::open(state_dir)?;
-        let master = credentials.master_key()?;
         Ok(match operation {
             Operation::PrepareDataWrite {
                 submission_id: id,
@@ -66,7 +67,7 @@ pub(super) fn write_control(
                         body_hash: spec.body_hash,
                     },
                     vault,
-                    &master,
+                    master,
                 )?)?
             }
             Operation::ExecuteDataWrite { submission } => {
@@ -75,7 +76,7 @@ pub(super) fn write_control(
                     submission_id(&submission.submission_id)?,
                     &mut std::io::empty(),
                     vault,
-                    &master,
+                    master,
                 )?)?
             }
             Operation::DataWriteStatus { submission } => {
@@ -83,7 +84,7 @@ pub(super) fn write_control(
                     &scope.account_alias,
                     submission_id(&submission.submission_id)?,
                     vault,
-                    &master,
+                    master,
                 )?)?
             }
             Operation::PendingDataWrites { .. } => {
@@ -110,15 +111,18 @@ pub(super) fn upload<R: std::io::Read>(
     }
     let profile =
         crate::read_cache::open_profile_session(registry, &scope.profile, timeout, cancellation)?;
-    with_vault(state_dir, &profile, |session, vault| {
+    // The vault wrapping key this session already read is the one the write
+    // needs, so opening a second credentials handle here would repeat the
+    // manifest reads behind it from inside the profile and database lock
+    // span, where the manifest lock is taken again.
+    with_vault_and_master(state_dir, &profile, |session, vault, master| {
         session.check_data_identity(&scope.account_alias, &scope.host_id, &scope.user_id, vault)?;
-        let credentials = ClientCredentials::open(state_dir)?;
         Ok(serde_json::to_value(session.execute_data_write(
             &scope.account_alias,
             submission_id(&submission.submission_id)?,
             reader,
             vault,
-            &*credentials.master_key()?,
+            master,
         )?)?)
     })
 }

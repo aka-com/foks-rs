@@ -223,7 +223,7 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     let state_dir = arguments.state_dir.canonicalize()?;
     let initialized = ClientCredentials::is_initialized(&state_dir)?;
     if initialized {
-        ClientCredentials::open(&state_dir)?.master_key()?;
+        vault_master_key(&open_credentials(&state_dir)?)?;
     }
     let ready = Arc::new(AtomicBool::new(initialized));
     let socket = arguments
@@ -664,10 +664,10 @@ fn run_scheduled_profile(
     let registry = ProfileRegistry::open(state_dir)?;
     let session =
         read_cache::open_profile_session(&registry, profile, timeout, cancellation.clone())?;
-    let credentials = ClientCredentials::open(state_dir)?;
+    let credentials = open_credentials(state_dir)?;
     profile_work::with_control(timeout, cancellation, || {
         checked_session(&credentials, &session, |session| {
-            let master = credentials.master_key()?;
+            let master = vault_master_key(&credentials)?;
             let mut store = EncryptedFileSecretStore::open(
                 &session.paths().credential_store,
                 derive_vault_key(&master),
@@ -2841,9 +2841,7 @@ fn put_kv_reader<R: std::io::Read>(
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let session =
         read_cache::open_profile_session(registry, kv_store_profile(store), timeout, cancellation)?;
-    with_vault(state_dir, &session, |session, vault| {
-        let credentials = ClientCredentials::open(state_dir)?;
-        let master = credentials.master_key()?;
+    with_vault_and_master(state_dir, &session, |session, vault, master| {
         let report = match store {
             KvStoreRef::Account(store) => session.put_kv_file_checked(
                 &store.account_alias,
@@ -2854,7 +2852,7 @@ fn put_kv_reader<R: std::io::Read>(
                 wire_role_to_app(write_role),
                 mkdir_p,
                 vault,
-                &master,
+                master,
             )?,
             KvStoreRef::Team(store) => session.put_team_kv_file_checked(
                 &store.account_alias,
@@ -2867,7 +2865,7 @@ fn put_kv_reader<R: std::io::Read>(
                 wire_role_to_app(write_role),
                 mkdir_p,
                 vault,
-                &master,
+                master,
             )?,
         };
         Ok(serde_json::to_value(report)?)
@@ -3245,17 +3243,17 @@ fn dispatch_result_inner(
             // Reopen and verify existing state to ensure the agent transitions
             // from Bootstrap to Ready if initialization already completed.
             let credentials = if ClientCredentials::is_initialized(state_dir)? {
-                ClientCredentials::open(state_dir)?
+                open_credentials(state_dir)?
             } else {
                 match ClientCredentials::initialize(state_dir, backend) {
                     Ok(credentials) => credentials,
                     Err(_error) if ClientCredentials::is_initialized(state_dir)? => {
-                        ClientCredentials::open(state_dir)?
+                        open_credentials(state_dir)?
                     }
                     Err(error) => return Err(error.into()),
                 }
             };
-            credentials.master_key()?;
+            vault_master_key(&credentials)?;
             drop(ProfileRegistry::open(state_dir)?);
             Ok(serde_json::json!({
                 "backend": match credentials.backend() {
@@ -3320,7 +3318,7 @@ fn dispatch_result_inner(
                     path: PathBuf::from(path),
                 },
             };
-            let credentials = ClientCredentials::open(state_dir)?;
+            let credentials = open_credentials(state_dir)?;
             Ok(serde_json::to_value(
                 credentials.check_and_add_profile_with_control(
                     &mut registry,
@@ -3365,7 +3363,7 @@ fn dispatch_result_inner(
                     path: PathBuf::from(path),
                 },
             };
-            let credentials = ClientCredentials::open(state_dir)?;
+            let credentials = open_credentials(state_dir)?;
             Ok(serde_json::to_value(
                 credentials.check_and_add_profile_for_host_with_control(
                     &mut registry,
@@ -3383,7 +3381,7 @@ fn dispatch_result_inner(
             )?)
         }
         Operation::RemoveProfile { name } => {
-            let credentials = ClientCredentials::open(state_dir)?;
+            let credentials = open_credentials(state_dir)?;
             let removed = credentials.remove_profile(&mut registry, &name)?;
             Ok(serde_json::json!({
                 "profile": name,
@@ -3402,7 +3400,7 @@ fn dispatch_result_inner(
         Operation::DescribeResetHardState { profile } => {
             // A reset is the way out of credentials this Mac cannot read, so
             // the preview goes as far as it can without them and says so.
-            let credentials = ClientCredentials::open(state_dir)?;
+            let credentials = open_credentials(state_dir)?;
             let session = ProfileSession::open(&registry, &profile)?;
             let preview = credentials.describe_reset_state_best_effort(&session)?;
             let token = issue_reset_ticket(state_dir, &profile, preview.state_digest())?;
@@ -3429,7 +3427,7 @@ fn dispatch_result_inner(
         }
         Operation::ResetHardState { profile, token } => {
             let state_digest = consume_reset_ticket(state_dir, &profile, token.expose())?;
-            let credentials = ClientCredentials::open(state_dir)?;
+            let credentials = open_credentials(state_dir)?;
             let session = ProfileSession::open(&registry, &profile)?;
             let outcome =
                 credentials.reset_hard_state_best_effort_if_matches(&session, state_digest)?;
@@ -3443,7 +3441,7 @@ fn dispatch_result_inner(
             registry.profiles().cloned().collect::<Vec<_>>(),
         )?),
         Operation::Probe { profile } => {
-            let credentials = ClientCredentials::open(state_dir)?;
+            let credentials = open_credentials(state_dir)?;
             let session =
                 read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             let report = checked_session(&credentials, &session, |session| {
@@ -3469,7 +3467,7 @@ fn dispatch_result_inner(
         Operation::ListProfileOverview { profile } => {
             let session =
                 read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
-            let credentials = ClientCredentials::open(state_dir)?;
+            let credentials = open_credentials(state_dir)?;
             if credentials.requires_import_verification(&session)? {
                 let catalog =
                     foks_client_app::portability::imported_local_catalog(&credentials, &session)?;
@@ -3495,7 +3493,7 @@ fn dispatch_result_inner(
                     server_status: blocked(),
                 })?);
             }
-            with_vault(state_dir, &session, |session, vault| {
+            with_vault_in(&credentials, &session, |session, vault, _master| {
                 let accounts = (|| -> Result<_, Box<dyn std::error::Error>> {
                     let mut accounts = Vec::new();
                     for alias in vault.aliases()? {
@@ -3567,8 +3565,8 @@ fn dispatch_result_inner(
         } => {
             registry.profile(&profile)?;
             let paths = registry.prepare_profile_directory(&profile)?;
-            let credentials = ClientCredentials::open(state_dir)?;
-            let master = credentials.master_key()?;
+            let credentials = open_credentials(state_dir)?;
+            let master = vault_master_key(&credentials)?;
             let mut store =
                 EncryptedFileSecretStore::open(&paths.credential_store, derive_vault_key(&master))?;
             AccountVault::new(&mut store).set_local_account_alias(&account_alias, &label)?;
@@ -3579,7 +3577,7 @@ fn dispatch_result_inner(
         Operation::ListAccounts { profile } => {
             let session =
                 read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
-            let credentials = ClientCredentials::open(state_dir)?;
+            let credentials = open_credentials(state_dir)?;
             if credentials.requires_import_verification(&session)? {
                 let catalog =
                     foks_client_app::portability::imported_local_catalog(&credentials, &session)?;
@@ -3596,7 +3594,7 @@ fn dispatch_result_inner(
                         .collect::<Vec<_>>(),
                 )?);
             }
-            with_vault(state_dir, &session, |session, vault| {
+            with_vault_in(&credentials, &session, |session, vault, _master| {
                 let mut accounts = Vec::new();
                 for alias in vault.aliases()? {
                     let username = vault.account_display_name(&alias)?;
@@ -3717,9 +3715,9 @@ fn dispatch_result_inner(
         } => {
             let session =
                 read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
-            let credentials = ClientCredentials::open(state_dir)?;
+            let credentials = open_credentials(state_dir)?;
             checked_session(&credentials, &session, |session| {
-                let master = credentials.master_key()?;
+                let master = vault_master_key(&credentials)?;
                 let mut store = EncryptedFileSecretStore::open(
                     &session.paths().credential_store,
                     derive_vault_key(&master),
@@ -3744,9 +3742,9 @@ fn dispatch_result_inner(
         Operation::ResumeAccount { profile, alias } => {
             let session =
                 read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
-            let credentials = ClientCredentials::open(state_dir)?;
+            let credentials = open_credentials(state_dir)?;
             checked_session(&credentials, &session, |session| {
-                let master = credentials.master_key()?;
+                let master = vault_master_key(&credentials)?;
                 let mut store = EncryptedFileSecretStore::open(
                     &session.paths().credential_store,
                     derive_vault_key(&master),
@@ -3798,7 +3796,7 @@ fn dispatch_result_inner(
             let session =
                 read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             let status = if session.has_hard_state_artifacts()? {
-                let credentials = ClientCredentials::open(state_dir)?;
+                let credentials = open_credentials(state_dir)?;
                 checked_session(&credentials, &session, |session| {
                     session
                         .server_status()
@@ -3816,14 +3814,12 @@ fn dispatch_result_inner(
         } => {
             let session =
                 read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
-            with_vault(state_dir, &session, |session, vault| {
-                let credentials = ClientCredentials::open(state_dir)?;
-                let master = credentials.master_key()?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
                 Ok(serde_json::to_value(session.remove_software_device(
                     &signer_alias,
                     &device_id,
                     vault,
-                    &master,
+                    master,
                 )?)?)
             })
         }
@@ -4213,14 +4209,14 @@ fn dispatch_result_inner(
         Operation::ListYubiAccounts { profile } => {
             let session =
                 read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
-            let credentials = ClientCredentials::open(state_dir)?;
+            let credentials = open_credentials(state_dir)?;
             if credentials.requires_import_verification(&session)? {
                 return Ok(serde_json::to_value(
                     foks_client_app::portability::imported_local_catalog(&credentials, &session)?
                         .yubi,
                 )?);
             }
-            with_vault(state_dir, &session, |_session, vault| {
+            with_vault_in(&credentials, &session, |_session, vault, _master| {
                 Ok(serde_json::to_value(vault.yubi_accounts()?)?)
             })
         }
@@ -4356,9 +4352,9 @@ fn dispatch_result_inner(
                     )?)?)
                 });
             }
-            let credentials = ClientCredentials::open(state_dir)?;
+            let credentials = open_credentials(state_dir)?;
             checked_session(&credentials, &session, |session| {
-                let master = credentials.master_key()?;
+                let master = vault_master_key(&credentials)?;
                 let mut store = EncryptedFileSecretStore::open(
                     &session.paths().credential_store,
                     derive_vault_key(&master),
@@ -4717,9 +4713,7 @@ fn dispatch_result_inner(
                 timeout,
                 cancellation,
             )?;
-            with_vault(state_dir, &session, |session, vault| {
-                let credentials = ClientCredentials::open(state_dir)?;
-                let master = credentials.master_key()?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
                 let report = match &store {
                     KvStoreRef::Account(store) => session.put_kv_symlink_checked(
                         &store.account_alias,
@@ -4730,7 +4724,7 @@ fn dispatch_result_inner(
                         wire_role_to_app(write_role),
                         mkdir_p,
                         vault,
-                        &master,
+                        master,
                     )?,
                     KvStoreRef::Team(store) => session.put_team_kv_symlink_checked(
                         &store.account_alias,
@@ -4743,7 +4737,7 @@ fn dispatch_result_inner(
                         wire_role_to_app(write_role),
                         mkdir_p,
                         vault,
-                        &master,
+                        master,
                     )?,
                 };
                 Ok(serde_json::to_value(report)?)
@@ -4763,9 +4757,7 @@ fn dispatch_result_inner(
                 timeout,
                 cancellation,
             )?;
-            with_vault(state_dir, &session, |session, vault| {
-                let credentials = ClientCredentials::open(state_dir)?;
-                let master = credentials.master_key()?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
                 let report = match &store {
                     KvStoreRef::Account(store) => session.mkdir_kv_checked(
                         &store.account_alias,
@@ -4775,7 +4767,7 @@ fn dispatch_result_inner(
                         wire_role_to_app(write_role),
                         mkdir_p,
                         vault,
-                        &master,
+                        master,
                     )?,
                     KvStoreRef::Team(store) => session.mkdir_team_kv_checked(
                         &store.account_alias,
@@ -4787,7 +4779,7 @@ fn dispatch_result_inner(
                         wire_role_to_app(write_role),
                         mkdir_p,
                         vault,
-                        &master,
+                        master,
                     )?,
                 };
                 Ok(serde_json::to_value(report)?)
@@ -4810,9 +4802,7 @@ fn dispatch_result_inner(
                 timeout,
                 cancellation,
             )?;
-            with_vault(state_dir, &session, |session, vault| {
-                let credentials = ClientCredentials::open(state_dir)?;
-                let master = credentials.master_key()?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
                 let report = match &store {
                     KvStoreRef::Account(store) => session.remove_kv_checked(
                         &store.account_alias,
@@ -4820,7 +4810,7 @@ fn dispatch_result_inner(
                         recursive,
                         version,
                         vault,
-                        &master,
+                        master,
                     )?,
                     KvStoreRef::Team(store) => session.remove_team_kv_checked(
                         &store.account_alias,
@@ -4830,7 +4820,7 @@ fn dispatch_result_inner(
                         recursive,
                         version,
                         vault,
-                        &master,
+                        master,
                     )?,
                 };
                 Ok(serde_json::to_value(report)?)
@@ -4909,9 +4899,21 @@ fn dispatch_result_inner(
         Operation::Chat { store, action } => {
             let session =
                 read_cache::open_profile_session(&registry, &store.profile, timeout, cancellation)?;
-            with_vault_and_master(state_dir, &session, |session, vault, master| {
-                chat::dispatch(state_dir, session, vault, master, store, action)
-                    .map_err(chat::contextual_error)
+            // The send and attempt arms need the credentials handle, so this
+            // opens it once here rather than letting them open a second one
+            // from inside the session.
+            let credentials = open_credentials(state_dir)?;
+            with_vault_in(&credentials, &session, |session, vault, master| {
+                chat::dispatch(
+                    state_dir,
+                    &credentials,
+                    session,
+                    vault,
+                    master,
+                    store,
+                    action,
+                )
+                .map_err(chat::contextual_error)
             })
         }
         Operation::ListTeams { profile } => {
@@ -5043,8 +5045,8 @@ fn dispatch_result_inner(
             let destination = team_destination(role, visibility)?;
             let session =
                 read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
-            with_vault_and_master(state_dir, &session, |session, vault, master| {
-                let credentials = ClientCredentials::open(state_dir)?;
+            let credentials = open_credentials(state_dir)?;
+            with_vault_in(&credentials, &session, |session, vault, master| {
                 Ok(serde_json::to_value(
                     session.demote_local_team_member_in_authenticated_roster(
                         &team_alias,
@@ -5065,8 +5067,8 @@ fn dispatch_result_inner(
         } => {
             let session =
                 read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
-            with_vault_and_master(state_dir, &session, |session, vault, master| {
-                let credentials = ClientCredentials::open(state_dir)?;
+            let credentials = open_credentials(state_dir)?;
+            with_vault_in(&credentials, &session, |session, vault, master| {
                 Ok(serde_json::to_value(
                     session.remove_local_team_member_in_authenticated_roster(
                         &team_alias,
@@ -5085,8 +5087,8 @@ fn dispatch_result_inner(
         } => {
             let session =
                 read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
-            with_vault_and_master(state_dir, &session, |session, vault, master| {
-                let credentials = ClientCredentials::open(state_dir)?;
+            let credentials = open_credentials(state_dir)?;
+            with_vault_in(&credentials, &session, |session, vault, master| {
                 Ok(serde_json::to_value(
                     session.resume_local_team_member_edit_in_authenticated_roster(
                         &team_alias,
@@ -5119,9 +5121,9 @@ fn dispatch_result_inner(
                 timeout,
                 cancellation,
             )?;
-            let credentials = ClientCredentials::open(state_dir)?;
+            let credentials = open_credentials(state_dir)?;
             checked_sessions(&credentials, &local, &remote, |local, remote| {
-                let master = credentials.master_key()?;
+                let master = vault_master_key(&credentials)?;
                 let mut local_store = EncryptedFileSecretStore::open(
                     &local.paths().credential_store,
                     derive_vault_key(&master),
@@ -5161,8 +5163,8 @@ fn dispatch_result_inner(
         } => {
             let session =
                 read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
-            with_vault_and_master(state_dir, &session, |session, vault, master| {
-                let credentials = ClientCredentials::open(state_dir)?;
+            let credentials = open_credentials(state_dir)?;
+            with_vault_in(&credentials, &session, |session, vault, master| {
                 Ok(serde_json::to_value(session.expel_federated_team(
                     &team_alias,
                     &remote_host_id_hex,
@@ -5211,9 +5213,9 @@ fn dispatch_result_inner(
         Operation::RunDueJobs { profile } => {
             let session =
                 read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
-            let credentials = ClientCredentials::open(state_dir)?;
+            let credentials = open_credentials(state_dir)?;
             checked_session(&credentials, &session, |session| {
-                let master = credentials.master_key()?;
+                let master = vault_master_key(&credentials)?;
                 let mut store = EncryptedFileSecretStore::open(
                     &session.paths().credential_store,
                     derive_vault_key(&master),
@@ -5340,8 +5342,8 @@ fn refresh_federated_security(
     // or consuming PIN attempts.
     session.profile().require(Capability::Teams)?;
     session.profile().require(Capability::Federation)?;
-    let credentials = ClientCredentials::open(state_dir)?;
-    let master = credentials.master_key()?;
+    let credentials = open_credentials(state_dir)?;
+    let master = vault_master_key(&credentials)?;
 
     let requested = requested_federation_unlocks(profile, &arguments)?;
 
@@ -5529,6 +5531,140 @@ fn go_candidate_for_session(
     Ok(candidate)
 }
 
+/// Test-only tally of the credential-service work one dispatched operation
+/// performs.
+///
+/// The fixtures run on the file backend, where these reads are ordinary file
+/// reads, and the one native-backend test in the tree is ignored; counting
+/// the calls the agent makes is therefore what an ordinary test run can
+/// observe. The mapping to native cost is fixed: an open is two manifest
+/// reads and a master-key read is one.
+///
+/// `nested_opens` counts opens taken while a checked session is held. Such an
+/// open re-enters the manifest file lock, which is not reentrant and is
+/// otherwise always the innermost lock, from inside a span that already holds
+/// the profile and database locks. It is the count that must stay at zero.
+///
+/// Dispatch runs synchronously on the calling thread, so thread-local
+/// counters keep parallel tests from observing each other.
+#[cfg(test)]
+mod credential_reads {
+    use std::cell::Cell;
+
+    thread_local! {
+        static OPENS: Cell<usize> = const { Cell::new(0) };
+        static NESTED_OPENS: Cell<usize> = const { Cell::new(0) };
+        static MASTER_KEY_READS: Cell<usize> = const { Cell::new(0) };
+        static CHECKED_DEPTH: Cell<usize> = const { Cell::new(0) };
+    }
+
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    pub(super) struct Counts {
+        pub(super) opens: usize,
+        pub(super) nested_opens: usize,
+        pub(super) master_key_reads: usize,
+    }
+
+    /// Marks the closure body of a checked session, so an open taken inside
+    /// one is distinguishable from an open taken before it.
+    pub(super) struct CheckedSpan;
+
+    impl CheckedSpan {
+        pub(super) fn enter() -> Self {
+            CHECKED_DEPTH.with(|depth| depth.set(depth.get() + 1));
+            Self
+        }
+    }
+
+    impl Drop for CheckedSpan {
+        fn drop(&mut self) {
+            CHECKED_DEPTH.with(|depth| depth.set(depth.get() - 1));
+        }
+    }
+
+    pub(super) fn note_open() {
+        OPENS.with(|count| count.set(count.get() + 1));
+        if CHECKED_DEPTH.with(Cell::get) > 0 {
+            NESTED_OPENS.with(|count| count.set(count.get() + 1));
+        }
+    }
+
+    pub(super) fn note_master_key_read() {
+        MASTER_KEY_READS.with(|count| count.set(count.get() + 1));
+    }
+
+    pub(super) fn reset() {
+        OPENS.with(|count| count.set(0));
+        NESTED_OPENS.with(|count| count.set(0));
+        MASTER_KEY_READS.with(|count| count.set(0));
+    }
+
+    pub(super) fn counts() -> Counts {
+        Counts {
+            opens: OPENS.with(Cell::get),
+            nested_opens: NESTED_OPENS.with(Cell::get),
+            master_key_reads: MASTER_KEY_READS.with(Cell::get),
+        }
+    }
+}
+
+/// Opens the client credentials for `state_dir`.
+///
+/// Every open is charged twice against the native credential service: the
+/// state lease reads the manifest to confirm the namespace is not mid
+/// relocation or import, and `open` reads it again to verify the state-root
+/// binding. Routing every open through here keeps that cost visible and lets
+/// the tests below assert how many an operation pays for.
+fn open_credentials(state_dir: &Path) -> foks_client_app::Result<ClientCredentials> {
+    #[cfg(test)]
+    credential_reads::note_open();
+    ClientCredentials::open(state_dir)
+}
+
+/// Reads the vault wrapping key, one further manifest read on the native
+/// backend. Counted for the same reason as [`open_credentials`].
+fn vault_master_key(
+    credentials: &ClientCredentials,
+) -> foks_client_app::Result<Zeroizing<[u8; 32]>> {
+    #[cfg(test)]
+    credential_reads::note_master_key_read();
+    credentials.master_key()
+}
+
+/// Runs `operation` under a checked session with the profile's account vault
+/// open, using credentials the caller already holds.
+///
+/// Callers that needed `ClientCredentials` before the session — to answer an
+/// import-verification question, or to hand the handle to a federated
+/// operation — pass theirs rather than opening a second one. The second open
+/// would repeat reads whose answers cannot have changed (the profile
+/// operation lock excludes every writer, and the state-root binding is
+/// immutable outside maintenance, which the held lease excludes), and it
+/// would take the manifest file lock again from inside the span where the
+/// profile and database locks are held.
+fn with_vault_in<T>(
+    credentials: &ClientCredentials,
+    session: &ProfileSession,
+    operation: impl FnOnce(
+        &CheckedProfileSession<'_>,
+        &mut AccountVault<'_>,
+        &[u8; 32],
+    ) -> Result<T, Box<dyn std::error::Error>>,
+) -> Result<T, Box<dyn std::error::Error>> {
+    checked_session(credentials, session, |session| {
+        let master = vault_master_key(credentials)?;
+        let mut store = EncryptedFileSecretStore::open(
+            &session.paths().credential_store,
+            derive_vault_key(&master),
+        )?;
+        {
+            let mut vault = AccountVault::new(&mut store);
+            bot_token::attach(session, &mut vault)?;
+            operation(session, &mut vault, &master)
+        }
+    })
+}
+
 fn with_vault<T>(
     state_dir: &Path,
     session: &ProfileSession,
@@ -5537,18 +5673,9 @@ fn with_vault<T>(
         &mut AccountVault<'_>,
     ) -> Result<T, Box<dyn std::error::Error>>,
 ) -> Result<T, Box<dyn std::error::Error>> {
-    let credentials = ClientCredentials::open(state_dir)?;
-    checked_session(&credentials, session, |session| {
-        let master = credentials.master_key()?;
-        let mut store = EncryptedFileSecretStore::open(
-            &session.paths().credential_store,
-            derive_vault_key(&master),
-        )?;
-        {
-            let mut vault = AccountVault::new(&mut store);
-            bot_token::attach(session, &mut vault)?;
-            operation(session, &mut vault)
-        }
+    let credentials = open_credentials(state_dir)?;
+    with_vault_in(&credentials, session, |session, vault, _master| {
+        operation(session, vault)
     })
 }
 
@@ -5561,19 +5688,8 @@ fn with_vault_and_master(
         &[u8; 32],
     ) -> Result<serde_json::Value, Box<dyn std::error::Error>>,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    let credentials = ClientCredentials::open(state_dir)?;
-    checked_session(&credentials, session, |session| {
-        let master = credentials.master_key()?;
-        let mut store = EncryptedFileSecretStore::open(
-            &session.paths().credential_store,
-            derive_vault_key(&master),
-        )?;
-        {
-            let mut vault = AccountVault::new(&mut store);
-            bot_token::attach(session, &mut vault)?;
-            operation(session, &mut vault, &master)
-        }
-    })
+    let credentials = open_credentials(state_dir)?;
+    with_vault_in(&credentials, session, operation)
 }
 
 fn checked_session<T>(
@@ -5590,6 +5706,8 @@ fn checked_session<T>(
             profile_work::check_control()
                 .map_err(|_| Box::new(ProfileBusyError) as Box<dyn std::error::Error>)?;
             match credentials.try_with_shared_checked_session(session, |checked| {
+                #[cfg(test)]
+                let _span = credential_reads::CheckedSpan::enter();
                 operation.take().expect("checked operation runs once")(checked)
             })? {
                 SharedSessionOutcome::Ran(value) => return Ok(value),
@@ -5606,6 +5724,8 @@ fn checked_session<T>(
         profile_work::check_control()
             .map_err(|_| Box::new(ProfileBusyError) as Box<dyn std::error::Error>)?;
         let result = credentials.try_with_checked_session(session, |checked| {
+            #[cfg(test)]
+            let _span = credential_reads::CheckedSpan::enter();
             operation.take().expect("checked operation runs once")(checked)
         })?;
         if let Some(value) = result {
@@ -5632,6 +5752,8 @@ fn checked_sessions<T>(
         profile_work::check_control()
             .map_err(|_| Box::new(ProfileBusyError) as Box<dyn std::error::Error>)?;
         let result = credentials.try_with_checked_sessions(left, right, |left, right| {
+            #[cfg(test)]
+            let _span = credential_reads::CheckedSpan::enter();
             operation.take().expect("checked operation runs once")(left, right)
         })?;
         if let Some(value) = result {
@@ -8697,5 +8819,283 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// A state root with one offline profile, enough for every arm below to
+    /// reach its account vault before the operation itself fails for want of
+    /// an account, a team or a server.
+    fn offline_state(directory: &tempfile::TempDir) -> PathBuf {
+        let state = directory.path().join("state");
+        ClientCredentials::initialize(&state, CredentialBackend::PrivateFile).unwrap();
+        let mut registry = ProfileRegistry::open(&state).unwrap();
+        registry
+            .add(Profile {
+                name: "local".to_owned(),
+                label: None,
+                probe: "foks.app".to_owned(),
+                protocol: ProtocolPolicy::V019,
+                trust: TrustRoot::WebPki,
+            })
+            .unwrap();
+        state
+    }
+
+    fn credential_reads_for(
+        state: &Path,
+        id: u64,
+        operation: Operation,
+    ) -> credential_reads::Counts {
+        credential_reads::reset();
+        let _ = dispatch(state, Request::new(id, operation));
+        credential_reads::counts()
+    }
+
+    fn account_store() -> KvStoreRef {
+        KvStoreRef::Account(AccountStoreRef {
+            profile: "local".to_owned(),
+            account_alias: "personal".to_owned(),
+        })
+    }
+
+    /// One dispatched operation opens the client credentials once and reads
+    /// the vault wrapping key once, and never opens a second handle from
+    /// inside its checked session.
+    ///
+    /// The count is what the native backend pays: an open is two manifest
+    /// reads — the namespace-readiness read the state lease takes and the
+    /// root-binding verification — and the key is a third. Each arm listed
+    /// here used to open a second handle inside the session closure, so each
+    /// paid two or three of those reads again. The nested count is the one
+    /// that matters beyond cost: the manifest lock is a non-reentrant file
+    /// lock and is otherwise always innermost, and a nested open takes it
+    /// from inside the span that already holds the profile and database
+    /// locks.
+    ///
+    /// The claim is per listed operation, not agent-wide. The submission
+    /// upload in `data.rs` is the one arm left out that still takes the
+    /// shared-handle path: it needs a live upload channel, so it cannot be
+    /// dispatched here.
+    #[test]
+    fn one_operation_opens_client_credentials_once_outside_its_checked_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = offline_state(&directory);
+        let expected = credential_reads::Counts {
+            opens: 1,
+            nested_opens: 0,
+            master_key_reads: 1,
+        };
+        let mut observed = Vec::new();
+        for (id, operation) in [
+            (
+                1,
+                Operation::ListProfileOverview {
+                    profile: "local".to_owned(),
+                },
+            ),
+            (
+                2,
+                Operation::ListAccounts {
+                    profile: "local".to_owned(),
+                },
+            ),
+            (
+                3,
+                Operation::ListYubiAccounts {
+                    profile: "local".to_owned(),
+                },
+            ),
+            (
+                4,
+                Operation::RemoveDevice {
+                    profile: "local".to_owned(),
+                    signer_alias: "personal".to_owned(),
+                    device_id: "0".repeat(66),
+                },
+            ),
+            (
+                5,
+                Operation::MkdirKv {
+                    store: account_store(),
+                    path: "/directory".to_owned(),
+                    read_role: KvRole::Admin,
+                    write_role: KvRole::Admin,
+                    precondition: KvPrecondition::Create,
+                    mkdir_p: false,
+                },
+            ),
+            (
+                6,
+                Operation::PutKvSymlink {
+                    store: account_store(),
+                    path: "/link".to_owned(),
+                    target: "/directory".to_owned(),
+                    read_role: KvRole::Admin,
+                    write_role: KvRole::Admin,
+                    precondition: KvPrecondition::Create,
+                    mkdir_p: false,
+                },
+            ),
+            (
+                7,
+                Operation::RemoveKv {
+                    store: account_store(),
+                    path: "/directory".to_owned(),
+                    recursive: false,
+                    precondition: KvPrecondition::ExactVersion { version: 1 },
+                },
+            ),
+            (
+                8,
+                Operation::DemoteTeamMember {
+                    profile: "local".to_owned(),
+                    team_alias: "team".to_owned(),
+                    party_id_hex: "0".repeat(66),
+                    role: TeamRole::Member,
+                    visibility: 0,
+                },
+            ),
+            (
+                9,
+                Operation::RemoveTeamMember {
+                    profile: "local".to_owned(),
+                    team_alias: "team".to_owned(),
+                    party_id_hex: "0".repeat(66),
+                },
+            ),
+            (
+                10,
+                Operation::ResumeTeamMemberEdit {
+                    profile: "local".to_owned(),
+                    team_alias: "team".to_owned(),
+                },
+            ),
+            (
+                11,
+                Operation::ExpelFederatedTeam {
+                    profile: "local".to_owned(),
+                    team_alias: "team".to_owned(),
+                    remote_host_id_hex: "0".repeat(66),
+                    remote_team_id_hex: "0".repeat(66),
+                },
+            ),
+            // The chat dispatch takes the handle its wrapper holds rather
+            // than opening one in its send and attempt arms.
+            (
+                12,
+                Operation::Chat {
+                    store: TeamStoreRef {
+                        profile: "local".to_owned(),
+                        account_alias: "personal".to_owned(),
+                        team_alias: "team".to_owned(),
+                        team_id: "0".repeat(66),
+                    },
+                    action: foks_agent_proto::chat::ChatAction::Inbox,
+                },
+            ),
+            // The submission control arm in `data.rs`, for the same reason.
+            (
+                13,
+                Operation::PrepareDataWrite {
+                    scope: foks_agent_proto::data::DataScope {
+                        profile: "local".to_owned(),
+                        account_alias: "personal".to_owned(),
+                        host_id: "0".repeat(66),
+                        user_id: "0".repeat(66),
+                        team_id: None,
+                    },
+                    submission_id: format!("v1-{}-{}", "0".repeat(16), "0".repeat(32)),
+                    spec: foks_agent_proto::data::DataWriteSpec {
+                        kind: foks_agent_proto::data::DataWriteKind::Mkdir,
+                        path: "/directory".to_owned(),
+                        destination: None,
+                        team_selector: None,
+                        overwrite: false,
+                        mkdir_p: false,
+                        recursive: false,
+                        body_length: 0,
+                        body_hash: [0; 32],
+                    },
+                },
+            ),
+        ] {
+            let name = operation.name();
+            observed.push((name, credential_reads_for(&state, id, operation)));
+        }
+        assert!(
+            observed.iter().all(|(_, counts)| *counts == expected),
+            "expected {expected:?} per operation, observed {observed:?}"
+        );
+    }
+
+    /// Sharing one credentials handle across an operation does not weaken the
+    /// import gate: it is enforced inside the checked session, on every entry,
+    /// by the profile check the session wrapper runs, not by the open.
+    #[test]
+    fn a_shared_credentials_handle_still_refuses_a_profile_awaiting_import_verification() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = offline_state(&directory);
+        let paths = ProfileRegistry::open(&state)
+            .unwrap()
+            .prepare_profile_directory("local")
+            .unwrap();
+
+        let listed = dispatch(
+            &state,
+            Request::new(
+                1,
+                Operation::ListPendingOperations {
+                    profile: "local".to_owned(),
+                },
+            ),
+        );
+        assert!(
+            matches!(listed.result, ResponseResult::Success { .. }),
+            "unexpected pending-operation listing: {listed:?}"
+        );
+
+        foks_client_db::HardStateStore::open(&paths.hard_database)
+            .unwrap()
+            .install_import_readiness(
+                [4; 16],
+                [5; 32],
+                &[foks_client_db::ImportAccount {
+                    alias: "personal".to_owned(),
+                    kind: foks_client_db::ImportAccountKind::Software,
+                }],
+            )
+            .unwrap();
+
+        for (id, operation) in [
+            (
+                2,
+                Operation::ListPendingOperations {
+                    profile: "local".to_owned(),
+                },
+            ),
+            (
+                3,
+                Operation::MkdirKv {
+                    store: account_store(),
+                    path: "/directory".to_owned(),
+                    read_role: KvRole::Admin,
+                    write_role: KvRole::Admin,
+                    precondition: KvPrecondition::Create,
+                    mkdir_p: false,
+                },
+            ),
+        ] {
+            let name = operation.name();
+            let response = dispatch(&state, Request::new(id, operation));
+            assert!(
+                matches!(
+                    response.result,
+                    ResponseResult::Error {
+                        code: ErrorCode::ImportVerificationRequired,
+                        ..
+                    }
+                ),
+                "{name} was not refused by the import gate: {response:?}"
+            );
+        }
     }
 }
