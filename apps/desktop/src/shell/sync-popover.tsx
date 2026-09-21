@@ -13,7 +13,13 @@
  * observations.
  */
 
-import { useEffect, useId, useState, useSyncExternalStore } from 'react';
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { Popover } from '/kit/overlay-primitives';
 import type { AgentSnapshot, CatalogFreshnessEntry, Server } from '../model';
@@ -572,9 +578,20 @@ export function SyncPopover({
       current = false;
     };
   }, []);
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  useEffect(
+    () => () => {
+      if (copiedTimer.current !== undefined) clearTimeout(copiedTimer.current);
+    },
+    [],
+  );
   // Start the clipboard write during the click so WebKit retains the user
   // gesture. A promise-backed item can collect fresh diagnostics afterward;
   // older clipboard implementations use the events collected on opening.
+  // Only a write the clipboard accepted says Copied.
   const copy = (): void => {
     const clipboard = navigator.clipboard;
     if (!clipboard) return;
@@ -602,7 +619,15 @@ export function SyncPopover({
     } catch {
       return;
     }
-    void writing.catch(() => undefined);
+    void writing.then(
+      () => {
+        if (copiedTimer.current !== undefined)
+          clearTimeout(copiedTimer.current);
+        setCopied(true);
+        copiedTimer.current = setTimeout(() => setCopied(false), 1_000);
+      },
+      () => undefined,
+    );
   };
   const body = { service, onClose, onOpenServers };
   const single = summary.servers.length === 1 ? summary.servers[0] : null;
@@ -663,8 +688,14 @@ export function SyncPopover({
               Refresh now
             </Button>
           ) : null}
-          <Button size="sm" variant="plain" className="lnk" onClick={copy}>
-            Copy diagnostics
+          <Button
+            size="sm"
+            variant="plain"
+            className="lnk"
+            icon={copied ? 'check' : undefined}
+            onClick={copy}
+          >
+            {copied ? 'Copied' : 'Copy diagnostics'}
           </Button>
         </div>
       </div>

@@ -53,11 +53,14 @@ test('Basic source renders safe bounded Markdown without HTML or image fetching'
 test('message timestamps are relative to the current time', () => {
   const now = Date.UTC(2026, 8, 18, 12);
   assert.equal(relativeMessageTime(String(now), now), 'just now');
-  assert.equal(
-    relativeMessageTime(String(now - 120_000), now),
-    '2 minutes ago',
-  );
-  assert.equal(relativeMessageTime(String(now - 86_400_000), now), 'yesterday');
+  assert.equal(relativeMessageTime(String(now - 120_000), now), '2 min');
+  assert.equal(relativeMessageTime(String(now - 60_000), now), '1 min');
+  assert.equal(relativeMessageTime(String(now - 7_200_000), now), '2 hours');
+  assert.equal(relativeMessageTime(String(now - 3_600_000), now), '1 hour');
+  assert.equal(relativeMessageTime(String(now - 86_400_000), now), '1 day');
+  assert.equal(relativeMessageTime(String(now - 259_200_000), now), '3 days');
+  // Only a clock disagreement puts a message ahead of now; it is not an age.
+  assert.equal(relativeMessageTime(String(now + 300_000), now), 'in 5 min');
 });
 
 test('unsafe and disguised links remain inert', () => {

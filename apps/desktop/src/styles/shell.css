@@ -201,9 +201,10 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .global-refresh-wrap{position:relative;display:inline-flex;align-items:center;flex:none}
 .sync-badge{position:absolute;top:3px;left:21px;width:8px;height:8px;border-radius:50%;box-shadow:0 0 0 2px #fff;pointer-events:none}
 .sync-badge.failed{background:var(--warning-dot)}
-/* While refreshing, the spinner stands where the icon was: the same ring the popover's rows spin, at the icon's size. */
-.global-refresh .spin{box-sizing:border-box;width:15px;height:15px;border:1.6px solid var(--line-mid);border-top-color:var(--accent);border-right-color:var(--line-mid);animation:btn-spin .9s linear infinite}
-@media (prefers-reduced-motion:reduce){.global-refresh .spin{animation:none}}
+/* While refreshing, the spinner stands where the icon was: the same ring the popover's rows spin, at the icon's size.
+   Qualified with .btn so it outranks the generic button spinner, which paints its ring in the button's text colour from a later stylesheet. */
+.btn.global-refresh .spin{box-sizing:border-box;width:15px;height:15px;border:1.6px solid var(--line-mid);border-top-color:var(--accent);border-right-color:var(--line-mid);border-radius:50%;animation:btn-spin .9s linear infinite}
+@media (prefers-reduced-motion:reduce){.btn.global-refresh .spin{animation:none}}
 .sync-popover{padding:6px 0 0;font-size:12.5px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto;background:var(--main-surface);border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-menu)}
 .sync-row{padding:0 8px}
 .sync-popover.multi .sync-row+.sync-row{margin-top:2px;padding-top:2px;border-top:1px solid var(--line-soft)}

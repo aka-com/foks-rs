@@ -210,7 +210,11 @@ test('renders channel descriptions, message times, and bounded inbox previews', 
   const time = document.querySelector<HTMLTimeElement>('.chat-message time');
   assert.equal(time?.dateTime, '2023-11-14T22:13:20.001Z');
   assert.match(time?.title ?? '', /inserted as message 1/);
-  assert.match(time?.textContent ?? '', /ago|yesterday|just now/);
+  // A bare age, no "ago": "just now", "5 min", "2 hours", "3 years".
+  assert.match(
+    time?.textContent ?? '',
+    /^(just now|\d+ (min|hours?|days?|weeks?|months?|years?))$/,
+  );
   assert.doesNotMatch(time?.textContent ?? '', /2023/);
 });
 

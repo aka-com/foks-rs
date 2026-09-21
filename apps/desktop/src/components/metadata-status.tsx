@@ -1,11 +1,13 @@
 /**
  * A one-line caption under a list whose data may be stale.
  *
- * Fresh data draws nothing. A refresh in progress is a spinner alone. Only a
- * failure produces a sentence: when the data was last read, that it could not
- * be refreshed, and a Retry when the page can ask again. The caption sits under
- * the list it describes rather than at the top of the page, so it says which
- * list is affected when a page has several.
+ * Fresh data draws nothing. A refresh in progress is a spinner, next to the
+ * time the data on screen was read when there is an earlier read to name, so a
+ * list that is being refreshed still says how old what you are looking at is.
+ * Only a failure produces a sentence: when the data was last read, that it
+ * could not be refreshed, and a Retry when the page can ask again. The caption
+ * sits under the list it describes rather than at the top of the page, so it
+ * says which list is affected when a page has several.
  */
 
 import type { ReactNode } from 'react';
@@ -48,7 +50,7 @@ export function FreshnessCaption({
       </p>
     );
   }
-  if (freshness.refreshing && !freshness.complete)
+  if (freshness.refreshing)
     return (
       <p
         className="freshness refreshing"
@@ -56,6 +58,9 @@ export function FreshnessCaption({
         aria-label={`${label} refreshing`}
       >
         <span className="spin" aria-hidden="true" />
+        {freshness.lastSuccessAt === undefined ? null : (
+          <span>Last {timeOf(freshness.lastSuccessAt)}</span>
+        )}
       </p>
     );
   return null;

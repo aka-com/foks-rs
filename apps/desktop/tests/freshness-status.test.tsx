@@ -95,7 +95,7 @@ test('the freshness caption names a retained failure, spins while loading, and i
   );
 });
 
-test('background metadata refreshes stay quiet only when every query has data', () => {
+test('a background metadata refresh names the time the data on screen was read', () => {
   const cached = {
     data: [],
     error: undefined,
@@ -111,16 +111,20 @@ test('background metadata refreshes stay quiet only when every query has data', 
         onRetry: () => {},
       }),
     );
-  assert.equal(render(metadataFreshness([cached, cached])), '');
-  assert.match(
-    render(
-      metadataFreshness([
-        cached,
-        { ...cached, data: undefined, lastSuccessAt: undefined },
-      ]),
-    ),
-    /class="freshness refreshing"/,
+  // Every query has data and a refresh is running: rather than going silent,
+  // the caption says how old what is on screen is.
+  const refreshing = render(metadataFreshness([cached, cached]));
+  assert.match(refreshing, /class="freshness refreshing"/);
+  assert.match(refreshing, /Last /);
+  // A first load has no earlier read to name, so it stays a bare spinner.
+  const first = render(
+    metadataFreshness([
+      cached,
+      { ...cached, data: undefined, lastSuccessAt: undefined },
+    ]),
   );
+  assert.match(first, /class="freshness refreshing"/);
+  assert.doesNotMatch(first, /Last /);
   const failed = render(
     metadataFreshness([
       cached,

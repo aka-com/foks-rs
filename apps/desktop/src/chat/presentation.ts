@@ -269,6 +269,16 @@ export function messageTime(milliseconds: string): string {
   }).format(date);
 }
 
+/**
+ * How old a message is, as a bare duration: "5 min", "2 hours", "3 days".
+ *
+ * The age sits beside the message it belongs to, so the "ago" that a relative
+ * formatter adds says nothing the column does not. Minutes are abbreviated
+ * because they are the case that recurs on every row of a live conversation;
+ * the larger units are spelled out. A timestamp in the future, which only a
+ * clock disagreement produces, keeps its direction rather than reading as an
+ * age.
+ */
 export function relativeMessageTime(
   milliseconds: string,
   nowMilliseconds: number = Date.now(),
@@ -278,17 +288,16 @@ export function relativeMessageTime(
   const difference = date.valueOf() - nowMilliseconds;
   const absolute = Math.abs(difference);
   if (absolute < 60_000) return 'just now';
-  const units: [Intl.RelativeTimeFormatUnit, number][] = [
+  const units: [string, number][] = [
     ['year', 31_536_000_000],
     ['month', 2_592_000_000],
     ['week', 604_800_000],
     ['day', 86_400_000],
     ['hour', 3_600_000],
-    ['minute', 60_000],
+    ['min', 60_000],
   ];
   const [unit, size] = units.find(([, size]) => absolute >= size) ?? units[5];
-  return new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(
-    Math.round(difference / size),
-    unit,
-  );
+  const count = Math.round(absolute / size);
+  const age = `${count} ${unit === 'min' || count === 1 ? unit : `${unit}s`}`;
+  return difference > 0 ? `in ${age}` : age;
 }
