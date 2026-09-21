@@ -482,6 +482,63 @@ fn a_catalog_listing_after_a_local_write_is_read_fresh() {
     assert_eq!(state.catalog_read_freshness(false), (true, 2));
 }
 
+/// A profile's own listing settles that profile: without this, every
+/// per-profile listing after any write read through as if stale, because only
+/// a listing of every profile advanced the epoch it was judged against.
+#[test]
+fn a_profile_listing_settles_that_profile_and_no_other() {
+    let state = AppState::new(Arc::new(AgentHandle::new(
+        "/tmp/unused-foks-agent.sock".into(),
+    )));
+    let work = state.for_profile("work.example").unwrap();
+    let home = state.for_profile("home.example").unwrap();
+    work.invalidate_catalog_items(&CatalogStoreRef::Account(account_ref(
+        "work.example",
+        "personal",
+    )));
+
+    let (fresh, epoch) = work.catalog_read_freshness(false);
+    assert!(fresh);
+    assert_eq!(epoch, 1);
+    work.note_fresh_catalog_read(epoch);
+    // The profile that was read is settled; its next listing is served from
+    // what the agent still holds.
+    assert_eq!(work.catalog_read_freshness(false), (false, 1));
+    // A second view of the same profile sees the same settlement.
+    assert_eq!(
+        state
+            .for_profile("work.example")
+            .unwrap()
+            .catalog_read_freshness(false),
+        (false, 1)
+    );
+    // The other profile was not read, so it is still read fresh, and so is a
+    // listing of every profile.
+    assert_eq!(home.catalog_read_freshness(false), (true, 1));
+    assert_eq!(state.catalog_read_freshness(false), (true, 1));
+
+    // A listing of every profile covers each of them.
+    state.note_fresh_catalog_read(1);
+    assert_eq!(home.catalog_read_freshness(false), (false, 1));
+    assert_eq!(state.catalog_read_freshness(false), (false, 1));
+
+    // The next write retires both again, and the profile read settles only
+    // the profile it covered.
+    home.invalidate_catalog_items(&CatalogStoreRef::Account(account_ref(
+        "home.example",
+        "home",
+    )));
+    let (fresh, epoch) = home.catalog_read_freshness(false);
+    assert!(fresh);
+    assert_eq!(epoch, 2);
+    home.note_fresh_catalog_read(epoch);
+    assert_eq!(home.catalog_read_freshness(false), (false, 2));
+    assert_eq!(work.catalog_read_freshness(false), (true, 2));
+    assert_eq!(state.catalog_read_freshness(false), (true, 2));
+    // A settled profile is still read fresh when the user asks for it.
+    assert_eq!(home.catalog_read_freshness(true), (true, 2));
+}
+
 #[test]
 fn mutation_gate_refuses_a_second_write_until_the_first_finishes() {
     let state = AppState::new(Arc::new(AgentHandle::new(

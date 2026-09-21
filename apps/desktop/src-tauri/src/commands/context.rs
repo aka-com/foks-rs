@@ -38,6 +38,10 @@ struct MutationScopeState {
     chat_identities: Mutex<HashMap<String, foks_agent_proto::chat::ChatScope>>,
     load_generation: Arc<AtomicU64>,
     load: Arc<Mutex<Option<CatalogLoadToken>>>,
+    /// The highest mutation epoch a fresh listing of this scope's own profile
+    /// has covered. Held per scope so a profile's own read settles that
+    /// profile, which the root epoch cannot say on its behalf.
+    fresh_epoch: Arc<AtomicU64>,
 }
 
 #[derive(Clone)]
@@ -55,7 +59,9 @@ pub struct AppState {
     /// be read for this pass instead of being served from the agent's
     /// retained snapshot, which is only as fresh as its own lifetime.
     catalog_mutation_epoch: Arc<AtomicU64>,
-    /// The highest mutation epoch a completed fresh listing has covered.
+    /// The highest mutation epoch a completed fresh listing of every profile
+    /// has covered. A listing of one profile settles that profile's own
+    /// scope instead; see [`MutationScopeState::fresh_epoch`].
     catalog_fresh_epoch: Arc<AtomicU64>,
     pub(super) catalog: Arc<Mutex<Option<CatalogSnapshot>>>,
     mutation_in_flight: Arc<AtomicBool>,
@@ -930,19 +936,42 @@ impl AppState {
     /// so a load that fails or is retired leaves the next one fresh as well.
     /// A mutation that lands while a fresh listing runs raises the epoch past
     /// the one that listing covers, so the listing after it is fresh again.
+    ///
+    /// Freshness is settled per profile. A listing of one profile answers for
+    /// that profile alone, so it is judged against the highest epoch either a
+    /// listing of every profile or a listing of this one has covered.
     pub(super) fn catalog_read_freshness(&self, requested: bool) -> (bool, u64) {
         let epoch = self.catalog_mutation_epoch.load(Ordering::Acquire);
         (
             requested
                 || self.mutation_requires_refresh.load(Ordering::Acquire)
-                || epoch != self.catalog_fresh_epoch.load(Ordering::Acquire),
+                || epoch != self.settled_fresh_epoch(),
             epoch,
         )
     }
 
+    /// The highest mutation epoch a fresh listing that covered this scope has
+    /// published.
+    fn settled_fresh_epoch(&self) -> u64 {
+        let every_profile = self.catalog_fresh_epoch.load(Ordering::Acquire);
+        match self.mutation_profile() {
+            Some(_) => every_profile.max(self.scope_state.fresh_epoch.load(Ordering::Acquire)),
+            None => every_profile,
+        }
+    }
+
     /// Records that a fresh listing covering `epoch` published its snapshot.
+    /// A listing made in a profile's scope settles that profile only; one
+    /// made outside any profile's scope read every profile and settles them
+    /// all.
     pub(super) fn note_fresh_catalog_read(&self, epoch: u64) {
-        self.catalog_fresh_epoch.fetch_max(epoch, Ordering::AcqRel);
+        if self.mutation_profile().is_some() {
+            self.scope_state
+                .fresh_epoch
+                .fetch_max(epoch, Ordering::AcqRel);
+        } else {
+            self.catalog_fresh_epoch.fetch_max(epoch, Ordering::AcqRel);
+        }
     }
 
     pub(super) fn selected_chat(

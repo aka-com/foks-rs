@@ -1078,9 +1078,9 @@ pub async fn list_profile_catalog(
     let access = crate::applock::unlocked_generation(app)?;
     let state = state.for_profile(&profile)?;
     let (generation, token) = state.begin_catalog_load_checked()?;
-    // A read of one profile never settles the mutation epoch: it says nothing
-    // about the other profiles, whose first pages the agent may still hold.
-    let (fresh, _) = state.catalog_read_freshness(false);
+    // A read of one profile settles that profile alone: it says nothing about
+    // the other profiles, whose first pages the agent may still hold.
+    let (fresh, epoch) = state.catalog_read_freshness(false);
     let transport = state
         .agent
         .transport_for("list_profile_catalog", Some(&profile));
@@ -1111,6 +1111,9 @@ pub async fn list_profile_catalog(
         result = catalog_dto(accepted, published, Some(&profiles));
     }) {
         return Err(super::context::catalog_changed_during_read());
+    }
+    if fresh {
+        state.note_fresh_catalog_read(epoch);
     }
     crate::applock::require_unlocked_generation(app, access)?;
     result
