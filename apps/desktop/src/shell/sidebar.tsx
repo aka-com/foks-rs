@@ -358,9 +358,7 @@ export function AccountHeader({
         title={`${username} · ${server}`}
         onClick={() => setOpen(!open)}
       >
-        <span className="avatar" aria-hidden="true">
-          {username.slice(0, 1).toUpperCase()}
-        </span>
+        <AccountMark name={username} size="round" className="avatar" />
         <span className="t">
           <b>{username}</b>
           <small>{host}</small>

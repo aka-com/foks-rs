@@ -20,6 +20,7 @@ import type { AccountStore, AgentSnapshot } from '../model';
 export function AccountMark({
   name,
   size = 'sm',
+  className,
 }: {
   /** The username, or the local alias when the catalog has no username. */
   name: string;
@@ -28,10 +29,17 @@ export function AccountMark({
    * `big` the 48px one a card draws.
    */
   size?: 'sm' | 'md' | 'round' | 'big';
+  className?: string;
 }): ReactNode {
   return (
     <span
-      className={['kico', size === 'sm' ? '' : size, 'group', 'account']
+      className={[
+        'kico',
+        size === 'sm' ? '' : size,
+        'group',
+        'account',
+        className,
+      ]
         .filter(Boolean)
         .join(' ')}
       // The initial stands for the name beside it, which is always drawn.

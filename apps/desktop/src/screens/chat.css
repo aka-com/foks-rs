@@ -743,17 +743,7 @@
   margin: 0;
 }
 .chat-avatar {
-  flex: none;
-  width: 26px;
-  height: 26px;
   margin-top: 2px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  color: var(--main-surface);
-  font-size: var(--mark-type);
-  font-weight: 700;
-  text-transform: uppercase;
 }
 .chat-message-body {
   flex: 1;

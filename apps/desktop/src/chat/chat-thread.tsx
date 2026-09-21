@@ -5,7 +5,8 @@ import type { ReactNode, Ref } from 'react';
 import { Button, Chip, Icon } from '../components';
 import { ChatAlerts, failureAlert, type ChatAlert } from './chat-alerts';
 import type { ChatAction, ChatChannel, ChatReply } from '../chat-contract';
-import { hue, plural, shortId } from '../model';
+import { plural, shortId } from '../model';
+import { AccountMark } from '../screens/account-switcher';
 import { TEXT_LIMIT_LABEL } from './use-chat-composer';
 import { useMessageComposer } from './use-message-composer';
 import { OutgoingRow } from './outgoing-row';
@@ -334,16 +335,7 @@ export function ChatThread({
                       data-message={m.id}
                       title={grouped ? messageTime(m.insert_time) : undefined}
                     >
-                      {/* The author's initial over the hue their name
-                          resolves to, the same hue the rest of the shell
-                          draws that name in. */}
-                      <span
-                        className="chat-avatar"
-                        aria-hidden="true"
-                        style={{ background: hue(avatarName) }}
-                      >
-                        {avatarName.slice(0, 1).toUpperCase()}
-                      </span>
+                      <AccountMark name={avatarName} className="chat-avatar" />
                       <div className="chat-message-body">
                         <header className={grouped ? 'offscreen' : undefined}>
                           <span

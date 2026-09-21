@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Bridge } from '../bridge';
 import { Button } from '../components';
-import { hue } from '../model';
+import { AccountMark } from '../screens/account-switcher';
 import type { ChatSendService, OutgoingMessage } from './send-service';
 import { MessageText } from './message-text';
 import { failure } from './actions';
@@ -56,13 +56,7 @@ export function OutgoingRow({
       data-submission={message.submission}
       data-operation={message.operation?.id}
     >
-      <span
-        className="chat-avatar"
-        aria-hidden="true"
-        style={{ background: hue(avatarName) }}
-      >
-        {avatarName.slice(0, 1).toUpperCase()}
-      </span>
+      <AccountMark name={avatarName} className="chat-avatar" />
       <div className="chat-message-body">
         <div className="chat-outgoing-content">
           <header>
