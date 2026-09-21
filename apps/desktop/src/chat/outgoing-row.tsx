@@ -16,12 +16,14 @@ const statusLabels: Partial<Record<OutgoingMessage['phase'], string>> = {
 };
 export function OutgoingRow({
   message,
+  grouped = false,
   avatarName,
   storeId,
   service,
   bridge,
 }: {
   message: OutgoingMessage;
+  grouped?: boolean;
   avatarName: string;
   storeId: string;
   service: ChatSendService;
@@ -52,15 +54,18 @@ export function OutgoingRow({
     message.text !== undefined;
   return (
     <article
-      className={`chat-message chat-outgoing${sent ? ' sent' : ''}${sending ? ' sending' : ''}${queued ? ' queued' : ''}`}
+      className={`chat-message chat-outgoing${grouped ? ' grouped' : ''}${sent ? ' sent' : ''}${sending ? ' sending' : ''}${queued ? ' queued' : ''}`}
       data-submission={message.submission}
       data-operation={message.operation?.id}
+      title={grouped ? messageTime(String(message.createdAt)) : undefined}
     >
       <AccountMark name={avatarName} className="chat-avatar" />
       <div className="chat-message-body">
         <div className="chat-outgoing-content">
           <header>
-            <span className="chat-sender you">You</span>
+            <span className={grouped ? 'offscreen' : 'chat-sender you'}>
+              You
+            </span>
             {sending ? (
               <span
                 className="chat-send-spinner"
@@ -69,11 +74,29 @@ export function OutgoingRow({
               />
             ) : (
               <time
+                className={grouped ? 'offscreen' : undefined}
                 dateTime={new Date(message.createdAt).toISOString()}
                 title={messageTime(String(message.createdAt))}
               >
                 {relativeMessageTime(String(message.createdAt))}
               </time>
+            )}
+            {!sending && statusLabel && (
+              <span
+                className={queued ? 'offscreen' : 'chat-send-state'}
+                role="status"
+              >
+                {statusLabel}
+              </span>
+            )}
+            {!sending && editable && (
+              <button
+                type="button"
+                className="chat-edit-link"
+                onClick={() => void run(true)}
+              >
+                Edit
+              </button>
             )}
           </header>
           {message.text !== undefined && (
@@ -81,9 +104,8 @@ export function OutgoingRow({
           )}
         </div>
         {!sending &&
-        (statusLabel || message.error || message.cleanupError || error) ? (
+        (message.error || retryable || message.cleanupError || error) ? (
           <div className="chat-send-status">
-            {statusLabel && <span role="status">{statusLabel}</span>}
             {message.error && <span>{message.error}</span>}
             {retryable && (
               <Button
@@ -92,11 +114,6 @@ export function OutgoingRow({
                 onClick={() => void run(false)}
               >
                 {message.phase === 'unconfirmed' ? 'Check again' : 'Retry'}
-              </Button>
-            )}
-            {editable && (
-              <Button size="sm" onClick={() => void run(true)}>
-                Edit
               </Button>
             )}
             {message.cleanupError && (

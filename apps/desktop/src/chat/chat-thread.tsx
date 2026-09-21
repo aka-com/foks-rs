@@ -367,10 +367,11 @@ export function ChatThread({
               })}
               {outgoing
                 .filter((m) => !m.observed)
-                .map((message) => (
+                .map((message, index) => (
                   <OutgoingRow
                     key={message.id}
                     message={message}
+                    grouped={index > 0}
                     avatarName={
                       actor
                         ? (senderNames.get(actor) ?? shortId(actor))

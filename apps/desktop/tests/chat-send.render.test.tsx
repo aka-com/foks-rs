@@ -403,8 +403,21 @@ test('queued messages survive agent unavailability and remain counted for the wi
       return row;
     });
     assert.ok(ui.within(queued).getByText('second message'));
-    assert.ok(ui.within(queued).getByRole('status'));
-    assert.equal(ui.within(queued).getByRole('status').textContent, 'Queued');
+    assert.equal(queued.classList.contains('grouped'), true);
+    assert.equal(
+      document.querySelectorAll('.chat-outgoing:not(.grouped)').length,
+      1,
+    );
+    const header = queued.querySelector('header');
+    assert.ok(header);
+    const status = ui.within(header).getByRole('status');
+    assert.equal(status.classList.contains('offscreen'), true);
+    assert.ok(
+      ui
+        .within(header)
+        .getByRole('button', { name: 'Edit' })
+        .classList.contains('chat-edit-link'),
+    );
     // Neither message has a copy the next session could read.
     await ui.waitFor(() => assert.equal(reports.at(-1), 2));
     ui.fireEvent.click(
