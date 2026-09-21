@@ -315,7 +315,15 @@ export class ChatSendService {
    * map, so drafts outlive conversation and team navigation.
    */
   drafts(storeId: string): Map<string, string> {
-    return this.ensure(storeId).drafts;
+    const existing = this.teams.get(storeId);
+    if (existing) return existing.drafts;
+    // A team this service's snapshot does not hold yet: the provider hands
+    // the service a new snapshot after the first render that names a team
+    // in it, so that render reads no drafts rather than failing the page.
+    const store = this.snapshot && storeOf(this.snapshot, storeId);
+    return store?.kind === 'team'
+      ? this.ensure(storeId).drafts
+      : new Map<string, string>();
   }
   draft(storeId: string, channel: string): string {
     return this.teams.get(storeId)?.drafts.get(channel) ?? '';

@@ -187,3 +187,19 @@ test('a lost submit reply is not retried as a new send', async () => {
     h.service.stop();
   }
 });
+
+test('drafts for a team the service has not been handed yet are empty, not a failure', async () => {
+  const { service } = await setup();
+  try {
+    // A location can name a team one render before the provider hands the
+    // service the snapshot that holds it; that render reads no drafts.
+    assert.doesNotThrow(() => service.drafts('team:not-yet'));
+    assert.equal(service.drafts('team:not-yet').size, 0);
+    assert.equal(service.drafts('acct:personal').size, 0);
+    const drafts = service.drafts('team:eng');
+    drafts.set('channel', 'text');
+    assert.equal(service.drafts('team:eng').get('channel'), 'text');
+  } finally {
+    service.stop();
+  }
+});
