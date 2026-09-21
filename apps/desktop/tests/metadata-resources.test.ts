@@ -18,7 +18,9 @@ import { appInfoKey, appInfoQuery } from '../src/resources/application';
 import {
   invitationRecoveryQuery,
   pendingOperationsQuery,
+  reportableTeamRequestError,
   teamRequestCountQuery,
+  TEAM_REQUEST_FRESHNESS,
 } from '../src/operation-queries';
 
 function deferred<T>() {
@@ -254,4 +256,56 @@ test('team request count does not re-enter a bridge that owns its own profile ad
     mock.timers.tick(60_000);
     mock.timers.reset();
   }
+});
+
+test('team request counts are quiet about servers that are away and stay current for minutes', async () => {
+  const cases = [
+    ['io', false],
+    ['profile-busy', false],
+    ['deadline-exceeded', false],
+    ['server-unavailable', false],
+    ['catalog-required', false],
+    ['agent-lost', true],
+    ['unsafe-socket', true],
+  ] as const;
+  for (const [code, reported] of cases)
+    assert.equal(
+      reportableTeamRequestError({
+        code,
+        message: code,
+        retryable: false,
+        fatal: false,
+        ambiguous: false,
+      }),
+      reported,
+      code,
+    );
+  let now = 0;
+  let calls = 0;
+  const repository = new MetadataRepository(() => now);
+  const bridge = {
+    invitation: async () => {
+      calls++;
+      return { rows: [] };
+    },
+  } as unknown as Bridge;
+  const store: TeamStore = {
+    id: 'store',
+    kind: 'team',
+    name: 'Team',
+    server: 'profile',
+    account: 'account',
+    alias: 'team',
+    team_id_hex: 'team',
+    active: true,
+    team_kind: 'named',
+  };
+  const query = teamRequestCountQuery(repository, bridge, store);
+  assert.equal(await query.load(), 0);
+  now = TEAM_REQUEST_FRESHNESS - 1;
+  await query.load();
+  assert.equal(calls, 1);
+  now = TEAM_REQUEST_FRESHNESS + 1;
+  await query.load();
+  assert.equal(calls, 2);
 });

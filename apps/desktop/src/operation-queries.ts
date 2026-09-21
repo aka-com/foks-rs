@@ -1,6 +1,11 @@
 /** Only public recovery metadata enters the query repository. Invitation payloads remain local. */
 import { useCallback, useEffect, useMemo } from 'react';
-import { enqueueProfileWork } from './bridge';
+import {
+  enqueueProfileWork,
+  isAgentSessionError,
+  isTerminalCommandError,
+  normalizeCommandError,
+} from './bridge';
 import type { Bridge, PendingOperation } from './bridge';
 import { plural } from './model';
 import type { AgentSnapshot, StoreRef, TeamStore } from './model';
@@ -98,20 +103,41 @@ export function teamRequestCountQuery(
   store: TeamStore,
 ) {
   const { server, account, alias } = store;
-  return repository.query<number>(teamRequestCountKey(store), async () => {
+  return repository.query<number>(
+    teamRequestCountKey(store),
+    async () => {
     // `invitation` owns its own profile admission: the native bridge queues
     // the request itself. Queuing here as well would hold the profile's
     // slot while awaiting a request that cannot start until the slot is
     // released, and the inner request would expire at the admission
     // deadline instead of running.
-    const reply = await bridge.invitation(
-      server,
-      account,
-      { action: 'inbox', team_alias: alias },
-      null,
-    );
-    return Array.isArray(reply) ? reply.length : (reply.rows?.length ?? 0);
-  });
+      const reply = await bridge.invitation(
+        server,
+        account,
+        { action: 'inbox', team_alias: alias },
+        null,
+      );
+      return Array.isArray(reply) ? reply.length : (reply.rows?.length ?? 0);
+    },
+    // A badge, read for every manageable team at unlock: invitation activity
+    // invalidates it, so it need not be re-read on the metadata cadence.
+    TEAM_REQUEST_FRESHNESS,
+  );
+}
+
+/** How long a request count is current without invitation activity. */
+export const TEAM_REQUEST_FRESHNESS = 5 * 60_000;
+
+/**
+ * Whether a failed request count is worth telling the user about. The count
+ * is a badge: a server that is offline, busy or slow leaves it blank, and
+ * saying so once per team per retry would be noise. What still reaches the
+ * handler is what changes the session itself: the agent lost or in a state
+ * that quarantines it.
+ */
+export function reportableTeamRequestError(error: unknown): boolean {
+  const typed = normalizeCommandError(error);
+  return isAgentSessionError(typed) || isTerminalCommandError(typed);
 }
 
 /** The named teams this account can manage: the only ones a request can be asked of. */
@@ -154,7 +180,13 @@ export function useTeamRequestCounts(
     () => teams.map((store) => teamRequestCountQuery(shared, bridge, store)),
     [teams, shared, bridge],
   );
-  const states = useMetadataQueries(queries, onError ? { onError } : {});
+  const reportError = useCallback(
+    (error: unknown) => {
+      if (onError && reportableTeamRequestError(error)) onError(error);
+    },
+    [onError],
+  );
+  const states = useMetadataQueries(queries, { onError: reportError });
   useEffect(() => {
     const refresh = (event: Event) => {
       const scope = (event as CustomEvent<InvitationActivityDetail>).detail;
