@@ -18,6 +18,7 @@ import {
   type TeamStore,
 } from '../src/model';
 import { failCatalogRefresh, markCatalogRefresh } from '../src/catalog-state';
+import { settle } from './lib/dom-harness';
 
 const tick = () => new Promise<void>((done) => setImmediate(done));
 
@@ -65,6 +66,95 @@ test('valid final catalogs supersede failed partial projections and failed publi
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(publications, publicationFailure ? 2 : 1);
   }
+});
+
+/**
+ * A catalog read whose partials the test emits by hand, with each partial
+ * labelled so the projection that reads it can be named.
+ *
+ * Every projection reads `failures` before its first await, so a getter there
+ * records which partials were projected and which were dropped unread.
+ */
+function labelledPartials(catalog: CatalogDto) {
+  const projected: string[] = [];
+  const label = (name: string): CatalogDto => {
+    const dto: CatalogDto = { ...catalog };
+    Object.defineProperty(dto, 'failures', {
+      enumerable: true,
+      get() {
+        if (projected.at(-1) !== name) projected.push(name);
+        return catalog.failures;
+      },
+    });
+    return dto;
+  };
+  return { projected, label };
+}
+
+test('several partials arriving in one tick produce one projection', async () => {
+  const base = mockBridge(FIXTURE);
+  const catalog = await base.listCatalog();
+  const { projected, label } = labelledPartials(catalog);
+  const gate = deferred<CatalogDto>();
+  const started = deferred<void>();
+  let emit!: (partial: CatalogDto) => void;
+  const bridge: Bridge = {
+    ...base,
+    listCatalog: (onPartial) => {
+      emit = onPartial!;
+      started.resolve();
+      return gate.promise;
+    },
+  };
+  let publications = 0;
+  const pending = loadSnapshot(bridge, FIXTURE, 1, () => {
+    publications++;
+  });
+  await started.promise;
+  emit(label('first'));
+  emit(label('second'));
+  emit(label('third'));
+  await settle();
+  // Only the newest partial is projected: each one carries the whole
+  // accumulated catalog, so the two it superseded are dropped unread.
+  assert.deepEqual(projected, ['third']);
+  assert.equal(publications, 1);
+  gate.resolve(catalog);
+  assert.ok(await pending);
+});
+
+test('a partial arriving after the previous settled is still projected', async () => {
+  const base = mockBridge(FIXTURE);
+  const catalog = await base.listCatalog();
+  const { projected, label } = labelledPartials(catalog);
+  const gate = deferred<CatalogDto>();
+  const started = deferred<void>();
+  let emit!: (partial: CatalogDto) => void;
+  const bridge: Bridge = {
+    ...base,
+    listCatalog: (onPartial) => {
+      emit = onPartial!;
+      started.resolve();
+      return gate.promise;
+    },
+  };
+  let publications = 0;
+  const pending = loadSnapshot(bridge, FIXTURE, 1, () => {
+    publications++;
+  });
+  await started.promise;
+  emit(label('first'));
+  await settle();
+  assert.deepEqual(projected, ['first']);
+  assert.equal(publications, 1);
+  // The slot is empty again, so the next partial is not swallowed by the one
+  // before it: first paint is never the only paint.
+  emit(label('second'));
+  await settle();
+  assert.deepEqual(projected, ['first', 'second']);
+  assert.equal(publications, 2);
+  gate.resolve(catalog);
+  assert.ok(await pending);
 });
 
 test('a terminal partial failure cannot be hidden by a valid final catalog', async () => {

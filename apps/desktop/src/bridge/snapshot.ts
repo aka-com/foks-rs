@@ -11,6 +11,7 @@ import {
   type BackgroundHistoryWork,
 } from '../scheduling/profile-work';
 import type { Bridge } from './contract';
+import type { CatalogDto } from './vault-catalog';
 import {
   normalizeCommandError,
   isTerminalCommandError,
@@ -197,44 +198,64 @@ async function loadSnapshotOnce(
   let accepting = true;
   let revision = 0;
   let terminalFailure: CommandError | undefined;
-  const projections = new Set<Promise<void>>();
+  /**
+   * The newest partial catalog that has not been projected yet, and the chain
+   * that drains it.
+   *
+   * Each partial carries the whole accumulated catalog, so projecting an
+   * older one is work whose answer the next projection replaces in full. Only
+   * the newest is kept: a partial that lands while a projection runs replaces
+   * whatever was waiting, and the drain picks it up when that projection ends.
+   */
+  let queued: CatalogDto | undefined;
+  let draining: Promise<void> | undefined;
+  /**
+   * Projects queued partials until none is left. The revision is taken here,
+   * when a projection starts, rather than when its partial arrived: taken on
+   * arrival it would always name the newest partial, and a projection the
+   * next partial superseded would still publish.
+   */
+  const drain = async (): Promise<void> => {
+    while (queued) {
+      const partial = queued;
+      queued = undefined;
+      if (!accepting || !isCurrent() || terminalFailure) return;
+      const current = ++revision;
+      try {
+        const snapshot = await projectCatalog(
+          bridge,
+          partial,
+          base,
+          nowSeconds,
+          agent,
+          true,
+          undefined,
+          undefined,
+          false,
+          activity,
+        );
+        if (
+          accepting &&
+          isCurrent() &&
+          current === revision &&
+          !terminalFailure
+        )
+          onPartial?.(snapshot);
+      } catch (cause: unknown) {
+        if (!isCurrent()) return;
+        const error = normalizeCommandError(cause);
+        if (isTerminalCommandError(error)) terminalFailure ??= error;
+      }
+    }
+  };
   try {
     activity.update('Loading catalog');
     const response = await bridge.listCatalog(
       onPartial
         ? (partial) => {
             if (!accepting || !isCurrent() || terminalFailure) return;
-            const current = ++revision;
-            const projection = projectCatalog(
-              bridge,
-              partial,
-              base,
-              nowSeconds,
-              agent,
-              true,
-              undefined,
-              undefined,
-              false,
-              activity,
-            )
-              .then((snapshot) => {
-                if (
-                  accepting &&
-                  isCurrent() &&
-                  current === revision &&
-                  !terminalFailure
-                )
-                  onPartial(snapshot);
-              })
-              .catch((cause: unknown) => {
-                if (!isCurrent()) return;
-                const error = normalizeCommandError(cause);
-                if (isTerminalCommandError(error)) terminalFailure ??= error;
-              })
-              .finally(() => {
-                projections.delete(projection);
-              });
-            projections.add(projection);
+            queued = partial;
+            draining = (draining ?? Promise.resolve()).then(drain);
           }
         : undefined,
       // A refresh the user asked for, and a read back of a write, must not be
@@ -242,8 +263,11 @@ async function loadSnapshotOnce(
       forceRosters,
     );
     accepting = false;
+    // A partial the drain never took cannot publish now that `accepting` is
+    // false, so projecting it would only delay the final read.
+    queued = undefined;
     activity.update('Loading catalog details');
-    await Promise.all(projections);
+    await draining;
     if (!isCurrent()) throw new CatalogReadRetiredError();
     if (terminalFailure) throw terminalFailure;
     const snapshot = await projectCatalog(
