@@ -18,7 +18,7 @@
  */
 
 import { useId, useMemo, useState } from 'react';
-import type { ReactNode, Ref } from 'react';
+import type { ReactNode } from 'react';
 import { Button, Icon, SectionLabel } from '../components';
 import {
   chatAvailable,
@@ -280,8 +280,6 @@ export interface ChatTeamColumnProps {
   activeChannel?: string;
   /** The clock the tab decides availability on, so the column shares it. */
   accessOptions?: AvailabilityOptions;
-  /** The search field, so the conversation header's search button reaches it. */
-  searchRef?: Ref<HTMLInputElement>;
   onOpen: (ref: StoreRef, channel?: string) => void;
   onNewChat: () => void;
   /** Opens a team's page on the Teams tab, where its setup is finished. */
@@ -293,7 +291,6 @@ export function ChatTeamColumn({
   selected,
   activeChannel,
   accessOptions = {},
-  searchRef,
   onOpen,
   onNewChat,
   onTeams,
@@ -383,7 +380,6 @@ export function ChatTeamColumn({
           <Icon name="search" />
           <input
             type="search"
-            ref={searchRef}
             value={filter}
             // The "No chat" teams are part of the column and are searched with
             // the rest of it, so the field is live whenever the column lists

@@ -51,6 +51,11 @@ export interface PageHeaderProps extends HeaderParts {
    * which leaves every existing caller's header as it is.
    */
   sub?: ReactNode;
+  /**
+   * A status mark drawn beside the title, for a fact about the page's own
+   * subject — "This device" — rather than something to act on.
+   */
+  badge?: ReactNode;
   /** A page-level action aligned at the far right of the header. */
   action?: ReactNode;
   /** A rule under the header, for pages with no toolbar to carry one. */
@@ -67,6 +72,7 @@ export function PageHeader({
   crumbs,
   mark,
   sub,
+  badge,
   tail,
   action,
   ruled = false,
@@ -104,6 +110,7 @@ export function PageHeader({
             {mark}
             <div className="loc-copy">
               <h1>{title}</h1>
+              {badge ? <span className="loc-badge">{badge}</span> : null}
               {sub === undefined ? null : <div className="sub">{sub}</div>}
             </div>
           </>

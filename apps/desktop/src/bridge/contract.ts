@@ -208,6 +208,8 @@ export interface Bridge {
     operationId: string,
   ): Promise<MutationResponse>;
   chatLocal(action: LocalAction): Promise<LocalSession>;
+  /** Opens the system pane where desktop alerts are permitted. */
+  openNotificationSettings(): Promise<CopyResponse>;
   openChatLink(url: string): Promise<CopyResponse>;
   copyText(text: string): Promise<CopyResponse>;
   initializeClientState(): Promise<AgentStatus>;

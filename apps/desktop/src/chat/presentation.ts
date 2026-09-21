@@ -7,8 +7,14 @@ import {
   CHAT_NAME_MAX_CHARS,
   CHAT_NAME_MIN_CHARS,
 } from '../chat-limits';
+/** The channel's own name, with no "#" — the crumbs and lists that sit in a
+ * labelled context draw this. */
+export function channelLabel(channel: ChatChannel): string {
+  return channel.name || 'general';
+}
+
 export function channelTitle(channel: ChatChannel): string {
-  return `#${channel.name || 'general'}`;
+  return `#${channelLabel(channel)}`;
 }
 
 /**

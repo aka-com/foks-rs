@@ -236,6 +236,19 @@ impl Inner {
         }
     }
 }
+/// Opens the system pane where desktop alerts are permitted. The destination
+/// is fixed, so nothing the webview says can redirect it.
+#[tauri::command]
+pub async fn open_notification_settings(
+    webview: tauri::Webview,
+) -> Result<serde_json::Value, AgentError> {
+    require_main_window(&webview)?;
+    tauri::async_runtime::spawn_blocking(platform::open_settings)
+        .await
+        .map_err(|_| error("Opening notification settings was interrupted."))??;
+    Ok(serde_json::json!({"ok": true}))
+}
+
 #[tauri::command]
 pub async fn chat_local(
     webview: tauri::Webview,
@@ -254,8 +267,12 @@ pub async fn chat_local(
     ) {
         let generation = crate::applock::unlocked_generation(app)?;
         if !platform::permission().await {
-            return Err(error(
+            // Its own code: the shell offers the settings pane for this one
+            // refusal, and states the rest as plain failures.
+            return Err(AgentError::new(
+                "chat-notification-permission",
                 "Desktop alerts were not permitted. Check macOS notification settings.",
+                false,
             ));
         }
         crate::applock::require_unlocked_generation(app, generation)?;

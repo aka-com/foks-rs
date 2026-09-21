@@ -1129,22 +1129,22 @@ function DeviceDetail({
             ? `${kindLabel(entry.kind)} · on ${serverName(snapshot, store)}`
             : `${kindLabel(entry.kind)} · ${accountSubtitle(snapshot, store)}`
         }
-        action={
-          <>
-            {refreshConnectedKeys}
-            {entry.current ? (
-              <Chip tone="you">
-                {entry.kind === 'Key on a card'
-                  ? 'Current key on a card'
-                  : 'This device'}
-              </Chip>
-            ) : enrollment ? (
-              <Chip tone={enrollment.state === 'complete' ? 'ok' : 'warn'}>
-                {enrollment.state === 'complete' ? 'Enrolled' : 'Incomplete'}
-              </Chip>
-            ) : null}
-          </>
+        // The chip states what this key is, so it reads beside the name
+        // rather than among the header's actions.
+        badge={
+          entry.current ? (
+            <Chip tone="you">
+              {entry.kind === 'Key on a card'
+                ? 'Current key on a card'
+                : 'This device'}
+            </Chip>
+          ) : enrollment ? (
+            <Chip tone={enrollment.state === 'complete' ? 'ok' : 'warn'}>
+              {enrollment.state === 'complete' ? 'Enrolled' : 'Incomplete'}
+            </Chip>
+          ) : null
         }
+        action={refreshConnectedKeys}
       />
       <div className="body">
         <div className="settings-main">
@@ -1193,10 +1193,6 @@ function DeviceDetail({
               {entry.current ? (
                 <InsetRow label="Status">
                   Authenticated on this device now
-                  <small>
-                    This is the key the agent signs this account’s operations
-                    with here.
-                  </small>
                 </InsetRow>
               ) : null}
             </Inset>
@@ -1270,9 +1266,9 @@ function DeviceDetail({
                   }
                 >
                   <small>
-                    To remove this Mac, use another enrolled device. The Reset
-                    this Mac option in Settings erases all local data and
-                    credentials across all servers.
+                    To remove this Mac, use another enrolled device. Or, use the
+                    Reset this Mac option in Settings to erase local data and
+                    delete credentials across servers.
                   </small>
                 </InsetRow>
               ) : source.kind === 'device' ? (

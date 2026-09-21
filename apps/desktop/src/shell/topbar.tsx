@@ -18,7 +18,7 @@ import { Button, Icon } from '../components';
 import type { DesktopReconciliation } from '../desktop-reconciliation';
 import { SYNC_STATUS_ID, SyncPopover, useSyncSummary } from './sync-popover';
 import { useSidebarInbox } from '../chat/inbox-provider';
-import { channelTitle } from '../chat/presentation';
+import { channelLabel } from '../chat/presentation';
 import { serverLocalAlias, storeOf } from '../model';
 import type { AgentSnapshot, DeviceLabel } from '../model';
 import {
@@ -77,12 +77,12 @@ export function crumbTrail(
       trail.push(named(location.ref));
       break;
     case 'chat':
-      if (location.ref)
-        trail.push(
-          channelName
-            ? `${named(location.ref)} ${channelName}`
-            : named(location.ref),
-        );
+      if (location.ref) {
+        trail.push(named(location.ref));
+        // The team and the channel are two steps, not one label: the crumbs
+        // read "Chat › Engineering › design".
+        if (channelName) trail.push(channelName);
+      }
       break;
     case 'devices':
       // `section` only scrolls the one list to an anchor now; it does not
@@ -284,7 +284,7 @@ export function Topbar({
   const trail = crumbTrail(
     location,
     snapshot,
-    open ? channelTitle(open) : undefined,
+    open ? channelLabel(open) : undefined,
     deviceLabel,
     folder,
   );

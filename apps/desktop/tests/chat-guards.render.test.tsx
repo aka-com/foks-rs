@@ -285,6 +285,16 @@ function write(text: string): void {
   ui.fireEvent.change(composer(), { target: { value: text } });
 }
 
+/** The channel titles the column lists under Engineering. */
+function engineeringChannels(): string[] {
+  const group = document.querySelector<HTMLElement>(
+    '.chat-channel-list[aria-label="Engineering"]',
+  );
+  return [...(group?.querySelectorAll('.chat-channel .n') ?? [])].map(
+    (node) => node.textContent ?? '',
+  );
+}
+
 /** A channel row of the column, by the title it draws. */
 async function channelRow(title: string): Promise<HTMLButtonElement> {
   return ui.waitFor(() => {
@@ -374,7 +384,22 @@ test('an unsent message follows the reader between channels of one team', async 
 
 test('a draft is dropped when its channel stops being listed', async () => {
   let listed = true;
-  await setup({ override: (base) => withDesign(base, () => listed) });
+  const { store } = await setup({
+    override: (base) => withDesign(base, () => listed),
+    includeHousehold: true,
+  });
+  // The team's channels are re-listed when its conversation is mounted, so
+  // leaving the team and coming back is what re-reads them.
+  const relist = async (): Promise<void> => {
+    await ui.act(async () => {
+      store.navigate({ kind: 'chat', ref: 'team:household' }, { force: true });
+      await Promise.resolve();
+    });
+    await ui.act(async () => {
+      store.navigate(IN_CHAT, { force: true });
+      await Promise.resolve();
+    });
+  };
   await click(await channelRow('#design'));
   await ui.waitFor(() => {
     assert.match(composer().placeholder, /#design/);
@@ -385,18 +410,14 @@ test('a draft is dropped when its channel stops being listed', async () => {
     assert.match(composer().placeholder, /#general/);
   });
   listed = false;
-  await click(ui.screen.getByRole('button', { name: 'Refresh messages' }));
-  // Only the general channel's row remains under the team's heading.
+  await relist();
+  // Only the general channel's row remains under the team's heading. The
+  // column lists a second team as well, so the rows read are Engineering's.
   await ui.waitFor(() => {
-    assert.deepEqual(
-      [...document.querySelectorAll('.chat-channel .n')].map(
-        (node) => node.textContent,
-      ),
-      ['#general'],
-    );
+    assert.deepEqual(engineeringChannels(), ['#general']);
   });
   listed = true;
-  await click(ui.screen.getByRole('button', { name: 'Refresh messages' }));
+  await relist();
   await click(await channelRow('#design'));
   await ui.waitFor(() => {
     assert.match(composer().placeholder, /#design/);

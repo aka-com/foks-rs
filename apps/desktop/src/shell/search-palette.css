@@ -120,7 +120,6 @@
 /* Channel tile */
 .pal-hit .kico.pal-channel {
   background: var(--rail);
-  font-size: 15px;
 }
 .pal-hit .t {
   flex: 1;

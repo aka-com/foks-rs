@@ -164,7 +164,9 @@ test('server statuses are shared rows: leaving Servers and returning does not re
       },
     }),
   });
-  await ui.waitFor(() => assert.ok(rendered.getAllByText('Checked').length));
+  await ui.waitFor(() =>
+    assert.ok(rendered.getAllByText('foks.example.net').length),
+  );
   await ui.waitFor(() => assert.ok(reads > 0));
   const loaded = reads;
 
@@ -172,7 +174,9 @@ test('server statuses are shared rows: leaving Servers and returning does not re
   await rendered.show({ section: 'mac' });
   assert.ok(rendered.getByRole('button', { name: 'Reset this Mac…' }));
   await rendered.show({});
-  await ui.waitFor(() => assert.ok(rendered.getAllByText('Checked').length));
+  await ui.waitFor(() =>
+    assert.ok(rendered.getAllByText('foks.example.net').length),
+  );
   assert.equal(reads, loaded);
 
   // Invalidated, they are read again for the page that shows them.
@@ -205,7 +209,10 @@ test('the sub-navigation lists every section, and Servers opens first', async ()
   assert.ok(rendered.getByRole('heading', { level: 1, name: 'Servers' }));
   assert.ok(rendered.getByText('foks.example.net'));
   assert.ok(rendered.getByRole('button', { name: 'Add a server…' }));
-  assert.ok(rendered.getAllByText('Checked').length);
+  // A server that answered carries no chip — its mark already reads as one —
+  // and only the states worth acting on are named.
+  assert.equal(rendered.queryByText('Checked'), null);
+  assert.ok(document.querySelector('.smark.ok'));
   assert.ok(rendered.getByText('Not verified'));
   // Only one page is mounted at a time: the other two sections' own content
   // is not drawn behind Servers.
@@ -397,9 +404,6 @@ test('a profile address opens that server instead of the page', async () => {
   assert.ok(rendered.getByText('Address'));
   assert.ok(rendered.getAllByText('foks.example.net').length);
   assert.ok(rendered.getByRole('button', { name: 'Rename…' }));
-  assert.ok(
-    rendered.getByRole('button', { name: 'Inspect last check response' }),
-  );
   // Forgetting a server and resetting its trust are two commands, so the
   // danger zone keeps two rows.
   assert.ok(rendered.getByRole('button', { name: 'Remove local data…' }));
@@ -630,7 +634,9 @@ test('Device displays application, agent, and data sections above local reset', 
   assert.ok(rendered.getByRole('button', { name: 'Choose folder…' }));
   assert.ok(rendered.getByRole('button', { name: 'Reset this Mac…' }));
   assert.ok(
-    rendered.getByText(/To reset one server, select it in the Servers list/),
+    rendered.getByText(
+      /Remote accounts and other enrolled devices are not affected/,
+    ),
   );
   // While disconnected, the Status row is multi-line and top-aligned. When
   // connected, it contains only the status value.
@@ -1095,7 +1101,7 @@ test('a maintenance action refused for a foreign agent asks to restart it, then 
     /foks-agent \(PID 4242\) · Started yesterday/,
   );
   assert.match(sheet.textContent ?? '', /\/opt\/foks\/foks-agent/);
-  // No "Interrupts" row when the restart serves an action.
+  // No "In progress" row when the restart serves an action.
   assert.doesNotMatch(sheet.textContent ?? '', /Nothing in progress/);
   await ui.act(async () => {
     ui.fireEvent.click(

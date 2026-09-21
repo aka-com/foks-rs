@@ -686,16 +686,40 @@ test('the tab opens its chosen conversation without a note, and a pick sticks', 
   );
 });
 
+/**
+ * The conversation re-reads the team's channels and its saved work when it is
+ * mounted, so leaving the team and coming back is what refreshes them.
+ */
+async function reopenConversation(
+  shell: Partial<Shell>,
+  location: Location,
+): Promise<void> {
+  await ui.act(async () => {
+    shell.setLocation?.({ kind: 'chat', ref: 'team:household' });
+  });
+  await ui.act(async () => {
+    shell.setLocation?.(location);
+  });
+}
+
 test('unfinished work sits in a bounded section and keeps the composer', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   let bridge: Bridge | undefined;
+  const shell: Partial<Shell> = {};
+  const open: Location = {
+    kind: 'chat',
+    ref: 'team:eng',
+    channel: 'ab'.repeat(16),
+  };
   await mount(
     snapshot,
-    { kind: 'chat', ref: 'team:eng', channel: 'ab'.repeat(16) },
+    open,
     (base) => {
       bridge = base;
       return base;
     },
+    undefined,
+    shell,
   );
   await ui.screen.findByText('Team chat is ready.');
   assert.ok(bridge);
@@ -713,9 +737,7 @@ test('unfinished work sits in a bounded section and keeps the composer', async (
       },
       'test',
     );
-  ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Refresh messages' }),
-  );
+  await reopenConversation(shell, open);
   await ui.waitFor(() =>
     assert.equal(document.querySelectorAll('.chat-pending').length, 6),
   );
@@ -736,13 +758,21 @@ test('unfinished work sits in a bounded section and keeps the composer', async (
 test('saved work that is accounted for says so rather than vanishing', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   let bridge: Bridge | undefined;
+  const shell: Partial<Shell> = {};
+  const open: Location = {
+    kind: 'chat',
+    ref: 'team:eng',
+    channel: 'ab'.repeat(16),
+  };
   await mount(
     snapshot,
-    { kind: 'chat', ref: 'team:eng', channel: 'ab'.repeat(16) },
+    open,
     (base) => {
       bridge = base;
       return base;
     },
+    undefined,
+    shell,
   );
   await ui.screen.findByText('Team chat is ready.');
   assert.ok(bridge);
@@ -757,9 +787,7 @@ test('saved work that is accounted for says so rather than vanishing', async () 
     },
     'test',
   );
-  ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Refresh messages' }),
-  );
+  await reopenConversation(shell, open);
   await ui.screen.findByText('Needs attention');
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Cancel' }));
   await ui.screen.findByText(
@@ -1060,7 +1088,7 @@ test('a conversation opened into a heading team marks the channel row it mounts'
   // The pane mounted the same channel the row is marked for.
   assert.equal(
     document.querySelector('.chat-thread-title h2')?.textContent,
-    'Household · #incidents',
+    '#incidents',
   );
   // The tab's own choice marks its row on the render that makes it, rather
   // than marking the team's first channel until the location catches up.
@@ -1996,9 +2024,9 @@ test('loading and failed channel lists do not claim No channels', async () => {
   }
 });
 
-test('clicking a team heading folds it, keeps its unread total, excludes a muted channel from it, and settings sit in the conversation header', async () => {
+test('clicking a team heading folds it, keeps its unread total, and excludes a muted channel from it', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
-  const journal = await mount(
+  await mount(
     snapshot,
     { kind: 'chat', ref: 'team:household', channel: '11'.repeat(16) },
     (base) =>
@@ -2048,19 +2076,16 @@ test('clicking a team heading folds it, keeps its unread total, excludes a muted
   const badge = head('Household').querySelector('.chat-unread');
   assert.equal(badge?.textContent, '3');
   assert.equal(badge?.getAttribute('aria-label'), '3 unread');
-  // Team settings are the conversation header's, beside the channel info.
+  // The conversation header carries the channel info and nothing else.
   const header = document.querySelector('.chat-thread-header');
   assert.ok(header);
-  ui.fireEvent.click(
-    ui.within(header as HTMLElement).getByRole('button', {
-      name: 'Team settings for Household',
-    }),
+  assert.deepEqual(
+    ui
+      .within(header as HTMLElement)
+      .getAllByRole('button')
+      .map((button) => button.getAttribute('aria-label')),
+    ['Channel info'],
   );
-  assert.deepEqual(journal.at(-1), {
-    kind: 'group-settings',
-    ref: 'team:household',
-    tab: 'settings',
-  });
   // Expanding restores the channel list exactly as it was.
   ui.fireEvent.click(expand);
   await ui.waitFor(() =>
@@ -2106,9 +2131,9 @@ test('the conversation header states the member count from the roster the team p
     channel: 'ab'.repeat(16),
   });
   await ui.waitFor(() =>
-    assert.match(
-      document.querySelector('.chat-thread-title h2')?.textContent ?? '',
-      /Engineering/,
+    assert.equal(
+      document.querySelector('.chat-thread-title h2')?.textContent,
+      '#general',
     ),
   );
   const count = await ui.waitFor(() => {
@@ -2131,9 +2156,9 @@ test('the header omits the member count while the open team’s roster has not a
     channel: 'ab'.repeat(16),
   });
   await ui.waitFor(() =>
-    assert.match(
-      document.querySelector('.chat-thread-title h2')?.textContent ?? '',
-      /Engineering/,
+    assert.equal(
+      document.querySelector('.chat-thread-title h2')?.textContent,
+      '#general',
     ),
   );
   // The count is the whole subtitle, so a roster that has not arrived leaves

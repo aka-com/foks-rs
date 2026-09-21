@@ -782,7 +782,7 @@ export function RecoverSheet({
         </>
       }
     >
-      <p>Adds this device to the account.</p>
+      <p>Enter a paper key phrase for this account to add this device to it.</p>
       <Inset>
         <Field label="Local alias" value={target} onChange={setTarget} />
         <Field label="Device name" value={device} onChange={setDevice} />

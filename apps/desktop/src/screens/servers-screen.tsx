@@ -19,7 +19,6 @@ import {
   InsetRow,
   SectionLabel,
   SheetDialog,
-  Toggle,
 } from '../components';
 import type { Location } from '../location';
 import { useSheetGuard } from '../navigation-guard';
@@ -157,13 +156,11 @@ function resolveServerUiState(
 }
 
 function StatusChip({ state }: { state: ServerUiState }): ReactNode {
-  if (state === 'unprobed') return null;
+  // A server that answered is the ordinary case, and the row's mark already
+  // reads as one: only a state worth acting on carries a chip.
+  if (state === 'unprobed' || state === 'checked') return null;
   return (
-    <Chip
-      tone={
-        state === 'checked' ? 'ok' : state === 'pending' ? 'default' : 'bad'
-      }
-    >
+    <Chip tone={state === 'pending' ? 'default' : 'bad'}>
       {STATE_LABEL[state]}
     </Chip>
   );
@@ -206,7 +203,6 @@ export function ServersSection({
   );
   const toasts = useToast();
   const selected = serverFor(agentSnapshot, profile);
-  const rollback = enteredScene === 'servers-rollback';
   const { statuses, checked, busy, check } = useServerMetadata({
     bridge,
     snapshot: agentSnapshot,
@@ -217,21 +213,6 @@ export function ServersSection({
     onRefresh,
     toast: (message) => toasts.show(message),
   });
-
-  useEffect(() => {
-    const conceal = (): void => {
-      setSheet(null);
-    };
-    const concealWhenHidden = (): void => {
-      if (document.hidden) conceal();
-    };
-    window.addEventListener('blur', conceal);
-    document.addEventListener('visibilitychange', concealWhenHidden);
-    return () => {
-      window.removeEventListener('blur', conceal);
-      document.removeEventListener('visibilitychange', concealWhenHidden);
-    };
-  }, []);
 
   // A check pins or advances the server's identity and then reads its signed
   // status back; the section is where both answers are stated. Nothing else
@@ -331,9 +312,7 @@ export function ServersSection({
           status={statuses.get(selected.id)}
           host={currentHost}
           checked={checked.get(selected.id)}
-          rollback={rollback}
           busy={busy}
-          onBack={() => onNavigate(servers())}
           onCheck={() => void check(selected)}
           onRename={() => setSheet('rename')}
           onReset={() => setSheet('reset')}
@@ -390,7 +369,13 @@ function StatusLine({
         {account ? account.username : 'No account'}
         {sep}
         {groups.length ? plural(groups.length, 'team') : 'No teams'}
-        {sep}Valid until {expiresShort(expiry)}
+        {/* A certificate with no expiry has no date to state, and the line
+            says nothing rather than "Valid until no expiration". */}
+        {expiry === null ? null : (
+          <>
+            {sep}Valid until {expiresShort(expiry)}
+          </>
+        )}
       </>
     );
   if (state === 'pending')
@@ -735,9 +720,7 @@ function ServerBody({
   status,
   host,
   checked,
-  rollback,
   busy,
-  onBack,
   onCheck,
   onRename,
   onReset,
@@ -751,9 +734,7 @@ function ServerBody({
   status?: ServerStatusSnapshot;
   host: ServerStatusSnapshot['host'];
   checked?: CheckedServer;
-  rollback: boolean;
   busy: boolean;
-  onBack: () => void;
   onCheck: () => void;
   onRename: () => void;
   onReset: () => void;
@@ -791,20 +772,13 @@ function ServerBody({
 
   return (
     <>
-      <button type="button" className="crumb" onClick={onBack}>
-        <Icon name="back" className="ic" />
-        Servers
-      </button>
       <div className="shead">
         <ServerMark state={state} />
         <span className="t">
           <b>{serverLocalAlias(server)}</b>
           {subtitle ? <small>{subtitle}</small> : null}
         </span>
-        {/* The page's own mark already reads as a healthy server; only an
-            abnormal state is worth a chip beside it. The list row keeps its
-            Checked chip, where the mark is smaller. */}
-        {state === 'checked' ? null : <StatusChip state={state} />}
+        <StatusChip state={state} />
         <Button size="sm" onClick={onRename}>
           Rename…
         </Button>
@@ -845,7 +819,7 @@ function ServerBody({
                 server's status row states the fact and nothing else. */}
             <InsetRow label="Status">
               {checked
-                ? 'Last checked: now. Trust history unchanged.'
+                ? 'Last checked now. No issues.'
                 : 'Identity pinned on this device.'}
             </InsetRow>
             <InsetRow label="Expires">{expires(expiry)}</InsetRow>
@@ -870,30 +844,6 @@ function ServerBody({
           </InsetRow>
         )}
       </Inset>
-
-      {/* The whole response, behind one disclosure, directly under the
-          check-in it is the record of. */}
-      {hasHost && host ? (
-        <Toggle
-          label="Inspect last check response"
-          open={rollback || undefined}
-          disabled={rollback}
-        >
-          <pre>
-            {JSON.stringify(
-              {
-                profile: status?.profile ?? server.id,
-                configuredProbe: status?.configuredProbe ?? null,
-                host,
-                leaseRequired: status?.leaseRequired ?? null,
-                leaseExpiresAt: expiry,
-              },
-              null,
-              2,
-            )}
-          </pre>
-        </Toggle>
-      ) : null}
 
       {/* What stops if this server lapses: the account held on it, and the
           groups that live there. */}
@@ -1343,7 +1293,9 @@ function ResetSheet({
           </Button>
         </div>
       ) : (
-        <p>Loading reset preview…</p>
+        // `hint` carries the spacing under the facts above it; a plain
+        // paragraph has no top margin and sits against them.
+        <p className="hint">Loading reset preview…</p>
       )}
       <Inset>
         <InsetRow label="Confirm">

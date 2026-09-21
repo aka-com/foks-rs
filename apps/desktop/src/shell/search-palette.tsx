@@ -416,11 +416,15 @@ function Marked({ text, query }: { text: string; query: string }): ReactNode {
   );
 }
 
+/**
+ * Every row's mark is the `md` one a group's mark draws, so an item, a person
+ * and a channel sit on the same square as the vault beside them.
+ */
 function EntryGlyph({ glyph }: { glyph: SearchEntry['glyph'] }): ReactNode {
   switch (glyph.kind) {
     case 'item':
       return (
-        <span className={`kico ${glyph.itemKind}`} aria-hidden="true">
+        <span className={`kico md ${glyph.itemKind}`} aria-hidden="true">
           <Icon name={KINDS[glyph.itemKind].icon as FoksIconName} />
         </span>
       );
@@ -429,7 +433,7 @@ function EntryGlyph({ glyph }: { glyph: SearchEntry['glyph'] }): ReactNode {
     case 'person':
       return (
         <span
-          className="kico"
+          className="kico md"
           aria-hidden="true"
           style={{ background: hue(glyph.username) }}
         >
@@ -438,7 +442,7 @@ function EntryGlyph({ glyph }: { glyph: SearchEntry['glyph'] }): ReactNode {
       );
     case 'channel':
       return (
-        <span className="kico pal-channel" aria-hidden="true">
+        <span className="kico md pal-channel" aria-hidden="true">
           #
         </span>
       );

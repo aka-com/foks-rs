@@ -21,3 +21,9 @@ pub fn display(_: &tauri::AppHandle, _: &str, _: &str) -> Result<(), crate::agen
 }
 #[cfg(not(target_os = "macos"))]
 pub fn clear() {}
+#[cfg(not(target_os = "macos"))]
+pub fn open_settings() -> Result<(), crate::agent::AgentError> {
+    Err(super::error(
+        "Notification settings are unavailable on this platform.",
+    ))
+}

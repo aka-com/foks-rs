@@ -205,3 +205,69 @@ test('conflicting history is rejected without replacing accepted content', () =>
     text: 'hello',
   });
 });
+
+/** The sequences a window holds, in order. */
+function sequences(
+  cache: ChatHistoryCache,
+  binding: Parameters<ChatHistoryCache['get']>[0],
+): string[] {
+  return (cache.get(binding)?.messages ?? []).map(
+    (message) => message.sequence,
+  );
+}
+
+/** True while any retained row is still flagged as unverified. */
+function unverified(
+  cache: ChatHistoryCache,
+  binding: Parameters<ChatHistoryCache['get']>[0],
+): boolean {
+  return [...(cache.get(binding)?.verification.values() ?? [])].some(Boolean);
+}
+
+test('a newest page disjoint from the window replaces it, and older pagination continues from the new page', () => {
+  const cache = new ChatHistoryCache();
+  cache.update('t', inbox(), 0);
+  const binding = cache.binding('t', 'a', 0)!;
+  const first = page();
+  first.messages = Array.from(
+    { length: 50 },
+    (_, index) => page('a', String(index + 51)).messages[0],
+  );
+  first.before = '51';
+  cache.accept(binding, first, null);
+  // A gap this window cannot bridge: the newest page starts well past its last
+  // row, so the window it does not join is dropped rather than merged.
+  const newest = page();
+  newest.messages = Array.from(
+    { length: 50 },
+    (_, index) => page('a', String(index + 151)).messages[0],
+  );
+  newest.before = '151';
+  cache.accept(binding, newest, null);
+  assert.deepEqual(sequences(cache, binding).at(0), '151');
+  assert.deepEqual(sequences(cache, binding).at(-1), '200');
+  // Paging back reaches the gap from the page that is held, not from the one
+  // that was dropped.
+  assert.equal(cache.get(binding)?.before, '151');
+});
+
+test('verification warnings survive unrelated pages until the flagged rows are rechecked', () => {
+  const cache = new ChatHistoryCache();
+  cache.update('t', inbox(), 0);
+  const binding = cache.binding('t', 'a', 0)!;
+  const flagged = page('a', '3');
+  flagged.missing_predecessors = ['1'];
+  cache.accept(binding, flagged, null);
+  assert.equal(unverified(cache, binding), true);
+  // A later page says nothing about the rows already held, so their warning
+  // stands.
+  cache.accept(binding, page('a', '4', 'next'), null);
+  assert.equal(unverified(cache, binding), true);
+  const rechecked = page('a', '3');
+  rechecked.messages = [
+    page('a', '3').messages[0],
+    page('a', '4', 'next').messages[0],
+  ];
+  cache.accept(binding, rechecked, null);
+  assert.equal(unverified(cache, binding), false);
+});

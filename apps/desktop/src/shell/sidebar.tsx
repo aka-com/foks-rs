@@ -392,6 +392,9 @@ export function AccountHeader({
           className="menu-portal"
           align="start"
           gap={4}
+          // The rail runs to the window's left edge, so the usual viewport
+          // margin would push the menu off the edge it aligns with.
+          inset={0}
           onClose={close}
         >
           <Menu

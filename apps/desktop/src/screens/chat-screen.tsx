@@ -47,7 +47,6 @@ export function ChatScreen({
   onToggleInfo,
   infoRef,
   onNewChat,
-  onSearch,
 }: {
   snapshot: AgentSnapshot;
   bridge: Bridge;
@@ -63,8 +62,6 @@ export function ChatScreen({
   infoRef?: Ref<HTMLButtonElement>;
   /** Opens the tab's New chat sheet on this team. */
   onNewChat?: () => void;
-  /** Moves to the column's search field, the only search chat has. */
-  onSearch?: () => void;
 }): ReactNode {
   const { service: sends } = useChatSends();
   const store = storeOf(agentSnapshot, location.ref);
@@ -317,17 +314,8 @@ export function ChatScreen({
             storeId={storeId}
             key={`${channel.id}:${channel.readable}`}
             channel={channel}
-            teamName={team.name}
+            teamName={store?.name}
             memberCount={memberCount}
-            onFiles={() => onNavigate({ kind: 'store', ref: team.id })}
-            onSearch={onSearch}
-            onSettings={() =>
-              onNavigate({
-                kind: 'group-settings',
-                ref: team.id,
-                tab: 'settings',
-              })
-            }
             onInfo={onToggleInfo}
             infoOpen={infoOpen}
             infoRef={infoRef}
@@ -336,7 +324,6 @@ export function ChatScreen({
             senderNames={senderNames}
             request={guardedRequest}
             refreshPending={guardedRefreshPending}
-            refreshInbox={guardedRefresh}
             revision={channelRevisions?.get(channel.id) ?? 0}
             readThrough={activeConversation?.read_through ?? null}
             markRead={guardedMarkRead}
@@ -392,10 +379,7 @@ export function ChatScreen({
               <Icon name="people" />
             </span>
             <h2>No conversations yet</h2>
-            <p>
-              Create the first channel for {team.name}. Every member with the
-              right role can join in.
-            </p>
+            <p>Create a channel for this team to start chatting.</p>
             {empty && onNewChat && (
               <Button variant="primary" icon="plus" onClick={onNewChat}>
                 New channel

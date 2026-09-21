@@ -177,19 +177,6 @@ test('composer suppresses IME and repeated Enter, and renders hostile text safel
   assert.equal(document.querySelector('.chat-messages img'), null);
   assert.equal((composer as HTMLTextAreaElement).value, '');
 });
-test('the header search button moves to the column’s search field', async () => {
-  await setup();
-  // The column's field is a search field, so its role is `searchbox`.
-  const field = ui.screen.getByRole('searchbox', {
-    name: 'Search teams and channels',
-  });
-  ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Search teams and channels' }),
-  );
-  // There is no message index, so the header's search is the column's.
-  assert.equal(document.activeElement === field, true);
-});
-
 test('the composer exposes only supported actions', async () => {
   await setup();
   for (const label of [
@@ -720,7 +707,7 @@ for (const distinct of [false, true]) {
     let failing = false;
     const failures = new Set<string>();
     const cause = 'This group could not be read.';
-    await setup((base) => ({
+    const { toggleChat: toggle } = await setup((base) => ({
       ...base,
       chat: async (store, action, view) => {
         if (
@@ -742,12 +729,12 @@ for (const distinct of [false, true]) {
         return base.chat(store, action, view);
       },
     }));
-    const refresh = ui.screen.getByRole<HTMLButtonElement>('button', {
-      name: 'Refresh messages',
-    });
-    await ui.waitFor(() => assert.equal(refresh.disabled, false));
+    // The conversation re-reads its history, its saved work and the team's
+    // channels when it is mounted, so closing and reopening it is what makes
+    // all three fail at once.
     failing = true;
-    ui.fireEvent.click(refresh);
+    toggle();
+    toggle();
     await ui.waitFor(() => assert.equal(failures.size, 3));
     const conversation = ui.screen.getByRole('region', {
       name: 'Conversation',
@@ -794,7 +781,7 @@ for (const distinct of [false, true]) {
 
 test('a team the catalog no longer lists is reported as inaccessible, not as a fault', async () => {
   let failing = false;
-  await setup((base) => ({
+  const { toggleChat: toggle } = await setup((base) => ({
     ...base,
     chat: async (store, action, view) => {
       if (failing && action.action === 'history')
@@ -809,12 +796,10 @@ test('a team the catalog no longer lists is reported as inaccessible, not as a f
       return base.chat(store, action, view);
     },
   }));
-  const refresh = ui.screen.getByRole<HTMLButtonElement>('button', {
-    name: 'Refresh messages',
-  });
-  await ui.waitFor(() => assert.equal(refresh.disabled, false));
+  // Remounting the conversation re-reads its history, which is what fails.
   failing = true;
-  ui.fireEvent.click(refresh);
+  toggle();
+  toggle();
   const conversation = ui.screen.getByRole('region', {
     name: 'Conversation',
   });
@@ -1050,50 +1035,7 @@ test('prepending older messages preserves scroll position', async () => {
   );
 });
 
-test('refresh resets a disjoint window so older pagination reaches the gap', async () => {
-  let latest = 100;
-  const cursors: (string | null)[] = [];
-  await setup((base) => ({
-    ...base,
-    chat: async (store, action) => {
-      const reply = await base.chat(store, action);
-      if (action.action === 'history' && reply.result.kind === 'history') {
-        cursors.push(action.before);
-        const end = action.before ? Number(action.before) - 1 : latest;
-        reply.result.messages = Array.from({ length: 50 }, (_, i) => {
-          const n = end - 49 + i;
-          return {
-            id: n.toString(16).padStart(32, '0'),
-            sequence: String(n),
-            sender: null,
-            send_time: '1700000000000',
-            insert_time: '1700000000001',
-            content: {
-              kind: 'text' as const,
-              text: n === 100 ? 'Team chat is ready.' : `Message ${n}`,
-            },
-          };
-        });
-        reply.result.before = String(end - 49);
-      }
-      return reply;
-    },
-  }));
-  latest = 200;
-  ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Refresh messages' }),
-  );
-  await ui.screen.findByText('Message 200');
-  assert.equal(ui.screen.queryByText('Team chat is ready.'), null);
-  ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Load older messages' }),
-  );
-  await ui.screen.findByText('Message 101');
-  assert.equal(cursors.at(-1), '151');
-});
-
-test('verification warnings survive unrelated pages until retained rows are rechecked', async () => {
-  let stage = 0;
+test('a history page with unverified predecessors warns in the conversation', async () => {
   await setup((base) => ({
     ...base,
     chat: async (store, action) => {
@@ -1115,28 +1057,16 @@ test('verification warnings survive unrelated pages until retained rows are rech
           insert_time: '1700000000001',
           content: { kind: 'text' as const, text: 'Next message' },
         };
-        reply.result.messages =
-          stage === 0 ? [original] : stage === 1 ? [next] : [original, next];
-        reply.result.before = stage === 1 ? '4' : '3';
-        reply.result.missing_predecessors = stage === 0 ? ['1'] : [];
+        reply.result.messages = [original, next];
+        reply.result.before = '3';
+        reply.result.missing_predecessors = ['1'];
       }
       return reply;
     },
   }));
   assert.ok(ui.screen.getByText(/incomplete verification/));
-  stage = 1;
-  ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Refresh messages' }),
-  );
-  await ui.screen.findByText('Next message');
-  assert.ok(ui.screen.getByText(/incomplete verification/));
-  stage = 2;
-  ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Refresh messages' }),
-  );
-  await ui.waitFor(() =>
-    assert.ok(ui.screen.queryByText(/incomplete verification/) === null),
-  );
+  // What happens to that warning across later pages is the retained window's
+  // own behaviour, covered in chat-history-cache.test.ts.
 });
 
 for (const offline of [true, false]) {

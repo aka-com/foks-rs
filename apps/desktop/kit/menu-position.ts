@@ -26,6 +26,10 @@ export type MenuAlign = 'start' | 'end' | 'center';
  * - `end` (default): right edges match (connection ⋯, Copy ▾)
  * - `start`: left edges match (sheet reconnect ⋯)
  * - `center`: menu centered on the trigger (Connect-agents blanks)
+ *
+ * `inset` is the margin kept between the menu and the viewport edges. Pass 0
+ * where a trigger sits flush against a window edge and the menu is meant to
+ * line up with it rather than be nudged inwards.
  */
 export function anchoredMenuPosition(
   anchor: MenuRect,
@@ -61,13 +65,14 @@ export function placeAnchoredMenu(
   trigger: HTMLElement,
   align: MenuAlign = 'end',
   gap = 4,
+  inset = 8,
 ): void {
   const position = anchoredMenuPosition(
     trigger.getBoundingClientRect(),
     wrap.getBoundingClientRect(),
     { width: window.innerWidth, height: window.innerHeight },
     gap,
-    8,
+    inset,
     align,
   );
   wrap.style.left = `${position.left}px`;

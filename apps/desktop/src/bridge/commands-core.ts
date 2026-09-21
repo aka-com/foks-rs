@@ -35,6 +35,7 @@ export const coreCommands: Pick<
   | 'retryAgentConnection'
   | 'autoRecoverAgent'
   | 'chatLocal'
+  | 'openNotificationSettings'
   | 'relocateClientState'
   | 'maintainClientState'
   | 'clientStateMaintenanceStatus'
@@ -76,6 +77,8 @@ export const coreCommands: Pick<
   autoRecoverAgent: () =>
     checked('auto_recover_agent', undefined, decodeAgentStatus, false),
   chatLocal: (action) => checked('chat_local', { action }, decodeLocalSession),
+  openNotificationSettings: () =>
+    checked('open_notification_settings', undefined, decodeCopy),
   relocateClientState: () =>
     checked('relocate_client_state', {}, decodeMaintenanceSnapshot),
   maintainClientState: (action) =>

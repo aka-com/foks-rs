@@ -448,6 +448,7 @@ export function Popover({
   className = '',
   align = 'end',
   gap = 4,
+  inset = 8,
   matchAnchorWidth = false,
   minWidth,
   onClose,
@@ -459,6 +460,8 @@ export function Popover({
   className?: string;
   align?: MenuAlign;
   gap?: number;
+  /** Margin kept from the viewport edges; 0 for a trigger flush to one. */
+  inset?: number;
   matchAnchorWidth?: boolean;
   minWidth?: number;
   onClose: () => void;
@@ -485,7 +488,7 @@ export function Popover({
         );
         popover.style.width = `${width}px`;
       }
-      placeAnchoredMenu(popover, anchor, align, gap);
+      placeAnchoredMenu(popover, anchor, align, gap, inset);
     };
     const pointerDown = (event: PointerEvent) => {
       const target = event.target;
@@ -511,7 +514,16 @@ export function Popover({
       document.removeEventListener('pointerdown', pointerDown, true);
       document.removeEventListener('keydown', keyDown, true);
     };
-  }, [align, anchorRef, blocking, dialogs, gap, matchAnchorWidth, minWidth]);
+  }, [
+    align,
+    anchorRef,
+    blocking,
+    dialogs,
+    gap,
+    inset,
+    matchAnchorWidth,
+    minWidth,
+  ]);
 
   if (blocking) return null;
   return createPortal(

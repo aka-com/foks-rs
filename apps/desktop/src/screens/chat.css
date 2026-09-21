@@ -7,9 +7,10 @@
   min-height: 0;
   height: 100%;
 }
-/* Note: The info panel's width is based on the conversation content width. */
+/* The panel is the shell's right-hand panel width, the same track the Files
+   details panel uses. */
 .chat-screen.with-info {
-  grid-template-columns: 272px minmax(0, 1fr) 292px;
+  grid-template-columns: 272px minmax(0, 1fr) var(--details-w);
 }
 
 /* Team column elements. */
@@ -424,10 +425,6 @@
 .chat-info .chat-quiet {
   padding: 0;
 }
-.chat-info-where {
-  font: 12px var(--mono);
-  color: var(--muted);
-}
 .chat-info-members {
   margin-bottom: 8px;
 }
@@ -489,8 +486,8 @@
   flex: none;
   margin-top: 2px;
 }
-.chat-info .chat-local-settings select {
-  margin-left: auto;
+.chat-info .chat-local-settings .chat-alert-mode {
+  margin-top: 10px;
 }
 
 .chat-conversation > .band,
@@ -835,12 +832,13 @@
 .chat-create .inset .fr .v small.action-error {
   color: var(--danger-ink);
 }
-@container (max-width: 1000px) {
+@container (max-width: 920px) {
   .chat-screen.with-info {
     grid-template-columns: 272px minmax(0, 1fr);
   }
-  /* Cover the conversation completely so the panel does not obscure only part
-     of each message and the header controls.. */
+  /* Below this there is no room for both, so the panel covers the
+     conversation completely rather than obscuring part of each message and
+     the header controls. */
   .chat-screen.with-info .chat-info {
     position: absolute;
     inset: 0 0 0 272px;
@@ -915,4 +913,16 @@
 }
 .chat-local-settings [role='alert'] {
   color: var(--danger-ink);
+}
+/* The settings pane, inline in the sentence that names it. */
+.chat-alert-link {
+  display: inline;
+  width: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
 }

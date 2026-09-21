@@ -1260,7 +1260,7 @@ impl AgentHandle {
             acquired.ok_or_else(|| {
                 AgentError::new(
                     "state-busy",
-                    "Active requests did not quiesce before the maintenance deadline.",
+                    "Cannot process this right now because of other active requests.",
                     true,
                 )
             })?

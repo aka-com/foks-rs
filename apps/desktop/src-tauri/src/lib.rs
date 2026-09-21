@@ -262,6 +262,7 @@ pub fn run() {
             commands::groups::list_group_details,
             commands::chat::chat_request,
             commands::chat_local::chat_local,
+            commands::chat_local::open_notification_settings,
             commands::chat::open_chat_link,
             commands::chat::cancel_chat_requests,
             commands::groups::list_parties,

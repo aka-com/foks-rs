@@ -103,7 +103,6 @@ export function ChatTab({
   // The ⓘ toggle takes focus back when the panel it opened closes.
   const infoToggle = useRef<HTMLButtonElement | null>(null);
   const conversation = useRef<HTMLElement | null>(null);
-  const search = useRef<HTMLInputElement | null>(null);
   // Unsubmitted sheets can resume from tab-session state. Submitted sheets
   // remain local views; closing or navigating never abandons the operation.
   // The tab with no conversation chosen is not a place to stay: it resolves to
@@ -191,7 +190,6 @@ export function ChatTab({
         selected={ref}
         activeChannel={channel?.id}
         accessOptions={accessOptions}
-        searchRef={search}
         onOpen={(next, channelId) => {
           onNavigate(
             channelId
@@ -247,10 +245,6 @@ export function ChatTab({
                 originChannel: location.channel,
               })
             }
-            onSearch={() => {
-              search.current?.focus();
-              search.current?.select();
-            }}
           />
         ) : catalogLoading || opening === 'pending' ? (
           <div

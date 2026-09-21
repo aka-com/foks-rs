@@ -24,9 +24,6 @@ export function ChatThread({
   channel,
   teamName,
   memberCount,
-  onFiles,
-  onSearch,
-  onSettings,
   onInfo,
   infoOpen = false,
   infoRef,
@@ -37,7 +34,6 @@ export function ChatThread({
   senderNames,
   request,
   refreshPending,
-  refreshInbox,
   revision,
   readThrough,
   markRead,
@@ -52,7 +48,10 @@ export function ChatThread({
   history: import('./conversation-model').HistoryWindow | null;
   blockHistory: (channel: string) => void;
   channel: ChatChannel;
-  /** The team the conversation header names before the channel. */
+  /**
+   * The team's name, for an alert that has to name the team: the header
+   * itself names only the channel.
+   */
   teamName?: string;
   /**
    * The channel's member count, from the roster the team page already loads.
@@ -60,12 +59,6 @@ export function ChatThread({
    * header omits the count rather than claiming zero.
    */
   memberCount?: number;
-  /** Opens the team's files; the header's folder button. */
-  onFiles?: () => void;
-  /** Moves to the inbox column's search field; the header's search button. */
-  onSearch?: () => void;
-  /** Opens the team's settings; the header's gear. */
-  onSettings?: () => void;
   /** Opens the channel info panel; the header's ⓘ button. */
   onInfo?: () => void;
   infoOpen?: boolean;
@@ -77,8 +70,6 @@ export function ChatThread({
   senderNames: Map<string, string>;
   request: (a: ChatAction) => Promise<ChatReply>;
   refreshPending: () => Promise<void>;
-  /** Re-lists the team's channels and saved work; the header's Refresh. */
-  refreshInbox: () => Promise<void>;
   revision: number;
   readThrough: string | null;
   markRead: (channel: string, sequence: string) => Promise<void>;
@@ -157,24 +148,16 @@ export function ChatThread({
     <>
       <div className="chat-thread-header">
         <div className="chat-thread-title">
+          {/* The team is already named by the crumbs and the channel column,
+              so the header names the channel alone. */}
           <h2>
-            {teamName && (
-              <>
-                <span className="team">{teamName}</span>
-                {/* The separator is markup, not a CSS pseudo-element, so the
-                    accessible name is "Team · #channel". */}
-                <span className="sep" aria-hidden="true">
-                  {' · '}
-                </span>
-              </>
-            )}
             <span className="chan">{title}</span>
           </h2>
           {/* Who is here, and nothing else: the channel's description and its
               access line are both in the info panel, which draws the
-              description under "Description" and the access under "Who can
-              take part". A channel whose roster has not arrived has no count,
-              and the line is empty rather than shortened. */}
+              description under "Description" and the access under
+              "Visibility". A channel whose roster has not arrived has no
+              count, and the line is empty rather than shortened. */}
           <p>
             {memberCount !== undefined && (
               <span className="chat-member-count">
@@ -185,48 +168,6 @@ export function ChatThread({
         </div>
         {channel.admin && <Chip>Admins</Chip>}
         {!channel.readable && <Chip tone="warn">Restricted</Chip>}
-        <Button
-          variant="quiet"
-          icon="again"
-          aria-label="Refresh messages"
-          title="Refresh this conversation and the channel list"
-          disabled={busy}
-          onClick={() => {
-            void load();
-            // One refresh: this history, the team's channels, and the saved
-            // work the conversation is recovering.
-            void refreshInbox().catch((e) => setError(e));
-          }}
-        />
-        {onSearch && (
-          <Button
-            variant="quiet"
-            icon="search"
-            aria-label="Search teams and channels"
-            // Chat has no message index, so the header's search is the
-            // column's: it finds a team or a channel, never a message.
-            title="Search teams and channels"
-            onClick={onSearch}
-          />
-        )}
-        {onFiles && (
-          <Button
-            variant="quiet"
-            icon="folder"
-            aria-label="Team files"
-            title="Team files"
-            onClick={onFiles}
-          />
-        )}
-        {onSettings && (
-          <Button
-            variant="quiet"
-            icon="gear"
-            aria-label={`Team settings for ${teamName ?? 'this team'}`}
-            title="Team settings"
-            onClick={onSettings}
-          />
-        )}
         {onInfo && (
           <Button
             variant="quiet"

@@ -1,8 +1,8 @@
 /**
  * The channel info panel.
  *
- * What the model already holds about the open channel: its description, who
- * can take part, the team roster with FOKS roles, and the per-device alert
+ * What the model already holds about the open channel: its description, its
+ * visibility, the team roster with FOKS roles, and the per-device alert
  * settings that used to sit in a strip above every thread. Leaving, muting,
  * deleting and editing the description have no `ChatAction` yet, so this panel
  * does not draw them.
@@ -18,7 +18,6 @@ import {
   partyName,
   roleName,
   roleRank,
-  serverName,
 } from '../model';
 import type { AgentSnapshot, Party, TeamStore } from '../model';
 import type { ChatChannel, ChatScope } from '../chat-contract';
@@ -77,13 +76,10 @@ export function ChannelInfoPanel({
               ? 'Loading the channel…'
               : 'No channel is open.'}
         </p>
-        <p className="chat-info-where">
-          {store.name} · {serverName(snapshot, store)}
-        </p>
       </section>
       {channel && (
         <section>
-          <h3>Who can take part</h3>
+          <h3>Visibility</h3>
           <p>
             <b>
               {channel.admin ? 'Admins and owners' : 'Everyone on the team'}

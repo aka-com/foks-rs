@@ -1082,6 +1082,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     },
     openSsoBrowser: async () => ({ ok: true }),
     openChatLink: async () => ({ ok: true }),
+    openNotificationSettings: async () => ({ ok: true }),
     copyText: async () => ({ ok: true }),
     initializeClientState: async () => ({ state: 'ready' }),
     discoverGoProfiles: async () => ({ installed: false, candidates: [] }),

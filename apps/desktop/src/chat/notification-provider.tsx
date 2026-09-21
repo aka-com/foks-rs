@@ -1,6 +1,7 @@
-import { Inset } from '../components';
+import { CardSelect, Inset, InsetRow } from '../components';
 import { chatClient, sameScope } from './client';
 import { failure } from './actions';
+import { normalizeCommandError } from '../bridge';
 import type { Location } from '../location';
 import {
   createContext,
@@ -17,9 +18,16 @@ import type { ChatInboxService } from './inbox-service';
 import type { LocalAction, LocalSession } from './local-contract';
 import { NotificationConsumer } from './notification-consumer';
 import { notificationKey } from './local-contract';
+/** The agent's code for alerts the system has not permitted. */
+const PERMISSION_CODE = 'chat-notification-permission';
+
 const Context = createContext<{
   session: LocalSession | null;
   error: string;
+  /** True when the error is the system refusing alerts, which has a way out. */
+  permission: boolean;
+  /** Opens the system pane where that refusal is undone. */
+  openSettings: () => Promise<void>;
   configure: (
     action: Extract<LocalAction, { action: 'configure' }>,
   ) => Promise<void>;
@@ -36,7 +44,8 @@ export function NotificationProvider({
   onNavigate?: (location: Location) => void;
 }) {
   const [session, setSession] = useState<LocalSession | null>(null),
-    [error, setError] = useState('');
+    [error, setError] = useState(''),
+    [permission, setPermission] = useState(false);
   const lifetime = useRef({ active: false });
   const configuring = useRef(false);
   useEffect(() => {
@@ -129,6 +138,7 @@ export function NotificationProvider({
       configuring.current = true;
       const owner = lifetime.current;
       setError('');
+      setPermission(false);
       setSession(null);
       try {
         const next = await bridge.chatLocal(action);
@@ -140,6 +150,7 @@ export function NotificationProvider({
       } catch (cause) {
         if (owner.active && lifetime.current === owner) {
           setError(failure(cause));
+          setPermission(normalizeCommandError(cause).code === PERMISSION_CODE);
           // A permission or persistence failure must leave controls retryable.
           // Begin reloads the native settings actually committed, with a fresh
           // baseline; it never repeats the user's configuration mutation.
@@ -164,8 +175,18 @@ export function NotificationProvider({
     },
     [bridge],
   );
+  const openSettings = useCallback(async () => {
+    try {
+      await bridge.openNotificationSettings();
+    } catch (cause) {
+      setError(failure(cause));
+      setPermission(false);
+    }
+  }, [bridge]);
   return (
-    <Context.Provider value={{ session, error, configure }}>
+    <Context.Provider
+      value={{ session, error, permission, openSettings, configure }}
+    >
       {children}
     </Context.Provider>
   );
@@ -193,7 +214,9 @@ export function NotificationSettings({
     };
   }, [scope, channel]);
   if (!context) return null;
-  const { session, error, configure } = context;
+  const { session, error, permission, openSettings, configure } = context;
+  const override = key ? session?.settings.overrides[key] : undefined;
+  const mode = override === undefined ? 'inherit' : override ? 'all' : 'none';
   return (
     <div
       className={`chat-local-settings${storeId ? '' : ' device-notification-settings'}`}
@@ -236,37 +259,48 @@ export function NotificationSettings({
         </Inset>
       )}
       {storeId && scope && channel && key && (
-        <label>
-          Channel alerts
-          <select
-            disabled={!session?.available}
-            value={
-              session?.settings.overrides[key] === undefined
-                ? 'inherit'
-                : session.settings.overrides[key]
-                  ? 'all'
-                  : 'none'
-            }
-            onChange={(e) =>
-              void configure({
-                action: 'configure',
-                storeId,
-                scope,
-                channel,
-                mode:
-                  e.target.value === 'inherit'
-                    ? null
-                    : e.target.value === 'all',
-              })
-            }
-          >
-            <option value="inherit">Use device setting</option>
-            <option value="all">All new messages</option>
-            <option value="none">None</option>
-          </select>
-        </label>
+        <Inset className="chat-alert-mode">
+          <InsetRow label="Channel alerts">
+            <CardSelect
+              label="Channel alerts"
+              value={mode}
+              disabled={!session?.available}
+              options={[
+                { id: 'inherit', title: 'Use device setting' },
+                { id: 'all', title: 'All new messages' },
+                { id: 'none', title: 'None' },
+              ]}
+              onChange={(next) =>
+                void configure({
+                  action: 'configure',
+                  storeId,
+                  scope,
+                  channel,
+                  mode: next === 'inherit' ? null : next === 'all',
+                })
+              }
+            />
+          </InsetRow>
+        </Inset>
       )}
-      {error && <p role="alert">{error}</p>}
+      {error &&
+        // The agent states the refusal; the shell says it again with the
+        // settings pane attached, because it is the one error with a way out.
+        (permission ? (
+          <p role="alert">
+            Desktop alerts were not permitted. Check{' '}
+            <button
+              type="button"
+              className="chat-alert-link"
+              onClick={() => void openSettings()}
+            >
+              macOS notification settings
+            </button>
+            .
+          </p>
+        ) : (
+          <p role="alert">{error}</p>
+        ))}
     </div>
   );
 }

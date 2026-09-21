@@ -125,3 +125,19 @@ pub fn clear() {
         center.removeAllDeliveredNotifications();
     }
 }
+/// The Notifications pane of System Settings. The URL is a constant, so this
+/// opens one fixed destination and takes no caller input.
+pub fn open_settings() -> Result<(), AgentError> {
+    let status = std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.notifications")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|_| super::super::error("Could not open notification settings."))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(super::super::error("Could not open notification settings."))
+    }
+}

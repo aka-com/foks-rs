@@ -122,24 +122,6 @@ export function SettingsScreen({
     onError,
   });
 
-  // A passphrase, a PIN or an unlock code must not stay on screen behind
-  // another window, and a reset preview token is invalidated with it.
-  useEffect(() => {
-    const conceal = (): void => {
-      setSheet(null);
-      setPassphrase(null);
-    };
-    const concealWhenHidden = (): void => {
-      if (document.hidden) conceal();
-    };
-    window.addEventListener('blur', conceal);
-    document.addEventListener('visibilitychange', concealWhenHidden);
-    return () => {
-      window.removeEventListener('blur', conceal);
-      document.removeEventListener('visibilitychange', concealWhenHidden);
-    };
-  }, []);
-
   const section: SettingsSection = location.section ?? DEFAULT_SETTINGS_SECTION;
 
   const serversSection = (
@@ -210,7 +192,31 @@ export function SettingsScreen({
         />
       </nav>
       <div className="subnav-page">
-        <PageHeader ruled title={SETTINGS_SECTION_LABEL[section]} />
+        <PageHeader
+          ruled
+          title={SETTINGS_SECTION_LABEL[section]}
+          // A server's own page is the Servers page with one server open, so
+          // the way back out of it belongs in that page's header.
+          action={
+            section === 'servers' && location.profile ? (
+              <Button
+                icon="back"
+                onClick={() =>
+                  onNavigate(
+                    {
+                      kind: 'settings',
+                      ...(location.store ? { store: location.store } : {}),
+                      section: 'servers',
+                    },
+                    { replace: true },
+                  )
+                }
+              >
+                All servers
+              </Button>
+            ) : null
+          }
+        />
         {/* Fixed IDs associate each tab button with its tabpanel. */}
         <div
           className="body"
@@ -619,7 +625,7 @@ function DeviceSection({
         >
           <small>
             Move every profile and its credentials to another folder on this
-            disk. FOKS verifies the move and restarts.
+            device. Requires restarting the application.
           </small>
         </InsetRow>
       </Inset>
@@ -645,10 +651,9 @@ function DeviceSection({
           }
         >
           <small>
-            Removes local account keys, trust history, cached state, and pending
-            operations for all servers. Remote accounts and other enrolled
-            devices are not affected. To reset one server, select it in the
-            Servers list.
+            Deletes local account keys, trust history, cached state, and pending
+            operations. Remote accounts and other enrolled devices are not
+            affected.
           </small>
         </InsetRow>
       </Inset>
@@ -799,7 +804,7 @@ function RestartAgentSheet({
           </InsetRow>
         ) : null}
         {plain ? (
-          <InsetRow label="Interrupts">Nothing in progress.</InsetRow>
+          <InsetRow label="In progress">Nothing in progress.</InsetRow>
         ) : null}
       </Inset>
     </SheetDialog>
