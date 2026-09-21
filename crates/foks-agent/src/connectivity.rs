@@ -351,6 +351,21 @@ fn identity_error(profile: &str, error: &(dyn std::error::Error + 'static)) -> R
     scoped_error(profile, error)
 }
 
+/// How long the identity check may spend on the network. It runs under the
+/// profile's admission, and `reconcile_saved_host` updates authenticated
+/// hard state under that same admission, so the check cannot release the
+/// profile while it waits on the server. Every other request for the
+/// profile waits behind it, and a server that accepts a connection and
+/// never answers would otherwise hold them for the whole request timeout.
+const IDENTITY_NETWORK_BUDGET: Duration = Duration::from_secs(20);
+
+/// The network deadline for one identity check: the request's remaining
+/// budget, bounded by what a periodic background check may hold the profile
+/// for.
+fn identity_network_budget(remaining: Duration) -> Duration {
+    remaining.min(IDENTITY_NETWORK_BUDGET)
+}
+
 async fn identity(
     root: &Path,
     profile: &str,
@@ -386,7 +401,7 @@ async fn identity(
             tokio::task::spawn_blocking(move || {
                 let _admission = admission;
                 let _worker = worker;
-                let remaining = timeout.saturating_sub(started.elapsed());
+                let remaining = identity_network_budget(timeout.saturating_sub(started.elapsed()));
                 let cancellation = CancellationToken::new();
                 let result = foks_keystore::without_user_interaction(|| {
                     profile_work::with_control(remaining, cancellation.clone(), || {
@@ -459,6 +474,20 @@ pub(super) async fn reconcile(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identity_network_budget_is_bounded_below_the_request_timeout() {
+        assert_eq!(
+            identity_network_budget(Duration::from_secs(60)),
+            IDENTITY_NETWORK_BUDGET
+        );
+        assert_eq!(
+            identity_network_budget(Duration::from_secs(5)),
+            Duration::from_secs(5)
+        );
+        assert_eq!(identity_network_budget(Duration::ZERO), Duration::ZERO);
+        assert!(IDENTITY_NETWORK_BUDGET < Duration::from_secs(60));
+    }
 
     #[test]
     fn registry_snapshot_waits_for_the_registry_lock_then_succeeds() {
