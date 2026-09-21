@@ -8,7 +8,7 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createElement } from 'react';
+import { createElement, useState } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge } from '../src/bridge';
@@ -59,6 +59,12 @@ interface SettingsOptions {
   onRefresh?: (message: string) => Promise<void>;
   /** The shell's shared metadata repository, for a test that watches its rows. */
   repository?: MetadataRepository;
+  /**
+   * Mounts the screen the way the shell does: under the screen error boundary,
+   * keyed on the location, with the sub-navigation's own moves re-addressing
+   * the page.
+   */
+  shellKeyed?: boolean;
 }
 
 async function renderSettings(
@@ -73,6 +79,7 @@ async function renderSettings(
     },
     onRefresh = async () => {},
     repository,
+    shellKeyed = false,
   }: SettingsOptions = {},
 ) {
   const { SettingsScreen } = (await vite.ssrLoadModule(
@@ -95,9 +102,15 @@ async function renderSettings(
   const { MetadataRepositoryContext } = (await vite.ssrLoadModule(
     '/src/query-hooks.ts',
   )) as typeof import('../src/query-hooks');
+  const boundary = (await vite.ssrLoadModule(
+    '/src/app/screen-error-boundary.tsx',
+  )) as typeof import('../src/app/screen-error-boundary');
   const bridge = decorate(mockBridge(snapshot));
   const controller = new ToastController();
-  const page = (at: SettingsOptions['where'] = where) => {
+  const page = (
+    at: SettingsOptions['where'] = where,
+    navigate: SettingsOptions['onNavigate'] = onNavigate,
+  ) => {
     const screen = createElement(ChatInboxProvider, {
       bridge,
       snapshot,
@@ -111,7 +124,7 @@ async function renderSettings(
             bridge,
             location: { kind: 'settings', ...at },
             scene,
-            onNavigate,
+            onNavigate: navigate,
             onRefresh,
             onRefreshSnapshot: async () => snapshot,
             onError: (error: unknown) => {
@@ -134,7 +147,19 @@ async function renderSettings(
         })
       : screen;
   };
-  const rendered = ui.render(page());
+  function ShellKeyed() {
+    const [at, setAt] = useState<SettingsOptions['where']>(where);
+    const location: Location = { kind: 'settings', ...at };
+    return createElement(boundary.ScreenErrorBoundary, {
+      key: boundary.screenBoundaryKey(location),
+      identity: boundary.screenIdentity(location),
+      children: page(at, (next) => {
+        onNavigate(next);
+        if (next.kind === 'settings') setAt(next);
+      }),
+    });
+  }
+  const rendered = ui.render(shellKeyed ? createElement(ShellKeyed) : page());
   await ui.act(async () => {
     await Promise.resolve();
   });
@@ -233,6 +258,26 @@ test('choosing a sub-navigation section replaces the page, dropping any open ser
 
   ui.fireEvent.click(rendered.getByRole('tab', { name: 'Device' }));
   assert.deepEqual(chosen.at(-1), { kind: 'settings', section: 'mac' });
+});
+
+test('walking the sub-navigation by keyboard keeps focus on the section it selects', async () => {
+  const rendered = await renderSettings(await fixture(), {
+    where: { section: 'servers' },
+    shellKeyed: true,
+  });
+  const strip = rendered.getByRole('tablist', { name: 'Settings sections' });
+  rendered.getByRole('tab', { name: 'Servers' }).focus();
+  await ui.act(async () => {
+    ui.fireEvent.keyDown(strip, { key: 'ArrowDown' });
+    await Promise.resolve();
+  });
+  // The shell keys the screen's boundary on the location; a section is a page
+  // of this screen, so the move must not remount it and drop the focus the
+  // tab strip just placed.
+  const preferences = rendered.getByRole('tab', { name: 'Preferences' });
+  assert.equal(preferences.getAttribute('aria-selected'), 'true');
+  assert.equal(document.activeElement, preferences);
+  assert.ok(rendered.getByRole('heading', { name: 'Preferences' }));
 });
 
 test('a section address opens that page, each with the sub-navigation beside it', async () => {

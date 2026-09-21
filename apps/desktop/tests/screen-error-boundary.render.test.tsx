@@ -110,13 +110,15 @@ test('changing location resets the screen error boundary', () => {
 test('the boundary key identifies screens and page identity includes route fields', () => {
   assert.equal(
     boundary.screenBoundaryKey({ kind: 'store', ref: 'acct:personal' }),
-    'store:acct:personal:',
+    'store:acct:personal',
   );
+  // A section is a page of the Settings screen, whose sub-navigation moves
+  // between sections; the screen stays mounted.
   assert.equal(
     boundary.screenBoundaryKey({ kind: 'settings', section: 'servers' }),
-    'settings::servers',
+    'settings:',
   );
-  assert.equal(boundary.screenBoundaryKey({ kind: 'all' }), 'all::');
+  assert.equal(boundary.screenBoundaryKey({ kind: 'all' }), 'all:');
   // The fields `sameLocation` distinguishes each make a different page, on
   // the same screen: the key is unchanged, the identity is not.
   const pairs: [Location, Location][] = [
@@ -142,6 +144,14 @@ test('the boundary key identifies screens and page identity includes route field
     [
       { kind: 'settings', section: 'servers', profile: 'acme' },
       { kind: 'settings', section: 'servers', profile: 'personal' },
+    ],
+    [
+      { kind: 'settings', section: 'servers' },
+      { kind: 'settings', section: 'preferences' },
+    ],
+    [
+      { kind: 'devices', section: 'keys', store: 'acct:a' },
+      { kind: 'devices', section: 'macs', store: 'acct:a' },
     ],
     [
       { kind: 'people', store: 'acct:a' },
