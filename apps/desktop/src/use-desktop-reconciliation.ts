@@ -109,9 +109,9 @@ export function useDesktopReconciliation(
       const { before, observed, observedAt } = pending;
       const latest = live.current.current();
       const after = latest.servers.find((server) => server.id === name);
-      // The facts moved under the observation, so it says nothing about the
-      // server as it is now. The connectivity job's key carries those facts,
-      // so the scheduler has already replaced it with one that runs at once.
+      // Discard an observation if the server configuration changed after it was
+      // collected, then schedule another connectivity check using the current
+      // configuration.
       if (
         !after ||
         before.configuredProbe !== after.configuredProbe ||
@@ -120,8 +120,10 @@ export function useDesktopReconciliation(
           after.host_id === null &&
           after.trust.status === 'unprobed' &&
           observed.identity.status === 'connected')
-      )
+      ) {
+        service.reconnect(name, 'recovery');
         return;
+      }
       const binding =
         after.host_id === null && after.trust.status === 'unknown'
           ? { ...after, host_id: before.host_id }

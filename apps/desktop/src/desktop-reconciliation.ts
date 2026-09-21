@@ -31,10 +31,21 @@ export const profileRefreshKey = (
   ]);
 };
 
+/**
+ * The connectivity job's key, derived from the profile's configuration
+ * alone. A successful observation binds the server's host id and trust
+ * status, so a key carrying those would change with the job's own result:
+ * the scheduler would retire the entry and, with no initial delay, run the
+ * job again the moment it had first succeeded. The catalog key still carries
+ * the host id, where a change of identity is a change of what is being read.
+ */
 export const profileConnectivityKey = (
   snapshot: AgentSnapshot,
   profile: string,
-): string => `connectivity:${profileRefreshKey(snapshot, profile)}`;
+): string => {
+  const server = snapshot.servers.find((candidate) => candidate.id === profile);
+  return JSON.stringify(['connectivity', profile, server?.configuredProbe]);
+};
 
 export class DesktopReconciliation {
   readonly scheduler: ReconciliationScheduler;

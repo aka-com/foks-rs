@@ -452,7 +452,12 @@ test('connectivity recovery refreshes signed facts without replaying setup or bl
       },
     }),
   );
-  await clock.advance(0);
+  // The saved host id the fixture starts from is not the one the server
+  // reports, so the first observation is dropped and the profile observed
+  // again against the facts the catalog read published. That second run is
+  // requested, not scheduled by a key change, so it waits the scheduler's
+  // one-second floor between attempts.
+  await clock.advance(1_000);
   assert.ok(renewed && probes > 0);
   const server = accepted.servers.find((server) => server.id === affected)!;
   assert.equal(server.connectivity.status, 'observed');

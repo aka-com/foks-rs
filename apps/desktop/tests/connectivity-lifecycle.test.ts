@@ -104,6 +104,56 @@ test('startup checks saved profiles but ordinary catalog reads do not need a pre
   f.service.dispose();
 });
 
+test('the result of a first observation does not run the observation again', async () => {
+  const probes = new Map<string, number>();
+  const f = setup(async (profile) => {
+    probes.set(profile, (probes.get(profile) ?? 0) + 1);
+  });
+  const total = () => [...probes.values()].reduce((sum, n) => sum + n, 0);
+  await f.clock.advance(0);
+  assert.equal(total(), FIXTURE.catalogProfiles.length);
+  const initial = total();
+  // What a successful observation publishes: the profile's server identity
+  // is bound and its trust follows from it. The job's schedule is derived
+  // from the profile's configuration, so its own result does not restart it.
+  f.setSnapshot({
+    ...ready(),
+    servers: ready().servers.map((server) => ({
+      ...server,
+      host_id: `${server.id}-bound`,
+      trust: { status: 'verified' as const },
+    })),
+  });
+  await f.clock.advance(30_000);
+  assert.equal(total(), initial);
+  assert.ok(f.catalogs() > 0);
+  await f.clock.advance(120_000);
+  assert.ok(total() > initial);
+  f.service.dispose();
+});
+
+test('a reconfigured probe endpoint is observed without waiting for the interval', async () => {
+  const probes = new Map<string, number>();
+  const f = setup(async (profile) => {
+    probes.set(profile, (probes.get(profile) ?? 0) + 1);
+  });
+  await f.clock.advance(0);
+  const [reconfigured, unchanged] = FIXTURE.catalogProfiles;
+  assert.equal(probes.get(reconfigured), 1);
+  f.setSnapshot({
+    ...ready(),
+    servers: ready().servers.map((server) =>
+      server.id === reconfigured
+        ? { ...server, configuredProbe: 'foks.example.org' }
+        : server,
+    ),
+  });
+  await f.clock.advance(0);
+  assert.equal(probes.get(reconfigured), 2);
+  assert.equal(probes.get(unchanged), 1);
+  f.service.dispose();
+});
+
 test('a failing profile backs off independently; focus storms do not bypass backoff', async () => {
   const failed = FIXTURE.servers[0].id;
   const calls = new Map<string, number>();
