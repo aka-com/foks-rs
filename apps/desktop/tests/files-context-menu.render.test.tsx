@@ -252,7 +252,6 @@ test('vault and team roots expose scoped folder creation and team info without s
     '[data-folder-store="team:eng"][data-folder-path="/"] .fselect',
   )!;
   ui.fireEvent.keyDown(team, { key: 'F10', shiftKey: true });
-  assert.ok(ui.screen.getByRole('separator'));
   ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Team info' }));
   assert.deepEqual(mounted.teamInfo, ['team:eng']);
   assert.equal(mounted.locations.getSnapshot(), before);

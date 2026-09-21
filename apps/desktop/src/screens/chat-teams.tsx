@@ -284,6 +284,7 @@ function channelCount(listed: ListedChannel | undefined): string | null {
 }
 
 export interface ChatTeamColumnProps {
+  id?: string;
   snapshot: AgentSnapshot;
   /** The team whose conversation is mounted, when there is one. */
   selected?: StoreRef;
@@ -305,6 +306,7 @@ export interface ChatTeamColumnProps {
 }
 
 export function ChatTeamColumn({
+  id,
   snapshot,
   selected,
   activeChannel,
@@ -438,6 +440,7 @@ export function ChatTeamColumn({
   });
   return (
     <aside
+      id={id}
       className="chat-inbox"
       aria-label="Chat inbox"
       onContextMenu={(event) => {

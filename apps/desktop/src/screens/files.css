@@ -4,7 +4,27 @@
    window header, so the band that used to hold them is gone. */
 
 .folder-split {
-  grid-template-columns: 232px minmax(0, 1fr);
+  grid-template-columns: var(--files-tree-w) minmax(0, 1fr);
+}
+
+.files-sidebar-resizer {
+  position: absolute;
+  z-index: 3;
+  inset-block: 0;
+  left: calc(var(--files-tree-w) - 3px);
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+  -webkit-app-region: no-drag;
+}
+.files-sidebar-resizer:hover,
+.files-sidebar-resizer:focus-visible,
+.files-sidebar-resizer.is-resizing {
+  background: var(--accent-border);
+}
+.files-sidebar-resizer:focus-visible {
+  outline: 1px solid var(--accent-ink);
+  outline-offset: -1px;
 }
 
 /* ---------------------------------------------------------- tree column */
@@ -903,4 +923,14 @@
 
 .folder-body .row:focus-within .cell.num {
   visibility: hidden;
+}
+
+@container (max-width: 700px) {
+  .folder-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .tpane,
+  .files-sidebar-resizer {
+    display: none;
+  }
 }

@@ -31,6 +31,7 @@ test.before(async () => {
 test.afterEach(() => {
   ui.cleanup();
   window.localStorage.removeItem('filesView');
+  window.localStorage.removeItem('filesSidebarWidth');
 });
 test.after(async () => vite.close());
 
@@ -118,6 +119,28 @@ test('defaults to All items, displaying all stores in one table', async () => {
   // The browser draws no toolbar band of its own any more: search and New
   // belong to the window header.
   assert.equal(document.querySelector('.folder-layout .toolbar'), null);
+});
+
+test('the folder tree resizes by keyboard and persists its width', async () => {
+  await mount({ kind: 'all' });
+  const handle = ui.screen.getByRole('separator', {
+    name: 'Resize Files sidebar',
+  });
+  assert.equal(handle.getAttribute('aria-valuenow'), '232');
+  assert.equal(
+    document.getElementById(handle.getAttribute('aria-controls')!),
+    document.querySelector('.tpane'),
+  );
+
+  ui.fireEvent.keyDown(handle, { key: 'ArrowRight' });
+  assert.equal(handle.getAttribute('aria-valuenow'), '240');
+  assert.equal(
+    document
+      .querySelector<HTMLElement>('.folder-layout')
+      ?.style.getPropertyValue('--files-tree-w'),
+    '240px',
+  );
+  assert.equal(window.localStorage.getItem('filesSidebarWidth'), '240');
 });
 
 test('renders kind filter at the top of the tree column', async () => {

@@ -12,6 +12,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { useChatSidebarResize } from './use-chat-sidebar-resize';
 import { Button, Icon } from '../components';
 import { chatAvailable, storeOf } from '../model';
 import type {
@@ -88,6 +89,7 @@ export function ChatTab({
   accessNow = systemAccessNow,
   accessGenerations = NO_GENERATIONS,
 }: ChatTabProps): ReactNode {
+  const sidebar = useChatSidebarResize();
   const inbox = useSidebarInbox();
   // One clock for the whole tab: the column, the pane and the fallback all
   // read availability off the moment this render started.
@@ -216,8 +218,14 @@ export function ChatTab({
   // team's inbox, and the panel says so meanwhile rather than flickering out.
   const showInfo = info && Boolean(open);
   return (
-    <section className={showInfo ? 'chat-screen with-info' : 'chat-screen'}>
+    <section
+      ref={sidebar.ref}
+      style={sidebar.style}
+      className={showInfo ? 'chat-screen with-info' : 'chat-screen'}
+    >
+      {sidebar.handle}
       <ChatTeamColumn
+        id={sidebar.id}
         snapshot={snapshot}
         selected={ref}
         activeChannel={channel?.id}

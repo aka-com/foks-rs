@@ -1311,10 +1311,6 @@ export function DetailsPanel({
               {saveProblem}
             </p>
           ) : null}
-          <p className="pfn">
-            Replacing creates version {item.version + 1}. If this file changed
-            elsewhere, refresh before choosing the replacement again.
-          </p>
         </SheetDialog>
       ) : null}
     </>

@@ -19,6 +19,7 @@ import { virtualListWindow } from '/kit/virtual-list';
 import { rememberFilesView, storedFilesView } from '../files-view-pref';
 import type { FilesView } from '../files-view-pref';
 import { filesGridWindow } from './files-grid';
+import { useFilesSidebarResize } from './use-files-sidebar-resize';
 import {
   Band,
   Button,
@@ -669,6 +670,7 @@ export function ItemsScreen({
   dropEnabled = true,
   accessNow = () => Date.now() / 1000,
 }: ItemsScreenProps): ReactNode {
+  const sidebar = useFilesSidebarResize();
   const toasts = useToast();
   const [view, setView] = useState<FilesView>(storedFilesView);
   const [folderMenu, setFolderMenu] = useState<{
@@ -1355,6 +1357,8 @@ export function ItemsScreen({
     <div className="drop-area">
       {dropZone}
       <div
+        ref={sidebar.ref}
+        style={sidebar.style}
         className="folder-layout"
         onContextMenu={(event) => {
           if (showFolderMenu(event.target, event.clientX, event.clientY))
@@ -1432,7 +1436,8 @@ export function ItemsScreen({
           </ContextMenu>
         ) : null}
         <div className="folder-split">
-          <aside className="tpane" aria-label="Folders">
+          {sidebar.handle}
+          <aside id={sidebar.id} className="tpane" aria-label="Folders">
             {/* Filter control for item kind (passwords, documents, etc.). */}
             <div className="filt">
               <SegmentedControl<KindFilter>

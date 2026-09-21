@@ -484,6 +484,7 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .tcard p.calm{margin-top:12px;font-size:12.5px}
 .tcard .copybox{margin-top:8px}
 .lock-back{inset:0;z-index:40;background:rgba(28,30,44,.55);backdrop-filter:blur(6px)}
+.window:has(>.lock-back) .side.rail .rail-brand{padding-top:8px}
 .tcard.lockcard{width:min(360px,100%)}
 .lockcard .btn{width:100%;height:34px;justify-content:center}
 
@@ -509,11 +510,10 @@ details.dd ol{padding-left:1.25em;display:flex;flex-direction:column;gap:10px}
 details.dd li b{color:var(--ink-2)}
 
 /* Folder browser */
-/* `--tree-w` is the tree column's width; .folder-split repeats the value
-   literally and .toolbar-filter reads it, so the two stay in step. */
-.folder-layout{flex:1;min-height:0;display:flex;flex-direction:column;--tree-w:236px}
+/* The tree width is shared by the Files grid and its resize handle. */
+.folder-layout{position:relative;flex:1;min-height:0;display:flex;flex-direction:column;--files-tree-w:232px;--tree-w:var(--files-tree-w)}
 .bandstrip{display:flex;flex-direction:column;gap:8px;padding:8px 20px 0}
-.folder-split{flex:1;min-height:0;display:grid;grid-template-columns:236px minmax(0,1fr)}
+.folder-split{position:relative;flex:1;min-height:0;display:grid;grid-template-columns:var(--files-tree-w) minmax(0,1fr)}
 .tpane{border-right:1px solid var(--line-soft);background:var(--main-surface);overflow:auto;padding:6px 6px 8px}
 .tpane h6{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);padding:4px 10px}
 /* Heading spacing after rows */
@@ -569,7 +569,6 @@ details.dd li b{color:var(--ink-2)}
 .crumbs .sep{display:inline-grid;place-items:center;color:var(--faint);font-size:12px;transform:rotate(-90deg)}
 .kic.Folder{background:rgba(245,158,11,.14);color:var(--folder-amber)}
 .kic.Store{background:var(--chip-bg);color:var(--ink-3)}
-@container (max-width:700px){.folder-split{grid-template-columns:minmax(0,1fr)}.tpane{display:none}}
 
 /* Vault drop zone */
 .drop-area{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}

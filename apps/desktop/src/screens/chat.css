@@ -1075,15 +1075,7 @@
     animation: none;
   }
 }
-@container (max-width: 900px) {
-  .chat-screen {
-    --chat-inbox-w: 220px;
-  }
-}
 @media (max-width: 860px) {
-  .chat-screen {
-    --chat-inbox-w: 220px;
-  }
   .chat-thread-header,
   .chat-messages {
     padding-left: 12px;
@@ -1164,4 +1156,25 @@
   color: inherit;
   text-decoration: underline;
   cursor: pointer;
+}
+
+/* Absolute positioning keeps the separator out of the two-column grid. */
+.chat-sidebar-resizer {
+  position: absolute;
+  z-index: 3;
+  inset-block: 0;
+  left: calc(var(--chat-inbox-w) - 3px);
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+  -webkit-app-region: no-drag;
+}
+.chat-sidebar-resizer:hover,
+.chat-sidebar-resizer:focus-visible,
+.chat-sidebar-resizer.is-resizing {
+  background: var(--accent-border);
+}
+.chat-sidebar-resizer:focus-visible {
+  outline: 1px solid var(--accent-ink);
+  outline-offset: -1px;
 }
