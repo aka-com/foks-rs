@@ -344,9 +344,9 @@ export function ChatTeamColumn({
   const filter = search;
   const query = filter.trim().toLowerCase();
   // The clock is the tab's, but the object it arrives in is rebuilt every
-  // render, so the memo is keyed on the moment rather than on its identity —
+  // render, so the cache is keyed on the moment rather than on its identity —
   // and on the second rather than on the fraction of a millisecond the tab
-  // reads, which no two renders share and which would make the memo a cost
+  // reads, which no two renders share and which would make the cache a cost
   // with no hit. Availability changes on the second; a check-in that lapses
   // between two ticks is seen on the next one.
   const { nowSeconds, agentReady, catalogReady } = accessOptions;

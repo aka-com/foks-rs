@@ -622,10 +622,10 @@ export function canChangeItem(
 /**
  * Items keyed by the snapshot they were read from.
  *
- * The memo is exact because a published snapshot is immutable: every producer
+ * The cache is exact because a published snapshot is immutable: every producer
  * (the catalog projection, `mergeProfileSnapshot`, `markCatalogRefresh`,
  * `settleCatalogRefresh`, `failCatalogRefresh`, `applyLease`, and the shell's
- * `shown` memo) builds a new object with fresh arrays rather than writing
+ * `shown` cache) builds a new object with fresh arrays rather than writing
  * through the one it was given, so a snapshot that is still reachable still
  * describes the same catalog.
  *
@@ -634,7 +634,7 @@ export function canChangeItem(
  * `AvailabilityOptions`, so it always reads the wall clock, and the answer
  * could change without the snapshot changing. `LeaseExpiryCoordinator`
  * mediates that: it publishes a new snapshot at each expiry boundary, so the
- * memo is dropped exactly where the answer can move.
+ * cache is dropped exactly where the answer can move.
  */
 const catalogCache = new WeakMap<AgentSnapshot, readonly Item[]>();
 
@@ -646,8 +646,8 @@ const catalogCache = new WeakMap<AgentSnapshot, readonly Item[]>();
  * mutated in place; copy it first.
  */
 export function catalog(snapshot: AgentSnapshot): readonly Item[] {
-  const memo = catalogCache.get(snapshot);
-  if (memo) return memo;
+  const cache = catalogCache.get(snapshot);
+  if (cache) return cache;
   // One availability decision per store rather than one per item: the store
   // resolution and the server, capability and inventory scans behind
   // `storeReadable` cost the same for every item that names the same store.

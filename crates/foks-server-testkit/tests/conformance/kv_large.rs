@@ -493,26 +493,26 @@ fn a_remembered_path_reads_a_chunk_in_fewer_requests_than_a_walk() {
         )
         .unwrap()
         .expect("the walk's version vector is still current");
-    let with_memo = fixture.server.metrics().requests_started - before;
+    let with_cache = fixture.server.metrics().requests_started - before;
 
     assert_eq!(remembered_chunk.content, walked_chunk.content);
     assert_eq!(remembered_chunk.content.len(), STORED_CHUNK);
-    println!("KV chunk requests: walked={with_walk} remembered={with_memo}");
+    println!("KV chunk requests: walked={with_walk} remembered={with_cache}");
     assert_eq!(
-        with_memo, 3,
+        with_cache, 3,
         "one cache check, one node read and one chunk read"
     );
     assert!(
-        with_walk >= 3 * with_memo,
-        "walked={with_walk} remembered={with_memo}"
+        with_walk >= 3 * with_cache,
+        "walked={with_walk} remembered={with_cache}"
     );
 }
 
-/// The property the obvious memo key would break.
+/// The property the obvious cache key would break.
 ///
 /// A dirent version restarts at 1 after an unlink and a re-create, on a fresh
 /// random dirent identifier, so the same `(path, version)` pair names a
-/// different node before and after. A memo keyed on that pair alone would
+/// different node before and after. A cache keyed on that pair alone would
 /// serve the node it first resolved. The walk's version vector is what
 /// refuses it: the unlink writes a tombstone to the dirent the vector cites,
 /// which moves that dirent's head, and the server answers the vector stale.

@@ -1966,7 +1966,7 @@ export function GroupSettingsScreen({
   // store switch must not take it away either: a submission has to be settled
   // where it was made.
   const channelUnresolved = useRef(false);
-  // One clock for this render, the way the Chat tab reads its own: a memo
+  // One clock for this render, the way the Chat tab reads its own: a cache
   // would freeze the availability decision at the moment the tab mounted, so
   // a check-in that lapses while the tab is open would never be noticed.
   const accessOptions: AvailabilityOptions = accessNow

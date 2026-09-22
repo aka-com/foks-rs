@@ -1890,8 +1890,8 @@ impl ProfileSession {
         self
     }
 
-    pub fn with_kv_node_memo(mut self, memo: std::sync::Arc<dyn crate::KvNodeMemo>) -> Self {
-        self.read_caches.kv_nodes = Some(memo);
+    pub fn with_kv_node_cache(mut self, cache: std::sync::Arc<dyn crate::KvNodeCache>) -> Self {
+        self.read_caches.kv_nodes = Some(cache);
         self
     }
 

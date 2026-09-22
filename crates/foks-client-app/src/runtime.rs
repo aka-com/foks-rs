@@ -599,7 +599,7 @@ impl CheckedProfileSession<'_> {
                 .collect::<std::collections::BTreeMap<_, _>>();
             let mut recipients =
                 std::collections::BTreeMap::<Vec<u8>, VerifiedTeamRecipient>::new();
-            // Memoized user projections, scoped to one discovery pass exactly
+            // Cached user projections, scoped to one discovery pass exactly
             // like `recipients`: a restart re-authenticates the graph at a new
             // head, so both maps are rebuilt from scratch. A cached projection
             // is only reused when it still satisfies the equal-root guard for

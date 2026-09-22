@@ -110,10 +110,10 @@ impl TeamViewCacheKey {
 /// restarts at 1 after an unlink and a re-create on a fresh random dirent
 /// identifier, so one `(path, version)` pair names different nodes at
 /// different times. An entry stored under this key is therefore only usable
-/// together with the version vector in [`KvNodeMemoEntry`], which the server
+/// together with the version vector in [`KvNodeCacheEntry`], which the server
 /// checks against its current directory and dirent heads.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct KvNodeMemoKey {
+pub struct KvNodeCacheKey {
     pub state_root: PathBuf,
     pub profile: String,
     pub host_id: Vec<u8>,
@@ -124,7 +124,7 @@ pub struct KvNodeMemoKey {
     pub version: u64,
 }
 
-impl KvNodeMemoKey {
+impl KvNodeCacheKey {
     /// `party` is the namespace owner: the acting user for a personal path,
     /// the team for a team path.
     pub fn new(user: &AuthCacheKey, party: &EntityId, path: &str, version: u64) -> Self {
@@ -152,7 +152,7 @@ impl KvNodeMemoKey {
 /// used without that check would serve bytes from a node that no longer
 /// occupies the path.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct KvNodeMemoEntry {
+pub struct KvNodeCacheEntry {
     pub node_id: [u8; 17],
     pub versions: foks_proto::KvPathVersionVector,
 }
@@ -162,12 +162,12 @@ pub struct KvNodeMemoEntry {
 /// Implementations must bound both the entry count and the entry lifetime.
 /// Entries hold no key material; they hold namespace structure, so they are
 /// still dropped whenever the profile's material is invalidated.
-pub trait KvNodeMemo: Send + Sync {
-    fn get(&self, key: &KvNodeMemoKey) -> Option<KvNodeMemoEntry>;
-    fn put(&self, key: KvNodeMemoKey, entry: KvNodeMemoEntry);
+pub trait KvNodeCache: Send + Sync {
+    fn get(&self, key: &KvNodeCacheKey) -> Option<KvNodeCacheEntry>;
+    fn put(&self, key: KvNodeCacheKey, entry: KvNodeCacheEntry);
     /// Drops one entry. Callers invalidate as soon as the server refuses the
     /// entry's version vector, so a superseded path is not rechecked.
-    fn invalidate(&self, key: &KvNodeMemoKey);
+    fn invalidate(&self, key: &KvNodeCacheKey);
     fn invalidate_profile(&self, state_root: &Path, profile: &str);
 }
 
@@ -199,7 +199,7 @@ pub trait TeamViewTokenCache: Send + Sync {
 pub struct ReadCaches {
     pub authenticated_users: Option<Arc<dyn AuthenticatedUserCache>>,
     pub team_view_tokens: Option<Arc<dyn TeamViewTokenCache>>,
-    pub kv_nodes: Option<Arc<dyn KvNodeMemo>>,
+    pub kv_nodes: Option<Arc<dyn KvNodeCache>>,
 }
 
 impl std::fmt::Debug for ReadCaches {
@@ -272,20 +272,20 @@ impl crate::CheckedProfileSession<'_> {
         Ok(outcome)
     }
 
-    /// The memo of resolved KV paths, with the key for one path, when this
+    /// The cache of resolved KV paths, with the key for one path, when this
     /// session was given one.
     ///
     /// The key alone never authorizes a hit: the caller must submit the
     /// entry's version vector to the server and act on that answer. See
-    /// [`KvNodeMemoKey`].
-    pub(crate) fn kv_node_memo(
+    /// [`KvNodeCacheKey`].
+    pub(crate) fn kv_node_cache_entry(
         &self,
         host: &PinnedHost,
         credential: &DeviceCredential,
         party: &EntityId,
         path: &str,
         version: u64,
-    ) -> Result<Option<(Arc<dyn KvNodeMemo>, KvNodeMemoKey)>> {
+    ) -> Result<Option<(Arc<dyn KvNodeCache>, KvNodeCacheKey)>> {
         let Some(cache) = self.session.read_caches.kv_nodes.as_ref() else {
             return Ok(None);
         };
@@ -297,7 +297,7 @@ impl crate::CheckedProfileSession<'_> {
         )?;
         Ok(Some((
             Arc::clone(cache),
-            KvNodeMemoKey::new(&user, party, path, version),
+            KvNodeCacheKey::new(&user, party, path, version),
         )))
     }
 

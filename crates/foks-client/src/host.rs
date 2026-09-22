@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use super::host_memo;
+use super::host_cache;
 use super::{
     decode, restore_local_merkle_checkpoint, restore_public_host_identity, restore_verified_team,
     restore_verified_user, verify_public_host, Acceptance, CertificateDer, EntityId, Error,
@@ -269,7 +269,7 @@ pub(crate) fn authenticated_tls_roots(host: &PinnedHost) -> Result<rustls::RootC
 /// The authenticated host, its Merkle anchor and its host chain, restored once
 /// per hard-state revision rather than once per call.
 ///
-/// The caller passes the store it already holds, and the memo is revalidated
+/// The caller passes the store it already holds, and the cache is revalidated
 /// against that same store: a connection opened before the file was replaced
 /// keeps reading the old inode, so validating against a separately opened store
 /// could pair a fresh metadata reading with a stale projection.
@@ -277,21 +277,21 @@ pub(crate) fn restored_host(
     store: &HardStateStore,
     lookup_name: &str,
     database_path: &Path,
-) -> Result<Arc<host_memo::RestoredHost>> {
-    // A memo must not be able to fail a call that would otherwise succeed, so
-    // a revision this cannot read means no memo for this call rather than an
+) -> Result<Arc<host_cache::RestoredHost>> {
+    // A cache must not be able to fail a call that would otherwise succeed, so
+    // a revision this cannot read means no cache for this call rather than an
     // error.
     let revision = store.metadata().ok();
     if let Some(metadata) = revision {
-        let key = host_memo::MemoKey::new(database_path, lookup_name, metadata);
-        if let Some(memoized) = host_memo::get(&key) {
-            return Ok(memoized);
+        let key = host_cache::CacheKey::new(database_path, lookup_name, metadata);
+        if let Some(cached) = host_cache::get(&key) {
+            return Ok(cached);
         }
     }
     let snapshot = store
         .host_for_lookup(lookup_name)?
         .ok_or(Error::HostBinding("pinned host is missing"))?;
-    host_memo::record_replay();
+    host_cache::record_replay();
     let restored = Arc::new(pinned_host_from_snapshot(snapshot, database_path)?);
     // The snapshot is read with several separate statements, so a writer that
     // commits between them yields a torn projection. Re-reading the revision
@@ -301,8 +301,8 @@ pub(crate) fn restored_host(
     // condition stick.
     if let Some(metadata) = revision {
         if store.metadata().is_ok_and(|current| current == metadata) {
-            host_memo::put(
-                host_memo::MemoKey::new(database_path, lookup_name, metadata),
+            host_cache::put(
+                host_cache::CacheKey::new(database_path, lookup_name, metadata),
                 &restored,
             );
         }
@@ -313,7 +313,7 @@ pub(crate) fn restored_host(
 fn pinned_host_from_snapshot(
     snapshot: StoredHostSnapshot,
     path: &Path,
-) -> Result<host_memo::RestoredHost> {
+) -> Result<host_cache::RestoredHost> {
     let identity = restore_public_host_identity(
         &snapshot.host_id,
         &snapshot.genesis_key,
@@ -364,7 +364,7 @@ fn pinned_host_from_snapshot(
         return Err(Error::HostTlsRoots);
     }
     let host_id = identity.host_id().clone();
-    Ok(host_memo::RestoredHost {
+    Ok(host_cache::RestoredHost {
         host: PinnedHost {
             lookup_name: snapshot.lookup_name,
             host_id,

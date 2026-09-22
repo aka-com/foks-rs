@@ -79,8 +79,8 @@ mod discovery;
 mod error;
 mod federation;
 mod host;
-mod host_memo;
-pub use host_memo::{forget_memoized_hosts, host_replay_count};
+mod host_cache;
+pub use host_cache::{clear_cached_hosts, host_replay_count};
 mod kex;
 mod kv;
 mod mutation;
@@ -414,7 +414,7 @@ mod tests {
             .unwrap();
 
         // Restore once before tampering, so the projection under test is the
-        // memoized one rather than a cold read.
+        // cached one rather than a cold read.
         FoksClient::webpki()
             .pinned_host("foks.app", &database)
             .unwrap();
@@ -452,7 +452,7 @@ mod tests {
             .unwrap();
 
         // Restore once before tampering, so the anchor under test is the
-        // memoized one rather than a cold read.
+        // cached one rather than a cold read.
         FoksClient::webpki()
             .pinned_host("foks.app", &database)
             .unwrap();
@@ -469,9 +469,9 @@ mod tests {
         ));
     }
 
-    /// Serializes the tests that clear the process-wide host memo, so one
+    /// Serializes the tests that clear the process-wide host cache, so one
     /// cannot drop an entry another has just asserted.
-    fn memo_tests() -> std::sync::MutexGuard<'static, ()> {
+    fn cache_tests() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         LOCK.lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -489,39 +489,39 @@ mod tests {
     }
 
     #[test]
-    fn a_restored_host_is_memoized_under_the_revision_it_was_read_at() {
-        let _guard = memo_tests();
+    fn a_restored_host_is_cached_under_the_revision_it_was_read_at() {
+        let _guard = cache_tests();
         let directory = tempfile::tempdir().unwrap();
         let database = pinned_fixture_host(directory.path());
         let metadata = HardStateStore::open(&database).unwrap().metadata().unwrap();
-        let key = host_memo::MemoKey::new(&database, "foks.app", metadata);
+        let key = host_cache::CacheKey::new(&database, "foks.app", metadata);
 
-        forget_memoized_hosts();
-        assert!(host_memo::get(&key).is_none());
+        clear_cached_hosts();
+        assert!(host_cache::get(&key).is_none());
         FoksClient::webpki()
             .pinned_host("foks.app", &database)
             .unwrap();
-        assert!(host_memo::get(&key).is_some());
+        assert!(host_cache::get(&key).is_some());
     }
 
     #[test]
-    fn a_memoized_host_equals_the_projection_a_fresh_replay_produces() {
-        let _guard = memo_tests();
+    fn a_cached_host_equals_the_projection_a_fresh_replay_produces() {
+        let _guard = cache_tests();
         let directory = tempfile::tempdir().unwrap();
         let database = pinned_fixture_host(directory.path());
         let client = FoksClient::webpki();
 
         let first = client.pinned_host("foks.app", &database).unwrap();
-        let memoized = client.pinned_host("foks.app", &database).unwrap();
-        forget_memoized_hosts();
+        let cached = client.pinned_host("foks.app", &database).unwrap();
+        clear_cached_hosts();
         let replayed = client.pinned_host("foks.app", &database).unwrap();
 
-        assert_eq!(first, memoized);
+        assert_eq!(first, cached);
         assert_eq!(first, replayed);
     }
 
     #[test]
-    fn two_discovery_names_for_one_database_do_not_share_a_memoized_host() {
+    fn two_discovery_names_for_one_database_do_not_share_a_cached_host() {
         let directory = tempfile::tempdir().unwrap();
         let database = pinned_fixture_host(directory.path());
         let connection = rusqlite::Connection::open(&database).unwrap();
@@ -538,7 +538,7 @@ mod tests {
         let probed = client.pinned_host("foks.app", &database).unwrap();
         let alias = client.pinned_host("alias.test", &database).unwrap();
 
-        // One database, one host identity, two discovery names. A memo keyed
+        // One database, one host identity, two discovery names. A cache keyed
         // without the name would answer the second request with the first
         // name, and every later resolution would follow it.
         assert_eq!(probed.lookup_name(), "foks.app");
@@ -547,7 +547,7 @@ mod tests {
     }
 
     #[test]
-    fn two_spellings_of_one_database_do_not_share_a_memoized_host() {
+    fn two_spellings_of_one_database_do_not_share_a_cached_host() {
         let directory = tempfile::tempdir().unwrap();
         let database = pinned_fixture_host(directory.path());
         // Path equality folds away a `.` component but keeps `..`, so this is
@@ -567,7 +567,7 @@ mod tests {
     }
 
     #[test]
-    fn a_write_to_a_host_table_is_seen_through_a_memoized_host() {
+    fn a_write_to_a_host_table_is_seen_through_a_cached_host() {
         let directory = tempfile::tempdir().unwrap();
         let database = pinned_fixture_host(directory.path());
         let client = FoksClient::webpki();
@@ -588,7 +588,7 @@ mod tests {
     }
 
     #[test]
-    fn a_write_that_changes_nothing_still_drops_a_memoized_host() {
+    fn a_write_that_changes_nothing_still_drops_a_cached_host() {
         let directory = tempfile::tempdir().unwrap();
         let database = pinned_fixture_host(directory.path());
         let client = FoksClient::webpki();
@@ -597,7 +597,7 @@ mod tests {
 
         // An update that writes each row's existing bytes back. The trigger
         // fires on the statement, not on a difference, so the revision moves
-        // and the memo drops its entry. That is the deliberate direction: the
+        // and the cache drops its entry. That is the deliberate direction: the
         // key over-invalidates rather than reasoning about what a write meant.
         let connection = rusqlite::Connection::open(&database).unwrap();
         connection
@@ -614,7 +614,7 @@ mod tests {
     }
 
     #[test]
-    fn re_accepting_an_unchanged_host_keeps_the_memoized_projection() {
+    fn re_accepting_an_unchanged_host_keeps_the_cached_projection() {
         let directory = tempfile::tempdir().unwrap();
         let database = pinned_fixture_host(directory.path());
         FoksClient::webpki()
@@ -629,7 +629,7 @@ mod tests {
             .unwrap();
 
         // Accepting a host whose chain and projection are unchanged writes
-        // nothing, so no trigger fires and the memoized projection survives.
+        // nothing, so no trigger fires and the cached projection survives.
         assert_eq!(
             HardStateStore::open(&database).unwrap().metadata().unwrap(),
             revision

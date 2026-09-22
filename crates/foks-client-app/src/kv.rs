@@ -101,7 +101,7 @@ impl CheckedProfileSession<'_> {
     ///
     /// A download issues this once per delivered chunk, and resolving the
     /// path costs a request per directory on it every time. A session with a
-    /// node memo resolves the path once and then reads under the node it
+    /// node cache resolves the path once and then reads under the node it
     /// remembered, submitting the version vector that walk cited so the
     /// server refuses the read if anything on the path moved. That is one
     /// request in place of the walk, not zero: a remembered `(path, version)`
@@ -122,14 +122,14 @@ impl CheckedProfileSession<'_> {
         let loaded = vault.account(alias)?;
         let host = self.pinned_host()?;
         let authenticated = self.authenticated_user(&host, &loaded.credential)?;
-        let memo = self.kv_node_memo(
+        let cache = self.kv_node_cache_entry(
             &host,
             &loaded.credential,
             &loaded.credential.uid,
             path,
             version,
         )?;
-        if let Some((cache, key)) = &memo {
+        if let Some((cache, key)) = &cache {
             if let Some(remembered) = cache.get(key) {
                 match self.client.read_user_kv_chunk_if_current(
                     &host,
@@ -201,10 +201,10 @@ impl CheckedProfileSession<'_> {
             chunk.content.len(),
             chunk.eof,
         )?;
-        if let Some((cache, key)) = memo {
+        if let Some((cache, key)) = cache {
             cache.put(
                 key,
-                crate::KvNodeMemoEntry {
+                crate::KvNodeCacheEntry {
                     node_id: entry.node_id,
                     versions: foks_client::kv_path_version_vector(&directories),
                 },
@@ -256,14 +256,14 @@ impl CheckedProfileSession<'_> {
         let components = parent_components(path)?;
         let (account, team, host) =
             self.authenticated_team_store(account_alias, team_alias, team_id_hex, vault)?;
-        let memo = self.kv_node_memo(
+        let cache = self.kv_node_cache_entry(
             &host,
             &account.credential,
             team.verified.team(),
             path,
             version,
         )?;
-        if let Some((cache, key)) = &memo {
+        if let Some((cache, key)) = &cache {
             if let Some(remembered) = cache.get(key) {
                 // As on [`Self::read_kv_chunk`]: the remembered node is used
                 // only if the server still accepts the walk's version vector.
@@ -330,10 +330,10 @@ impl CheckedProfileSession<'_> {
             chunk.content.len(),
             chunk.eof,
         )?;
-        if let Some((cache, key)) = memo {
+        if let Some((cache, key)) = cache {
             cache.put(
                 key,
-                crate::KvNodeMemoEntry {
+                crate::KvNodeCacheEntry {
                     node_id: entry.node_id,
                     versions: foks_client::kv_path_version_vector(&directories),
                 },

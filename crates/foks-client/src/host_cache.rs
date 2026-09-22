@@ -45,16 +45,16 @@ use crate::PinnedHost;
 /// Merkle anchor, whose stored evidence grows with the number of epochs its
 /// profile has pinned, so this is also the bound on how much of that a process
 /// keeps resident.
-const MAXIMUM_MEMOIZED_HOSTS: usize = 16;
+const MAXIMUM_CACHED_HOSTS: usize = 16;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MemoKey {
+pub(crate) struct CacheKey {
     database_path: PathBuf,
     lookup_name: String,
     metadata: HardStateMetadata,
 }
 
-impl MemoKey {
+impl CacheKey {
     pub(crate) fn new(
         database_path: &Path,
         lookup_name: &str,
@@ -76,28 +76,28 @@ impl MemoKey {
 
 /// A bounded map from an exact key to a restored value, holding one entry per
 /// named host and evicting the oldest when full.
-struct Memo<V> {
-    entries: VecDeque<(MemoKey, V)>,
+struct BoundedCache<V> {
+    entries: VecDeque<(CacheKey, V)>,
 }
 
-impl<V: Clone> Memo<V> {
+impl<V: Clone> BoundedCache<V> {
     const fn new() -> Self {
         Self {
             entries: VecDeque::new(),
         }
     }
 
-    fn get(&self, key: &MemoKey) -> Option<V> {
+    fn get(&self, key: &CacheKey) -> Option<V> {
         self.entries
             .iter()
             .find(|(stored, _)| stored == key)
             .map(|(_, value)| value.clone())
     }
 
-    fn put(&mut self, key: MemoKey, value: V) {
+    fn put(&mut self, key: CacheKey, value: V) {
         self.entries
             .retain(|(stored, _)| !stored.names_same_host(&key));
-        while self.entries.len() >= MAXIMUM_MEMOIZED_HOSTS {
+        while self.entries.len() >= MAXIMUM_CACHED_HOSTS {
             self.entries.pop_front();
         }
         self.entries.push_back((key, value));
@@ -124,22 +124,22 @@ pub(crate) struct RestoredHost {
     pub(crate) chain_tail_hash: [u8; 32],
 }
 
-fn memo() -> &'static Mutex<Memo<Arc<RestoredHost>>> {
-    static MEMO: OnceLock<Mutex<Memo<Arc<RestoredHost>>>> = OnceLock::new();
-    MEMO.get_or_init(|| Mutex::new(Memo::new()))
+fn cache() -> &'static Mutex<BoundedCache<Arc<RestoredHost>>> {
+    static CACHE: OnceLock<Mutex<BoundedCache<Arc<RestoredHost>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(BoundedCache::new()))
 }
 
 static REPLAYS: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) fn get(key: &MemoKey) -> Option<Arc<RestoredHost>> {
-    memo()
+pub(crate) fn get(key: &CacheKey) -> Option<Arc<RestoredHost>> {
+    cache()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .get(key)
 }
 
-pub(crate) fn put(key: MemoKey, restored: &Arc<RestoredHost>) {
-    memo()
+pub(crate) fn put(key: CacheKey, restored: &Arc<RestoredHost>) {
+    cache()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .put(key, Arc::clone(restored));
@@ -150,17 +150,17 @@ pub(crate) fn record_replay() {
 }
 
 /// Counts the host restores that replayed the stored evidence rather than
-/// reusing a memoized projection. The key is exact, so this reports work done,
+/// reusing a cached projection. The key is exact, so this reports work done,
 /// not correctness.
 pub fn host_replay_count() -> u64 {
     REPLAYS.load(Ordering::Relaxed)
 }
 
-/// Drops every memoized host. The key already covers a relocated, reimported
+/// Drops every cached host. The key already covers a relocated, reimported
 /// or reset state directory, because each changes the path or the database
 /// identity; this is for a caller that would rather not depend on that.
-pub fn forget_memoized_hosts() {
-    memo()
+pub fn clear_cached_hosts() {
+    cache()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .clear();
@@ -178,78 +178,78 @@ mod tests {
         }
     }
 
-    fn key(path: &str, name: &str, revision: u64, token: u8) -> MemoKey {
-        MemoKey::new(Path::new(path), name, metadata(revision, token))
+    fn key(path: &str, name: &str, revision: u64, token: u8) -> CacheKey {
+        CacheKey::new(Path::new(path), name, metadata(revision, token))
     }
 
     #[test]
-    fn a_memoized_host_is_returned_only_for_its_own_name_path_and_revision() {
-        let mut memo = Memo::new();
+    fn a_cached_host_is_returned_only_for_its_own_name_path_and_revision() {
+        let mut cache = BoundedCache::new();
         let stored = key("/a/hard.sqlite3", "one.test", 4, 1);
-        memo.put(stored.clone(), "one");
+        cache.put(stored.clone(), "one");
 
-        assert_eq!(memo.get(&stored), Some("one"));
+        assert_eq!(cache.get(&stored), Some("one"));
         // A second discovery name in the same database at the same revision.
         // Without the name in the key this would answer with the first host's
         // identity and endpoints.
-        assert_eq!(memo.get(&key("/a/hard.sqlite3", "two.test", 4, 1)), None);
+        assert_eq!(cache.get(&key("/a/hard.sqlite3", "two.test", 4, 1)), None);
         // A second spelling of the same file. Path equality folds away a `.`
         // component but keeps `..`, so this is a spelling the advance-and-accept
-        // exclusion would also treat as a distinct key, and the memo must agree
+        // exclusion would also treat as a distinct key, and the cache must agree
         // with it rather than alias the two.
         assert_eq!(
-            memo.get(&key("/a/sub/../hard.sqlite3", "one.test", 4, 1)),
+            cache.get(&key("/a/sub/../hard.sqlite3", "one.test", 4, 1)),
             None
         );
         // The same revision number with a rerolled write token.
-        assert_eq!(memo.get(&key("/a/hard.sqlite3", "one.test", 4, 2)), None);
+        assert_eq!(cache.get(&key("/a/hard.sqlite3", "one.test", 4, 2)), None);
         // A later revision.
-        assert_eq!(memo.get(&key("/a/hard.sqlite3", "one.test", 5, 1)), None);
+        assert_eq!(cache.get(&key("/a/hard.sqlite3", "one.test", 5, 1)), None);
     }
 
     #[test]
     fn a_new_revision_replaces_its_predecessor_rather_than_accumulating() {
-        let mut memo = Memo::new();
+        let mut cache = BoundedCache::new();
         let first = key("/b/hard.sqlite3", "one.test", 1, 1);
         let second = key("/b/hard.sqlite3", "one.test", 2, 2);
-        memo.put(first.clone(), "first");
-        memo.put(second.clone(), "second");
+        cache.put(first.clone(), "first");
+        cache.put(second.clone(), "second");
 
-        assert_eq!(memo.get(&first), None);
-        assert_eq!(memo.get(&second), Some("second"));
-        assert_eq!(memo.len(), 1);
+        assert_eq!(cache.get(&first), None);
+        assert_eq!(cache.get(&second), Some("second"));
+        assert_eq!(cache.len(), 1);
     }
 
     #[test]
     fn a_second_name_in_one_database_keeps_its_own_entry() {
-        let mut memo = Memo::new();
+        let mut cache = BoundedCache::new();
         let one = key("/b/hard.sqlite3", "one.test", 1, 1);
         let two = key("/b/hard.sqlite3", "two.test", 1, 1);
-        memo.put(one.clone(), "one");
-        memo.put(two.clone(), "two");
+        cache.put(one.clone(), "one");
+        cache.put(two.clone(), "two");
 
-        assert_eq!(memo.get(&one), Some("one"));
-        assert_eq!(memo.get(&two), Some("two"));
-        assert_eq!(memo.len(), 2);
+        assert_eq!(cache.get(&one), Some("one"));
+        assert_eq!(cache.get(&two), Some("two"));
+        assert_eq!(cache.len(), 2);
     }
 
     #[test]
-    fn the_memo_is_bounded_and_evicts_oldest_first() {
-        let mut memo = Memo::new();
+    fn the_cache_is_bounded_and_evicts_oldest_first() {
+        let mut cache = BoundedCache::new();
         let mut keys = Vec::new();
-        for index in 0..MAXIMUM_MEMOIZED_HOSTS + 1 {
+        for index in 0..MAXIMUM_CACHED_HOSTS + 1 {
             let path = format!("/c/{index}/hard.sqlite3");
             let entry = key(&path, "one.test", 1, 1);
-            memo.put(entry.clone(), index);
+            cache.put(entry.clone(), index);
             keys.push(entry);
         }
 
-        assert_eq!(memo.len(), MAXIMUM_MEMOIZED_HOSTS);
-        assert_eq!(memo.get(&keys[0]), None);
-        assert_eq!(memo.get(&keys[1]), Some(1));
+        assert_eq!(cache.len(), MAXIMUM_CACHED_HOSTS);
+        assert_eq!(cache.get(&keys[0]), None);
+        assert_eq!(cache.get(&keys[1]), Some(1));
         assert_eq!(
-            memo.get(keys.last().expect("a key was inserted")),
-            Some(MAXIMUM_MEMOIZED_HOSTS)
+            cache.get(keys.last().expect("a key was inserted")),
+            Some(MAXIMUM_CACHED_HOSTS)
         );
     }
 }

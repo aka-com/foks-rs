@@ -26,8 +26,8 @@ use std::time::{Duration, Instant};
 use foks_agent_proto::Operation;
 use foks_client::{AuthenticatedUserOutcome, TeamViewGrant};
 use foks_client_app::{
-    AuthCacheKey, AuthenticatedUserCache, CancellationToken, KvNodeMemo, KvNodeMemoEntry,
-    KvNodeMemoKey, ProfileRegistry, ProfileSession, ReadCaches, TeamViewCacheKey,
+    AuthCacheKey, AuthenticatedUserCache, CancellationToken, KvNodeCache, KvNodeCacheEntry,
+    KvNodeCacheKey, ProfileRegistry, ProfileSession, ReadCaches, TeamViewCacheKey,
     TeamViewTokenCache,
 };
 
@@ -46,7 +46,7 @@ const MAXIMUM_CACHED_TEAM_VIEWS: usize = 64;
 /// lifetime bounds memory rather than staleness. It matches the catalog
 /// cadence for the same reason as the authenticated-user cache: one download
 /// and the reads around it share an entry, and the next pass does not.
-const KV_NODE_MEMO_LIFETIME: Duration = Duration::from_secs(30);
+const KV_NODE_CACHE_LIFETIME: Duration = Duration::from_secs(30);
 /// One entry per (profile, actor, party, path, version). Each holds the
 /// version vector of the directories on one path, which is proportional to
 /// the number of dirents in them, so this is deliberately smaller than the
@@ -117,7 +117,7 @@ impl<K: PartialEq, V: Clone> Expiring<K, V> {
 struct CacheState {
     users: Expiring<AuthCacheKey, Arc<AuthenticatedUserOutcome>>,
     team_views: Expiring<TeamViewCacheKey, TeamViewGrant>,
-    kv_nodes: Expiring<KvNodeMemoKey, KvNodeMemoEntry>,
+    kv_nodes: Expiring<KvNodeCacheKey, KvNodeCacheEntry>,
 }
 
 impl Default for CacheState {
@@ -128,7 +128,7 @@ impl Default for CacheState {
                 MAXIMUM_CACHED_AUTHENTICATED_USERS,
             ),
             team_views: Expiring::new(TEAM_VIEW_TOKEN_CACHE_LIFETIME, MAXIMUM_CACHED_TEAM_VIEWS),
-            kv_nodes: Expiring::new(KV_NODE_MEMO_LIFETIME, MAXIMUM_CACHED_KV_NODES),
+            kv_nodes: Expiring::new(KV_NODE_CACHE_LIFETIME, MAXIMUM_CACHED_KV_NODES),
         }
     }
 }
@@ -210,12 +210,12 @@ impl TeamViewTokenCache for AgentReadCaches {
     }
 }
 
-impl KvNodeMemo for AgentReadCaches {
+impl KvNodeCache for AgentReadCaches {
     // A hit is not an answer. It is a candidate node the caller still has to
     // put to the server as a version vector, so this deliberately does not
     // mark the operation as served from retained material: nothing here can
     // make a read succeed that would otherwise have failed.
-    fn get(&self, key: &KvNodeMemoKey) -> Option<KvNodeMemoEntry> {
+    fn get(&self, key: &KvNodeCacheKey) -> Option<KvNodeCacheEntry> {
         cache_state()
             .lock()
             .ok()?
@@ -223,13 +223,13 @@ impl KvNodeMemo for AgentReadCaches {
             .get_at(key, Instant::now())
     }
 
-    fn put(&self, key: KvNodeMemoKey, entry: KvNodeMemoEntry) {
+    fn put(&self, key: KvNodeCacheKey, entry: KvNodeCacheEntry) {
         if let Ok(mut state) = cache_state().lock() {
             state.kv_nodes.put_at(key, entry, Instant::now());
         }
     }
 
-    fn invalidate(&self, key: &KvNodeMemoKey) {
+    fn invalidate(&self, key: &KvNodeCacheKey) {
         if let Ok(mut state) = cache_state().lock() {
             state.kv_nodes.retain(|stored| stored != key);
         }
@@ -248,7 +248,7 @@ impl KvNodeMemo for AgentReadCaches {
 pub(crate) fn invalidate_profile(state_root: &Path, profile: &str) {
     AuthenticatedUserCache::invalidate_profile(&AgentReadCaches, state_root, profile);
     TeamViewTokenCache::invalidate_profile(&AgentReadCaches, state_root, profile);
-    KvNodeMemo::invalidate_profile(&AgentReadCaches, state_root, profile);
+    KvNodeCache::invalidate_profile(&AgentReadCaches, state_root, profile);
 }
 
 /// Clears all retained outcomes, views, and resolved paths after an operation

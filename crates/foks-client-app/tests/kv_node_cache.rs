@@ -1,28 +1,28 @@
-//! The resolved-path memo a chunked read consults, against a live server.
+//! The resolved-path cache a chunked read consults, against a live server.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use foks_client_app::{
     derive_vault_key, AccountVault, AuthCacheKey, AuthenticatedUserCache, ClientCredentials,
-    CredentialBackend, KvMutationPrecondition, KvNodeMemo, KvNodeMemoEntry, KvNodeMemoKey,
+    CredentialBackend, KvMutationPrecondition, KvNodeCache, KvNodeCacheEntry, KvNodeCacheKey,
     KvRoleSummary, Profile, ProfileRegistry, ProfileSession, ProtocolPolicy, TrustRoot,
 };
 use foks_keystore::EncryptedFileSecretStore;
 use foks_server_testkit::TestEnvironment;
 
-/// A memo that records what the read path asked of it. It is otherwise the
+/// A cache that records what the read path asked of it. It is otherwise the
 /// bounded store the agent keeps: one entry per key, replaced on `put`.
 #[derive(Default)]
-struct RecordingMemo {
-    entries: Mutex<Vec<(KvNodeMemoKey, KvNodeMemoEntry)>>,
+struct RecordingCache {
+    entries: Mutex<Vec<(KvNodeCacheKey, KvNodeCacheEntry)>>,
     hits: AtomicUsize,
     misses: AtomicUsize,
     invalidations: AtomicUsize,
 }
 
-impl KvNodeMemo for RecordingMemo {
-    fn get(&self, key: &KvNodeMemoKey) -> Option<KvNodeMemoEntry> {
+impl KvNodeCache for RecordingCache {
+    fn get(&self, key: &KvNodeCacheKey) -> Option<KvNodeCacheEntry> {
         let found = self
             .entries
             .lock()
@@ -38,13 +38,13 @@ impl KvNodeMemo for RecordingMemo {
         found
     }
 
-    fn put(&self, key: KvNodeMemoKey, entry: KvNodeMemoEntry) {
+    fn put(&self, key: KvNodeCacheKey, entry: KvNodeCacheEntry) {
         let mut entries = self.entries.lock().unwrap();
         entries.retain(|(stored, _)| *stored != key);
         entries.push((key, entry));
     }
 
-    fn invalidate(&self, key: &KvNodeMemoKey) {
+    fn invalidate(&self, key: &KvNodeCacheKey) {
         self.invalidations.fetch_add(1, Ordering::AcqRel);
         self.entries
             .lock()
@@ -86,7 +86,7 @@ impl AuthenticatedUserCache for HoldingAuth {
     }
 }
 
-/// Three properties of the memo, in the order a download meets them: the
+/// Three properties of the cache, in the order a download meets them: the
 /// first chunk walks the path and remembers it, a later chunk reads under the
 /// remembered node for fewer server requests, and an entry replaced by a peer
 /// fails the read rather than being served from the node the walk found.
@@ -113,11 +113,11 @@ fn a_chunk_read_remembers_its_path_and_refuses_a_replaced_entry() {
             trust: TrustRoot::CertificateDer { path: root },
         })
         .unwrap();
-    let memo = Arc::new(RecordingMemo::default());
+    let cache = Arc::new(RecordingCache::default());
     let session = ProfileSession::open(&registry, "local")
         .unwrap()
         .with_authenticated_user_cache(Arc::new(HoldingAuth::default()))
-        .with_kv_node_memo(memo.clone());
+        .with_kv_node_cache(cache.clone());
     let credentials = ClientCredentials::open(&state).unwrap();
     credentials
         .with_checked_session(&session, |session| {
@@ -130,9 +130,9 @@ fn a_chunk_read_remembers_its_path_and_refuses_a_replaced_entry() {
             let mut vault = AccountVault::new(&mut store);
             session.create_account(
                 "owner",
-                "memoowner",
+                "cacheowner",
                 "device",
-                "memo@example.test",
+                "cache@example.test",
                 "",
                 None,
                 &mut vault,
@@ -150,7 +150,7 @@ fn a_chunk_read_remembers_its_path_and_refuses_a_replaced_entry() {
                 &mut vault,
                 &master,
             )?;
-            // A second write so the entry the memo remembers is at a version
+            // A second write so the entry the cache remembers is at a version
             // a re-created dirent cannot reach: a re-create restarts at 1.
             let written = session.put_kv_file_checked(
                 "owner",
@@ -177,8 +177,8 @@ fn a_chunk_read_remembers_its_path_and_refuses_a_replaced_entry() {
             )?;
             let walked = server.metrics().requests_started - before;
             assert_eq!(first.content, data[..64 * 1024]);
-            assert_eq!(memo.misses.load(Ordering::Acquire), 1);
-            assert_eq!(memo.entries.lock().unwrap().len(), 1);
+            assert_eq!(cache.misses.load(Ordering::Acquire), 1);
+            assert_eq!(cache.entries.lock().unwrap().len(), 1);
 
             let before = server.metrics().requests_started;
             let second = session.read_kv_chunk(
@@ -191,8 +191,8 @@ fn a_chunk_read_remembers_its_path_and_refuses_a_replaced_entry() {
             )?;
             let remembered = server.metrics().requests_started - before;
             assert_eq!(second.content, data[64 * 1024..128 * 1024]);
-            assert_eq!(memo.hits.load(Ordering::Acquire), 1);
-            assert_eq!(memo.invalidations.load(Ordering::Acquire), 0);
+            assert_eq!(cache.hits.load(Ordering::Acquire), 1);
+            assert_eq!(cache.invalidations.load(Ordering::Acquire), 0);
             println!("read_kv_chunk requests: walked={walked} remembered={remembered}");
             assert!(
                 remembered * 2 <= walked,
@@ -201,7 +201,7 @@ fn a_chunk_read_remembers_its_path_and_refuses_a_replaced_entry() {
 
             // A peer unlinks the entry and writes another file at the same
             // name. The new dirent is a fresh identifier at version 1, so the
-            // memo still holds an entry for the version asked for here.
+            // cache still holds an entry for the version asked for here.
             session.remove_kv("owner", "/nested/large", false, &mut vault, &master)?;
             session.put_kv_file_checked(
                 "owner",
@@ -214,7 +214,7 @@ fn a_chunk_read_remembers_its_path_and_refuses_a_replaced_entry() {
                 &mut vault,
                 &master,
             )?;
-            assert_eq!(memo.entries.lock().unwrap().len(), 1);
+            assert_eq!(cache.entries.lock().unwrap().len(), 1);
             let refused = session.read_kv_chunk(
                 "owner",
                 "/nested/large",
@@ -228,10 +228,10 @@ fn a_chunk_read_remembers_its_path_and_refuses_a_replaced_entry() {
                 "a replaced entry was served from the remembered node"
             );
             // The refusal came from the version vector, not from the key: the
-            // memo was consulted, found stale, and dropped.
-            assert_eq!(memo.hits.load(Ordering::Acquire), 2);
-            assert_eq!(memo.invalidations.load(Ordering::Acquire), 1);
-            assert!(memo.entries.lock().unwrap().is_empty());
+            // cache was consulted, found stale, and dropped.
+            assert_eq!(cache.hits.load(Ordering::Acquire), 2);
+            assert_eq!(cache.invalidations.load(Ordering::Acquire), 1);
+            assert!(cache.entries.lock().unwrap().is_empty());
             Ok::<_, foks_client_app::Error>(())
         })
         .unwrap();
